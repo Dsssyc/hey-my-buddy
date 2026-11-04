@@ -193,8 +193,22 @@
 - 开发者的方向：像 Worker 的四元组那样，由机制自动生成，不让 Host 自报。
 - Host 的看法：Worker 由黑板启动，四个字段都由黑板决定；Host 是用户自己的会话，黑板只能从启动器所在的进程看到它的 harness 与形态，有的 harness 还给出自己的会话号；模型与 effort 通常看不到，看不到的记为未知，也不让 Host 填。
 - 代价：`hostId` 是 Host 契约与 Host 控制三元组的一部分，存在 `workflow_runs.host_id` 与 `macro_tasks.source_host_id` 里。去掉它要动契约与存储形式，所以放进下一次存储批。
+- 开发者随后提出：干脆不记 Host 是谁，它对黑板的完整性没有作用。Host 核对代码：
+  - 授权只靠控制凭据，即令牌与 owner generation。
+  - `hostId` 只在两处参与判断。一处是控制三元组里要求名字与记录一致，这一比较多余，代码注释自己也写着 “an owner name is attribution, not authority”。另一处是加入已有宏任务时，要求是起名相同的 Host；名字是自报的，这道检查挡不住谁。
+  - Host 的建议：删掉 `hostId` 与这两处比较；控制台的归属按谱系显示为 Host 或某个 Lead；放进下一次契约与存储批，与 skill 和接口的精简一起做。要不要仍然挡住别的 Host 加入一个宏任务，待开发者定。Host 的倾向是不挡，只要求同一个项目。
 - 第一步：做一次只读调研，弄清各 harness 的 CLI 与 app 形态，各向子进程给出了哪些关于自己的事实。依据公开源码与文档，按已安装的版本。
 - 一处实测（2026-11-04，Claude Code，在 Claude 桌面 app 4.4212.0 里）：Host 的工具命令所在的进程链是 `zsh` ← `claude` ← Claude 桌面 app；继承下来的环境里有 `CLAUDECODE=1`、`CLAUDE_CODE_ENTRYPOINT=claude-desktop`（形态）、`CLAUDE_CODE_DESKTOP_APP_VERSION`、`CLAUDE_CODE_SESSION_ID`（一个 UUID）与 `CLAUDE_EFFORT=max`，没有任何带 MODEL 的变量。所以这一种形态下，harness、形态、版本、会话号与 effort 看得到，模型看不到。会话中途换了模型或 effort 之后，这些变量会不会跟着变，没有测过。只看了变量名与这几个不含密钥的值。
+
+**封存另造的快照提交会进到项目历史，引用会一直累积。**（2026-11-04，Gridmen 的 Host 在两个仓库里实测后，经它的会话转来开发者的反馈“快照提交这个太冗余，还多占了 git 的存储”；数字 Host 未复核）
+- 快照提交：`workspace._commit_tree` 用固定的身份 “hey-my-buddy snapshot” 与 2000-01-01 的日期另造一个提交，让对象写出后中途崩溃的恢复可以确定。交付里的 `outputCommit` 就是它。Worker 自己也提交过时，两者的父提交与树都相同。Host 照 `outputCommit` 快进或合并，这个提交就进了项目的历史；开发者对 AI 写的代码坚持普通合并，进去了就一直留着。
+- 引用：已验收、检出也已回收的工作区，`refs/hey-my-buddy/` 下的 input、outputs 与 retained 引用都还在，要到宏任务删除时才删。gridmen 有 551 个，只由它们持有的对象压缩后 4.89 MB（全库 38.8 MB）；nh-flood-2d 有 127 个，0.35 MB。
+- Host 的看法：
+  - Worker 自己的提交与封存的状态相同时，直接用它，不另造；只有确实要另造时才造。
+  - 快照提交不该是 Host 要整合的那个提交：交付里写明整合 Worker 自己的提交，或者应用补丁。这与“项目的文件与历史用它自己的说法”是同一条。
+  - 不改用仓库身份与真实时间，那会破坏恢复的确定性。
+  - 引用验收并回收之后还被谁读，先查清，再定保留到什么时候。
+  - 这些都要动交付的契约与封存的形式，放进下一次契约与存储批。
 
 **skill 与 Host 接口要精简。**（2026-11-04 开发者提出，等有空讨论） `SKILL.md` 已到 4,095 字节，离 4 KB 上限只差 1 字节，内容偏臃肿。讨论时一并看 Host 的方法、参数与功能里有没有该合并或删掉的；Host 先列出候选，再谈。
 
