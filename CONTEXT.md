@@ -254,6 +254,9 @@ _Avoid_: 接管, takeover (those name a Host taking over the ownership of a micr
 **验收 / acceptance**:
 The Host's evidence-backed judgment on a fixed artifact, separate from Worker completion.
 
+**三方交叉验证 / three-way cross-check**:
+At acceptance the Host checks the brief with its later inputs, the buddy's report and the sealed artifact against one another, and trusts none of them alone: the brief may miss what the Host left out, the report may flatter, and the artifact may drift from the brief.
+
 **打回 / send back**:
 The Host's handling of a delivered micro task it does not accept: it continues the same micro task with what must change, so a Worker runs another turn in the same checkout; nothing counts as accepted until a later seal is accepted.
 
