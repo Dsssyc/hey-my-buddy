@@ -77,7 +77,7 @@ export function TaskWork(props: TaskWorkProps) {
   const activeMarker = hoveredMarker ?? (hoveredSpan || hoveredRow ? null : focusedMarker);
   const [collapsedLanes, setCollapsedLanes] = useState<ReadonlySet<string>>(() => new Set());
   const { viewport: workspace, setViewport: setWorkspace, width: workspaceWidth } = useViewport<HTMLElement>(1088);
-  const { viewport, setViewport, width } = useViewport(1088);
+  const { viewport, setViewport, width } = useViewport(1088, true);
   const [detailViewport, setDetailViewport] = useState<HTMLDivElement | null>(null);
   const [ruler, setRuler] = useState<HTMLDivElement | null>(null);
   const narrow = workspaceWidth <= 760;
@@ -111,7 +111,7 @@ export function TaskWork(props: TaskWorkProps) {
   const highlightedKey = activeMarker ? markerKey(activeMarker) : pointingSpan ? `span:${pointingSpan.spanId}` : pointingRow ? null : selectedKey;
   const macroId = timeline?.macroTask.macroTaskId;
   const buddyColors = useMemo(() => buddyColorsFor(timeline?.spans ?? []), [timeline]);
-  // Fit the actual scroll viewport, which excludes its reserved scrollbar gutter.
+  // Fit the content box, excluding the scrollbar padding that decoration can paint into.
   const originX = narrow ? SLACK_PX : nameWidth + SLACK_PX;
   const available = Math.max(1, width - (narrow ? SLACK_PX * 2 : nameWidth + SLACK_PX * 2));
   const { scale, change: zoom, zoomAt, atMinimum } = useTimelineZoom(input, available, macroId, viewportRef, anchorAt, nowMs, originX, unfinished);
@@ -206,16 +206,21 @@ export function TaskWork(props: TaskWorkProps) {
     onFocusSpan: (span: TimelineSpan | null) => { setPointerScreenX(null); setHoveredRow(null); setHoveredSpan(null); setFocusedMarker(null); setFocusedSpan(span); },
     onHover: (span: TimelineSpan | null) => { setHoveredMarker(null); setHoveredSpan(span); if (span) setHoveredRow(null); },
   });
+  const nameEdge = (row: TimelineRow, lead = false) => <div data-slot="timeline-name-edge" aria-hidden="true"
+    className={cn("flex-1", !lead && "border-t", (selectedRunId === row.runId || highlightedRunId === row.runId) && "bg-selected-row")}/>;
+  const narrowPaintWidth = `calc(${width}px + var(--scrollbar-size))`;
   const trackRow = (row: TimelineRow, lead?: TimelineRow) => <div key={row.runId} data-slot="timeline-row" data-run-id={row.runId}
     onClick={event => { if (!(event.target as Element).closest("[data-key]")) select(row.runId); }}
     className={cn("relative", lead ? "bg-card" : "bg-background")}>
     {narrow
-      ? <><div className={cn("sticky left-0 z-10", lead ? "bg-card" : "bg-background")} style={{ width: Math.max(1, width - 2) }}>{renderName(row, { laneLevel: lead ? laneLevel(lead, row) : undefined })}</div>
-        <Track {...trackProps(row)} surface={lead ? "card" : "background"}/></>
+      ? <><div className={cn("sticky left-0 z-10 flex", lead ? "bg-card" : "bg-background")} style={{ width: narrowPaintWidth }}>
+          <div className="shrink-0" style={{ width: Math.max(1, width - 2) }}>{renderName(row, { laneLevel: lead ? laneLevel(lead, row) : undefined })}</div>{nameEdge(row)}
+        </div>
+        <div className="flex"><Track {...trackProps(row)} surface={lead ? "card" : "background"}/><div data-slot="timeline-row-edge" className={cn("flex-1 border-t", (selectedRunId === row.runId || highlightedRunId === row.runId) && "bg-selected-row")}/></div></>
       : <div className="grid items-stretch" style={{ gridTemplateColumns: `${nameWidth}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
         <div className={cn("sticky left-0 z-10", lead ? "bg-card" : "bg-background")}>{renderName(row, { laneLevel: lead ? laneLevel(lead, row) : undefined })}</div>
         <Track {...trackProps(row)} surface={lead ? "card" : "background"}/>
-        <div className={cn("border-t", (selectedRunId === row.runId || highlightedRunId === row.runId) && "bg-selected-row")}/>
+        <div data-slot="timeline-row-edge" className={cn("border-t", (selectedRunId === row.runId || highlightedRunId === row.runId) && "bg-selected-row")}/>
       </div>}
   </div>;
   const toggleLane = (leadRunId: string) => setCollapsedLanes(previous => {
@@ -239,17 +244,18 @@ export function TaskWork(props: TaskWorkProps) {
     // The divider under a Lead runs across the whole row; the members below it sit one indent step in.
     return <header data-slot="timeline-lane-lead" data-run-id={lead.runId} onClick={event => { if (!(event.target as Element).closest("[data-key], button")) select(lead.runId); }} className={cn("border-b border-line", narrow ? "block" : "grid items-stretch")} style={{ gridTemplateColumns: narrow ? undefined : `${nameWidth}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
       {narrow
-        ? <div className="sticky left-0 z-10 bg-card" style={{ width: Math.max(1, width - 2) }}>
-          <div className="flex items-stretch">{laneToggle(lead, collapsed)}{leadName()}</div>
+        ? <div className="sticky left-0 z-10 flex bg-card" style={{ width: narrowPaintWidth }}>
+          <div className="flex shrink-0 items-stretch" style={{ width: Math.max(1, width - 2) }}>{laneToggle(lead, collapsed)}{leadName()}</div>{nameEdge(lead, true)}
         </div>
         : <div className="sticky left-0 z-20 flex items-stretch bg-card">
           {laneToggle(lead, collapsed)}
           {leadName()}
         </div>}
-      {scale && input && <div className={narrow ? "block" : "flex items-center"}>
+      {scale && input && <div className="flex items-center">
         <Track {...trackProps(lead)} surface="card" ownedWaits={laneWaits.get(lead.runId)} height={LEAD_PX}/>
+        {narrow && <div data-slot="timeline-row-edge" className={cn("self-stretch flex-1 border-t", (selectedRunId === lead.runId || highlightedRunId === lead.runId) && "bg-selected-row")}/>}
       </div>}
-      {!narrow && <div className={cn((selectedRunId === lead.runId || highlightedRunId === lead.runId) && "bg-selected-row")}/>}
+      {!narrow && <div data-slot="timeline-row-edge" className={cn((selectedRunId === lead.runId || highlightedRunId === lead.runId) && "bg-selected-row")}/>}
     </header>;
   };
   const trackWidth = scale ? scale.widthPx + SLACK_PX * 2 : 0;
@@ -302,10 +308,12 @@ export function TaskWork(props: TaskWorkProps) {
         setHoveredRow(rows.find(row => row.runId === runId) ?? null);
       },
       onPointerLeave: () => { setPointerScreenX(null); setHoveredSpan(null); setHoveredRow(null); setHoveredMarker(null); } }}>
-    {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="relative min-h-full pb-8" style={{ width: narrow ? trackWidth : `max(100%, ${nameWidth + trackWidth}px)`, minWidth: "100%" }}>
+    {/* Paint into the reserved padding without adding it to the scrollable width twice. */}
+    {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="relative min-h-full pb-8" style={{ width: `calc(${narrow ? `${trackWidth}px` : `max(100%, ${nameWidth + trackWidth}px)`} + var(--scrollbar-size))`, minWidth: "calc(100% + var(--scrollbar-size))", marginRight: "calc(-1 * var(--scrollbar-size))" }}>
       <div data-slot="timeline-ruler" className="sticky top-0 z-30 border-b border-line">
-        {narrow && <div className="sticky left-0 z-40" style={{ width }}>{rowFilter}</div>}
+        {narrow && <div className="sticky left-0 z-40 bg-ruler pr-(--scrollbar-size)" style={{ width: narrowPaintWidth }}>{rowFilter}</div>}
         <ZoomRuler ref={setRuler} viewportWidth={width} atMinimum={atMinimum} onChange={zoom} style={narrow ? undefined : { display: "grid", gridTemplateColumns: `${nameWidth}px ${trackWidth}px minmax(0,1fr)` }}>
+        <div data-slot="axis-edge" aria-hidden="true" className="pointer-events-none absolute top-[29.5px] right-0 border-t border-ink3" style={{ left: originX + scale.widthPx }}/>
         {narrow
           ? <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, scrollLeft - originX), right: Math.min(scale.widthPx, scrollLeft - originX + width) }}/>
           : <><div className="sticky left-0 z-40">{rowFilter}</div>

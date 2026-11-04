@@ -16,7 +16,7 @@ function ScrollArea({
   viewportProps?: Omit<React.ComponentProps<typeof ScrollAreaPrimitive.Viewport>, "className"> & { className?: string } & Record<`data-${string}`, string | undefined>
   /** "both" adds the horizontal scrollbar beside the vertical one. */
   orientation?: "vertical" | "both"
-  /** Keep the custom vertical scrollbar outside the viewport's measured width. */
+  /** Reserve content space for the vertical scrollbar while allowing paint beneath it. */
   reserveScrollbarGutter?: boolean
 }) {
   const { className: viewportClassName, ...viewportRest } = viewportProps ?? {}
@@ -36,13 +36,14 @@ function ScrollArea({
       type={type}
       scrollHideDelay={scrollHideDelay}
       onScrollCapture={recordScroll}
-      className={cn("group/scroll-area relative [--scrollbar-size:--spacing(2.5)]", reserveScrollbarGutter && "pr-(--scrollbar-size)", className)}
+      className={cn("group/scroll-area relative [--scrollbar-size:--spacing(2.5)]", reserveScrollbarGutter && "[&>[data-slot=scroll-area-scrollbar]]:z-50", className)}
       {...props}
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
         className={cn(
           "size-full rounded-[inherit] transition-[color,box-shadow] duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1",
+          reserveScrollbarGutter && "pr-(--scrollbar-size)",
           viewportClassName
         )}
         {...viewportRest}

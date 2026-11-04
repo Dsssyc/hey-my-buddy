@@ -67,7 +67,7 @@ for (const scene of [
     await expect.poll(() => names(page).evaluateAll(nodes => nodes.map(node => node.getAttribute("data-run-id")))).toEqual(ids);
     await expect(count).toHaveText(`${ids.length} / ${timeline.rows.length}`);
     const filtered = { ...timeline, rows: shown, spans: timeline.spans.filter(span => ids.includes(span.runId)), events: timeline.events.filter(event => ids.includes(event.runId)) };
-    const available = await page.locator('[data-slot=timeline-tracks]').evaluate(node => node.clientWidth)
+    const available = await page.locator('[data-slot=timeline-tracks]').evaluate(node => node.clientWidth - parseFloat(getComputedStyle(node).paddingRight))
       - (scene.width === 390 ? 0 : await header(page).evaluate(node => node.getBoundingClientRect().width)) - TIMELINE_OUTSET_PX * 2;
     const input = timelineScaleInput(filtered);
     expect(input.domain!.startMs).toBeGreaterThan(timelineScaleInput(timeline).domain!.startMs);
