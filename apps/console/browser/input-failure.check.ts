@@ -1,7 +1,7 @@
 import { expect } from "@playwright/test";
 import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
 
-const MACRO = "macro-33333333-3333-4333-8333-333333333333";
+const MACRO = "macro-55555555-5555-4555-8555-555555555555";
 
 for (const locale of ["zh-CN", "en-US"]) for (const width of [390, 1280]) for (const known of [true, false]) {
   const suffix = known ? "input-preflight" : "input-native";
@@ -35,6 +35,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [390, 1280]) for (c
       await page.screenshot({ path: testInfo.outputPath(`${suffix}-${locale}-${width}-host-dark.png`) });
       await page.locator(`[data-slot=detail-strip] [data-key="span:execution:att-${suffix}"]`).click();
       await expect(pane.getByRole("heading").first()).toHaveText(locale === "zh-CN" ? "回合 1" : "Turn 1");
+      await expect(pane.locator("[data-slot=pane-title] > p")).toHaveText(stage);
       await expect(facts).toHaveCount(1);
       await expect(facts).toContainText(stage);
       await checkGeometry();

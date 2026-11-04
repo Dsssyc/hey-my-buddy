@@ -580,11 +580,11 @@ class PreviewDeletionTest(unittest.TestCase):
         preview = self.preview
         older = [f"macro-preview-list-{index}" for index in range(1, 7)]
         expected = {
-            "activity-desc": [preview.MACRO_B, preview.MACRO_A, preview.MACRO_C,
-                              *reversed(older[-3:]), preview.STANDALONE_GROUP],
+            "activity-desc": [preview.MACRO_B, preview.MACRO_A, preview.MACRO_INPUT, preview.MACRO_C,
+                              *reversed(older[-2:]), preview.STANDALONE_GROUP],
             "activity-asc": [*older[:5], preview.MACRO_B, preview.STANDALONE_GROUP],
-            "created-desc": [preview.MACRO_A, preview.MACRO_C,
-                             *reversed(older[-3:]), preview.MACRO_B, preview.STANDALONE_GROUP],
+            "created-desc": [preview.MACRO_A, preview.MACRO_INPUT, preview.MACRO_C,
+                             *reversed(older[-2:]), preview.MACRO_B, preview.STANDALONE_GROUP],
             "created-asc": [*older[:5], preview.MACRO_B, preview.STANDALONE_GROUP],
         }
         with self.server() as server:

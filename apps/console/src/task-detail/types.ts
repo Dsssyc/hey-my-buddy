@@ -66,7 +66,7 @@ export type Artifact = {
   attemptId: string;
   manifestSha256: string;
   /** The database form and source identities remain visible for audit views. */
-  contentForm?: "sealed-inline-v1" | "record-reference";
+  contentForm: "sealed-inline-v1" | "record-reference";
   outputSnapshotSha256?: string;
   recordFile?: { path: string; sha256: string } | null;
   outputCommit: string | null;

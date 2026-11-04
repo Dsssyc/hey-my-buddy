@@ -29,7 +29,7 @@ for (const { locale, width, theme } of [
     await entry.click();
     const header = page.locator("[data-slot=macro-overview-header]");
     const host = header.locator("[data-slot=macro-overview-count-host]");
-    await expect(host.locator("dd")).toHaveText("4");
+    await expect(host.locator("dd")).toHaveText("2");
     await expect(host.locator("dt")).toHaveText(zh ? "等待 Host" : "Waiting for Host");
     await expect(host.locator('[data-kind="hand"]')).toHaveCount(1);
     await expect(header.locator("[data-slot=macro-overview-count-failed] dd")).toHaveText("1");

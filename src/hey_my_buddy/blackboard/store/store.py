@@ -76,7 +76,7 @@ def _overlaps(left: str, right: str) -> bool:
     return left_path.is_relative_to(right_path) or right_path.is_relative_to(left_path)
 
 
-def _public_result_payload(payload: dict, directory: Path, result_form: str = "archived-report-v1") -> dict:
+def _public_result_payload(payload: dict, directory: Path, result_form: str) -> dict:
     """Bound service-owned workspace facts in a reply, leaving the receipt intact."""
     result = payload.get("result")
     if not isinstance(result, dict):
@@ -2244,7 +2244,7 @@ class BoardStore:
         # A micro-task turn's sealed output manifest is verified outside the transaction
         # too; a manifest that cannot be verified fails the attempt honestly instead
         # of publishing an unverified success.
-        self.workflow.precheck_result(params)
+        output_record = self.workflow.precheck_result(params)
         # The seal-side shared-stash observation of this attempt's repository is
         # read here, outside the result transaction; the turn's pinned fact binds
         # it below. A failed or partial seal keeps the same honest collection.
@@ -2264,7 +2264,7 @@ class BoardStore:
         }
         return self._commit_execution_result(
             request, seal_stash=seal_stash,
-            completion_evidence=stop_evidence)
+            completion_evidence=stop_evidence, output_record=output_record)
 
     def confirm_execution_shutdown(self, attempt_id: str, evidence: dict) -> dict:
         """Supplement only a no-receipt interruption with its later native-stop proof."""
@@ -2275,16 +2275,17 @@ class BoardStore:
         # native-stop proof can now bind its safely sealed partial output.
         params = {**payload, "shutdownConfirmed": True, "attemptId": attempt_id}
         stop_output = {key: evidence[key] for key in ("partialWorkspaceSeal", "workspaceSealError") if key in evidence}
-        self.workflow.precheck_result({**params, "result": {**(payload["result"] or {}), **stop_output}})
+        output_record = self.workflow.precheck_result({**params, "result": {**(payload["result"] or {}), **stop_output}})
         request = {key: params[key] for key in (
             "attemptId", "status", "result", "artifacts", "shutdownConfirmed", "exitCode", "signal",
             "error", "logPaths", "runtimeIdentity", "terminationReason")}
         return self._commit_execution_result(
             request,
-            seal_stash=self.workflow.collect_result_stash_facts(params), shutdown_evidence=evidence)
+            seal_stash=self.workflow.collect_result_stash_facts(params), shutdown_evidence=evidence,
+            output_record=output_record)
 
     def _commit_execution_result(self, request: dict, *, seal_stash, shutdown_evidence: dict | None = None,
-                                 completion_evidence: dict | None = None) -> dict:
+                                 completion_evidence: dict | None = None, output_record: dict | None = None) -> dict:
         # Normalize the imported projection once for every entry path and replay.
         from ...protocol.usage import normalize_token_usage
         imported = request["result"]
@@ -2517,6 +2518,7 @@ class BoardStore:
                 task_state=task_state,
                 now=now,
                 seal_stash=seal_stash,
+                output_record=output_record,
             )
             if micro_task is not None:
                 response["workflow"] = micro_task

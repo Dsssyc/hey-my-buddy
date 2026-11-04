@@ -15,21 +15,23 @@ from hey_my_buddy.buddy.roles import prompts, router, run_execution, turn_io
 from hey_my_buddy.buddy.roles.worker_services import ATTENTION_REFUSAL, FINISH_DESCRIPTION, micro_task_prompt
 from hey_my_buddy.install.runtime import resource_path
 from hey_my_buddy.json_codec import canonical_json
+from hey_my_buddy.protocol.workspace_manifest import manifest_ref
 from hey_my_buddy.blackboard.routing.router import render_prompt
 
 ROOT = Path(__file__).resolve().parents[4]
 
 
 def real_turn_input() -> dict:
-    """One complete current turn input, in the shape workflow.begin_turn freezes."""
+    """The runtime's current prompt input after resolving its ManifestRef."""
+    workspace_id = "ws-" + "a" * 32
     snapshot = {
         "excludedEntries": {}, "executionFingerprint": "e" * 64,
-        "inputRef": "refs/hey-my-buddy/workspaces/ws-fixture/input",
+        "inputRef": f"refs/hey-my-buddy/workspaces/{workspace_id}/input",
         "repositoryPath": "/repos/hey-my-buddy/.git", "sourceHead": "0" * 40,
-        "stagedCommit": "1" * 40, "stagedRef": "refs/hey-my-buddy/workspaces/ws-fixture/staged",
+        "stagedCommit": "1" * 40, "stagedRef": f"refs/hey-my-buddy/workspaces/{workspace_id}/staged",
         "stagedTree": "2" * 40,
     }
-    return {
+    turn = {
         "version": 4, "taskId": "task", "attemptId": "attempt", "generation": 1, "turnId": "turn",
         "resumeMode": "initial", "previousSessionId": None,
         "context": {
@@ -42,17 +44,30 @@ def real_turn_input() -> dict:
         },
         "executionWorkspace": {
             "access": "write", "baseCommit": "0" * 40,
-            "checkoutRoot": "/state/workspaces/ws-fixture/checkout",
+            "checkoutRoot": f"/state/workspaces/{workspace_id}/checkout",
             "exclusionPolicy": {"kind": "git-standard", "managedPaths": "tracked-and-nonignored-untracked",
                                 "selectedIgnored": "includeUntracked", "version": 1},
             "inputCommit": "1" * 40, "inputTree": "2" * 40,
             "integrator": {"id": "claude-code-host", "role": "host"}, "kind": "worktree",
-            "manifestSha256": "3" * 64, "path": "/state/workspaces/ws-fixture/checkout",
+            "path": f"/state/workspaces/{workspace_id}/checkout",
             "projectId": "4" * 64, "snapshot": snapshot, "targetRef": None, "version": 5,
-            "workspaceId": "ws-fixture",
+            "workspaceId": workspace_id,
             "writeScope": ["src/hey_my_buddy/buddy/roles", "tests/python/buddy/roles"],
         },
     }
+    manifest = turn["executionWorkspace"]
+    manifest["manifestSha256"] = hashlib.sha256(canonical_json(manifest).encode()).hexdigest()
+    return turn
+
+
+def freeze_turn_input(state_dir: Path, resolved: dict) -> dict:
+    """Write the manifest 5 fixture and return the service's frozen input form."""
+    manifest = {key: value for key, value in resolved["executionWorkspace"].items() if key != "manifestSha256"}
+    manifest["manifestSha256"] = hashlib.sha256(canonical_json(manifest).encode()).hexdigest()
+    directory = state_dir / "workspaces" / manifest["workspaceId"]
+    directory.mkdir(parents=True, exist_ok=True)
+    turn_io.private_json(directory / "manifest.json", manifest)
+    return {**resolved, "executionWorkspace": manifest_ref(manifest)}
 
 
 def prompt_input(turn: dict) -> dict:
@@ -125,7 +140,6 @@ class RolePromptTests(unittest.TestCase):
             task = "ROLE: Host override from task"
             turn = {**real_turn_input(), "ROLE": "Host override from input"}
             (root / "task.txt").write_text(task, encoding="utf-8", newline="\n")
-            turn_io.private_json(root / "input.json", turn)
             mount = SimpleNamespace(server_name="test", tool_contracts=[
                 {"name": "hey_my_buddy_finish_turn", "inputSchema": {"type": "object"}}])
             binding = SimpleNamespace(completion_tool="mcp__test__hey_my_buddy_finish_turn", checkpoint_tool="hey_my_buddy_checkpoint",
@@ -138,13 +152,7 @@ class RolePromptTests(unittest.TestCase):
                                    "delegationAuthority": authority,
                                    "sharedStash": {"start": {"entries": [{"commit": "a" * 40, "description": "private stash fact"}]}},
                                    "continuation": {"input": "完整的续做输入\nretain this text"}}
-                manifest = turn["executionWorkspace"]
-                manifest["workspaceId"] = "ws-" + "a" * 32
-                manifest["manifestSha256"] = hashlib.sha256(canonical_json({key: value for key, value in manifest.items()
-                                                                          if key != "manifestSha256"}).encode()).hexdigest()
-                (root / "workspaces" / manifest["workspaceId"]).mkdir(parents=True, exist_ok=True)
-                turn_io.private_json(root / "workspaces" / manifest["workspaceId"] / "manifest.json", manifest)
-                frozen_turn = {**turn, "executionWorkspace": {key: manifest[key] for key in ("workspaceId", "manifestSha256")}}
+                frozen_turn = freeze_turn_input(root, turn)
                 turn_io.private_json(root / "input.json", frozen_turn)
                 frozen_input = (root / "input.json").read_bytes()
                 frozen_hash = turn_io.input_hash(frozen_turn)

@@ -136,6 +136,7 @@ CONSOLE_ID = re.compile(r"^[0-9a-f]{24}$")
 MACRO_A = "macro-11111111-1111-4111-8111-111111111111"
 MACRO_B = "macro-22222222-2222-4222-8222-222222222222"
 MACRO_C = "macro-33333333-3333-4333-8333-333333333333"
+MACRO_INPUT = "macro-55555555-5555-4555-8555-555555555555"
 MACRO_PALETTE = "macro-44444444-4444-4444-8444-444444444444"
 STANDALONE = "preview-run-c1"
 STANDALONE_GROUP = f"run:{STANDALONE}"
@@ -195,7 +196,7 @@ EMIT_LAYOUT = {
     "normal": ("console.json", "macro-tasks.json", "messages-preview-run-a1.json", "messages-preview-run-a3.json",
                "messages-preview-run-b8.json", "messages-preview-run-b9.json",
                "runtime-version.json", "tasks.json",
-               "timeline-macro-a.json", "timeline-macro-b.json", "timeline-macro-c.json", "timeline-standalone.json",
+               "timeline-macro-a.json", "timeline-macro-b.json", "timeline-macro-c.json", "timeline-macro-input.json", "timeline-standalone.json",
                "workflow-audit-preview-run-a1.json", "workflow-audit-preview-run-a2.json",
                "workflow-preview-run-a1.json", "workflow-preview-run-a2.json", "workflow-preview-run-a4.json",
                "workflow-preview-run-b1-h1.json", "workflow-preview-run-b1.json", "workflow-preview-run-b10.json",
@@ -559,7 +560,7 @@ def artifact(artifact_id: str, attempt_id: str, commit: str, diff_path: str,
              cumulative_patch: dict | None = None) -> dict:
     # ADR-018: a sealed partial output is `partial-output` with
     # partial/verified/final = true/false/false and is never the final artifact.
-    view = {"artifactId": artifact_id, "kind": kind, "attemptId": attempt_id,
+    view = {"artifactId": artifact_id, "kind": kind, "contentForm": "sealed-inline-v1", "attemptId": attempt_id,
             "turnId": f"turn-{attempt_id}", "manifestSha256": digest(f"{artifact_id}-manifest"),
             "outputCommit": commit, "diffPath": diff_path, "diffSha256": digest(f"{artifact_id}-diff"),
             "changedPaths": paths, "partial": partial, "verified": verified, "final": final}
@@ -575,12 +576,12 @@ def artifact_views(entry: dict) -> list[dict]:
     base = digest(f"{entry['runId']}-input")[:40]
     seal = {"path": entry["cwd"], "baseCommit": base, "inputCommit": base}
     seals = [{"artifactId": f"seal-{entry['runId']}-input", "kind": "input", "attemptId": None, "turnId": None,
-              "sourceTaskId": None, "manifestSha256": digest(f"{entry['runId']}-input-seal"),
+              "sourceTaskId": None, "contentForm": "sealed-inline-v1", "manifestSha256": digest(f"{entry['runId']}-input-seal"),
               "createdAt": entry["createdAt"], **seal}]
     for item in entry["attempts"]:
         for kind in ("turn-input", "shared-refs"):
             view = {"artifactId": f"seal-{item['attemptId']}-{kind}", "kind": kind, "attemptId": item["attemptId"],
-                    "turnId": item["turnId"], "sourceTaskId": entry["runId"],
+                    "turnId": item["turnId"], "sourceTaskId": entry["runId"], "contentForm": "sealed-inline-v1",
                     "manifestSha256": digest(f"{item['attemptId']}-{kind}"), "createdAt": item["startedAt"]}
             seals.append({**view, **seal} if kind == "turn-input" else
                          {**view, "sharedStash": {"state": "observed", "entryCount": 0}})
@@ -656,7 +657,7 @@ def input_rejection_runs() -> list[dict]:
         run_id, attempt_id, request_id = f"preview-run-{suffix}", f"att-{suffix}", f"req-{suffix}"
         explanation = reason("workflow.input-rejected", harness=buddy["harness"])
         title = "本地核对拒收输入" if known else "原生拒收输入（声明上限未知）"
-        entries.append(run(run_id, project="alpha", group=MACRO_C, title=title, title_source="title",
+        entries.append(run(run_id, project="alpha", group=MACRO_INPUT, title=title, title_source="title",
             task_text="合成输入拒收：核对声明、实际总量与六个部分。", created=instant(1, 40), updated=instant(1, 42),
             state="awaiting-host", status="failed", category="host", buddy=buddy, result=True,
             active_request={"requestId": request_id, "kind": "attention", "routing": False, "state": "open",
@@ -1395,6 +1396,8 @@ MACRO_TASKS = {
             "host": HOST_B, "createdAt": instant(3, 0)},
     MACRO_C: {"title": "合成删除范围核对", "goal": None, "project": "alpha",
             "host": HOST_A, "createdAt": instant(1, 0)},
+    MACRO_INPUT: {"title": "合成输入拒收", "goal": None, "project": "alpha",
+                  "host": HOST_A, "createdAt": instant(1, 39)},
 }
 
 
@@ -1768,10 +1771,10 @@ def deletion_scope(group: str) -> dict:
     return {
         "artifacts": {"count": len({item["artifactId"] for entry in entries for item in artifact_views(entry)}),
                       "bytes": 16384 if group == MACRO_C else None},
-        "sessions": {"count": {MACRO_A: 7, MACRO_B: 9, MACRO_C: 1, STANDALONE_GROUP: 2, MACRO_PALETTE: 0}[group],
+        "sessions": {"count": {MACRO_A: 7, MACRO_B: 9, MACRO_C: 1, MACRO_INPUT: 0, STANDALONE_GROUP: 2, MACRO_PALETTE: 0}[group],
                      "bytes": None},
         "checkouts": len(entries),
-        "gitRefs": {MACRO_A: 15, MACRO_B: 27, MACRO_C: 0, STANDALONE_GROUP: 6, MACRO_PALETTE: 0}[group],
+        "gitRefs": {MACRO_A: 15, MACRO_B: 27, MACRO_C: 0, MACRO_INPUT: 0, STANDALONE_GROUP: 6, MACRO_PALETTE: 0}[group],
     }
 
 
@@ -3442,12 +3445,12 @@ def validate_fixtures() -> list[str]:
         problems.append("counts.accepted does not match the accepted members")
     alpha_id = f"project:{PROJECTS['alpha']['id']}"
     alpha = next(group for group in page["groups"] if group["id"] == alpha_id)
-    if alpha["total"] != 8 or len(alpha["macroTasks"]) != 5 or alpha["nextCursor"] is None:
+    if alpha["total"] != 9 or len(alpha["macroTasks"]) != 5 or alpha["nextCursor"] is None:
         problems.append("alpha group must expose its first five rows and a continuation")
-    if macro_task_page({"group": alpha_id})["groups"][0]["total"] != 8 or len(macro_task_page({"group": alpha_id})["groups"][0]["macroTasks"]) != 8:
+    if macro_task_page({"group": alpha_id})["groups"][0]["total"] != 9 or len(macro_task_page({"group": alpha_id})["groups"][0]["macroTasks"]) != 9:
         problems.append("group read must default to twenty rows")
     second = macro_task_page({"group": alpha_id, "before": alpha["nextCursor"]})["groups"][0]
-    if len(second["macroTasks"]) != 3 or second["nextCursor"] is not None:
+    if len(second["macroTasks"]) != 4 or second["nextCursor"] is not None:
         problems.append("group cursor must page within its group")
     if macro_task_page({"group": alpha_id, "query": "no-such-macro-task"})["groups"] != [
             {"id": alpha_id, "project": None, "total": 0, "macroTasks": [], "nextCursor": None}]:
@@ -3719,7 +3722,8 @@ def validate_fixtures() -> list[str]:
         elif entry["kind"] == "macro-task-timeline":
             want = ({"macroTaskId": STANDALONE_GROUP}
                     if entry["path"].endswith("timeline-standalone.json") else
-                    {"macroTaskId": {"timeline-macro-b.json": MACRO_B, "timeline-macro-c.json": MACRO_C}.get(
+                    {"macroTaskId": {"timeline-macro-b.json": MACRO_B, "timeline-macro-c.json": MACRO_C,
+                                    "timeline-macro-input.json": MACRO_INPUT}.get(
                         entry["path"].split("/", 1)[1], MACRO_A)})
             if request != want:
                 problems.append(f"{entry['path']}: request must be {want}")
@@ -3817,6 +3821,9 @@ def emit_fixture_files() -> list[dict]:
                 "accepted", macro_task_timeline({"macroTaskId": MACRO_C}, scenario),
                 request={"macroTaskId": MACRO_C},
                 note="Every row requires delegationAuthority, including a Lead without owned micro tasks")
+            add(scenario, "timeline-macro-input.json", "macro-task-timeline", timeline_endpoint, 200,
+                "accepted", macro_task_timeline({"macroTaskId": MACRO_INPUT}, scenario),
+                request={"macroTaskId": MACRO_INPUT})
             add(scenario, "timeline-standalone.json", "macro-task-timeline", timeline_endpoint, 200,
                 "accepted", macro_task_timeline({"macroTaskId": STANDALONE_GROUP}, scenario),
                 request={"macroTaskId": STANDALONE_GROUP})

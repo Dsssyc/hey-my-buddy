@@ -357,6 +357,8 @@ CREATE TABLE IF NOT EXISTS decision_requests (
     selected_json          TEXT,
     output_json            TEXT,
     requested_json         TEXT NOT NULL DEFAULT '{}',
+    request_form           TEXT NOT NULL DEFAULT 'manifest-reference-v2'
+        CHECK (request_form IN ('archived-inline-v1','manifest-reference-v2')),
     updated_at             TEXT NOT NULL
 );
 """
@@ -867,9 +869,8 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
     staged_commit   TEXT,
     output_workspace_id TEXT,
     output_manifest_sha256 TEXT,
-    output_ref      TEXT,
     output_commit   TEXT,
-    output_action   TEXT,
+    output_action   TEXT CHECK (output_action IN ('restore','adopt')),
     output_origin   TEXT CHECK (output_origin IN ('worker','host')),
     created_at      TEXT NOT NULL,
     CHECK ((kind IN ('input','turn-input') AND workspace_id IS NOT NULL AND input_manifest_sha256 IS NOT NULL
@@ -894,11 +895,11 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
             AND input_commit IS NULL AND staged_commit IS NULL)),
     CHECK (kind!='input' OR workspace_facts_role IS NOT NULL),
     CHECK ((kind IN ('output','resolved-output','partial-output','abandoned-site')
-            AND output_workspace_id IS NOT NULL AND output_manifest_sha256 IS NOT NULL
-            AND output_ref IS NOT NULL AND output_commit IS NOT NULL)
+            AND attempt_id IS NOT NULL AND output_workspace_id IS NOT NULL
+            AND output_manifest_sha256 IS NOT NULL AND output_commit IS NOT NULL)
         OR (kind NOT IN ('output','resolved-output','partial-output','abandoned-site')
             AND output_workspace_id IS NULL AND output_manifest_sha256 IS NULL
-            AND output_ref IS NULL AND output_commit IS NULL AND output_action IS NULL)),
+            AND output_commit IS NULL AND output_action IS NULL)),
     CHECK ((kind='resolved-output' AND output_action IS NOT NULL)
         OR (kind!='resolved-output' AND output_action IS NULL)),
     CHECK ((kind IN ('output','partial-output') AND output_origin IS NOT NULL)
@@ -996,6 +997,8 @@ CREATE TABLE IF NOT EXISTS router_requests (
     decision_id      TEXT NOT NULL REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
     round            INTEGER NOT NULL CHECK (round >= 1),
     snapshot_json    TEXT NOT NULL,
+    snapshot_form    TEXT NOT NULL DEFAULT 'manifest-reference-v2'
+        CHECK (snapshot_form IN ('archived-inline-v1','manifest-reference-v2')),
     frozen_at        TEXT NOT NULL,
     PRIMARY KEY (decision_id, round)
 );

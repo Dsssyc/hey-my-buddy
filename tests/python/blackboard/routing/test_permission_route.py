@@ -17,10 +17,13 @@ class WorkflowPermissionRouteTests(unittest.TestCase):
         with patch.object(DecisionCoordinator, "_create", return_value={}) as create, \
                 patch("hey_my_buddy.blackboard.tasks.micro_task.resolve", return_value={"project": None}):
             coordinator.route_workflow(connection, run_id="run-1", sequence=1, spec=spec,
-                                       manifest={"access": "read"})
+                                       manifest={"access": "read", "workspaceId": "ws-" + "a" * 32,
+                                                 "manifestSha256": "b" * 64})
         request = create.call_args.args[1]
         self.assertEqual(request["requiredCapabilities"], ["input:text", "permission:full", "permission:read"])
         self.assertEqual(spec["requiredCapabilities"], ["input:text", "permission:full"])
+        self.assertEqual(request["executionWorkspace"],
+                         {"workspaceId": "ws-" + "a" * 32, "manifestSha256": "b" * 64})
 
     def test_full_access_requires_declared_permission_capability(self):
         connection = Mock()
@@ -29,7 +32,9 @@ class WorkflowPermissionRouteTests(unittest.TestCase):
         with patch.object(DecisionCoordinator, "_create", return_value={}) as create, \
                 patch("hey_my_buddy.blackboard.tasks.micro_task.resolve", return_value={"project": None}):
             coordinator.route_workflow(connection, run_id="run-1", sequence=1,
-                                       spec={"task": "work", "expectedSeconds": 1800}, manifest={"access": "full"})
+                                       spec={"task": "work", "expectedSeconds": 1800},
+                                       manifest={"access": "full", "workspaceId": "ws-" + "a" * 32,
+                                                 "manifestSha256": "b" * 64})
         self.assertEqual(create.call_args.args[1]["requiredCapabilities"], ["permission:full"])
 
 

@@ -30,10 +30,9 @@ class LeadStopPreviewTests(unittest.TestCase):
                        if item['macroTaskId'] == preview.MACRO_C)
         self.assertEqual(summary['state'], 'host')
         self.assertEqual({key: summary['counts'][key] for key in ('host', 'failed', 'ended', 'accepted')},
-                         {'host': 4, 'failed': 1, 'ended': 5, 'accepted': 2})
+                         {'host': 2, 'failed': 1, 'ended': 5, 'accepted': 2})
         filtered = preview.macro_task_timeline({'macroTaskId': preview.MACRO_C, 'filter': 'host'}, 'normal')
-        self.assertEqual({row['runId'] for row in filtered['rows']}, {'preview-run-d2', 'preview-run-d3',
-                                                                 'preview-run-input-preflight', 'preview-run-input-native'})
+        self.assertEqual({row['runId'] for row in filtered['rows']}, {'preview-run-d2', 'preview-run-d3'})
         self.assertEqual({row['category'] for row in filtered['rows']}, {'host'})
         for run_id in ('preview-run-d2', 'preview-run-d3'):
             self.assertIsNone(preview.workflow_get({'runId': run_id})['hostConclusion'])
@@ -49,6 +48,9 @@ class LeadStopPreviewTests(unittest.TestCase):
 
     def test_input_rejections_retain_the_same_frozen_facts_in_every_projection(self):
         from hey_my_buddy.protocol.input_failure import normalize_input_failure
+        rows = preview.macro_task_timeline({'macroTaskId': preview.MACRO_INPUT}, 'normal')['rows']
+        self.assertEqual({row['runId'] for row in rows},
+                         {'preview-run-input-preflight', 'preview-run-input-native'})
         for suffix, stage in (('input-preflight', 'preflight'), ('input-native', 'native-admission')):
             run_id = f'preview-run-{suffix}'
             entry = preview.FIXTURES['runs'][run_id]
@@ -63,6 +65,8 @@ class LeadStopPreviewTests(unittest.TestCase):
                          record['requests'][0], record['audit']['turns'][0], record['audit']['requests'][0]):
                 self.assertEqual(item['inputFailure'], failure)
             self.assertEqual(record['state'], 'awaiting-host')
+            self.assertEqual(record['macroTaskId'], preview.MACRO_INPUT)
+            self.assertEqual(entry['group'], preview.MACRO_INPUT)
 
     def test_preview_root_stop_states_match_the_board_host_filter(self):
         from hey_my_buddy.blackboard.tasks.macro_tasks import _state

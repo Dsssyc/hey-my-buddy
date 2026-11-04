@@ -485,8 +485,8 @@ class LeadLifecycleTests(WorkflowTestCase):
             self.assertEqual([row["runId"] for row in changed["ownedMicroTasks"]], [first["runId"]])
             self.assertTrue(all(initial["ownedFactsCursor"] < row["activitySeq"] <= changed["ownedFactsCursor"]
                                 for row in changed["ownedMicroTasks"]))
-            without_cursor = coordinator._owned_turn_context(connection, lead["runId"], {"input_json": '{"version":4,"context":{}}'})
-            self.assertEqual(len(without_cursor["ownedMicroTasks"]), 2)
+            with self.assertRaises(KeyError):
+                coordinator._owned_turn_context(connection, lead["runId"], {"input_json": '{"version":4,"context":{}}'})
 
     def test_credential_pages_get_and_replay_leave_the_frozen_wakeup_cursor_unchanged(self):
         board = self.board()

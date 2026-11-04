@@ -1,14 +1,18 @@
 """Shared-object eligibility through real workspace admission and ownership."""
 import json
+import shutil
 import sqlite3
 import tempfile
 from unittest.mock import patch as defer_reclaim
 from pathlib import Path
+from types import SimpleNamespace
 
 from blackboard.tasks import workspace_lifecycle_case as lifecycle_fixtures
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import macro_task_deletion as deletion, workspace, workflow
 from hey_my_buddy.blackboard.store.store import BoardStore
+from hey_my_buddy import private_dirs
+from hey_my_buddy.buddy.harnesses import registry as harness_registry
 from hey_my_buddy.errors import BoardError
 
 
@@ -56,6 +60,28 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         self.assertTrue((self.repo/'tracked.txt').is_file())
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(),[])
+
+    def test_deletion_uses_checkout_repository_when_project_is_copied(self):
+        board = self.board()
+        first = self.submit_group(board, 'original-project')
+        self.close(board, first)
+        copied = self.directory / 'copied-project'
+        shutil.copytree(self.repo, copied)
+        second = self.submit_group(board, 'copied-project', cwd=copied)
+        self.close(board, second)
+        with board.store.db.read() as connection:
+            identifier = connection.execute(
+                "SELECT workspace_id FROM workflow_artifacts WHERE run_id=? AND kind='input'",
+                (second['runId'],)).fetchone()[0]
+        prefix = f'refs/hey-my-buddy/workspaces/{identifier}/'
+        with defer_reclaim.object(self, 'repo', copied):
+            before = self.git('for-each-ref', '--format=%(refname)', prefix)
+        self.assertTrue(before)
+        result = deletion.delete(board.store, second['macroTaskId'], 1)
+        self.assertEqual(result['state'], 'deleted', result)
+        self.assertFalse((board.directory / 'workspaces' / identifier).exists())
+        with defer_reclaim.object(self, 'repo', copied):
+            self.assertFalse(self.git('for-each-ref', '--format=%(refname)', prefix))
 
     def test_retry_after_workspace_records_removed_by_an_earlier_phase(self):
         board = self.board()
@@ -126,7 +152,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
 
     def test_each_physical_phase_retries_after_store_restart_with_real_git(self):
         stages = ('_delete_sessions', '_delete_workspaces', '_delete_private_roots',
-                  '_delete_session_group', '_delete_cli_files')
+                  '_delete_session_group', '_delete_cli_files', '_delete_rows')
         for index, stage in enumerate(stages):
             with self.subTest(stage=stage):
                 board = self.board()
@@ -138,22 +164,91 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                         (run['runId'],)).fetchone()[0]
                 directory = board.directory / 'workspaces' / workspace_id
                 frozen = (directory / 'manifest.json').read_bytes()
-                foreign = f'refs/hey-my-buddy/workspaces/ws-{"f" * 32}/input'
-                head = self.git('rev-parse', 'HEAD').strip()
-                self.git('update-ref', foreign, head)
-                with defer_reclaim.object(deletion, stage, side_effect=OSError('injected phase stop')):
-                    interrupted = deletion.delete(board.store, run['macroTaskId'], 1)
-                self.assertEqual(interrupted['state'], 'deleting', interrupted)
-                if directory.exists():
-                    self.assertEqual((directory / 'manifest.json').read_bytes(), frozen)
-                board.store.db.close()
-                resumed = BoardStore(board.directory)
-                self.addCleanup(resumed.db.close)
-                resumed.initialize()
-                done = deletion.delete(resumed, run['macroTaskId'], 1)
-                self.assertEqual(done['state'], 'deleted', done)
-                self.assertFalse(directory.exists())
-                self.assertEqual(self.git('rev-parse', foreign).strip(), head)
+                own_prefix = f'refs/hey-my-buddy/workspaces/{workspace_id}/'
+                self.assertTrue(self.git('for-each-ref', '--format=%(refname)', own_prefix))
+                attempts = board.directory / 'attempts' / run['runId']
+                attempts.mkdir(parents=True, exist_ok=True)
+                (attempts / 'phase-proof').write_bytes(b'attempt evidence')
+                sessions = private_dirs.session_group_root(board.directory, run['macroTaskId'])
+                sessions.mkdir(parents=True, exist_ok=True)
+                (sessions / 'phase-proof').write_bytes(b'session evidence')
+                controls = board.directory / 'controls'
+                controls.mkdir(parents=True, exist_ok=True)
+                control = controls / f"{run['runId']}.g1.json"
+                control.write_bytes(b'control evidence')
+                native = self.directory / f'native-session-{index}.jsonl'
+                foreign_native = self.directory / f'foreign-native-session-{index}.jsonl'
+                native.write_bytes(b'owned native session evidence')
+                foreign_native.write_bytes(b'foreign native session evidence')
+                attempt_id = f'native-phase-attempt-{index}'
+                session_id = f'native-phase-session-{index}'
+                receipt = {'result': {'nativeSession': {
+                    'harness': 'codex', 'sessionId': session_id, 'captured': True,
+                    'storageOwner': 'harness-user-store', 'resumeMode': 'initial'},
+                    'nativeCheckpoint': {'version': 1, 'sessionId': session_id,
+                                         'taskId': run['runId'], 'attemptId': attempt_id}}}
+                with board.store.db.write() as connection:
+                    connection.execute(
+                        "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
+                        "adapter,shutdown_confirmed,result_json,result_form,created_at,updated_at)"
+                        " VALUES(?,?,1,'fixture','finished','codex',1,?,'archived-report-v1',?,?)",
+                        (attempt_id, run['runId'], json.dumps(receipt), board.store.now(), board.store.now()))
+
+                def delete_native(ids, *, state_dir):
+                    # Substitute only the native app boundary; every selected
+                    # identity and phase, SQL fence and physical file are real.
+                    self.assertEqual(ids, [session_id])
+                    self.assertEqual(state_dir, board.directory)
+                    present = native.exists()
+                    native.unlink(missing_ok=True)
+                    return {session_id: 'deleted' if present else 'already-gone'}
+
+                with defer_reclaim.object(harness_registry, 'adapter',
+                        return_value=SimpleNamespace(delete_sessions=delete_native)):
+                    foreign = f'refs/hey-my-buddy/workspaces/ws-{"f" * 32}/input'
+                    head = self.git('rev-parse', 'HEAD').strip()
+                    self.git('update-ref', foreign, head)
+                    with defer_reclaim.object(deletion, stage, side_effect=OSError('injected phase stop')):
+                        if stage == '_delete_rows':
+                            with self.assertRaisesRegex(OSError, 'injected phase stop'):
+                                deletion.delete(board.store, run['macroTaskId'], 1)
+                        else:
+                            interrupted = deletion.delete(board.store, run['macroTaskId'], 1)
+                            self.assertEqual(interrupted['state'], 'deleting', interrupted)
+                    workspace_gone = stages.index(stage) > stages.index('_delete_workspaces')
+                    self.assertEqual(native.exists(), stage == '_delete_sessions')
+                    self.assertEqual(foreign_native.read_bytes(), b'foreign native session evidence')
+                    attempts_gone = stages.index(stage) > stages.index('_delete_private_roots')
+                    sessions_gone = stages.index(stage) > stages.index('_delete_session_group')
+                    control_gone = stages.index(stage) > stages.index('_delete_cli_files')
+                    self.assertEqual(directory.exists(), not workspace_gone)
+                    if not workspace_gone:
+                        self.assertEqual((directory / 'manifest.json').read_bytes(), frozen)
+                    self.assertEqual(bool(self.git('for-each-ref', '--format=%(refname)', own_prefix)),
+                                     not workspace_gone)
+                    self.assertEqual((attempts / 'phase-proof').exists(), not attempts_gone)
+                    self.assertEqual((sessions / 'phase-proof').exists(), not sessions_gone)
+                    self.assertEqual(control.exists(), not control_gone)
+                    self.assertEqual(self.git('rev-parse', foreign).strip(), head)
+                    with board.store.db.read() as connection:
+                        self.assertIsNotNone(connection.execute('SELECT 1 FROM macro_task_deletions WHERE target_id=?',
+                                                                (run['macroTaskId'],)).fetchone())
+                        self.assertIsNotNone(connection.execute('SELECT 1 FROM workflow_runs WHERE run_id=?',
+                                                                (run['runId'],)).fetchone())
+                    board.store.db.close()
+                    resumed = BoardStore(board.directory)
+                    self.addCleanup(resumed.db.close)
+                    resumed.initialize()
+                    done = deletion.delete(resumed, run['macroTaskId'], 1)
+                    self.assertEqual(done['state'], 'deleted', done)
+                    self.assertFalse(directory.exists())
+                    self.assertFalse(attempts.exists())
+                    self.assertFalse(sessions.exists())
+                    self.assertFalse(control.exists())
+                    self.assertFalse(native.exists())
+                    self.assertEqual(foreign_native.read_bytes(), b'foreign native session evidence')
+                    self.assertFalse(self.git('for-each-ref', '--format=%(refname)', own_prefix))
+                    self.assertEqual(self.git('rev-parse', foreign).strip(), head)
 
     def test_borrower_deletes_only_its_output_in_a_foreign_workspace_namespace(self):
         board = self.board()
@@ -181,10 +276,10 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         self.assertEqual(output['snapshotSha256'], host_output['snapshotSha256'])
         with board.store.db.write() as connection:
             output_id = board.store.workflow._pin_artifact(connection, run_id=borrower['runId'], kind='output',
-                                                           manifest=output, attempt_id=None, turn_id=None,
+                                                           manifest=output, attempt_id='foreign-output-attempt', turn_id=None,
                                                            now=board.store.now())
             host_id = board.store.workflow._pin_artifact(connection, run_id=borrower['runId'], kind='partial-output',
-                                                         manifest=host_output, attempt_id=None, turn_id=None,
+                                                         manifest=host_output, attempt_id='foreign-output-attempt', turn_id=None,
                                                          now=board.store.now())
             self.assertEqual(output_id, host_id)
         with self.assertRaises(BoardError) as caught:
@@ -273,10 +368,10 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                                                manifest=manifest, attempt_id=None, turn_id=None,
                                                now=board.store.now())
             board.store.workflow._pin_artifact(connection, run_id=borrower['runId'], kind='resolved-output',
-                                               manifest=resolution, attempt_id=None, turn_id=None,
+                                               manifest=resolution, attempt_id=attempt_id, turn_id=None,
                                                now=board.store.now())
             board.store.workflow._pin_artifact(connection, run_id=borrower['runId'], kind='output',
-                                               manifest=output, attempt_id=None, turn_id=None,
+                                               manifest=output, attempt_id=attempt_id, turn_id=None,
                                                now=board.store.now())
         self.close(board, borrower)
         folder = board.directory / 'workspaces' / manifest['workspaceId'] / 'outputs' / workspace._sha(

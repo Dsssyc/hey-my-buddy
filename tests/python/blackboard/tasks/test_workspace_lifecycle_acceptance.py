@@ -195,6 +195,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         })
         self.assertEqual(continued["state"], "executing")
         second_claim = self.claim(board, run_id, request_id="cleared-refs-second", nonce="q" * 16)
+        self.assertIsNotNone(second_claim["claim"], self.view(board, run_id)["activeRequest"])
         second_manifest = turn_manifest(self.directory, second_claim["claim"]["turn"]["input"])
         clear_workspace_refs()
         attempt = second_claim["claim"]["attempt"]
@@ -430,15 +431,14 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
             connection.execute(
                 "INSERT INTO workflow_artifacts(artifact_id, run_id, turn_id, attempt_id, kind,"
                 " content_form, manifest_json, output_snapshot_sha256, output_workspace_id,"
-                " output_manifest_sha256, output_ref, output_commit, output_action, created_at)"
-                " VALUES('art-forged', ?, NULL, NULL, 'resolved-output', 'sealed-inline-v1', ?, ?, ?, ?, ?, ?, 'adopt',"
+                " output_manifest_sha256, output_commit, output_action, created_at)"
+                " VALUES('art-forged', ?, NULL, 'forged-attempt', 'resolved-output', 'sealed-inline-v1', ?, ?, ?, ?, ?, 'adopt',"
                 " '2020-01-01T00:00:00.000Z')",
                 (submitted["runId"], canonical_json({
                     "kind": "resolution", "action": "adopt",
                     "manifestSha256": manifest["manifestSha256"], "snapshotSha256": "0",
                     "adoptedPaths": ["smuggled.txt"], "changedPaths": ["smuggled.txt"],
                 }), "0", manifest["workspaceId"], manifest["manifestSha256"],
-                 f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/outputs/forged",
                  manifest["inputCommit"]),
             )
         params = {"runId": submitted["runId"], "note": "the forged record must not smuggle this path",

@@ -259,6 +259,12 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     const workflows = outcomes.filter(outcome => outcome.kind === "workflow-get");
     expect(snapshots).toHaveLength(1);
     expect(workflows.length).toBeGreaterThanOrEqual(3);
+    expect(outcomes.find(outcome => outcome.path === "normal/timeline-macro-input.json")).toMatchObject({
+      accepted: true, facts: { macroTaskId: "macro-55555555-5555-4555-8555-555555555555", rows: 2 },
+    });
+    expect(outcomes.find(outcome => outcome.path === "normal/timeline-macro-c.json")).toMatchObject({
+      accepted: true, facts: { macroTaskId: "macro-33333333-3333-4333-8333-333333333333", rows: 7 },
+    });
 
     // A preview snapshot must carry the single Router and the model service note
     // schema the current console requires (the original schema-13 defect).

@@ -120,8 +120,25 @@ describe("input rejection presentation", () => {
     history.turns[0]!.inputFailure = failure;
     open({ step: 3, replies: { workflow: record, audit: history, task: task({ inputFailure: inputFailure(false) }) } });
     await ready();
-    expect(within(pane()).getAllByText("本地核对拒收")).toHaveLength(1);
+    const facts = pane().querySelectorAll("[data-slot=input-failure]");
+    expect(facts).toHaveLength(1);
+    expect(within(facts[0] as HTMLElement).getByText("本地核对拒收")).toBeTruthy();
     expect(within(pane()).queryByText("原生拒收")).toBeNull();
+  });
+
+  it("names the input-rejection stage in the turn's cause line in both languages", async () => {
+    for (const language of ["zh", "en"] as const) for (const known of [true, false]) {
+      setLanguageChoice(language);
+      const failure = inputFailure(known), record = workflow();
+      record.turns[0]!.inputFailure = failure;
+      open({ step: 7, replies: { workflow: record, task: task({ state: "failed", inputFailure: failure,
+        selectedAttempt: { result: { terminationReason: "harness-error" }, error: "Synthetic input rejection" } }) } });
+      await ready();
+      const cause = pane().querySelector("[data-slot=pane-title] > p")!;
+      expect(cause.textContent).toBe(known ? language === "zh" ? "本地核对拒收" : "Rejected by local preflight"
+        : language === "zh" ? "原生拒收" : "Rejected by native admission");
+      cleanup();
+    }
   });
 
   it("shows the request's frozen failure once while waiting for Host, without repeating the summary", () => {

@@ -1282,10 +1282,6 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
                 or not Path(intent["cwd"]).is_relative_to(Path(final_input["checkoutRoot"]))):
             raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The continuation seal does not bind its allocation")
         verify_sealed_output(final_input, final_input, output)
-        repository = _repository(final_input)
-        if (_line(repository, "symbolic-ref", "--quiet", output["ref"], allowed=(0, 1))
-                or _commit(repository, output["ref"]) != output["commit"]):
-            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The fixed handoff reference changed")
     if manifest is not None:
         verify(manifest, state_dir=state_dir, require_unchanged=False)
         return manifest
@@ -2648,6 +2644,18 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
         checkout_root = Path(allocation["path"])
         if not _inside(manifest["path"], checkout_root):
             result["reasons"].append("unsafe-path")
+        # The plan's terminal binding identifies the allocation. A later Host
+        # seal can describe another prepared input on that same checkout.
+        proof_input = manifest
+        if isinstance(sealed, dict) and isinstance(sealed.get('snapshot'), dict):
+            proof_input = next((item for item in (manifest, *(retained or ()))
+                                if item['workspaceId'] == sealed.get('workspaceId')
+                                and item['manifestSha256'] == sealed.get('manifestSha256')
+                                and item['checkoutRoot'] == manifest['checkoutRoot']
+                                and manifest_project_id(item) == manifest_project_id(manifest)), None)
+            if proof_input is None:
+                result['reasons'].append('unsealed-handoff')
+                return result
         restored = None
         if resume:
             repository = Path(repository) if repository is not None else _repository(manifest)
@@ -2661,7 +2669,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
             if record is None:
                 result["eligible"] = not result["reasons"]
                 return result
-            restored = _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed,
+            restored = _cleanup_restore(checkout_root, repository, git_dir, proof_input, sealed,
                                         state_dir=state_dir, allowed=tuple(allowed or ()))
         try:
             actual = (_inspect(str(checkout_root), checkout=manifest) if repository is not None
@@ -2676,7 +2684,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
         if repository is not None and str(repository) != actual["repositoryPath"]:
             result["reasons"].append("identity-changed")
         try:
-            _cleanup_proof(Path(actual["repositoryPath"]), checkout_root, allocation, manifest, retained, sealed,
+            _cleanup_proof(Path(actual["repositoryPath"]), checkout_root, allocation, proof_input, retained, sealed,
                            result, state_dir=state_dir, allowed=tuple(allowed or ()), observation=restored,
                            resume=resume)
         except BoardError:
