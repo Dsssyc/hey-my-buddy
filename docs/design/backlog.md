@@ -202,6 +202,7 @@
 
 **封存另造的快照提交会进到项目历史，引用会一直累积。**（2026-11-04，Gridmen 的 Host 在两个仓库里实测后，经它的会话转来开发者的反馈“快照提交这个太冗余，还多占了 git 的存储”；数字 Host 未复核）
 - 快照提交：`workspace._commit_tree` 用固定的身份 “hey-my-buddy snapshot” 与 2000-01-01 的日期另造一个提交，让对象写出后中途崩溃的恢复可以确定。交付里的 `outputCommit` 就是它。Worker 自己也提交过时，两者的父提交与树都相同。Host 照 `outputCommit` 快进或合并，这个提交就进了项目的历史；开发者对 AI 写的代码坚持普通合并，进去了就一直留着。
+  - 已经真实发生：2026-11-04，c-two 的 Host 推送前发现一个提交的作者是快照身份（`hey-my-buddy snapshot <hey-my-buddy@localhost>`，日期 2000-01-01），改成仓库身份后才推送；c-two 上游的 main 里已经有一个以前留下的同类提交。
 - 引用：已验收、检出也已回收的工作区，`refs/hey-my-buddy/` 下的 input、outputs 与 retained 引用都还在，要到宏任务删除时才删。gridmen 有 551 个，只由它们持有的对象压缩后 4.89 MB（全库 38.8 MB）；nh-flood-2d 有 127 个，0.35 MB。
 - Host 的看法：
   - Worker 自己的提交与封存的状态相同时，直接用它，不另造；只有确实要另造时才造。
