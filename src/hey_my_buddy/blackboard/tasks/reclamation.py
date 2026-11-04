@@ -316,8 +316,10 @@ class Reclamation:
 
     Startup rebuilds from SQLite and the private directory entries. Thereafter
     the store's existing task-change notification invalidates cached ownership;
-    new/replaced directory entries are found when the allocation parent changes.
-    Every pending deletion still proves its current facts at its own boundary.
+    every run lists the allocation parent again, so new, replaced and deleted
+    entries are all found, and an entry is reprocessed only when it is new or
+    replaced by a different inode. Every pending deletion still proves its
+    current facts at its own boundary.
     """
     def __init__(self, store):
         self.store = store
@@ -326,7 +328,6 @@ class Reclamation:
         self._changed = set()
         self._workspaces = set()
         self._task_ids = {}
-        self._allocation_stamp = None
         self._entries = {}
         self._allocations = set()
         self._owned_allocations = {}
@@ -394,18 +395,15 @@ class Reclamation:
         self._allocations.update(revoked)
         if not root.is_dir():
             return
-        stamp = root.stat().st_mtime_ns
-        if stamp != self._allocation_stamp:
-            with os.scandir(root) as entries:
-                current = {root / entry.name: entry.inode() for entry in entries
-                           if workspace._workspace_identifier(entry.name)}
-            self._allocations.update(path for path, inode in current.items() if self._entries.get(path) != inode)
-            self._allocations.intersection_update(current.keys() | revoked)
-            for directory in self._entries.keys() - current.keys():
-                self._blocked_allocations.pop(directory, None)
-                self._remember_tasks(directory, set())
-            self._entries = current
-            self._allocation_stamp = stamp
+        with os.scandir(root) as entries:
+            current = {root / entry.name: entry.inode() for entry in entries
+                       if workspace._workspace_identifier(entry.name)}
+        self._allocations.update(path for path, inode in current.items() if self._entries.get(path) != inode)
+        self._allocations.intersection_update(current.keys() | revoked)
+        for directory in self._entries.keys() - current.keys():
+            self._blocked_allocations.pop(directory, None)
+            self._remember_tasks(directory, set())
+        self._entries = current
         for directory, entry in tuple(self._blocked_allocations.items()):
             if self._allocation_entry(directory) != entry:
                 self._allocations.add(directory)

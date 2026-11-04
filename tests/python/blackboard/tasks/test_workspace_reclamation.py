@@ -925,6 +925,7 @@ class ReclamationTests(LifecycleTestCase):
         self.assertEqual(board.store.service_issues(), [])
 
     def test_disappeared_unproven_allocation_does_not_remain_in_the_pending_inventory(self):
+        import os
         from unittest.mock import patch
         from hey_my_buddy import private_dirs
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
@@ -933,8 +934,13 @@ class ReclamationTests(LifecycleTestCase):
         (directory / '.lock').touch()
         (directory / 'request.json').write_text('not a record', encoding='utf-8')
         maintenance = Reclamation(board.store)
+        stamp = directory.parent.stat().st_mtime_ns
         maintenance.run()
         private_dirs.remove_tree(directory)
+        # A delete inside the same filesystem timestamp tick as the create
+        # leaves the parent directory's mtime unchanged, so pin it back to the
+        # value the first inventory read: discovery must not depend on it.
+        os.utime(directory.parent, ns=(stamp, stamp))
         lstat = Path.lstat
         def no_removed_history(path, *args, **kwargs):
             if path.is_relative_to(directory):
