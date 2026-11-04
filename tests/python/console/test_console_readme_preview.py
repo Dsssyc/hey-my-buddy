@@ -36,6 +36,21 @@ class ReadmeSceneTests(unittest.TestCase):
                     self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                     self.assertIn("preview smoke: 0 failure(s) with scenario=readme", result.stdout)
 
+    def test_list_contains_only_the_four_authored_macro_tasks(self):
+        for language in ("en", "zh"):
+            with self.subTest(language=language):
+                p = self.scene(language)
+                page = p.macro_task_page({})
+                self.assertEqual(4, page["totals"]["all"])
+                self.assertEqual({p.MACRO_A, p.MACRO_B, p.MACRO_C, p.MACRO_PALETTE},
+                                 {row["macroTaskId"] for group in page["groups"]
+                                  for row in group["macroTasks"]})
+                for group in page["groups"]:
+                    self.assertEqual(len(group["macroTasks"]), group["total"])
+                    self.assertIsNone(group["nextCursor"])
+                    expanded = p.macro_task_page({"group": group["id"]})["groups"]
+                    self.assertEqual([group], expanded)
+
     def test_turns_and_artifacts_have_ordered_evidence(self):
         for language in ("en", "zh"):
             with self.subTest(language=language):

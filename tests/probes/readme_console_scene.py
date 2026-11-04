@@ -16,6 +16,7 @@ def configure(p: ModuleType, language: str) -> None:
     flash = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "max"}
     claude = {"harness": "claude", "provider": "anthropic", "model": "claude-opus-5-5", "effort": "high"}
     p.HOST_A = "host-atlas"
+    p.LIST_PADDING_COUNT = 0
     p.COOLING_UNTIL = p.instant(10, 30)
     p.PROJECTS = {
         "alpha": {"id": "synthetic-atlas", "path": "~/projects/atlas", "label": text("Atlas search", "Atlas 搜索")},

@@ -141,6 +141,9 @@ MACRO_INPUT = "macro-55555555-5555-4555-8555-555555555555"
 MACRO_PALETTE = "macro-44444444-4444-4444-8444-444444444444"
 STANDALONE = "preview-run-c1"
 STANDALONE_GROUP = f"run:{STANDALONE}"
+# Ordinary regression scenarios also exercise list pagination; authored scenes
+# can select a smaller list without inheriting these unrelated rows.
+LIST_PADDING_COUNT = 6
 
 PROJECTS = {
     "alpha": {"id": "synthetic-preview-alpha", "path": "/synthetic-preview/hey-my-buddy",
@@ -2273,7 +2276,7 @@ def preview_list_rows(applied: dict, state: PreviewState | None) -> list[dict]:
             if (state is None or group not in state.deleted) and group_matching(group, applied)]
     # These rows exercise a page boundary without changing the timeline fixtures.
     template = macro_task_summary(MACRO_C, set(FIXTURES["groups"][MACRO_C]))
-    for index in range(6):
+    for index in range(LIST_PADDING_COUNT):
         row = {**template, "macroTaskId": f"macro-preview-list-{index + 1}",
                "title": f"合成分页任务 {index + 1}",
                "createdAt": instant(0, index + 1), "lastActivityAt": instant(0, index + 1),
