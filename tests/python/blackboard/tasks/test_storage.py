@@ -404,7 +404,8 @@ class StorageTests(BoardTestCase):
             first = board.call('storage_plan', {})
             with self.assertRaises(BoardError) as caught:
                 board.call('storage_apply', {'planId':first['planId'], 'commandId':'x'})
-            self.assertEqual(caught.exception.code, 'CONFIRMATION_REQUIRED')
+            self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+            self.assertEqual(caught.exception.details['field'], 'confirm')
             board.call('storage_apply', {'planId':first['planId'], 'commandId':'x', 'confirm':True})
             second = board.call('storage_plan', {})
             with self.assertRaises(BoardError) as caught:

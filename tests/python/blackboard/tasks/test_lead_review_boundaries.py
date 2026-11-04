@@ -1,8 +1,7 @@
-"""Host review of a Lead cannot take over the Lead's independent owned work."""
+"""Host review of a Lead cannot control the Lead's independent owned work."""
 
 from blackboard.tasks import test_lead_owned as lead_helpers
-from blackboard.tasks.test_workflow import WorkflowTestCase
-from blackboard.routing.test_decision import DecisionTestCase
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from hey_my_buddy.blackboard.tasks import workflow
 from hey_my_buddy.errors import BoardError
 
@@ -24,22 +23,19 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         self.assertIsNotNone(row)
         return row["artifact_id"]
 
-    def test_host_control_cannot_target_a_lead_owned_micro_task(self):
+    def test_host_cannot_target_independent_lead_owned_work_through_the_lead(self):
         operations = {
-            "workflow_accept": lambda child, lead: {
+            "workflow_accept": lambda child: {
                 "artifactId": child["finalArtifactId"], "note": "Host review",
                 "notRequired": "The fixture has no integration target",
             },
-            "workflow_conclude": lambda child, lead: {"note": "Host closes child"},
-            "workflow_continue": lambda child, lead: {
-                "commandId": "host-continue-child", "expectedRevision": lead["revision"],
-                "input": "Continue the child", "helperPolicy": "keep",
+            "workflow_conclude": lambda child: {
+                "artifactId": child["finalArtifactId"], "note": "Host closes child",
             },
-            "workflow_reclaim": lambda child, lead: {},
-            "workflow_scope_amend": lambda child, lead: {
-                "commandId": "host-amend-child", "expectedRevision": lead["revision"],
-                "writeScope": ["review.txt"], "expectedScopeVersion": 1, 'note': "Review scope",
+            "workflow_continue": lambda child: {
+                "artifactId": child["finalArtifactId"], "input": "Continue the child",
             },
+            "workflow_cancel": lambda child: {"note": "Host stops child"},
         }
         board = self.board()
         lead, claim = self.lead(board)
@@ -47,65 +43,58 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         child, _ = self.finish_owned(board, child)
         for operation, fields in operations.items():
             with self.subTest(operation=operation):
-                lead_view = self.view(board, lead)
                 before = self.view(board, child)
                 with self.assertRaises(BoardError) as caught:
                     board.call(operation, {
                         "runId": lead["runId"], "targetRunId": child["runId"],
-                        **lead["control"], **fields(child, lead_view),
+                        **fields(child),
                     })
                 self.assertEqual(caught.exception.code, "UNAUTHORIZED")
-                self.assertEqual(self.view(board, child)["revision"], before["revision"])
+                after = self.view(board, child)
+                self.assertEqual(after["state"], before["state"])
+                self.assertEqual(after["finalArtifactId"], before["finalArtifactId"])
 
-    def test_operations_without_target_selector_keep_their_existing_boundary(self):
+    def test_direct_host_actions_cannot_mutate_lead_owned_work(self):
         board = self.board()
         lead, claim = self.lead(board)
         child = self.owned(board, claim)
         child, _ = self.finish_owned(board, child, disposition="assistance")
         request_id = child["activeRequest"]["requestId"]
         for operation, fields in (
-            ("workflow_decide", {"requestId": request_id, "commandId": "wrong-decision",
-                                 "expectedRevision": child["revision"], "decision": "decline"}),
+            ("workflow_continue", {"requestId": request_id, "decision": "decline"}),
             ("workflow_cancel", {"note": "Wrong owner"}),
-            ("workflow_takeover", {"commandId": "wrong-takeover", "expectedOwnerGeneration": 1,
-                                   "newHostId": "another-host"}),
         ):
-            with self.subTest(operation=operation, selector="direct"), self.assertRaises(BoardError) as caught:
-                board.call(operation, {"runId": child["runId"], **lead["control"], **fields})
+            with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
+                board.call(operation, {"runId": child["runId"], **fields})
             self.assertEqual(caught.exception.code, "UNAUTHORIZED")
-            with self.subTest(operation=operation, selector="unsupported"), self.assertRaises(BoardError) as caught:
-                board.call(operation, {"runId": lead["runId"], "targetRunId": child["runId"],
-                                       **lead["control"], **fields})
-            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         self.assertEqual(self.view(board, child)["state"], "awaiting-host")
+        self.assertEqual(self.view(board, child)["activeRequest"]["requestId"], request_id)
 
-    def test_host_takeover_keeps_an_owned_micro_tasks_running_routing_attempt(self):
-        self.catalog_fixture()
-        DecisionTestCase.use_helper(self)
-        board = self.board()
-        DecisionTestCase.seed(self, board)
+    def test_host_reads_and_rejected_cancel_leave_owned_execution_running(self):
+        board = self.board(max_concurrent=4)
+        with board.store.db.write() as db:
+            db.execute(
+                "INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
+                " VALUES(?,?,?,8)",
+                (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]),
+            )
         lead, claim = self.lead(board)
-        child = board.call("workflow_submit", {
-            "requestId": "routed-owned", "task": "Select an executor", "cwd": str(self.workdir("routed-owned")),
-            "executionWorkspace": {"kind": "existing", "access": "write"},
-            "submissionToken": "r" * 32, "credential": claim["agentCredential"],
-        })
-        self.assertEqual(child["routing"]["status"], "queued")
-        route_id = child["routing"]["taskId"]
-        pass  # Admission is owned by the service.
-        route_claim = self.claim(board, "router", claim_request_id="owned-route", run_id=route_id)["claim"]
-        self.assertEqual(route_claim["attempt"]["taskId"], route_id)
-        before = board.call("task_get", {"runId": route_id})["task"]
-        taken = board.call("workflow_takeover", {
-            "runId": lead["runId"], "commandId": "takeover-lead", "expectedOwnerGeneration": 1,
-            "newHostId": "successor", **lead["control"],
-        })
-        self.assertEqual(taken["ownerGeneration"], 2)
-        after = board.call("task_get", {"runId": route_id})["task"]
+        child = self.owned(board, claim, "running-owned")
+        child_claim = self.claim(board, "w2", claim_request_id="owned-execution", run_id=child["runId"])["claim"]
+        self.assertEqual(child_claim["attempt"]["taskId"], child["runId"])
+        before = board.call("task_get", {"runId": child["runId"]})["task"]
+        self.view(board, lead)
+        self.view(board, child)
+        for packet in ({"runId": child["runId"]},
+                       {"runId": lead["runId"], "targetRunId": child["runId"]}):
+            with self.subTest(packet=packet), self.assertRaises(BoardError) as caught:
+                board.call("workflow_cancel", packet)
+            self.assertEqual(caught.exception.code, "UNAUTHORIZED")
+        after = board.call("task_get", {"runId": child["runId"]})["task"]
         self.assertEqual(after["state"], before["state"])
         self.assertEqual(after["selectedAttempt"]["attemptId"], before["selectedAttempt"]["attemptId"])
         self.assertFalse(after["selectedAttempt"]["cancelRequested"])
-        self.assertEqual(self.view(board, child)["routing"]["status"], "running")
+        self.assertEqual(self.view(board, child)["state"], "executing")
 
     def test_host_completion_refuses_unfinished_owned_work_with_bounded_details(self):
         board = self.board()
@@ -116,6 +105,9 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         self.finish_turn(board, {"claim": claim})
         view = self.view(board, lead)
         self.assertEqual(view["state"], "awaiting-host")
+        self.assertEqual(view["counts"]["ownedMicroTasks"], len(children))
+        self.assertEqual(len(view["ownedMicroTasks"]), workflow.MAX_CHILD_VIEW)
+        self.assertEqual(view["truncated"]["ownedMicroTasks"], 2)
         with self.assertRaises(BoardError) as caught:
             self.accept_run(board, view, artifact_id=self.output_artifact(board, lead))
         self.assertEqual(caught.exception.code, "NOT_READY")
@@ -125,12 +117,24 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         self.assertEqual([item["runId"] for item in unfinished], [child["runId"] for child in children[:workflow.MAX_CHILD_VIEW]])
         self.assertEqual(self.view(board, lead)["state"], "awaiting-host")
 
+    def test_authenticated_console_can_accept_lead_owned_delivery(self):
+        board = self.board()
+        _, claim = self.lead(board)
+        child = self.owned(board, claim)
+        delivered, _ = self.finish_owned(board, child)
+        accepted = board.console_call("workflow_accept", {
+            "runId": child["runId"], "artifactId": delivered["finalArtifactId"],
+            "note": "Reviewed in console", "notRequired": "The fixture has no separate target",
+        })
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(self.view(board, child)["state"], "accepted")
+
     def test_delivered_lead_acceptance_rechecks_owned_settlement(self):
         board = self.board()
         lead, claim = self.lead(board)
         child = self.owned(board, claim)
         child, _ = self.finish_owned(board, child)
-        self.accept_run(board, child)
+        self.accept_run(board, child, credential=claim["agentCredential"])
         self.finish_turn(board, {"claim": claim})
         delivered = self.view(board, lead)
         self.assertEqual(delivered["state"], "delivered")
@@ -153,11 +157,11 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         lead, claim = self.lead(board)
         accepted = self.owned(board, claim, "accepted")
         accepted, _ = self.finish_owned(board, accepted)
-        self.accept_run(board, accepted)
+        self.accept_run(board, accepted, credential=claim["agentCredential"])
         concluded = self.owned(board, claim, "concluded")
-        self.finish_owned(board, concluded)
-        board.call("workflow_conclude", {"runId": concluded["runId"], "note": "Reviewed and closed",
-                                         **self.control(concluded)})
+        concluded, _ = self.finish_owned(board, concluded)
+        board.call("workflow_conclude", {"runId": concluded["runId"], "artifactId": concluded["finalArtifactId"],
+                                         "note": "Reviewed and closed", "credential": claim["agentCredential"]})
         self.finish_turn(board, {"claim": claim})
         result = self.accept_run(board, self.view(board, lead))
         self.assertEqual(result["state"], "accepted")

@@ -323,7 +323,7 @@ def inspect(store) -> dict:
                     ' WHERE b.run_id=?', (run['run_id'],)).fetchone()
                 if owner is None:
                     raise
-                unproven_workspaces.append((run['run_id'], run['revision'], dict(owner), error.code))
+                unproven_workspaces.append((run['run_id'], dict(owner), error.code))
                 continue
             retained = store.workflow._allocation_provenance(connection, run)
             reasons = None
@@ -341,9 +341,9 @@ def inspect(store) -> dict:
             elif managed_workspace:
                 task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
                 reasons, _, _ = store.workflow._cleanup_reasons(connection, run, task, manifest)
-            workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons))
+            workspace_inputs.append((run['run_id'], manifest, retained, reasons))
     checked_inputs = []
-    for run_id, revision, manifest, retained, reasons in workspace_inputs:
+    for run_id, manifest, retained, reasons in workspace_inputs:
         if reasons is repository_check:
             physical = next((item for item in (manifest, *retained)
                              if item['kind'] == 'worktree' and item['checkoutRoot'] == manifest['checkoutRoot']), manifest)
@@ -353,7 +353,7 @@ def inspect(store) -> dict:
                 reasons = ['repository-not-found'] if repository is None else None
             except BoardError as error:
                 reasons = [error.code]
-        checked_inputs.append((run_id, revision, manifest, retained, reasons))
+        checked_inputs.append((run_id, manifest, retained, reasons))
     workspace_inputs = checked_inputs
     from . import reclamation
     native = reclamation.native_roots(store)
@@ -379,14 +379,14 @@ def inspect(store) -> dict:
     # Board knowledge is independent of whether physical ownership is proved.
     # Rejected/borrowed allocations must not fall through to the orphan path.
     recognized = set()
-    for run_id, revision, owner, code in unproven_workspaces:
+    for run_id, owner, code in unproven_workspaces:
         path = Path(os.path.normpath(owner['checkout_root']))
         recognized.add(path)
         if owner['workspace_kind'] == 'worktree' and workspace._workspace_identifier(owner['workspace_id']):
             recognized.add(state / 'workspaces' / owner['workspace_id'] / 'checkout')
             if workspace._path_present(path):
-                add('workspaces', path, [code], runId=run_id, revision=revision)
-    for _, _, manifest, retained, _ in workspace_inputs:
+                add('workspaces', path, [code], runId=run_id)
+    for _, manifest, retained, _ in workspace_inputs:
         for recorded in (manifest, *retained):
             root = recorded.get('checkoutRoot')
             if isinstance(root, str):
@@ -394,7 +394,7 @@ def inspect(store) -> dict:
             identifier = recorded.get('workspaceId')
             if recorded.get('kind') == 'worktree' and workspace._workspace_identifier(identifier):
                 recognized.add(state / 'workspaces' / identifier / 'checkout')
-    for run_id, revision, manifest, retained, reasons in workspace_inputs:
+    for run_id, manifest, retained, reasons in workspace_inputs:
         if reasons is None:
             continue  # Terminal allocations belong to the service's reclamation loop.
         try:
@@ -406,9 +406,9 @@ def inspect(store) -> dict:
                 continue
             seen.add(path)
             if not workspace._path_present(path):
-                add('workspaces', path.parent, [*reasons, 'checkout-missing'], runId=run_id, revision=revision)
+                add('workspaces', path.parent, [*reasons, 'checkout-missing'], runId=run_id)
             else:
-                add('workspaces', path, reasons, runId=run_id, revision=revision)
+                add('workspaces', path, reasons, runId=run_id)
         except BoardError:
             continue
     workspace_root = state / 'workspaces'
@@ -586,7 +586,6 @@ def locked(store):
 
 
 def plan(store, params: dict) -> dict:
-    schemas.reject_unknown(params, set(), 'storage.plan')
     with locked(store) as directory:
         result = inspect(store)
         result.update(planId='stg-' + uuid.uuid4().hex, expiresAt=(datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat())
@@ -595,11 +594,8 @@ def plan(store, params: dict) -> dict:
 
 
 def apply(store, params: dict) -> dict:
-    schemas.reject_unknown(params, {'planId', 'commandId', 'confirm'}, 'storage.apply')
-    plan_id = schemas.required_string(params, 'planId', max_length=64, pattern=re.compile(r'^stg-[0-9a-f]{32}$'))
-    command = schemas.required_string(params, 'commandId', max_length=128)
-    if params.get('confirm') is not True:
-        raise BoardError('CONFIRMATION_REQUIRED', 'Confirm the exact storage plan before applying it')
+    plan_id = params['planId']
+    command = params['commandId']
     with locked(store) as directory:
         receipt = directory / ('receipt-' + hashlib.sha256(command.encode()).hexdigest() + '.json')
         saved = _read_storage_json(receipt, missing_ok=True)

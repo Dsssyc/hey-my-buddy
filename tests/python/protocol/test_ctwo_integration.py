@@ -128,10 +128,14 @@ class CTwoIntegrationTests(unittest.TestCase):
                  "commit", "--allow-empty", "-qm", "private integration input"))):
             process = self.spawn(["git", *arguments], f"git-{number}", cwd=work)
             self.assertEqual(process.wait(timeout=5), 0)
-        submitted = self.client.call("workflow_submit", {**BUDDY,
-            "requestId": "ctwo-integration", "hostId": "integration-host",
-            "task": "model-free live transport fixture", "cwd": str(work), "expectedSeconds": 30,
-            "executionWorkspace": {"kind": "existing", "access": "write"}})
+        from hey_my_buddy.cli.main import _creation_key
+        from hey_my_buddy.blackboard.tasks import workspace
+        project_id=workspace.ensure_project_id(workspace.repository_at(str(work),allow_parent=True))
+        title='ctwo-integration'
+        task='model-free live transport fixture'
+        submitted=self.client.call('workflow_submit',{'cwd':str(work),'macroTaskId':'standalone','title':title,'task':task,
+            'buddy':':'.join(BUDDY.values()),'checkout':'existing','access':'write','inputs':[],'writeScope':['.'],
+            'expectedSeconds':30,'creationKey':_creation_key(['adr032-submit-v1','project:'+project_id,title,task])})
         self.run_id = submitted["runId"]
 
     def attach_execution(self):
@@ -193,7 +197,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         if not kill:
             self.assert_same_connection_survives_expiry()
         observation = self.client.call("inquiry_observe", {"runId": self.run_id,
-            "inquiryId": "through-service", "question": "Commit this private inquiry.", "timeoutMs": 2000})
+            "question": "Commit this private inquiry.", "timeoutMs": 2000})
         self.record("service-inquiry.json", observation)
         self.assertTrue(observation["bridge"]["enabled"])
         self.assertTrue(observation["bridge"]["observed"], "service -> execution must return a commit")
@@ -202,7 +206,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         journals = list(self.state.glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/native-journal.jsonl"))
         self.assertEqual(len(journals), 1)
         committed = json.loads(journals[0].read_text(encoding="utf-8"))
-        self.assertEqual(committed["requestId"], "through-service")
+        self.assertEqual(committed["requestId"],observation["inquiryId"])
         self.assertEqual(committed["identity"]["taskId"], self.run_id)
         exchange(self.service, {"op": "kill-execution" if kill else "finish"})
 

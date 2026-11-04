@@ -9,6 +9,7 @@ from copy import deepcopy
 import unittest
 
 from support import BoardTestCase
+from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
@@ -54,7 +55,7 @@ class RouterListConfigurationTests(BoardTestCase):
         return result
 
     def test_fresh_private_board_initializes_router_defaults(self):
-        snapshot = self.board_.call("console_snapshot", {})
+        snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(snapshot["configuration"], {
             "routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
             "defaultRoutingMode": "fast", "routingBudget": "standard",
@@ -71,7 +72,7 @@ class RouterListConfigurationTests(BoardTestCase):
         result = self.publish({"routerBuddyIds": [A, B], "routerRetryIntervalSeconds": 30,
                                "defaultRoutingMode": "review", "routingBudget": "deep"})
         self.assertTrue(result["published"])
-        snapshot = self.board_.call("console_snapshot", {})
+        snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [A, B])
         self.assertEqual(snapshot["configuration"]["routerRetryIntervalSeconds"], 30)
         self.assertEqual(snapshot["configuration"]["defaultRoutingMode"], "review")
@@ -91,12 +92,12 @@ class RouterListConfigurationTests(BoardTestCase):
         self.publish({"routerBuddyIds": [A, B], "routerRetryIntervalSeconds": 600})
         # Omitted fields preserve their stored values.
         self.publish({"routingBudget": "brief"})
-        snapshot = self.board_.call("console_snapshot", {})
+        snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [A, B])
         self.assertEqual(snapshot["configuration"]["routingBudget"], "brief")
         # The explicit clear is an empty array.
         self.publish({"routerBuddyIds": []})
-        self.assertEqual(self.board_.call("console_snapshot", {})["configuration"]["routerBuddyIds"], [])
+        self.assertEqual(console_snapshot_projection(self.board_.service)[0]["configuration"]["routerBuddyIds"], [])
         for value in ({"routerBuddyIds": None}, {"routerBuddyIds": [A, A]}, {"routerBuddyIds": [A, None]},
                       {"routerBuddyId": A}, {"fastRouterBuddyId": A}, {"reviewRouterBuddyId": B},
                       {"routerBuddyIds": "solo"}, {"routerRetryIntervalSeconds": True},
@@ -106,12 +107,12 @@ class RouterListConfigurationTests(BoardTestCase):
                 self.publish(value)
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         # The rejected patches changed nothing.
-        self.assertEqual(self.board_.call("console_snapshot", {})["configuration"]["routerBuddyIds"], [])
+        self.assertEqual(console_snapshot_projection(self.board_.service)[0]["configuration"]["routerBuddyIds"], [])
 
     def test_reorder_add_remove_and_scalar_settings_survive_real_save_and_read(self):
         self.publish({"routerBuddyIds": [A]})
         self.publish({"routerBuddyIds": [A, B]})
-        self.assertEqual(self.board_.call("console_snapshot", {})["configuration"]["routerBuddyIds"], [A, B])
+        self.assertEqual(console_snapshot_projection(self.board_.service)[0]["configuration"]["routerBuddyIds"], [A, B])
         self.publish({"routerBuddyIds": [B, A], "defaultRoutingMode": "review",
                       "routerRetryIntervalSeconds": 47})
         self.assertEqual(self.stored()["buddies"], [(0, B), (1, A)])
@@ -121,7 +122,7 @@ class RouterListConfigurationTests(BoardTestCase):
                 "routerBuddyIds": [B], "defaultRoutingMode": "review",
                 "routingBudget": "standard", "routerRetryIntervalSeconds": 47,
                 "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600})
-        self.assertEqual(self.board_.call("console_snapshot", {})["configuration"]["routerBuddyIds"], [B])
+        self.assertEqual(console_snapshot_projection(self.board_.service)[0]["configuration"]["routerBuddyIds"], [B])
 
     def test_list_items_need_published_complete_identity_and_nothing_more(self):
         with self.assertRaises(BoardError) as caught:
@@ -147,7 +148,7 @@ class RouterListConfigurationTests(BoardTestCase):
                        ("reviewonly", "reviewonly", "zcode", "fixture", "reviewonly", "max",
                         canonical_json([])))
         self.publish({"routerBuddyIds": [A, "disabled", "offline", "reviewonly"], "defaultRoutingMode": "review"})
-        self.assertEqual(self.board_.call("console_snapshot", {})["configuration"]["routerBuddyIds"],
+        self.assertEqual(console_snapshot_projection(self.board_.service)[0]["configuration"]["routerBuddyIds"],
                          [A, "disabled", "offline", "reviewonly"])
 
     def test_interval_and_budget_patches_do_not_require_availability(self):
@@ -159,7 +160,7 @@ class RouterListConfigurationTests(BoardTestCase):
                         canonical_json([])))
         self.publish({"routerBuddyIds": ["offline"]})
         self.publish({"routerRetryIntervalSeconds": 1, "routingBudget": "brief", "defaultRoutingMode": "review"})
-        configuration = self.board_.call("console_snapshot", {})["configuration"]
+        configuration = console_snapshot_projection(self.board_.service)[0]["configuration"]
         self.assertEqual(configuration["routerBuddyIds"], ["offline"])
         self.assertEqual(configuration["routerRetryIntervalSeconds"], 1)
 
@@ -170,7 +171,7 @@ class RouterListConfigurationTests(BoardTestCase):
             with self.board_.store.db.read() as db:
                 router.configuration(db)
                 router.current_router(db, now="2026-01-01T01:00:00.000Z")
-            self.board_.call("console_snapshot", {})
+            console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(self.stored(), before)
 
     def test_patch_input_dicts_are_never_mutated(self):

@@ -26,7 +26,7 @@ class SingleRouterRequestTests(BoardTestCase):
         mock_readonly.install(self)
 
     def request(self, board, **extra):
-        return board.call("selection_request", {"requestId": "selection", "task": "bounded change", **extra})
+        return board.store.decisions.request_select({"requestId": "selection", "task": "bounded change", **extra})
 
     def audit(self, board, response):
         return board.call("selection_get", {"decisionId": response["decisionId"], "includeAudit": True})["decision"]
@@ -254,25 +254,25 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertNotIn("fallback", view)
         self.assertNotIn("requestedRoutingMode", view)
 
-    def test_selection_request_accepts_task_beyond_old_router_limit(self):
+    def test_direct_selection_accepts_task_beyond_old_router_limit(self):
         board = self.board()
         self.seed(board)
-        response = board.call("selection_request", {"requestId": "large-selection",
+        response = board.store.decisions.request_select({"requestId": "large-selection",
                                                     "task": "x" * 9000})
         view = self.audit(board, response)
         self.assertEqual(view["status"], "queued")
         self.assertEqual(view["input"]["task"], "x" * 9000)
         self.assertIsNotNone(view["runId"])
 
-    def test_selection_request_uses_shared_one_mib_task_bound(self):
+    def test_direct_selection_uses_shared_one_mib_task_bound(self):
         board = self.board()
         self.seed(board)
         task = "x" * schemas.MAX_TASK_BYTES
-        accepted = board.call("selection_request", {"requestId": "exact-one-mib", "task": task})
+        accepted = board.store.decisions.request_select({"requestId": "exact-one-mib", "task": task})
         self.assertEqual(accepted["status"], "queued")
         self.assertEqual(self.audit(board, accepted)["input"]["task"], task)
         with self.assertRaises(BoardError) as raised:
-            board.call("selection_request", {"requestId": "over-one-mib", "task": task + "x"})
+            board.store.decisions.request_select({"requestId": "over-one-mib", "task": task + "x"})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
     def test_admission_failure_rolls_back_request_task_and_event_together(self):
@@ -365,13 +365,14 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.seed(board, decision_buddy=None)
         first = self.routed(board)
         self.publish_user_patch(board, request_id="choose-router", command_id="choose-router", configuration={"routerBuddyIds": [BUDDY_ID]})
-        pending = self.continue_run(board, first, reroute=True)
+        request_id = first["activeRequest"]["requestId"]
+        pending = self.continue_run(board, first, requestId=request_id, buddy="route")
         board.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
         fresh = board.call("workflow_get", {"runId": first["runId"]})
         self.assertEqual(fresh["routing"]["status"], "queued")
         self.assertNotEqual(fresh["routing"]["decisionId"], first["routing"]["decisionId"])
         self.assertEqual(fresh["routing"]["routerBuddyId"], BUDDY_ID)
-        self.assertTrue(self.continue_run(board, first, reroute=True)["duplicate"])
+        self.assertTrue(self.continue_run(board, first, requestId=request_id, buddy="route")["alreadyResponded"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 2)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)

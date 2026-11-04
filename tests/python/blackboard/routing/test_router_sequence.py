@@ -80,7 +80,7 @@ class RouterSequenceTestCase(BoardTestCase):
                 " VALUES('dec-1','pick-1','digest','{}',?)", (T0,))
             for task_id in ("task-alpha", "task-bravo"):
                 db.execute(
-                    "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,'decision',json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','/work','queued',1,?,?)",
+                    "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','/work','queued',1,?,?)",
                     (task_id, f"decision:{task_id}", T0, T0))
 
     def stored(self, table, key, value):

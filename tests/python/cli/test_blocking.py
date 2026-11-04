@@ -1,774 +1,192 @@
-"""Fast isolated tests for the CLI blocking wait (no service, no dsh, no model).
+"""Bounded await preserves decision, reminder and shutdown wakeups."""
+from __future__ import annotations
 
-``hey-my-buddy await`` is the only blocking CLI call. It may
-issue ``status``/``events``/``watch``/``wait``/``result`` and consume one reminder
-through ``wait``. It must never start, resume, retry or cancel a run.
-"""
-import json
-import os
 from pathlib import Path
-import shlex
+import tempfile
 import threading
 import unittest
+from unittest import mock
 
-import hey_my_buddy.cli.blocking as blocking
-from hey_my_buddy.cli.blocking import (
-    MAX_WAIT_SECONDS,
-    WaitAbandoned,
-    await_run,
-    recovery_commands,
-    validate_wait_seconds,
-)
+from hey_my_buddy.cli import blocking
+from hey_my_buddy.cli.blocking import WaitAbandoned, await_run
 from hey_my_buddy.protocol.transport import ServiceError
 
 
-class VirtualClock:
-    def __init__(self, now: float = 1000.0):
-        self.now = now
+class Clock:
+    def __init__(self):
+        self.value = 0.0
 
-    def __call__(self) -> float:
-        return self.now
+    def __call__(self):
+        return self.value
 
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
-
-
-class FakeService:
-    """Injectable stand-in for ``hey_my_buddy.protocol.transport.call_service``.
-
-    Only observation operations await may use are implemented; ``wait`` may
-    consume one reminder. Anything else fails the no-start/no-cancel contract.
-    """
-
-    READ_ONLY = frozenset({"status", "events", "watch", "wait", "result"})
-
-    def __init__(self, clock, *, complete_after_waits=None, stop_event=None, terminal_without_result=False,
-                 listed=False, result_response=None):
-        self.clock = clock
-        self.calls = []
-        self.complete_after_waits = complete_after_waits
-        self.stop_event = stop_event
-        # True -> "reconciliation-needed"; a status string -> that terminal status, no persisted result.
-        self.terminal_without_result = terminal_without_result
-        self.listed = listed
-        self.result_response = result_response
-        self.run = {
-            "runId": "run-fixture", "requestId": "fixture", "state": "running", "revision": 1,
-            "resultAvailable": False, "shutdownConfirmed": False, "createdAt": "t0", "updatedAt": "t0",
-            "cwd": "/tmp", "logPaths": {"stdout": "/tmp/stdout.log", "stderr": "/tmp/stderr.log"},
-        }
-
-    def __call__(self, method, params, state_dir=None):
-        assert method in self.READ_ONLY, f"await must stay read-only, but called {method!r}"
-        self.calls.append(method)
-        if method == "status":
-            if "requestId" in params:
-                if not self.listed or params["requestId"] != self.run["requestId"]:
-                    raise ServiceError("NOT_FOUND", "Unknown requestId")
-                return dict(self.run)
-            return dict(self.run)
-        if method == "wait":
-            self.clock.advance(params["timeoutMs"] / 1000)
-            if self.complete_after_waits is not None and self.calls.count("wait") >= self.complete_after_waits:
-                self.run = {**self.run, "state": "completed", "resultAvailable": True,
-                            "shutdownConfirmed": True, "revision": self.run["revision"] + 1}
-                if "workflowState" in self.run:
-                    self.run["workflowState"] = "delivered"
-            elif self.terminal_without_result:
-                status = self.terminal_without_result if isinstance(self.terminal_without_result, str) else "reconciliation-needed"
-                self.run = {**self.run, "state": status, "revision": self.run["revision"] + 1}
-            if self.stop_event is not None:
-                self.stop_event.set()
-            return dict(self.run)
-        if method == "result":
-            if self.result_response is not None:
-                return self.result_response(self.run) if callable(self.result_response) else self.result_response
-            if not self.run["resultAvailable"]:
-                raise ServiceError("NOT_READY", "no result yet")
-            return {**self.run, "result": {"status": "ok", "finalText": "fixture result", "processState": {"shutdownConfirmed": True}}}
-        raise AssertionError(f"unexpected method {method}")
-
-
-class WaitWindowTests(unittest.TestCase):
-    """The wait window is CLI-owned, explicit and bounded; nothing else is a deadline."""
-
-    def test_host_await_keeps_waiting_while_lead_is_parked_on_owned_work(self):
-        clock = VirtualClock()
-        service = FakeService(clock, complete_after_waits=1)
-        service.run.update(state="queued", workflowState="waiting-owned", resultAvailable=True,
-                           shutdownConfirmed=True)
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60},
-                             state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(service.calls.count("wait"), 1)
-        self.assertEqual(envelope["workflowState"], "delivered")
-
-    def test_wait_seconds_defaults_to_24h_and_is_bounded_by_it(self):
-        clock = VirtualClock()
-        service = FakeService(clock, listed=True, complete_after_waits=1)
-        envelope = await_run({"requestId": "fixture"}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["waitSeconds"], MAX_WAIT_SECONDS)
-        self.assertEqual(envelope["maxWaitSeconds"], MAX_WAIT_SECONDS)
-        self.assertFalse(hasattr(blocking, "default_wait_seconds"))
-        with self.assertRaises(ServiceError):
-            validate_wait_seconds(MAX_WAIT_SECONDS + 1)
-        with self.assertRaises(ServiceError):
-            validate_wait_seconds(0)
-        with self.assertRaises(ServiceError):
-            validate_wait_seconds(True)
-
-    def test_validation_rejects_bad_input_before_any_service_contact(self):
-        def forbidden(*_args, **_kwargs):
-            raise AssertionError("validation must not contact the service")
-
-        cases = [
-            ({"requestId": " "}, "INVALID_ARGUMENT"),
-            ({"runId": ""}, "INVALID_ARGUMENT"),
-            ({"requestId": "x" * 129}, "INVALID_ARGUMENT"),
-            ({}, "INVALID_ARGUMENT"),
-            ({"requestId": "fixture", "waitSeconds": 0}, "INVALID_ARGUMENT"),
-            ({"requestId": "fixture", "waitSeconds": 99999}, "INVALID_ARGUMENT"),
-            ({"requestId": "fixture", "surprise": True}, "INVALID_ARGUMENT"),
-            ({"requestId": "fixture", "controlFile": "/tmp/x"}, "INVALID_ARGUMENT"),
-        ]
-        for params, code in cases:
-            with self.subTest(params=params):
-                with self.assertRaises(ServiceError) as failure:
-                    await_run(params, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=forbidden)
-                self.assertEqual(failure.exception.code, code)
-
-    def test_the_run_blocking_convenience_is_gone(self):
-        # The old one-call start-and-wait path does not remain as a compatibility shim.
-        self.assertFalse(hasattr(blocking, "run_blocking"))
-        self.assertFalse(hasattr(blocking, "validate_run_params"))
-        self.assertFalse(hasattr(blocking, "START_FIELDS"))
-        self.assertFalse(hasattr(blocking, "SHUTDOWN_GRACE_SECONDS"))
-
-
-class RecoveryCommandTests(unittest.TestCase):
-    def test_recovery_commands_are_current_and_never_imply_an_implicit_start(self):
-        commands = " ".join(recovery_commands("fixture", "run-fixture"))
-        for current in ("hey-my-buddy status", "hey-my-buddy get", "hey-my-buddy await", "hey-my-buddy result"):
-            self.assertIn(current, commands)
-        for removed in ("buddy run", "buddy start", "buddy retry", "workflow-", "hey-my-buddy cancel '"):
-            self.assertNotIn(removed, commands)
-
-    def test_recovery_commands_round_trip_json_and_shell_quoting(self):
-        """Quotes/apostrophes/unicode must survive shlex.split + json.loads in every suggested command."""
-        tricky_request = 'req-"quoted"-\'apostrophe\'-ünïcode'
-
-        # Without a runId only `await` accepts a requestId selector: the other
-        # commands need a runId, so no invented one is suggested.
-        request_only = recovery_commands(tricky_request, None)
-        self.assertEqual(len(request_only), 1)
-        self.assertEqual(shlex.split(request_only[0])[1], "await")
-        for command in request_only:
-            argv = shlex.split(command)
-            self.assertEqual(argv[0], "hey-my-buddy")
-            self.assertEqual(json.loads(argv[-1]), {"requestId": tricky_request})
-
-        # With a known runId every command carries a parseable runId selector.
-        with_run = recovery_commands(tricky_request, "run-fixture")
-        self.assertEqual(
-            [shlex.split(command)[1] for command in with_run],
-            ["status", "get", "await", "result"],
-        )
-        for command in with_run:
-            argv = shlex.split(command)
-            self.assertEqual(argv[0], "hey-my-buddy")
-            self.assertEqual(json.loads(argv[-1]), {"runId": "run-fixture"})
-
-        # A runId with shell-active characters is quoted and parsed identically.
-        tricky_run = 'run-"quoted"-\'apostrophe\'-ünïcode'
-        for command in recovery_commands(tricky_request, tricky_run):
-            argv = shlex.split(command)
-            self.assertEqual(argv[0], "hey-my-buddy")
-            self.assertEqual(json.loads(argv[-1]), {"runId": tricky_run})
-
-        # The WAIT_ABANDONED envelope built by the CLI uses the same quoted commands.
-        from hey_my_buddy.cli.main import _abandoned
-
-        abandoned = WaitAbandoned(tricky_request, None)
-        payload = _abandoned(abandoned, recovery_commands(abandoned.request_id, abandoned.run_id))
-        argv = shlex.split(payload["recovery"]["commands"][0])
-        self.assertEqual(json.loads(argv[-1]), {"requestId": tricky_request})
-
-
-class InstallHandoverTests(unittest.TestCase):
-    """A wait already in flight outlives the service handover of an installation."""
-
-    def test_wait_survives_the_old_service_stopping_and_the_new_service_answering(self):
-        for code in ("SERVICE_STOPPING", "SERVICE_UNAVAILABLE", "UPGRADE_IN_PROGRESS"):
-            with self.subTest(code=code):
-                clock = VirtualClock()
-                state = Path(os.environ["HMB_STATE_DIR"])
-                state.mkdir(parents=True, exist_ok=True)
-                journal = state / "upgrade.json"
-                journal.write_text("{}", encoding="utf-8")
-                self.addCleanup(journal.unlink, missing_ok=True)
-                service = FakeService(clock, complete_after_waits=1)
-                handovers = []
-
-                def handover(method, params, state_dir):
-                    if method == "wait" and not handovers:
-                        handovers.append(code)
-                        raise ServiceError(code, "the old service stopped while the installation owns the cutover")
-                    if method == "wait":
-                        journal.unlink()
-                    return service(method, params, state_dir)
-
-                envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=state,
-                                     service=handover, clock=clock)
-                self.assertEqual(handovers, [code])
-                self.assertEqual(envelope["outcome"], "completed", envelope)
-                self.assertTrue(envelope["ok"])
-                self.assertIsNone(envelope["error"])
-                self.assertEqual(envelope["result"]["finalText"], "fixture result")
-
-    def test_install_handover_retries_are_still_bounded_by_the_wait_window(self):
-        clock = VirtualClock()
-        state = Path(os.environ["HMB_STATE_DIR"])
-        state.mkdir(parents=True, exist_ok=True)
-        journal = state / "upgrade.json"
-        journal.write_text("{}", encoding="utf-8")
-        self.addCleanup(journal.unlink, missing_ok=True)
-        service = FakeService(clock)
-        attempts = []
-
-        def still_installing(method, params, state_dir):
-            if method == "wait":
-                attempts.append(method)
-                clock.advance(0.6)
-                raise ServiceError("SERVICE_UNAVAILABLE", "the installation still owns the service")
-            return service(method, params, state_dir)
-
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 2}, state_dir=state,
-                             service=still_installing, clock=clock)
-        self.assertEqual(envelope["outcome"], "wait-timeout", envelope)
-        self.assertEqual(envelope["status"], "running")
-        self.assertGreaterEqual(len(attempts), 2)
-        self.assertIsNone(envelope["error"])
+    def advance(self, seconds: float):
+        self.value += seconds
 
 
 class AwaitTests(unittest.TestCase):
-    def test_waiting_counts_use_the_latest_result_at_each_boundary(self):
-        for boundary in ('awaiting-host', 'delivered'):
-            for latest in ({'host': 1, 'review': 3}, None):
-                with self.subTest(boundary=boundary, latest=latest):
-                    clock = VirtualClock()
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state_dir = Path(directory.name)
+        self.clock = Clock()
 
-                    def result_response(run):
-                        result = {key: value for key, value in run.items() if key != 'waitingForHost'}
-                        if latest is not None:
-                            result['waitingForHost'] = latest
-                        return {**result, 'result': {'status': 'ok'}}
+    def test_boundary_returns_exact_request_id_without_command_templates(self):
+        calls = []
+        active = {"runId": "run-1", "state": "running", "workflowState": "executing", "revision": 1,
+                  "actions": ["await", "inquire", "cancel", "get"]}
+        boundary = {"runId": "run-1", "state": "completed", "workflowState": "awaiting-host",
+                    "workflow": {"activeRequestId": "req-7", "requestKind": "attention"},
+                    "resultAvailable": False, "revision": 2, "actions": ["continue", "cancel", "get"]}
+        def service(method, params, directory):
+            calls.append(method)
+            if method == "workflow_get":
+                return {"state": "awaiting-host", "actions": ["continue", "cancel", "get"],
+                        "activeRequest": {"requestId": "req-7", "kind": "attention"},
+                        "finalArtifactId": None}
+            return active if method == "task_get" else boundary
+        answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)
+        self.assertEqual(calls, ["task_get", "task_wait", "workflow_get"])
+        self.assertEqual(answer["requestId"], "req-7")
+        self.assertEqual(answer["requestKind"], "attention")
+        self.assertEqual(answer["actions"], ["continue", "cancel", "get"])
+        self.assertNotIn("nextCommands", answer)
+        self.assertNotIn("resultCommand", answer)
 
-                    service = FakeService(clock, result_response=result_response)
-                    service.run.update(state='completed', resultAvailable=True, shutdownConfirmed=True,
-                                       workflowState=boundary, workflow={}, waitingForHost={'host': 1, 'review': 2})
-                    response = await_run({'runId': 'run-fixture', 'waitSeconds': 1},
-                                         Path(os.environ['HMB_STATE_DIR']), clock=clock, service=service)
-                    self.assertEqual(response.get('waitingForHost'), latest)
-                    if latest is None:
-                        self.assertNotIn('waitingForHost', response)
+    def test_descendant_shutdown_waits_on_event_then_rechecks_parent(self):
+        calls = []
+        unconfirmed = {"runId": "run-1", "state": "completed", "workflowState": "delivered",
+                       "resultAvailable": True, "revision": 3, "actions": ["await", "inquire", "cancel", "get"],
+                       "workflowShutdown": {"selfConfirmed": True, "descendantsConfirmed": False,
+                                            "unconfirmedRunIds": ["child-1"]}}
+        confirmed = {**unconfirmed, "workflowShutdown": {"selfConfirmed": True,
+                        "descendantsConfirmed": True, "unconfirmedRunIds": []},
+                     "artifactId": "artifact-1", "actions": ["accept", "continue", "conclude", "get"]}
+        count = 0
+        def service(method, params, directory):
+            nonlocal count
+            calls.append((method, dict(params)))
+            if method == "task_get":
+                count += 1
+                return unconfirmed if count == 1 else confirmed
+            if method == "events_read":
+                return {"head": 9}
+            if method == "workflow_get":
+                return {"state": "delivered", "actions": ["accept", "continue", "conclude", "get"],
+                        "finalArtifactId": "artifact-1", "activeRequest": None}
+            if method == "task_result":
+                return {"result": {"status": "completed"}}
+            self.fail(f"unexpected call {method}")
+        answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)
+        self.assertEqual([name for name, _ in calls], ["task_get", "events_read", "task_get", "workflow_get", "task_result"])
+        self.assertEqual(calls[1][1]["runId"], "child-1")
+        self.assertEqual(answer["artifactId"], "artifact-1")
+        self.assertTrue(answer["shutdownConfirmed"])
+        self.assertEqual(answer["actions"], ["accept", "continue", "conclude", "get"])
 
-    def test_await_resolves_an_existing_run_by_request_id_and_never_starts(self):
-        clock = VirtualClock()
-        service = FakeService(clock, listed=True, complete_after_waits=1)
-        envelope = await_run({"requestId": "fixture"}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "completed")
-        self.assertEqual(envelope["runId"], "run-fixture")
-        self.assertEqual(envelope["result"]["finalText"], "fixture result")
-        self.assertEqual(service.calls, ["status", "wait", "result"])
+    def test_scoped_descendant_wait_uses_own_event_cursor_and_real_event_wait(self):
+        unconfirmed = {"runId": "run-1", "state": "completed", "workflowState": "delivered",
+                       "resultAvailable": True, "revision": 3, "actions": ["await", "get"],
+                       "workflowShutdown": {"selfConfirmed": True, "descendantsConfirmed": False,
+                                            "unconfirmedRunIds": ["private-child"]}}
+        confirmed = {**unconfirmed, "actions": ["accept", "continue", "conclude", "get"],
+                     "workflowShutdown": {"selfConfirmed": True, "descendantsConfirmed": True,
+                                          "unconfirmedRunIds": []}}
+        reads = 0
+        calls = []
+        def service(method, params, directory):
+            nonlocal reads
+            calls.append((method, dict(params)))
+            if method == "task_get":
+                reads += 1
+                return confirmed if reads == 3 else unconfirmed
+            if method == "events_read":
+                return {"head": 7}
+            if method == "events_wait":
+                return {"head": 8}
+            if method == "workflow_get":
+                return {"state": "delivered", "actions": confirmed["actions"],
+                        "activeRequest": None, "finalArtifactId": "art-1"}
+            if method == "task_result":
+                return {"result": {"status": "completed"}}
+            self.fail(f"unexpected call {method}")
+        answer = await_run({"runId": "run-1"}, self.state_dir, service=service,
+                           clock=self.clock, scoped=True)
+        self.assertEqual([name for name, _ in calls],
+                         ["task_get", "events_read", "task_get", "events_wait", "task_get", "workflow_get", "task_result"])
+        self.assertEqual(calls[1][1]["runId"], "run-1")
+        self.assertEqual(calls[3][1]["runId"], "run-1")
+        self.assertEqual(answer["artifactId"], "art-1")
+        self.assertTrue(answer["shutdownConfirmed"])
 
-    def test_await_accepts_a_run_id_and_checks_a_mismatched_request(self):
-        clock = VirtualClock()
-        service = FakeService(clock, complete_after_waits=1)
-        envelope = await_run({"runId": "run-fixture", "requestId": "fixture"}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "completed")
-        self.assertEqual(service.calls[0], "status")
-        with self.assertRaises(ServiceError) as failure:
-            await_run({"runId": "run-fixture", "requestId": "other"}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(failure.exception.code, "CONFLICT")
+    def test_pending_reminder_ends_wait_without_starting_a_new_turn(self):
+        reminder = {"kind": "review-reminder", "reason": "review is waiting"}
+        run = {"runId": "run-1", "state": "running", "workflowState": "executing",
+               "actions": ["await", "inquire", "cancel", "get"], "reminder": reminder}
+        calls = []
+        def service(method, params, directory):
+            calls.append(method)
+            return run
+        answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)
+        self.assertEqual(calls, ["task_get"])
+        self.assertEqual(answer["reminder"], reminder)
+        self.assertEqual(answer["outcome"], "review-reminder")
+        self.assertEqual(answer["actions"], run["actions"])
 
-    def test_await_never_starts_missing_work_and_names_current_commands(self):
-        clock = VirtualClock()
-        service = FakeService(clock)
-        with self.assertRaises(ServiceError) as failure:
-            await_run({"requestId": "missing"}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(failure.exception.code, "NOT_FOUND")
-        message = str(failure.exception)
-        self.assertIn("hey-my-buddy submit", message)
-        self.assertNotIn("execution-submit", message)
-        self.assertNotIn("buddy run", message)
-        self.assertEqual(service.calls, ["status"])
+    def test_upgrade_handover_rearms_same_wait_inside_window(self):
+        (self.state_dir / "upgrade.json").write_text("{}", encoding="utf-8")
+        active = {"runId": "run-1", "state": "running", "workflowState": "executing",
+                  "revision": 1, "actions": ["await", "inquire", "cancel", "get"]}
+        boundary = {"runId": "run-1", "state": "completed", "workflowState": "awaiting-host",
+                    "revision": 2, "resultAvailable": False, "actions": ["continue", "cancel", "get"],
+                    "workflow": {"activeRequestId": "req-1", "requestKind": "attention"}}
+        waits = 0
+        calls = []
+        def service(method, params, directory):
+            nonlocal waits
+            calls.append(method)
+            if method == "task_get":
+                return active
+            if method == "task_wait":
+                waits += 1
+                if waits == 1:
+                    raise ServiceError("SERVICE_UNAVAILABLE", "old daemon detached")
+                return boundary
+            if method == "workflow_get":
+                return {"state": "awaiting-host", "actions": boundary["actions"],
+                        "activeRequest": {"requestId": "req-1", "kind": "attention"},
+                        "finalArtifactId": None}
+            self.fail(f"unexpected call {method}")
+        with mock.patch.object(blocking.time, "sleep", side_effect=self.clock.advance):
+            answer = await_run({"runId": "run-1", "waitSeconds": 2}, self.state_dir,
+                               service=service, clock=self.clock)
+        self.assertEqual(calls, ["task_get", "task_wait", "task_wait", "workflow_get"])
+        self.assertEqual(answer["requestId"], "req-1")
+        self.assertNotIn("error", answer)
 
-    def test_await_timeout_is_a_wait_limit_and_never_cancels(self):
-        clock = VirtualClock()
-        service = FakeService(clock, listed=True)
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 1}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "wait-timeout")
-        self.assertEqual(envelope["status"], "running")
-        self.assertTrue(envelope["timedOut"])
-        self.assertFalse(envelope["ok"])
-        self.assertEqual(
-            set(service.calls) - FakeService.READ_ONLY, set(),
-            "a wait timeout must not start, retry or cancel anything",
-        )
-        self.assertIn("hey-my-buddy await", envelope["recovery"]["action"])
-        self.assertIn("hey-my-buddy get", envelope["recovery"]["action"])
-        self.assertNotIn("buddy run", envelope["recovery"]["action"])
-        commands = " ".join(envelope["recovery"]["commands"])
-        self.assertIn("hey-my-buddy status", commands)
-        self.assertNotIn("buddy start", commands)
+    def test_wait_window_expires_without_cancelling_run(self):
+        active = {"runId": "run-1", "state": "running", "workflowState": "executing", "revision": 1,
+                  "actions": ["await", "inquire", "cancel", "get"],
+                  "selectedAttempt": {"issues": [{"code": "native-permission-denied"}]}}
+        calls = []
+        def service(method, params, directory):
+            calls.append(method)
+            if method == "task_wait":
+                self.clock.advance(1)
+            return active
+        answer = await_run({"runId": "run-1", "waitSeconds": 1}, self.state_dir,
+                           service=service, clock=self.clock)
+        self.assertEqual(answer["outcome"], "wait-timeout")
+        self.assertTrue(answer["timedOut"])
+        self.assertEqual(answer["selectedAttempt"]["issues"], [{"code": "native-permission-denied"}])
+        self.assertEqual(calls, ["task_get", "task_wait"])
+        self.assertNotIn("cancel", calls)
 
-    def test_disconnect_or_stop_abandons_only_the_wait(self):
-        clock = VirtualClock()
+    def test_client_stop_abandons_only_this_wait(self):
         stop = threading.Event()
-        service = FakeService(clock, listed=True, stop_event=stop)
-        with self.assertRaises(WaitAbandoned) as failure:
-            await_run({"requestId": "fixture"}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock, stop=stop)
-        self.assertEqual(failure.exception.run_id, "run-fixture")
-        self.assertEqual(failure.exception.request_id, "fixture")
-        # list + one event wait; the durable run is never cancelled by losing the wait.
-        self.assertEqual(service.calls, ["status", "wait"])
-
-
-class UnavailableTests(unittest.TestCase):
-    """Without an installation journal, a failed wait returns the same durable identity without retrying."""
-
-    def test_wait_service_error_returns_unavailable_without_reconnecting(self):
-        for code in ("SERVICE_UNAVAILABLE", "INVALID_ARGUMENT", "UNAUTHORIZED", "NOT_FOUND"):
-            with self.subTest(code=code):
-                clock = VirtualClock()
-                service = FakeService(clock)
-                def call(method, params, state_dir):
-                    if method == "wait":
-                        service.calls.append(method)
-                        raise ServiceError(code, "fixture failure")
-                    return service(method, params, state_dir)
-                envelope = await_run({"runId": "run-fixture", "waitSeconds": 60},
-                                     state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
-                self.assertEqual(envelope["outcome"], "unavailable")
-                self.assertEqual(envelope["error"]["code"], code)
-                self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
-                self.assertEqual(envelope["recovery"]["commands"], recovery_commands("fixture", "run-fixture"))
-                self.assertFalse(envelope["ok"])
-                self.assertNotIn("reconnects", envelope)
-                self.assertEqual(service.calls, ["status", "wait"])
-
-    def test_concluded_without_an_attempt_result_finishes_the_wait(self):
-        clock = VirtualClock()
-        service = FakeService(clock, listed=True, terminal_without_result="concluded")
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60},
-                             state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["status"], "concluded")
-        self.assertFalse(envelope["resultAvailable"])
-        self.assertEqual(service.calls.count("wait"), 1)
-
-    def test_terminal_without_persisted_result_is_reported(self):
-        clock = VirtualClock()
-        service = FakeService(clock, complete_after_waits=None, terminal_without_result=True)
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "reconciliation-needed")
-        self.assertFalse(envelope["resultAvailable"])
-        self.assertIsNone(envelope["result"])
-        self.assertIn("hey-my-buddy result", envelope["recovery"]["reason"])
-
-
-class ResultTruthTests(unittest.TestCase):
-    """A completed run never claims success unless its promised result is delivered.
-
-    ``status`` keeps the underlying execution status (the worker may really have
-    completed), while ``ok``/``outcome`` must stay honest about result delivery.
-    """
-
-    def test_completed_without_persisted_result_cannot_claim_success(self):
-        clock = VirtualClock()
-        service = FakeService(clock, listed=True, terminal_without_result="completed")
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        # Execution status and identity are preserved...
-        self.assertEqual(envelope["status"], "completed")
-        self.assertEqual(envelope["runId"], "run-fixture")
-        self.assertEqual(envelope["requestId"], "fixture")
-        self.assertIsNotNone(envelope["recovery"])
-        # ...but this is not a successful complete result.
-        self.assertFalse(envelope["ok"])
-        self.assertEqual(envelope["outcome"], "completed-no-result")
-        self.assertNotEqual(envelope["outcome"], "completed")
-        self.assertFalse(envelope["resultAvailable"])
-        self.assertFalse(envelope["resultDelivered"])
-        self.assertIsNone(envelope["result"])
-        self.assertEqual(envelope["error"]["code"], "RESULT_NOT_AVAILABLE")
-        self.assertIn("hey-my-buddy result", envelope["recovery"]["reason"])
-        self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
-        self.assertEqual(service.calls, ["status", "wait"])
-
-    def test_result_service_error_keeps_the_same_run_recovery_without_retrying(self):
-        for status, outcome in (("completed", "completed-no-result"), ("failed", "failed")):
-            with self.subTest(status=status):
-                clock = VirtualClock()
-                service = FakeService(clock)
-                service.run.update(state=status, resultAvailable=True, shutdownConfirmed=True)
-
-                def unavailable(_run):
-                    raise ServiceError("SERVICE_UNAVAILABLE", "result service unavailable")
-
-                service.result_response = unavailable
-                envelope = await_run({"runId": "run-fixture"},
-                                     state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-                self.assertEqual(envelope["status"], status)
-                self.assertEqual(envelope["outcome"], outcome)
-                self.assertEqual(envelope["runId"], "run-fixture")
-                self.assertEqual(envelope["requestId"], "fixture")
-                self.assertFalse(envelope["ok"])
-                self.assertTrue(envelope["resultAvailable"])
-                self.assertFalse(envelope["resultDelivered"])
-                self.assertEqual(envelope["error"]["code"], "SERVICE_UNAVAILABLE")
-                self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
-                self.assertEqual(envelope["recovery"]["commands"], recovery_commands("fixture", "run-fixture"))
-                self.assertEqual(service.calls, ["status", "result"])
-
-    def test_successful_result_control_keeps_completed_semantics(self):
-        clock = VirtualClock()
-        service = FakeService(clock, listed=True, complete_after_waits=1)
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertTrue(envelope["ok"])
-        self.assertEqual(envelope["outcome"], "completed")
-        self.assertEqual(envelope["status"], "completed")
-        self.assertTrue(envelope["resultAvailable"])
-        self.assertTrue(envelope["resultDelivered"])
-        self.assertEqual(envelope["result"]["finalText"], "fixture result")
-        self.assertIsNone(envelope["error"])
-        self.assertIsNone(envelope["recovery"])
-
-    def test_failed_terminal_without_result_stays_honest(self):
-        clock = VirtualClock()
-        service = FakeService(clock, listed=True, terminal_without_result="failed")
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["status"], "failed")
-        self.assertEqual(envelope["outcome"], "failed")
-        self.assertFalse(envelope["ok"])
-        self.assertIsNone(envelope["result"])
-        self.assertFalse(envelope["resultDelivered"])
-        self.assertEqual(envelope["error"]["code"], "RESULT_NOT_AVAILABLE")
-        self.assertIsNotNone(envelope["recovery"])
-
-
-class MicroTaskBoundaryTests(unittest.TestCase):
-    def test_routing_boundary_without_a_turn_uses_the_same_templates_in_both_output_modes(self):
-        from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
-        from hey_my_buddy.cli import cli_views
-        clock = VirtualClock()
-        service = FakeService(clock)
-        boundary = build_boundary(kind="router-unavailable", code=None, reason=None,
-            candidates=[{"buddyId": "b1", "harness": "codex", "provider": "openai", "model": "model", "effort": "high"}],
-            facts={}, router_trials=[], retry_at="2026-10-23T00:00:00Z", decision_id="decision-1",
-            run_id="run-fixture", revision=3, shutdown_confirmed=True, target_run_id="authorized-child")
-        service.run.update(
-            state="queued", workflowState="awaiting-host", resultAvailable=False,
-            workflow={"revision": 3, "activeRequestId": "route-boundary", "requestKind": "attention",
-                      "requestSummary": "Configure a selector", "requestRouting": True,
-                      "requestTargetRunId": "authorized-child", "routingBoundary": boundary},
-        )
-        # A candidate can become blocked after the templates are built.
-        blocked = {**boundary["commands"]["continue"]["choices"][0], "blocked": True}
-        boundary["commands"]["continue"]["choices"][0]["blocked"] = False
-        boundary["commands"]["continue"]["choices"].append(blocked)
-        envelope = await_run({"runId": "run-fixture"}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "waiting-host")
-        self.assertFalse(envelope["microTaskComplete"])
-        self.assertIsNone(envelope["turn"])
-        self.assertNotIn("result", service.calls)
-        expected = [{"method": "continue", "params": boundary["commands"]["continue"]["choices"][0]["params"]},
-                    {key: boundary["commands"]["reroute"][key] for key in ("method", "params", "notBefore")}]
-        for mode in (cli_views.OUTPUT_BRIEF, cli_views.OUTPUT_FULL):
-            rendered = cli_views.render("await", envelope, mode)
-            self.assertEqual(rendered["nextCommands"], expected)
-            self.assertEqual(rendered["routingBoundary"], boundary)
-            self.assertEqual(rendered["request"]["routingBoundary"], boundary)
-            self.assertTrue(all(command["params"]["targetRunId"] == "authorized-child" for command in rendered["nextCommands"]))
-
-    """A structured yield is a Host decision boundary, never a fake completion."""
-
-    def _boundary_service(self):
-        clock = VirtualClock()
-        service = FakeService(clock, complete_after_waits=99)
-        turn = {
-            "turnId": "turn-1",
-            "resumeMode": "initial",
-            "outcome": {"disposition": "assistance", "summary": "need a Host decision", "remaining": [],
-                        "request": {"requestId": "req-1", "kind": "assistance", "summary": "review the approach"}},
-        }
-        service.run = {
-            **service.run,
-            "state": "queued",
-            "revision": 7,
-            "resultAvailable": True,
-            "workflowState": "awaiting-host",
-            "awaitingHost": True,
-            "workflow": {
-                "state": "awaiting-host",
-                "awaitingHost": True,
-                "revision": 7,
-                "activeRequestId": "req-1",
-                "requestKind": "assistance",
-                "requestSummary": "review the approach",
-            },
-        }
-        service.result_response = lambda run: {
-            **run,
-            "result": {"status": "ok", "turn": turn},
-            "resultMeta": {"status": "ok", "shutdownConfirmed": True},
-        }
-        return service, clock
-
-    def test_await_returns_the_structured_boundary_immediately(self):
-        service, clock = self._boundary_service()
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "waiting-host")
-        self.assertFalse(envelope["ok"])
-        self.assertFalse(envelope["microTaskComplete"])
-        self.assertEqual(envelope["turn"]["turnId"], "turn-1")
-        self.assertEqual(envelope["request"]["requestId"], "req-1")
-        self.assertEqual(envelope["workflowState"], "awaiting-host")
-        self.assertEqual(service.calls.count("wait"), 0, "a Host boundary must not block the wait")
-
-    def test_next_commands_use_current_names_and_a_named_control_file(self):
-        service, clock = self._boundary_service()
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        commands = envelope["nextCommands"]
-        self.assertEqual([shlex.split(command)[1] for command in commands], ["decide", "decide", "continue"])
-        for command in commands:
-            params = json.loads(shlex.split(command)[-1])
-            self.assertEqual(params["controlFile"], "<saved-controlFile>")
-        # The retired CLI aliases never appear in a suggested command.
-        joined = " ".join(commands)
-        self.assertNotIn("workflow-decide", joined)
-        self.assertNotIn("workflow-continue", joined)
-        self.assertNotIn("buddy run", joined)
-
-    def test_waiting_follows_authorized_helpers_to_the_next_completion(self):
-        clock = VirtualClock()
-        service = FakeService(clock, complete_after_waits=1)
-        service.run = {
-            **service.run,
-            "state": "queued",
-            "revision": 3,
-            "resultAvailable": True,
-            "workflowState": "waiting-helpers",
-            "awaitingHost": False,
-        }
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        # The stale turn result of the previous attempt never becomes a fake success;
-        # the wait follows the same durable task until it really completes.
-        self.assertEqual(envelope["outcome"], "completed")
-        self.assertTrue(envelope["ok"])
-        self.assertTrue(envelope["resultDelivered"])
-        self.assertGreaterEqual(service.calls.count("wait"), 1)
-
-
-class CompactMicroTaskEnvelopeTests(unittest.TestCase):
-    def test_micro_task_report_is_whole_and_points_at_the_full_result(self):
-        clock = VirtualClock()
-        service = FakeService(clock, complete_after_waits=1)
-        report = "report " * 500
-        service.run = {
-            **service.run,
-            "state": "queued",
-            "resultAvailable": True,
-            "workflowState": "executing",
-            "awaitingHost": False,
-        }
-        service.result_response = lambda run: {
-            **run,
-            "state": "completed",
-            "result": {
-                "status": "ok",
-                "logPaths": {"stdout": "/tmp/out", "stderr": "/tmp/err"},
-                "processState": {"shutdownConfirmed": True},
-                "turn": {
-                    "turnId": "turn-1",
-                    "resumeMode": "initial",
-                    "sessionId": "sess-1",
-                    "outcome": {"disposition": "completed", "summary": report, "remaining": []},
-                    "provenance": {"tool": "hey_my_buddy_finish_turn"},
-                },
-                "workspaceSeal": {
-                    "snapshotSha256": "a" * 64,
-                    "manifestSha256": "b" * 64,
-                    "commit": "c" * 40,
-                    "diffPath": "/tmp/output.patch",
-                },
-            },
-            "resultMeta": {"status": "ok", "shutdownConfirmed": True},
-        }
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "completed")
-        self.assertTrue(envelope["ok"])
-        self.assertTrue(envelope["resultCompact"])
-        self.assertEqual(envelope["turn"]["turnId"], "turn-1")
-        self.assertEqual(envelope["artifacts"][0]["commit"], "c" * 40)
-        self.assertIn("hey-my-buddy result", envelope["resultCommand"])
-        self.assertEqual(envelope["turn"]["summary"], report)
-        self.assertNotIn("finalText", envelope["result"])
-
-    def test_preparation_failure_with_a_null_runner_result_stays_failed(self):
-        from hey_my_buddy.cli import cli_views
-        clock = VirtualClock()
-        service = FakeService(clock)
-        service.run.update(state="failed", workflowState="failed", resultAvailable=True, shutdownConfirmed=True)
-        service.result_response = lambda run: {**run, "result": None}
-        envelope = await_run({"runId": "run-fixture"}, state_dir=Path(os.environ["HMB_STATE_DIR"]),
-                             service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "failed")
-        self.assertFalse(envelope["ok"])
-        self.assertFalse(envelope["resultDelivered"])
-        self.assertIsNone(envelope["error"])
-        self.assertEqual(service.calls, ["status", "result"])
-        brief = cli_views.result_brief({**service.run, "result": None})
-        self.assertEqual(brief["state"], "failed")
-        self.assertIsNone(brief["result"])
-
-    def test_execution_envelope_delivers_the_full_result(self):
-        clock = VirtualClock()
-        service = FakeService(clock, complete_after_waits=1)
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "completed")
-        self.assertNotIn("resultCompact", envelope)
-        self.assertEqual(envelope["result"]["finalText"], "fixture result")
-
-    def test_scoped_await_waits_on_owned_run_events_without_addressing_internal_executions(self):
-        clock = VirtualClock()
-        run = {"runId": "owned", "requestId": "owned-request", "state": "running", "workflowState": "executing",
-               "workflowShutdown": {"selfConfirmed": False, "descendantsConfirmed": False,
-                                    "unconfirmedRunIds": ["internal-router"]}, "revision": 1, "resultAvailable": False}
-        watched = []
-        def service(method, params, state_dir):
-            self.assertEqual(params["runId"], "owned")
-            if method == "status":
-                return dict(run)
-            if method == "events":
-                return {"head": 10}
-            if method == "watch":
-                watched.append(params["runId"])
-                run.update(state="cancelled", workflowState="cancelled",
-                           workflowShutdown={"selfConfirmed": True, "descendantsConfirmed": True, "unconfirmedRunIds": []})
-                return {"head": 11}
-            self.fail("Unexpected operation: " + method)
-        result = await_run({"runId": "owned", "waitSeconds": 1}, state_dir=Path(os.environ["HMB_STATE_DIR"]),
-                           service=service, clock=clock, scoped=True)
-        self.assertEqual(watched, ["owned"])
-        self.assertEqual(result["outcome"], "cancelled")
-
-
-class ReminderReturnTests(unittest.TestCase):
-
-    def test_active_micro_task_with_unconfirmed_self_waits_for_a_reminder(self):
-        clock = VirtualClock()
-        service = FakeService(clock)
-        service.run.update(
-            workflowState="executing", attemptState="executing",
-            workflowShutdown={"selfConfirmed": False, "descendantsConfirmed": False,
-                              "unconfirmedRunIds": ["run-fixture"]},
-        )
-        original_call = service.__call__
-
-        def call(method, params, state_dir=None):
-            if method in ("events", "watch"):
-                self.fail("an active attempt must use task_wait so the reminder can wake await")
-            if method == "wait":
-                self.assertTrue(params["consumeReminders"])
-                service.calls.append(method)
-                clock.advance(1)
-                return {**service.run, "reminder": {
-                    "reminderId": 6, "kind": "native-silence", "elapsedSeconds": 901.0,
-                    "lastNativeEventAt": None, "toolInProgress": False,
-                    "createdAt": "2026-01-01T00:15:01Z", "expectedMultiple": None,
-                }}
-            return original_call(method, params, state_dir)
-
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60},
-                             state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
-        self.assertEqual(envelope["outcome"], "native-silence")
-        self.assertEqual(envelope["waitedSeconds"], 1.0)
-        self.assertEqual(service.calls, ["status", "wait"])
-
-    def test_pending_reminders_return_once_per_await_before_any_blocking_wait(self):
-        clock = VirtualClock()
-        service = FakeService(clock)
-        service.run.update(workflowState="executing", attemptState="executing")
-        pending = [
-            {"reminderId": 7, "kind": "expected-duration", "elapsedSeconds": 12.0,
-             "lastNativeEventAt": None, "toolInProgress": False,
-             "createdAt": "2026-01-01T00:00:12Z", "expectedMultiple": 1},
-            {"reminderId": 8, "kind": "native-silence", "elapsedSeconds": 15.0,
-             "lastNativeEventAt": "2026-01-01T00:00:01Z", "toolInProgress": True,
-             "createdAt": "2026-01-01T00:00:15Z", "expectedMultiple": None},
-        ]
-        original_call = service.__call__
-
-        def call(method, params, state_dir=None):
-            if method == "wait" and pending:
-                self.assertGreater(params["timeoutMs"], 0)
-                self.assertTrue(params["consumeReminders"])
-                service.calls.append(method)
-                return {**service.run, "reminder": pending.pop(0)}
-            return original_call(method, params, state_dir)
-
-        first = await_run({"runId": "run-fixture", "waitSeconds": 60},
-                          state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
-        second = await_run({"runId": "run-fixture", "waitSeconds": 60},
-                           state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
-        self.assertEqual([first["outcome"], second["outcome"]], ["expected-duration", "native-silence"])
-        self.assertEqual([first["reminder"]["reminderId"], second["reminder"]["reminderId"]], [7, 8])
-        self.assertEqual(second["reminder"]["lastNativeEventAt"], "2026-01-01T00:00:01Z")
-        self.assertTrue(second["reminder"]["toolInProgress"])
-        for envelope in (first, second):
-            self.assertFalse(envelope["ok"])
-            self.assertFalse(envelope["microTaskComplete"])
-            self.assertFalse(envelope["timedOut"])
-            self.assertEqual(envelope["status"], "running")
-            self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
-            self.assertEqual(envelope["waitedSeconds"], 0.0)
-        self.assertEqual(service.calls, ["status", "wait", "status", "wait"])
-
-    def test_new_reminder_ends_a_blocking_wait_without_stopping_the_run(self):
-        clock = VirtualClock()
-        service = FakeService(clock)
-        service.run.update(workflowState="executing", attemptState="executing")
-        original_call = service.__call__
-
-        def call(method, params, state_dir=None):
-            if method == "wait" and params["timeoutMs"] > 0:
-                self.assertTrue(params["consumeReminders"])
-                service.calls.append(method)
-                clock.advance(2)
-                return {**service.run, "reminder": {
-                    "reminderId": 9, "kind": "expected-duration", "elapsedSeconds": 1800.0,
-                    "lastNativeEventAt": None, "toolInProgress": False,
-                    "createdAt": "2026-01-01T00:30:00Z", "expectedMultiple": 1,
-                }}
-            return original_call(method, params, state_dir)
-
-        result = await_run({"runId": "run-fixture", "waitSeconds": 60},
-                           state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
-        self.assertEqual(result["outcome"], "expected-duration")
-        self.assertEqual(result["waitedSeconds"], 2.0)
-        self.assertEqual(service.calls, ["status", "wait"])
-
-
-class ResultPathCountTests(unittest.TestCase):
-    def test_await_preserves_service_path_totals(self):
-        for key in ("workspaceSeal", "partialWorkspaceSeal"):
-            for path in ("/private/output.patch", "/private/cumulative.patch"):
-                with self.subTest(seal=key, path=path):
-                    patch = {"path": path, "changedPaths": [f"file-{index}" for index in range(32)],
-                             "changedPathsCount": 2000, "changedPathsTruncated": True}
-                    full = {"workflowState": "delivered", "shutdownConfirmed": False,
-                            "result": {key: {"diffPath": "/private/output.patch", "cumulativePatch": patch}}}
-                    view = blocking._micro_task_result_view(full, "run")
-                    self.assertEqual(view["artifacts"][0]["cumulativePatch"], patch)
-                    self.assertEqual(view["artifacts"][0]["diffPath"], "/private/output.patch")
+        stop.set()
+        with self.assertRaises(WaitAbandoned) as raised:
+            await_run({"runId": "run-1"}, self.state_dir, stop=stop)
+        self.assertEqual(raised.exception.run_id, "run-1")
 
 
 if __name__ == "__main__":

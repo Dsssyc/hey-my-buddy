@@ -27,14 +27,14 @@ class TestWorkflowRouting(WorkflowTestCase):
         DecisionTestCase.use_helper(self)
 
     def routed(self, board, *, request_id="route-1", **constraints):
-        response = board.call("workflow_submit", {
-            "requestId": request_id, "hostId": "host-1", "submissionToken": "submission-secret-1",
-            "task": "Produce a verified implementation", "cwd": str(self.workdir(request_id)),
-            "executionWorkspace": {"kind": "existing", "access": "write"}, **constraints,
-        })
-        if response.get("control"):
-            self.controls[response["runId"]] = response["control"]
-        return response
+        workspace = constraints.pop("workspace", {})
+        task = constraints.pop("task", "Produce a verified implementation")
+        return self.submit(
+            board, request_id=request_id, task=task,
+            cwd=str(self.workdir(request_id)), buddy="route",
+            checkout=workspace.get("kind", "existing"),
+            access=workspace.get("access", "write"), **constraints,
+        )
 
     def prepare_reroute(self, board, view):
         board.store.workflow.prepare_continuation_workspace({"runId": view["runId"]})
@@ -75,7 +75,7 @@ class TestWorkflowRouting(WorkflowTestCase):
     def test_macro_task_goal_never_enters_selector_or_worker(self):
         board = self.board()
         self.seed(board)
-        view = self.routed(board, macroTask={'title': 'Human-only group', 'goal': 'Hidden goal sentinel'}, title='Human-only title')
+        view = self.routed(board, create_macro={'title': 'Human-only group', 'goal': 'Hidden goal sentinel'}, title='Human-only title')
         claim = self.router_claim(board, view)
         serialized = json.dumps(claim)
         for hidden in ('Hidden goal sentinel', 'Human-only group', 'Human-only title'):
@@ -113,7 +113,7 @@ class TestWorkflowRouting(WorkflowTestCase):
     def test_settings_edit_does_not_stop_a_queued_router_selection(self):
         board = self.board()
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
-        submitted = self.routed(board, requiredCapabilities=["effort:high"])
+        submitted = self.routed(board, )
         decision_id = submitted["routing"]["decisionId"]
         board.console_call("user_policy_publish", {
             "commandId": "change-router-list",
@@ -132,8 +132,8 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.seed(board)
         submitted = self.routed(board)
         duplicate = self.routed(board)
-        self.assertTrue(duplicate["duplicate"])
-        self.assertEqual(duplicate["control"], submitted["control"])
+        self.assertTrue(duplicate["alreadyExists"])
+        self.assertEqual(duplicate["runId"], submitted["runId"])
         self.assertEqual(duplicate["routing"]["decisionId"], submitted["routing"]["decisionId"])
         self.assertIsNone(submitted["buddy"])
         self.assertEqual(submitted["counts"]["turns"], 0)
@@ -144,8 +144,6 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.select(board, claim)
         selected = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         self.assertEqual(selected["buddy"], BUDDY)
-        self.assertEqual(selected["requestFingerprint"], submitted["requestFingerprint"])
-        self.assertEqual(selected["microTask"]["fingerprint"], submitted["microTask"]["fingerprint"])
         with board.store.db.read() as connection:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (submitted["runId"],)).fetchone()
             self.assertNotIn("adapter", json.loads(task["spec_json"]))
@@ -153,27 +151,21 @@ class TestWorkflowRouting(WorkflowTestCase):
         claimed = self.claim(board, run_id=submitted["runId"], claim_request_id="execute")
         self.assertEqual(claimed["claim"]["task"]["spec"]["model"], BUDDY["model"])
         self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["buddy"], BUDDY)
-        self.assertTrue(self.routed(board)["duplicate"])
+        self.assertTrue(self.routed(board)["alreadyExists"])
 
-    def test_partial_constraints_are_rejected_and_capabilities_filter_instead(self):
+    def test_partial_buddy_constraints_and_required_capabilities_are_rejected(self):
         board = self.board()
-        # Two effort-high buddies keep the Router path; the required capability is
-        # still a hard filter, and a third enabled buddy would also be filtered out.
-        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
-        with self.assertRaises(BoardError) as raised:
-            self.routed(board, effort="high")
-        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        self.assertIn("all-or-nothing", raised.exception.message)
-        submitted = self.routed(board, requiredCapabilities=["effort:high"])
-        claim = self.router_claim(board, submitted)
-        self.assertEqual(sorted(buddy["buddyId"] for buddy in claim["claim"]["decisionInput"]["buddies"]),
-                         sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
-        self.select(board, claim, buddy_id=BUDDY_ID)
-        view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertTrue(view["awaitingHost"])
-        self.assertEqual(view["routing"]["status"], "needs-host")
-        self.assertEqual(view["counts"]["turns"], 0)
-        self.assertIsNone(view["buddy"])
+        self.seed(board)
+        for field, value in (("effort", "high"), ("requiredCapabilities", ["effort:high"])):
+            with self.subTest(field=field), self.assertRaises(BoardError) as raised:
+                board.call("workflow_submit", {
+                    "cwd": str(self.workdir(field)), "macroTaskId": "standalone",
+                    "title": field, "task": "bounded work", "buddy": "route",
+                    "checkout": "existing", "access": "write", "inputs": [],
+                    "writeScope": ["."], "expectedSeconds": 1800,
+                    "creationKey": "test-" + field, field: value,
+                })
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
     def test_no_selector_or_candidates_is_recoverable_without_fake_turn(self):
         board = self.board()
@@ -200,26 +192,25 @@ class TestWorkflowRouting(WorkflowTestCase):
         recovered = self.continue_run(board, submitted, buddy=BUDDY, note="Host selected an installed buddy after routing had no selector")
         self.assertEqual(recovered["buddy"], BUDDY)
         self.assertFalse(recovered["awaitingHost"])
-        self.assertTrue(self.continue_run(board, submitted, buddy=BUDDY, note="Host selected an installed buddy after routing had no selector")["duplicate"])
+        replay = self.continue_run(board, submitted, requestId=submitted["activeRequest"]["requestId"], buddy=BUDDY, note="Host selected an installed buddy after routing had no selector")
+        self.assertTrue(replay["alreadyResponded"])
 
-    def test_reroute_after_buddy_fix_is_durable_and_idempotent(self):
+    def test_route_request_can_be_retried_after_selector_becomes_available(self):
         board = self.board()
         submitted = self.routed(board)
+        self.assertEqual(submitted["activeRequest"]["reason"]["code"], "no-legal-candidate")
         self.seed(board)
-        continued = self.continue_run(board, submitted, reroute=True)
-        self.assertIsNone(continued["routing"]["decisionId"])
-        with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)
-            event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='workflow.continued' ORDER BY seq DESC LIMIT 1").fetchone()[0])
-            self.assertTrue(event["reroute"])
+        request_id = submitted["activeRequest"]["requestId"]
+        continued = self.continue_run(board, submitted, requestId=request_id,
+                                      buddy="route", note="Use the now available selector")
         continued = self.prepare_reroute(board, continued)
         self.assertEqual(continued["routing"]["status"], "queued")
         self.assertNotEqual(continued["routing"]["decisionId"], submitted["routing"]["decisionId"])
-        self.assertTrue(self.continue_run(board, submitted, reroute=True)["duplicate"])
+        replay = self.continue_run(board, submitted, requestId=request_id,
+                                   buddy="route", note="Use the now available selector")
+        self.assertTrue(replay["alreadyResponded"])
         self.select(board, self.router_claim(board, continued))
-        with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 2)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+        self.assertEqual(board.call("workflow_get", {"runId": submitted["runId"]})["buddy"], BUDDY)
 
     def test_catalog_drift_at_dispatch_is_attention_and_other_work_claims(self):
         board = self.board()
@@ -284,9 +275,9 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.seed(board)
         submitted = self.routed(board)
         claim = self.router_claim(board, submitted)
-        cancelled = board.call("workflow_cancel", {"runId": submitted["runId"], **self.control(submitted)})
+        cancelled = board.call("workflow_cancel", {"runId": submitted["runId"]})
         self.assertEqual(cancelled["state"], "cancelled")
-        self.assertEqual(cancelled["shutdown"]["unconfirmedRunIds"], [submitted["routing"]["taskId"]])
+        self.assertEqual(board.call("workflow_get", {"runId": submitted["runId"]})["shutdown"]["unconfirmedRunIds"], [submitted["routing"]["taskId"]])
         owned = board.call("task_get", {"runId": submitted["routing"]["taskId"]})["task"]
         self.assertTrue(owned["cancelRequested"])
         self.select(board, claim)
@@ -295,67 +286,11 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(view["state"], "cancelled")
         self.assertEqual(view["shutdown"]["unconfirmedCount"], 0)
 
-    def test_takeover_fences_selection_and_requires_real_stop_before_recovery(self):
-        board = self.board()
-        self.seed(board)
-        submitted = self.routed(board)
-        claim = self.router_claim(board, submitted)
-        taken = board.call("workflow_takeover", {"runId": submitted["runId"], "commandId": "takeover",
-                           "expectedOwnerGeneration": 1, "newHostId": "host-2", **self.control(submitted)})
-        self.controls[taken["runId"]] = taken["control"]
-        self.assertTrue(taken["awaitingHost"])
-        self.assertEqual(taken["activeRequest"]["reason"],
-                         {"code": "routing-taken-over", "params": {}})
-        with board.store.db.read() as connection:
-            request = connection.execute(
-                "SELECT summary,reason_code,decision_id,payload_json FROM workflow_requests WHERE request_id=?",
-                (taken["activeRequest"]["requestId"],),
-            ).fetchone()
-            self.assertIsNone(request["summary"])
-            self.assertEqual(request["reason_code"], "routing-taken-over")
-            self.assertEqual(request["decision_id"], submitted["routing"]["decisionId"])
-            self.assertEqual(json.loads(request["payload_json"]), {"source": "routing"})
-        with self.assertRaises(BoardError) as raised:
-            self.continue_run(board, taken, buddy=BUDDY, note="New Host selected an installed buddy after takeover")
-        self.assertEqual(raised.exception.code, "SHUTDOWN_UNCONFIRMED")
-        self.select(board, claim)
-        view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertIsNone(view["buddy"])
-        recovered = self.continue_run(board, view, buddy=BUDDY, note="New Host selected an installed buddy after shutdown confirmation")
-        self.assertEqual(recovered["buddy"], BUDDY)
 
-    def test_takeover_of_unconfirmed_old_route_owns_its_attention_without_current_decision(self):
-        board = self.board()
-        self.seed(board)
-        submitted = self.routed(board)
-        self.router_claim(board, submitted)
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE workflow_routes SET state='fenced' WHERE decision_id=?",
-                               (submitted["routing"]["decisionId"],))
-            connection.execute("UPDATE workflow_runs SET current_routing_id=NULL WHERE run_id=?", (submitted["runId"],))
-        current = board.call("workflow_get", {"runId":submitted["runId"]})
-        taken = board.call("workflow_takeover", {"runId":submitted["runId"], "commandId":"takeover-old-route",
-                           "expectedOwnerGeneration":1, "newHostId":"host-2", **self.control(current)})
-        self.assertEqual(taken["activeRequest"]["reason"], {"code":"routing-taken-over", "params":{}})
-        self.assertIsNone(taken["activeRequest"]["decisionId"])
-        self.assertTrue(taken["awaitingHost"])
 
-    def test_host_buddy_cannot_break_locked_constraints(self):
-        # The retired scenario locked a partial `effort` constraint; a partial tuple
-        # is rejected input now, so the lock's surviving meaning is checked with the
-        # complete quadruple it can still be supplied with.
-        board = self.board()
-        supplied = {**BUDDY, "effort": "high"}
-        submitted = self.submit(board, buddyLocked=True, **supplied)
-        self.assertEqual(submitted["routing"]["status"], "explicit")
-        self.register(board)
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        awaiting = board.call("workflow_get", {"runId": submitted["runId"]})
-        with self.assertRaises(BoardError) as raised:
-            self.continue_run(board, awaiting, buddy=BUDDY, note="Host attempted to override the locked buddy")
-        self.assertEqual(raised.exception.code, "BUDDY_CONFLICT")
-        recovered = self.continue_run(board, awaiting, buddy=supplied, note="Host re-selected the locked buddy")
-        self.assertEqual(recovered["buddy"], supplied)
+
+
+
 
     def test_routing_attention_refuses_assistance_before_workspace_or_catalog_work(self):
         board = self.board()
@@ -363,94 +298,50 @@ class TestWorkflowRouting(WorkflowTestCase):
         prepared = len(self.workspace.prepare_calls)
         with self.assertRaises(BoardError) as raised:
             self.decide(board, submitted, submitted["activeRequest"]["requestId"], helpers=[{
-                "requestId": "wrong-operation-helper", "task": "cannot resolve buddy",
+                "title": "wrong-operation-helper", "task": "cannot resolve buddy",
                 "cwd": str(self.workdir("wrong-operation-helper")),
-                "executionWorkspace": {"kind": "worktree", "access": "write"},
+                "workspace": {"kind": "worktree", "access": "write"},
             }])
         self.assertEqual(raised.exception.code, "BUDDY_REQUIRED")
         self.assertEqual(len(self.workspace.prepare_calls), prepared)
         self.assertEqual(self.catalog_validation.call_count, 0)
 
-    def helper_routing(self, board, parent, *, request_id="partial-helper", **constraints):
+    def helper_routing(self, board, parent, *, request_id="route-helper"):
         view = board.call("workflow_get", {"runId": parent["runId"]})
-        return board.call("workflow_decide", {
-            "runId": view["runId"], "requestId": view["activeRequest"]["requestId"],
-            "commandId": f"authorize-{request_id}", "expectedRevision": view["revision"],
-            "decision": "approve", **self.control(parent), "helpers": [{
-                "requestId": request_id, "task": "Produce one bounded helper output",
-                "cwd": str(self.workdir(request_id)),
-                "executionWorkspace": {"kind": "existing", "access": "write"}, **constraints,
-            }],
-        })
-
-    def test_helper_routes_with_hard_filters_and_parent_owns_its_stop(self):
-        board = self.board()
-        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
-        parent = self.submit(board)
-        self.register(board)
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        approved = self.helper_routing(board, parent, requiredCapabilities=["effort:high"])
-        helper_id = approved["children"][0]["taskId"]
-        helper = board.call("workflow_get", {"runId": helper_id})
-        routing = self.router_claim(board, helper)
-        self.assertEqual(sorted(buddy["buddyId"] for buddy in routing["claim"]["decisionInput"]["buddies"]),
-                         sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
-        cancelled = board.call("workflow_cancel", {"runId": parent["runId"], **self.control(parent)})
-        self.assertIn(helper["routing"]["taskId"], cancelled["shutdown"]["unconfirmedRunIds"])
-        self.select(board, routing, buddy_id=SECOND_BUDDY_ID)
-        closed = board.call("workflow_get", {"runId": helper_id})
-        self.assertEqual(closed["state"], "cancelled")
-        self.assertIsNone(closed["buddy"])
+        reply = board.call("workflow_continue", {"runId": view["runId"],
+            "requestId": view["activeRequest"]["requestId"],
+            "decision": "approve", "autoContinue": True, "helpers": [{
+            "title": request_id, "task": "Produce one bounded helper output",
+            "cwd": str(self.workdir(request_id)), "buddy": "route",
+            "checkout": "worktree", "access": "write", "inputs": [],
+            "writeScope": ["."], "expectedSeconds": 1800,
+        }]})
+        return {**board.call("workflow_get", {"runId": parent["runId"]}), **reply}
 
     def test_helper_routing_attention_can_be_resolved_by_root_owner(self):
         board = self.board()
         parent = self.submit(board)
-        self.register(board)
         self.finish_turn(board, self.claim(board), disposition="assistance")
-        view = self.helper_routing(board, parent, requiredCapabilities=["effort:high"])
+        # Explicit parent admission registers a candidate in the shared catalog;
+        # remove it to exercise a helper's unresolved routing boundary.
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE buddies SET enabled=0")
+        view = self.helper_routing(board, parent)
         helper_id = view["children"][0]["taskId"]
         request = view["activeRequest"]
         self.assertTrue(request["routing"])
         self.assertEqual(request["origin"]["runId"], helper_id)
         with self.assertRaises(BoardError) as raised:
-            self.decide(board, view, request["requestId"], command_id="wrong-command")
+            self.decide(board, view, request["requestId"])
         self.assertEqual(raised.exception.code, "BUDDY_REQUIRED")
-        continued = self.continue_run(board, view, targetRunId=helper_id, buddy={**BUDDY, "effort": "high"}, note="Root Host resolved the helper's high effort routing request")
-        self.assertEqual(continued["runId"], parent["runId"])
-        self.assertEqual(continued["targetRunId"], helper_id)
+        from support import enable_fixture_buddy
+        enable_fixture_buddy(board.store, BUDDY)
+        continued = self.continue_run(board, view, requestId=request["requestId"],
+                                      targetRunId=helper_id, buddy=BUDDY, note="Root Host selected an installed buddy")
         self.assertEqual(continued["counts"]["openRequests"], 0)
-        # The helper's required capability is part of its authorization, so the
-        # coding worker declares it before claiming the resolved helper.
-        pass  # Admission is owned by the service.
-        claimed = self.claim(board, run_id=helper_id, claim_request_id="helper")
+        claimed = self.claim(board, run_id=helper_id)
         self.assertIsNotNone(claimed["claim"], claimed)
-        self.assertEqual(claimed["claim"]["task"]["spec"]["effort"], "high")
-        self.assertEqual(claimed["claim"]["turn"]["turnIndex"], 1)
-        # The helper still owns a writer in this checkout; the unrelated micro task
-        # uses an isolated fixture worktree to reach the Host authorization check.
-        unrelated = self.routed(board, request_id="unrelated", executionWorkspace={"kind": "worktree", "access": "write"})
-        fresh = board.call("workflow_get", {"runId": parent["runId"]})
-        with self.assertRaises(BoardError) as raised:
-            self.continue_run(board, fresh, command_id="foreign", targetRunId=unrelated["runId"], buddy=BUDDY, note="Host attempted to configure an unrelated micro task")
-        self.assertEqual(raised.exception.code, "UNAUTHORIZED")
-
-    def test_installed_validation_race_with_takeover_cannot_start_old_snapshot(self):
-        board = self.board()
-        self.seed(board)
-        view = self.routed(board)
-        self.select(board, self.router_claim(board, view))
-        self.register(board)
-
-        def takeover(buddy, **_):
-            board.call("workflow_takeover", {"runId": view["runId"], "commandId": "during-validation",
-                       "expectedOwnerGeneration": 1, "newHostId": "host-2", **self.control(view)})
-            return dict(buddy)
-
-        self.catalog_validation.side_effect = takeover
-        claim = self.claim(board)
-        self.assertIsNone(claim["claim"])
-        self.assertEqual(claim["reason"], "awaiting-buddy-validation")
-        self.assertEqual(board.call("workflow_get", {"runId": view["runId"]})["counts"]["turns"], 0)
+        self.assertEqual(claimed["claim"]["task"]["spec"]["model"], BUDDY["model"])
 
     def test_native_resume_requires_same_buddy_and_exact_previous_session(self):
         board = self.board()
@@ -460,13 +351,13 @@ class TestWorkflowRouting(WorkflowTestCase):
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id="native-123")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="next-native")
+        self.continue_run(board, view)
         resumed = self.claim(board, claim_request_id="native-turn-2")
         self.assertEqual(resumed["claim"]["turn"]["resumeMode"], "native-session")
         self.assertEqual(resumed["claim"]["turn"]["input"]["previousSessionId"], "native-123")
         self.finish_turn(board, resumed, disposition="attention", session_id="native-123")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="change-config", buddy=BUDDY, note="Host changed harness after the prior turn")
+        self.continue_run(board, view,  buddy=BUDDY, note="Host changed harness after the prior turn")
         changed = self.claim(board, claim_request_id="new-harness")
         self.assertEqual(changed["claim"]["turn"]["resumeMode"], "reconstructed-new-session")
 
@@ -485,7 +376,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertIn("exact previous session", result["attempt"]["error"])
 
         failed = board.call("workflow_get", {"runId": parent["runId"]})
-        self.continue_run(board, failed, command_id="after-invalid-native-turn")
+        self.continue_run(board, failed)
         reconstructed = self.claim(board, claim_request_id="claim-after-invalid-native-turn")
         self.assertEqual(reconstructed["claim"]["turn"]["resumeMode"], "reconstructed-new-session")
 
@@ -503,7 +394,7 @@ class TestWorkflowRouting(WorkflowTestCase):
             db.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?', (json.dumps(result), attempt_id))
             db.execute("UPDATE harness_health SET record_json=? WHERE harness='zcode'", (json.dumps({'version': '2.0'}),))
         view = board.call('workflow_get', {'runId': submitted['runId']})
-        self.continue_run(board, view, command_id='new-harness-version')
+        self.continue_run(board, view)
         resumed = self.claim(board, claim_request_id='version-changed-turn')
         self.assertEqual(resumed['claim']['turn']['resumeMode'], 'reconstructed-new-session')
         self.assertEqual(resumed['claim']['turn']['input']['context']['resumeReason'], 'harness-version-changed')
@@ -537,13 +428,13 @@ class TestWorkflowRouting(WorkflowTestCase):
         first = self.claim(board, run_id=submitted["runId"], claim_request_id="first-coding-turn")
         self.finish_turn(board, first, disposition="attention")
         current = board.call("workflow_get", {"runId": submitted["runId"]})
-        continued = self.continue_run(board, current, command_id="same-buddy")
+        continued = self.continue_run(board, current)
         self.assertEqual(continued["buddyRevision"], 1)
         second = self.claim(board, claim_request_id="second-coding-turn")
         self.assertEqual(self.catalog_validation.call_count, 1)
         self.finish_turn(board, second, disposition="attention")
         current = board.call("workflow_get", {"runId": submitted["runId"]})
-        changed = self.continue_run(board, current, command_id="new-buddy", buddy={**BUDDY, "effort": "high"}, note="Host chose higher effort after capacity released")
+        changed = self.continue_run(board, current,  buddy={**BUDDY, "effort": "high"}, note="Host chose higher effort after capacity released")
         self.assertEqual(changed["buddyRevision"], 2)
         third = self.claim(board, claim_request_id="third-coding-turn")
         self.assertEqual(third["claim"]["turn"]["input"]["context"]["buddy"]["effort"], "high")
@@ -562,7 +453,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.readonly_start.side_effect = remember_handle
         board = self.board(max_concurrent=1)
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
-        submitted = self.routed(board, requiredCapabilities=["effort:high"])
+        submitted = self.routed(board, )
         self.assertEqual(run_next(board.client()), "ran")
         selected = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(selected["routing"]["status"], "completed")
@@ -573,7 +464,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         decision_id = selected["routing"]["decisionId"]
         audit = board.call("selection_get", {"decisionId": decision_id, "includeAudit": True})["decision"]
         self.assertEqual(sorted(buddy["buddyId"] for buddy in audit["input"]["buddies"]),
-                         sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
+                         sorted([BUDDY_ID, SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
         self.assertEqual(audit["requestedBuddy"]["model"], CATALOG_BUDDY["model"])
         self.assertEqual(len(held), 1)
         control = held[0].role_run_control
@@ -589,7 +480,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(fixture_request.budget, audit["input"]["budget"])
         self.assertTrue(audit["inputVerification"]["unchanged"])
         self.assertTrue(audit["stopEvidence"]["shutdownConfirmed"])
-        self.assertTrue(self.routed(board, requiredCapabilities=["effort:high"])["duplicate"])
+        self.assertTrue(self.routed(board)["alreadyExists"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)

@@ -1,17 +1,12 @@
 """Client for one execution to report progress and results to the board."""
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 from typing import Any, Callable
 
 from . import transport
 from ..errors import BoardError
 from ..state_root import get_state_dir
-
-def new_command_id(prefix: str = "cmd") -> str:
-    return f"{prefix}-{uuid.uuid4()}"
-
 
 class BoardClient:
     """One client for the same-user local blackboard."""
@@ -59,11 +54,7 @@ class BoardClient:
     def cancel(self, **selector: Any) -> dict:
         return self.call("task_cancel", selector)["task"]
 
-    def retry(self, *, note: str | None = None, **selector: Any) -> dict:
-        return self.call("task_retry", {**selector, "note": note})["task"]
 
-    def acknowledge(self, note: str, verdict: str = "accepted", **selector: Any) -> dict:
-        return self.call("task_acknowledge", {**selector, "note": note, "verdict": verdict})["task"]
 
     def wait_task(self, timeout_ms: int = 30000, **selector: Any) -> dict:
         return self.call("task_wait", {**selector, "timeoutMs": timeout_ms}, resource="wait")
@@ -132,8 +123,6 @@ class BoardClient:
         return self.call("artifact_list", selector)
 
     # -- console and routing configuration ----------------------------------
-    def console_snapshot(self) -> dict:
-        return self.call("console_snapshot")
 
     def console(self, action: str = "open") -> dict:
         return self.call("console", {"action": action})
@@ -142,20 +131,26 @@ class BoardClient:
         return self.call("model_catalog_refresh", {"requestId": request_id})
 
     # -- micro-task workflow --------------------------------------------------
+    def workflow_create(self, **params: Any) -> dict:
+        return self.call("workflow_create", params)
+
+    def workflow_amend(self, **params: Any) -> dict:
+        return self.call("workflow_amend", params)
+
     def workflow_submit(self, **params: Any) -> dict:
         return self.call("workflow_submit", params)
 
-    def workflow_get(self, run_id: str, *, include_audit: bool = False) -> dict:
-        return self.call("workflow_get", {"runId": run_id, "includeAudit": include_audit})
+    def workflow_get(self, run_id: str | None = None, *, include_audit: bool | None = None, **selector: Any) -> dict:
+        if run_id is not None:
+            selector["runId"] = run_id
+        if include_audit is not None:
+            selector["includeAudit"] = include_audit
+        return self.call("workflow_get", selector)
 
-    def workflow_decide(self, **params: Any) -> dict:
-        return self.call("workflow_decide", params)
 
     def workflow_continue(self, **params: Any) -> dict:
         return self.call("workflow_continue", params)
 
-    def workflow_takeover(self, **params: Any) -> dict:
-        return self.call("workflow_takeover", params)
 
     def workflow_cancel(self, **params: Any) -> dict:
         return self.call("workflow_cancel", params)
@@ -166,11 +161,9 @@ class BoardClient:
     def workflow_conclude(self, **params: Any) -> dict:
         return self.call("workflow_conclude", params)
 
-    def workflow_reclaim(self, **params: Any) -> dict:
-        return self.call("workflow_reclaim", params)
 
     def workflow_suggest(self, run_id: str, body: str) -> dict:
         return self.call("workflow_suggest", {"runId": run_id, "body": body})
 
 
-__all__ = ["BoardClient", "BoardError", "new_command_id"]
+__all__ = ["BoardClient", "BoardError"]

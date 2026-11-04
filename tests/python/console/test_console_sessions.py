@@ -234,7 +234,7 @@ class ConsoleSessionTests(ConsoleTestCase):
 class ConsoleForegroundTests(ConsoleTestCase):
     def test_real_cli_interrupt_closes_only_its_console_and_preserves_work(self):
         with self.daemon():
-            code, before = self.cli('ping')
+            code, before = self.cli('health')
             self.assertEqual(code, 0)
             task = self.submit_execution(**{
                 'requestId': 'console-wait-owned-task', 'task': 'outlive the browser',
@@ -290,12 +290,12 @@ class ConsoleForegroundTests(ConsoleTestCase):
                 self.assertEqual(result['wait']['status'], 'interrupted')
                 self.assertTrue(result['wait']['close']['closed'])
                 self.assertEqual(result['consoleId'], result['wait']['close']['consoleId'])
-                code, after = self.cli('ping')
+                code, after = self.cli('health')
                 self.assertEqual(code, 0)
                 self.assertEqual(after['serviceId'], before['serviceId'])
-                code, viewed = self.cli('status', json.dumps({'runId': task['runId']}))
+                code, viewed = self.cli('get', json.dumps({'runId': task['runId']}))
                 self.assertEqual(code, 0)
-                self.assertIn(viewed['state'], ('queued', 'running', 'completed'))
+                self.assertIn(viewed['task']['state'], ('queued', 'running', 'completed'))
                 self.assertFalse(self.cli('console', '{"action":"status"}')[1]['running'])
             finally:
                 if child.poll() is None:

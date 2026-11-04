@@ -245,7 +245,8 @@ class UpgradeTests(BoardTestCase):
         old_skill = skill.with_name('.hey-my-buddy-upgrade-previous-' + 'c' * 32)
         old_skill.mkdir(parents=True)
         journal = {'phase': 'verified', 'contractChanged': False, 'previous': str(previous), 'target': str(target),
-                   'before': {}, 'expected': {}, 'skillTarget': str(skill), 'skillStage': str(staged), 'skillPrevious': str(old_skill)}
+                   'before': {'schema': SCHEMA_VERSION}, 'expected': {}, 'skillTarget': str(skill),
+                   'skillStage': str(staged), 'skillPrevious': str(old_skill)}
         upgrade.write_journal(state / 'upgrade.json', journal)
         with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=skill.parent), \
              mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
@@ -575,7 +576,9 @@ class UpgradeTests(BoardTestCase):
         marker=board.directory/'upgrade.json';marker.write_text('{}', encoding="utf-8", newline="\n")
         self.assertEqual(board.call('ping', {})['status'], 'ok')
         with self.assertRaises(BoardError) as caught:
-            board.call('task_retry', {'runId': 'blocked'})
+            board.call('workflow_create', {'cwd': str(self.directory), 'title': 'Blocked by install',
+                                           'goal': 'Do not admit a new macro during cutover',
+                                           'creationKey': 'a' * 64})
         self.assertEqual(caught.exception.code,'UPGRADE_IN_PROGRESS')
         self.assertEqual(board.store.count_tasks(),0)
 

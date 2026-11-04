@@ -37,10 +37,10 @@ class PermissionResumeTests(WorkflowTestCase):
             self.finish_turn(board, first, disposition="attention", session_id=session,
                              result_mutator=lambda result: result.update(nativeSession={"storageOwner": owner}))
             view = board.call("workflow_get", {"runId": submitted["runId"]})
-            kwargs = {"access": access}
+            kwargs = {"access": access, **({"writeScope":["."]} if access != "read" else {})}
             if access == "full":
                 kwargs["accessNote"] = "Need unrestricted fixture operations"
-            self.continue_run(board, view, command_id=f"continue-{index}", **kwargs)
+            self.continue_run(board, view, **kwargs)
             # The current task already has the new level; the old turn must keep
             # the old one so this comparison cannot use the task's current access.
             with board.store.db.read() as db:

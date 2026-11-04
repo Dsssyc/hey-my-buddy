@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
+from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
@@ -69,7 +70,7 @@ class CurrentRouterTestCase(BoardTestCase):
     def add_task(self, task_id, *, at=T0, state="completed"):
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,'host',json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','/work',?,1,?,?)",
+                "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','/work',?,1,?,?)",
                 (task_id, f"task-request-{task_id}", state, at, at))
 
     def add_attempt(self, attempt_id, task_id, *, at=T0, state="finished", receipt=None):
@@ -289,7 +290,7 @@ class ResolutionTests(CurrentRouterTestCase):
 
     def test_unfrozen_read_uses_current_settings_without_version_marker(self):
         self.add_buddy(A)
-        before = self.board_.call("console_snapshot", {})
+        before = console_snapshot_projection(self.board_.service)[0]
         self.assertNotIn("configurationError", before)
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)

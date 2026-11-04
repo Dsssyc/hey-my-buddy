@@ -40,7 +40,7 @@ class WorkspaceGitTruthTests(unittest.TestCase):
     def intent(self, *, kind="worktree", selected=(), base=None):
         return {"kind": kind, "cwd": str(self.repo), "access": "write",
                 "base": base or {"kind": "working-tree"}, "writeScope": ["src"],
-                "integrator": {"role": "host", "id": "host-1"}, "includeUntracked": list(selected)}
+                "integrator": {"role": "host"}, "includeUntracked": list(selected)}
 
     def git_link_and_crlf_fixture(self):
         self.git("config", "core.symlinks", "false")

@@ -33,14 +33,11 @@ class RoutingHistoryTestCase(WorkflowTestCase):
 
     # -- driven helpers -----------------------------------------------------
     def routed(self, board, *, request_id="route-1", **constraints):
-        response = board.call("workflow_submit", {
-            "requestId": request_id, "hostId": "host-1", "submissionToken": "submission-secret-1",
-            "task": ROUTING_TASK_TEXT, "cwd": str(self.workdir(request_id)),
-            "executionWorkspace": {"kind": "existing", "access": "write"}, **constraints,
-        })
-        if response.get("control"):
-            self.controls[response["runId"]] = response["control"]
-        return response
+        workspace = constraints.pop("workspace", {})
+        return self.submit(board, request_id=request_id, task=ROUTING_TASK_TEXT,
+                           cwd=str(self.workdir(request_id)), buddy="route",
+                           checkout=workspace.get("kind", "existing"),
+                           access=workspace.get("access", "write"), **constraints)
 
     def prepare_reroute(self, board, view):
         board.store.workflow.prepare_continuation_workspace({"runId": view["runId"]})
@@ -59,7 +56,8 @@ class RoutingHistoryTestCase(WorkflowTestCase):
 
 
     def select_decision(self, board, request_id):
-        return board.call("selection_request", {"requestId": request_id, "task": f"select for {request_id}"})
+        return board.store.decisions.request_select({"requestId": request_id,
+                                                     "task": f"select for {request_id}"})
 
     def state_fingerprint(self, board) -> dict:
         tables = (
@@ -112,7 +110,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         decision_ids = [submitted["routing"]["decisionId"]]
         view = submitted
         for index in range(1, 22):
-            view = self.continue_run(board, view, command_id=f"reroute-{index}", reroute=True)
+            view = self.continue_run(board, view, buddy="route")
             view = self.prepare_reroute(board, view)
             decision_ids.append(view["routing"]["decisionId"])
         self.assertEqual(len(set(decision_ids)), 22)
@@ -127,7 +125,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual([entry["status"] for entry in first["entries"]], ["needs-host"] * 3)
         self.assertEqual([entry["taskId"] for entry in first["entries"]], [None, None, None])
         self.assertEqual([entry["selectedBuddy"] for entry in first["entries"]], [None, None, None])
-        self.assertEqual([entry["ownerGeneration"] for entry in first["entries"]], [1, 1, 1])
+        self.assertTrue(all("ownerGeneration" not in entry for entry in first["entries"]))
         # Only the newest decision is the run's explicit current routing.
         self.assertEqual([entry["current"] for entry in first["entries"]], [True, False, False])
         for entry in first["entries"]:
@@ -207,12 +205,11 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
             "INVALID_ARGUMENT", board.call, "workflow_get",
             {"runId": run_id, "routingHistory": {"limit": 20}, "unexpected": True},
         )
-        # An absent or explicit-null routingHistory keeps the compact shape exactly.
+        # Inapplicable optional fields must be omitted from the current request.
         compact = board.call("workflow_get", {"runId": run_id})
         self.assertNotIn("routingHistory", compact)
-        identical = board.call("workflow_get", {"runId": run_id, "routingHistory": None})
-        self.assertEqual(set(identical), set(compact))
-        self.assertNotIn("routingHistory", identical)
+        self.assert_code("INVALID_ARGUMENT", board.call, "workflow_get",
+                         {"runId": run_id, "routingHistory": None})
         # A cursor below every row is an honest empty page, not an error.
         empty = self.history(board, run_id, before=1)
         self.assertEqual(empty["entries"], [])
@@ -228,7 +225,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         view = board.call("workflow_get", {"runId": plain["task"]["runId"], "routingHistory": {"limit": 5}})
         self.assertEqual(view["task"]["lineage"]["kind"], "execution")
         self.assertNotIn("microTask", view)
-        self.assertEqual(view["routingHistory"], {"entries": [], "nextCursor": None, "total": 0})
+        self.assertNotIn("routingHistory", view)
         self.assertNotIn("routingHistory", board.call("workflow_get", {"runId": plain["task"]["runId"]}))
 
     def test_resolved_reroute_history_keeps_its_frozen_selection_after_buddies_change(self):
@@ -246,6 +243,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual(entry["taskId"], selector_task_id)
         self.assertEqual(entry["selectedBuddy"]["buddyId"], BUDDY_ID)
         self.assertEqual(entry["selectedBuddy"]["model"], CATALOG_BUDDY["model"])
+        self.finish_turn(board, self.claim(board, run_id=submitted["runId"], claim_request_id="routed-turn"))
 
         # The user changes eligible buddies; the historical route retains its selection.
         self.publish_user_patch(
@@ -253,14 +251,15 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
             buddySettings=[{"buddyId": BUDDY_ID, "enabled": False}],
             configuration={"routerBuddyIds": [SECOND_BUDDY_ID]},
         )
-        snapshot = board.call("console_snapshot", {})
-        self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [SECOND_BUDDY_ID])
+        with board.store.db.read() as connection:
+            from hey_my_buddy.blackboard.routing import router
+            self.assertEqual(router.configuration(connection)["routerBuddyIds"], [SECOND_BUDDY_ID])
         frozen_config = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(frozen_config["buddy"]["model"], CATALOG_BUDDY["model"])
         self.assertEqual(frozen_config["buddyRevision"], 1)
 
         current = board.call("workflow_get", {"runId": submitted["runId"]})
-        pending = self.continue_run(board, current, command_id="reroute-after-change", reroute=True)
+        pending = self.continue_run(board, current, buddy="route")
         self.prepare_reroute(board, pending)
         history = self.history(board, submitted["runId"], limit=2)
         self.assertEqual(history["total"], 2)
@@ -371,7 +370,7 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
 
         self.assertIn("selection_list", CONTROL_OPERATIONS)
         self.assertIn("selection_list", CONSOLE_OPERATIONS)
-        self.assertIn("selection-list", METHODS)
+        self.assertNotIn("selection-list", METHODS)
         # A read stays a read: no agent-scoped mutation or extra grant is added.
         self.assertNotIn("selection_list", AGENT_OPERATIONS)
 
@@ -414,7 +413,7 @@ class TurnRoutingBindingTests(RoutingHistoryTestCase):
         self.finish_turn(board, first, disposition="attention")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         changed = self.continue_run(
-            board, view, command_id="reconfigure", buddy={**BUDDY, "effort": "high"}
+            board, view,  buddy={**BUDDY, "effort": "high"}
         )
         self.assertEqual(changed["buddyRevision"], 2)
         second = self.claim(board, claim_request_id="second")

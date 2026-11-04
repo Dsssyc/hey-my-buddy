@@ -53,10 +53,7 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertTrue(router_input.verify(original, frozen, digest, deadline=time.monotonic() + 120, state_dir=self.directory)["unchanged"])
         self.assertEqual(self.fixed_files(), initial_files)
         run_id = submitted["runId"]
-        continued = board.call("workflow_continue", {
-            "runId": run_id, "commandId": "restart-chain-continue", "expectedRevision": parked["revision"],
-            "input": "finish after the simulated restart", **self.control(parked),
-        })
+        continued = self.continue_run(board, {'runId': run_id, 'input': "finish after the simulated restart"})
         self.assertEqual(continued["state"], "executing")
         resumed = self.claim(board, run_id, request_id="restart-chain-second", nonce="q" * 16)
         self.assertIsNotNone(resumed["claim"], resumed)
@@ -162,24 +159,16 @@ class RestartLifecycleTests(LifecycleTestCase):
         board = self.board()
         self.assertEqual(self.fixed_files(), files)
         root = self.view(board, root_id)
-        resolved = board.store.workflow.workspace_resolve({
-            "runId": root_id, "targetRunId": helper_id, "commandId": "restart-restore-resolution",
-            "expectedRevision": root["revision"], "conflictId": flow["conflict"]["conflictId"], "action": "restore",
-            "paths": ["tracked.txt"], "observedFingerprint": flow["conflict"]["observedFingerprint"],
-            'note': "restore the authorized helper input", **self.control(root),
-        })
+        resolved = self.continue_run(board, {'runId': root_id, 'targetRunId': helper_id, 'paths': ["tracked.txt"], 'observedFingerprint': flow["conflict"]["observedFingerprint"], 'note': "restore the authorized helper input", 'resolution': "restore", 'requestId': self.view(board, root_id)["activeRequest"]["requestId"]})
         self.assertEqual(resolved["resolutionState"], "restored")
         self.assertEqual((flow["helperCheckout"] / "tracked.txt").read_text(encoding="utf-8"), "base\n")
         self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
         root = self.view(board, root_id)
-        board.call("workflow_continue", {
-            "runId": root_id, "targetRunId": helper_id, "commandId": "restart-restored-helper-continue",
-            "expectedRevision": root["revision"], "input": "continue from the preserved legal output", **self.control(root),
-        })
+        self.continue_run(board, {'runId': root_id, 'targetRunId': helper_id, 'input': "continue from the preserved legal output"})
         resumed = self.claim(board, helper_id, request_id="restart-restored-helper-claim")
         self.assertIsNotNone(resumed["claim"], resumed)
         current = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
-        self.assertEqual(current["baseCommit"], resolved["outputCommit"])
+        self.assertEqual(current["baseCommit"],self.artifact_record(board,resolved["artifactId"])["commit"])
         self.assertEqual(current["checkoutRoot"], workspace_module.inspect(current["path"])["checkoutRoot"])
         for path, raw in files.items():
             self.assertEqual(native_path(self.directory / path).read_bytes(), raw, path)
@@ -191,21 +180,14 @@ class RestartLifecycleTests(LifecycleTestCase):
         board = self.board()
         self.assertEqual(self.fixed_files(), files)
         root = self.view(board, root_id)
-        abandoned = board.store.workflow.workspace_resolve({
-            "runId": root_id, "targetRunId": helper_id, "commandId": "restart-abandon-resolution",
-            "expectedRevision": root["revision"], "conflictId": flow["conflict"]["conflictId"], "action": "abandon",
-            "observedFingerprint": flow["conflict"]["observedFingerprint"], 'note': "preserve this failed round as evidence",
-            **self.control(root),
-        })
+        abandoned = self.continue_run(board, {'runId': root_id, 'targetRunId': helper_id, 'observedFingerprint': flow["conflict"]["observedFingerprint"], 'note': "preserve this failed round as evidence", 'resolution': "abandon", 'requestId': self.view(board, root_id)["activeRequest"]["requestId"]})
         self.assertEqual(abandoned["resolutionState"], "abandoned")
-        self.assertEqual(abandoned["artifact"]["kind"], "abandoned-site")
-        self.assertIn("outside the helper scope", native_path(Path(abandoned["diffPath"])).read_text(encoding="utf-8"))
+        artifact=next(row for row in self.view(board,helper_id)["artifacts"] if row["artifactId"]==abandoned["artifactId"])
+        self.assertEqual(artifact["kind"], "abandoned-site")
+        self.assertIn("outside the helper scope",native_path(Path(self.artifact_record(board,abandoned["artifactId"])["diffPath"])).read_text(encoding="utf-8"))
         self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(encoding="utf-8"), "value = 1\n")
         root = self.view(board, root_id)
-        board.call("workflow_continue", {
-            "runId": root_id, "targetRunId": helper_id, "commandId": "restart-abandoned-helper-continue",
-            "expectedRevision": root["revision"], "input": "continue from the original authorized input", **self.control(root),
-        })
+        self.continue_run(board, {'runId': root_id, 'targetRunId': helper_id, 'input': "continue from the original authorized input"})
         resumed = self.claim(board, helper_id, request_id="restart-abandoned-helper-claim")
         self.assertIsNotNone(resumed["claim"], resumed)
         current = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])

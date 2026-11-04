@@ -206,9 +206,6 @@ class PreviewFixtureTest(unittest.TestCase):
         workflows = {path: outcome["facts"] for path, outcome in outcomes.items()
                      if outcome["kind"] == "workflow-get" and outcome["accepted"]}
         self.assertTrue(workflows)
-        locked = {facts["buddyLocked"] for facts in workflows.values()}
-        self.assertIn(True, locked, "one micro task must record the user-locked buddy")
-        self.assertIn(False, locked, "one micro task must record a Host-supplied buddy")
         for facts in workflows.values():
             self.assertIn("hostConclusion", facts)
 
@@ -300,9 +297,9 @@ class PreviewFixtureTest(unittest.TestCase):
             self.assertLessEqual(dispatch_turn["createdAt"], owned["createdAt"])
             self.assertLessEqual(owned["createdAt"], dispatch_turn["updatedAt"])
             self.assertLess(owned["updatedAt"], turn["createdAt"])
-            self.assertIsNone(owned["hostId"])
-            self.assertIsNone(owned["task"]["lineage"]["sourceHostId"])
-            self.assertIsNone(owned["task"]["lineage"]["currentHostId"])
+            self.assertNotIn("hostId",owned)
+            self.assertNotIn("sourceHostId",owned["task"]["lineage"])
+            self.assertNotIn("currentHostId",owned["task"]["lineage"])
             self.assertIsNone(row["parentRunId"], "Lead-owned work is an independent micro task")
             self.assertEqual(owned["runId"], row["rootRunId"])
             self.assertIsNone(owned["finalAttemptId"])

@@ -88,7 +88,7 @@ def _rebind_workspace_owners(connection, records: dict) -> None:
                       input_commit=original[0][3], staged_commit=original[0][4])
 
 
-def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str]]]:
+def _select(connection, source_schema: int) -> tuple[dict[str, list[dict]], list[tuple[str, str, str]]]:
     # The most recently accepted micro tasks are selected; the reversed list
     # writes them into the destination oldest first.
     selected = [row[0] for row in connection.execute(
@@ -119,7 +119,7 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
                   'workflow_workspace_conflicts', 'workflow_integrations', 'workflow_artifacts',
                   'workflow_suggestions', 'workflow_host_conclusions'):
         records[table] = _rows(connection, table, 'run_id', selected)
-    if 'content_form' in {row[1] for row in connection.execute('PRAGMA table_info(workflow_artifacts)')}:
+    if source_schema >= 34:
         _rebind_workspace_owners(connection, records)
     # Relationships survive only when both micro tasks were selected. A selected
     # child of an omitted parent becomes a root; no omitted task is pulled in.
@@ -136,9 +136,11 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
         group = groups[run['run_id']]
         if not group.startswith('run:'):
             run['macro_task_id'] = group
-        # None of the source's capability verifiers belongs to the new board.
-        run['control_verifier'] = secrets.token_hex(32)
-        run['submission_verifier'] = None
+        # Schema 35 has no Host capability columns. Earlier source forms keep
+        # their own structure, without carrying authority into the new board.
+        if source_schema < 35:
+            run['control_verifier'] = secrets.token_hex(32)
+            run['submission_verifier'] = None
     for attempt in records['attempts']:
         attempt['nonce_verifier'] = secrets.token_hex(32)
     session_groups = _session_groups(records, groups)
@@ -202,7 +204,7 @@ def _copy_required_regular(origin: Path, target: Path, digest: str | None = None
 
 
 def _referenced_files(records: dict, source: Path, output: Path) -> list[tuple[Path, Path, str | None]]:
-    """Only files explicitly named by selected schema 34 facts belong to a sample."""
+    """Copy only files explicitly named by selected schema 34/35 facts."""
     files: dict[Path, tuple[Path, Path, str | None]] = {}
     owners = {(row['workspace_id'], row.get('input_manifest_sha256') or row.get('workspace_manifest_sha256')): row
               for table in ('workflow_artifacts', 'workflow_continuations') for row in records[table]
@@ -293,7 +295,7 @@ def export_sample(source: Path, output: Path) -> Path:
         reader.row_factory = sqlite3.Row
         reader.execute('BEGIN')
         version, definitions = _source_schema(reader)
-        records, sessions = _select(reader)
+        records, sessions = _select(reader, int(version))
         referenced_files = _referenced_files(records, source, output) if int(version) >= 34 else []
     with tempfile.TemporaryDirectory(prefix='.board-sample-', dir=output.parent) as temporary:
         stage = Path(temporary) / 'state'

@@ -30,7 +30,7 @@ class WrapUpStopTests(WorkflowTestCase):
         self.register(board)
         run = self.submit(board)
         claim = self.claim(board)
-        board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         params = self.result_params(claim, reason="wrap-up")
         board.store.workflow.cancel({"runId": run["runId"]}, console_authority={"sessionId": "browser"})
         receipt = board.call('execution_result', params)
@@ -59,7 +59,7 @@ class WrapUpStopTests(WorkflowTestCase):
         self.register(board)
         run = self.submit(board)
         claim = self.claim(board)
-        board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         params = self.result_params(claim, reason="wrap-up")
         params["result"]["turn"]["generation"] += 1
         params["result"]["partialOutput"] = {"partial": True, "verified": False, "final": False,
@@ -76,7 +76,7 @@ class WrapUpStopTests(WorkflowTestCase):
         self.register(board)
         run = self.submit(board)
         claim = self.claim(board)
-        board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         receipt = self.result(board, claim, reason=None, status="failed", shutdown=False)
         self.assertEqual(receipt["task"]["state"], "cancelling")
         self.assertEqual(receipt["attempt"]["executionState"], "finalizing")
@@ -89,7 +89,7 @@ class WrapUpStopTests(WorkflowTestCase):
         run = self.submit(board)
         claim = self.claim(board)
         self.assertIsNone(self.attempt(board, claim)["graceDeadline"])
-        board.call("workflow_cancel", {"runId": run["runId"], "commandId": "first-stop", **self.control(run)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         stopped = self.attempt(board, claim)
         self.assertEqual(stopped["stopInitiator"], "host")
         self.assertTrue(stopped["cancelRequested"])
@@ -99,7 +99,7 @@ class WrapUpStopTests(WorkflowTestCase):
         )
         self.assertEqual(board.call("task_get", {"runId": run["runId"]})["task"]["graceDeadline"],
                          stopped["graceDeadline"])
-        board.call("workflow_cancel", {"runId": run["runId"], "commandId": "second-stop", **self.control(run)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         self.assertEqual(self.attempt(board, claim)["graceDeadline"], stopped["graceDeadline"])
         self.assertEqual(self.attempt(board, claim)["cancelRequestedAt"], stopped["cancelRequestedAt"])
 
@@ -109,7 +109,7 @@ class WrapUpStopTests(WorkflowTestCase):
         self.register(board, "w2")
         first = self.submit(board, kind="worktree")
         first_claim = self.claim(board)
-        board.call("workflow_cancel", {"runId": first["runId"], **self.control(first)})
+        board.call("workflow_cancel", {"runId": first["runId"]})
         self.assertIsNotNone(self.attempt(board, first_claim)["graceDeadline"])
         board.store.workflow.cancel({"runId": first["runId"]}, console_authority={"sessionId": "browser"})
         upgraded = self.attempt(board, first_claim)
@@ -134,12 +134,12 @@ class WrapUpStopTests(WorkflowTestCase):
         self.finish_turn(board, self.claim(board), disposition="assistance")
         view = board.call("workflow_get", {"runId": parent["runId"]})
         approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
-            "requestId": "helper", "task": "help", "cwd": str(self.workdir("helper")),
-            "executionWorkspace": {"kind": "worktree", "access": "write"},
+            "title": "helper", "task": "help", "cwd": str(self.workdir("helper")),
+            "workspace": {"kind": "worktree", "access": "write"},
         }])
         child = approved["children"][0]["taskId"]
         claim = self.claim(board, claim_request_id="child-claim", run_id=child)
-        board.call("workflow_cancel", {"runId": parent["runId"], **self.control(approved)})
+        board.call("workflow_cancel", {"runId": parent["runId"]})
         attempt = self.attempt(board, claim)
         self.assertEqual(attempt["stopInitiator"], "host")
         self.assertIsNotNone(attempt["graceDeadline"])
@@ -153,7 +153,7 @@ class WrapUpStopTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute("UPDATE attempts SET execution_state='uncertain' WHERE attempt_id=?",
                                (claim["claim"]["attempt"]["attemptId"],))
-        board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         uncertain = self.attempt(board, claim)
         self.assertEqual(uncertain["stopInitiator"], "host")
         self.assertIsNone(uncertain["graceDeadline"])
@@ -176,7 +176,7 @@ class WrapUpStopTests(WorkflowTestCase):
                 "UPDATE attempts SET cancel_requested_at=?,stop_initiator='unknown' WHERE attempt_id=?",
                 ("2026-01-01T00:00:00Z", attempt_id),
             )
-        board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         stopped = self.attempt(board, claim)
         self.assertEqual(stopped["stopInitiator"], "unknown")
         self.assertIsNone(stopped["graceDeadline"])
@@ -206,7 +206,7 @@ class WrapUpStopTests(WorkflowTestCase):
         with self.assertRaises(BoardError) as forbidden:
             board.call('execution_result', {**self.result_params(claim, reason=None), "stopInitiator": "host"})
         self.assertEqual(forbidden.exception.code, "INVALID_ARGUMENT")
-        board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         rejected = self.result(board, claim, reason="console-stop")
         self.assertEqual(rejected["attempt"]["result"]["result"]["microTaskError"]["code"], "INVALID_ARGUMENT")
         self.assertNotIn("stopInitiator", rejected["attempt"]["result"])
@@ -223,7 +223,7 @@ class WrapUpStopTests(WorkflowTestCase):
                 claim = self.claim(board, worker_id=worker_id, claim_request_id=f'capability-claim-{index}',
                                    run_id=run['runId'])
                 self.assertIsNotNone(claim['claim'])
-                board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+                board.call("workflow_cancel", {"runId": run["runId"]})
                 self.assertEqual(self.attempt(board, claim)["graceDeadline"] is not None, supported)
 
     def test_expired_wrap_up_receipt_does_not_import_late_turn(self):
@@ -231,7 +231,7 @@ class WrapUpStopTests(WorkflowTestCase):
         self.register(board)
         run = self.submit(board)
         claim = self.claim(board)
-        board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         settled = self.result(board, claim, reason="grace-expired")
         self.assertEqual(settled["attempt"]["result"]["terminationReason"], "grace-expired")
         view = board.call("workflow_get", {"runId": run["runId"]})
@@ -242,7 +242,7 @@ class WrapUpStopTests(WorkflowTestCase):
         self.register(board)
         run = self.submit(board)
         claim = self.claim(board)
-        board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         view = board.call("workflow_get", {"runId": run["runId"]})
         self.assertEqual(view["task"]["stopInitiator"], "host")
         self.assertIsNotNone(view["task"]["graceDeadline"])
@@ -300,7 +300,7 @@ class WrapUpStopTests(WorkflowTestCase):
                         board.store.workflow._request_attempt_stop(
                             connection, run["runId"], requested_at, initiator="service", wrap_up=False)
                 else:
-                    board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+                    board.call("workflow_cancel", {"runId": run["runId"]})
             if initiator == first:
                 first_stop = self.attempt(board, claim)
 

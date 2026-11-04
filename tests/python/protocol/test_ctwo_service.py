@@ -32,7 +32,9 @@ class TestNamedContract(BoardTestCase):
                 for _ in range(3):
                     frame = json.dumps({"token": endpoint["token"], "after": 2**62, "timeoutMs": 50})
                     self.assertTrue(json.loads(peer.events_wait(frame))["timedOut"])
-            capacity = client.call("wait_capacity", resource="wait")
+            health=client.call("health")
+            capacity = health["waitAdmission"]
+            self.assertEqual(health["waitCapacity"],capacity["capacity"])
             self.assertEqual(capacity["admitted"], 0)
             self.assertEqual(capacity["available"], 1)
 
@@ -45,7 +47,7 @@ class TestNamedContract(BoardTestCase):
                                          {"after": 2**62, "timeoutMs": 30000})
                 deadline = time.monotonic() + 3
                 while True:
-                    capacity = client.call("wait_capacity", resource="wait")
+                    capacity = client.call("health")["waitAdmission"]
                     if capacity["admitted"] == 1:
                         break
                     self.assertLess(time.monotonic(), deadline)
@@ -57,6 +59,10 @@ class TestNamedContract(BoardTestCase):
         endpoint = _read_endpoint(self.directory)
         self.assertIsNotNone(endpoint, "the daemon must publish a private endpoint")
         return endpoint
+
+    def _capacity(self, endpoint):
+        with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as control:
+            return json.loads(control.health(json.dumps({"token":endpoint["token"]})))["waitAdmission"]
 
     def _wait_call(self, endpoint, operation: str, params: dict) -> dict:
         with self.rpc_connection(BuddyWait, name=WAIT_NAME, address=endpoint["address"]) as wait:
@@ -77,6 +83,8 @@ class TestNamedContract(BoardTestCase):
                 self.assertIn("runtimeIdentity", health)
                 self.assertTrue(hasattr(board, "execution_result"))
                 self.assertFalse(hasattr(board, "worker_claim"))
+                for retired in ("workflow_takeover", "workflow_decide", "workflow_reclaim", "console_snapshot", "selection_request", "task_retry", "task_acknowledge", "task_wait"):
+                    self.assertFalse(hasattr(board,retired),retired)
                 self.assertTrue(hasattr(board, "events_read"))
                 self.assertFalse(hasattr(board, "dispatch"), "no generic dispatch facade may exist")
                 denied = json.loads(board.task_list(json.dumps({"token": "wrong"})))
@@ -93,7 +101,7 @@ class TestNamedContract(BoardTestCase):
     def test_the_wait_route_is_a_separate_resource_with_its_own_capacity(self):
         with self.daemon(env={"HMB_WAIT_CAPACITY": "1"}):
             endpoint = self._endpoint()
-            capacity = self._wait_call(endpoint, "wait_capacity", {})
+            capacity = self._capacity(endpoint)
             self.assertEqual(capacity["capacity"], 1)
             with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
                 reply = self.submit_execution(
@@ -121,7 +129,7 @@ class TestNamedContract(BoardTestCase):
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     holder = pool.submit(self._wait_call, endpoint, "events_wait", params)
                     deadline = time.monotonic() + 5
-                    while self._wait_call(endpoint, "wait_capacity", {})["admitted"] != 1:
+                    while self._capacity(endpoint)["admitted"] != 1:
                         if holder.done():
                             self.fail(f"The holder returned before admission was observed: {holder.result()}")
                         if time.monotonic() >= deadline:

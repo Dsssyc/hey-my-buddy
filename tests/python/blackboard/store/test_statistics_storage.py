@@ -53,7 +53,8 @@ class StatisticsStorageTests(WorkflowTestCase):
                             self.accept_run(self.board_, self.delivered)
                         else:
                             self.board_.call("workflow_conclude", {"runId": self.run["runId"],
-                                            "note": "Observed failure", **self.control(self.run)})
+                                            "artifactId": self.delivered["finalArtifactId"],
+                                            "note": "Observed failure"})
                 self.assertEqual(self.facts()["overall"]["samples"], 0)
                 with self.board_.store.db.read() as db:
                     self.assertEqual(db.execute("SELECT state FROM workflow_runs WHERE run_id=?", (self.run["runId"],)).fetchone()[0], "delivered")
@@ -111,7 +112,7 @@ class StatisticsStorageTests(WorkflowTestCase):
                 {"terminationReason": "harness-error", "result": {"code": "harness-unavailable"}}, self.board_.store.now())
         before = self.facts()
         with ExitStack() as stack:
-            for stage in ("_delete_sessions", "_delete_workspaces", "_delete_private_roots", "_delete_cli_files"):
+            for stage in ("_delete_sessions", "_delete_workspaces", "_delete_private_roots"):
                 stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
             deleted = macro_task_deletion.delete(self.board_.store, "run:" + self.run["runId"], 1)
         self.assertEqual(deleted["state"], "deleted")

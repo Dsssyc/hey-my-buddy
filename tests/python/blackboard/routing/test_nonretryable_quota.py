@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from hey_my_buddy.blackboard.evaluation.native_observations import persist
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
+from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing.quota_routing import cooling, provider_state
 from support import BoardTestCase, FakeClock, FIXTURE_CATALOG
 
@@ -63,15 +64,17 @@ class ProviderDenialRoutingTests(BoardTestCase):
             self.assertIsNone(cooling(db, {"harness": "zcode", "provider": "other-api"},
                                       now=self.clock()))
         with patch("hey_my_buddy.blackboard.routing.quota_routing.utc_now", self.clock):
-            for operation in ("buddy_list", "console_snapshot"):
-                views = {row["buddyId"]: row for row in self.board_.call(operation, {})["buddies"]}
+            for snapshot in (self.board_.call("buddy_list", {}),
+                             console_snapshot_projection(self.board_.service)[0]):
+                views = {row["buddyId"]: row for row in snapshot["buddies"]}
                 for buddy_id in BUDDY_IDS:
                     self.assertEqual(views[buddy_id]["providerCooling"]["coolingUntil"],
                                      "2026-01-01T00:30:00.000Z")
                 self.assertIsNone(views[OTHER_PROVIDER_ID]["providerCooling"])
             self.clock.advance(1800)
-            for operation in ("buddy_list", "console_snapshot"):
-                views = {row["buddyId"]: row for row in self.board_.call(operation, {})["buddies"]}
+            for snapshot in (self.board_.call("buddy_list", {}),
+                             console_snapshot_projection(self.board_.service)[0]):
+                views = {row["buddyId"]: row for row in snapshot["buddies"]}
                 self.assertTrue(all(views[buddy_id]["providerCooling"] is None for buddy_id in BUDDY_IDS))
 
     def test_expiry_and_redetect_restore_all_models_without_single_use_claim(self):

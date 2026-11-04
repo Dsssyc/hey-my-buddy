@@ -49,7 +49,7 @@ class StorageOrphanTests(WorkflowTestCase):
     def orphan(self, request_id='orphan-request'):
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write',
                   'base': {'kind': 'working-tree'}, 'includeUntracked': [],
-                  'writeScope': ['.'], 'integrator': {'role': 'host', 'id': 'host-1'}}
+                  'writeScope': ['.'], 'integrator': {'role': 'host'}}
         manifest = workspace.prepare(self.directory, request_id, intent)
         checkout = Path(manifest['checkoutRoot'])
         planned = self.board_instance.call('storage_plan', {})
@@ -88,9 +88,10 @@ class StorageOrphanTests(WorkflowTestCase):
             accepted = board.call('workflow_accept', {
                 'runId': delivered['runId'], 'artifactId': view['finalArtifactId'],
                 'note': 'Private ref integration regression',
-                'target': {'path': str(checkout), 'ref': sealed['commit']}, **self.control(view)})
-        self.assertEqual(accepted['integration']['state'], 'verified')
-        self.assertEqual(accepted['integration']['target']['path'], str(checkout))
+                'target': {'path': str(checkout), 'ref': sealed['commit']}})
+        integration = board.call('workflow_get',{'runId':delivered['runId']})['integrations'][0]
+        self.assertEqual(integration['state'], 'verified')
+        self.assertEqual(integration['target']['path'], str(checkout))
         self.assertEqual(self.git(checkout, 'rev-parse', 'HEAD'), manifest['inputCommit'])
         self.assertEqual((checkout / 'tracked.txt').read_text(encoding="utf-8"), 'input\n')
         return accepted
@@ -114,7 +115,8 @@ class StorageOrphanTests(WorkflowTestCase):
         snapshot = dict(current['snapshot'], executionSelectors=[], includeSelectors=[],
                         includedUntracked=workspace.input_untracked_paths(current),
                         excludedUntracked=sorted(current['snapshot']['excludedEntries']))
-        old = dict(current, version=2, access='full', accessReason='Original Host explanation', snapshot=snapshot)
+        old = dict(current, version=2, access='full', accessReason='Original Host explanation',
+                   integrator={'role':'host','id':'historical-host'},snapshot=snapshot)
         old['repositoryId'] = old.pop('projectId')
         old['checkoutId'] = '0' * 64
         old['manifestSha256'] = workspace._sha(workspace._json({
@@ -123,6 +125,7 @@ class StorageOrphanTests(WorkflowTestCase):
         request_path = checkout.parent / 'request.json'
         request = json.loads(request_path.read_bytes())
         request['version'] = 2
+        request['intent']['integrator'] = old['integrator']
         request['intent']['access'] = 'full'
         request['intent']['accessReason'] = old['accessReason']
         request_path.write_bytes(workspace._json(request))
@@ -153,7 +156,7 @@ class StorageOrphanTests(WorkflowTestCase):
                         connection.execute('''INSERT INTO workflow_integrations
                             (integration_id,run_id,artifact_id,strategy,binding_sha256,
                              target_path,target_ref,target_project_id,verification_json,actor_role,actor_id,created_at)
-                            VALUES (?,?,?,?,?,?,?,?,?,'host','host-1',?)''',
+                            VALUES (?,?,?,?,?,?,?,?,?,'host',NULL,?)''',
                             (identity, parent['runId'], 'private-artifact', strategy, identity,
                              value if kind == 'path' else '', 'HEAD', manifest['projectId'],
                              json.dumps(value if kind == 'nested' else {}), '2026-01-01T00:00:00Z'))
@@ -199,7 +202,7 @@ class StorageOrphanTests(WorkflowTestCase):
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workflow_scope_versions
                 (run_id,scope_version,actor_role,actor_id,write_scope_json,manifest_sha256,stopped_evidence_json,created_at)
-                VALUES (?,2,'host','host-1','[]',?,'{}',?)''',
+                VALUES (?,2,'host',NULL,'[]',?,'{}',?)''',
                 (parent['runId'], manifest['manifestSha256'], '2026-01-01T00:00:00Z'))
             self.assertIn('workflow_scope_versions-reference', self.references(connection, manifest))
         row = next(row for row in storage.inspect(self.board_instance.store)['candidates'] if row['path'] == str(checkout))
@@ -225,10 +228,10 @@ class StorageOrphanTests(WorkflowTestCase):
         parent = self.submit(self.board_instance, request_id='other-run', cwd=str(self.repo), kind='existing')
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workflow_continuations
-                (continuation_id,run_id,kind,expected_revision,input_text,
+                (continuation_id,run_id,kind,input_text,
                  workspace_id,workspace_manifest_sha256,workspace_facts_role,
                  workspace_kind,checkout_root,repository_path,input_commit,staged_commit,state,created_at)
-                VALUES (?,?,'manual',1,'input',?,?,'owner',?,?,?,?,?,'invalidated',?)''',
+                VALUES (?,?,'manual','input',?,?,'owner',?,?,?,?,?,'invalidated',?)''',
                 ('retained-continuation', parent['runId'], manifest['workspaceId'], manifest['manifestSha256'],
                  manifest['kind'], manifest['checkoutRoot'], manifest['snapshot']['repositoryPath'],
                  manifest['inputCommit'], manifest['snapshot']['stagedCommit'], '2026-01-01T00:00:00Z'))

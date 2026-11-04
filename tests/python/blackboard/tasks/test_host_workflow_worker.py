@@ -29,10 +29,11 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
         self.assertEqual(code, 0, reply)
         return reply
 
-    def provider_rejection(self, *, locked=False):
-        submitted = self.call("submit", {**BUDDY, "requestId": "quota-recovery", "hostId": "host-1",
-            "task": "Implement the fixture change", "cwd": str(self.repo), "buddyLocked": locked,
-            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}})
+    def provider_rejection(self):
+        submitted = self.call("submit", {"macroTaskId": "standalone", "title": "Quota recovery",
+            "task": "Implement the fixture change", "cwd": str(self.repo),
+            "buddy": ":".join(BUDDY.values()), "checkout": "worktree", "access": "write",
+            "inputs": [], "writeScope": ["."], "expectedSeconds": 600})
         # A terminal failed micro task is an await outcome, not a CLI transport error.
         _code, stopped = self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}), env=self.env(), timeout=110)
         current = self.call("get", {"runId": submitted["runId"]})
@@ -52,8 +53,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
         # The quota death keeps its machine classification end to end: the
         # private session record's turn-end code is the only native failure
         # source, and only a recognized quota code surfaces as one.
-        receipt = self.call("result", {"runId": submitted["runId"]})
-        failure = (receipt.get("result") or {}).get("providerRejection")
+        failure = (stopped.get("result") or {}).get("providerRejection")
         self.assertIsNotNone(failure, "the offline quota death lost its machine code")
         self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["nativeCode"], "QUOTA")
@@ -65,11 +65,11 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
         with self.daemon(env=self.env()):
             submitted, failed, partial = self.provider_rejection()
             path = failed["workspace"]["path"]
-            continued = self.call("continue", {"runId": failed["runId"], "commandId": "change-after-quota",
-                "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
-                "buddy": {**BUDDY, "effort": "high"}, "note": "Use another enabled buddy after quota failure",
+            continued = self.call("continue", {"runId": failed["runId"], "artifactId": partial["artifactId"],
+                "buddy": ":".join({**BUDDY, "effort": "high"}.values()),
+                "note": "Use another enabled buddy after quota failure",
                 "input": "Finish and verify the preserved changes."})
-            self.assertEqual(continued["workspace"]["path"], path)
+            self.assertEqual(self.call("get", {"runId": failed["runId"]})["workspace"]["path"], path)
             self.call("await", {"runId": failed["runId"], "waitSeconds": 90})
             delivered = self.call("get", {"runId": failed["runId"]})
             self.assertEqual(delivered["state"], "delivered", delivered)
@@ -95,21 +95,10 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             self.assertEqual((target / "tracked.txt").read_text(encoding="utf-8"), "partial work preserved after quota failure\n")
             self.assertTrue((target / "mock-output.txt").is_file())
 
-    def test_provider_rejection_cannot_override_a_user_locked_buddy(self):
-        with self.daemon(env=self.env()):
-            submitted, failed, _partial = self.provider_rejection(locked=True)
-            code, refused = self.cli("continue", json.dumps({"runId": failed["runId"], "commandId": "refused-override",
-                "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
-                "buddy": {**BUDDY, "effort": "high"}, "note": "Attempt a locked replacement",
-                "input": "Finish."}), env=self.env())
-            self.assertEqual(code, 1)
-            self.assertEqual(refused["error"]["code"], "BUDDY_CONFLICT")
-            self.assertEqual(self.call("get", {"runId": failed["runId"]})["counts"]["turns"], 1)
-
     def test_failed_micro_task_conclusion_reclaims_checkout_but_retains_partial_artifacts(self):
         with self.daemon(env=self.env()):
             submitted, failed, partial = self.provider_rejection()
-            common = {"runId": failed["runId"], "controlFile": submitted["controlFile"]}
+            common = {"runId": failed["runId"]}
             # The Host edits the failed checkout inside the authorized scope before
             # concluding: the conclusion must seal these changes as its own
             # independent partial output without overwriting the Worker's earlier
@@ -121,14 +110,12 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
                 **common,
                 "note": "Incomplete work is retained in the partial artifact; no further execution.",
             }), env=self.env())[1]
-            self.assertEqual(concluded["status"], "concluded")
-            self.assertEqual(concluded["verdict"], "concluded")
-            self.assertIsNotNone(concluded["hostConclusion"])
+            self.assertEqual(concluded["state"], "concluded")
+            self.assertIsNotNone(concluded["conclusionId"])
             self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
             self.assertFalse(checkout.exists())
             # The Host seal is a new artifact with its own binding; the Worker's
             # partial artifact, ref and manifest stay exactly as they were.
-            self.assertNotEqual(concluded["partialArtifactId"], partial["artifactId"])
             self.assertTrue(native_path(Path(partial["diffPath"])).is_file())
             self.assertTrue(native_path(Path(partial["cumulativePatch"]["path"])).is_file())
             sealed = self.call("get", {"runId": failed["runId"], "includeAudit": True})
@@ -136,12 +123,13 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             self.assertIn(partial["artifactId"], artifacts)
             self.assertEqual(artifacts[partial["artifactId"]]["outputSnapshotSha256"], worker_partial_snapshot)
             self.assertEqual(artifacts[partial["artifactId"]]["recordFile"], partial["recordFile"])
-            host_artifact = artifacts[concluded["partialArtifactId"]]
+            host_artifact = next(row for row in artifacts.values() if row["kind"] == "partial-output"
+                                 and row["artifactId"] != partial["artifactId"])
             self.assertEqual(host_artifact["kind"], "partial-output")
             self.assertNotEqual(host_artifact["outputCommit"], partial["outputCommit"])
             replay = self.cli("conclude", json.dumps({**common, "note": "Incomplete work is retained in the "
                 "partial artifact; no further execution."}), env=self.env())[1]
-            self.assertTrue(replay["duplicate"])
+            self.assertTrue(replay["alreadyResponded"])
             # Both partial outputs stay readable after the reclaim.
             self.assertTrue(native_path(Path(host_artifact["diffPath"])).is_file())
 
@@ -173,12 +161,13 @@ class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):
                        Path(__file__).resolve().parents[2] / "buddy/harnesses/codex/fixtures/mock_quota_codex.py")
         return environment
 
-    def test_codex_overload_is_visible_directly_in_get_await_and_list(self):
+    def test_codex_overload_is_visible_directly_in_get_and_await(self):
         self.codex_case = "overload-activity-text"
         with self.daemon(env=self.env()):
-            submitted = self.call("submit", {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
-                "requestId": "codex-overload", "hostId": "host-1", "task": "Offline model overload",
-                "cwd": str(self.repo), "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}})
+            submitted = self.call("submit", {"macroTaskId": "standalone", "title": "Codex overload",
+                "buddy": "codex:openai:fixture-model:low", "task": "Offline model overload",
+                "cwd": str(self.repo), "checkout": "worktree", "access": "write",
+                "inputs": [], "writeScope": ["."], "expectedSeconds": 600})
             awaited = self.call("await", {"runId": submitted["runId"], "waitSeconds": 90})
             current = self.call("get", {"runId": submitted["runId"]})
             self.assertEqual(current["state"], "failed", current)
@@ -192,32 +181,24 @@ class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):
                 self.assertEqual(code, 0, brief)
                 failure = brief["providerRejection"] if method == "get" else brief["result"]["providerRejection"]
                 self.assertEqual((failure["code"], failure["nativeCode"]), ("overloaded", "serverOverloaded"))
-            full_list = self.call("list", {"limit": 100})
-            code, brief_list = self.cli("list", json.dumps({"limit": 100}), env=self.env())
-            self.assertEqual(code, 0, brief_list)
-            for reply in (full_list, brief_list):
-                row = next(item for item in reply["runs"] if item["runId"] == submitted["runId"])
-                self.assertNotIn("quotaFailure", row)
-                self.assertEqual((row["providerRejection"]["code"], row["providerRejection"]["nativeCode"]),
-                                 ("overloaded", "serverOverloaded"))
+            self.assertNotIn("quotaFailure", current)
 
     def test_failed_codex_reconstructs_in_dsh_with_bound_partial_output_and_message(self):
         with self.daemon(env=self.env()):
-            submitted = self.call("submit", {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
-                "requestId": "cross-harness", "hostId": "host-1", "task": "Only exercise the offline quota fixture",
-                "cwd": str(self.repo), "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}})
-            self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}), env=self.env(), timeout=110)
+            submitted = self.call("submit", {"macroTaskId": "standalone", "title": "Cross harness",
+                "buddy": "codex:openai:fixture-model:low", "task": "Only exercise the offline quota fixture",
+                "cwd": str(self.repo), "checkout": "worktree", "access": "write",
+                "inputs": [], "writeScope": ["."], "expectedSeconds": 600})
+            awaited = self.call("await", {"runId": submitted["runId"], "waitSeconds": 90})
             failed = self.call("get", {"runId": submitted["runId"]})
             self.assertEqual(failed["state"], "failed", failed)
             partial = next(item for item in failed["artifacts"] if item["kind"] == "partial-output")
-            receipt = self.call("result", {"runId": submitted["runId"]})
-            self.assertEqual(receipt["result"]["providerRejection"]["code"], "quota-exceeded")
+            self.assertEqual(awaited["result"]["providerRejection"]["code"], "quota-exceeded")
             self.assertIsNotNone(failed["currentTurn"]["tokenUsage"])
-            continued = self.call("continue", {"runId": submitted["runId"], "commandId": "change-harness",
-                "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
-                "buddy": {**BUDDY, "effort": "high"}, "note": "Recover with an enabled different harness",
+            continued = self.call("continue", {"runId": submitted["runId"], "artifactId": partial["artifactId"],
+                "buddy": ":".join({**BUDDY, "effort": "high"}.values()), "note": "Recover with an enabled different harness",
                 "input": "Finish the retained work within the same authorized checkout."})
-            self.assertEqual(continued["workspace"]["path"], failed["workspace"]["path"])
+            self.assertEqual(self.call("get", {"runId": failed["runId"]})["workspace"]["path"], failed["workspace"]["path"])
             self.call("await", {"runId": submitted["runId"], "waitSeconds": 90})
             delivered = self.call("get", {"runId": submitted["runId"], "includeAudit": True})
             self.assertEqual(delivered["state"], "delivered", delivered)
@@ -299,14 +280,16 @@ class NativeContextFailureTests(MicroTaskWorkerTestCase):
         task = "Inspect this complete input.\n" + ("context evidence\n" * 1000) + self.prompt_tail
         with self.daemon(env=self.env()):
             code, submitted = self.cli("submit", json.dumps({
-                "harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
-                "requestId": "native-context-window", "hostId": "host-1", "task": task,
+                "buddy": "codex:openai:fixture-model:low", "macroTaskId": "standalone",
+                "title": "Native context window", "task": task,
                 "cwd": str(self.repo),
-                "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
+                "checkout": "worktree", "access": "write", "inputs": [], "writeScope": ["."],
+                "expectedSeconds": 600,
             }), env=self.env())
             self.assertEqual(code, 0, submitted)
-            self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}),
-                     env=self.env(), timeout=110)
+            code, awaited = self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}),
+                                     env=self.env(), timeout=110)
+            self.assertEqual(code, 0, awaited)
             code, current = self.cli("get", json.dumps({"runId": submitted["runId"], "output": "full"}),
                                      env=self.env())
             self.assertEqual(code, 0, current)
@@ -314,13 +297,9 @@ class NativeContextFailureTests(MicroTaskWorkerTestCase):
             self.assertEqual(current["currentTurn"]["state"], "failed", current)
             self.assertTrue(current["shutdown"]["selfConfirmed"])
             self.assertIsNone(current["activeRequest"])
-            code, receipt = self.cli("result", json.dumps({"runId": submitted["runId"], "output": "full"}),
-                                     env=self.env())
-            self.assertEqual(code, 0, receipt)
-            self.assertEqual(receipt["result"].get("code"), "native-turn-failed",
-                             (receipt["resultMeta"], receipt["result"]))
-            self.assertEqual(receipt["result"]["nativeFailure"]["error"]["message"], self.native_reason)
-            self.assertTrue(receipt["resultMeta"]["shutdownConfirmed"])
+            self.assertEqual(awaited["result"].get("code"), "native-turn-failed", awaited)
+            self.assertEqual(awaited["result"]["nativeFailure"]["error"]["message"], self.native_reason)
+            self.assertTrue(awaited["shutdownConfirmed"])
             prompt = json.loads(self.prompt_capture.read_text(encoding="utf-8"))["prompt"]
             self.assertIn(self.prompt_tail, prompt)
             self.assertIn("context evidence\n" * 1000, prompt)

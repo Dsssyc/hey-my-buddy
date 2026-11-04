@@ -1,72 +1,41 @@
-"""Await's suggested Host commands pass the real workflow boundary.
+"""Await failure and internal observation routes expose no command templates."""
+from __future__ import annotations
 
-Private in-process boards and synthetic turn receipts exercise validation and
-transactions without starting a harness or making a model call.
-"""
-import json
-import shlex
-
-from blackboard.tasks import test_workflow as workflow_tests
-from blackboard.tasks.test_workflow import WorkflowTestCase
-from cli.test_blocking import VirtualClock
-from support import InProcessBoard
+from pathlib import Path
+import tempfile
+import unittest
 
 from hey_my_buddy.cli.blocking import await_run
-from hey_my_buddy.protocol.transport import METHOD_MAP
+from hey_my_buddy.protocol.transport import ServiceError, INTERNAL_METHOD_MAP, METHOD_MAP
 
 
-class BoundaryCommandTests(WorkflowTestCase):
-    def test_every_host_boundary_command_passes_workflow_validation(self):
-        for boundary, command_count in (
-            ("assistance", 3),
-            ("attention", 3),
-            ("helper-attention", 3),
-            ("continuation", 1),
-        ):
-            for command_index in range(command_count):
-                with self.subTest(boundary=boundary, command=command_index):
-                    # Each alternative gets the same fresh boundary: executing
-                    # one suggested command must not stale the next one's revision.
-                    case = f"{boundary}-{command_index}"
-                    board = InProcessBoard(self.workdir(case))
-                    self._stack.append(board)
-                    if boundary == "helper-attention":
-                        submitted, _, _ = workflow_tests.HelperAttentionResolutionTests._attention_with_helper(
-                            self, board, request_id=case,
-                        )
-                    else:
-                        submitted = self.submit(board, request_id=case, cwd=str(self.workdir(f"{case}-source")))
-                        self.finish_turn(board, self.claim(board), disposition=(
-                            "attention" if boundary == "attention" else "assistance"
-                        ))
-                        view = board.call("workflow_get", {"runId": submitted["runId"]})
-                        if boundary == "continuation":
-                            self.decide(board, view, view["activeRequest"]["requestId"],
-                                        decision="decline", autoContinue=False)
+class AwaitRouteTests(unittest.TestCase):
+    def test_service_failure_keeps_run_identity_and_current_actions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            calls = []
+            def service(method, params, state_dir):
+                calls.append(method)
+                if method == "task_get":
+                    return {"runId": "run-1", "state": "running", "workflowState": "executing", "revision": 1,
+                            "actions": ["await", "inquire", "cancel", "get"]}
+                raise ServiceError("SERVICE_UNAVAILABLE", "service restarted")
+            answer = await_run({"runId": "run-1"}, Path(directory), service=service)
+        self.assertEqual(calls, ["task_get", "task_wait"])
+        self.assertEqual(answer["outcome"], "unavailable")
+        self.assertEqual(answer["runId"], "run-1")
+        self.assertEqual(answer["error"]["code"], "SERVICE_UNAVAILABLE")
+        self.assertEqual(answer["actions"], ["await", "inquire", "cancel", "get"])
+        self.assertNotIn("commands", answer)
+        self.assertNotIn("nextCommands", answer)
 
-                    def service(method, params, state_dir):
-                        self.assertEqual(state_dir, board.directory)
-                        self.assertIn(method, ("status", "result"))
-                        response = board.call(METHOD_MAP[method][1], params)
-                        return response["task"] if method == "status" else response
+    def test_observation_names_are_private_to_await_and_clients(self):
+        self.assertEqual(INTERNAL_METHOD_MAP["task_get"], ("control", "task_get"))
+        self.assertEqual(INTERNAL_METHOD_MAP["task_result"], ("control", "task_result"))
+        self.assertEqual(INTERNAL_METHOD_MAP["task_wait"], ("wait", "task_wait"))
+        self.assertEqual(INTERNAL_METHOD_MAP["events_wait"], ("wait", "events_wait"))
+        for name in ("task_get", "task_result", "task_wait", "events_wait", "events_read"):
+            self.assertNotIn(name, METHOD_MAP)
 
-                    envelope = await_run({"runId": submitted["runId"]}, state_dir=board.directory,
-                                         service=service, clock=VirtualClock())
-                    self.assertEqual(envelope["outcome"], "waiting-host")
-                    self.assertEqual(len(envelope["nextCommands"]), command_count)
-                    if boundary == "continuation":
-                        self.assertIsNone(envelope["request"])
-                    else:
-                        self.assertEqual(envelope["request"]["kind"], boundary)
-                    executable, method, payload = shlex.split(envelope["nextCommands"][command_index])
-                    self.assertEqual(executable, "hey-my-buddy")
-                    params = json.loads(payload)
-                    self.assertEqual(params.pop("controlFile"), "<saved-controlFile>")
-                    params.update(self.control(submitted))
-                    # Fill only values offered as placeholders; never add a
-                    # missing parameter that the generated command needs.
-                    for key in ("input", "note"):
-                        if params.get(key) == "...":
-                            params[key] = "Host reviewed this boundary and authorized the next step."
-                    response = board.call(METHOD_MAP[method][1], params)
-                    self.assertEqual(response["runId"], submitted["runId"])
+
+if __name__ == "__main__":
+    unittest.main()

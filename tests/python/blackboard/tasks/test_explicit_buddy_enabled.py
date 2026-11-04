@@ -4,6 +4,8 @@ from unittest.mock import patch
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from blackboard.tasks.test_workflow_real import RealWorkspaceTestCase
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.cli.main import _creation_key
+from hey_my_buddy.blackboard.tasks import workspace
 from support import enable_fixture_buddy
 
 
@@ -16,10 +18,14 @@ class ExplicitSubmitTests(RealWorkspaceTestCase):
                   "workflow_requests", "workspace_reservations", "events", "commands")
         with board.store.db.read() as db:
             before = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")] for table in tables}
+        project_id = workspace.ensure_project_id(workspace.repository_at(self.repo, allow_parent=True))
         refs = self.git("for-each-ref", "refs/hey-my-buddy")
-        params = {**BUDDY, "requestId": "disabled", "hostId": "host-1", "task": "do the work",
-                  "cwd": str(self.repo), "macroTask": {"title": "Rejected group", "goal": "Rejected goal"},
-                  "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}}
+        params = {"cwd": str(self.repo), "title": "disabled", "task": "do the work",
+                  "macroTaskId": "standalone", "buddy": ":".join(BUDDY.values()),
+                  "checkout": "worktree", "access": "write", "inputs": [], "writeScope": ["."],
+                  "expectedSeconds": 1800,
+                  "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id,
+                                                "disabled", "do the work"])}
         with patch.object(board.store.workflow, "_submission_preparation") as prepare:
             with self.assertRaises(BoardError) as rejected:
                 board.call("workflow_submit", params)
@@ -48,18 +54,18 @@ class ExplicitHelperTests(WorkflowTestCase):
         enable_fixture_buddy(board.store, disabled)
         with board.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=0 WHERE effort='high'")
-        helpers = [{**buddy, "requestId": f"helper-{index}", "task": "review", "cwd": str(self.workdir(f"helper-{index}")),
-                    "executionWorkspace": {"kind": "worktree", "access": "read"}}
+        helpers = [{"title": f"helper-{index}", "task": "review", "cwd": str(self.workdir(f"helper-{index}")),
+                    "buddy": ":".join(buddy.values()), "checkout": "worktree", "access": "read",
+                    "inputs": [], "expectedSeconds": 1800}
                    for index, buddy in enumerate((BUDDY, disabled))]
         before_calls = list(self.workspace.prepare_calls)
         tables = ("tasks", "workflow_children", "workflow_requests", "events", "commands", "workflow_artifacts")
         with board.store.db.read() as db:
             before = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")] for table in tables}
         with self.assertRaises(BoardError) as rejected:
-            board.call("workflow_decide", {
+            board.call("workflow_continue", {
                 "runId": parent["runId"], "requestId": view["activeRequest"]["requestId"],
-                "commandId": "disabled-helper", "expectedRevision": view["revision"], "decision": "approve",
-                "helpers": helpers, **self.control(parent),
+                "decision": "approve", "helpers": helpers, "autoContinue": True,
             })
         self.assertEqual(rejected.exception.code, "BUDDY_UNAVAILABLE")
         self.assertIs(rejected.exception.details["enabled"], False)

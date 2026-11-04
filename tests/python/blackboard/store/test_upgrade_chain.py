@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from blackboard.store.upgrade_fixture import FIXTURE, FIXTURE_ROOT_TOKEN, load_fixture, complete_fixture_cleanup
-from hey_my_buddy.blackboard.store import schema_30_31, schema_32_33, upgrade
+from hey_my_buddy.blackboard.store import schema_30_31, schema_32_33, schema_34_35, upgrade
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.install.upgrade import preflight
 from hey_my_buddy.errors import BoardError
@@ -24,12 +24,13 @@ def digest(value):
 
 class FrozenUpgradeTests(unittest.TestCase):
     def test_new_step_has_no_current_package_imports(self):
-        source = ast.parse(Path(schema_32_33.__file__).read_text(encoding='utf-8'))
-        self.assertFalse([node for node in ast.walk(source) if isinstance(node, (ast.Import, ast.ImportFrom))
-                          and (any(alias.name.startswith('hey_my_buddy') for alias in node.names)
-                               if isinstance(node, ast.Import) else node.module is not None
-                               and node.module.startswith('hey_my_buddy'))])
-        self.assertFalse([node for node in ast.walk(source) if isinstance(node, ast.ImportFrom) and node.level])
+        for step in (schema_32_33, schema_34_35):
+            source = ast.parse(Path(step.__file__).read_text(encoding='utf-8'))
+            self.assertFalse([node for node in ast.walk(source) if isinstance(node, (ast.Import, ast.ImportFrom))
+                              and (any(alias.name.startswith('hey_my_buddy') for alias in node.names)
+                                   if isinstance(node, ast.Import) else node.module is not None
+                                   and node.module.startswith('hey_my_buddy'))])
+            self.assertFalse([node for node in ast.walk(source) if isinstance(node, ast.ImportFrom) and node.level])
 
     def test_30_to_31_matches_the_complete_pre_freeze_output(self):
         oracle = json.loads((FIXTURE / 'schema-31-oracle.json').read_text(encoding='utf-8'))
@@ -192,7 +193,9 @@ class UpgradeChainTests(unittest.TestCase):
         frozen_columns = {table: ','.join(['rowid', *(row[1] for row in self.db.execute(f'PRAGMA table_info({table})') if row[1] not in ('manifest_sha256', 'workspace_manifest_json'))]) for table in ('workflow_turns', 'workflow_artifacts', 'workflow_host_conclusions', 'workflow_continuations', 'router_requests', 'attempt_received_receipts')}
         frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT {frozen_columns[table]} FROM {table} ORDER BY rowid')]
                   for table in ('router_requests', 'workflow_turns', 'attempt_received_receipts')}
-        specs = list(self.db.execute('SELECT task_id,spec_json,input_fingerprint FROM tasks ORDER BY rowid'))
+        specs = list(self.db.execute('SELECT task_id,spec_json,input_fingerprint FROM tasks'
+                                     ' WHERE task_id NOT IN (SELECT run_id FROM workflow_runs) ORDER BY rowid'))
+        task_text = dict(self.db.execute("SELECT task_id,json_extract(spec_json,'$.task') FROM tasks"))
         sources = (('attempts', 'attempt_id', 'result_json', ('result', 'usage')),
                    ('decision_requests', 'decision_id', 'output_json', ('usage',)))
         expected = {}
@@ -225,7 +228,9 @@ class UpgradeChainTests(unittest.TestCase):
                                              (budget_path,)).fetchone()[0], 0)
         for table, rows in frozen.items():
             self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT {frozen_columns[table]} FROM {table} ORDER BY rowid')], rows)
-        self.assertEqual(list(self.db.execute('SELECT task_id,spec_json,input_fingerprint FROM tasks ORDER BY rowid')), specs)
+        self.assertEqual(list(self.db.execute('SELECT task_id,spec_json,input_fingerprint FROM tasks'
+                                              ' WHERE task_id NOT IN (SELECT run_id FROM workflow_runs) ORDER BY rowid')), specs)
+        self.assertEqual(dict(self.db.execute("SELECT task_id,json_extract(spec_json,'$.task') FROM tasks")), task_text)
         self.assertGreater(self.db.execute("SELECT COUNT(*) FROM router_requests,json_tree(snapshot_json) WHERE json_tree.key='bytesRead'").fetchone()[0], 0)
         self.assertEqual(self.db.execute("SELECT json_extract(spec_json,'$.decision.document.budget.bytesRead') FROM tasks WHERE task_id='schema31-maintenance-task'").fetchone()[0], 524288)
 
@@ -320,7 +325,8 @@ class UpgradeChainTests(unittest.TestCase):
         # updated_at may move for a later lifecycle operation; it is no decision time.
         self.db.execute("UPDATE workflow_runs SET updated_at='2026-02-01T00:00:00.000Z'")
         self.db.commit()
-        frozen_columns = {table: ','.join(['rowid', *(row[1] for row in self.db.execute(f'PRAGMA table_info({table})') if row[1] not in ('manifest_sha256', 'workspace_manifest_json'))]) for table in ('workflow_turns', 'workflow_artifacts', 'workflow_host_conclusions', 'workflow_continuations', 'router_requests', 'attempt_received_receipts')}
+        retired = {'manifest_sha256', 'workspace_manifest_json', 'run_revision', 'owner_generation', 'command_id'}
+        frozen_columns = {table: ','.join(['rowid', *(row[1] for row in self.db.execute(f'PRAGMA table_info({table})') if row[1] not in retired)]) for table in ('workflow_turns', 'workflow_artifacts', 'workflow_host_conclusions', 'workflow_continuations', 'router_requests', 'attempt_received_receipts')}
         frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT {frozen_columns[table]} FROM {table} ORDER BY rowid')]
                   for table in ('workflow_host_conclusions', 'workflow_artifacts', 'workflow_turns')}
         roots = {}
@@ -360,14 +366,17 @@ class UpgradeChainTests(unittest.TestCase):
         self.schema31()
         stored = self.db.execute("SELECT spec_json,input_fingerprint FROM tasks WHERE task_id='schema31-maintenance-task'").fetchone()
         self.assertEqual(stored[1], hashlib.sha256(('2:' + stored[0]).encode()).hexdigest())
-        removed = {'required_capabilities','exclusive_resources','expected_seconds','router_budget_seconds'}
-        columns = ['rowid', *[r[1] for r in self.db.execute('PRAGMA table_info(tasks)') if r[1] not in removed]]
+        removed = {'required_capabilities','exclusive_resources','expected_seconds','router_budget_seconds', 'owner'}
+        columns = ['rowid', *[r[1] for r in self.db.execute('PRAGMA table_info(tasks)')
+                             if r[1] not in removed | {'spec_json', 'input_fingerprint'}]]
         query = 'SELECT ' + ','.join(columns) + ' FROM tasks ORDER BY rowid'
         before = [tuple(r) for r in self.db.execute(query)]
         complete_fixture_cleanup(self.db)
         self.assertEqual(preflight(self.state, contract_changed=True)['schema'], 31)
         self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 31, 'targetSchema': SCHEMA_VERSION})
         self.assertEqual([tuple(r) for r in self.db.execute(query)], before)
+        self.assertEqual(tuple(self.db.execute("SELECT spec_json,input_fingerprint FROM tasks"
+                                               " WHERE task_id='schema31-maintenance-task'").fetchone()), tuple(stored))
         self.assertTrue(removed.isdisjoint({r[1] for r in self.db.execute('PRAGMA table_info(tasks)')}))
         self.assertEqual(self.db.execute("SELECT json_extract(spec_json,'$.routerBudgetSeconds'),"
                           "json_extract(spec_json,'$.decision.routerBudgetSeconds'),"

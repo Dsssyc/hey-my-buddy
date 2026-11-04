@@ -141,9 +141,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertEqual(attempt["ownership"], "owned")
                 self.assertEqual(attempt["processIdentity"], identity)
                 self.assert_retained(run_id, before["attemptId"])
-                code, response = self.cli("execution-cancel", json.dumps({
-                    "runId": run_id, "note": "private test"}))
-                self.assertEqual(code, 0, response)
+                self.assertTrue(self.client().cancel(runId=run_id, note="private test")["cancelRequested"])
                 finished = wait_for(lambda: self._finished(run_id), timeout=35)
                 self.assertIsNotNone(finished, self.client().get(runId=run_id))
                 self.assertEqual(finished["state"], "cancelled")
@@ -240,9 +238,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertIsNotNone(unknown, self.client().get(runId=run_id))
                 self.assertEqual(unknown["selectedAttempt"]["attemptId"], before["attemptId"])
                 self.assert_retained(run_id, before["attemptId"])
-                code, response = self.cli("execution-cancel", json.dumps({
-                    "runId": run_id, "note": "frozen private execution"}))
-                self.assertEqual(code, 0, response)
+                self.assertTrue(self.client().cancel(runId=run_id, note="frozen private execution")["cancelRequested"])
                 forced = wait_for(lambda: self.client().get(runId=run_id)["selectedAttempt"].get("forceRequestedAt"),
                                   timeout=35)
                 self.assertIsNotNone(forced)
@@ -371,12 +367,19 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             store.db.close()
         return entry, started, gate, candidate
 
+    def select_offline_router(self, request_id, task):
+        """Admit a development-only Router selection through its internal owner."""
+        store = BoardStore(self.directory)
+        try:
+            return store.decisions.request_select({"requestId": request_id, "task": task})
+        finally:
+            store.db.close()
+
     def test_router_result_after_restart_uses_frozen_decision_and_budget(self):
         script, started, release, candidate = self.offline_router()
         environment = {"HMB_MAX_CONCURRENT": "1", "HMB_DSH_CLI": str(script)}
         with self.daemon(env=environment) as daemon:
-            created = self.client().call("selection_request", {
-                "requestId": "router-reconnect", "task": "Choose an offline fixture buddy"})
+            created = self.select_offline_router("router-reconnect", "Choose an offline fixture buddy")
             self.assertTrue(wait_for(started.exists, timeout=60), created)
             self.assertFalse((self.directory / "sessions").exists(), "ungrouped selections do not record sessions")
             run_id = created["runId"]
@@ -412,8 +415,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         frozen_process = None
         try:
             with self.daemon(env=environment) as daemon:
-                created = self.client().call("selection_request", {
-                    "requestId": "router-deadline", "task": "Choose behind a frozen gate"})
+                created = self.select_offline_router("router-deadline", "Choose behind a frozen gate")
                 self.assertTrue(wait_for(started.exists, timeout=60), created)
                 self.assertFalse((self.directory / "sessions").exists(), "ungrouped selections do not record sessions")
                 run_id = created["runId"]
@@ -486,11 +488,10 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         try:
             with self.daemon(env=environment) as daemon:
                 submitted = self.client().call("workflow_submit", {
-                    "requestId": "worker-wrap-up", "hostId": "host-1",
+                    "creationKey": "a" * 64, "macroTaskId": "standalone", "title": "worker-wrap-up",
                     "task": "Complete a gated offline fixture turn", "cwd": str(repo),
-                    "submissionToken": "t" * 32, "executionWorkspace": {"kind": "existing", "access": "write"},
-                    "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash",
-                    "effort": "max"})
+                    "buddy": "dsh:deepseek-official:deepseek-flash:max", "checkout": "existing",
+                    "access": "write", "inputs": [], "writeScope": ["."], "expectedSeconds": 120})
                 run_id = submitted["runId"]
                 self.assertTrue(wait_for(worker_started.exists, timeout=60), submitted)
                 before_view = wait_for(lambda: self._running(run_id), timeout=30)
@@ -506,7 +507,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertIsNotNone(bridge)
                 self.assertEqual(inspect_process_identity(identity), "alive")
                 frozen_process = self.freeze_execution(identity)
-                self.client().call("workflow_cancel", {"runId": run_id, **submitted["control"]})
+                self.client().call("workflow_cancel", {"runId": run_id})
                 stopped = self.client().get(runId=run_id)["selectedAttempt"]
                 self.assertEqual(stopped["stopInitiator"], "host")
                 self.assertIsNotNone(stopped["graceDeadline"], stopped)
@@ -619,7 +620,7 @@ class ReconnectedWrapUpTests(WorkflowTestCase):
         claimed = self.claim(board)
         claim = claimed["claim"]
         attempt = claim["attempt"]
-        board.call("workflow_cancel", {"runId": run["runId"], **self.controls[run["runId"]]})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         durable = board.client().get(runId=run["runId"])["selectedAttempt"]
         self.assertEqual(durable["stopInitiator"], "host")
         self.assertIsNotNone(durable["graceDeadline"])

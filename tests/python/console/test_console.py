@@ -252,7 +252,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
             "POST", browser.prefix + "/api/command", body=body, headers={"X-Hey-My-Buddy-CSRF": "nope"}
         )
         self.assertEqual(status, 403)
-        self.assertEqual(board.call("console_snapshot", {})["configuration"], snapshot["configuration"])
+        self.assertEqual(browser.bootstrap()["configuration"], snapshot["configuration"])
 
     def test_foreign_origin_host_and_cross_site_requests_are_refused(self):
         board = self.board()
@@ -347,7 +347,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         _, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
         board.call("model_catalog_refresh", {"requestId": "cat"})
-        buddy = next(p for p in board.call("console_snapshot", {})["buddies"] if p["buddyId"] == BUDDY_ID)
+        buddy = next(p for p in browser.bootstrap()["buddies"] if p["buddyId"] == BUDDY_ID)
         model_service = {key: buddy[key] for key in ("harness", "provider", "model")}
         status, _h, data = browser.command("task_cancel", {"runId": run_id, 'note': "console operator"}, csrf=csrf)
         self.assertEqual(status, 403, data)
@@ -367,7 +367,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertEqual(status, 200, data)
         result = json.loads(data)["result"]
         self.assertTrue(result["published"])
-        self.assertTrue(next(p for p in board.call("console_snapshot", {})["buddies"] if p["buddyId"] == BUDDY_ID)["enabled"])
+        self.assertTrue(next(p for p in browser.bootstrap()["buddies"] if p["buddyId"] == BUDDY_ID)["enabled"])
         status, _headers, data = browser.get("/api/console")
         self.assertEqual(status, 200)
         capacity = next(row for row in json.loads(data)["modelServiceConcurrency"]
@@ -381,7 +381,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertEqual(payload["error"]["code"], "INVALID_ARGUMENT")
         self.assertNotIn("Traceback", data.decode())
         # Snapshot reads expose no control or session secrets.
-        snapshot = snapshot_of(board)
+        snapshot = browser.bootstrap()
         encoded = json.dumps(snapshot)
         self.assertNotIn("test-token", encoded)
         def keys(value):
@@ -400,7 +400,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         board = self.board()
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
-        created = board.call("selection_request", {"requestId": "host-pick", "task": "inspect routing"})
+        created = board.store.decisions.request_select({"requestId": "host-pick", "task": "inspect routing"})
         status, _headers, data = browser.command(
             "selection_get", {"decisionId": created["decisionId"]}, csrf=csrf
         )
@@ -430,10 +430,6 @@ class ConsoleSecurityTests(ConsoleTestCase):
             catalog.discover = original
 
 
-def snapshot_of(board) -> dict:
-    return board.call("console_snapshot", {})
-
-
     def test_task_detail_route_returns_the_existing_view(self):
         board = self.board()
         submitted = board.submit_execution(**{
@@ -444,11 +440,10 @@ def snapshot_of(board) -> dict:
                 "argv": ["/bin/echo", "detail"],
             })
         run_id = submitted["task"]["runId"]
+        from admission import admit_execution
         client = board.client()
-        client.register_worker("worker-1", adapter="command", capabilities=["command"])
-        claim = client.claim("worker-1", "claim-detail", "n" * 32, task_id=run_id)["claim"]
+        claim = admit_execution(client, "n" * 32, task_id=run_id)["claim"]
         client.submit_result(
-            "worker-1",
             claim["attempt"]["attemptId"],
             claim["attempt"]["generation"],
             "n" * 32,
@@ -681,12 +676,15 @@ class ConsoleDaemonTests(ConsoleTestCase):
                 refreshed = json.loads(body)["result"]["catalog"]
                 self.assertEqual(refreshed["source"], f"file:{fixture}", "R-05: private fixture source")
                 self.assertEqual(refreshed["providers"][0]["models"][0]["id"], model["id"], "R-05: private fixture content")
-                # Re-read changed file contents through the real CLI and transport;
+                # Re-read changed file contents through the console service boundary;
                 # a cached constant or a different fixture cannot satisfy this check.
                 model["id"] = "r05-second-private-model"
                 fixture.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
-                code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "r05-cli-catalog"}), env=environment)
-                self.assertEqual(code, 0, refreshed)
+                status, _headers, body = browser.command(
+                    "model_catalog_refresh", {"requestId": "r05-second-catalog"}, csrf=csrf,
+                )
+                self.assertEqual(status, 200, body)
+                refreshed = json.loads(body)["result"]
                 self.assertFalse(trace.exists(), trace.read_text(encoding="utf-8") if trace.exists() else "")
                 self.assertEqual(refreshed["catalog"]["source"], f"file:{fixture}", "R-05: private fixture source after rewrite")
                 self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"], model["id"], "R-05: private fixture content after rewrite")
@@ -726,24 +724,23 @@ class ConsoleDaemonTests(ConsoleTestCase):
             self.assertEqual(code, 0, closed)
             self.assertTrue(closed["closed"])
 
-    def test_cli_policy_publish_round_trip_through_ctwo(self):
+    def test_console_policy_publish_round_trip_through_ctwo(self):
         with self.daemon():
             code, caps = self.cli("harnesses", "{}")
             self.assertEqual(code, 0, caps)
-            self.assertIn("console_snapshot", caps["operations"]["control"])
-            for operation in ("selection_request", "selection_get", "user_policy_publish"):
+            for operation in ("selection_get", "user_policy_publish", "model_catalog_refresh"):
                 self.assertIn(operation, caps["operations"]["control"])
+            self.assertNotIn("selection_request", caps["operations"]["control"])
             self.assertIn("permission:full", caps["adapters"]["codex"]["capabilities"])
-            code, snapshot = self.cli("console-snapshot", "{}")
-            self.assertEqual(code, 0, snapshot)
-            self.assertNotIn("tableRevision", snapshot)
-            code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "cli-cat"}))
-            self.assertEqual(code, 0, refreshed)
-            self.assertEqual(refreshed["catalog"]["source"], f"file:{self.directory / 'model-catalog.json'}")
             code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}))
             self.assertEqual(code, 0, opened)
             browser = Browser(opened["url"])
             csrf = browser.bootstrap()["csrfToken"]
+            self.assertNotIn("tableRevision", browser.bootstrap())
+            status, _headers, body = browser.command("model_catalog_refresh", {"requestId": "console-cat"}, csrf=csrf)
+            self.assertEqual(status, 200, body)
+            self.assertEqual(json.loads(body)["result"]["catalog"]["source"],
+                             f"file:{self.directory / 'model-catalog.json'}")
             status, _headers, body = browser.command("user_policy_publish", {
                 "commandId": "cli-publish",
                 "buddySettings": [{"buddyId": BUDDY_ID, "enabled": True}],
@@ -751,8 +748,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
             self.assertEqual(status, 200, body)
             published = json.loads(body)["result"]
             self.assertTrue(published["published"])
-            code, final = self.cli("console-snapshot", "{}")
-            self.assertEqual(code, 0, final)
+            final = browser.bootstrap()
             self.assertNotIn("tableRevision", final)
             self.assertTrue(next(p for p in final["buddies"] if p["buddyId"] == BUDDY_ID)["enabled"])
             self.assertNotIn("autoMaintain", final["configuration"])
@@ -772,7 +768,7 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
                               for buddy in (CATALOG_BUDDY, SECOND_BUDDY)],
             "configuration": {"defaultRoutingMode": "fast", "routerBuddyIds": [BUDDY_ID]},
         })
-        selected = board.call("selection_request", {"requestId": "host-selection", "task": "Choose a Worker"})
+        selected = board.store.decisions.request_select({"requestId": "host-selection", "task": "Choose a Worker"})
         self.assertIsNotNone(selected["runId"], selected)
         _, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
@@ -788,7 +784,7 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
 
     def test_selection_list_is_reachable_over_the_console_boundary(self):
         board = self.board()
-        board.call("selection_request", {"requestId": "http-select", "task": "browse over http"})
+        board.store.decisions.request_select({"requestId": "http-select", "task": "browse over http"})
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
 
@@ -811,7 +807,7 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         self.assertEqual(status, 404, data)
         self.assertEqual(json.loads(data)["error"]["code"], "METHOD_NOT_FOUND")
 
-    def test_workflow_get_routing_history_is_reachable_over_the_console_boundary(self):
+    def test_workflow_get_plain_execution_is_reachable_over_the_console_boundary(self):
         board = self.board()
         plain = board.submit_execution(**{
                 "requestId": "console-plain",
@@ -831,7 +827,7 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         result = json.loads(data)["result"]
         self.assertEqual(result["task"]["lineage"]["kind"], "execution")
         self.assertNotIn("microTask", result)
-        self.assertEqual(result["routingHistory"], {"entries": [], "nextCursor": None, "total": 0})
+        self.assertNotIn("routingHistory", result)
         status, _headers, data = browser.command(
             "workflow_get",
             {"runId": plain["task"]["runId"], "routingHistory": {"before": 0}},
@@ -897,7 +893,7 @@ class ConsoleMacroTaskTests(ConsoleTestCase, WorkflowTestCase):
 
     def test_macro_task_list_and_timeline_routes(self):
         board = self.board()
-        first = self.submit(board, request_id="macro-task-http-1", kind="worktree", macroTask={"title": "HTTP group", 'goal': "HTTP group"})
+        first = self.submit(board, request_id="macro-task-http-1", kind="worktree", create_macro={"title": "HTTP group", 'goal': "HTTP group"})
         loose = self.submit(board, request_id="macro-task-http-2", kind="worktree", task="loose root")
         _stated, browser = self.open_console(board)
         status, headers, body = browser.get("/api/macro-tasks?limit=5&filter=all")
@@ -920,7 +916,8 @@ class ConsoleMacroTaskTests(ConsoleTestCase, WorkflowTestCase):
         status, _headers, body = browser.get(encoded)
         self.assertEqual(status, 200, body[:300])
         self.assertEqual(json.loads(body)["rows"][0]["runId"], loose["runId"])
-        for path, code in (("/api/macro-tasks?unknown=1", 400), ("/api/macro-tasks?limit=1&limit=2", 400),
+        for path, code in (("/api/macro-tasks?unknown=1", 400), ("/api/macro-tasks?hostId=old", 400),
+                           ("/api/macro-tasks?limit=1&limit=2", 400),
                            ("/api/macro-tasks?sort=created", 400),
                            ("/api/macro-tasks/macro-missing/timeline", 404), ("/api/macro-tasks/bad%20id/timeline", 404),
                            ("/api/macro-tasks/macro-x/timeline?before=1", 400)):

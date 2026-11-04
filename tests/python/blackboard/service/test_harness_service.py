@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 from hey_my_buddy.blackboard.service.service import BoardService
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.store.store import BoardStore
-from support import BoardTestCase
+from support import BoardTestCase, enable_fixture_buddy
 
 
 class HarnessServiceTests(BoardTestCase):
@@ -123,13 +123,15 @@ class HarnessServiceTests(BoardTestCase):
 
 
     def test_submit_only_rescans_an_explicit_unavailable_harness(self):
-        base = {'requestId': 'discovery-submit', 'hostId': 'host', 'task': 'fixture',
-                'cwd': str(self.directory), 'executionWorkspace': {'kind': 'existing', 'access': 'read'}}
-        with patch.object(self.board.workflow, 'submit_normalized', return_value={'admitted': True}), patch.object(self.service.harnesses, 'refresh') as refresh:
-            self.assertTrue(self.call('workflow_submit', **base)['admitted'])
+        buddy={'harness':'codex','provider':'openai','model':'fixture','effort':'high'}
+        enable_fixture_buddy(self.board,buddy)
+        base={'title':'discovery-submit','macroTaskId':'standalone','task':'fixture','cwd':str(self.directory),
+              'buddy':'route','checkout':'existing','access':'read','inputs':[],'expectedSeconds':60,'creationKey':'0'*64}
+        with patch.object(self.board.workflow,'submit_normalized',return_value={'admitted':True}), patch.object(self.service.harnesses,'refresh') as refresh:
+            self.assertTrue(self.call('workflow_submit',**base)['admitted'])
             refresh.assert_not_called()
-            self.assertTrue(self.call('workflow_submit', **base, harness='codex', provider='openai', model='fixture', effort='high')['admitted'])
-            refresh.assert_called_once_with('codex', force=True)
+            self.assertTrue(self.call('workflow_submit',**{**base,'buddy':':'.join(buddy.values())})['admitted'])
+            refresh.assert_called_once_with('codex',force=True)
 
     def test_manual_path_write_uses_latest_value(self):
         missing = {'harness': 'codex', 'status': 'missing',
@@ -162,16 +164,15 @@ class HarnessServiceTests(BoardTestCase):
                     self.assertIn('decision', buddy['capabilities'])
 
     def test_explicit_continuation_and_helper_also_refresh_unavailable_harness(self):
-        with patch.object(self.board.workflow, 'continue_run', return_value={}), \
-             patch.object(self.board.workflow, 'normalize_decision', return_value={'helpers': [{'spec': {'harness': 'dsh'}}]}), \
-             patch.object(self.board.workflow, 'decide_normalized', return_value={}), \
-             patch.object(self.service.harnesses, 'refresh') as refresh:
-            self.call('workflow_continue', buddy={'harness': 'codex'})
-            self.call('workflow_decide', helpers=[{'spec': {'harness': 'dsh'}}])
-        self.assertEqual([call.args[0] for call in refresh.call_args_list], ['codex', 'dsh'])
-
-
-
+        for harness in ('codex','dsh'):
+            enable_fixture_buddy(self.board,{'harness':harness,'provider':'fixture','model':'fixture','effort':'high'})
+        with patch.object(self.board.workflow,'continue_run',return_value={}), patch.object(self.service.harnesses,'refresh') as refresh:
+            self.call('workflow_continue',runId='run',requestId='boundary',input='Continue',
+                      buddy='codex:fixture:fixture:high',note='Choose this installed route')
+            self.call('workflow_continue',runId='run',requestId='boundary',decision='approve',autoContinue=True,helpers=[{
+                'title':'helper','task':'Bounded helper','cwd':str(self.directory),'buddy':'dsh:fixture:fixture:high',
+                'checkout':'worktree','access':'read','inputs':[],'expectedSeconds':60}])
+        self.assertEqual([call.args[0] for call in refresh.call_args_list],['codex','dsh'])
 
     def test_accounts_reports_cached_native_login_without_source_management(self):
         ready = {'harness': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'],

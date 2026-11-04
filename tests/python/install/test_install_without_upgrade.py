@@ -9,6 +9,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import threading
+import time
 import tomllib
 from unittest import mock
 
@@ -18,7 +19,6 @@ from blackboard.service import test_execution_recovery as recovery_fixture
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.tasks.storage import prune_old_runtimes
-from hey_my_buddy.cli.blocking import await_run
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.install import launcher, runtime, upgrade
@@ -26,6 +26,7 @@ from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.protocol.process_identity import inspect_process_identity, kill_verified_process_session
 from hey_my_buddy.protocol.transport import _call_service
+from hey_my_buddy.protocol.transport import ServiceError
 
 
 class InstallWithoutUpgradeTests(BoardTestCase):
@@ -137,13 +138,27 @@ class InstallWithoutUpgradeTests(BoardTestCase):
             entered = threading.Event()
 
             def waiting_service(method, params, state_dir):
-                if method == "wait":
+                if method == "task_wait":
                     entered.set()
                 return _call_service(method, params, state_dir)
 
+            def wait_command_result():
+                view = waiting_service("task_get", {"runId": run_id}, self.directory)
+                deadline = time.monotonic() + 90
+                while not view["resultAvailable"]:
+                    self.assertLess(time.monotonic(), deadline, view)
+                    try:
+                        view = waiting_service("task_wait", {"runId": run_id,
+                            "afterRevision": view["revision"], "timeoutMs": 30000}, self.directory)
+                    except ServiceError:
+                        if not (self.directory / "upgrade.json").exists():
+                            raise
+                        time.sleep(.2)
+                        view = waiting_service("task_get", {"runId": run_id}, self.directory)
+                return view
+
             with ThreadPoolExecutor(max_workers=1) as pool:
-                waiter = pool.submit(await_run, {"runId": run_id, "waitSeconds": 90},
-                                     self.directory, service=waiting_service)
+                waiter = pool.submit(wait_command_result)
                 try:
                     self.assertTrue(entered.wait(15))
                     first_install = upgrade.upgrade(self.directory)
@@ -165,9 +180,9 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                 finally:
                     release.touch()
                 awaited = waiter.result(timeout=60)
-            self.assertEqual(awaited["outcome"], "completed", awaited)
-            self.assertTrue(awaited["ok"], awaited)
-            self.assertIsNone(awaited["error"])
+            self.assertEqual(awaited["state"], "completed", awaited)
+            self.assertTrue(awaited["shutdownConfirmed"], awaited)
+            self.assertTrue(awaited["resultAvailable"], awaited)
             self.assertEqual(awaited["runId"], run_id)
             finished = wait_for(lambda: self.finished(run_id), timeout=35)
             self.assertIsNotNone(finished, self.client().get(runId=run_id))
@@ -317,8 +332,8 @@ class InstallWithoutUpgradeTests(BoardTestCase):
         self.addCleanup(release.touch)
         with self.installation(second, overrides={"HMB_DSH_CLI": str(script)}):
             self.start(first)
-            created = self.client().call("selection_request", {
-                "requestId": "router-live-install", "task": "Choose an offline fixture buddy"})
+            created = recovery_fixture.PrivateExecutionRecoveryTests.select_offline_router(
+                self, "router-live-install", "Choose an offline fixture buddy")
             self.assertTrue(wait_for(started.exists, timeout=60), created)
             run_id = created["runId"]
             running = wait_for(lambda: self.running(run_id), timeout=30)
@@ -363,9 +378,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                 self.assertEqual(unknown["selectedAttempt"]["attemptId"], before["attemptId"])
                 self.assertEqual(inspect_process_identity(identity), "alive")
                 self.assertTrue(first.exists())
-                code, response = self.cli("execution-cancel", json.dumps({
-                    "runId": run_id, "note": "frozen private install"}))
-                self.assertEqual(code, 0, response)
+                self.assertTrue(self.client().cancel(runId=run_id, note="frozen private install")["cancelRequested"])
                 forced = wait_for(lambda: self.client().get(runId=run_id)["selectedAttempt"].get("forceRequestedAt"),
                                   timeout=35)
                 self.assertIsNotNone(forced)

@@ -368,7 +368,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
     def test_macro_task_and_timeline_reads_are_conditional(self):
         board = self.board()
         submitted = self.submit(
-            board, request_id="cond-1", cwd=str(self.workdir("cond-1")), macroTask={"title": "Conditional", 'goal': "Conditional"}
+            board, request_id="cond-1", cwd=str(self.workdir("cond-1")), create_macro={"title": "Conditional", 'goal': "Conditional"}
         )
         browser = self.open(board)
         for path in ("/api/macro-tasks?limit=5",
@@ -390,11 +390,9 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
 
     def test_goal_history_http_route_returns_revisions_and_rejects_query(self):
         board = self.board()
-        submitted = self.submit(board, request_id="goal-history", macroTask={"title": "Group", "goal": "First"})
-        board.call("workflow_goal_amend", {
-            "runId": submitted["runId"], "commandId": "goal-history-amend",
-            "goal": "Second", "expectedGoalRevision": 1, **self.control(submitted),
-        })
+        submitted = self.submit(board, request_id="goal-history", create_macro={"title": "Group", "goal": "First"})
+        first_goal = board.call("workflow_get", {"macroTaskId": submitted["macroTaskId"]})["goal"]
+        board.call("workflow_amend", {"macroTaskId": submitted["macroTaskId"], "goal": "Second"})
         browser = self.open(board)
         path = f"/api/macro-tasks/{submitted['macroTaskId']}/goals"
         status, _headers, body = browser.get(path)
@@ -403,7 +401,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
             "macroTaskId": submitted["macroTaskId"],
             "goals": [
                 {"body": "Second", "revision": 2, "createdAt": board.call("workflow_get", {"runId": submitted["runId"]})["goal"]["createdAt"]},
-                {"body": "First", "revision": 1, "createdAt": submitted["createdAt"]},
+                {"body": "First", "revision": 1, "createdAt": first_goal["createdAt"]},
             ],
         })
         for bad_path, expected in ((path + "?limit=1", 400),

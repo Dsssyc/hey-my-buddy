@@ -1,290 +1,223 @@
-"""Lead credentials extend the existing operation and target boundaries."""
-from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
+"""Lead credentials derive ownership and remain confined to their own graph."""
+from __future__ import annotations
+
 import json
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
-from support import enable_fixture_buddy, macro_summaries
 from hey_my_buddy.blackboard.tasks import workflow
-from hey_my_buddy.cli.cli_views import micro_task_brief, task_brief, list_brief
+from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.paths import native_path
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest
+from support import enable_fixture_buddy
 
 
 class LeadOwnedTests(WorkflowTestCase):
-    def test_execution_credentials_never_receive_host_waiting_counts(self):
-        board = self.board()
-        self.register(board)
-        returned = self.submit(board)
-        self.finish_turn(board, self.claim(board))
-        self.assertEqual(board.call('workflow_get', {'runId': returned['runId']})['waitingForHost'],
-                         {'review': 1})
-        lead, claim = self.lead(board, worker='lead-worker')
-        child = self.owned(board, claim)
-        self.assertNotIn('waitingForHost', child)
-        self.assertNotIn('waitingForHost', board.call('workflow_get', {'runId': child['runId']}))
-        for operation, params in (
-            ('workflow_get', {'runId': lead['runId']}),
-            ('task_get', {'runId': lead['runId']}),
-            ('task_list', {}),
-            ('workflow_get', {'runId': child['runId']}),
-        ):
-            with self.subTest(operation=operation, params=params):
-                response = board.call(operation, {**params, 'credential': claim['agentCredential']})
-                self.assertNotIn('waitingForHost', response)
+    def test_duplicate_admission_rechecks_lead_ownership_and_revocation(self):
+        board=self.board(max_concurrent=2)
+        _,first=self.lead(board,name="first-lead")
+        child=self.owned(board,first)
+        _,second=self.lead(board,name="second-lead",worker="w2")
+        first_scope=board.store.workflow.resolve_credential(first["agentCredential"])
+        second_scope=board.store.workflow.resolve_credential(second["agentCredential"])
+        with board.store.db.read() as connection:
+            task=connection.execute("SELECT * FROM tasks WHERE task_id=?",(child["runId"],)).fetchone()
+            key=connection.execute("SELECT creation_key FROM workflow_runs WHERE run_id=?",(child["runId"],)).fetchone()[0]
+        admission={"spec":json.loads(task["spec_json"]),"creationKey":key,"lead":first_scope}
+        replay=board.store.task_submit({"requestId":task["request_id"]},micro_task=admission)
+        self.assertTrue(replay["duplicate"])
+        head=board.store.head()
+        with self.assertRaises(BoardError) as foreign:
+            board.store.task_submit({"requestId":task["request_id"]},micro_task={**admission,"lead":second_scope})
+        self.assertEqual(foreign.exception.code,"FORBIDDEN")
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE agent_credentials SET state='revoked' WHERE credential_id=?",(first_scope["credentialId"],))
+        with self.assertRaises(BoardError) as revoked:
+            board.store.task_submit({"requestId":task["request_id"]},micro_task=admission)
+        self.assertEqual(revoked.exception.code,"UNAUTHORIZED")
+        self.assertEqual(board.store.head(),head)
 
+    # Other lifecycle tests reuse these fixture methods with their own TestCase.
     def lead(self, board, name="lead", worker="w1", **extra):
         enable_fixture_buddy(board.store, BUDDY)
         submitted = self.submit(board, request_id=name, cwd=str(self.workdir(name)), access="full",
-                                executionWorkspace={"kind": "existing", "access": "full", "accessNote": "Lead checks"},
                                 delegationAuthority=True, **extra)
         self.register(board, worker)
         claim = self.claim(board, worker, claim_request_id="claim-" + name, run_id=submitted["runId"])
         return submitted, claim["claim"]
 
     def owned(self, board, lead_claim, name="owned", **extra):
-        result = board.call("workflow_submit", {
-            **BUDDY, "requestId": name, "task": "Do owned work", "cwd": str(self.workdir(name)),
-            "executionWorkspace": {"kind": "existing", "access": "write"},
-            "submissionToken": "s" * 32, "credential": lead_claim["agentCredential"], **extra,
-        })
-        self.assertNotIn("control", result)
-        board.service.register_console_authority("owned-fixture-console")
-        self.controls[result["runId"]] = {"consoleAuthority": {"sessionId": "owned-fixture-console"}}
-        return result
+        lead_id = lead_claim["task"]["taskId"]
+        credential = extra.pop("credential", lead_claim["agentCredential"])
+        lead = board.call("workflow_get", {"runId": lead_id, "credential": lead_claim["agentCredential"]})
+        title = extra.pop("title", name)
+        task = extra.pop("task", "Do owned work")
+        cwd = extra.pop("cwd", lead["microTask"]["cwd"])
+        checkout = extra.pop("checkout", extra.pop("kind", "worktree"))
+        access = extra.pop("access", "write")
+        buddy = extra.pop("buddy", ":".join(BUDDY.values()))
+        namespace = "macro:" + lead["macroTaskId"] if lead.get("macroTaskId") else "project:" + lead["project"]["id"]
+        packet = {"creationKey": _creation_key(["adr032-submit-v1", namespace, title, task]),
+                  "credential": credential, "cwd": cwd, "title": title, "task": task,
+                  "buddy": buddy, "checkout": checkout, "access": access, "expectedSeconds": 600,
+                  "inputs": [], **extra}
+        if access in ("write", "full"):
+            packet.setdefault("writeScope", ["."])
+        if access == "full":
+            packet.setdefault("accessNote", "Lead fixture full access")
+        response = board.call("workflow_submit", packet)
+        view = board.call("workflow_get", {"runId": response["runId"]})
+        return {**view, **response}
 
     def finish_owned(self, board, child, worker="w2", **extra):
         self.register(board, worker)
-        claim = self.claim(board, worker, claim_request_id="claim-" + child["requestId"], run_id=child["runId"])
+        claim = self.claim(board, worker, claim_request_id="claim-" + child["runId"], run_id=child["runId"])
         self.finish_turn(board, claim, worker_id=worker, **extra)
         return board.call("workflow_get", {"runId": child["runId"]}), claim["claim"]
 
-    def test_standalone_lead_and_owned_execution_share_one_console_and_record_group(self):
-        from hey_my_buddy.blackboard.tasks import macro_task_deletion, macro_tasks
-        from hey_my_buddy.blackboard.tasks.session_content import identity
-        from hey_my_buddy.private_dirs import session_record_path
-
+    def test_lead_submit_derives_macro_and_ownership_without_host_fields(self):
         board = self.board()
-        lead, lead_claim = self.lead(board)
-        owned = self.owned(board, lead_claim)
-        _view, owned_claim = self.finish_owned(board, owned)
-        group = 'run:' + lead['runId']
-        for claim in (lead_claim, owned_claim):
-            task_id, attempt_id = claim['task']['taskId'], claim['attempt']['attemptId']
-            self.assertEqual(identity(board.store, task_id, attempt_id)['group_id'], group)
-            self.assertEqual(claim['sessionRecordPath'],
-                             str(session_record_path(board.directory, group, attempt_id)))
-        groups = macro_summaries(board.call('macro_task_list', {}))
-        self.assertEqual([row['macroTaskId'] for row in groups], [group])
-        with board.store.db.read() as db:
-            members = db.execute(f'SELECT task_id,group_id FROM ({macro_tasks.MEMBERS_SQL})').fetchall()
-        self.assertEqual({row['task_id']: row['group_id'] for row in members},
-                         {lead['runId']: group, owned['runId']: group})
-        self.assertEqual(macro_task_deletion.preview(board.store, group)['microTaskCount'], 2)
-        rows = board.call('macro_task_timeline', {'macroTaskId': group})['rows']
-        self.assertEqual({row['runId'] for row in rows}, {lead['runId'], owned['runId']})
-        self.assertFalse(native_path(session_record_path(board.directory, 'run:' + owned['runId'], 'unused').parent).exists())
-
-    def test_submit_records_run_turn_macro_and_source_in_one_admission(self):
-        board = self.board()
-        lead, claim = self.lead(board, macroTask={"title": "Grouped work", 'goal': "Grouped work"})
+        lead, claim = self.lead(board, create_macro={"title": "Grouped work", "goal": "Grouped work"})
         child = self.owned(board, claim)
-        ownership = {"leadRunId": lead["runId"], "leadTurnId": claim["turn"]["turnId"],
-                     "createdAt": child["createdAt"]}
-        self.assertEqual(child["leadOwnership"], ownership)
+        self.assertEqual(child["macroTaskId"], lead["macroTaskId"])
+        self.assertEqual(child["leadOwnership"]["leadRunId"], lead["runId"])
+        self.assertEqual(child["leadOwnership"]["leadTurnId"], claim["turn"]["turnId"])
         self.assertFalse(child["delegationAuthority"])
-        self.assertIsNone(child["hostId"])
-        fetched = board.call("workflow_get", {"runId": child["runId"], "credential": claim["agentCredential"]})
-        self.assertEqual(fetched["leadOwnership"], ownership)
-        self.assertEqual(micro_task_brief(fetched)["leadOwnership"], ownership)
-        listed = board.call("task_list", {})
-        row = next(row for row in listed["runs"] if row["runId"] == child["runId"])
-        self.assertEqual(row["lineage"]["leadOwnership"], ownership)
-        self.assertIsNone(row["lineage"]["sourceHostId"])
-        self.assertEqual(task_brief(row)["leadOwnership"], ownership)
-        self.assertEqual(next(row for row in list_brief(listed)["runs"] if row["runId"] == child["runId"])["leadOwnership"], ownership)
-        lead_view = board.call("workflow_get", {"runId": lead["runId"]})
-        self.assertEqual(lead_view["ownedMicroTasks"], [{"runId": child["runId"], "leadTurnId": claim["turn"]["turnId"],
-                                                       "createdAt": child["createdAt"], "state": "executing"}])
+        self.assertEqual(child["ownedMicroTasks"], [])
+        self.assertEqual(board.call("workflow_get", {"runId": lead["runId"]})["ownedMicroTasks"][0]["runId"],
+                         child["runId"])
+        self.assertEqual(board.call("workflow_get", {"runId": child["runId"],
+                                                     "credential": claim["agentCredential"]})["runId"], child["runId"])
+        listed = board.call("task_list", {"credential": claim["agentCredential"]})
+        self.assertIn(child["runId"], [row["runId"] for row in listed["runs"]])
         with board.store.db.read() as db:
-            self.assertIsNone(db.execute("SELECT source_host_id FROM workflow_runs WHERE run_id=?",
-                                         (child["runId"],)).fetchone()[0])
-            groups = dict(db.execute("SELECT run_id,macro_task_id FROM workflow_runs"))
-            self.assertIsNotNone(groups[lead["runId"]])
-            self.assertEqual(groups[lead["runId"]], groups[child["runId"]])
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_children").fetchone()[0], 0)
-            self.assertEqual(tuple(db.execute(
-                "SELECT actor_role,actor_id FROM events WHERE kind='task.submitted' AND task_id=?",
-                (child["runId"],)).fetchone()), ("lead", lead["runId"]))
-            self.assertIsNone(db.execute("SELECT owner FROM tasks WHERE task_id=?", (child["runId"],)).fetchone()[0])
+            event = db.execute("SELECT actor_role,actor_id FROM events WHERE kind='task.submitted' AND task_id=?",
+                               (child["runId"],)).fetchone()
+        self.assertEqual(tuple(event), ("lead", lead["runId"]))
         replay = self.owned(board, claim)
-        self.assertTrue(replay["duplicate"])
-        self.assertNotIn("control", replay)
-        self.assertFalse(replay["controlAvailable"])
+        self.assertEqual(replay["runId"], child["runId"])
+        self.assertTrue(replay["alreadyExists"])
 
-    def test_routing_and_shared_field_validation_still_apply(self):
+    def test_lead_cannot_supply_owner_macro_or_another_grant(self):
         board = self.board()
-        _, claim = self.lead(board)
-        params = {"requestId": "routed", "task": "Route normally", "cwd": str(self.workdir("routed")),
-                  "credential": claim["agentCredential"], "executionWorkspace": {"kind": "existing", "access": "write"}}
-        routed = board.call("workflow_submit", params)
-        self.assertIsNotNone(routed["routing"]["decisionId"])
-        for change in ({"harness": "dsh"}, {"expectedSeconds": -1}, {"unknown": True}):
-            with self.subTest(change=change), self.assertRaises(BoardError) as caught:
-                board.call("workflow_submit", {**params, "requestId": "invalid", **change})
-            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+        _lead, claim = self.lead(board)
+        for change in ({"macroTaskId": "forged"}, {"hostId": "forged"},
+                       {"delegationAuthority": True}, {"owner": "forged"}):
+            with self.subTest(change=change), self.assertRaises(BoardError) as raised:
+                self.owned(board, claim, "forged-" + next(iter(change)), **change)
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
-    def test_lead_cannot_supply_attribution_macro_or_another_grant(self):
+    def test_lead_credential_cannot_read_collection_or_foreign_run(self):
         board = self.board()
-        _, claim = self.lead(board)
-        for key, value in (("hostId", "forged"), ("owner", "forged"), ("macroTask", {"title": "forged"}),
-                           ("macroTaskId", "macro-forged"), ("macroTaskOf", "forged")):
-            with self.subTest(field=key), self.assertRaises(BoardError) as caught:
-                self.owned(board, claim, **{key: value})
-            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        with self.assertRaises(BoardError) as caught:
-            self.owned(board, claim, delegationAuthority=True,
-                       executionWorkspace={"kind": "existing", "access": "full", "accessNote": "forged grant"})
-        self.assertEqual(caught.exception.code, "FORBIDDEN")
-        with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_lead_tasks").fetchone()[0], 0)
+        lead, claim = self.lead(board, create_macro={"title": "Grouped work", "goal": "Grouped work"})
+        child = self.owned(board, claim)
+        foreign = self.submit(board, request_id="foreign", cwd=str(self.workdir("foreign")))
+        for selector in ({"cwd": lead["microTask"]["cwd"]}, {"macroTaskId": lead["macroTaskId"]}):
+            with self.subTest(selector=selector), self.assertRaises(BoardError) as raised:
+                board.call("workflow_get", {**selector, "credential": claim["agentCredential"]})
+            self.assertEqual(raised.exception.code, "FORBIDDEN")
+        for operation, packet in (("workflow_get", {"runId": foreign["runId"]}),
+                                  ("task_get", {"runId": foreign["runId"]}),
+                                  ("task_get", {"taskId": foreign["runId"]}),
+                                  ("workflow_cancel", {"runId": foreign["runId"]})):
+            with self.subTest(operation=operation, packet=packet), self.assertRaises(BoardError) as raised:
+                board.call(operation, {**packet, "credential": claim["agentCredential"]})
+            self.assertEqual(raised.exception.code, "FORBIDDEN")
+        self.assertEqual(board.call("workflow_get", {"runId": child["runId"]})["state"], "executing")
 
-    def test_ungranted_credential_rejects_every_new_operation_even_with_real_control(self):
+    def test_ungranted_and_invalid_credentials_never_gain_host_actions(self):
         board = self.board()
-        self.register(board)
-        submitted = self.submit(board)
-        claim = self.claim(board)["claim"]
-        for operation in sorted(workflow.LEAD_OPERATIONS):
+        ordinary = self.submit(board, request_id="ordinary")
+        claim = self.claim(board, run_id=ordinary["runId"])["claim"]
+        for operation in workflow.LEAD_OPERATIONS:
             with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
-                board.call(operation, {"runId": submitted["runId"], **submitted["control"],
+                board.call(operation, {"runId": ordinary["runId"],
                                        "credential": claim["agentCredential"]})
             self.assertEqual(caught.exception.code, "FORBIDDEN")
+        for credential in ("invalid-credential", ""):
+            with self.subTest(credential=credential), self.assertRaises(BoardError) as caught:
+                board.call("workflow_cancel", {"runId": ordinary["runId"], "credential": credential})
+            self.assertEqual(caught.exception.code, "UNAUTHORIZED")
+        self.assertEqual(board.call("workflow_get", {"runId": ordinary["runId"]})["state"], "executing")
 
-    def test_foreign_host_other_lead_and_helper_targets_are_denied_for_every_selector(self):
-        board = self.board(max_concurrent=4)
-        lead, claim = self.lead(board)
-        owned = self.owned(board, claim)
-        with board.store.db.write() as db:
-            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
-                       " VALUES(?,?,?,4)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
-        foreign = self.submit(board, request_id="host-own", cwd=str(self.workdir("host-own")))
-        host_view, host_claim = self.finish_owned(board, foreign, disposition="assistance")
-        other, other_claim = self.lead(board, "other-lead", "w3")
-        other_owned = self.owned(board, other_claim, "other-owned")
-        other_view, other_attempt = self.finish_owned(board, other_owned, "w4", disposition="assistance")
-        decided = self.decide(board, host_view, host_view["activeRequest"]["requestId"], helpers=[{
-            "requestId": "helper", "task": "Help host", "cwd": str(self.workdir("helper")),
-            "executionWorkspace": {"kind": "existing", "access": "write"},
-        }], autoContinue=False)
-        helper_id = decided["children"][0]["taskId"]
-        helper = board.call("workflow_get", {"runId": helper_id})
-        helper_view, helper_claim = self.finish_owned(board, helper, "w2", disposition="assistance")
-        scope = board.store.workflow.resolve_credential(claim["agentCredential"])
-        for view, attempt in ((host_view, host_claim), (other_view, other_attempt), (helper_view, helper_claim)):
-            message = board.store._message_post(view["runId"], "question", "Status?")["message"]
-            for operation in sorted(workflow.LEAD_OWNED_OPERATIONS):
-                selectors = [{"runId": view["runId"]}, {"taskId": view["runId"]},
-                             {"requestId": view["activeRequest"]["requestId"] if operation == "workflow_decide" else view["requestId"]},
-                             {"attemptId": attempt["attempt"]["attemptId"]}, {"messageId": message["messageId"]},
-                             {"runId": owned["runId"], "taskId": view["runId"]},
-                             {"runId": owned["runId"], "attemptId": attempt["attempt"]["attemptId"]},
-                             {"runId": owned["runId"], "messageId": message["messageId"]}]
-                for selector in selectors:
-                    with self.subTest(kind=view["runId"], operation=operation, selector=selector), self.assertRaises(BoardError) as caught:
-                        board.store.workflow.authorize_agent_operation(operation, dict(selector), scope)
-                    self.assertEqual(caught.exception.code, "FORBIDDEN")
-                with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
-                    board.call(operation, {"runId": view["runId"],                                            "credential": claim["agentCredential"]})
-                self.assertEqual(caught.exception.code, "FORBIDDEN")
-        for operation in workflow.LEAD_OPERATIONS - {"workflow_submit"}:
-            with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
-                board.call(operation, {"runId": lead["runId"], **lead["control"], "credential": claim["agentCredential"]})
-            self.assertEqual(caught.exception.code, "FORBIDDEN")
-        listing = board.call("task_list", {"credential": claim["agentCredential"]})
-        self.assertEqual(listing["total"], 1)
-        self.assertEqual([row["runId"] for row in listing["runs"]], [owned["runId"]])
-        filtered = board.call("task_list", {"credential": claim["agentCredential"], "hostId": "host-1"})
-        self.assertEqual(filtered["total"], 0)
-        for operation in ("workflow_takeover", "macro_task_stop", "task_cancel", "user_policy_publish", "selection_request", "service_control"):
-            with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
-                board.call(operation, {"runId": owned["runId"], "credential": claim["agentCredential"]})
-            self.assertEqual(caught.exception.code, "FORBIDDEN")
-
-    def test_submit_cannot_replay_a_foreign_request_or_leave_a_partial_link(self):
+    def test_lead_creation_key_cannot_replay_host_work_or_leave_a_partial_link(self):
         board = self.board()
-        lead, claim = self.lead(board)
-        foreign = self.submit(board, request_id="foreign", cwd=str(self.workdir("foreign")), host_id="lead:" + lead["runId"])
+        lead, claim = self.lead(board, create_macro={"title": "Grouped work", "goal": "Grouped work"})
+        host = self.submit(board, request_id="owned", title="owned", task="Do owned work",
+                           macroTaskId=lead["macroTaskId"], cwd=lead["microTask"]["cwd"], kind="worktree")
         with self.assertRaises(BoardError) as caught:
-            self.owned(board, claim, "foreign")
+            self.owned(board, claim)
         self.assertEqual(caught.exception.code, "FORBIDDEN")
+        self.assertEqual(board.call("workflow_get", {"runId": host["runId"]})["leadOwnership"], None)
+
         original = board.store._append_event
+
         def fail_link(connection, kind, **kwargs):
             if kind == "workflow.lead_task_created":
                 raise BoardError("CONFLICT", "Simulated admission rollback")
             return original(connection, kind, **kwargs)
+
         with patch.object(board.store, "_append_event", side_effect=fail_link), self.assertRaises(BoardError):
             self.owned(board, claim, "rolled-back")
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_lead_tasks").fetchone()[0], 0)
-            self.assertIsNone(db.execute("SELECT task_id FROM tasks WHERE request_id='rolled-back'").fetchone())
+            self.assertIsNone(db.execute("SELECT run_id FROM workflow_runs WHERE title='rolled-back'").fetchone())
 
-    def test_owned_read_wait_inquiry_decide_continue_accept_conclude_and_cancel(self):
-        board = self.board()
+    def test_lead_can_review_continue_accept_conclude_and_cancel_owned_work(self):
+        board = self.board(max_concurrent=4)
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
+                       " VALUES(?,?,?,8)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
         _, claim = self.lead(board)
+        credential = {"credential": claim["agentCredential"]}
         child = self.owned(board, claim)
-        cred = {"credential": claim["agentCredential"]}
-        self.assertEqual(board.call("task_get", {"requestId": "owned", **cred})["task"]["runId"], child["runId"])
-        for operation in ("task_wait", "events_wait"):
-            with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
-                board.call(operation, {"runId": child["runId"], "timeoutMs": 0, **cred})
-            self.assertEqual(caught.exception.code, "FORBIDDEN")
-        board.call("artifact_list", {"runId": child["runId"], **cred})
-        board.call("events_read", {"runId": child["runId"], **cred})
-        board.call("inquiry_observe", {"runId": child["runId"], "inquiryId": "question", "question": "Status?", **cred})
-        message = board.call("message_get", {"runId": child["runId"], "inquiryId": "question", **cred})["message"]
-        board.call("message_get", {"messageId": message["messageId"], **cred})
-        board.call("message_list", {"runId": child["runId"], **cred})
-        view, _ = self.finish_owned(board, child, disposition="assistance")
-        declined = self.decide(board, view, view["activeRequest"]["requestId"], decision="decline", **cred)
-        continued = self.continue_run(board, declined, **cred)
+        self.assertEqual(board.call("task_get", {"runId": child["runId"], **credential})["task"]["runId"],
+                         child["runId"])
+        board.call("artifact_list", {"runId": child["runId"], **credential})
+        board.call("events_read", {"runId": child["runId"], **credential})
+        awaiting, _ = self.finish_owned(board, child, disposition="assistance")
+        continued = self.decide(board, awaiting, awaiting["activeRequest"]["requestId"],
+                                decision="decline", note="Continue after review", **credential)
         self.assertEqual(continued["state"], "executing")
-        second = self.claim(board, "w2", claim_request_id="owned-next", run_id=child["runId"])
-        self.finish_turn(board, second, worker_id="w2")
-        board.call("task_result", {"runId": child["runId"], **cred})
-        delivered = board.call("workflow_get", {"runId": child["runId"], **cred})
-        accepted = self.accept_run(board, delivered, **cred)
-        self.assertEqual(accepted["state"], "accepted")
+        next_claim = self.claim(board, "w2", claim_request_id="owned-next", run_id=child["runId"])
+        self.finish_turn(board, next_claim, worker_id="w2")
+        delivered = board.call("workflow_get", {"runId": child["runId"], **credential})
+        self.assertEqual(self.accept_run(board, delivered, **credential)["state"], "accepted")
+
         ended = self.owned(board, claim, "concluded")
-        ended_view, _ = self.finish_owned(board, ended)
-        concluded = board.call("workflow_conclude", {"runId": ended["runId"], "note": "Observed outcome",
-                                                      **cred})
+        ended, _ = self.finish_owned(board, ended)
+        concluded = board.call("workflow_conclude", {"runId": ended["runId"],
+                                                      "artifactId": ended["finalArtifactId"],
+                                                      "note": "Observed outcome", **credential})
         self.assertEqual(concluded["state"], "concluded")
+
         cancelled = self.owned(board, claim, "cancelled")
-        running = self.claim(board, "w2", claim_request_id="cancel-running", run_id=cancelled["runId"])
-        result = board.call("workflow_cancel", {"runId": cancelled["runId"], 'note': "Lead stopped owned work",
-                                               **cred})
-        self.assertEqual(result["state"], "cancelled")
+        self.claim(board, "w2", claim_request_id="cancel-running", run_id=cancelled["runId"])
+        stopped = board.call("workflow_cancel", {"runId": cancelled["runId"],
+                                                 "note": "Lead stopped owned work", **credential})
+        self.assertEqual(stopped["state"], "cancelled")
         attempt = board.call("task_get", {"runId": cancelled["runId"]})["task"]["selectedAttempt"]
         self.assertEqual(attempt["stopInitiator"], "lead")
-        self.assertIsNotNone(attempt["graceDeadline"])
+        self.assertTrue(attempt["cancelRequested"])
 
-    def test_owned_get_is_bounded_and_grant_does_not_transfer_to_child_execution(self):
-        board = self.board()
-        lead, claim = self.lead(board)
-        children = [self.owned(board, claim, "owned-" + str(index)) for index in range(workflow.MAX_CHILD_VIEW + 1)]
-        view = board.call("workflow_get", {"runId": lead["runId"]})
-        self.assertEqual(len(view["ownedMicroTasks"]), workflow.MAX_CHILD_VIEW)
-        self.assertEqual(view["counts"]["ownedMicroTasks"], workflow.MAX_CHILD_VIEW + 1)
-        self.assertEqual(view["truncated"]["ownedMicroTasks"], 1)
-        self.register(board, "w2")
-        child = self.claim(board, "w2", claim_request_id="child", run_id=children[0]["runId"])["claim"]
-        self.assertFalse(child["turn"]["input"]["context"]["delegationAuthority"])
+    def test_child_execution_does_not_inherit_lead_authority(self):
+        board = self.board(max_concurrent=4)
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
+                       " VALUES(?,?,?,8)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
+        _, claim = self.lead(board)
+        first = self.owned(board, claim, "first")
+        second = self.owned(board, claim, "second")
+        child_claim = self.claim(board, "w2", claim_request_id="child", run_id=first["runId"])["claim"]
+        self.assertFalse(child_claim["turn"]["input"]["context"]["delegationAuthority"])
         for operation in workflow.LEAD_OPERATIONS:
             with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
-                board.call(operation, {"runId": children[1]["runId"], "credential": child["agentCredential"]})
+                board.call(operation, {"runId": second["runId"],
+                                       "credential": child_claim["agentCredential"]})
             self.assertEqual(caught.exception.code, "FORBIDDEN")
 
-    def test_new_lead_turn_controls_existing_owned_tasks_without_rewriting_creation_turn(self):
+    def test_new_lead_turn_can_control_older_owned_work_without_rewriting_its_origin(self):
         board = self.board()
         lead, claim = self.lead(board)
         child = self.owned(board, claim)
@@ -293,90 +226,115 @@ class LeadOwnedTests(WorkflowTestCase):
         with self.assertRaises(BoardError) as caught:
             board.call("workflow_get", {"runId": child["runId"], "credential": claim["agentCredential"]})
         self.assertEqual(caught.exception.code, "UNAUTHORIZED")
-        current = board.call("workflow_get", {"runId": lead["runId"]})
-        self.continue_run(board, current)
+        self.continue_run(board, board.call("workflow_get", {"runId": lead["runId"]}))
         replacement = self.claim(board, claim_request_id="lead-next", run_id=lead["runId"])["claim"]
         self.assertNotEqual(replacement["turn"]["turnId"], original["leadTurnId"])
-        result = board.call("workflow_cancel", {"runId": child["runId"],                                                "credential": replacement["agentCredential"]})
-        self.assertEqual(result["state"], "cancelled")
-        self.assertEqual(result["leadOwnership"], original)
+        stopped = board.call("workflow_cancel", {"runId": child["runId"],
+                                                 "credential": replacement["agentCredential"]})
+        self.assertEqual(stopped["state"], "cancelled")
+        self.assertEqual(board.call("workflow_get", {"runId": child["runId"]})["leadOwnership"], original)
 
-    def test_lead_answers_its_owned_micro_tasks_helper_proxy_request(self):
-        board = self.board()
-        _, claim = self.lead(board)
-        owned = self.owned(board, claim)
-        view, _ = self.finish_owned(board, owned, disposition="assistance")
-        decided = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
-            "requestId": "helper", "task": "Help owned work", "cwd": str(self.workdir("helper")),
-            "executionWorkspace": {"kind": "existing", "access": "write"},
-        }], autoContinue=False, credential=claim["agentCredential"])
-        helper = board.call("workflow_get", {"runId": decided["children"][0]["taskId"]})
-        self.finish_owned(board, helper, disposition="assistance")
-        parent = board.call("workflow_get", {"runId": owned["runId"]})
-        self.assertEqual(parent["activeRequest"]["childTaskId"], helper["runId"])
-        request_id = parent["activeRequest"]["requestId"]
-        decided = self.decide(board, parent, request_id, command_id="proxy",
-                              decision="decline", credential=claim["agentCredential"])
-        self.assertEqual(decided["runId"], owned["runId"])
-        with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT state FROM workflow_requests WHERE request_id=?", (request_id,)).fetchone()[0], "declined")
-
-    def test_lead_accepts_and_concludes_its_owned_micro_tasks_helpers(self):
-        board = self.board()
+    def test_lead_can_settle_helpers_inside_its_owned_micro_task(self):
+        board = self.board(max_concurrent=4)
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
+                       " VALUES(?,?,?,8)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
         _, claim = self.lead(board)
         owned = self.owned(board, claim)
         view, _ = self.finish_owned(board, owned, disposition="assistance")
         parent = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
-            "requestId": name, "task": "Help owned work", "cwd": str(self.workdir(name)),
-            "executionWorkspace": {"kind": "existing", "access": "write"},
-        } for name in ("accept-helper", "conclude-helper")], autoContinue=False, credential=claim["agentCredential"])
+            "title": name, "task": "Help owned work", "cwd": owned["microTask"]["cwd"],
+            "checkout": "worktree", "access": "write", "inputs": [], "writeScope": ["."],
+        } for name in ("accept-helper", "conclude-helper")], autoContinue=False,
+            credential=claim["agentCredential"])
         helpers = []
-        for child in parent["children"]:
-            helper = board.call("workflow_get", {"runId": child["taskId"]})
-            finished, _ = self.finish_owned(board, helper)
-            helpers.append(finished)
+        for row in parent["children"]:
+            helper = board.call("workflow_get", {"runId": row["taskId"]})
+            delivered, _ = self.finish_owned(board, helper)
+            helpers.append(delivered)
         first, second = helpers
-        control = {"credential": claim["agentCredential"]}
+        credential = {"credential": claim["agentCredential"]}
         accepted = board.call("workflow_accept", {"runId": owned["runId"], "targetRunId": first["runId"],
                                                   "artifactId": first["finalArtifactId"], "note": "Reviewed helper output",
-                                                  "notRequired": "No separate integration target", **control})
-        self.assertEqual(accepted["state"], "accepted")
-        self.assertEqual(accepted["targetRunId"], first["runId"])
+                                                  "notRequired": "No separate integration target", **credential})
+        self.assertEqual(accepted["runId"], owned["runId"])
+        self.assertEqual(board.call("workflow_get", {"runId": first["runId"]})["state"], "accepted")
         concluded = board.call("workflow_conclude", {"runId": owned["runId"], "targetRunId": second["runId"],
-                                                     "note": "Concluded helper work", **control})
-        self.assertEqual(concluded["state"], "concluded")
-        self.assertEqual(concluded["targetRunId"], second["runId"])
+                                                     "artifactId": second["finalArtifactId"],
+                                                     "note": "Concluded helper work", **credential})
+        self.assertEqual(concluded["runId"], owned["runId"])
+        self.assertEqual(board.call("workflow_get", {"runId": second["runId"]})["state"], "concluded")
 
-    def test_handlers_refuse_foreign_host_and_other_leads_helper_targets(self):
-        board = self.board(max_concurrent=4)
+    def test_lead_can_answer_an_owned_helper_proxy_request(self):
+        board = self.board()
         _, claim = self.lead(board)
+        owned = self.owned(board, claim)
+        awaiting, _ = self.finish_owned(board, owned, disposition="assistance")
+        parent = self.decide(board, awaiting, awaiting["activeRequest"]["requestId"], helpers=[{
+            "title": "proxy-helper", "task": "Help owned work", "cwd": owned["microTask"]["cwd"],
+            "checkout": "worktree", "access": "write", "inputs": [], "writeScope": ["."],
+        }], autoContinue=False, credential=claim["agentCredential"])
+        helper = board.call("workflow_get", {"runId": parent["children"][0]["taskId"]})
+        self.finish_owned(board, helper, disposition="assistance")
+        proxy = board.call("workflow_get", {"runId": owned["runId"]})["activeRequest"]
+        self.assertEqual(proxy["childTaskId"], helper["runId"])
+        answered = self.decide(board, parent, proxy["requestId"], decision="decline",
+                               credential=claim["agentCredential"])
+        self.assertEqual(answered["runId"], owned["runId"])
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT state FROM workflow_requests WHERE request_id=?",
+                                        (proxy["requestId"],)).fetchone()[0], "declined")
+
+    def test_lead_cannot_target_a_foreign_helper_through_its_owned_root(self):
+        board = self.board(max_concurrent=4)
         with board.store.db.write() as db:
             db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
-                       " VALUES(?,?,?,4)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
+                       " VALUES(?,?,?,8)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
+        _, claim = self.lead(board)
         owned = self.owned(board, claim)
-        host = self.submit(board, request_id="host-root", cwd=str(self.workdir("host-root")))
-        _, other_claim = self.lead(board, "other-lead", "w3")
-        other_owned = self.owned(board, other_claim, "other-owned")
-        for parent in (host, other_owned):
-            view, _ = self.finish_owned(board, parent, disposition="assistance")
-            created = self.decide(board, view, view["activeRequest"]["requestId"], command_id="approve-" + parent["requestId"], helpers=[{
-                "requestId": "helper-" + parent["requestId"], "task": "Foreign help",
-                "cwd": str(self.workdir("helper-" + parent["requestId"])),
-                "executionWorkspace": {"kind": "existing", "access": "write"},
-            }], autoContinue=False)
-            target = created["children"][0]["taskId"]
-            control = {"runId": owned["runId"], "targetRunId": target, "credential": claim["agentCredential"]}
-            for operation, params in (("workflow_conclude", {"note": "Cannot conclude foreign help"}),
-                                      ("workflow_accept", {"artifactId": "foreign-artifact", "note": "Cannot accept foreign help",
-                                                           "notRequired": "No separate integration target"})):
-                with self.subTest(parent=parent["requestId"], operation=operation), self.assertRaises(BoardError) as caught:
-                    board.call(operation, {**control, **params})
-                self.assertEqual(caught.exception.code, "UNAUTHORIZED")
+        foreign = self.submit(board, request_id="foreign-root", cwd=str(self.workdir("foreign-root")),
+                              kind="worktree")
+        awaiting, _ = self.finish_owned(board, foreign, disposition="assistance")
+        created = self.decide(board, awaiting, awaiting["activeRequest"]["requestId"], helpers=[{
+            "title": "foreign-helper", "task": "Help foreign work", "cwd": foreign["microTask"]["cwd"],
+            "checkout": "worktree", "access": "write", "inputs": [], "writeScope": ["."],
+        }], autoContinue=False)
+        helper_id = created["children"][0]["taskId"]
+        for operation, fields in (("workflow_cancel", {}),
+                                  ("workflow_accept", {"artifactId": "foreign-artifact", "note": "Cannot accept",
+                                                       "notRequired": "No integration target"}),
+                                  ("workflow_conclude", {"note": "Cannot conclude"})):
+            with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
+                board.call(operation, {"runId": owned["runId"], "targetRunId": helper_id,
+                                       "credential": claim["agentCredential"], **fields})
+            self.assertEqual(caught.exception.code, "UNAUTHORIZED")
+        self.assertEqual(board.call("workflow_get", {"runId": helper_id})["state"], "executing")
 
-    def test_revocation_during_preparation_fences_new_admission(self):
+    def test_owned_continuation_keeps_original_frozen_input(self):
+        board = self.board()
+        lead, claim = self.lead(board)
+        child = self.owned(board, claim)
+        with board.store.db.read() as db:
+            original = dict(db.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='input'",
+                                       (child["runId"],)).fetchone())
+        self.assertEqual(turn_manifest(self.directory, claim["turn"]["input"])["integrator"],
+                         {"role": "host"})
+        delivered, child_claim = self.finish_owned(board, child)
+        self.assertEqual(turn_manifest(self.directory, child_claim["turn"]["input"])["integrator"],
+                         {"role": "lead", "id": lead["runId"]})
+        self.continue_run(board, delivered, credential=claim["agentCredential"])
+        next_claim = self.claim(board, "w2", claim_request_id="continued-owned", run_id=child["runId"])["claim"]
+        self.assertEqual(turn_manifest(self.directory, next_claim["turn"]["input"])["integrator"],
+                         {"role": "lead", "id": lead["runId"]})
+        with board.store.db.read() as db:
+            historical = dict(db.execute("SELECT * FROM workflow_artifacts WHERE artifact_id=?",
+                                         (original["artifact_id"],)).fetchone())
+        self.assertEqual(historical, original)
+
+    def test_revoked_lead_credential_fences_prepared_submission(self):
         self.revocation_fence("submit")
 
-    def test_revocation_during_preparation_fences_continuation(self):
+    def test_revoked_lead_credential_fences_prepared_continuation(self):
         self.revocation_fence("continue")
 
     def revocation_fence(self, mutation):
@@ -384,94 +342,24 @@ class LeadOwnedTests(WorkflowTestCase):
         _, claim = self.lead(board)
         child = self.owned(board, claim)
         if mutation == "continue":
-            view, _ = self.finish_owned(board, child)
+            child, _ = self.finish_owned(board, child)
         validate = board.store.workflow._validated_buddy
+
         def revoke_after_validation(spec):
             result = validate(spec)
             with board.store.db.write() as db:
-                db.execute("UPDATE agent_credentials SET state='revoked' WHERE run_id=?", (claim["task"]["taskId"],))
+                db.execute("UPDATE agent_credentials SET state='revoked' WHERE run_id=?",
+                           (claim["task"]["taskId"],))
             return result
-        with patch.object(board.store.workflow, "_validated_buddy", side_effect=revoke_after_validation), self.assertRaises(BoardError) as caught:
-            if mutation == "submit":
-                self.owned(board, claim, "revoked")
-            else:
-                self.continue_run(board, view, buddy=BUDDY, credential=claim["agentCredential"])
+
+        with patch.object(board.store.workflow, "_validated_buddy", side_effect=revoke_after_validation):
+            with self.assertRaises(BoardError) as caught:
+                if mutation == "submit":
+                    self.owned(board, claim, "revoked")
+                else:
+                    self.continue_run(board, child, buddy=BUDDY,
+                                      credential=claim["agentCredential"])
         self.assertEqual(caught.exception.code, "UNAUTHORIZED")
         with board.store.db.read() as db:
-            self.assertIsNone(db.execute("SELECT task_id FROM tasks WHERE request_id='revoked'").fetchone())
+            self.assertIsNone(db.execute("SELECT run_id FROM workflow_runs WHERE title='revoked'").fetchone())
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_continuations").fetchone()[0], 0)
-
-    def test_owned_wake_filter_compares_role_and_identity(self):
-        from hey_my_buddy.blackboard.tasks.workflow import OWNED_WAKE_FILTER_SQL
-        board = self.board()
-        lead, claim = self.lead(board)
-        child = self.owned(board, claim)
-        with board.store.db.write() as db:
-            for role, identifier, expected in (("lead", lead["runId"], 0),
-                                                ("host", lead["runId"], 1),
-                                                ("host", "lead:" + lead["runId"], 1),
-                                                ("lead", "another-lead", 1)):
-                board.store._append_event(db, "workflow.cancelled", task_id=child["runId"],
-                                          payload={"actor": {"role": role, "id": identifier}})
-                row = db.execute("SELECT * FROM events ORDER BY seq DESC LIMIT 1").fetchone()
-                self.assertEqual((row["actor_role"], row["actor_id"]), (role, identifier))
-                self.assertNotIn("actor", json.loads(row["payload_json"]))
-                count = db.execute("SELECT COUNT(*) FROM events e JOIN workflow_lead_tasks l"
-                                   " ON l.owned_run_id=e.task_id WHERE e.seq=? AND " + OWNED_WAKE_FILTER_SQL,
-                                   (row["seq"],)).fetchone()[0]
-                self.assertEqual(count, expected)
-
-    def test_without_execution_credential_lead_named_host_is_host(self):
-        board = self.board()
-        lead, claim = self.lead(board)
-        host = self.submit(board, request_id="named-host", host_id="lead:" + lead["runId"],
-                           cwd=str(self.workdir("named-host")))
-        self.assertIsNone(host["leadOwnership"])
-        self.assertEqual(host["hostId"], "lead:" + lead["runId"])
-        stopped = board.call("workflow_cancel", {"runId": host["runId"], **host["control"]})
-        self.assertEqual(stopped["cancellation"]["actor"], {"role": "host", "id": host["hostId"]})
-        child = self.owned(board, claim)
-        stopped = board.call("workflow_cancel", {"runId": child["runId"], "credential": claim["agentCredential"]})
-        self.assertEqual(stopped["cancellation"]["actor"], {"role": "lead", "id": lead["runId"]})
-
-    def test_owned_mutations_never_accept_a_nameless_host_control(self):
-        board = self.board()
-        _lead, claim = self.lead(board)
-        child = self.owned(board, claim)
-        run_id = child["runId"]
-        leaked = {"hostId": None, "ownerGeneration": 1,
-                  "controlToken": board.store.db.control_token(run_id, 1)}
-        operations = (
-            ("workflow_cancel", {"note": "uncredentialed stop"}),
-            ("workflow_continue", {"commandId": "uncredentialed-continue", "input": "continue", "expectedRevision": child["revision"]}),
-            ("workflow_accept", {"artifactId": "unreviewed-artifact", "note": "uncredentialed accept", "notRequired": "fixture"}),
-            ("workflow_takeover", {"commandId": "uncredentialed-takeover", "newHostId": "forged-host", "expectedOwnerGeneration": 1}),
-        )
-        for operation, params in operations:
-            for authority in ({}, leaked):
-                with self.subTest(operation=operation, authority=bool(authority)), self.assertRaises(BoardError) as caught:
-                    board.call(operation, {"runId": run_id, **params, **authority})
-                self.assertEqual(caught.exception.code, "UNAUTHORIZED")
-        self.assertEqual(board.call("workflow_get", {"runId": run_id})["state"], "executing")
-
-    def test_continuation_uses_current_owner_and_preserves_original_manifest(self):
-        board = self.board()
-        lead, claim = self.lead(board)
-        child = self.owned(board, claim)
-        run_id = child["runId"]
-        with board.store.db.read() as db:
-            original = board.store.workflow._run_manifest(db, board.store.workflow._run_row(db,run_id))
-            artifact = dict(db.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='input'", (run_id,)).fetchone())
-        self.assertEqual(original["integrator"], {"role": "lead", "id": lead["runId"]})
-        view, _ = self.finish_owned(board, child)
-        taken = board.call("workflow_takeover", {"runId": run_id, "commandId": "console-takeover",
-                                                "newHostId": "lead:ordinary-host", "expectedOwnerGeneration": 1,
-                                                **self.control(child)})
-        self.controls[run_id] = taken["control"]
-        self.continue_run(board, taken)
-        resumed = self.claim(board, "w2", claim_request_id="claim-current-owner", run_id=run_id)["claim"]
-        self.assertEqual(turn_manifest(self.directory, resumed["turn"]["input"])["integrator"],
-                         {"role": "host", "id": "lead:ordinary-host"})
-        with board.store.db.read() as db:
-            historical = dict(db.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY created_at LIMIT 1", (run_id,)).fetchone())
-        self.assertEqual(historical, artifact)

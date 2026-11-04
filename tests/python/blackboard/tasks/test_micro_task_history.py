@@ -7,9 +7,7 @@ tests, so a temporary execution worktree can be distinguished from the source
 project without running Git.
 """
 from __future__ import annotations
-from admission import admit_execution
 
-import json
 import os
 import unittest
 from unittest.mock import patch
@@ -50,45 +48,27 @@ class MicroTaskTestCase(WorkflowTestCase):
     def history(self, board, **params):
         return board.call("task_list", params)
 
-    def take_over(self, board, view, host, command, *, console=False):
-        params = {"runId": view["runId"], "commandId": command, "newHostId": host,
-                  "expectedOwnerGeneration": view["ownerGeneration"]}
-        if console:
-            response = board.store.workflow.takeover(params, console_authority={"sessionId": "private-test-console"})
-        else:
-            response = board.call("workflow_takeover", {**params, **self.control(view)})
-        self.controls[view["runId"]] = response["control"]
-        return response
-
     def helper_spec(self, request_id="helper-1", **extra):
-        return {"requestId": request_id, "task": "bounded helper", "cwd": str(self.workdir(request_id)),
-                "executionWorkspace": {"kind": "worktree", "access": "write"}, **extra}
+        return {"title": request_id, "task": "bounded helper", "cwd": str(self.workdir(request_id)),
+                "workspace": {"kind": "worktree", "access": "write"}, **extra}
 
     def parent_and_helper(self, board, *, routed=False):
         self.register(board)
-        parent = self.submit(board, request_id="parent", host_id="host-a", cwd=str(self.workdir("parent")))
+        parent = self.submit(board, request_id="parent", cwd=str(self.workdir("parent")))
         self.finish_turn(board, self.claim(board), disposition="assistance")
         view = board.call("workflow_get", {"runId": parent["runId"]})
-        params = {"runId": view["runId"], "requestId": view["activeRequest"]["requestId"],
-                  "commandId": "delegate-helper", "expectedRevision": view["revision"], "decision": "approve",
-                  "autoContinue": False, "helpers": [self.helper_spec(**({} if routed else BUDDY))],
-                  **self.control(parent)}
-        approved = board.call("workflow_decide", params)
+        approved = self.decide(board, view, view["activeRequest"]["requestId"],
+                               autoContinue=False,
+                               helpers=[self.helper_spec(buddy="route" if routed else BUDDY)])
         return parent, approved["children"][0]["taskId"]
 
     def deliver_parent(self, board, parent):
         view = board.call("workflow_get", {"runId": parent["runId"]})
-        self.continue_run(board, view, command_id="parent-continues", helper_policy="keep", buddy=BUDDY)
+        self.continue_run(board, view,  helper_policy="keep", buddy=BUDDY)
         self.register(board, "parent-worker")
         claim = self.claim(board, "parent-worker", run_id=parent["runId"], claim_request_id="parent-result")
         self.finish_turn(board, claim, worker_id="parent-worker")
         return board.call("workflow_get", {"runId": parent["runId"]})
-
-    def remove_source_event_fields(self, board, run_id):
-        # Event payloads are audit evidence; history reads the admission column.
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE events SET payload_json=json_remove(payload_json, '$.microTask.sourceHostId',"
-                               " '$.sourceHostId', '$.previousHostId', '$.previousOwnerGeneration') WHERE task_id=?", (run_id,))
 
     def page_all(self, board, *, page_size: int, **params):
         """Walk the whole filtered history through nextCursor and return the rows."""
@@ -120,67 +100,34 @@ class MicroTaskTestCase(WorkflowTestCase):
 
 
 class MicroTaskProvenanceTests(MicroTaskTestCase):
-    def test_micro_task_reports_source_and_current_host_with_the_source_project(self):
+    def test_root_lineage_names_host_role_and_pinned_source_project(self):
         board = self.board()
-        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a", kind="worktree")
+        submitted = self.submit(board, request_id="micro-task-1", kind="worktree")
         run_id = submitted["runId"]
         view = self.task_view(board, run_id)
         metadata = view["lineage"]
         source = os.path.realpath(str(self.workdir()))
-        worktree = view["cwd"]
-        # The execution checkout is a temporary worktree; the project stays the
-        # source Micro task's original cwd and its saved repository identity.
-        self.assertNotEqual(worktree, source)
+        self.assertNotEqual(view["cwd"], source)
         self.assertEqual(metadata["kind"], "micro-task")
-        self.assertEqual(metadata["sourceHostId"], "host-a")
-        self.assertEqual(metadata["currentHostId"], "host-a")
+        self.assertEqual(metadata["actor"], {"role": "host"})
         self.assertIsNone(metadata["parentRunId"])
         self.assertEqual(metadata["rootRunId"], run_id)
-        self.assertEqual(metadata["project"]["path"], source)
-        self.assertEqual(metadata["project"]["label"], "work")
-        self.assertEqual(metadata["project"]["id"], f"repo:{source}")
+        self.assertEqual(metadata["project"], {"id": f"repo:{source}", "kind": "git",
+                                               "path": source, "label": "work"})
         self.assertEqual(metadata["buddy"], BUDDY)
-        # The existing workflow extension is unchanged and still present.
-        self.assertEqual(view["workflow"]["hostId"], "host-a")
         self.assertEqual(view["workflowState"], "executing")
+        for obsolete in ("sourceHostId", "currentHostId", "hostId"):
+            self.assertNotIn(obsolete, metadata)
 
-    def test_takeover_never_passes_the_current_host_off_as_the_source(self):
+    def test_project_uses_pinned_root_input_after_new_turn_and_task_cwd_change(self):
         board = self.board()
-        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a")
-        run_id = submitted["runId"]
-        board.call(
-            "workflow_takeover",
-            {
-                "runId": run_id,
-                "commandId": "takeover-1",
-                "newHostId": "host-b",
-                "expectedOwnerGeneration": 1,
-                **submitted["control"],
-            },
-        )
-        metadata = self.micro_task_of(board, run_id)
-        self.assertEqual(metadata["currentHostId"], "host-b")
-        self.assertEqual(self.task_view(board, run_id)["workflow"]["hostId"], "host-b")
-        self.assertEqual(metadata["sourceHostId"], "host-a")
-        with board.store.db.read() as connection:
-            admission = json.loads(connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='task.submitted'", (run_id,)).fetchone()[0])
-            takeover = json.loads(connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.takeover'", (run_id,)).fetchone()[0])
-        self.assertEqual(admission["microTask"]["sourceHostId"], "host-a")
-        self.assertEqual(takeover["previousHostId"], "host-a")
-        self.assertEqual(takeover["previousOwnerGeneration"], 1)
-        # Root lineage and project survive the ownership change.
-        self.assertEqual(metadata["rootRunId"], run_id)
-        self.assertEqual(metadata["project"]["path"], os.path.realpath(str(self.workdir())))
-
-    def test_project_uses_the_pinned_root_input_and_original_spec(self):
-        board = self.board()
-        submitted = self.submit(board, request_id="pinned-project", host_id="host-a", kind="worktree")
+        submitted = self.submit(board, request_id="pinned-project", kind="worktree")
         run_id = submitted["runId"]
         original = self.micro_task_of(board, run_id)["project"]
         initial = board.call("workflow_get", {"runId": run_id})["workspace"]
         self.finish_turn(board, self.claim(board, run_id=run_id))
         delivered = board.call("workflow_get", {"runId": run_id})
-        self.continue_run(board, delivered, command_id="pinned-project-next")
+        self.continue_run(board, delivered)
         board.store.workflow.prepare_continuation_workspace({"runId": run_id})
         current = board.call("workflow_get", {"runId": run_id})["workspace"]
         self.assertNotEqual((current["workspaceId"], current["manifestSha256"]),
@@ -193,137 +140,35 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         self.assertEqual(original["path"], os.path.realpath(str(self.workdir())))
         self.assertEqual(original["id"], f"repo:{original['path']}")
 
-    def test_helper_keeps_the_host_that_delegated_it_across_a_root_takeover(self):
+    def test_helper_inherits_root_actor_and_project_with_explicit_parent(self):
         board = self.board(max_concurrent=1)
-        self.register(board)
-        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a")
-        micro_task_id = submitted["runId"]
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        view = board.call("workflow_get", {"runId": micro_task_id})
-        approved = self.decide(
-            board,
-            view,
-            view["activeRequest"]["requestId"],
-            helpers=[
-                {
-                    "requestId": "helper-1",
-                    "task": "help out",
-                    "cwd": str(self.workdir()),
-                    "executionWorkspace": {"kind": "worktree", "access": "write"},
-                }
-            ],
-        )
-        helper_id = approved["children"][0]["taskId"]
-        self.assertEqual(self.micro_task_of(board, helper_id)["sourceHostId"], "host-a")
-        board.call(
-            "workflow_takeover",
-            {
-                "runId": micro_task_id,
-                "commandId": "takeover-1",
-                "newHostId": "host-b",
-                "expectedOwnerGeneration": 1,
-                **submitted["control"],
-            },
-        )
-        micro_task = self.micro_task_of(board, micro_task_id)
-        helper = self.micro_task_of(board, helper_id)
-        self.assertEqual(micro_task["sourceHostId"], "host-a")
-        self.assertEqual(micro_task["currentHostId"], "host-b")
-        # The helper retains its own admission source after the root changes owner.
-        self.assertEqual(helper["sourceHostId"], "host-a")
-        self.assertEqual(helper["currentHostId"], "host-b")
-        self.assertEqual(helper["rootRunId"], micro_task_id)
-
-    def test_frozen_source_survives_event_payload_removal_and_takeovers(self):
-        board = self.board()
-        original = self.submit(board, host_id="host-a")
-        self.remove_source_event_fields(board, original["runId"])
-        self.assertEqual(self.micro_task_of(board, original["runId"])["sourceHostId"], "host-a")
-        second = self.take_over(board, original, "host-b", "old-first-takeover")
-        self.take_over(board, second, "host-c", "old-second-takeover")
-        metadata = self.micro_task_of(board, original["runId"])
-        self.assertEqual(metadata["sourceHostId"], "host-a")
-        self.assertEqual(metadata["currentHostId"], "host-c")
-        with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT source_host_id FROM workflow_runs WHERE run_id=?",
-                                                (original["runId"],)).fetchone()[0], "host-a")
-
-    def test_helper_source_survives_its_own_takeovers_without_changing_root_controller(self):
-        board = self.board()
-        parent, child = self.parent_and_helper(board)
-        child_view = board.call("workflow_get", {"runId": child})
-        child_view = self.take_over(board, child_view, "child-host-b", "child-first", console=True)
-        self.take_over(board, child_view, "child-host-c", "child-second", console=True)
-        metadata = self.micro_task_of(board, child)
-        self.assertEqual(metadata["sourceHostId"], "host-a")
-        self.assertEqual(metadata["currentHostId"], "host-a")
-        self.assertEqual(metadata["rootRunId"], parent["runId"])
-
-    def test_proxy_micro_task_records_the_actual_authorizing_host_after_root_takeover(self):
-        board = self.board()
-        self.seed(board)
-        parent, child = self.parent_and_helper(board)
-        self.finish_turn(board, self.claim(board, run_id=child, claim_request_id="old-leaf-yields"), disposition="assistance")
-        view = board.call("workflow_get", {"runId": parent["runId"]})
-        view = self.take_over(board, view, "host-b", "new-controller")
-        with patch("hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
-            board.call("workflow_decide", {"runId": parent["runId"], "requestId": view["activeRequest"]["requestId"],
-                       "commandId": "new-deep-helper", "expectedRevision": view["revision"], "decision": "approve",
-                       "helpers": [self.helper_spec("new-grandchild")], **self.control(view)})
-        grandchild = board.call("workflow_get", {"runId": child})["children"][0]["taskId"]
-        created = board.call("workflow_get", {"runId": grandchild})
-        router_id = created["routing"]["taskId"]
-        self.assertEqual(created["hostId"], "host-a", "provenance must not change the helper's authorization contract")
-        self.assertEqual(self.micro_task_of(board, grandchild)["sourceHostId"], "host-b")
-        self.assertEqual(self.micro_task_of(board, router_id)["sourceHostId"], "host-b")
-        with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT source_host_id FROM workflow_runs WHERE run_id=?",
-                                                (grandchild,)).fetchone()[0], "host-b")
-        root = board.call("workflow_get", {"runId": parent["runId"]})
-        self.take_over(board, root, "host-c", "later-controller")
-        self.assertEqual(self.micro_task_of(board, child)["sourceHostId"], "host-a")
-        for run_id in (grandchild, router_id):
-            metadata = self.micro_task_of(board, run_id)
-            self.assertEqual(metadata["sourceHostId"], "host-b")
-            self.assertEqual(metadata["currentHostId"], "host-c")
-
-    def test_helper_takes_lineage_project_and_hosts_from_its_root_micro_task(self):
-        board = self.board(max_concurrent=1)
-        self.register(board)
-        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a", kind="worktree")
-        micro_task_id = submitted["runId"]
-        self.finish_turn(board, self.claim(board), disposition="assistance")
-        view = board.call("workflow_get", {"runId": micro_task_id})
-        helper_cwd = self.workdir("helper-project")
-        approved = self.decide(
-            board,
-            view,
-            view["activeRequest"]["requestId"],
-            helpers=[
-                {
-                    "requestId": "helper-1",
-                    "task": "an isolated helper",
-                    "cwd": str(helper_cwd),
-                    "executionWorkspace": {"kind": "worktree", "access": "write"},
-                }
-            ],
-        )
-        helper_id = approved["children"][0]["taskId"]
+        parent, helper_id = self.parent_and_helper(board)
+        root = self.micro_task_of(board, parent["runId"])
         helper_view = self.task_view(board, helper_id)
-        micro_task = self.micro_task_of(board, micro_task_id)
         helper = helper_view["lineage"]
         self.assertEqual(helper["kind"], "helper")
-        self.assertEqual(helper["parentRunId"], micro_task_id)
-        self.assertEqual(helper["rootRunId"], micro_task_id)
-        self.assertEqual(helper["sourceHostId"], "host-a")
-        self.assertEqual(helper["currentHostId"], "host-a")
-        # The project is the root Micro task's, never the helper's own temporary checkout
-        # and never the helper's declared cwd.
-        self.assertEqual(helper["project"], micro_task["project"])
+        self.assertEqual(helper["parentRunId"], parent["runId"])
+        self.assertEqual(helper["rootRunId"], parent["runId"])
+        self.assertEqual(helper["actor"], {"role": "host"})
+        self.assertEqual(helper["project"], root["project"])
         self.assertNotEqual(helper_view["cwd"], helper["project"]["path"])
-        self.assertNotEqual(helper["project"]["id"], f"repo:{os.path.realpath(str(helper_cwd))}")
         self.assertEqual(helper["buddy"], BUDDY)
-        self.assertEqual(micro_task["kind"], "micro-task")
+
+    def test_nested_helper_keeps_root_lineage(self):
+        board = self.board()
+        parent, child = self.parent_and_helper(board)
+        self.finish_turn(board, self.claim(board, run_id=child, claim_request_id="child-yields"),
+                         disposition="assistance")
+        root_view = board.call("workflow_get", {"runId": parent["runId"]})
+        self.decide(board, root_view, root_view["activeRequest"]["requestId"],
+                    helpers=[self.helper_spec("grandchild")])
+        grandchild = board.call("workflow_get", {"runId": child})["children"][0]["taskId"]
+        metadata = self.micro_task_of(board, grandchild)
+        self.assertEqual(metadata["kind"], "helper")
+        self.assertEqual(metadata["parentRunId"], child)
+        self.assertEqual(metadata["rootRunId"], parent["runId"])
+        self.assertEqual(metadata["actor"], {"role": "host"})
+        self.assertEqual(metadata["project"], self.micro_task_of(board, parent["runId"])["project"])
 
     def test_same_named_projects_do_not_share_one_project_id(self):
         board = self.board()
@@ -331,122 +176,79 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         second = self.workdir("two")
         (first / "proj").mkdir()
         (second / "proj").mkdir()
-        one = self.submit(board, request_id="micro-task-1", host_id="host-a", cwd=str(first / "proj"))
-        two = self.submit(board, request_id="micro-task-2", host_id="host-b", cwd=str(second / "proj"))
+        one = self.submit(board, request_id="micro-task-1", cwd=str(first / "proj"))
+        two = self.submit(board, request_id="micro-task-2", cwd=str(second / "proj"))
         left = self.micro_task_of(board, one["runId"])
         right = self.micro_task_of(board, two["runId"])
         self.assertEqual(left["project"]["label"], "proj")
         self.assertEqual(right["project"]["label"], "proj")
         self.assertNotEqual(left["project"]["id"], right["project"]["id"])
         self.assertNotEqual(left["project"]["path"], right["project"]["path"])
-        self.assertEqual(
-            [row["runId"] for row in self.history(board, projectId=left["project"]["id"])["runs"]],
-            [one["runId"]],
-        )
+        self.assertEqual([row["runId"] for row in self.history(board, projectId=left["project"]["id"])["runs"]],
+                         [one["runId"]])
 
-    def test_execution_task_without_a_source_micro_task_reports_unknown_hosts(self):
+    def test_execution_task_has_no_micro_task_actor_or_lineage(self):
         board = self.board()
         created = self.execution_task(board, "plain-1")
         metadata = self.micro_task_of(board, created["runId"])
         self.assertEqual(metadata["kind"], "execution")
-        self.assertIsNone(metadata["sourceHostId"])
-        self.assertIsNone(metadata["currentHostId"])
+        self.assertIsNone(metadata["actor"])
         self.assertIsNone(metadata["parentRunId"])
         self.assertIsNone(metadata["rootRunId"])
         self.assertEqual(metadata["project"]["path"], os.path.realpath(str(self.workdir())))
         self.assertIsNone(metadata["project"]["id"])
-        self.assertEqual(metadata["project"]["label"], "work")
-        # The command adapter has no complete execution buddy, so none is
-        # invented for it.
         self.assertIsNone(metadata["buddy"])
 
-    def test_internal_routing_decision_belongs_to_its_owning_micro_task(self):
+    def test_router_decision_belongs_to_owning_micro_task(self):
         board = self.board()
         self.seed(board)
-        with patch("hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
-            submitted = board.call(
-                "workflow_submit",
-                {
-                    "requestId": "route-1",
-                    "hostId": "host-a",
-                    "submissionToken": "s" * 32,
-                    "task": "Produce a verified implementation\nWith details",
-                    "title": "Verified implementation",
-                    "macroTask": {"title": "Release work", 'goal': "Release work"},
-                    "cwd": str(self.workdir()),
-                    "executionWorkspace": {"kind": "existing", "access": "write"},
-                },
-            )
+        with patch("hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available",
+                   return_value=(True, None)):
+            submitted = self.submit(board, request_id="route-1", buddy="route",
+                                    title="Verified implementation",
+                                    task="Produce a verified implementation\nWith details",
+                                    create_macro={"title": "Release work", "goal": "Release work"})
         micro_task_id = submitted["runId"]
         router_id = board.call("workflow_get", {"runId": micro_task_id})["routing"]["taskId"]
         self.assertIsNotNone(router_id)
-        micro_task = self.micro_task_of(board, micro_task_id)
+        root = self.micro_task_of(board, micro_task_id)
         router = self.micro_task_of(board, router_id)
         self.assertEqual(router["kind"], "decision")
-        # The relation is the authoritative workflow_routes link, never a parsed label.
+        self.assertEqual(router["actor"], {"role": "host"})
         self.assertEqual(router["parentRunId"], micro_task_id)
         self.assertEqual(router["rootRunId"], micro_task_id)
-        self.assertEqual(router["sourceHostId"], "host-a")
-        self.assertEqual(router["currentHostId"], "host-a")
-        self.assertEqual(router["project"], micro_task["project"])
+        self.assertEqual(router["project"], root["project"])
         self.assertEqual(router["routingTask"], {"runId": micro_task_id,
-                                                   "title": "Verified implementation",
-                                                   "titleSource": "title",
+                                                   "title": "Verified implementation", "titleSource": "title",
                                                    "macroTaskId": submitted["macroTaskId"],
                                                    "macroTaskTitle": "Release work"})
         self.assertEqual(router["buddy"], {key: CATALOG_BUDDY[key]
                                             for key in ("harness", "provider", "model", "effort")})
-        listed = next(item for item in self.history(board)["runs"] if item["runId"] == router_id)
-        self.assertEqual(listed["lineage"], router)
+        self.assertEqual(next(item for item in self.history(board)["runs"]
+                              if item["runId"] == router_id)["lineage"], router)
         self.assertEqual({row["runId"] for row in self.history(board, query="Verified implementation")["runs"]},
                          {micro_task_id, router_id})
         with board.store.db.write() as connection:
             connection.execute("UPDATE workflow_runs SET title=NULL WHERE run_id=?", (micro_task_id,))
-        self.assertEqual(self.micro_task_of(board, router_id)["routingTask"], {
-            "runId": micro_task_id, "title": "Produce a verified implementation",
-            "titleSource": "first-line", "macroTaskId": submitted["macroTaskId"],
-            "macroTaskTitle": "Release work",
-        })
-        self.assertEqual([row["runId"] for row in self.history(board, rootsOnly=True)["runs"]], [micro_task_id])
-
-    def test_selection_decision_outside_a_micro_task_is_classified_and_has_no_lineage(self):
-        board = self.board()
-        self.seed(board)
-        created = board.call("selection_request", {"requestId": "pick-1", "task": "which model"})
-        self.assertEqual(created["status"], "queued")
-        with board.store.db.read() as connection:
-            task_id = connection.execute(
-                "SELECT task_id FROM decision_requests WHERE decision_id=?", (created["decisionId"],)
-            ).fetchone()["task_id"]
-        metadata = self.micro_task_of(board, task_id)
-        self.assertEqual(metadata["kind"], "decision")
-        self.assertIsNone(metadata["parentRunId"])
-        self.assertIsNone(metadata["rootRunId"])
-        self.assertIsNone(metadata["sourceHostId"])
-        self.assertIsNone(metadata["currentHostId"])
-        self.assertIsNone(metadata["project"])
-        self.assertIsNone(metadata["routingTask"])
-        self.assertEqual(metadata["buddy"], {key: CATALOG_BUDDY[key]
-                                              for key in ("harness", "provider", "model", "effort")})
-        self.assertEqual(self.history(board, rootsOnly=True)["total"], 0)
+        self.assertEqual(self.micro_task_of(board, router_id)["routingTask"]["titleSource"], "first-line")
+        self.assertEqual([row["runId"] for row in self.history(board, rootsOnly=True)["runs"]],
+                         [micro_task_id])
 
     def test_every_decorated_view_carries_the_same_metadata(self):
         board = self.board()
-        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a")
+        submitted = self.submit(board, request_id="micro-task-1")
         run_id = submitted["runId"]
         with board.store.db.read() as connection:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             resolved = micro_task.resolve(connection, task)
             self.assertEqual(resolved, self.micro_task_of(board, run_id))
-            # The batch read returns exactly the rows that exist; an unknown id is
-            # absent instead of being invented.
             self.assertEqual(micro_task.resolve_many(connection, [run_id, "missing-run"]), {run_id: resolved})
             self.assertEqual(micro_task.resolve_many(connection, []), {})
         listed = self.history(board, limit=100)["runs"][0]["lineage"]
         self.assertEqual(listed, self.micro_task_of(board, run_id))
-        snapshot = board.call("console_snapshot", {})
-        self.assertEqual(snapshot["tasks"]["runs"][0]["lineage"], self.micro_task_of(board, run_id))
-        self.assertIsNone(snapshot["tasks"]["nextCursor"])
+        timeline = board.call("macro_task_timeline", {"macroTaskId": f"run:{run_id}"})
+        self.assertEqual(timeline["rows"][0]["actor"], listed["actor"])
+        self.assertEqual(timeline["rows"][0]["kind"], listed["kind"])
         self.assertEqual(self.task_view(board, run_id)["lineage"], listed)
         compact_task = board.call("workflow_get", {"runId": run_id})["task"]
         self.assertEqual(compact_task["lineage"], listed)
@@ -458,7 +260,7 @@ class LeadHistoryFilterTests(MicroTaskTestCase):
     def test_host_filter_excludes_a_lead_owned_helper_tree(self):
         board = self.board()
         self.register(board)
-        lead = self.submit(board, request_id="lead-filter-owner", host_id="host-lead",
+        lead = self.submit(board, request_id="lead-filter-owner",
                            cwd=str(self.workdir("lead-filter-owner")))
         self.finish_turn(board, self.claim(board, run_id=lead["runId"], claim_request_id="lead-filter-claim"))
 
@@ -467,7 +269,7 @@ class LeadHistoryFilterTests(MicroTaskTestCase):
                          disposition="assistance")
         self.assign_lead_ownership(board, root["runId"], lead["runId"])
 
-        pending = self.submit(board, request_id="unowned-host-boundary", host_id="host-other",
+        pending = self.submit(board, request_id="unowned-host-boundary",
                               cwd=str(self.workdir("unowned-host-boundary")))
         self.finish_turn(board, self.claim(board, run_id=pending["runId"], claim_request_id="unowned-host-claim"),
                          disposition="assistance")
@@ -542,37 +344,31 @@ class HistoryPagingTests(MicroTaskTestCase):
 
     def test_filters_are_applied_before_pagination(self):
         board = self.board()
-        host_a = [
-            self.submit(
-                board,
-                request_id=f"a-{index}",
-                host_id="host-a",
-                cwd=str(self.workdir(f"a-{index}")),
-                kind="worktree",
-            )
-            for index in range(3)
-        ]
-        self.submit(
-            board, request_id="b-0", host_id="host-b", cwd=str(self.workdir("b-0")), kind="worktree"
-        )
-        self.submit(
-            board, request_id="b-1", host_id="host-b", cwd=str(self.workdir("b-1")), kind="worktree"
-        )
-        listing = self.history(board, hostId="host-a", filter="all", limit=1, rootsOnly=True)
+        project_a = self.workdir("project-a")
+        project_b = self.workdir("project-b")
+        (project_a / ".git").mkdir()
+        (project_b / ".git").mkdir()
+        first_group = [self.submit(board, request_id=f"a-{index}", cwd=str(project_a), kind="worktree")
+                       for index in range(3)]
+        for index in range(2):
+            self.submit(board, request_id=f"b-{index}", cwd=str(project_b), kind="worktree")
+        first_project = self.micro_task_of(board, first_group[0]["runId"])["project"]["id"]
+        second_project = f"repo:{os.path.realpath(project_b)}"
+        listing = self.history(board, projectId=first_project, filter="all", limit=1, rootsOnly=True)
         self.assertEqual(listing["total"], 3)
         self.assertEqual(len(listing["runs"]), 1)
         self.assertIsNotNone(listing["nextCursor"])
-        collected, _pages = self.page_all(board, page_size=1, hostId="host-a", rootsOnly=True)
-        self.assertEqual({row["runId"] for row in collected}, {row["runId"] for row in host_a})
-        self.assertEqual(self.history(board, hostId="host-b", rootsOnly=True)["total"], 2)
+        collected, _pages = self.page_all(board, page_size=1, projectId=first_project, rootsOnly=True)
+        self.assertEqual({row["runId"] for row in collected}, {row["runId"] for row in first_group})
+        self.assertEqual(self.history(board, projectId=second_project, rootsOnly=True)["total"], 2)
         self.assertEqual(self.history(board, rootsOnly=True)["total"], 5)
         self.assertEqual(self.history(board, projectId="repo:/no/such/project")["total"], 0)
 
-    def test_query_matches_task_project_hosts_and_buddy(self):
+    def test_query_matches_task_project_and_buddy(self):
         board = self.board()
         work = self.workdir("searchable-project")
         submitted = self.submit(
-            board, request_id="micro-task-1", host_id="host-zed", cwd=str(work), task="Refactor the parser"
+            board, request_id="micro-task-1", cwd=str(work), task="Refactor the parser"
         )
         run_id = submitted["runId"]
         self.execution_task(board, "noise", cwd=self.workdir("unrelated"), task_text="unrelated workload")
@@ -581,7 +377,6 @@ class HistoryPagingTests(MicroTaskTestCase):
             ("parser", [run_id]),
             (run_id, [run_id]),
             ("searchable-project", [run_id]),
-            ("host-zed", [run_id]),
             ("deepseek-flash", [run_id]),
             ("dsh", [run_id]),
             ("nothing-matches-this", []),
@@ -606,14 +401,14 @@ class HistoryPagingTests(MicroTaskTestCase):
 
     def test_review_filter_follows_the_durable_result_and_acceptance(self):
         board = self.board()
-        created = self.execution_task(board, "review-me")
+        created = self.submit(board, request_id="review-me")
         run_id = created["runId"]
         self.assertEqual(self.history(board, filter="review")["total"], 0)
-        client = board.client()
-        claim = admit_execution(client, "n" * 32, task_id=run_id)["claim"]
-        client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, {"status": "ok", "result": {"finalText": "done"}, "shutdownConfirmed": True, "exitCode": 0})
+        self.finish_turn(board, self.claim(board, run_id=run_id))
         self.assertEqual([row["runId"] for row in self.history(board, filter="review")["runs"]], [run_id])
-        board.call("task_acknowledge", {"runId": run_id, "verdict": "accepted", "note": "checked the real output"})
+        delivered = board.call("workflow_get", {"runId": run_id})
+        board.call("workflow_accept", {"runId": run_id, "artifactId": delivered["finalArtifactId"],
+                                       "note": "checked the real output", "notRequired": "No separate target"})
         self.assertEqual(self.history(board, filter="review")["total"], 0)
         self.assertEqual(self.history(board, filter="active")["total"], 0)
 
@@ -644,7 +439,7 @@ class HistoryPagingTests(MicroTaskTestCase):
         for params in (
             {"query": "x" * (micro_task.QUERY_MAX_LENGTH + 1)},
             {"projectId": "x" * (micro_task.PROJECT_ID_MAX_LENGTH + 1)},
-            {"hostId": "x" * (micro_task.HOST_ID_MAX_LENGTH + 1)},
+            {"hostId": "retired-host-filter"},
             {"filter": "everything"},
             {"rootsOnly": "true"},
             {"limit": 101},
@@ -704,7 +499,7 @@ class ShutdownHistoryTests(MicroTaskTestCase):
         self.assertEqual([row["runId"] for row in page["runs"]], [parent["runId"]])
         self.assertIsNotNone(page["nextCursor"])
 
-    def test_review_filter_waits_for_a_descendants_fenced_router_to_stop(self):
+    def test_review_filter_excludes_a_parent_when_router_stop_reopens_a_boundary(self):
         board = self.board(max_concurrent=2)
         self.seed(board)
         with patch("hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
@@ -712,17 +507,15 @@ class ShutdownHistoryTests(MicroTaskTestCase):
         helper = board.call("workflow_get", {"runId": helper_id})
         router_id = helper["routing"]["taskId"]
         router = self.claim(board, "router", run_id=router_id, claim_request_id="router-active")["claim"]
-        view = board.call("workflow_get", {"runId": parent["runId"]})
-        self.take_over(board, view, "host-b", "fence-selection")
         delivered = self.deliver_parent(board, parent)
         self.assertEqual(delivered["state"], "delivered")
         self.assertEqual(delivered["shutdown"]["unconfirmedRunIds"], [router_id])
         self.assertEqual(self.history(board, filter="review", rootsOnly=True)["total"], 0)
         board.call('execution_result', {'attemptId': router['attempt']['attemptId'], 'generation': router['attempt']['generation'], 'nonce': NONCE, 'status': 'cancelled', 'result': {}, 'shutdownConfirmed': True, 'exitCode': 0})
         stopped = board.call("workflow_get", {"runId": parent["runId"]})
-        self.assertEqual(stopped["state"], "delivered")
+        self.assertEqual(stopped["state"], "awaiting-host")
         self.assertEqual(stopped["shutdown"]["unconfirmedCount"], 0)
-        self.assertEqual([row["runId"] for row in self.history(board, filter="review", rootsOnly=True)["runs"]], [parent["runId"]])
+        self.assertEqual(self.history(board, filter="review", rootsOnly=True)["total"], 0)
 
     def test_active_filter_includes_execution_needing_reconciliation(self):
         board = self.board()
@@ -735,10 +528,10 @@ class ShutdownHistoryTests(MicroTaskTestCase):
 
 
 class BulkDecoratedViewsTests(MicroTaskTestCase):
-    def test_task_list_and_snapshot_keep_helper_and_decision_rows(self):
+    def test_task_list_and_console_timeline_keep_helper_rows(self):
         board = self.board(max_concurrent=1)
         self.register(board)
-        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a")
+        submitted = self.submit(board, request_id="micro-task-1")
         micro_task_id = submitted["runId"]
         self.finish_turn(board, self.claim(board), disposition="assistance")
         view = board.call("workflow_get", {"runId": micro_task_id})
@@ -748,10 +541,10 @@ class BulkDecoratedViewsTests(MicroTaskTestCase):
             view["activeRequest"]["requestId"],
             helpers=[
                 {
-                    "requestId": "helper-1",
+                    "title": "helper-1",
                     "task": "help out",
                     "cwd": str(self.workdir()),
-                    "executionWorkspace": {"kind": "worktree", "access": "write"},
+                    "workspace": {"kind": "worktree", "access": "write"},
                 }
             ],
         )
@@ -760,11 +553,11 @@ class BulkDecoratedViewsTests(MicroTaskTestCase):
         kinds = {row["runId"]: row["lineage"]["kind"] for row in all_rows["runs"]}
         self.assertEqual(kinds[micro_task_id], "micro-task")
         self.assertEqual(kinds[helper_id], "helper")
-        snapshot = board.call("console_snapshot", {})
-        snapshot_kinds = {row["runId"]: row["lineage"]["kind"] for row in snapshot["tasks"]["runs"]}
-        self.assertEqual(snapshot_kinds[helper_id], "helper")
-        self.assertEqual(snapshot["tasks"]["total"], 2)
-        self.assertIsNone(snapshot["tasks"]["nextCursor"])
+        timeline = board.call("macro_task_timeline", {"macroTaskId": f"run:{micro_task_id}"})
+        timeline_kinds = {row["runId"]: row["kind"] for row in timeline["rows"]}
+        self.assertEqual(timeline_kinds, {micro_task_id: "micro-task", helper_id: "helper"})
+        self.assertEqual(timeline["totals"]["rows"], 2)
+        self.assertFalse(timeline["truncated"]["rows"])
         roots = self.history(board, rootsOnly=True)
         self.assertEqual([row["runId"] for row in roots["runs"]], [micro_task_id])
 
@@ -772,17 +565,8 @@ class BulkDecoratedViewsTests(MicroTaskTestCase):
         board = self.board()
         self.seed(board)
         with patch("hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
-            routed = board.call(
-                "workflow_submit",
-                {
-                    "requestId": "route-1",
-                    "hostId": "host-a",
-                    "submissionToken": "s" * 32,
-                    "task": "Produce a verified implementation",
-                    "cwd": str(self.workdir()),
-                    "executionWorkspace": {"kind": "existing", "access": "write"},
-                },
-            )
+            routed = self.submit(board, request_id="route-1", buddy="route",
+                                 task="Produce a verified implementation")
         listing = self.history(board, rootsOnly=True)
         self.assertEqual([row["runId"] for row in listing["runs"]], [routed["runId"]])
         self.assertEqual(listing["total"], 1)

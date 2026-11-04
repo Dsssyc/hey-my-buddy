@@ -75,7 +75,7 @@ class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
                 row = db.execute(f"SELECT * FROM ({micro_task.RELATION_SQL}) WHERE task_id=?",
                                  (claim["task"]["taskId"],)).fetchone()
                 self.assertEqual(row["decision_id"], request["decisionId"])
-                self.assertEqual(row["source_host_id"], "host-1")
+                self.assertEqual(view["lineage"]["actor"], {"role": "host"})
                 self.assertEqual(row["router_model"], claim["decisionInput"]["routerBuddy"]["model"])
 
     def test_review_gate_includes_the_replaced_routers_attempt(self):

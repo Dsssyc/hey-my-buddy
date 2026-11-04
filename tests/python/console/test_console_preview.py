@@ -97,7 +97,6 @@ class LeadStopPreviewTests(unittest.TestCase):
         view = preview.workflow_get({"runId": "preview-run-b6"})
         task = view["task"]
         actor = {"role": "lead", "id": "preview-run-b3"}
-        self.assertIsNone(view["hostId"])
         self.assertEqual(actor["id"], task["lineage"]["leadOwnership"]["leadRunId"])
         self.assertEqual("cancelled", view["state"])
         self.assertEqual("cancelled", task["state"])

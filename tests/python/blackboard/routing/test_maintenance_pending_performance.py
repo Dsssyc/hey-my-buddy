@@ -26,13 +26,14 @@ class MaintenancePendingPerformanceTests(WorkflowTestCase):
             )
             run_ids.append(submitted["runId"])
             self.finish_turn(board, self.claim(board, run_id=submitted["runId"]))
+            delivered = board.call("workflow_get", {"runId": submitted["runId"]})
             if number % 2:
                 board.call("workflow_conclude", {
                     "runId": submitted["runId"], "note": "Fixture task concluded",
-                    **self.control(submitted),
+                    "artifactId": delivered["finalArtifactId"],
                 })
             else:
-                self.accept_run(board, board.call("workflow_get", {"runId": submitted["runId"]}))
+                self.accept_run(board, delivered)
 
         def measure(connection, expected_pending, expected_count):
             samples = {"pendingMs": [], "pendingCountMs": []}

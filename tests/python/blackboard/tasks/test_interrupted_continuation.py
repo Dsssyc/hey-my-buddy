@@ -74,8 +74,7 @@ class InterruptedContinuationTests(WorkflowTestCase):
         self.assertEqual(failed["state"], "failed")
         self.assertEqual(failed["currentTurn"]["state"], "interrupted")
         self.assertEqual(failed["task"]["interruptionEvidence"]["kind"], "identity-absent")
-        from hey_my_buddy.cli.cli_views import micro_task_brief
-        self.assertEqual(micro_task_brief(failed)['interruptionEvidence']['kind'], 'identity-absent')
+        self.assertEqual(failed['task']['interruptionEvidence']['kind'], 'identity-absent')
         partial = next(item for item in failed["artifacts"] if item["kind"] == "partial-output")
         self.assertFalse(partial["verified"])
         self.continue_run(board, failed)

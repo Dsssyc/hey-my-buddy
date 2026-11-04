@@ -57,7 +57,7 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
             if state == "passive":
                 continue
             view = board.call("workflow_get", {"runId": run["runId"]})
-            self.decide(board, view, view["activeRequest"]["requestId"], command_id=state)
+            self.decide(board, view, view["activeRequest"]["requestId"])
             if state in ("recorded", "queued"):
                 # Keep the durable continuation before its run leaves the Host boundary.
                 with board.store.db.write() as connection:
@@ -120,8 +120,8 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
         self.finish_turn(board, self.claim(board), disposition="assistance")
         waiting = board.call("workflow_get", {"runId": parent["runId"]})
         approved = self.decide(board, waiting, waiting["activeRequest"]["requestId"], helpers=[{
-            "requestId": "helper-1", "task": "helper", "cwd": str(self.workdir("helper")),
-            "executionWorkspace": {"kind": "worktree", "access": "write"},
+            "title": "helper-1", "task": "helper", "cwd": str(self.workdir("helper")),
+            "workspace": {"kind": "worktree", "access": "write"},
         }])
         child_id = approved["children"][0]["taskId"]
         claim = self.claim(board, claim_request_id="helper-claim", run_id=child_id)
@@ -144,12 +144,12 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
         settled = board.call("workflow_get", {"runId": parent["runId"]})
         self.assertTrue(settled["shutdown"]["descendantsConfirmed"])
 
-    def test_public_task_cancel_cannot_bypass_micro_task_control(self):
+    def test_internal_task_cancel_cannot_bypass_micro_task_authority(self):
         board = self.board()
         self.register(board)
         submitted = self.submit(board)
         claim = self.claim(board)
-        for params, expected in (({}, "UNAUTHORIZED"), (self.control(submitted), "MICRO_TASK_REQUIRED"),
+        for params, expected in (({}, "MICRO_TASK_REQUIRED"),
                                  ({"credential": claim["claim"]["agentCredential"]}, "FORBIDDEN")):
             with self.subTest(params=params):
                 with self.assertRaises(BoardError) as raised:

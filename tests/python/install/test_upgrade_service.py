@@ -40,8 +40,6 @@ class UpgradeServiceTests(BoardTestCase):
 
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             self.assertEqual(call("health", {})["schemaVersion"], SCHEMA_VERSION)
-            snapshot = call("console_snapshot", {})
-            self.assertEqual(snapshot["configuration"]["routerBuddyIds"], fixture["routerBuddyIds"])
             tasks = call("task_list", {})["runs"]
             self.assertIn(fixture["stableIds"]["delivered"], {task["runId"] for task in tasks})
             view = call("workflow_get", {"runId": fixture["stableIds"]["delivered"]})

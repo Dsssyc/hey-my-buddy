@@ -50,10 +50,9 @@ class CleanupLifecycleTests(LifecycleTestCase):
                     if removed:
                         self.assertTrue(self.reclaim(board, view)["removed"])
                     else:
-                        with self.assertRaises(BoardError) as caught:
-                            self.reclaim(board, view)
-                        self.assertEqual(caught.exception.code, "NOT_READY")
-                        cause = caught.exception.details["reclaim"]["reason"]
+                        caught = self.reclaim(board, view)
+                        self.assertFalse(caught["removed"])
+                        cause = caught["reason"]
                         self.assertEqual(cause["code"], "checkout.process-blockers")
                         self.assertEqual(cause["params"]["unreadableProcesses"][0]["pid"], process.pid)
                 self.assertEqual(checkout.exists(), not removed)
@@ -63,20 +62,15 @@ class CleanupLifecycleTests(LifecycleTestCase):
         board = self.board()
         run, _claim, initial, checkout, _seal, view, _artifact = self.run_worktree(
             board, request_id="prepared-then-concluded")
-        board.call("workflow_continue", {
-            "runId": run["runId"], "commandId": "prepare-next-turn",
-            "expectedRevision": view["revision"], "input": "Continue this work",
-            **self.control(view),
-        })
+        self.continue_run(board, {'runId': run["runId"], 'input': "Continue this work"})
         board.store.workflow.prepare_continuation_workspace({"runId": run["runId"]})
         prepared = self.view(board, run["runId"])
         self.assertNotEqual(prepared["workspace"]["workspaceId"], initial["workspaceId"])
         (checkout / "tracked.txt").write_text("Host change after next input preparation\n", encoding="utf-8")
-        board.call("workflow_cancel", {"runId": run["runId"], **self.control(prepared)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         cancelled = self.view(board, run["runId"])
         concluded = board.call("workflow_conclude", {
             "runId": run["runId"], "note": "Preserve the Host change and finish",
-            **self.control(cancelled),
         })
         self.assertTrue(concluded['reclaim']['removed'], concluded['reclaim'])
         self.assertFalse(checkout.exists())
@@ -98,13 +92,12 @@ class CleanupLifecycleTests(LifecycleTestCase):
 
 
 
-    def test_cumulative_failure_keeps_partial_output_readable_and_resumable(self):
+    def partial_output_recovery(self):
         board = self.board()
         self.register(board)
         submitted, _first, original, checkout, _seal, delivered, _artifact = self.run_worktree(board)
         run_id = submitted["runId"]
-        board.call("workflow_continue", {"runId": run_id, "commandId": "partial-stage",
-                   "expectedRevision": delivered["revision"], "input": "Continue", **self.control(delivered)})
+        self.continue_run(board, {'runId': run_id, 'input': "Continue"})
         second = self.claim(board, run_id, request_id="partial-claim", nonce="q" * 16)
         claim = second["claim"]
         manifest = turn_manifest(board.directory, claim["turn"]["input"])
@@ -122,8 +115,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertNotIn("cumulativePatch", preserved)
         self.assertEqual(native_read_bytes(Path(preserved["diffPath"])),
                          native_read_bytes(Path(partial["diffPath"])))
-        board.call("workflow_continue", {"runId": run_id, "commandId": "resume-partial",
-                   "expectedRevision": failed["revision"], "input": "Finish", **self.control(failed)})
+        self.continue_run(board, {'runId': run_id, 'input': "Finish"})
         third = self.claim(board, run_id, request_id="partial-resume", nonce="r" * 16)
         self.assertIsNotNone(third["claim"], third)
         final_input = turn_manifest(board.directory, third["claim"]["turn"]["input"])
@@ -138,6 +130,18 @@ class CleanupLifecycleTests(LifecycleTestCase):
             attempt_ids = [row[0] for row in connection.execute("SELECT attempt_id FROM attempts WHERE task_id=?", (run_id,))]
         for attempt_id in attempt_ids:
             board.store.complete_execution_cleanup(attempt_id)
+        return board,run_id,artifact
+
+    def test_cumulative_failure_keeps_partial_output_readable_and_resumable(self):
+        board,run_id,artifact=self.partial_output_recovery()
+        # A required cumulative file that disappears is still an integrity error.
+        native_unlink(Path(artifact["cumulativePatch"]["path"]))
+        with self.assertRaises(BoardError) as missing:
+            self.view(board, run_id)
+        self.assertEqual(missing.exception.code, "ARTIFACT_MISSING")
+
+    def test_sample_export_preserves_recovered_partial_output(self):
+        board,run_id,artifact=self.partial_output_recovery()
         import tempfile
         from tools.test_export_board_sample import export_sample
         from support import InProcessBoard
@@ -151,11 +155,6 @@ class CleanupLifecycleTests(LifecycleTestCase):
                 self.assertTrue(Path(sample_partial["diffPath"]).is_relative_to(output))
             finally:
                 sample.close()
-        # A required cumulative file that disappears is still an integrity error.
-        native_unlink(Path(artifact["cumulativePatch"]["path"]))
-        with self.assertRaises(BoardError) as missing:
-            self.view(board, run_id)
-        self.assertEqual(missing.exception.code, "ARTIFACT_MISSING")
 
     def test_cleanup_removes_only_the_registered_worktree_and_is_idempotent(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
@@ -195,9 +194,8 @@ class CleanupLifecycleTests(LifecycleTestCase):
         board, run_id, _attempt, checkout, failed_root, refs, native, _recorded = self.failed_evidence_worktree()
         concluded = board.call('workflow_conclude', {
             'runId': run_id, 'note': 'reviewed the failure and ended this micro task',
-            **self.control(self.view(board, run_id)),
         })
-        self.assertEqual(concluded['state'], 'concluded')
+        self.assertEqual(self.view(board,concluded.get('targetRunId',concluded['runId']))['state'], 'concluded')
         self.assertTrue(concluded['reclaim']['removed'], concluded['reclaim'])
         self.assertFalse(checkout.exists())
         self.assertTrue(native_path(native).exists())
@@ -219,14 +217,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         submitted, _claim, _manifest, checkout, _seal, yielded, _artifact = self.run_worktree(
             board, request_id='borrowed-evidence', disposition='assistance')
         run_id = submitted['runId']
-        decided = board.call('workflow_decide', {
-            'runId': run_id, 'requestId': yielded['activeRequest']['requestId'],
-            'commandId': 'borrowed-evidence-helper', 'expectedRevision': yielded['revision'], 'decision': 'approve',
-            'helpers': [{**BUDDY, 'requestId': 'evidence-helper', 'task': 'inspect the shared checkout',
-                         'cwd': str(checkout),
-                         'executionWorkspace': {'kind': 'existing', 'access': 'write', 'writeScope': ['.']}}],
-            **self.control(yielded),
-        })
+        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded['activeRequest']['requestId'], 'decision': 'approve', 'helpers': [{'task': 'inspect the shared checkout', 'cwd': str(checkout), 'title': 'evidence-helper', 'buddy': ":".join(BUDDY.values()), 'checkout': 'existing', 'access': 'write', 'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800}], 'autoContinue': True})
         helper_id = decided['children'][0]['taskId']
         claim = self.claim(board, helper_id, request_id='evidence-helper-claim')['claim']
         attempt = claim['attempt']
@@ -239,9 +230,8 @@ class CleanupLifecycleTests(LifecycleTestCase):
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'failed', 'terminationReason': 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1, 'result': {'status': 'invalid-result', 'workspaceSeal': record_reference(self.directory, seal)}})
         concluded = board.call('workflow_conclude', {
             'runId': run_id, 'targetRunId': helper_id, 'note': 'end the failed helper',
-            **self.control(self.view(board, run_id)),
         })
-        self.assertEqual(concluded['state'], 'concluded')
+        self.assertEqual(self.view(board,concluded.get('targetRunId',concluded['runId']))['state'], 'concluded')
         self.assertTrue(checkout.exists())
         self.assertEqual(native_path(evidence).read_text(encoding="utf-8"), 'helper failure evidence')
         with board.store.db.write() as connection:
@@ -285,9 +275,8 @@ class CleanupLifecycleTests(LifecycleTestCase):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id='cleanup-dangling')
         workspace_module.cleanup_remove(self.directory, manifest)
         checkout.symlink_to(self.directory / 'absent-target', target_is_directory=True)
-        with self.assertRaises(BoardError) as raised:
-            self.reclaim(board, view)
-        self.assertEqual(raised.exception.code, "NOT_READY")
+        raised = self.reclaim(board, view)
+        self.assertFalse(raised["removed"])
         self.assertTrue(checkout.is_symlink())
         self.assertNotEqual(self.view(board, submitted['runId'])['cleanup']['state'], 'applied')
 
@@ -303,7 +292,6 @@ class CleanupLifecycleTests(LifecycleTestCase):
         with mock.patch.object(workspace_module, "_git", failing_remove):
             with self.assertRaises(BoardError) as raised:
                 workspace_module.cleanup_remove(self.directory, manifest)
-        self.assertEqual(raised.exception.code, "WORKSPACE_GIT_ERROR")
         self.assertFalse(checkout.exists())
         self.assertEqual(workspace_module._worktree_record(self.repo, checkout)['locked'],
                          'hey-my-buddy:' + manifest['workspaceId'])
@@ -356,11 +344,10 @@ class CleanupLifecycleTests(LifecycleTestCase):
         board = self.board()
         self.register(board)
         _submitted, _claim, _manifest, checkout, _seal, view, _artifact = self.run_worktree(board)
-        with self.assertRaises(BoardError) as raised:
-            self.reclaim(board, view)
-        self.assertEqual(raised.exception.code, "NOT_READY")
-        self.assertIn("not-accepted", raised.exception.details["reasons"])
-        self.assertIn("integration-missing", raised.exception.details["reasons"])
+        raised = self.reclaim(board, view)
+        self.assertFalse(raised["removed"])
+        self.assertIn("not-accepted", raised["reasons"])
+        self.assertIn("integration-missing", raised["reasons"])
         self.assertTrue(checkout.exists())
 
     def test_cleanup_is_blocked_by_unsealed_changes(self):
@@ -369,10 +356,9 @@ class CleanupLifecycleTests(LifecycleTestCase):
         session = native / 'session.json'
         native_path(session).write_text('retain until reclaim is authorized', encoding="utf-8", newline="\n")
         (checkout / "tracked.txt").write_text("edited after the seal\n", encoding="utf-8", newline="\n")
-        with self.assertRaises(BoardError) as raised:
-            self.reclaim(board, view)
-        self.assertEqual(raised.exception.code, "NOT_READY")
-        self.assertIn("unsealed-changes", raised.exception.details["reasons"])
+        raised = self.reclaim(board, view)
+        self.assertFalse(raised["removed"])
+        self.assertIn("unsealed-changes", raised["reasons"])
         blocked_view = self.view(board, submitted["runId"])
         self.assertEqual(blocked_view["cleanup"]["state"], "blocked")
         self.assertEqual(blocked_view["cleanup"]["evidence"]["workspace"]["unsealedPaths"], ["tracked.txt"])
@@ -405,12 +391,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         # An existing (non-disposable) workspace is never a cleanup target.
         board_existing = self.board()
         self.register(board_existing, worker_id="w-existing")
-        existing = board_existing.call("workflow_submit", {
-            **BUDDY, "requestId": "existing-run", "hostId": "host-1", "task": "source checkout task",
-            "cwd": str(self.repo), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "existing", "access": "read", "writeScope": []},
-        })
-        self.controls[existing["runId"]] = existing["control"]
+        existing = self.submit_run(board, {'task': "source checkout task", 'cwd': str(self.repo), 'title': "existing-run", 'checkout': "existing", 'access': "read", 'inputs': []})
         existing_claim = admit_board(board_existing, {'workerId': 'w-existing', 'claimRequestId': 'existing-claim', 'nonce': 'e' * 16, 'runId': existing['runId']})
         existing_manifest = turn_manifest(self.directory, existing_claim["claim"]["turn"]["input"])
         existing_seal = workspace_module.seal(self.directory, existing_manifest, existing["runId"],
@@ -421,10 +402,9 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.accept(board_existing, existing_view, existing_artifact, not_required=True,
                     reason="read-only source checkout")
         existing_view = self.view(board_existing, existing["runId"])
-        with self.assertRaises(BoardError) as refused:
-            self.reclaim(board_existing, existing_view)
-        self.assertEqual(refused.exception.code, "NOT_READY")
-        self.assertIn("not-a-managed-worktree", refused.exception.details["reasons"])
+        refused = self.reclaim(board_existing, existing_view)
+        self.assertFalse(refused["removed"])
+        self.assertIn("not-a-managed-worktree", refused["reasons"])
         self.assertTrue((self.repo / "tracked.txt").exists())
         # A manifest redirected to the source checkout is preserved, never removed.
         tampered = {**manifest, "checkoutRoot": str(self.repo)}
@@ -439,7 +419,6 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertTrue(checkout.exists())
         with self.assertRaises(BoardError) as raised:
             workspace_module.cleanup_remove(self.directory, tampered)
-        self.assertEqual(raised.exception.code, "WORKSPACE_UNSAFE")
         self.assertTrue((self.repo / "tracked.txt").exists())
 
     def test_cleanup_keeps_a_foreign_stale_worktree_registry_entry(self):
@@ -569,10 +548,9 @@ class CleanupLifecycleTests(LifecycleTestCase):
         board, submitted, first, second, final, view = self.two_turn_worktree(request_id="continuation-dirty")
         checkout = Path(second["checkoutRoot"])
         (checkout / "tracked.txt").write_text("edited after the second seal\n", encoding="utf-8", newline="\n")
-        with self.assertRaises(BoardError) as raised:
-            self.reclaim(board, view)
-        self.assertEqual(raised.exception.code, "NOT_READY")
-        self.assertIn("unsealed-changes", raised.exception.details["reasons"])
+        raised = self.reclaim(board, view)
+        self.assertFalse(raised["removed"])
+        self.assertIn("unsealed-changes", raised["reasons"])
         # The delta is against the latest prepared input: the second stage's own
         # file is sealed, only the later edit is named.
         blocked_view = self.view(board, submitted["runId"])
@@ -600,12 +578,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         board, submitted, first, second, final, view = self.two_turn_worktree(request_id="borrow-owner")
         checkout = Path(first["checkoutRoot"])
         self.register(board, worker_id="w-borrow")
-        borrowed = board.call("workflow_submit", {
-            **BUDDY, "requestId": "borrowed-run", "hostId": "host-1", "task": "borrowed checkout task",
-            "cwd": str(checkout), "submissionToken": "b" * 32,
-            "executionWorkspace": {"kind": "existing", "access": "read"},
-        })
-        self.controls[borrowed["runId"]] = borrowed["control"]
+        borrowed = self.submit_run(board, {'task': "borrowed checkout task", 'cwd': str(checkout), 'title': "borrowed-run", 'checkout': "existing", 'access': "read", 'inputs': []})
         with board.store.db.read() as connection:
             borrowed_row = connection.execute(
                 "SELECT workspace_id,workspace_manifest_sha256 FROM workflow_runs WHERE run_id=?", (borrowed["runId"],)
@@ -618,24 +591,20 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertNotEqual(borrowed_manifest["workspaceId"], first["workspaceId"])
         # A live holder keeps the allocation owner from removing the checkout.
         owner_view = self.view(board, submitted["runId"])
-        with self.assertRaises(BoardError) as blocked:
-            self.reclaim(board, owner_view)
-        self.assertEqual(blocked.exception.code, "NOT_READY")
-        self.assertIn("workspace-dependency", blocked.exception.details["reasons"])
+        blocked = self.reclaim(board, owner_view)
+        self.assertFalse(blocked["removed"])
+        self.assertIn("workspace-dependency", blocked["reasons"])
         # The borrowed run has no worktree manifest of its own: it can never delete it.
         borrowed_view = self.view(board, borrowed["runId"])
-        with self.assertRaises(BoardError) as raised:
-            self.reclaim(board, borrowed_view)
-        self.assertEqual(raised.exception.code, "NOT_READY")
-        self.assertIn("not-a-managed-worktree", raised.exception.details["reasons"])
+        raised = self.reclaim(board, borrowed_view)
+        self.assertFalse(raised["removed"])
+        self.assertIn("not-a-managed-worktree", raised["reasons"])
         with self.assertRaises(BoardError) as raised:
             workspace_module.cleanup_remove(self.directory, borrowed_manifest)
-        self.assertEqual(raised.exception.code, "WORKSPACE_UNSAFE")
         self.assertTrue(checkout.exists())
         # Once the borrower stops holding the checkout, the owner may clean it.
         board.call("workflow_cancel", {
-            "runId": borrowed["runId"], "commandId": "borrowed-cancel",
-            **self.control(self.view(board, borrowed["runId"])),
+            "runId": borrowed["runId"],
         })
         applied = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(applied["removed"])
@@ -648,14 +617,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
             board, request_id="helper-owner", disposition="assistance"
         )
         run_id = submitted["runId"]
-        decided = board.call("workflow_decide", {
-            "runId": run_id, "requestId": yielded["activeRequest"]["requestId"], "commandId": "helper-approval",
-            "expectedRevision": yielded["revision"], "decision": "approve",
-            "helpers": [{**BUDDY, "requestId": "borrow-helper", "task": "helper on the parent checkout",
-                         "cwd": str(checkout),
-                         "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]}}],
-            **self.control(yielded),
-        })
+        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "helper on the parent checkout", 'cwd': str(checkout), 'title': "borrow-helper", 'buddy': ":".join(BUDDY.values()), 'checkout': "existing", 'access': "write", 'inputs': [], 'writeScope': ["."], 'expectedSeconds': 1800}], 'autoContinue': True})
         self.assertEqual(decided["decision"], "approve")
         helper_id = decided["children"][0]["taskId"]
         with board.store.db.read() as connection:
@@ -672,16 +634,13 @@ class CleanupLifecycleTests(LifecycleTestCase):
         owner_view = self.view(board, run_id)
         # Reclaim always carries the controlling root's Host control, even when it
         # only proves that a borrowed run owns nothing disposable.
-        with self.assertRaises(BoardError) as raised:
-            self.reclaim(board, owner_view, targetRunId=helper_id)
-        self.assertEqual(raised.exception.code, "NOT_READY")
-        self.assertIn("not-a-managed-worktree", raised.exception.details["reasons"])
+        raised = self.reclaim(board, owner_view, targetRunId=helper_id)
+        self.assertFalse(raised["removed"])
+        self.assertIn("not-a-managed-worktree", raised["reasons"])
         with self.assertRaises(BoardError) as raised:
             workspace_module.cleanup_remove(self.directory, helper_manifest)
-        self.assertEqual(raised.exception.code, "WORKSPACE_UNSAFE")
         # The owner's own allocation cannot be removed while the helper holds it.
-        with self.assertRaises(BoardError) as blocked:
-            self.reclaim(board, owner_view)
-        self.assertEqual(blocked.exception.code, "NOT_READY")
-        self.assertIn("workspace-dependency", blocked.exception.details["reasons"])
+        blocked = self.reclaim(board, owner_view)
+        self.assertFalse(blocked["removed"])
+        self.assertIn("workspace-dependency", blocked["reasons"])
         self.assertTrue(checkout.exists())

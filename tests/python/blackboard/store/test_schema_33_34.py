@@ -67,11 +67,11 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
             if isinstance(node, ast.Import):
                 self.assertFalse(any(alias.name.startswith('hey_my_buddy') for alias in node.names))
 
-    def test_floor_chain_and_direct_33_match_a_new_34_board(self):
+    def test_floor_chain_and_direct_33_match_a_new_current_board(self):
         floor, floor_db = self.restored('floor', schema33=False)
         direct, direct_db = self.restored('direct')
-        self.assertEqual(upgrade.upgrade_state(floor['state']), {'sourceSchema': 30, 'targetSchema': 34})
-        self.assertEqual(upgrade.upgrade_state(direct['state']), {'sourceSchema': 33, 'targetSchema': 34})
+        self.assertEqual(upgrade.upgrade_state(floor['state']), {'sourceSchema': 30, 'targetSchema': 35})
+        self.assertEqual(upgrade.upgrade_state(direct['state']), {'sourceSchema': 33, 'targetSchema': 35})
         self.assertEqual(self.schema(floor_db), self.schema(direct_db))
         self.assert_new_structure(direct_db)
 
@@ -138,7 +138,8 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
             stem = 'schema-' + str(schema) + '-workspace-growth'
             self.assertEqual(metadata[stage + 'WriterCommit'], commit)
             self.assertEqual(metadata[stage + 'BaseSha256'], hashlib.sha256((FIXTURE / 'board.sql').read_bytes()).hexdigest())
-            self.assertEqual(metadata[stage + 'GeneratorSha256'], '70e3ed545a219aa2fb08b3d2738f73ed0840d16e12fffc6e91a4767a931a77a6')
+            self.assertEqual(metadata[stage + 'GeneratorSha256'], hashlib.sha256(
+                (source / 'packaging/generate-upgrade-fixture.py').read_bytes()).hexdigest())
             for suffix, key in (('stock.sql','SqlSha256'), ('resources.json','ResourcesSha256')):
                 self.assertEqual(metadata[stage + key], hashlib.sha256((FIXTURE / (stem + '-' + suffix)).read_bytes()).hexdigest())
         fixture, _db = self.restored('wrong-stage', schema33=False)
@@ -266,7 +267,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                 ('workflow_artifacts', 'artifact_id,manifest_json,created_at,run_id,turn_id,attempt_id'),
                 ('workflow_continuations', 'continuation_id,input_text,helper_outcomes_json'),
                 ('attempt_received_receipts', '*'),
-                ('workflow_workspace_conflicts', '*')):
+                ('workflow_workspace_conflicts', 'conflict_id,evidence_json,delivery_json,created_at,updated_at')):
             query = f'SELECT rowid,{columns} FROM {table} ORDER BY rowid'
             snapshots[query] = [tuple(row) for row in db.execute(query)]
         files = self.files(fixture)

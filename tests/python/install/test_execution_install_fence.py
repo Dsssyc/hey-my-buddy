@@ -131,8 +131,8 @@ class ExecutionInstallFenceTests(BoardTestCase):
         self.addCleanup(release.touch)
         with self.installation(candidate_runtime, overrides={"HMB_DSH_CLI": str(script)}):
             self.start(baseline)
-            created = self.client().call("selection_request", {
-                "requestId": "fenced-router", "task": "Choose an offline fixture buddy"})
+            created = recovery_fixture.PrivateExecutionRecoveryTests.select_offline_router(
+                self, "fenced-router", "Choose an offline fixture buddy")
             self.assertTrue(wait_for((self.directory / "preflight.ready").exists, timeout=30), created)
             attempt = self.client().get(runId=created["runId"])["selectedAttempt"]
             self.install_at_fence(self.directory / "preflight.release", self.directory / "preflight.refused",
@@ -192,11 +192,10 @@ class ExecutionInstallFenceTests(BoardTestCase):
         with self.installation(candidate_runtime, overrides={"HMB_DSH_CLI": str(script)}):
             self.start(baseline)
             created = self.client().call("workflow_submit", {
-                "requestId": "fenced-activity", "hostId": "host-1",
+                "creationKey": "b" * 64, "macroTaskId": "standalone", "title": "fenced-activity",
                 "task": "Complete a gated offline fixture turn", "cwd": str(repo),
-                "submissionToken": "t" * 32, "executionWorkspace": {"kind": "existing", "access": "write"},
-                "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash",
-                "effort": "max"})
+                "buddy": "dsh:deepseek-official:deepseek-flash:max", "checkout": "existing",
+                "access": "write", "inputs": [], "writeScope": ["."], "expectedSeconds": 120})
             self.assertTrue(wait_for(started.exists, timeout=60), created)
             attempt = self.running(created["runId"])["selectedAttempt"]
             self.install_at_fence(self.directory / "activity.release", self.directory / "preflight.refused",

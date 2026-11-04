@@ -91,7 +91,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
             "commandId": "publish-" + str(uuid.uuid4()), "configuration": settings})
 
     def request_route(self, board, request_id, worker="router"):
-        result = board.call("selection_request", {"requestId": request_id, "task": "choose"})
+        result = board.store.decisions.request_select({"requestId": request_id, "task": "choose"})
         pass  # Admission is owned by the service.
         claim = admit_execution(board.client(), NONCE, task_id=result["runId"])["claim"]
         return result, claim
@@ -120,7 +120,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
     def test_a_pre_claim_document_cannot_bind_evidence(self):
         board = self.board()
         self.seed(board)
-        result = board.call("selection_request", {"requestId": "pre-claim", "task": "choose"})
+        result = board.store.decisions.request_select({"requestId": "pre-claim", "task": "choose"})
         row, document = self.frozen(board, result["decisionId"])
         self.assertIsNone(row["decision_attempt_id"])
         problem = board.store.decisions._tool_evidence_problem(

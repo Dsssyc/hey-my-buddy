@@ -69,7 +69,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         claim = self.claim(board, run_id=run['runId'])
         self.finish_turn(board, claim)
         delivered = board.call('workflow_get', {'runId': run['runId']})
-        board.call('workflow_accept', {'runId': run['runId'], **self.control(run),
+        board.call('workflow_accept', {'runId': run['runId'],
             'artifactId': delivered['finalArtifactId'], 'note': 'Synthetic acceptance',
             'notRequired': 'Private fixture has no integration target'})
         attempt_id = claim['claim']['attempt']['attemptId']
@@ -101,13 +101,13 @@ class ExportBoardSampleTests(WorkflowTestCase):
 
     def test_console_history_and_sessions_survive_and_source_bytes_do_not_change(self):
         board = self.source_board()
-        first, attempt = self.accepted(board, 'accepted-first', macroTask={'title': 'Sample macro', 'goal': 'Sample macro'})
+        first, attempt = self.accepted(board, 'accepted-first', create_macro={'title': 'Sample macro', 'goal': 'Sample macro'})
         second, _ = self.accepted(board, 'accepted-second', macroTaskId=first['macroTaskId'])
         unaccepted = self.submit(board, request_id='not-accepted', macroTaskId=first['macroTaskId'])
         unselected_manifest = Path(board.call('workflow_get', {'runId': unaccepted['runId']})['workspace']['manifestFile']['path'])
         self.finish_turn(board, self.claim(board, run_id=unaccepted['runId']))
         cancelled = self.submit(board, request_id='cancelled', kind='worktree')
-        board.call('workflow_cancel', {'runId': cancelled['runId'], **self.control(cancelled), 'note': 'Fixture'})
+        board.call('workflow_cancel', {'runId': cancelled['runId'], 'note': 'Fixture'})
         running = self.submit(board, request_id='running', kind='worktree')
         self.claim(board, run_id=running['runId'])
         path = private_dirs.session_record_path(board.directory, first['macroTaskId'], attempt)
@@ -130,6 +130,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         before = files(board.directory)
         with closing(sqlite3.connect(board.directory / DB_FILE)) as connection:
             source_results = dict(connection.execute('SELECT attempt_id,result_json FROM attempts'))
+            source_keys = dict(connection.execute('SELECT run_id,creation_key FROM workflow_runs'))
         output = export_sample(board.directory, self.directory / 'sample')
         assert_private_path(self, output, 0o700)
         self.assertFalse(native_exists(output / unselected_manifest.relative_to(board.directory)))
@@ -141,6 +142,10 @@ class ExportBoardSampleTests(WorkflowTestCase):
         with closing(sqlite3.connect(output / DB_FILE)) as connection:
             self.assertEqual(set(row[0] for row in connection.execute('SELECT run_id FROM workflow_runs')),
                              {first['runId'], second['runId']})
+            columns = {row[1] for row in connection.execute('PRAGMA table_info(workflow_runs)')}
+            self.assertTrue(columns.isdisjoint({'control_verifier', 'submission_verifier'}))
+            self.assertEqual(dict(connection.execute('SELECT run_id,creation_key FROM workflow_runs')),
+                             {run_id: source_keys[run_id] for run_id in (first['runId'], second['runId'])})
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM agent_credentials').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT SUM(samples),SUM(successes) FROM kind_statistics').fetchone(), (2, 2))
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM kind_cell_statistics').fetchone()[0], 0)
@@ -201,8 +206,8 @@ class ExportBoardSampleTests(WorkflowTestCase):
                     "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at,accepted_at) VALUES(?,?,json_set('{}','$.expectedSeconds',10),'hash',1,'dsh','fixture','completed',1,?,?,?)",
                     (identifier, identifier, time, time, time))
                 connection.execute(
-                    'INSERT INTO workflow_runs(run_id,control_verifier,execution_workspace_json,standalone_project_id,state,created_at,updated_at) '
-                    "VALUES(?,'source-verifier','{}','sample-project','accepted',?,?)", (identifier, time, time))
+                    'INSERT INTO workflow_runs(run_id,execution_workspace_json,standalone_project_id,state,created_at,updated_at) '
+                    "VALUES(?,'{}','sample-project','accepted',?,?)", (identifier, time, time))
         database.close()
         before = files(source)
         result = subprocess.run([sys.executable, str(TOOL), str(self.directory / 'sample'), '--source', str(source)],
@@ -389,6 +394,59 @@ class ExportBoardSampleTests(WorkflowTestCase):
                              statistics)
         self.assert_only_upgrade_project_marker_changed(before, files(fixture['state']), fixture, project_id)
 
+    def test_schema34_sample_keeps_its_structure_seals_and_can_upgrade(self):
+        from hey_my_buddy.blackboard.store.upgrade import STEPS
+        fixture = load_fixture(self.directory / 'source34')
+        source = fixture['state']
+        with closing(sqlite3.connect(source / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            with connection:
+                for version in range(UPGRADE_FLOOR_SCHEMA, 34):
+                    STEPS[version](connection)
+                connection.execute("UPDATE attempts SET execution_state='finished',shutdown_confirmed=1,cleanup_pending=0")
+                connection.execute("UPDATE tasks SET state='completed',active_attempt_id=NULL")
+            source_schema = list(connection.execute(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master "
+                "WHERE type IN ('table','index') AND name NOT LIKE 'sqlite_%' ORDER BY type,name"))
+            source_verifiers = {row['run_id']: row['control_verifier'] for row in connection.execute(
+                "SELECT r.run_id,r.control_verifier FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id "
+                "WHERE r.state='accepted' AND t.accepted_at IS NOT NULL")}
+            self.assertTrue(source_verifiers)
+            self.assertTrue(all(source_verifiers.values()))
+            source_seals = dict(connection.execute(
+                "SELECT a.artifact_id,a.manifest_json FROM workflow_artifacts a "
+                "JOIN workflow_runs r ON r.run_id=a.run_id JOIN tasks t ON t.task_id=r.run_id "
+                "WHERE r.state='accepted' AND t.accepted_at IS NOT NULL"))
+            self.assertTrue(source_seals)
+        before = files(source)
+        sample = export_sample(source, self.directory / 'sample34')
+        with closing(sqlite3.connect(sample / DB_FILE)) as connection:
+            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '34')
+            self.assertEqual([tuple(row) for row in source_schema], list(connection.execute(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master "
+                "WHERE type IN ('table','index') AND name NOT LIKE 'sqlite_%' ORDER BY type,name")))
+            for run_id, verifier, submission in connection.execute(
+                    'SELECT run_id,control_verifier,submission_verifier FROM workflow_runs'):
+                self.assertNotEqual(verifier, source_verifiers[run_id])
+                self.assertEqual(len(verifier), 64)
+                self.assertIsNone(submission)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM agent_credentials').fetchone()[0], 0)
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+            # The floor's seals remain inline after the frozen 33 → 34 step;
+            # export and the later upgrade must preserve those exact bytes.
+            self.assertEqual(dict(connection.execute('SELECT artifact_id,manifest_json FROM workflow_artifacts')),
+                             source_seals)
+            self.assertEqual({row[0] for row in connection.execute('SELECT content_form FROM workflow_artifacts')},
+                             {'sealed-inline-v1'})
+        self.assert_source_unchanged(before, files(source))
+        self.assertEqual(upgrade_state(sample), {'sourceSchema': 34, 'targetSchema': SCHEMA_VERSION})
+        with closing(sqlite3.connect(sample / DB_FILE)) as connection:
+            columns = {row[1] for row in connection.execute('PRAGMA table_info(workflow_runs)')}
+            self.assertTrue(columns.isdisjoint({'control_verifier', 'submission_verifier'}))
+            self.assertEqual(dict(connection.execute('SELECT artifact_id,manifest_json FROM workflow_artifacts')),
+                             source_seals)
+        self.assert_source_unchanged(before, files(source))
+
     def test_source_service_can_commit_during_snapshot_and_destination_creation(self):
         board = self.source_board()
         run, _ = self.accepted(board, 'accepted')
@@ -439,9 +497,9 @@ class ExportBoardSampleTests(WorkflowTestCase):
                         wait_commit(1)
                     return rows
 
-                def capture_reader(reader):
+                def capture_reader(reader, source_schema):
                     readers.append(reader)
-                    return original_select(reader)
+                    return original_select(reader, source_schema)
 
                 def create_destination(connection, version, definitions):
                     self.assertEqual(len(readers), 1)

@@ -1,8 +1,7 @@
-"""Host control over independently allocated helper worktrees.
+"""Host actions address independently allocated helpers through their current root.
 
-Root control targets, amends and resolves helper scopes; a takeover fences a
-stale helper command, and only the control root's revision authorizes the
-helper's reclamation.
+Acceptance, new scope and mechanical resolution retain the root/target relation;
+the service reclaims terminal allocations from their own durable facts.
 """
 from __future__ import annotations
 from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
@@ -28,11 +27,11 @@ class RootControlLifecycleTests(LifecycleTestCase):
                 "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
                 "note": "reviewed the helper output",
                 "target": {"path": str(target["path"]), "ref": "HEAD"},
-                "beforeCommit": target["before"],  **self.control(root_view),
+                "beforeCommit": target["before"],
             })
-        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(self.view(board, helper_id)["state"], "accepted")
         self.assertEqual(accepted["targetRunId"], helper_id)
-        self.assertEqual(accepted["integration"]["state"], "verified")
+        self.assertEqual(self.view(board, helper_id)["integrations"][0]["state"], "verified")
         self.assertEqual(self.view(board, helper_id)["state"], "accepted")
         with board.store.db.read() as connection:
             integration_run = connection.execute(
@@ -44,51 +43,18 @@ class RootControlLifecycleTests(LifecycleTestCase):
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_accept", {
                 "runId": run_id, "targetRunId": "run-not-owned", "artifactId": artifact["artifactId"],
-                "note": "wrong target", "notRequired": "wrong target", **self.control(root_view),
+                "note": "wrong target", "notRequired": "wrong target",
             })
         self.assertEqual(raised.exception.code, "UNAUTHORIZED")
         # The kept helper checkout is reclaimed through the root capability alone.
         self.assertTrue(flow["helperCheckout"].exists())
-        applied = board.call("workflow_reclaim", {
-            "runId": run_id, "targetRunId": helper_id, **self.control(root_view),
-        })
+        applied = board.store.workflow._reclaim_checkout(run_id=helper_id)
         self.assertTrue(applied["removed"])
         self.assertFalse(applied["alreadyRemoved"])
-        self.assertEqual(applied["targetRunId"], helper_id)
         self.assertFalse(flow["helperCheckout"].exists())
         # The root's own worktree is not the helper target and stays in place.
         self.assertTrue(flow["checkout"].exists())
 
-    def test_reclaim_helper_uses_the_control_roots_revision(self):
-        flow = self.root_with_helper_worktree(request_id="helper-root-revision")
-        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
-        artifact = flow["artifact"]
-        target = self.target_with_artifact(artifact)
-        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
-            accepted = board.call("workflow_accept", {
-                "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
-                "note": "helper reviewed before the control root changes",
-                "target": {"path": str(target["path"]), "ref": "HEAD"}, **self.control(flow["rootView"]),
-            })
-        self.assertEqual(accepted["state"], "accepted")
-        # Only the controlling root advances; the helper keeps its own revision.
-        for index in range(2):
-            root = self.view(board, run_id)
-            taken = board.call("workflow_takeover", {
-                "runId": run_id, "commandId": f"revision-takeover-{index}",
-                "expectedOwnerGeneration": root["ownerGeneration"],
-                "newHostId": f"host-revision-{index}", **self.control(root),
-            })
-            self.controls[run_id] = dict(taken["control"])
-        root = self.view(board, run_id)
-        helper = self.view(board, helper_id)
-        self.assertNotEqual(root["revision"], helper["revision"] + 1)
-        reclaimed = board.call("workflow_reclaim", {
-            "runId": run_id, "targetRunId": helper_id, **self.control(root),
-        })
-        self.assertTrue(reclaimed["removed"])
-        self.assertFalse(flow["helperCheckout"].exists())
-        self.assertTrue(flow["checkout"].exists())
 
     def test_an_accepted_helper_allocation_cleans_after_the_parent_is_accepted(self):
         flow = self.root_with_helper_worktree(request_id="helper-after-parent")
@@ -98,9 +64,9 @@ class RootControlLifecycleTests(LifecycleTestCase):
         accepted = board.call("workflow_accept", {
             "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
             "note": "helper reviewed", "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "beforeCommit": target["before"], **self.control(root_view),
+            "beforeCommit": target["before"],
         })
-        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(self.view(board, helper_id)["state"], "accepted")
         # Deliver and accept the parent without cleaning the helper first. The
         # approval's auto continuation already requeued the parent for its next turn.
         root_view = self.view(board, run_id)
@@ -122,40 +88,16 @@ class RootControlLifecycleTests(LifecycleTestCase):
             parent_accepted = board.call("workflow_accept", {
                 "runId": run_id, "artifactId": parent_artifact["artifactId"], "note": "parent reviewed",
                 "target": {"path": str(parent_target["path"]), "ref": "HEAD"},
-                "beforeCommit": parent_target["before"],  **self.control(root_view),
+                "beforeCommit": parent_target["before"],
             })
         self.assertEqual(parent_accepted["state"], "accepted")
         # The accepted helper allocation is still owned and still removable.
         root_view = self.view(board, run_id)
-        applied = board.call("workflow_reclaim", {
-            "runId": run_id, "targetRunId": helper_id, **self.control(root_view),
-        })
+        applied = board.store.workflow._reclaim_checkout(run_id=helper_id)
         self.assertTrue(applied["removed"])
         self.assertFalse(flow["helperCheckout"].exists())
         self.assertTrue(flow["checkout"].exists())
 
-    def test_root_takeover_fences_a_stale_helper_target_command(self):
-        flow = self.root_with_helper_worktree(request_id="helper-takeover")
-        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
-        root_view, artifact = flow["rootView"], flow["artifact"]
-        target = self.target_with_artifact(artifact)
-        taken = board.call("workflow_takeover", {
-            "runId": run_id, "commandId": "helper-takeover", "expectedOwnerGeneration": root_view["ownerGeneration"],
-            "newHostId": "host-2", **self.control(root_view),
-        })
-        self.assertEqual(taken["ownerGeneration"], root_view["ownerGeneration"] + 1)
-        params = {
-            "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
-            "note": "a stale owner must be fenced",
-            "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "beforeCommit": target["before"],
-        }
-        with self.assertRaises(BoardError) as raised:
-            board.call("workflow_accept", {**params, **self.control(root_view)})
-        self.assertEqual(raised.exception.code, "STALE_GENERATION")
-        recorded = board.call("workflow_accept", {**params, **dict(taken["control"])})
-        self.assertEqual(recorded["targetRunId"], helper_id)
-        self.assertEqual(recorded["integration"]["state"], "verified")
 
     def test_a_target_detached_during_git_work_is_refused(self):
         flow = self.root_with_helper_worktree(request_id="helper-detach")
@@ -178,7 +120,7 @@ class RootControlLifecycleTests(LifecycleTestCase):
                     "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
                     "note": "detached mid-flight",
                     "target": {"path": str(target["path"]), "ref": "HEAD"},
-                    "beforeCommit": target["before"], **self.control(root_view),
+                    "beforeCommit": target["before"],
                 })
         self.assertEqual(raised.exception.code, "UNAUTHORIZED")
         with board.store.db.read() as connection:
@@ -194,19 +136,15 @@ class RootControlLifecycleTests(LifecycleTestCase):
         flow = self.root_with_helper_worktree(request_id="helper-amend")
         board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
         root_view = flow["rootView"]
-        amended = board.store.workflow.scope_amend({
-            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-amend",
-            "expectedRevision": root_view["revision"], "expectedScopeVersion": 1,
-            "writeScope": ["docs", "."], 'note': "the helper may touch docs next", **self.control(root_view),
-        })
-        self.assertEqual(amended["scopeVersion"], 2)
+        amended = self.continue_run(board, {'runId': run_id, 'targetRunId': helper_id, 'writeScope': ["docs", "."], 'note': "the helper may touch docs next", 'input': 'Continue with the revised scope'})
+        self.assertEqual(self.view(board, helper_id)["scope"]["scopeVersion"], 2)
         self.assertEqual(amended["targetRunId"], helper_id)
         with board.store.db.read() as connection:
             stored = connection.execute(
                 "SELECT write_scope_json FROM workflow_scope_versions WHERE run_id=? AND scope_version=2",
                 (helper_id,),
             ).fetchone()
-        self.assertEqual(json.loads(stored["write_scope_json"]), [".", "docs"])
+        self.assertCountEqual(json.loads(stored["write_scope_json"]), [".", "docs"])
 
     def test_root_control_resolves_a_helper_scope_conflict(self):
         flow = self.helper_scope_failure()
@@ -224,16 +162,10 @@ class RootControlLifecycleTests(LifecycleTestCase):
                 (run_id, root_view["activeRequest"]["requestId"]),
             ).fetchone()[0]
         self.assertEqual(opened, 1, "settlement must not propagate the system request a second time")
-        resolved = board.store.workflow.workspace_resolve({
-            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-resolve",
-            "expectedRevision": root_view["revision"], "conflictId": flow["conflict"]["conflictId"],
-            "action": "restore", "paths": ["tracked.txt"],
-            "observedFingerprint": flow["conflict"]["observedFingerprint"],
-            'note': "restore the helper site to its authorized input", **self.control(root_view),
-        })
+        resolved = self.continue_run(board, {'runId': run_id, 'targetRunId': helper_id, 'paths': ["tracked.txt"], 'observedFingerprint': flow["conflict"]["observedFingerprint"], 'note': "restore the helper site to its authorized input", 'resolution': "restore", 'requestId': self.view(board, run_id)["activeRequest"]["requestId"]})
         self.assertEqual(resolved["targetRunId"], helper_id)
         self.assertEqual(resolved["resolutionState"], "restored")
-        self.assertIn("tracked.txt", resolved["resolvedPaths"])
+        self.assertIn("tracked.txt", self.view(board, helper_id)["workspaceConflicts"][0]["resolvedPaths"])
         self.assertEqual((flow["helperCheckout"] / "tracked.txt").read_text(encoding="utf-8"), "base\n")
         self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
         with board.store.db.read() as connection:

@@ -30,7 +30,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
 
     def test_stop_entire_group_and_replay_without_expanding_scope(self):
         board = self.board()
-        first = self.submit(board, kind='worktree', macroTask={'title': 'Group', 'goal': 'Group'})
+        first = self.submit(board, kind='worktree', create_macro={'title': 'Group', 'goal': 'Group'})
         second = self.submit(board, kind='worktree', request_id='second', macroTaskId=first['macroTaskId'])
         unrelated = self.submit(board, kind='worktree', request_id='other')
         _, browser = self.open_console(board)
@@ -55,7 +55,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
 
     def test_atomic_failure_and_console_authority(self):
         board = self.board()
-        first = self.submit(board, kind='worktree', macroTask={'title': 'Group', 'goal': 'Group'})
+        first = self.submit(board, kind='worktree', create_macro={'title': 'Group', 'goal': 'Group'})
         second = self.submit(board, kind='worktree', request_id='second', macroTaskId=first['macroTaskId'])
         params = {'macroTaskId': first['macroTaskId'], 'commandId': 'atomic-stop'}
         with self.assertRaises(BoardError) as denied:
@@ -111,18 +111,20 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         self.assertEqual(stopped['state'], 'cancelled')
         self.assertIsNone(stopped['hostConclusion'])
         closed = board.call('workflow_conclude', {'runId': run['runId'],
-            'note': 'Host ends the stopped micro task', **self.control(stopped)})
+            'note': 'Host ends the stopped micro task'})
         self.assertEqual(closed['state'], 'concluded')
 
     def test_concluded_roots_are_preserved_and_reported_in_results(self):
         board = self.board()
-        closed = self.submit(board, kind='worktree', macroTask={'title': 'Group', 'goal': 'Group'})
-        cancelled = board.call('workflow_cancel', {'runId': closed['runId'], **self.control(closed)})
+        closed = self.submit(board, kind='worktree', create_macro={'title': 'Group', 'goal': 'Group'})
+        macro_task_id = closed['macroTaskId']
+        cancelled = board.call('workflow_cancel', {'runId': closed['runId']})
         closed = board.call('workflow_conclude', {'runId': closed['runId'],
-            'note': 'Already closed by Host', **self.control(cancelled)})
-        pending = self.submit(board, kind='worktree', request_id='pending', macroTaskId=closed['macroTaskId'])
+            'note': 'Already closed by Host'})
+        closed = board.call('workflow_get', {'runId': closed['runId']})
+        pending = self.submit(board, kind='worktree', request_id='pending', macroTaskId=macro_task_id)
         _, browser = self.open_console(board)
-        params = {'macroTaskId': closed['macroTaskId'], 'commandId': 'stop-around-concluded'}
+        params = {'macroTaskId': macro_task_id, 'commandId': 'stop-around-concluded'}
         status, _, raw = browser.command('macro_task_stop', params, csrf=browser.bootstrap()['csrfToken'])
         self.assertEqual(status, 200, raw)
         result = json.loads(raw)['result']
@@ -131,7 +133,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
             closed['runId']: ('concluded', False), pending['runId']: ('cancelled', True),
         })
         current = board.call('workflow_get', {'runId': closed['runId']})
-        self.assertEqual(current['revision'], closed['revision'])
+        self.assertEqual(current['task']['revision'], closed['task']['revision'])
         self.assertEqual(current['hostConclusion'], closed['hostConclusion'])
         self.assertEqual(board.call('workflow_get', {'runId': pending['runId']})['state'], 'cancelled')
         status, _, raw = browser.command('macro_task_stop', params, csrf=browser.bootstrap()['csrfToken'])
@@ -170,19 +172,19 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
     def test_helpers_are_cancelled_and_accepted_roots_are_retained(self):
         board = self.board()
         self.register(board)
-        accepted = self.submit(board, kind='worktree', macroTask={'title': 'Group', 'goal': 'Group'})
+        accepted = self.submit(board, kind='worktree', create_macro={'title': 'Group', 'goal': 'Group'})
         self.finish_turn(board, self.claim(board))
         view = board.call('workflow_get', {'runId': accepted['runId']})
         board.call('workflow_accept', {
             'runId': view['runId'], 'artifactId': view['finalArtifactId'],
-            'note': 'Checked fixed fixture artifact', 'notRequired': 'Fixture has no changes', **self.control(view),
+            'note': 'Checked fixed fixture artifact', 'notRequired': 'Fixture has no changes',
         })
         pending = self.submit(board, kind='worktree', request_id='pending', macroTaskId=accepted['macroTaskId'])
         self.finish_turn(board, self.claim(board, claim_request_id='parent-claim'), disposition='assistance')
         view = board.call('workflow_get', {'runId': pending['runId']})
         approved = self.decide(board, view, view['activeRequest']['requestId'], helpers=[{
-            'requestId': 'helper', 'task': 'Assist', 'cwd': str(self.workdir('helper')),
-            'executionWorkspace': {'kind': 'worktree', 'access': 'write'},
+            'title': 'helper', 'task': 'Assist', 'cwd': str(self.workdir('helper')),
+            'workspace': {'kind': 'worktree', 'access': 'write'},
         }])
         helper = approved['children'][0]['taskId']
         self.claim(board, claim_request_id='helper-claim', run_id=helper)
@@ -203,7 +205,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
 
     def test_queued_running_awaiting_host_and_cancelled_roots(self):
         board = self.board(max_concurrent=4)
-        queued = self.submit(board, kind='worktree', request_id='queued', macroTask={'title': 'State scope', 'goal': 'State scope'})
+        queued = self.submit(board, kind='worktree', request_id='queued', create_macro={'title': 'State scope', 'goal': 'State scope'})
         running = self.submit(board, kind='worktree', request_id='running', macroTaskId=queued['macroTaskId'])
         awaiting = self.submit(board, kind='worktree', request_id='awaiting', macroTaskId=queued['macroTaskId'])
         already_cancelled = self.submit(board, kind='worktree', request_id='cancelled', macroTaskId=queued['macroTaskId'])
@@ -212,7 +214,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         running_claim = self.claim(board, claim_request_id='running-claim', run_id=running['runId'])
         self.finish_turn(board, self.claim(board, 'w2', claim_request_id='awaiting-claim', run_id=awaiting['runId']),
                          worker_id='w2', disposition='attention')
-        board.call('workflow_cancel', {'runId': already_cancelled['runId'], **self.control(already_cancelled)})
+        board.call('workflow_cancel', {'runId': already_cancelled['runId']})
         preserved = {run['runId']: board.call('workflow_get', {'runId': run['runId']})
                      for run in (awaiting, already_cancelled)}
         self.assertEqual(board.call('task_get', {'runId': queued['runId']})['task']['state'], 'queued')
@@ -229,7 +231,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         })
         for run in (awaiting, already_cancelled):
             current = board.call('workflow_get', {'runId': run['runId']})
-            self.assertEqual(current['revision'], preserved[run['runId']]['revision'])
+            self.assertEqual(current['task']['revision'], preserved[run['runId']]['task']['revision'])
             self.assertEqual(current['activeRequest'], preserved[run['runId']]['activeRequest'])
         attempt = board.call('task_get', {'runId': running['runId']})['task']['selectedAttempt']
         self.assertEqual(attempt['stopInitiator'], 'console')
@@ -246,12 +248,9 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         self.catalog_fixture()
         DecisionTestCase.use_helper(self)
         DecisionTestCase.seed(self, board)
-        routed = board.call('workflow_submit', {
-            'requestId': 'routed-stop', 'hostId': 'host-1', 'task': 'Route this work',
-            'cwd': str(self.workdir('routed-stop')),
-            'executionWorkspace': {'kind': 'existing', 'access': 'write'},
-            'macroTask': {'title': 'Routing stop', 'goal': 'Routing stop'},
-        })
+        routed = self.submit(board, request_id='routed-stop', task='Route this work',
+                             cwd=str(self.workdir('routed-stop')), buddy='route',
+                             create_macro={'title': 'Routing stop', 'goal': 'Routing stop'})
         self.assertEqual(routed['routing']['status'], 'queued')
         self.assertEqual(board.call('workflow_get', {'runId': routed['runId']})['state'], 'executing')
         router_id = routed['routing']['taskId']
@@ -264,7 +263,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
 
     def test_waiting_owned_lead_is_stopped_with_its_active_child(self):
         board = self.board(max_concurrent=4)
-        lead, claim = self.lead(board, macroTask={'title': 'Lead group', 'goal': 'Lead group'})
+        lead, claim = self.lead(board, create_macro={'title': 'Lead group', 'goal': 'Lead group'})
         active = self.owned(board, claim, 'active-owned')
         self.finish_turn(board, {'claim': claim}, outcome={
             'disposition': 'waiting', 'summary': 'Waiting for owned work',
@@ -280,7 +279,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
 
     def test_delivered_owned_child_is_preserved_below_cancelled_lead(self):
         board = self.board(max_concurrent=4)
-        lead, claim = self.lead(board, macroTask={'title': 'Lead delivery', 'goal': 'Lead delivery'})
+        lead, claim = self.lead(board, create_macro={'title': 'Lead delivery', 'goal': 'Lead delivery'})
         delivered = self.owned(board, claim, 'delivered-owned')
         self.finish_owned(board, delivered, worker='w2')
         _, browser = self.open_console(board)
@@ -292,13 +291,13 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
 
     def test_active_nested_helper_stops_under_preserved_awaiting_host_lead(self):
         board = self.board(max_concurrent=4)
-        lead, claim = self.lead(board, macroTask={'title': 'Preserved Lead', 'goal': 'Preserved Lead'})
+        lead, claim = self.lead(board, create_macro={'title': 'Preserved Lead', 'goal': 'Preserved Lead'})
         owned = self.owned(board, claim, 'owned-with-helper')
         view, _ = self.finish_owned(board, owned, worker='w2', disposition='assistance')
         approved = self.decide(board, view, view['activeRequest']['requestId'],
-            helpers=[{'requestId': 'nested-helper', 'task': 'Help owned work',
+            helpers=[{'title': 'nested-helper', 'task': 'Help owned work',
                       'cwd': str(self.workdir('nested-helper')),
-                      'executionWorkspace': {'kind': 'existing', 'access': 'write'}}],
+                      'workspace': {'kind': 'existing', 'access': 'write'}}],
             autoContinue=False, credential=claim['agentCredential'])
         helper_id = approved['children'][0]['taskId']
         self.register(board, 'w3')
@@ -317,7 +316,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
             helper_id: ('cancelled', True),
         })
         current = board.call('workflow_get', {'runId': lead['runId']})
-        self.assertEqual(current['revision'], before['revision'])
+        self.assertEqual(current['task']['revision'], before['task']['revision'])
         self.assertEqual(current['activeRequest'], before['activeRequest'])
         self.assertEqual(current['cancellation'], before['cancellation'])
         helper_task = board.call('task_get', {'runId': helper_id})['task']
@@ -339,7 +338,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
 
     def test_console_attribution_and_reason_are_readable_for_lead_owned_stop(self):
         board = self.board()
-        lead, claim = self.lead(board, macroTask={'title': 'Attribution', 'goal': 'Attribution'})
+        lead, claim = self.lead(board, create_macro={'title': 'Attribution', 'goal': 'Attribution'})
         owned = self.owned(board, claim, 'attributed-owned')
         _, browser = self.open_console(board)
         session_id = browser.bootstrap()['consoleSession']['id']
@@ -350,10 +349,11 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         for run in (lead, owned):
             view = board.call('workflow_get', {'runId': run['runId']})
             task = board.call('task_get', {'runId': run['runId']})['task']
-            self.assertEqual(view['cancellation'], expected)
-            self.assertEqual(task['cancellation'], expected)
-            self.assertEqual(cli_views.render('get', view)['cancellation'], expected)
-            self.assertEqual(cli_views.render('status', task)['cancellation'], expected)
+            for projection in (view['cancellation'], task['cancellation'],
+                               cli_views.render('get', view)['cancellation'],
+                               cli_views.render('status', task)['cancellation']):
+                self.assertEqual({key: projection[key] for key in expected}, expected)
+                self.assertIsInstance(projection['eventId'], int)
 
     def test_preserved_helper_boundary_survives_active_sibling_stop_receipt(self):
         board = self.board(max_concurrent=4)
@@ -362,8 +362,8 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         self.finish_turn(board, self.claim(board), disposition='assistance')
         view = board.call('workflow_get', {'runId': parent['runId']})
         approved = self.decide(board, view, view['activeRequest']['requestId'], helpers=[
-            {'requestId': name, 'task': name, 'cwd': str(self.workdir(name)),
-             'executionWorkspace': {'kind': 'worktree', 'access': 'write'}}
+            {'title': name, 'task': name, 'cwd': str(self.workdir(name)),
+             'workspace': {'kind': 'worktree', 'access': 'write'}}
             for name in ('boundary-helper', 'running-helper')
         ])
         boundary_id, running_id = [child['taskId'] for child in approved['children']]
@@ -380,7 +380,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
             running_id: ('cancelled', True),
         })
         stopped = board.call('workflow_get', {'runId': parent['runId']})
-        self.assertEqual(stopped['revision'], before['revision'])
+        self.assertEqual(stopped['task']['revision'], before['task']['revision'])
         self.assertEqual(stopped['activeRequest'], before['activeRequest'])
         self.finish_turn(board, running, runner_status='cancelled', seal=False)
         settled = board.call('workflow_get', {'runId': parent['runId']})

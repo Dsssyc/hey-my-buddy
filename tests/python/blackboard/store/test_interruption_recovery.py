@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 from admission import admit_execution
 from support import BoardTestCase, InProcessBoard
+from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy.blackboard.tasks import interruption
 from hey_my_buddy.blackboard.service.execution_scheduler import _ExecutionObservation
 from hey_my_buddy.errors import BoardError
@@ -691,34 +692,6 @@ class InterruptionRecoveryTests(BoardTestCase):
                                            'shutdownConfirmed': True})
         self.assertEqual(refused.exception.code, 'ATTEMPT_FINISHED')
 
-    def test_release_reason_belongs_to_the_selected_attempt(self):
-        board, client, task, _, first = self.claimed(identity=False)
-        self.assertNotIn('releaseReason', first)
-        self.assertIsNone(client.get(runId=task['runId'])['selectedAttempt']['releaseReason'])
-
-        board.store.release_execution(first['attemptId'], reason='execution-process-not-created')
-        released = client.get(runId=task['runId'])['selectedAttempt']
-        self.assertEqual(released['attemptId'], first['attemptId'])
-        self.assertEqual(released['releaseReason'],
-                         {'code': 'execution-process-not-created', 'params': {}})
-
-        client.retry(runId=task['runId'])
-        second = admit_execution(client, 'n' * 32)['claim']['attempt']
-        self.assertNotIn('releaseReason', second)
-        current = client.get(runId=task['runId'])['selectedAttempt']
-        self.assertEqual(current['attemptId'], second['attemptId'])
-        self.assertIsNone(current['releaseReason'])
-
-        board.store.release_execution(second['attemptId'], reason='service-stopped-before-launch')
-        self.assertEqual(client.get(runId=task['runId'])['selectedAttempt']['releaseReason'],
-                         {'code': 'service-stopped-before-launch', 'params': {}})
-        with board.store.db.read() as connection:
-            plan = connection.execute(
-                "EXPLAIN QUERY PLAN SELECT payload_json FROM events "
-                "WHERE task_id=? AND attempt_id=? AND kind='attempt.released'",
-                (task['runId'], second['attemptId']),
-            ).fetchall()
-        self.assertTrue(any('events_task_idx' in row['detail'] for row in plan), plan)
 
     def test_service_stop_between_admission_and_creation_releases_as_cancelled(self):
         board, client, task, _, actor = self.claimed(identity=False)
@@ -783,3 +756,38 @@ class InterruptionRecoveryTests(BoardTestCase):
         final = client.get(runId=task['runId'])
         self.assertEqual(final['terminationReason'], 'service-stop')
         self.assertEqual(final['selectedAttempt']['shutdownEvidence']['detail']['terminationReason'], 'service-stop')
+
+
+class ReleaseReasonContinuationTests(WorkflowTestCase):
+    def test_release_reason_belongs_to_the_selected_attempt_after_continuation(self):
+        board = self.board()
+        submitted = self.submit(board)
+        first = self.claim(board, run_id=submitted['runId'])['claim']['attempt']
+        self.assertIsNone(board.call('task_get', {'runId': submitted['runId']})['task']['selectedAttempt']['releaseReason'])
+
+        board.store.release_execution(first['attemptId'], reason='execution-process-not-created')
+        released = board.call('task_get', {'runId': submitted['runId']})['task']['selectedAttempt']
+        self.assertEqual(released['attemptId'], first['attemptId'])
+        self.assertEqual(released['releaseReason'],
+                         {'code': 'execution-process-not-created', 'params': {}})
+
+        view = board.call('workflow_get', {'runId': submitted['runId']})
+        board.call('workflow_continue', {'runId': submitted['runId'],
+                                         'turnId': view['currentTurn']['turnId'],
+                                         'input': 'Retry after the process was never created'})
+        second = self.claim(board, claim_request_id='second-admission', run_id=submitted['runId'])['claim']['attempt']
+        self.assertNotEqual(second['attemptId'], first['attemptId'])
+        current = board.call('task_get', {'runId': submitted['runId']})['task']['selectedAttempt']
+        self.assertEqual(current['attemptId'], second['attemptId'])
+        self.assertIsNone(current['releaseReason'])
+
+        board.store.release_execution(second['attemptId'], reason='service-stopped-before-launch')
+        self.assertEqual(board.call('task_get', {'runId': submitted['runId']})['task']['selectedAttempt']['releaseReason'],
+                         {'code': 'service-stopped-before-launch', 'params': {}})
+        with board.store.db.read() as connection:
+            plan = connection.execute(
+                "EXPLAIN QUERY PLAN SELECT payload_json FROM events "
+                "WHERE task_id=? AND attempt_id=? AND kind='attempt.released'",
+                (submitted['runId'], second['attemptId']),
+            ).fetchall()
+        self.assertTrue(any('events_task_idx' in row['detail'] for row in plan), plan)

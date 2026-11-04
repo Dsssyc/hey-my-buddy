@@ -18,27 +18,29 @@ class TimelineConclusionTests(WorkflowTestCase):
         group = None
         for status in ("failed", "cancelled", "delivered"):
             submitted = self.submit(board, request_id=f"conclusion-{status}", title=status, kind="worktree",
-                                    **({"macroTaskId": group} if group else {"macroTask": {"title": "Conclusion facts", 'goal': "Conclusion facts"}}))
+                                    **({"macroTaskId": group} if group else {"create_macro": {"title": "Conclusion facts", 'goal': "Conclusion facts"}}))
             group = submitted["macroTaskId"]
             claim = self.claim(board, run_id=submitted["runId"])
             if status == "cancelled":
-                board.call("workflow_cancel", {"runId": submitted["runId"],
-                                                "commandId": "cancel-conclusion", **self.control(submitted)})
+                board.call("workflow_cancel", {"runId": submitted["runId"]})
             self.finish_turn(board, claim, runner_status="ok" if status == "delivered" else status,
                              exit_code=1 if status == "failed" else 0, seal=status == "delivered")
             timeline = board.call("macro_task_timeline", {"macroTaskId": group})
             row = next(row for row in timeline["rows"] if row["runId"] == submitted["runId"])
             self.assertIsNone(row["conclusionStatus"])
+            current = board.call("workflow_get", {"runId": submitted["runId"]})
             concluded = board.call("workflow_conclude", {"runId": submitted["runId"],
-                                   "note": f"Host closes {status}", **self.control(submitted)})
-            self.assertEqual(status, concluded["hostConclusion"]["executionStatus"])
+                                   "note": f"Host closes {status}",
+                                   **({"artifactId": current["finalArtifactId"]} if status == "delivered" else {})})
+            conclusion = board.call("workflow_get", {"runId": submitted["runId"]})["hostConclusion"]
+            self.assertEqual(status, conclusion["executionStatus"])
             timeline = board.call("macro_task_timeline", {"macroTaskId": group})
             row = next(row for row in timeline["rows"] if row["runId"] == submitted["runId"])
             self.assertEqual(("concluded", "concluded", status),
                              (row["state"], row["status"], row["conclusionStatus"]))
             event = next(event for event in timeline["events"]
                          if event["runId"] == row["runId"] and event["kind"] == "conclude")
-            self.assertEqual(concluded["hostConclusion"]["attemptId"], event["attemptId"])
+            self.assertEqual(conclusion["attemptId"], event["attemptId"])
             self.assertNotIn("conclusionStatus", event)
             with board.store.db.read() as connection:
                 stored = connection.execute("SELECT execution_status FROM workflow_host_conclusions WHERE run_id=?",

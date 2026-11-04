@@ -27,7 +27,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
     def test_sole_candidate_is_selected_by_the_program_without_a_router_call(self):
         board = self.board()
         self.seed(board)
-        request = board.call("selection_request", {
+        request = board.store.decisions.request_select({
             "requestId": "pick-sole", "task": "needs image input",
             "requiredCapabilities": ["input:image"],
         })
@@ -64,7 +64,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
     def test_sole_candidate_does_not_depend_on_router_availability(self):
         board = self.board()
         self.seed(board, decision_buddy=None)
-        sole = board.call("selection_request", {
+        sole = board.store.decisions.request_select({
             "requestId": "pick-sole-no-router", "task": "needs image input",
             "requiredCapabilities": ["input:image"],
         })
@@ -118,8 +118,8 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.seed(board)
         params = {"requestId": "pick-sole-replay", "task": "needs image input",
                   "requiredCapabilities": ["input:image"]}
-        first = board.call("selection_request", params)
-        replay = board.call("selection_request", params)
+        first = board.store.decisions.request_select(params)
+        replay = board.store.decisions.request_select(params)
         self.assertTrue(replay["duplicate"])
         self.assertEqual(replay["decisionId"], first["decisionId"])
         self.assertEqual(replay["status"], "completed")
@@ -197,19 +197,14 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         DecisionTestCase.use_helper(self)
 
     def routed(self, board, *, request_id="route-sole", task="Produce a verified implementation", **constraints):
-        response = board.call("workflow_submit", {
-            "requestId": request_id, "hostId": "host-1", "submissionToken": "submission-secret-1",
-            "task": task, "cwd": str(self.workdir(request_id)),
-            "executionWorkspace": {"kind": "existing", "access": "write"}, **constraints,
-        })
-        if response.get("control"):
-            self.controls[response["runId"]] = response["control"]
-        return response
+        return self.submit(board, request_id=request_id, task=task,
+                           cwd=str(self.workdir(request_id)), kind="existing", access="write",
+                           buddy="route", **constraints)
 
     def test_sole_candidate_route_completes_without_a_router_attempt(self):
         board = self.board()
-        self.seed(board)
-        submitted = self.routed(board, requiredCapabilities=["effort:high"])
+        self.seed(board, preferences=[{"buddyId": BUDDY_ID, "mode": "exclude", "note": "fixture filter"}])
+        submitted = self.routed(board)
         routing = submitted["routing"]
         self.assertEqual(routing["status"], "completed")
         self.assertEqual(routing["source"], "single-candidate")
@@ -217,7 +212,10 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertIsNone(routing["taskId"])
         self.assertIsNone(routing["attemptId"])
         self.assertEqual(routing["routingBasis"],
-                         {"candidateCount": 1, "excludedBuddies": [],
+                         {"candidateCount": 1, "excludedBuddies": [{"buddyId": BUDDY_ID,
+                          "harness": CATALOG_BUDDY["harness"], "provider": CATALOG_BUDDY["provider"],
+                          "model": CATALOG_BUDDY["model"], "effort": CATALOG_BUDDY["effort"],
+                          "note": "fixture filter"}],
                           "coolingBuddies": [], "overloadedModelServices": []})
         self.assertEqual(submitted["buddy"],
                          {key: SECOND_BUDDY[key] for key in BUDDY})
@@ -233,7 +231,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertEqual(resolved["source"], "single-candidate")
         self.assertEqual(resolved["buddy"], {key: SECOND_BUDDY[key] for key in BUDDY})
         # Replaying the same submission is a duplicate, not a second route.
-        self.assertTrue(self.routed(board, requiredCapabilities=["effort:high"])["duplicate"])
+        self.assertTrue(self.routed(board)["alreadyExists"])
         # The run proceeds into ordinary execution under the adopted buddy.
         # The coding worker declares the capability that narrowed the candidates.
         pass  # Admission is owned by the service.
@@ -244,11 +242,11 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
 
     def test_large_task_uses_the_sole_candidate_without_a_router_input(self):
         board = self.board()
-        self.seed(board, decision_buddy=None)
+        self.seed(board, decision_buddy=None, preferences=[{"buddyId": BUDDY_ID, "mode": "exclude", "note": "fixture filter"}])
         task = "完整工作说明" * 3000
-        submitted = self.routed(board, task=task, requiredCapabilities=["effort:high"])
+        submitted = self.routed(board, task=task)
         self.assertEqual(submitted["routing"]["status"], "completed")
-        self.assertEqual(submitted["routing"]["requiredCapabilities"], ["effort:high", "permission:write"])
+        self.assertEqual(submitted["routing"]["requiredCapabilities"], ["permission:write"])
         self.assertEqual(submitted["routing"]["constraints"], {})
         decision = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"]})["decision"]
         self.assertIsNone(decision["runId"])
@@ -261,71 +259,50 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
             micro_task = json.loads(connection.execute("SELECT spec_json FROM tasks").fetchone()[0])
             self.assertEqual(micro_task["task"], task)
 
-    def test_unlocked_reroute_freezes_its_own_candidate_basis(self):
-        # The retired scenario narrowed the first route with a partial `effort`
-        # constraint and watched an unlocked reroute drop it; a partial tuple is
-        # rejected input now, so the surviving essence is per-route freezing: a
-        # micro task that named no buddy routes with empty constraints, and a later
-        # table change never rewrites the frozen basis of the earlier route.
+    def test_each_route_freezes_its_own_candidate_basis(self):
         board = self.board()
-        self.seed(board)
+        self.seed(board,preferences=[{"buddyId":BUDDY_ID,"mode":"exclude","note":"First route has one candidate"}])
         submitted = self.routed(board)
-        self.assertEqual(submitted["routing"]["status"], "queued")
-        self.assertEqual(submitted["routing"]["constraints"], {})
-        # Settle the first Router answer so the reroute can replace the route.
-        pass  # Admission is owned by the service.
-        claim = self.claim(board, "router", run_id=submitted["routing"]["taskId"], claim_request_id="router-claim")["claim"]
-        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim, state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': claim['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': BUDDY_ID, "note": 'fixture selection', 'evidence': []}}})
-        settled = board.call("workflow_get", {"runId": submitted["runId"]})
-        continued = self.continue_run(board, settled, command_id="reroute-unlocked", reroute=True)
-        board.store.workflow.prepare_continuation_workspace({"runId": continued["runId"]})
-        self.publish_user_patch(
-            board, request_id="exclude-one", command_id="exclude-one",
-            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "note": "narrowed later"}])
-        routed = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertEqual(routed["routing"]["status"], "queued")
-        self.assertEqual(routed["routing"]["constraints"], {})
-        original = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"]})["decision"]
-        self.assertEqual(original["constraints"], {})
-        self.assertEqual(original["routingBasis"]["candidateCount"], 2)
-        history = board.call("workflow_get", {
-            "runId": submitted["runId"], "routingHistory": {"limit": 10}})["routingHistory"]
-        self.assertEqual(len(history["entries"]), 2)
-        self.assertEqual(history["entries"][1]["decisionId"], submitted["routing"]["decisionId"])
+        first_id = submitted["routing"]["decisionId"]
+        self.assertEqual(submitted["routing"]["routingBasis"]["candidateCount"],1)
+        self.finish_turn(board,self.claim(board,run_id=submitted["runId"]))
+        self.publish_user_patch(board,request_id="restore-candidate",command_id="restore-candidate",
+                                preferenceChanges=[{"buddyId":BUDDY_ID,"mode":None}])
+        current = board.call("workflow_get",{"runId":submitted["runId"]})
+        self.continue_run(board,current,buddy="route",note="Route the next fixed turn with current settings")
+        board.store.workflow.prepare_continuation_workspace({"runId":submitted["runId"]})
+        routed = board.call("workflow_get",{"runId":submitted["runId"]})
+        self.assertEqual(routed["routing"]["routingBasis"]["candidateCount"],2)
+        second_id = routed["routing"]["decisionId"]
+        self.publish_user_patch(board,request_id="later-change",command_id="later-change",
+                                preferenceChanges=[{"buddyId":SECOND_BUDDY_ID,"mode":"exclude","note":"Changed after capture"}])
+        first = board.call("selection_get",{"decisionId":first_id})["decision"]
+        second = board.call("selection_get",{"decisionId":second_id})["decision"]
+        self.assertEqual(first["routingBasis"]["candidateCount"],1)
+        self.assertEqual(second["routingBasis"]["candidateCount"],2)
+        history = board.call("workflow_get",{"runId":submitted["runId"],"routingHistory":{"limit":10}})["routingHistory"]
+        self.assertEqual([item["decisionId"] for item in history["entries"]],[second_id,first_id])
 
-    def test_reroute_after_a_preference_change_reaches_the_host_boundary(self):
+    def test_route_after_user_excludes_every_candidate_stops_at_boundary(self):
         board = self.board()
-        self.seed(board)
-        submitted = self.routed(board, requiredCapabilities=["effort:high"])
-        self.assertEqual(submitted["routing"]["status"], "completed")
-        # The user now excludes the only effort-high candidate. The locked
-        # constraint survives the reroute, so it finds no legal candidate and
-        # stops at the Host boundary with the frozen basis naming the exclusion.
-        self.publish_user_patch(
-            board, request_id="exclude-high", command_id="exclude-high",
-            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "note": "no longer wanted"}])
-        current = board.call("workflow_get", {"runId": submitted["runId"]})
-        pending = self.continue_run(board, current, command_id="reroute-after-change", reroute=True)
-        board.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
-        continued = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertEqual(continued["routing"]["status"], "needs-host")
-        # The reroute stopped at the Host boundary without a Router call, so its
-        # recorded source names the empty candidate set instead of a model choice.
-        self.assertEqual(continued["routing"]["source"], "no-candidate")
-        self.assertEqual(continued["routing"]["reason"]["code"], "no-legal-candidate")
-        basis = continued["routing"]["routingBasis"]
-        self.assertEqual(basis["candidateCount"], 0)
-        self.assertEqual(len(basis["excludedBuddies"]), 1)
-        self.assertEqual(basis["excludedBuddies"][0]["buddyId"], SECOND_BUDDY_ID)
-        # The earlier program selection stays completed, and the history keeps
-        # each route's own recorded source.
-        old = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"]})["decision"]
-        self.assertEqual(old["status"], "completed")
-        history = board.call("workflow_get", {
-            "runId": submitted["runId"], "routingHistory": {"limit": 10}})["routingHistory"]
-        self.assertEqual([entry["source"] for entry in history["entries"]],
-                         ["no-candidate", "single-candidate"])
-        self.assertEqual(history["entries"][1]["decisionId"], submitted["routing"]["decisionId"])
+        self.seed(board,preferences=[{"buddyId":BUDDY_ID,"mode":"exclude","note":"First exclusion"}])
+        submitted = self.routed(board)
+        first_id = submitted["routing"]["decisionId"]
+        self.finish_turn(board,self.claim(board,run_id=submitted["runId"]))
+        self.publish_user_patch(board,request_id="exclude-every-candidate",command_id="exclude-every-candidate",
+                                preferenceChanges=[{"buddyId":SECOND_BUDDY_ID,"mode":"exclude","note":"Second exclusion"}])
+        current = board.call("workflow_get",{"runId":submitted["runId"]})
+        self.continue_run(board,current,buddy="route",note="Use the user's current candidate exclusions")
+        board.store.workflow.prepare_continuation_workspace({"runId":submitted["runId"]})
+        boundary = board.call("workflow_get",{"runId":submitted["runId"]})
+        self.assertEqual(boundary["routing"]["status"],"needs-host")
+        self.assertEqual(boundary["routing"]["source"],"no-candidate")
+        self.assertEqual(boundary["routing"]["routingBasis"]["candidateCount"],0)
+        self.assertEqual({item["buddyId"] for item in boundary["routing"]["routingBasis"]["excludedBuddies"]},
+                         {BUDDY_ID,SECOND_BUDDY_ID})
+        self.assertEqual(board.call("selection_get",{"decisionId":first_id})["decision"]["status"],"completed")
+        history = board.call("workflow_get",{"runId":submitted["runId"],"routingHistory":{"limit":10}})["routingHistory"]
+        self.assertEqual([item["source"] for item in history["entries"]],["no-candidate","single-candidate"])
 
     def test_multi_candidate_route_keeps_the_router_attempt_path(self):
         board = self.board()

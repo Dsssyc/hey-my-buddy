@@ -1,6 +1,7 @@
 import uuid
 """Human settings patches and upgrade-required reads on private boards."""
 from unittest.mock import patch
+from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
@@ -22,10 +23,10 @@ class SingleRouterConfigurationTests(BoardTestCase):
         return self.board_.console_call('user_policy_publish', params)
 
     def settings(self):
-        return self.board_.call('console_snapshot', {})['configuration']
+        return console_snapshot_projection(self.board_.service)[0]['configuration']
 
     def test_fresh_defaults_have_an_empty_router_list(self):
-        snapshot = self.board_.call('console_snapshot', {})
+        snapshot = console_snapshot_projection(self.board_.service)[0]
         settings = snapshot['configuration']
         self.assertEqual(settings['routerBuddyIds'], [])
         self.assertEqual(settings['defaultRoutingMode'], 'fast')

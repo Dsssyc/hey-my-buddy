@@ -680,8 +680,8 @@ class RealDaemonControlTests(unittest.TestCase):
         return reply["task"]["runId"]
 
     def _admission(self) -> dict:
-        return call_board("wait_capacity", {}, endpoint=self.endpoint,
-                          state_dir=self.state, resource="wait")
+        return call_board("health", {}, endpoint=self.endpoint,
+                          state_dir=self.state)["waitAdmission"]
 
     def _await_admitted(self, expected: int) -> None:
         deadline = time.monotonic() + 10

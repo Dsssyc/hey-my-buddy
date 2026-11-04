@@ -20,6 +20,7 @@ from support import BoardTestCase, enable_fixture_buddy
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.cli.main import _creation_key
 
 NONCE = "n" * 16
 BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
@@ -49,13 +50,24 @@ class ClaimStashTestCase(BoardTestCase):
         workflow_module._workspace_module = self._previous_workspace
 
     def submit(self, board, *, request_id, cwd, **extra):
-        enable_fixture_buddy(board.store, {**BUDDY, **extra})
-        return board.call("workflow_submit", {
-            **BUDDY, "requestId": request_id, "hostId": "host-1", "task": "claim stash task",
-            "cwd": str(cwd), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]},
-            **extra,
+        selected = {**BUDDY, **{key: extra[key] for key in BUDDY if key in extra}}
+        enable_fixture_buddy(board.store, selected)
+        cwd = str(cwd)
+        project_id = self.workspace.ensure_project_id(self.workspace.repository_at(cwd, allow_parent=True))
+        title = request_id
+        task = 'claim stash task'
+        response = board.call("workflow_submit", {
+            "cwd": cwd, "title": title, "task": task, "macroTaskId": "standalone",
+            "creationKey": _creation_key(['adr032-submit-v1', 'project:' + project_id, title, task]),
+            "buddy": ':'.join(selected.values()), "checkout": "existing", "access": "write",
+            "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
         })
+        if required := extra.get("requiredCapabilities"):
+            # Model an internal scheduler constraint after Host admission.
+            with board.store.db.write() as connection:
+                connection.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.requiredCapabilities',json(?))"
+                                   " WHERE task_id=?", (json.dumps(required), response["runId"]))
+        return response
 
     def claim(self, board, *, claim_request_id="c1", run_id=None):
         params = {'nonce': NONCE}
@@ -258,9 +270,8 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
                 view = board.call("workflow_get", {"runId": target["runId"]})
                 self.assertEqual(view["state"], "delivered")
                 board.call("workflow_continue", {
-                    "runId": target["runId"], "commandId": "host-requeue", "expectedRevision": view["revision"],
+                    "runId": target["runId"], "artifactId": view["finalArtifactId"],
                     'note': "explicit private rejection and retry", "input": "repeat the fixture work",
-                    **target["control"],
                 })
                 coordinator.prepare_continuation_workspace({"runId": target["runId"]})
                 coordinator.prepare_dispatch({"runId": target["runId"]})

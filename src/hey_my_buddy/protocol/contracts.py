@@ -14,7 +14,7 @@ control capacity that cancel, renew and result commits need.
 import c_two as cc
 
 # Patch releases share the software's major/minor contract (major.minor.0).
-CONTRACT_VERSION = "0.60.0"
+CONTRACT_VERSION = "0.61.0"
 CONTROL_NAME = "hey-my-buddy-control"
 WAIT_NAME = "hey-my-buddy-wait"
 
@@ -52,8 +52,6 @@ class BuddyControl:
     def console(self, request_json: str) -> str:
         ...
 
-    def console_snapshot(self, request_json: str) -> str:
-        ...
 
     def reminder_settings_set(self, request_json: str) -> str:
         ...
@@ -95,14 +93,8 @@ class BuddyControl:
     def task_cancel(self, request_json: str) -> str:
         ...
 
-    def task_retry(self, request_json: str) -> str:
-        ...
 
-    def task_acknowledge(self, request_json: str) -> str:
-        ...
 
-    def task_wait(self, request_json: str) -> str:
-        ...
 
     # -- executions ---------------------------------------------------------
     def execution_progress(self, request_json: str) -> str:
@@ -137,8 +129,6 @@ class BuddyControl:
         raise NotImplementedError
 
     # -- bounded decisions --------------------------------------------------
-    def selection_request(self, request_json: str) -> str:
-        ...
 
     def selection_get(self, request_json: str) -> str:
         ...
@@ -153,20 +143,22 @@ class BuddyControl:
         ...
 
     # -- micro-task workflow --------------------------------------------------
+    def workflow_create(self, request_json: str) -> str:
+        ...
+
+    def workflow_amend(self, request_json: str) -> str:
+        ...
+
     def workflow_submit(self, request_json: str) -> str:
         ...
 
     def workflow_get(self, request_json: str) -> str:
         ...
 
-    def workflow_decide(self, request_json: str) -> str:
-        ...
 
     def workflow_continue(self, request_json: str) -> str:
         ...
 
-    def workflow_takeover(self, request_json: str) -> str:
-        ...
 
     def workflow_cancel(self, request_json: str) -> str:
         ...
@@ -177,17 +169,9 @@ class BuddyControl:
     def workflow_conclude(self, request_json: str) -> str:
         ...
 
-    def workflow_reclaim(self, request_json: str) -> str:
-        ...
 
-    def workflow_goal_amend(self, request_json: str) -> str:
-        ...
 
-    def workflow_scope_amend(self, request_json: str) -> str:
-        ...
 
-    def workflow_workspace_resolve(self, request_json: str) -> str:
-        ...
 
     def workflow_suggest(self, request_json: str) -> str:
         ...
@@ -222,8 +206,6 @@ class BuddyWait:
     def task_wait(self, request_json: str) -> str:
         ...
 
-    def wait_capacity(self, request_json: str) -> str:
-        ...
 
 
 @cc.crm(namespace="hey.my.buddy", version=CONTRACT_VERSION)

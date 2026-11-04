@@ -22,8 +22,8 @@ class WorkflowBoundaryTests(WorkflowTestCase):
         return board, root, [child["taskId"] for child in approved["children"]]
 
     def helper_spec(self, request_id):
-        return {"requestId": request_id, "task": "bounded helper", "cwd": str(self.workdir()),
-                "executionWorkspace": {"kind": "worktree", "access": "write"}}
+        return {"title": request_id, "task": "bounded helper", "cwd": str(self.workdir()),
+                "workspace": {"kind": "worktree", "access": "write"}}
 
     def view(self, board, run_id):
         return board.call("workflow_get", {"runId": run_id})
@@ -35,7 +35,7 @@ class WorkflowBoundaryTests(WorkflowTestCase):
 
     def answer(self, board, root_id, command, **extra):
         view = self.view(board, root_id)
-        return self.decide(board, view, view["activeRequest"]["requestId"], command_id=command,
+        return self.decide(board, view, view["activeRequest"]["requestId"],
                            note="Host supplied the requested direction", **extra)
 
     def test_two_attention_helpers_remain_visible_and_parent_continues_once(self):
@@ -82,11 +82,11 @@ class WorkflowBoundaryTests(WorkflowTestCase):
         self.assertEqual(boundary["state"], "awaiting-host")
         self.assertEqual(boundary["activeRequest"]["origin"]["runId"], leaf)
         self.assertEqual(boundary["activeRequest"]["proxy"]["runId"], middle)
-        middle_view = self.view(board, middle)
+        foreign = self.submit(board, request_id="foreign", cwd=str(self.workdir("foreign")), checkout="worktree")
         with self.assertRaises(BoardError) as wrong_run:
-            board.call("workflow_decide", {"runId": middle, "requestId": middle_view["activeRequest"]["requestId"],
-                       "expectedRevision": middle_view["revision"], "commandId": "wrong-control", "decision": "approve",
-                       **self.control(root)})
+            board.call("workflow_continue", {"runId": root["runId"],
+                       "targetRunId": foreign["runId"],
+                       "requestId": boundary["activeRequest"]["requestId"], "decision": "approve"})
         self.assertEqual(wrong_run.exception.code, "UNAUTHORIZED")
         self.answer(board, root["runId"], "answer-leaf")
         self.assertEqual(self.view(board, leaf)["state"], "executing")
@@ -114,9 +114,9 @@ class WorkflowBoundaryTests(WorkflowTestCase):
         leaf = self.view(board, middle)["children"][0]["taskId"]
         self.yield_helper(board, leaf, "w2", "leaf-yield")
         waiting = self.view(board, root["runId"])
-        board.call("workflow_cancel", {"runId": root["runId"], **self.control(root)})
+        board.call("workflow_cancel", {"runId": root["runId"]})
         with self.assertRaises(BoardError):
-            self.decide(board, waiting, waiting["activeRequest"]["requestId"], command_id="late-answer")
+            self.decide(board, waiting, waiting["activeRequest"]["requestId"])
         for run_id in (root["runId"], middle, leaf):
             view = self.view(board, run_id)
             self.assertEqual(view["state"], "cancelled")

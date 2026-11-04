@@ -64,9 +64,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         private_environment(self)
         self.catalog_fixture()
         self.repo = self.directory / "repo"
+        self.submitted_manifests = {}
         shutil.copytree(self._repository_template, self.repo)
         self.git("update-index", "--refresh")
-        self.controls: dict[str, dict] = {}
         self.worker = "w-life"
         self._previous_workspace = workflow_module._workspace_module
         workflow_module._workspace_module = workspace_module
@@ -79,8 +79,31 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def register(self, board, worker_id=None):
         return None
 
-    def control(self, view):
-        return dict(self.controls[view["runId"]])
+    def submit_run(self, board, params):
+        from hey_my_buddy.cli.main import _creation_key
+        project_id=workspace_module.ensure_project_id(workspace_module.repository_at(params["cwd"],allow_parent=True))
+        params={"macroTaskId":"standalone", "buddy":":".join(BUDDY.values()), "inputs":[], "expectedSeconds":1800, **params}
+        namespace = ("project:" + project_id if params["macroTaskId"] == "standalone"
+                     else "macro:" + params["macroTaskId"])
+        params["creationKey"]=_creation_key(["adr032-submit-v1",namespace,params["title"],params["task"]])
+        reply=board.call("workflow_submit",params)
+        return {**self.view(board,reply["runId"]),**reply}
+
+    def continue_run(self, board, params):
+        target=self.view(board,params.get("targetRunId",params["runId"]))
+        if not any(key in params for key in ("requestId","artifactId","turnId")):
+            active=target["activeRequest"]
+            if active is not None:
+                root=self.view(board,params["runId"])
+                params["requestId"]=root["activeRequest"]["requestId"]
+            elif target["finalArtifactId"] is not None:
+                params["artifactId"]=target["finalArtifactId"]
+            else:
+                turn_id=target["currentTurn"]["turnId"]
+                fixed=next((row for row in target["artifacts"] if row["turnId"]==turn_id and row["kind"] in ("output","resolved-output","partial-output")),None)
+                params["artifactId" if fixed else "turnId"]=fixed["artifactId"] if fixed else turn_id
+        reply=board.call("workflow_continue",params)
+        return {**self.view(board,params["runId"]),**reply}
 
     def claim(self, board, run_id, *, request_id="claim-1", nonce="n" * 16):
         return admit_board(board, {'workerId': self.worker, 'claimRequestId': request_id, 'nonce': nonce, 'runId': run_id})
@@ -107,13 +130,14 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def view(self, board, run_id, **extra):
         return board.call("workflow_get", {"runId": run_id, **extra})
 
+    def artifact_record(self, board, artifact_id):
+        from hey_my_buddy.protocol.workspace_manifest import artifact_manifest
+        with board.store.db.read() as connection:
+            row=connection.execute("SELECT * FROM workflow_artifacts WHERE artifact_id=?",(artifact_id,)).fetchone()
+        return artifact_manifest(board.directory,row)
+
     def run_worktree(self, board, *, request_id="lifecycle-1", output="sealed output\n", disposition="completed"):
-        submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": request_id, "hostId": "host-1", "task": "isolated worktree task",
-            "cwd": str(self.repo), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
-        })
-        self.controls[submitted["runId"]] = submitted["control"]
+        submitted = self.submit_run(board, {'task': "isolated worktree task", 'cwd': str(self.repo), 'title': request_id, 'checkout': "worktree", 'access': "write", 'writeScope': ["."]})
         claimed = self.claim(board, submitted["runId"], request_id=f"{request_id}-claim")
         manifest = resolve_manifest(board.directory, claimed["claim"]["turn"]["input"]["executionWorkspace"])
         checkout = Path(manifest["path"])
@@ -133,7 +157,6 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         """One-step acceptance: the service derives and verifies the integration itself."""
         params = {
             "runId": view["runId"], "artifactId": artifact["artifactId"], "note": note,
-            **self.control(view),
         }
         if not_required:
             params["notRequired"] = "the artifact needs no repository target" if reason is None else reason
@@ -144,13 +167,14 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             if target.get("before"):
                 params["beforeCommit"] = target["before"]
         params.update(extra)
-        return board.call("workflow_accept", params)
+        reply = board.call("workflow_accept", params)
+        return {**self.view(board, view["runId"]), **reply}
 
     def reclaim(self, board, view, **extra):
-        params = {"runId": view["runId"], **self.control(view)}
+        params = {"runId": view["runId"]}
         params.update(extra)
         try:
-            return board.call("workflow_reclaim", params)
+            return board.store.workflow._reclaim_checkout(run_id=params.get("targetRunId", params["runId"]), **({"cwd": params["cwd"]} if "cwd" in params else {}))
         except BoardError as error:
             error.add_note(repr(error.details))
             raise
@@ -169,11 +193,6 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         after = git(target, "rev-parse", "HEAD").strip()
         return {"path": target, "before": before, "after": after}
 
-    def acknowledge(self, board, view, artifact, *, verdict="accepted", **extra):
-        """Compatibility shim: every acknowledgement is one accept under the current contract."""
-        assert verdict == "accepted"
-        return self.accept(board, view, artifact, **extra)
-
     def rename_lifecycle(self, *, long_paths=False, historical=False):
         file_count = 3000 if long_paths else 1000
         prefix = Path(*(["x" * 220] * 3)) if long_paths else Path()
@@ -188,13 +207,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.git("commit", "-qm", "rename input")
         original = self.git("rev-parse", "HEAD").strip()
         board = self.board()
-        submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": "thousand-renames", "hostId": "host-1", "task": "rename files",
-            "cwd": str(self.repo), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
-        })
+        submitted = self.submit_run(board, {'task': "rename files", 'cwd': str(self.repo), 'title': "thousand-renames", 'checkout': "worktree", 'access': "write", 'writeScope': ["."]})
         run_id = submitted["runId"]
-        self.controls[run_id] = submitted["control"]
         claimed = self.claim(board, run_id)
         manifest = resolve_manifest(board.directory, claimed["claim"]["turn"]["input"]["executionWorkspace"])
         checkout = Path(manifest["path"])
@@ -262,7 +276,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
             accepted = self.accept(board, view, artifact, target=target)
         self.assertEqual(accepted["state"], "accepted")
-        verification = accepted["integration"]["verification"]
+        verification = accepted["integrations"][0]["verification"]
         self.assertEqual(verification["matchingPaths"], [path[:500] for path in expected[:32]])
         self.assertEqual(verification["matchingPathsCount"], len(expected))
         self.assertTrue(verification["matchingPathsTruncated"])
@@ -271,9 +285,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertLess(len(canonical_json(accepted).encode()), 8 * 1024 * 1024)
         with board.store.db.read() as connection:
             stored = connection.execute("SELECT verification_json FROM workflow_integrations WHERE integration_id=?",
-                                        (accepted["integration"]["integrationId"],)).fetchone()[0]
+                                        (accepted["integrations"][0]["integrationId"],)).fetchone()[0]
         self.assertEqual(set(json.loads(stored)),
-                         {"matchingPaths", "differingPaths", "missingPaths", "hostPaths", "note"})
+                         {"matchingPaths", "differingPaths", "missingPaths", "hostPaths", "note", "requested"})
         self.assertEqual(json.loads(stored)["matchingPaths"], expected)
         self.assertNotIn("verified", verification)
         self.assertNotIn("summary", verification)
@@ -317,10 +331,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         )
         run_id = submitted["runId"]
         self.assertEqual(yielded["state"], "awaiting-host")
-        continued = board.call("workflow_continue", {
-            "runId": run_id, "commandId": f"{request_id}-continue", "expectedRevision": yielded["revision"],
-            "input": "finish the micro task", **self.control(yielded),
-        })
+        continued = self.continue_run(board, {'runId': run_id, 'input': "finish the micro task"})
         self.assertEqual(continued["state"], "executing")
         second = self.claim(board, run_id, request_id=f"{request_id}-claim-2", nonce="q" * 16)
         self.assertIsNotNone(second["claim"], second)
@@ -349,14 +360,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def failed_evidence_worktree(self, *, import_failure=False):
         board = self.board()
         self.register(board)
-        submitted = board.call('workflow_submit', {
-            **BUDDY, 'requestId': 'failed-evidence', 'hostId': 'host-1',
-            'task': 'retry after an invalid native result', 'cwd': str(self.repo),
-            'submissionToken': 't' * 32,
-            'executionWorkspace': {'kind': 'worktree', 'access': 'write', 'writeScope': ['.']},
-        })
+        submitted = self.submit_run(board, {'task': 'retry after an invalid native result', 'cwd': str(self.repo), 'title': 'failed-evidence', 'checkout': 'worktree', 'access': 'write', 'writeScope': ['.']})
         run_id = submitted['runId']
-        self.controls[run_id] = submitted['control']
         first = self.claim(board, run_id, request_id='failed-evidence-first')['claim']
         attempt = first['attempt']
         manifest = resolve_manifest(board.directory, first['turn']['input']['executionWorkspace'])
@@ -398,10 +403,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         board, run_id, attempt, checkout, failed_root, refs, native, recorded = self.failed_evidence_worktree(
             import_failure=import_failure)
         failed = self.view(board, run_id)
-        board.call('workflow_continue', {
-            'runId': run_id, 'commandId': 'retry-failed-evidence', 'expectedRevision': failed['revision'],
-            'input': 'finish with a valid result', **self.control(failed),
-        })
+        self.continue_run(board, {'runId': run_id, 'input': 'finish with a valid result'})
         second = self.claim(board, run_id, request_id='failed-evidence-second', nonce='q' * 16)
         second_id = second['claim']['attempt']['attemptId']
         second_manifest = resolve_manifest(board.directory, second['claim']['turn']['input']['executionWorkspace'])
@@ -440,8 +442,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def root_with_helper_worktree(self, *, request_id="helper-target"):
         """A root worktree run plus a helper that owns a separate isolated worktree.
 
-        Only the root control capability is kept, exactly like the real Host: the
-        helper's own control verifier is never issued to any caller.
+        Helper mutations address the root run and its target helper explicitly.
         """
         board = self.board()
         self.register(board)
@@ -449,14 +450,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             board, request_id=request_id, output="root output\n", disposition="assistance"
         )
         run_id = submitted["runId"]
-        decided = board.call("workflow_decide", {
-            "runId": run_id, "requestId": yielded["activeRequest"]["requestId"],
-            "commandId": f"{request_id}-decide", "expectedRevision": yielded["revision"], "decision": "approve",
-            "helpers": [{**BUDDY, "requestId": f"{request_id}-helper",
-                         "task": "helper owns its own worktree", "cwd": str(self.repo),
-                         "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}}],
-            **self.control(yielded),
-        })
+        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "helper owns its own worktree", 'cwd': str(self.repo), 'title': f"{request_id}-helper", 'buddy': ":".join(BUDDY.values()), 'checkout': "worktree", 'access': "write", 'inputs': [], 'writeScope': ["."], 'expectedSeconds': 1800}], 'autoContinue': True})
         self.assertEqual(decided["decision"], "approve")
         helper_id = decided["children"][0]["taskId"]
         with board.store.db.read() as connection:
@@ -491,14 +485,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             board, request_id=request_id, output="root output\n", disposition="assistance"
         )
         run_id = submitted["runId"]
-        decided = board.call("workflow_decide", {
-            "runId": run_id, "requestId": yielded["activeRequest"]["requestId"],
-            "commandId": f"{request_id}-decide", "expectedRevision": yielded["revision"], "decision": "approve",
-            "helpers": [{**BUDDY, "requestId": f"{request_id}-helper", "task": "scoped helper",
-                         "cwd": str(self.repo),
-                         "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src"]}}],
-            **self.control(yielded),
-        })
+        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "scoped helper", 'cwd': str(self.repo), 'title': f"{request_id}-helper", 'buddy': ":".join(BUDDY.values()), 'checkout': "worktree", 'access': "write", 'inputs': [], 'writeScope': ["src"], 'expectedSeconds': 1800}], 'autoContinue': True})
         helper_id = decided["children"][0]["taskId"]
         helper_claim = self.claim(board, helper_id, request_id=f"{request_id}-helper-claim", nonce="s" * 16)
         self.assertIsNotNone(helper_claim["claim"], helper_claim)
@@ -558,13 +545,12 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         contents = {path.relative_to(native_path(checkout)): path.read_bytes()
                     for path in native_path(checkout).rglob("*") if path.is_file()}
         with mock.patch.object(workspace_module, "cleanup_remove", side_effect=AssertionError("refused deletion")):
-            with self.assertRaises(BoardError) as refused:
-                self.reclaim(board, self.view(board, run_id))
-        self.assertEqual(refused.exception.code, "NOT_READY")
-        self.assertEqual(refused.exception.details["reasons"], [reason])
-        self.assertEqual(refused.exception.details["reclaim"]["path"], str(checkout))
+            refused = self.reclaim(board, self.view(board, run_id))
+            self.assertFalse(refused["removed"])
+        self.assertEqual(refused["reasons"], [reason])
+        self.assertEqual(refused["path"], str(checkout))
         if paths is not None:
-            self.assertEqual(refused.exception.details["reclaim"]["unsealedPaths"], paths)
+            self.assertEqual(refused["unsealedPaths"], paths)
         after_contents = {path.relative_to(native_path(checkout)): path.read_bytes()
                           for path in native_path(checkout).rglob("*") if path.is_file()}
         self.assertEqual({path: after_contents[path] for path in contents}, contents)

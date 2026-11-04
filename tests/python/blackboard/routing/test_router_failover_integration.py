@@ -629,7 +629,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def busy_attempt(self, db, number, *, provider="busy", model="busy", buddy_id=None):
         task_id, attempt_id = f"busy-{number}", f"busy-attempt-{number}"
-        db.execute("INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,'host',json_set('{}','$.expectedSeconds',60),'digest',1,'dsh','/work','running',1,?,?)", (task_id, task_id, T0, T0))
+        db.execute("INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set('{}','$.expectedSeconds',60),'digest',1,'dsh','/work','running',1,?,?)", (task_id, task_id, T0, T0))
         db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES(?,?,1,'verifier','executing','dsh','dsh',?,?,?,?,?)", (attempt_id, task_id, provider, model, T0, T0, T0))
         if buddy_id:
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES(?,'running',?)", (task_id, T0))
@@ -770,10 +770,9 @@ for name, kwargs in (("list", {"ids": [B, A]}), ("mode", {"mode": "review"}),
 install_unfenced_edit_case("identity", execute_change("UPDATE buddies SET model='replacement' WHERE buddy_id=?", (A,)))
 
 
-install_change_case("owner", execute_change("UPDATE workflow_runs SET owner_generation=2"), micro_task=True)
 install_change_case("route", execute_change("UPDATE workflow_routes SET state='fenced'"), micro_task=True)
 install_change_case("parent_cancel", execute_change("UPDATE workflow_runs SET state='cancelled'"), micro_task=True, outcome="cancelled")
-install_change_case("task_cancel_race", execute_change("UPDATE tasks SET state='cancelling' WHERE owner='decision'"), outcome="cancelled")
+install_change_case("task_cancel_race", execute_change("UPDATE tasks SET state='cancelling' WHERE adapter='decision'"), outcome="cancelled")
 install_change_case("attempt_cancel_race", execute_change("UPDATE attempts SET cancel_requested_at=?", (T0,)), outcome="cancelled")
 install_change_case("copy", lambda self, request, claim, output: output["inputVerification"].update(unchanged=False), review=True)
 install_change_case("manifest", lambda self, request, claim, output: output["inputVerification"].update(manifestSha256="changed"), review=True)

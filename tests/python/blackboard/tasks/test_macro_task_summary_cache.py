@@ -50,7 +50,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             with seed.board.store.db.read() as connection:
                 connection.backup(cls.snapshot)
             cls.fixture_values = copy.deepcopy({name: getattr(seed, name) for name in (
-                "macros", "roots", "helpers", "completed_attempts", "plain", "controls", "operations",
+                "macros", "roots", "helpers", "completed_attempts", "plain", "operations",
             )})
             cls.clock_value = seed.clock.value
             cls.workspace_values = copy.deepcopy(vars(seed.workspace))
@@ -131,7 +131,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.read()
             derive.assert_not_called()
             group = self.fixture.macros[0]
-            self.sql("UPDATE workflow_runs SET revision=revision+1 WHERE run_id=?", (self.root_for(group),))
+            self.sql("UPDATE macro_tasks SET title=title||' corrected' WHERE macro_task_id=?", (group,))
             self.read()
             self.assertEqual(derive.call_count, 1)
             self.assertEqual(derive.call_args.args[1], [group])
@@ -167,6 +167,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                                 ("/fictional/corrected-repository/.git", "corrected-repository"),
                                 ("/fictional/bare-repository", "bare-repository")):
                 with self.subTest(path=path):
+                    self.sql("UPDATE macro_tasks SET repository_path=? WHERE macro_task_id=?",(path,group))
                     self.sql("UPDATE workflow_artifacts SET repository_path=?"
                              " WHERE run_id=? AND kind='input' AND workspace_facts_role='owner'", (path, root))
                     summary = self.rows()[group]
@@ -193,9 +194,8 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         original_run_project = self.fixture.call("task_get", {"runId": run_id})["task"]["lineage"]["project"]
         view = self.fixture.call("workflow_get", {"runId": run_id})
         self.store.workflow.continue_run({
-            "runId": run_id, "commandId": "macro-project-continuation",
-            "expectedRevision": view["revision"], "input": "Continue fictional work",
-            "helperPolicy": "keep",
+            "runId": run_id, "artifactId": view["finalArtifactId"],
+            "input": "Continue fictional work",
         }, console_authority={"sessionId": "private-cache-test"})
         self.store.workflow.prepare_continuation_workspace({"runId": run_id})
         with self.store.db.read() as connection:
@@ -229,8 +229,8 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                     self.sql("UPDATE attempts SET shutdown_confirmed=1 WHERE task_id=?", (task,))
                     self.assertEqual(self.rows()[group], initial)
                     self.assert_recomputed(counter, [group])
-            self.sql("UPDATE workflow_runs SET host_id='fictional-new-host',owner_generation=2 WHERE run_id=?", (parent,))
-            self.assertIn("fictional-new-host", self.rows()[group]["currentHostIds"])
+            self.sql("UPDATE workflow_runs SET title='fictional-new-title' WHERE run_id=?", (parent,))
+            self.assertEqual(self.rows(query="fictional-new-title")[group]["matchingRuns"], 1)
             self.assert_recomputed(counter, [group])
             self.sql("UPDATE workflow_runs SET state='accepted',workspace_id=NULL,workspace_manifest_sha256=NULL WHERE run_id=?", (parent,))
             self.sql("UPDATE tasks SET accepted_at='2026-01-01T00:00:00Z' WHERE task_id=?", (parent,))
@@ -291,9 +291,9 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.sql("UPDATE workflow_runs SET state='concluded',workspace_id=NULL,workspace_manifest_sha256=NULL WHERE run_id=?", (root,))
         self.sql(
             "INSERT INTO workflow_host_conclusions("
-            "conclusion_id,run_id,run_revision,owner_generation,execution_status,note,"
-            "actor_role,actor_id,command_id,created_at) VALUES(?,?,1,1,'failed','reviewed',"
-            "'host','fictional-host','fictional-conclusion-command','2026-01-01T00:00:00Z')",
+            "conclusion_id,run_id,execution_status,note,"
+            "actor_role,actor_id,created_at) VALUES(?,?,'failed','reviewed',"
+            "'host',NULL,'2026-01-01T00:00:00Z')",
             ('fictional-conclusion', root),
         )
         self.assertEqual(self.rows()[group]['counts']['failed'], 1)
@@ -386,10 +386,10 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assert_recomputed(counter, [group])
             self.assertEqual(self.rows(group="project:" + project)[group]["matchingRuns"], 4)
             self.assert_recomputed(counter, [])
-            self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.microTask.sourceHostId','fictional-corrected-source') WHERE task_id=? AND kind='task.submitted'", (root,))
-            self.assertNotIn(group, self.rows(query="fictional-corrected-source"))
-            self.sql("UPDATE workflow_runs SET source_host_id='fictional-corrected-source' WHERE run_id=?", (root,))
-            self.assertEqual(self.rows(query="fictional-corrected-source")[group]["matchingRuns"], 1)
+            self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.microTask.title','fictional-corrected-title') WHERE task_id=? AND kind='task.submitted'", (root,))
+            self.assertNotIn(group, self.rows(query="fictional-corrected-title"))
+            self.sql("UPDATE workflow_runs SET title='fictional-corrected-title' WHERE run_id=?", (root,))
+            self.assertEqual(self.rows(query="fictional-corrected-title")[group]["matchingRuns"], 1)
             self.assert_recomputed(counter, [group])
 
     def test_macro_task_metadata_and_goal_raw_corrections(self):
@@ -398,12 +398,11 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             self.read()
             counter.reset_mock()
-            self.sql("UPDATE macro_tasks SET title='Fictional revised title',source_host_id='revised-source',created_at='2020-01-01T00:00:00Z' WHERE macro_task_id=?", (group,))
-            self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.cwd','/fictional/revised') WHERE task_id=?", (first,))
+            self.sql("UPDATE macro_tasks SET title='Fictional revised title',created_at='2020-01-01T00:00:00Z' WHERE macro_task_id=?", (group,))
+            self.sql("UPDATE macro_tasks SET project_cwd='/fictional/revised' WHERE macro_task_id=?", (group,))
             row = self.rows()[group]
             self.assertEqual(row["title"], "Fictional revised title")
             self.assertEqual(row["project"]["path"], "/fictional/revised")
-            self.assertEqual(row["sourceHostId"], "revised-source")
             self.assertEqual(row["createdAt"], "2020-01-01T00:00:00Z")
             self.assert_recomputed(counter, [group])
             expected = self.read()
@@ -414,7 +413,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assertEqual(macro_tasks.macro_task_timeline(self.store, {"macroTaskId": group})["macroTask"]["goal"]["body"],
                              "Fictional corrected goal")
 
-    def test_root_creation_order_changes_project_projection(self):
+    def test_root_creation_order_preserves_the_independent_macro_project(self):
         group = self.fixture.macros[0]
         first = self.root_for(group)
         with self.store.db.read() as connection:
@@ -424,8 +423,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.sql("UPDATE workflow_runs SET created_at='2000-01-01T00:00:00Z' WHERE run_id=?", (second,))
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             project = self.rows()[group]["project"]
-            self.assertNotEqual(project, original_project)
-            self.assertEqual(project["path"], "/fictional/second-root")
+            self.assertEqual(project, original_project)
             self.assert_recomputed(counter, [group])
 
     def test_goal_revision_changes_detail_without_recomputing_list(self):
@@ -540,9 +538,8 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.assertTrue(self.read(group=project_group, limit=1,before=first["groups"][0]["nextCursor"])["changed"])
         self.sql("UPDATE workflow_runs SET standalone_project_id=(SELECT project_id FROM macro_tasks WHERE macro_task_id=workflow_runs.macro_task_id),macro_task_id=NULL WHERE macro_task_id=?", (group,))
         after = self.read()
-        self.assertNotIn(group,{row["macroTaskId"] for row in macro_summaries(after)})
+        self.assertEqual(next(row for row in macro_summaries(after) if row["macroTaskId"]==group)["counts"]["roots"],0)
         self.assertGreater(after["totals"]["all"],3)
-        self.assertEqual(self.read(hostId="not-a-fictional-host")["totals"]["all"],0)
         self.assertTrue(self.read(filter="host")["totals"]["host"])
         self.assertTrue(self.read(filter="review")["totals"]["review"])
 
@@ -550,8 +547,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         group = self.fixture.macros[0]
         summary = self.rows()[group]
         scopes = ({}, {"query": "needle-fictional"},
-                  {"group": "project:" + summary["project"]["id"]},
-                  {"hostId": summary["sourceHostId"]})
+                  {"group": "project:" + summary["project"]["id"]})
         for scope in scopes:
             with self.subTest(scope=scope):
                 totals = self.read(**scope)["totals"]
@@ -573,8 +569,8 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.sql("UPDATE workflow_runs SET buddy_json=json_set(buddy_json,'$.model','fictional-model') WHERE run_id=?", (root,))
             self.assertEqual(self.rows(query="fictional-model")[group]["matchingRuns"],1)
             self.assert_recomputed(counter,[group])
-            self.sql("UPDATE workflow_runs SET host_id='fictional-takeover' WHERE run_id=?", (root,))
-            self.assertEqual(self.rows(hostId="fictional-takeover")[group]["matchingRuns"],1)
+            self.sql("UPDATE workflow_runs SET title='fictional-new-title' WHERE run_id=?", (root,))
+            self.assertEqual(self.rows(query="fictional-new-title")[group]["matchingRuns"],1)
             self.assert_recomputed(counter,[group])
 
     def test_concurrent_reads_share_one_computation_and_writer_cannot_poison_snapshot(self):
@@ -616,7 +612,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         hit = self.rows()[self.fixture.macros[0]]
         expected = copy.deepcopy(hit)
         hit["counts"]["roots"] = -500
-        hit["currentHostIds"].append("fictional-poisoned-host")
+        hit["rootRunIds"].append("fictional-poisoned-run")
         self.assertEqual(self.rows()[self.fixture.macros[0]], expected)
         with patch.object(macro_tasks,"_summary",wraps=macro_tasks._summary) as counter:
             self.read(query="macro-000")
@@ -625,6 +621,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assert_recomputed(counter,[])
             with fixture_module.SyntheticBoard(self.root/"second-state",self.root/"second-runtime",SOURCE,recipe=fixture_module.Recipe.smoke(),seed=613) as other:
                 self.assertEqual(other.macros,self.fixture.macros)
+                counter.reset_mock()  # Generation independently reads its newly created empty macros.
                 macro_tasks.macro_task_list(other.board.store,{})
                 self.assert_recomputed(counter,other.macros)
                 self.assertIsNot(memo.for_store(other.board.store),memo.for_store(self.store))
@@ -660,7 +657,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.sql("INSERT INTO meta(key,value) VALUES('fictional-case-only','changed')")
         self.fixture.clock.advance(600)
         self.fixture.macros.append("fictional-case-only")
-        self.fixture.controls[next(iter(self.fixture.controls))]["hostId"] = "fictional-case-only"
+        self.fixture.operations = -500
         self.fixture.workspace.dirty = True
         self.fixture.workspace.manifests.clear()
         self.fixture.initial_facts["counts"]["tasks"] = -500

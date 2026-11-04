@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 import errno
-import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,20 +21,18 @@ PHYSICAL_STAGES = (
     "_delete_sessions",
     "_delete_workspaces",
     "_delete_private_roots",
-    "_delete_cli_files",
 )
 
 
 class MacroTaskDeletionTests(WorkflowTestCase):
     def closed(self, board, request_id, *, macro_task=None, macro_task_id=None, project="project"):
-        extra = {"macroTask": {"title": macro_task, 'goal': macro_task}} if macro_task else {}
+        extra = {"create_macro": {"title": macro_task, 'goal': macro_task}} if macro_task else {}
         if macro_task_id:
             extra["macroTaskId"] = macro_task_id
         run = self.submit(board, request_id=request_id, cwd=str(self.workdir(project)), **extra)
-        cancelled = board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+        cancelled = board.call("workflow_cancel", {"runId": run["runId"]})
         board.call("workflow_conclude", {
             "runId": run["runId"], "note": "Private deletion fixture is settled",
-            **self.control(cancelled),
         })
         return run
 
@@ -85,8 +82,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         for stage, phase in (("_delete_sessions", "native-session"),
                              ("_delete_workspaces", "workspace"),
                              ("_delete_private_roots", "private-root"),
-                             ("_delete_session_group", "session-records"),
-                             ("_delete_cli_files", "cli-file")):
+                             ("_delete_session_group", "session-records")):
             with self.subTest(stage=stage):
                 run = self.closed(board, "skipped-" + phase, macro_task="Skipped physical phase")
                 target = run["macroTaskId"]
@@ -201,7 +197,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
 
     def test_preview_caps_blocker_detail_but_not_group_count(self):
         board = self.board()
-        first = self.submit(board, request_id="queued-0", macroTask={"title": "Large group", 'goal': "Large group"})
+        first = self.submit(board, request_id="queued-0", create_macro={"title": "Large group", 'goal': "Large group"})
         for number in range(1, 53):
             self.submit(board, request_id=f"queued-{number}", macroTaskId=first["macroTaskId"], kind="worktree")
         # This case counts queued tasks; the workflow fixture uses synthetic
@@ -216,7 +212,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
     def test_run_group_counts_failed_without_conclusion_and_accepts_it(self):
         board = self.board()
         run = self.submit(board, request_id="unconcluded", cwd=str(self.workdir("unconcluded")))
-        board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         target = "run:" + run["runId"]
         preview = macro_task_deletion.preview(board.store, target)
         self.assertEqual(preview["microTaskCount"], 1)
@@ -260,8 +256,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        " VALUES(?,?,?,?,?)", (decision_id, "route-history", "hash", "route-latest", now))
             db.execute("INSERT INTO router_requests(decision_id,round,snapshot_json,frozen_at) VALUES(?,1,?,?)",
                        (decision_id, json.dumps({"baseInput": {"task": "Router private text"}}), now))
-            db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
-                       " VALUES(?,?,?,?,?)", (decision_id, owner["runId"], 1, "resolved", now))
+            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,created_at)"
+                       " VALUES(?,?,?,?)", (decision_id, owner["runId"], "resolved", now))
             for index, task_id in enumerate(("route-earlier", "route-latest")):
                 row = {**original, "task_id": task_id, "request_id": f"route-request-{index}",
                        "adapter": "decision", "spec_json": json.dumps({"adapter": "decision", "routerBudgetSeconds": 60}),
@@ -386,7 +382,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 0)
 
-    def test_private_evidence_controls_and_submissions_are_scoped_to_target(self):
+    def test_private_evidence_is_scoped_to_target(self):
         board = self.board()
         target = self.closed(board, "private-target", macro_task="Private evidence")
         other = self.closed(board, "private-other", macro_task="Other private evidence", project="private-other-project")
@@ -395,14 +391,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             task_id = run["runId"]
             native = micro_task_root(self.directory, "dsh", task_id) / "native"
             evidence = self.directory / "attempts" / task_id / "attempt-fixture"
-            control = self.directory / "controls" / f"{task_id}.g1.json"
-            submission = self.directory / "submissions" / (
-                hashlib.sha256(run["requestId"].encode()).hexdigest()[:32] + ".json"
-            )
-            for path in (native / "session", evidence / "task.txt", control, submission):
+            for path in (native / "session", evidence / "task.txt"):
                 native_path(path.parent).mkdir(parents=True, exist_ok=True)
                 native_path(path).write_text("private fixture", encoding="utf-8", newline="\n")
-            return native.parent, evidence.parent, control, submission
+            return native.parent, evidence.parent
 
         target_paths = materialize(target)
         other_paths = materialize(other)
@@ -437,10 +429,9 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             for child, parent, request in ((helper, root, "tree-help-request"),
                                            (grandchild, lead_owned, "tree-grand-request")):
                 db.execute("INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,"
-                           "decision_command_id,state,created_at,updated_at)"
-                           " VALUES(?,?,?,?,?,?,?)",
-                           (child["runId"], parent["runId"], request, request + "-command",
-                            "succeeded", now, now))
+                           "state,created_at,updated_at)"
+                           " VALUES(?,?,?,?,?,?)",
+                           (child["runId"], parent["runId"], request, "succeeded", now, now))
             db.execute("INSERT INTO workflow_lead_tasks(owned_run_id,lead_run_id,lead_turn_id,created_at)"
                        " VALUES(?,?,?,?)", (lead_owned["runId"], helper["runId"], "lead-tree-turn", now))
             db.execute("INSERT INTO workflow_fixes(run_id,fixed_run_id,created_at) VALUES(?,?,?)",
@@ -462,8 +453,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             router_sequence.reserve_dispatch(db, decision_id='tree-decision', task_id=router_id, router_index=0,
                                              buddy={'buddyId': 'fixture', 'harness': 'dsh', 'provider': 'fixture',
                                                     'model': 'router', 'effort': 'max'}, now=now)
-            db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
-                       " VALUES('tree-decision',?,1,'resolved',?)", (lead_owned['runId'], now))
+            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,created_at)"
+                       " VALUES('tree-decision',?,'resolved',?)", (lead_owned['runId'], now))
         target = "run:" + root["runId"]
         from hey_my_buddy.private_dirs import session_record_path
         with board.store.db.read() as db:
@@ -473,7 +464,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         records = []
         for run in (root, helper, lead_owned, grandchild, {'runId': router_id, 'requestId': 'router-record'}):
             self.assertEqual(by_task[run['runId']], target)
-            record = session_record_path(board.directory, by_task[run['runId']], run['requestId'])
+            record = session_record_path(board.directory, by_task[run['runId']],
+                                         run['requestId'] if 'requestId' in run else run['task']['requestId'])
             native_path(record.parent).mkdir(parents=True, exist_ok=True)
             native_path(record).write_bytes(b'private session')
             records.append(record)
@@ -539,7 +531,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                             f"hash-{generation}", 15, now))
                 db.execute("INSERT INTO resource_claims(claim_id,task_id,attempt_id,resource,kind,state,created_at)"
                            " VALUES(?,?,?,?,?,?,?)", (f"claim-{generation}", task_id, attempt_id,
-                            f"fixture-{generation}", "fixture", "released", now))
+                            f"fixture-{generation}", "cwd", "released", now))
             db.execute("UPDATE tasks SET selected_attempt_id=?,active_attempt_id=? WHERE task_id=?",
                        (attempt_ids[0], attempt_ids[1], task_id))
         with self.without_physical_io()[0]:
@@ -637,14 +629,14 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         target = run["macroTaskId"]
         with board.store.db.write() as db:
             db.execute("INSERT INTO workflow_requests(request_id,run_id,kind,summary,payload_json,state,"
-                       "expected_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                       ("pending-request", run["runId"], "attention", "private", "{}", "open", 1, now, now))
+                       "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                       ("pending-request", run["runId"], "attention", "private", "{}", "open", now, now))
         self.assertIn("macro-task-deletion.awaiting-host", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_requests SET state='declined' WHERE request_id='pending-request'")
-            db.execute("INSERT INTO workflow_continuations(continuation_id,run_id,kind,expected_revision,"
-                       "input_text,workspace_facts_role,state,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                       ("pending-continuation", run["runId"], "manual", 1, "private", "pending", "recorded", now))
+            db.execute("INSERT INTO workflow_continuations(continuation_id,run_id,kind,"
+                       "input_text,workspace_facts_role,state,created_at) VALUES(?,?,?,?,?,?,?)",
+                       ("pending-continuation", run["runId"], "manual", "private", "pending", "recorded", now))
         self.assertIn("macro-task-deletion.queued", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_continuations SET state='queued' WHERE continuation_id='pending-continuation'")
@@ -657,8 +649,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        "updated_at) VALUES(?,?,?,?)", ("pending-decision", "pending-route", "hash", now))
             from hey_my_buddy.blackboard.routing import router_sequence
             router_sequence.freeze_request(db, "pending-decision", snapshot={"baseInput": {"task": "private"}}, now=now)
-            db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
-                       " VALUES(?,?,?,?,?)", ("pending-decision", run["runId"], 1, "pending", now))
+            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,created_at)"
+                       " VALUES(?,?,?,?)", ("pending-decision", run["runId"], "pending", now))
         self.assertIn("macro-task-deletion.routing", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_routes SET state='resolved' WHERE decision_id='pending-decision'")
@@ -816,9 +808,9 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        ("owned-decision", "owned-decision-request", "hash", now))
             from hey_my_buddy.blackboard.routing import router_sequence
             router_sequence.freeze_request(db, "owned-decision", snapshot={"baseInput": {"task": "private"}}, now=now)
-            db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
-                       " VALUES(?,?,?,?,?)",
-                       ("owned-decision", run["runId"], 1, "resolved", now))
+            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,created_at)"
+                       " VALUES(?,?,?,?)",
+                       ("owned-decision", run["runId"], "resolved", now))
             db.execute("INSERT INTO provider_cooling(harness,provider,consecutive_rejections,"
                        "cooling_until,last_rejected_at) VALUES(?,?,?,?,?)",
                        ("codex", "fixture", 2, now, now))

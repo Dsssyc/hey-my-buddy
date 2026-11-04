@@ -1,6 +1,5 @@
-"""Public lifecycle operations against private real-Git workspaces."""
+"""Host workflow methods reach the real service while the browser stays read only."""
 from __future__ import annotations
-from unittest.mock import patch as defer_reclaim
 
 import contextlib
 import io
@@ -24,22 +23,22 @@ from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
 from hey_my_buddy.paths import native_path
 
 
-OPERATIONS = {
+HOST_WORKSPACE_OPERATIONS = {
+    "continue": "workflow_continue",
+    "cancel": "workflow_cancel",
     "accept": "workflow_accept",
     "conclude": "workflow_conclude",
-    "reclaim": "workflow_reclaim",
-    "scope-amend": "workflow_scope_amend",
-    "workspace-resolve": "workflow_workspace_resolve",
 }
+RETIRED_METHODS = ("scope-amend", "workspace-resolve", "reclaim")
 
 
 class WorkspaceApiTests(RealWorkspaceTestCase):
     register = lifecycle_tests.LifecycleTestCase.register
-    control = lifecycle_tests.LifecycleTestCase.control
     claim = lifecycle_tests.LifecycleTestCase.claim
     turn_record = lifecycle_tests.LifecycleTestCase.turn_record
     finish_turn = lifecycle_tests.LifecycleTestCase.finish_turn
     view = lifecycle_tests.LifecycleTestCase.view
+    submit_run = lifecycle_tests.LifecycleTestCase.submit_run
     run_worktree = lifecycle_tests.LifecycleTestCase.run_worktree
     target_with_artifact = lifecycle_tests.LifecycleTestCase.target_with_artifact
     micro_task_submit = scope_recovery_tests.ScopeRecoveryTestCase.micro_task_submit
@@ -48,14 +47,14 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
 
     def setUp(self):
         super().setUp()
-        self.controls = {}
         self.worker = "w-api"
         self.enterContext(patch.object(workflow_module, "_workspace_module", workspace_module))
 
     def cli_call(self, board: InProcessBoard, method: str, params: dict) -> tuple[int, dict]:
         endpoint = {"address": "ipc://private-api-test", "token": "test-token"}
         with patch.object(transport, "_ensure_service", return_value=endpoint), patch.object(
-            transport, "_request", side_effect=lambda _endpoint, operation, values, resource="control", **kwargs: board.call(operation, values)
+            transport, "_request",
+            side_effect=lambda _endpoint, operation, values, resource="control", **kwargs: board.call(operation, values),
         ), contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
             code = cli.main([method, json.dumps(params)])
         return code, json.loads(output.getvalue())
@@ -65,117 +64,98 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
         browser = Browser(opened["url"])
         return browser, browser.bootstrap()["csrfToken"]
 
-    def test_five_named_surfaces_and_worker_authority(self):
-        self.assertEqual({name: transport.METHOD_MAP[name] for name in OPERATIONS},
-                         {name: ("control", operation) for name, operation in OPERATIONS.items()})
-        for name, operation in OPERATIONS.items():
+    def test_host_surfaces_and_worker_authority(self):
+        for name, operation in HOST_WORKSPACE_OPERATIONS.items():
             with self.subTest(operation=operation):
+                self.assertEqual(transport.METHOD_MAP[name], ("control", operation))
                 self.assertIn(name, cli.METHODS)
-                self.assertIn(name, cli.cli_help._CONTROL_METHODS)
                 self.assertIn(operation, CONTROL_OPERATIONS)
                 self.assertNotIn(operation, CONSOLE_OPERATIONS)
                 self.assertTrue(callable(getattr(BuddyControl, operation)))
+        for name in RETIRED_METHODS:
+            self.assertNotIn(name, transport.METHOD_MAP)
+            self.assertNotIn(name, cli.METHODS)
 
         board = self.board()
-        self.register(board)
         submitted = self.micro_task_submit(board, request_id="worker-boundary", scope=("src",))
-        claim = self.claim(board, submitted["runId"])["claim"]
-        credential = claim["agentCredential"]
-        for operation in OPERATIONS.values():
+        claimed = self.claim(board, submitted["runId"])["claim"]
+        credential = claimed["agentCredential"]
+        packets = {
+            "workflow_continue": {"runId": submitted["runId"], "turnId": claimed["turn"]["turnId"],
+                                  "input": "forged worker continuation"},
+            "workflow_cancel": {"runId": submitted["runId"]},
+            "workflow_accept": {"runId": submitted["runId"], "artifactId": "forged-artifact",
+                                "note": "forged acceptance", "notRequired": "fixture"},
+            "workflow_conclude": {"runId": submitted["runId"], "note": "forged conclusion"},
+        }
+        for operation, packet in packets.items():
             with self.subTest(worker_operation=operation), self.assertRaises(BoardError) as caught:
-                board.call(operation, {"runId": submitted["runId"], "commandId": "worker-forged",
-                                       "expectedRevision": submitted["revision"], "credential": credential})
+                board.call(operation, {**packet, "credential": credential})
             self.assertEqual(caught.exception.code, "FORBIDDEN")
             with self.subTest(unknown_operation=operation), self.assertRaises(BoardError) as caught:
                 board.call(operation, {"unknownField": True})
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
-    def test_five_named_methods_reach_the_real_ctwo_resource(self):
+    def test_host_methods_reach_the_real_ctwo_resource(self):
         with self.daemon():
             endpoint = transport._read_endpoint(self.directory)
             self.assertIsNotNone(endpoint)
             with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as control:
-                for operation in OPERATIONS.values():
+                for operation in HOST_WORKSPACE_OPERATIONS.values():
                     with self.subTest(operation=operation):
                         response = json.loads(getattr(control, operation)(json.dumps({
                             "token": endpoint["token"], "unknownField": True,
                         })))
                         self.assertEqual(response["error"]["code"], "INVALID_ARGUMENT")
 
-    def test_console_refuses_scope_and_resolution_while_host_cli_remains_authorized(self):
+    def test_console_refuses_host_resolution_while_cli_continues_the_same_run(self):
         board, submitted, _claimed, _manifest, checkout = self.scoped_failure()
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
         browser, csrf = self.browser(board)
         resolution = {
-            "runId": view["runId"], "commandId": "http-resolve", "expectedRevision": view["revision"],
-            "conflictId": conflict["conflictId"], "action": "restore",
-            "paths": ["outside.txt", "tracked.txt"],
+            "runId": view["runId"], "requestId": view["activeRequest"]["requestId"],
+            "resolution": "restore", "paths": ["outside.txt", "tracked.txt"],
             "observedFingerprint": conflict["observedFingerprint"],
-            'note': "Restore the unauthorized paths while retaining the legal edit",
+            "note": "Restore unauthorized paths while retaining the legal edit",
         }
-        status, _headers, body = browser.command("workflow_workspace_resolve", {
+        status, _headers, body = browser.command("workflow_continue", {
             **resolution, "consoleAuthority": {"sessionId": "forged"},
         }, csrf=csrf)
         self.assertEqual(status, 404, body)
         self.assertTrue((checkout / "outside.txt").exists())
-        status, _headers, body = browser.command("workflow_workspace_resolve", resolution, csrf=csrf)
+        status, _headers, body = browser.command("workflow_continue", resolution, csrf=csrf)
         self.assertEqual(status, 404, body)
         self.assertEqual(json.loads(body)["error"]["code"], "METHOD_NOT_FOUND")
-        self.assertTrue((checkout / "outside.txt").exists())
-        code, resolved = self.cli_call(board, "workspace-resolve", {**resolution, **self.control(view)})
+        code, resolved = self.cli_call(board, "continue", resolution)
         self.assertEqual(code, 0, resolved)
-        self.assertTrue(resolved["resolved"])
+        self.assertIn("artifactId", resolved)
+        self.assertEqual(self.view(board, view["runId"])["workspaceConflicts"][0]["state"], "restored")
         self.assertFalse((checkout / "outside.txt").exists())
         self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
-        self.assertNotIn("controlToken", json.dumps(resolved))
 
-        scope = {"runId": resolved["runId"], "commandId": "http-amend",
-                 "expectedRevision": resolved["revision"], "expectedScopeVersion": 1,
-                 "writeScope": ["src", "docs"], 'note': "Host authorized documentation changes for the next stage"}
-        status, _headers, body = browser.command("workflow_scope_amend", scope, csrf=csrf)
-        self.assertEqual(status, 404, body)
-        self.assertEqual(json.loads(body)["error"]["code"], "METHOD_NOT_FOUND")
-        code, amended = self.cli_call(board, "scope-amend", {**scope, **self.control(view)})
-        self.assertEqual(code, 0, amended)
-        self.assertEqual(amended["scopeVersion"], 2)
-        self.assertNotIn("controlToken", json.dumps(amended))
+        next_turn = {"runId": view["runId"], "artifactId": resolved["artifactId"],
+                     "input": "Continue with documentation", "writeScope": ["src", "docs"],
+                     "note": "Documentation is authorized for the next turn"}
+        code, continued = self.cli_call(board, "continue", next_turn)
+        self.assertEqual(code, 0, continued)
+        self.assertEqual(self.view(board, view["runId"])["scope"]["writeScope"], ["src", "docs"])
 
-    def test_cli_integration_acceptance_and_cleanup_preserve_private_control(self):
+    def test_cli_acceptance_records_integration_and_reclaims_without_control_file(self):
         board = self.board()
-        self.register(board)
         submitted, _claimed, manifest, checkout, _seal, view, artifact = self.run_worktree(board)
-        control_file = cli._save_control(submitted["runId"], submitted["control"], self.directory)
         target = self.target_with_artifact(artifact)
-        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
-            code, accepted = self.cli_call(board, "accept", {
-                "runId": view["runId"], "artifactId": artifact["artifactId"],
-                "note": "Inspected the sealed output and verified the target commit",
-                "target": {"path": str(target["path"]), "ref": "HEAD"},
-                "beforeCommit": target["before"],  "controlFile": control_file,
-            })
+        code, accepted = self.cli_call(board, "accept", {
+            "runId": view["runId"], "artifactId": artifact["artifactId"],
+            "note": "Inspected the sealed output and verified the target commit",
+            "target": {"path": str(target["path"]), "ref": "HEAD"},
+            "beforeCommit": target["before"],
+        })
         self.assertEqual(code, 0, accepted)
         self.assertEqual(accepted["state"], "accepted")
-        self.assertEqual(accepted["integration"]["state"], "verified")
-        self.assertEqual(accepted["integration"]["afterCommit"], target["after"])
-        self.assertNotIn(submitted["control"]["controlToken"], json.dumps(accepted))
-
-        code, refused = self.cli_call(board, "reclaim", {"runId": view["runId"]})
-        self.assertEqual(code, 1)
-        self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")
-        code, stale = self.cli_call(board, "reclaim", {
-            "runId": view["runId"],
-            "hostId": submitted["control"]["hostId"], "ownerGeneration": 2,
-            "controlToken": submitted["control"]["controlToken"],
-        })
-        self.assertEqual(code, 1)
-        self.assertEqual(stale["error"]["code"], "STALE_GENERATION")
-        self.assertTrue(checkout.exists())
-
-        code, applied = self.cli_call(board, "reclaim", {"runId": view["runId"], "controlFile": control_file})
-        self.assertEqual(code, 0, applied)
-        self.assertTrue(applied["removed"])
-        self.assertEqual(applied["path"], manifest["checkoutRoot"])
+        integration = self.view(board, view["runId"])["integrations"][0]
+        self.assertEqual(integration["state"], "verified")
+        self.assertEqual(integration["afterCommit"], target["after"])
+        self.assertTrue(accepted["reclaim"]["removed"])
         self.assertFalse(checkout.exists())
         self.assertTrue(native_path(Path(artifact["diffPath"])).exists())
-        self.assertNotIn(submitted["control"]["controlToken"], json.dumps(applied))

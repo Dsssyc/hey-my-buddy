@@ -24,6 +24,9 @@ from private_acl import assert_private_path
 from fake_executable import make_fake_executable
 from hey_my_buddy.cli.checks import prepare_test_home
 from hey_my_buddy.blackboard.store.store import BoardStore
+from hey_my_buddy.blackboard.tasks import workspace
+from hey_my_buddy.cli.main import _creation_key
+from hey_my_buddy.protocol.client import BoardClient
 from console.test_console import Browser
 
 GIT_ENV = {
@@ -88,16 +91,32 @@ class MicroTaskWorkerTestCase(BoardTestCase):
             "submit",
             json.dumps(
                 {
-                    **BUDDY,
-                    "requestId": request_id,
-                    "hostId": "host-1",
+                    "title": request_id,
+                    "macroTaskId": "standalone",
+                    "buddy": ":".join(BUDDY.values()),
                     "task": "run the mock turn",
                     "cwd": str(self.repo),
-                    "executionWorkspace": {"kind": "existing", "access": "write"},
+                    "checkout": "existing", "access": "write", "inputs": [],
+                    "writeScope": ["."], "expectedSeconds": 1800,
                 }
             ),
             env=self.env(),
         )
+
+    def submit_direct(self, board, *, title="fixture-run", task="run the mock turn", checkout="existing",
+                      access="write", delegation_authority=False):
+        project_id = workspace.ensure_project_id(workspace.repository_at(self.repo, allow_parent=True))
+        params = {"cwd": str(self.repo), "title": title, "task": task, "macroTaskId": "standalone",
+                  "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, title, task]),
+                  "buddy": ":".join(BUDDY.values()), "checkout": checkout, "access": access,
+                  "inputs": [], "expectedSeconds": 1800}
+        if access in ("write", "full"):
+            params["writeScope"] = ["."]
+        if access == "full":
+            params["accessNote"] = "Lead fixture needs full access"
+        if delegation_authority:
+            params["delegationAuthority"] = True
+        return board.call("workflow_submit", params)
 
 
 class RealWorkerTurnTests(MicroTaskWorkerTestCase):
@@ -107,16 +126,16 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                                              {'adapter': 'external'}, {'argv': ['true']})):
                 with self.subTest(fields=fields):
                     code, response = self.cli('submit', json.dumps({
-                        'requestId': f'execution-record-{index}', 'hostId': 'host-1', 'task': 'separate execution',
-                        'cwd': str(self.repo), 'executionWorkspace': {'kind': 'existing', 'access': 'write'},
+                        'title': f'execution-record-{index}', 'macroTaskId': 'standalone',
+                        'buddy': ':'.join(BUDDY.values()), 'task': 'separate execution',
+                        'cwd': str(self.repo), 'checkout': 'existing', 'access': 'write',
+                        'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800,
                         **fields,
                     }), env=self.env())
                     self.assertNotEqual(code, 0, response)
                     self.assertEqual(response['error']['code'], 'INVALID_ARGUMENT')
-                    self.assertIn('Unknown', response['error']['message'])
-            code, listing = self.cli('list', '{}', env=self.env())
-            self.assertEqual(code, 0, listing)
-            self.assertEqual(listing['runs'], [])
+                    self.assertIn('Extra inputs are not permitted', response['error']['message'])
+            self.assertEqual(BoardClient(self.directory, autostart=False).list_tasks()['runs'], [])
 
     def execution_diagnostics(self, run_id: str, view: dict) -> str:
         code, receipt = self.cli("result", json.dumps({"runId": run_id}), env=self.env())
@@ -145,10 +164,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             code, submitted = self.submit()
             self.assertEqual(code, 0, submitted)
             run_id = submitted["runId"]
-            self.assertIn("controlFile", submitted)
-            self.assertNotIn("controlToken", json.dumps(submitted))
-            control_path = Path(submitted["controlFile"])
-            assert_private_path(self, control_path, 0o600)
+            self.assertNotIn("controlFile", submitted)
 
             latest = {}
 
@@ -184,7 +200,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             # of this rule is the Host's own
             # DshPublishedReceiptTests witness). The retained native result
             # supplies its activity facts after the short live endpoint ends.
-            _, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
+            receipt = BoardClient(self.directory, autostart=False).result(runId=run_id)
             native = (receipt.get("result") or {}).get("nativeSession") or {}
             self.assertEqual(native.get("storageScope"), "task-shared-sessions")
             self.assertEqual(native.get("storageOwner"), "hey-my-buddy-micro-task")
@@ -200,7 +216,6 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             # The execution publishes the final native activity before its
             # result. No controller stdout/result frame exists in M1.
             self.assertEqual(receipt["attemptId"], turn["attemptId"])
-            from hey_my_buddy.protocol.client import BoardClient
             activity = BoardClient(self.directory, autostart=False).get(runId=run_id)["activity"]
             self.assertEqual(activity["phase"], "finishing")
             self.assertEqual(activity["nativeSessionId"], turn["sessionId"])
@@ -218,7 +233,6 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
 
             # The final acceptance is separate from execution and bound to the
             # actual sealed artifact, with its explicit integration decision.
-            control = json.loads(control_path.read_text(encoding="utf-8"))
             code, acknowledged = self.cli(
                 "accept",
                 json.dumps(
@@ -227,15 +241,15 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                         "artifactId": outputs[0]["artifactId"],
                         "note": "inspected the sealed output",
                         "notRequired": "the mock turn is reviewed without a separate integration target",
-                        "controlFile": str(control_path),
                     }
                 ),
                 env=self.env(),
             )
             self.assertEqual(code, 0, acknowledged)
             self.assertEqual(acknowledged["state"], "accepted")
-            self.assertEqual(acknowledged["view"], "receipt")
-            self.assertIsNotNone(acknowledged["acceptedAt"])
+            self.assertTrue(acknowledged["integrationId"])
+            accepted_task = BoardClient(self.directory, autostart=False).get(runId=run_id)
+            self.assertIsNotNone(accepted_task["acceptedAt"])
             self.assertNotIn("acceptanceVerdict", acknowledged)
 
     def test_cli_fails_closed_for_an_agent_scoped_caller(self):
@@ -243,29 +257,22 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             code, submitted = self.submit("worker-req-2")
             self.assertEqual(code, 0, submitted)
             credential = self.directory / "agent-credential.json"
-            credential.write_text(json.dumps({"token": "not-a-real-credential", "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
+            credential.write_text(json.dumps({"token": "not-a-real-credential", "stateDir": str(self.directory),
+                                              "taskId": submitted["runId"]}), encoding="utf-8", newline="\n")
             os.chmod(credential, 0o600)
             env = {**self.env(), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
             code, refused = self.cli(
                 "submit",
-                json.dumps({"requestId": "forged", "task": "x", "cwd": str(self.repo)}),
+                json.dumps({"title": "forged", "task": "x", "cwd": str(self.repo),
+                            "buddy": ":".join(BUDDY.values()), "checkout": "existing", "access": "write",
+                            "inputs": [], "writeScope": ["."], "expectedSeconds": 1800}),
                 env=env,
             )
             self.assertEqual(code, 1)
             self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")
-            # A control file cannot make an invalid execution credential valid.
+            # An invalid execution credential cannot read another run.
             code, refused = self.cli(
-                "decide",
-                json.dumps(
-                    {
-                        "runId": submitted["runId"],
-                        "requestId": "req-x",
-                        "commandId": "forged",
-                        "expectedRevision": 1,
-                        "decision": "approve",
-                        "controlFile": submitted["controlFile"],
-                    }
-                ),
+                "get", json.dumps({"runId": submitted["runId"]}),
                 env=env,
             )
             self.assertEqual(code, 1)
@@ -277,10 +284,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
         from hey_my_buddy.buddy.harnesses.dsh.acp.launch import child_environment
         board = self.board()
         enable_fixture_buddy(board.store, BUDDY)
-        submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": "ordinary-launcher", "hostId": "host-1", "task": "run the mock turn",
-            "cwd": str(self.repo), "executionWorkspace": {"kind": "existing", "access": "write"},
-        })
+        submitted = self.submit_direct(board, title="ordinary-launcher")
         response = admit_board(board, {'workerId': 'ordinary-worker', 'claimRequestId': 'ordinary-claim', 'runId': submitted['runId'], 'nonce': 'o' * 16})
         credential = self.directory / "ordinary-credential.json"
         credential.write_text(json.dumps({"token": response["claim"]["agentCredential"]}), encoding="utf-8", newline="\n")
@@ -299,18 +303,15 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
         from hey_my_buddy.protocol import capabilities as execution_capabilities
         board = self.board()
         enable_fixture_buddy(board.store, BUDDY)
+        submitted = self.submit_direct(board, title="launcher-private", access="full",
+                                       delegation_authority=True)
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.requiredCapabilities',json(?))"
+                               " WHERE task_id=?", (json.dumps(["fixture-manual-lead-claim"]), submitted["runId"]))
         with self.daemon(env=self.env()), ExitStack() as cleanup:
-            # The extra capability leaves this test's Lead turn queued for the
-            # in-process admission while the daemon serves its CLI calls.
-            code, submitted = self.cli("submit", json.dumps({
-                **BUDDY, "requestId": "launcher-private", "hostId": "host-1", "task": "run the mock turn",
-                "cwd": str(self.repo), "submissionToken": "l" * 32, "delegationAuthority": True,
-                "requiredCapabilities": ["launcher-private"],
-                "executionWorkspace": {"kind": "existing", "access": "full", "accessNote": "Lead tasks"},
-            }), env=self.env())
-            self.assertEqual(code, 0, submitted)
             with mock.patch.dict(execution_capabilities.ADAPTER_CAPABILITIES,
-                                 dsh=(*execution_capabilities.ADAPTER_CAPABILITIES["dsh"], "launcher-private")):
+                                 dsh=(*execution_capabilities.ADAPTER_CAPABILITIES["dsh"],
+                                      "fixture-manual-lead-claim")):
                 response = admit_board(board, {'runId': submitted['runId'], 'nonce': 'n' * 16})
             self.assertIsNotNone(response["claim"], response)
             # This fixture admits the Lead itself and never creates its
@@ -319,7 +320,8 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                              reason="execution-process-not-created")
             credential = self.directory / "launcher-credential.json"
             credential.write_text(json.dumps({"token": response["claim"]["agentCredential"],
-                                              "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
+                                              "stateDir": str(self.directory),
+                                              "taskId": submitted["runId"]}), encoding="utf-8", newline="\n")
             credential.chmod(0o600)
             incoming = {**self.child_environment(self.env()), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
             controller = controller_environment(self.directory, incoming)
@@ -342,10 +344,10 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                 prepared = subprocess.run(["git", *arguments], cwd=child_repo, env={**os.environ, **GIT_ENV},
                                           capture_output=True, text=True, encoding="utf-8")
                 self.assertEqual(prepared.returncode, 0, prepared.stderr)
-            child_request = {**BUDDY, "requestId": "launcher-owned", "task": "Do bounded work",
-                             "output": "full",
-                             "cwd": str(child_repo), "submissionToken": "p" * 32,
-                             "executionWorkspace": {"kind": "existing", "access": "write"}}
+            child_request = {"title": "launcher-owned", "task": "Do bounded work",
+                             "buddy": ":".join(BUDDY.values()), "cwd": str(child_repo),
+                             "checkout": "existing", "access": "write", "inputs": [],
+                             "writeScope": ["."], "expectedSeconds": 1800}
             # Source-check fixture bypasses only installed-runtime selection;
             # the launcher and CLI run in their own process with no inherited
             # HMB state, runtime or role variables.
@@ -369,9 +371,10 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                                      input=prompt, capture_output=True, text=True, timeout=30)
             self.assertEqual(command.returncode, 0, command.stdout + command.stderr)
             owned = json.loads(command.stdout)
-            self.assertIsNone(owned["hostId"])
-            self.assertEqual(owned["leadOwnership"]["leadRunId"], submitted["runId"])
-            self.assertEqual(owned["leadOwnership"]["leadTurnId"], response["claim"]["turn"]["turnId"])
+            self.assertNotIn("hostId", owned)
+            owned_view = board.call("workflow_get", {"runId": owned["runId"]})
+            self.assertEqual(owned_view["leadOwnership"]["leadRunId"], submitted["runId"])
+            self.assertEqual(owned_view["leadOwnership"]["leadTurnId"], response["claim"]["turn"]["turnId"])
 
 
 class ConsoleWorkflowRouteTests(MicroTaskWorkerTestCase):
@@ -381,17 +384,7 @@ class ConsoleWorkflowRouteTests(MicroTaskWorkerTestCase):
         browser = Browser(opened['url'])
         snapshot = browser.bootstrap()
         csrf = snapshot["csrfToken"]
-        created = board.call(
-            "workflow_submit",
-            {
-                **BUDDY,
-                "requestId": "console-req-1",
-                "hostId": "host-1",
-                "task": "console micro-task task",
-                "cwd": str(self.repo),
-                "executionWorkspace": {"kind": "existing", "access": "write"},
-            },
-        )
+        created = self.submit_direct(board, title="console-req-1", task="console micro-task task")
         status, _headers, body = browser.command(
             "workflow_get", {"runId": created["runId"]}, csrf=csrf
         )
@@ -407,16 +400,14 @@ class ConsoleWorkflowRouteTests(MicroTaskWorkerTestCase):
         )
         self.assertEqual(status, 400, body)
         self.assertEqual(json.loads(body)["error"]["code"], "INVALID_ARGUMENT")
-        # The console cannot submit work or issue a Host capability.
+        # The console cannot submit work through its command route.
         status, _headers, body = browser.command(
             "workflow_submit",
             {
-                **BUDDY,
-                "requestId": "console-req-2",
-                "hostId": "host-1",
-                "task": "console submission",
-                "cwd": str(self.repo),
-                "executionWorkspace": {"kind": "worktree", "access": "write"},
+                "title": "console-req-2", "task": "console submission", "macroTaskId": "standalone",
+                "buddy": ":".join(BUDDY.values()), "cwd": str(self.repo),
+                "checkout": "worktree", "access": "write", "inputs": [],
+                "writeScope": ["."], "expectedSeconds": 1800,
             },
             csrf=csrf,
         )
@@ -429,30 +420,16 @@ class ConsoleWorkflowRouteTests(MicroTaskWorkerTestCase):
 class CompactRouteTests(MicroTaskWorkerTestCase):
     def test_workflow_get_matches_the_reported_compact_shape(self):
         board = self.board()
-        submitted = board.call(
-            "workflow_submit",
-            {
-                **BUDDY,
-                "requestId": "shape-req-1",
-                "hostId": "host-1",
-                "task": "shape",
-                "cwd": str(self.repo),
-                "executionWorkspace": {"kind": "existing", "access": "write"},
-            },
-        )
+        submitted = self.submit_direct(board, title="shape-req-1", task="shape")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         expected = {
             "microTask",
             "runId",
-            "requestId",
-            "hostId",
-            "ownerGeneration",
             "state",
             "status",
             "queueReason",
             "awaitingHost",
             "microTask",
-            "revision",
             "continuationCount",
             "workspace",
             "executionWorkspace",
@@ -471,10 +448,11 @@ class CompactRouteTests(MicroTaskWorkerTestCase):
             "task",
         }
         self.assertTrue(expected <= set(view), sorted(expected - set(view)))
-        self.assertNotIn("controlToken", json.dumps(view))
+        for retired in ("hostId", "ownerGeneration", "revision", "controlFile"):
+            self.assertNotIn(retired, view)
         self.assertEqual(view["task"]["workflowState"], "executing")
         self.assertTrue(view["task"]["awaitingHost"] is False)
-        self.assertEqual(view["microTask"]["fingerprint"], submitted["microTask"]["fingerprint"])
+        self.assertTrue(view["microTask"]["fingerprint"])
         self.assertTrue(all(isinstance(value, int) for value in view["truncated"].values()))
         self.assertTrue(all(isinstance(value, int) for value in view["counts"].values()))
 
@@ -500,15 +478,13 @@ class SubmissionPreparationRaceTests(MicroTaskWorkerTestCase):
         self.assertEqual(errors, [])
         return tokens
 
-    def test_cli_submission_token_creation_is_immutable_and_shared(self):
-        from unittest import mock
-
+    def test_cli_creation_key_is_deterministic_across_threads(self):
         from hey_my_buddy.cli import main as cli
-        with mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}):
-            tokens = self._race(lambda: cli._submission_token("req-race", {}, self.directory))
-            self.assertEqual(len(set(tokens)), 1, tokens)
-            path = next((self.directory / "submissions").glob("*.json"))
-            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["submissionToken"], tokens[0])
+        params = {"cwd": str(self.repo), "title": "req-race", "task": "same work",
+                  "macroTaskId": "standalone"}
+        keys = self._race(lambda: cli._host_creation_key("submit", params))
+        self.assertEqual(len(set(keys)), 1, keys)
+        self.assertEqual(keys[0], cli._host_creation_key("submit", params))
 
 
 

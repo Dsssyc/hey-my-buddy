@@ -463,14 +463,13 @@ class DecisionCoordinator:
         fingerprint = schemas.spec_fingerprint(spec)
         blocker = self.board._admission_blocker(connection, spec)
         connection.execute(
-            "INSERT INTO tasks(task_id, request_id, owner, spec_json, input_fingerprint,"
+            "INSERT INTO tasks(task_id, request_id, spec_json, input_fingerprint,"
             " fingerprint_version, adapter, cwd,"
             " state, queue_reason, revision, created_at, updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task_id,
                 request_key,
-                "decision",
                 canonical_json(spec),
                 fingerprint,
                 schemas.FINGERPRINT_VERSION_CURRENT,
@@ -819,13 +818,13 @@ class DecisionCoordinator:
         cancel_raced = completion_event is not None and json.loads(completion_event[0]).get("cancelRaced") is True
         cancelled = cancel_raced or status == "cancelled" or task["state"] in ("cancelling", "cancelled") or attempt["cancel_requested_at"] is not None
         route = connection.execute(
-            "SELECT r.*,w.state AS run_state,w.owner_generation AS current_owner,w.current_routing_id"
+            "SELECT r.*,w.state AS run_state,w.current_routing_id"
             " FROM workflow_routes r JOIN workflow_runs w ON w.run_id=r.run_id WHERE r.decision_id=?",
             (row["decision_id"],)).fetchone()
         if route is not None:
             ancestor = self.board.workflow._terminal_ancestor(connection, route["run_id"])
             cancelled = cancelled or route["run_state"] == "cancelled" or (ancestor is not None and ancestor["state"] == "cancelled")
-            if (route["state"] != "pending" or route["current_owner"] != route["owner_generation"]
+            if (route["state"] != "pending"
                     or route["current_routing_id"] != row["decision_id"] or route["run_state"] != "executing"
                     or ancestor is not None):
                 checked.update(changed=True, code="workflow-routing-fenced")

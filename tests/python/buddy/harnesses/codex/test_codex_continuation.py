@@ -71,7 +71,7 @@ class CodexContinuationTests(WorkflowTestCase):
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(delivered["state"], "delivered")
         self.assertEqual(delivered["currentTurn"]["state"], "returned")
-        self.continue_run(board, delivered, command_id="continue-returned")
+        self.continue_run(board, delivered)
         document = self.claim(board, claim_request_id="c3")["claim"]["turn"]["input"]
         self.assertTrue(document["context"]["lastAssistantMessage"]["validatedOutcome"])
 

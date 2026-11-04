@@ -1,6 +1,6 @@
 """A stopped orphan's deterministic seal failure follows the ordinary failed-turn path."""
 from __future__ import annotations
-from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, artifact_manifest
 from admission import admit_board, admit_store
 
 import json
@@ -11,6 +11,7 @@ from unittest.mock import patch
 from support import BoardTestCase
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import interruption, workflow, workspace
+from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol import process_identity as processes
@@ -28,12 +29,15 @@ class InterruptedSealTests(RealWorkspaceTestCase):
 
     def claimed(self, *, access="write", scope=None):
         board = self.board()
+        title = f"interrupted-seal-{access}"
+        task = "recover stopped workspace"
+        project_id = workspace.ensure_project_id(workspace.repository_at(str(self.repo), allow_parent=True))
         submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": f"interrupted-seal-{access}", "hostId": "host-1",
-            "task": "recover stopped workspace", "cwd": str(self.repo),
-            "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "existing", "access": access,
-                                   **({"writeScope": scope} if scope is not None else {})},
+            "cwd": str(self.repo), "macroTaskId": "standalone", "title": title, "task": task,
+            "buddy": ":".join(BUDDY.values()), "checkout": "existing", "access": access,
+            "inputs": [], "expectedSeconds": 1800,
+            **({"writeScope": scope or ["."]} if access != "read" else {}),
+            "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, title, task]),
         })
         claim = admit_board(board, {'workerId': 'orphan-worker', 'claimRequestId': 'claim-orphan', 'nonce': 'n' * 16, 'runId': submitted['runId']})["claim"]
         attempt_id = claim["attempt"]["attemptId"]
@@ -80,14 +84,14 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         self.assertEqual(view["activeRequest"]["kind"], "attention")
         conflict = view["workspaceConflicts"][0]
         self.assertEqual(conflict["blockingPaths"], ["tracked.txt"])
-        resolved = board.call("workflow_workspace_resolve", {
-            "runId": submitted["runId"], "commandId": "restore-orphan", "expectedRevision": view["revision"],
-            "conflictId": conflict["conflictId"], "action": "restore", "paths": ["tracked.txt"],
+        resolved = board.call("workflow_continue", {
+            "runId": submitted["runId"], "requestId": view["activeRequest"]["requestId"],
+            "resolution": "restore", "paths": ["tracked.txt"],
             "observedFingerprint": conflict["observedFingerprint"], 'note': "restore outside change",
-            **submitted["control"],
         })
-        self.assertTrue(resolved["resolved"])
         self.assertEqual(resolved["resolutionState"], "restored")
+        self.assertEqual(board.call("workflow_get", {"runId": submitted["runId"]})["workspaceConflicts"][0]["state"],
+                         "restored")
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
         self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
 

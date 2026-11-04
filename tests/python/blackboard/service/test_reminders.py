@@ -15,6 +15,7 @@ from support import BoardTestCase, FakeClock, wait_for, enable_fixture_buddy
 from hey_my_buddy.blackboard.tasks import reminders
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.blackboard.service.service import call_operation
 from hey_my_buddy.blackboard.tasks import workflow
 from mock_workspace import MockWorkspace
 from unittest.mock import patch
@@ -45,15 +46,16 @@ class ReminderBoardTests(BoardTestCase):
         enable_fixture_buddy(self.board_instance.store, DSH_BUDDY)
         with patch.object(workflow, "_workspace_module", MockWorkspace(self.directory)):
             submitted = self.client.workflow_submit(
-                requestId="reminder-native", hostId="reminder-host", task="Observe native activity",
-                cwd=str(self.workdir()), executionWorkspace={"kind": "existing", "access": "read"},
-                expectedSeconds=expected_seconds, **DSH_BUDDY,
+                creationKey="a" * 64, macroTaskId="standalone", title="reminder-native",
+                task="Observe native activity", cwd=str(self.workdir()),
+                buddy=":".join(DSH_BUDDY.values()), checkout="existing", access="read",
+                inputs=[], expectedSeconds=expected_seconds,
             )
         claim = self.board_instance.store.admit_execution("a" * 64, task_id=submitted["runId"])
         return submitted["runId"], claim["claim"]["attempt"]
 
     def wait(self, run_id):
-        return self.board_instance.call("task_wait", {
+        return call_operation(self.board_instance.wait_service, "task_wait", {
             "runId": run_id, "timeoutMs": 0, "consumeReminders": True,
             "reminderWaitId": uuid.uuid4().hex,
         })
@@ -148,21 +150,19 @@ class ReminderPrivateServiceTests(BoardTestCase):
             run_id = submitted["runId"]
             try:
                 self.assertTrue(wait_for(started.exists, timeout=60))
-                code, first = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 30}), timeout=60)
-                self.assertEqual(code, 0, first)
-                self.assertEqual(first["outcome"], "expected-duration")
+                client = BoardClient(self.directory, autostart=False)
+                first = client.wait_task(30000, runId=run_id, consumeReminders=True,
+                                         reminderWaitId=uuid.uuid4().hex)
                 self.assertEqual(first["reminder"]["expectedMultiple"], 1)
-                self.assertFalse(first["ok"])
+                self.assertEqual(first["state"], "running")
                 self.assertFalse(first["shutdownConfirmed"])
-                code, second = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 30}), timeout=60)
-                self.assertEqual(code, 0, second)
-                self.assertEqual(second["outcome"], "expected-duration")
+                second = client.wait_task(30000, runId=run_id, consumeReminders=True,
+                                          reminderWaitId=uuid.uuid4().hex)
                 self.assertEqual(second["reminder"]["expectedMultiple"], 2)
                 self.assertNotEqual(first["reminder"]["reminderId"], second["reminder"]["reminderId"])
-                code, status = self.cli("status", json.dumps({"runId": run_id}))
-                self.assertEqual(code, 0, status)
+                status = client.get(runId=run_id)
                 self.assertEqual(status["state"], "running")
-                attempt = BoardClient(self.directory).get(runId=run_id)["selectedAttempt"]
+                attempt = status["selectedAttempt"]
                 self.assertFalse(attempt["reminders"]["possiblyStuck"])
                 store = BoardStore(self.directory)
                 try:
@@ -218,9 +218,9 @@ class ReminderPrivateServiceTests(BoardTestCase):
         env = {"HOME": str(private_home), "USERPROFILE": str(private_home), "HMB_DSH_CLI": str(entry)}
         with self.daemon(env=env):
             code, submitted = self.cli("submit", json.dumps({
-                "requestId": "native-reminder-live", "hostId": "reminder-host", "task": "Observe native activity",
-                "cwd": str(repo), "executionWorkspace": {"kind": "existing", "access": "read"},
-                "expectedSeconds": 120, **DSH_BUDDY,
+                "macroTaskId": "standalone", "title": "native-reminder-live", "task": "Observe native activity",
+                "cwd": str(repo), "buddy": ":".join(DSH_BUDDY.values()), "checkout": "existing",
+                "access": "read", "inputs": [], "expectedSeconds": 120,
             }), env=env)
             self.assertEqual(code, 0, submitted)
             run_id = submitted["runId"]

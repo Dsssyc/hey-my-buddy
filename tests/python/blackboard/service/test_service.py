@@ -138,24 +138,21 @@ class CatalogRefreshServiceTests(BoardTestCase):
                          "A reread hook uses the claimed scan window")
 
 
-class ConsoleSnapshotContractTests(BoardTestCase):
-    """The named console_snapshot operation keeps its full C-Two shape.
+class ConsoleProjectionTests(BoardTestCase):
+    """The console reads its service projection without a retired RPC."""
 
-    The console's periodic HTTP read moved to the slim projection in
-    ``hey_my_buddy.console.reads``; callers of the operation itself (C-Two,
-    CLI, probes) still get the task page that was part of this contract.
-    """
+    def test_projection_keeps_current_settings_and_pending_count(self):
+        from hey_my_buddy.console.reads import console_snapshot_projection
 
-    def test_operation_keeps_tasks(self):
         board = self.board()
-        snapshot = board.call("console_snapshot", {})
-        self.assertIn("runs", snapshot["tasks"])
-        self.assertIn("total", snapshot["tasks"])
+        snapshot, _deadline = console_snapshot_projection(board.service)
+        self.assertEqual(snapshot["tasks"]["pendingCount"], 0)
         self.assertIn("harnesses", snapshot)
         self.assertIn("routingHealth", snapshot)
-        self.assertTrue(snapshot["capabilities"]["consoleAssets"] is False or
-                        snapshot["capabilities"]["consoleAssets"] is True)
-        # The slim console core and this operation agree on every shared key.
+        self.assertEqual(snapshot["capabilities"], board.evaluation.capabilities())
+        # The console projection reuses the core's current settings.
         core = board.evaluation.console_core()
         for key in core:
+            if key == "tasks":
+                continue
             self.assertEqual(snapshot[key], core[key], key)

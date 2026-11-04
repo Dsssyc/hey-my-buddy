@@ -49,7 +49,7 @@ class ProjectRepositoryCase(BoardTestCase):
     def intent(self, *, kind="worktree", cwd=None):
         return {"kind": kind, "cwd": str(cwd or self.repo), "access": "write",
                 "base": {"kind": "working-tree"}, "writeScope": ["."],
-                "integrator": {"role": "host", "id": "host-1"}}
+                "integrator": {"role": "host"}}
 
     def prepare(self, name="request", *, kind="worktree", cwd=None):
         return workspace.prepare(self.directory, name, self.intent(kind=kind, cwd=cwd))
@@ -78,7 +78,7 @@ class ProjectMarkerTests(ProjectRepositoryCase):
         self.assertEqual(workspace.read_project_id(self.common()), project_id)
         self.assertEqual(self.git(self.repo, "cat-file", "-t", PROJECT_REF), b"blob")
         self.assertEqual(self.git(self.repo, "show", PROJECT_REF).decode().strip(), project_id)
-        self.assertEqual(manifest["version"], 5)
+        self.assertEqual(manifest["version"], 6)
         self.assertNotIn("repositoryId", manifest)
         self.assertNotIn("checkoutId", manifest)
 
@@ -215,6 +215,8 @@ class ProjectMarkerTests(ProjectRepositoryCase):
                 historical.pop("projectId")
                 if version == 1:
                     historical["integrator"] = "host:host-1"
+                else:
+                    historical["integrator"] = {"role":"host","id":"historical-host"}
                 historical["manifestSha256"] = workspace._sha(workspace._json({
                     key: value for key, value in historical.items() if key != "manifestSha256"}))
                 sealed_bytes = workspace._json(historical)

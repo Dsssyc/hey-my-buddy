@@ -43,7 +43,7 @@ class WorkspaceReviewTests(unittest.TestCase):
     def intent(self, **updates):
         return {"kind": "worktree", "cwd": str(self.repo), "access": "write",
                 "base": {"kind": "working-tree"}, "writeScope": ["src"],
-                "integrator": {"role": "host", "id": "host-1"}, **updates}
+                "integrator": {"role": "host"}, **updates}
 
     def prepare(self, request, **updates):
         return workspace.prepare(self.state, request, self.intent(**updates))

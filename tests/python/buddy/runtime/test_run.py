@@ -1,35 +1,36 @@
-"""Real cross-process CLI/C-Two integration for execution records and the read-only wait.
+"""Real cross-process C-Two integration for private command executions.
 
 Everything runs against an isolated ``HMB_STATE_DIR`` with the real daemon, the
 real execution processes and the real ``command`` adapter; no model is called.
-The CLI is invoked exactly as a user invokes it from an unrelated working directory.
-
 The command execution records are seeded directly into the private board; the
-micro task lifecycle is covered by the workflow tests. ``await`` is read-only:
-these tests pin that it never starts, retries or cancels a run, including when
-its own wait window ends.
+micro task lifecycle and Host ``await`` are covered by workflow tests. The
+internal wait here is read-only even when its own window ends.
 """
 from __future__ import annotations
 
-import json
 import sys
 import unittest
 
 from support import BoardTestCase, wait_for
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.protocol.transport import ServiceError
 
 
 PYTHON = sys._base_executable
 
 
 class TestExecutionRecords(BoardTestCase):
+    def client(self):
+        return BoardClient(self.directory, autostart=False)
+
     def command_task(self, request_id: str, argv: list[str], *, expected_seconds: int = 120) -> dict:
         return self.submit_execution(
             requestId=request_id, task="run one command", cwd=str(self.workdir()),
             adapter="command", argv=argv, expectedSeconds=expected_seconds,
         )["task"]
 
-    def test_internal_execution_completes_one_real_task_and_await_delivers_its_result(self):
+    def test_internal_execution_completes_one_real_task_and_delivers_its_result(self):
         with self.daemon():
             marker = self.directory / "execution-marker.txt"
             task = self.command_task("exec-1", [
@@ -40,13 +41,12 @@ class TestExecutionRecords(BoardTestCase):
             self.assertTrue(task["queueReason"], "a queued task must say why it is waiting")
             self.assertNotIn("taskId", task)
 
-            code, envelope = self.cli("await", json.dumps({"runId": task["runId"], "waitSeconds": 60}), timeout=120)
-            self.assertEqual(code, 0, envelope)
-            self.assertEqual(envelope["outcome"], "completed")
-            self.assertTrue(envelope["ok"])
+            finished = wait_for(lambda: self.client().get(runId=task["runId"])["state"] == "completed", 60)
+            self.assertTrue(finished)
+            envelope = self.client().result(runId=task["runId"])
             self.assertTrue(envelope["resultDelivered"])
             self.assertTrue(envelope["shutdownConfirmed"])
-            self.assertEqual(envelope["status"], "completed")
+            self.assertEqual(envelope["state"], "completed")
             self.assertEqual(envelope["runId"], task["runId"])
             self.assertIn("argv", envelope["result"])
             self.assertEqual(marker.read_text(encoding="utf-8").strip(), "done")
@@ -64,70 +64,48 @@ class TestExecutionRecords(BoardTestCase):
             first = self.command_task("exec-recover-1", [PYTHON, "-c", "pass"])
             second = self.command_task("exec-recover-1", [PYTHON, "-c", "pass"])
             self.assertEqual(second["runId"], first["runId"])
-            self.assertEqual(self.cli("list")[1]["total"], 1)
+            self.assertEqual(self.client().list_tasks()["total"], 1)
 
             with self.assertRaises(BoardError) as conflict:
                 self.submit_execution(**{**payload, "task": "changed"})
             self.assertEqual(conflict.exception.code, "CONFLICT")
-            self.assertEqual(self.cli("list")[1]["total"], 1)
+            self.assertEqual(self.client().list_tasks()["total"], 1)
 
-    def test_await_never_launches_work_and_honours_its_wait_window(self):
+    def test_internal_wait_never_launches_work_and_honours_its_wait_window(self):
         with self.daemon():
-            code, missing = self.cli("await", json.dumps({"requestId": "never-admitted", "waitSeconds": 1}))
-            self.assertEqual(code, 1)
-            self.assertEqual(missing["error"]["code"], "NOT_FOUND")
-            message = missing["error"]["message"]
-            self.assertIn("hey-my-buddy submit", message)
-            self.assertNotIn("buddy run", message)
+            with self.assertRaises(ServiceError) as missing:
+                self.client().wait_task(1000, runId="never-admitted")
+            self.assertEqual(missing.exception.code, "NOT_FOUND")
+            self.assertEqual(self.client().list_tasks()["total"], 0)
 
             task = self.command_task("exec-await-1", [PYTHON, "-c", "import time; time.sleep(4)"])
-            code, envelope = self.cli("await", json.dumps({"runId": task["runId"], "waitSeconds": 2}), timeout=120)
-            self.assertEqual(code, 0, envelope)
-            self.assertEqual(envelope["outcome"], "wait-timeout")
-            self.assertFalse(envelope["ok"])
-            self.assertTrue(envelope["timedOut"])
-            self.assertFalse(envelope["resultDelivered"])
-            self.assertTrue(envelope["recovery"]["commands"], "a wait timeout must name real recovery commands")
-            commands = " ".join(envelope["recovery"]["commands"])
-            self.assertIn("hey-my-buddy status", commands)
-            self.assertIn("hey-my-buddy await", commands)
-            self.assertNotIn("buddy start", commands)
-            self.assertNotIn("buddy run", commands)
+            self.assertTrue(wait_for(lambda: self.client().get(runId=task["runId"])["state"] == "running", 30))
+            running = self.client().get(runId=task["runId"])
+            observed = self.client().wait_task(500, runId=task["runId"], afterRevision=running["revision"])
+            self.assertFalse(observed["resultAvailable"])
+            self.assertEqual(observed["runId"], task["runId"])
+            self.assertTrue(wait_for(lambda: self.client().get(runId=task["runId"])["state"] == "completed", 30))
+            self.assertEqual(self.client().get(runId=task["runId"])["createdAt"], task["createdAt"])
 
-            # The timeout stopped only the wait: the SAME run is still there and
-            # awaiting it again delivers its result.
-            run_id = envelope["runId"]
-            code, finished = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 60}), timeout=120)
-            self.assertEqual(code, 0, finished)
-            self.assertEqual(finished["outcome"], "completed")
-            self.assertEqual(finished["runId"], run_id)
-            status = self.cli("status", json.dumps({"runId": run_id}))[1]
-            self.assertEqual(status["createdAt"], task["createdAt"])
-
-    def test_await_resolves_an_existing_run_by_request_id_without_starting_it(self):
+    def test_internal_get_resolves_an_existing_run_by_request_id_without_starting_it(self):
         with self.daemon():
             task = self.command_task("exec-by-request", [PYTHON, "-c", "print('hello')"])
-            code, envelope = self.cli(
-                "await", json.dumps({"requestId": "exec-by-request", "waitSeconds": 60}), timeout=120
-            )
-            self.assertEqual(code, 0, envelope)
-            self.assertEqual(envelope["outcome"], "completed")
+            envelope = self.client().get(requestId="exec-by-request")
             self.assertEqual(envelope["runId"], task["runId"])
-            self.assertEqual(self.cli("list")[1]["total"], 1)
+            self.assertEqual(self.client().list_tasks()["total"], 1)
 
     def test_status_result_and_list_keep_the_stable_envelope(self):
         with self.daemon():
             task = self.command_task("exec-envelope-1", [PYTHON, "-c", "print('hello')"])
-            status = self.cli("status", json.dumps({"runId": task["runId"]}))[1]
-            self.assertEqual(status["requestId"], "exec-envelope-1")
+            status = self.client().get(runId=task["runId"])
             self.assertEqual(status["requestId"], "exec-envelope-1")
             self.assertEqual(status["runId"], task["runId"])
             self.assertIn(status["state"], ("queued", "running", "completed"))
-            self.assertTrue(wait_for(lambda: self.cli("status", json.dumps({"runId": task["runId"]}))[1]["state"] == "completed", 30))
-            result = self.cli("result", json.dumps({"runId": task["runId"]}))[1]
+            self.assertTrue(wait_for(lambda: self.client().get(runId=task["runId"])["state"] == "completed", 30))
+            result = self.client().result(runId=task["runId"])
             self.assertTrue(result["resultAvailable"])
             self.assertEqual(result["resultMeta"]["status"], "ok")
-            page = self.cli("list", json.dumps({"limit": 10}))[1]
+            page = self.client().list_tasks(limit=10)
             self.assertEqual(page["total"], 1)
             self.assertEqual(page["runs"][0]["runId"], task["runId"])
 
@@ -136,39 +114,28 @@ class TestExecutionRecords(BoardTestCase):
             task = self.command_task("exec-distinct-1", [PYTHON, "-c", "pass"])
             # The micro task view answers for an ordinary execution record too, but it
             # says so instead of inventing micro task state.
-            view = self.cli("get", json.dumps({"runId": task["runId"]}))[1]
+            view = self.client().workflow_get(runId=task["runId"])
             self.assertNotIn("microTask", view)
             self.assertEqual(view["runId"], task["runId"])
             self.assertIn("task", view)
-            status = self.cli("status", json.dumps({"runId": task["runId"]}))[1]
+            status = self.client().get(runId=task["runId"])
             self.assertEqual(status["runId"], task["runId"])
             self.assertNotIn("microTask", status)
 
-    def test_execution_cancel_then_acknowledge_records_a_reviewed_outcome(self):
+    def test_internal_execution_cancel_settles_with_shutdown_evidence(self):
         with self.daemon():
             task = self.command_task("exec-cancel-1", [PYTHON, "-c", "import time; time.sleep(30)"])
-            self.assertTrue(wait_for(lambda: self.cli("status", json.dumps({"runId": task["runId"]}))[1]["state"] == "running", 30))
-            code, cancelled = self.cli(
-                "execution-cancel", json.dumps({"runId": task["runId"], "note": "operator stopped it"})
-            )
-            self.assertEqual(code, 0, cancelled)
+            self.assertTrue(wait_for(lambda: self.client().get(runId=task["runId"])["state"] == "running", 30))
+            cancelled = self.client().cancel(runId=task["runId"], note="private test stopped it")
+            self.assertTrue(cancelled["cancelRequested"])
             done = wait_for(
-                lambda: self.cli("status", json.dumps({"runId": task["runId"]}))[1]["state"] in ("cancelled", "failed", "reconciliation-needed"),
+                lambda: self.client().get(runId=task["runId"])["state"] in ("cancelled", "failed", "reconciliation-needed"),
                 60,
             )
             self.assertTrue(done, "the worker must observe the cancel intent and stop its own child")
-            final = self.cli("status", json.dumps({"runId": task["runId"]}))[1]
+            final = self.client().get(runId=task["runId"])
             self.assertIn(final["state"], ("cancelled", "reconciliation-needed"))
-            if final["state"] == "cancelled":
-                code, acknowledged = self.cli(
-                    "execution-acknowledge",
-                    json.dumps({"runId": task["runId"], "note": "reviewed the cancelled run", "verdict": "rejected"}),
-                )
-                self.assertEqual(code, 0, acknowledged)
-                self.assertNotIn("acceptanceVerdict", acknowledged)
-                self.assertIsNone(acknowledged.get("acceptedAt"))
-                self.assertIsNotNone(acknowledged["reviewRejectedAt"])
-                self.assertEqual(acknowledged["reviewRejectionNote"], "reviewed the cancelled run")
+            self.assertTrue(final["shutdownConfirmed"])
 
 
 if __name__ == "__main__":

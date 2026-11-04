@@ -17,6 +17,7 @@ from blackboard.evaluation.test_evaluation import EvaluationTestCase as Evaluati
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION, Corruption
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.store.store import BoardStore
+from hey_my_buddy.cli.main import _creation_key
 
 MODEL_SERVICE_A = ("dsh", "deepseek-official", "deepseek-flash")
 MODEL_SERVICE_B = ("dsh", "deepseek-official", "deepseek-v4-pro")
@@ -37,18 +38,20 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
 
     def submit_micro_task(self, board, request_id: str, model_service=MODEL_SERVICE_A, *, effort: str = "off") -> str:
         enable_fixture_buddy(board.store, dict(zip(("harness", "provider", "model", "effort"), (*model_service, effort))))
+        cwd = str(self.workdir(request_id))
+        project_id = self.model_workspace.ensure_project_id(
+            self.model_workspace.repository_at(cwd, allow_parent=True))
+        title = request_id
+        task = "concurrency fixture"
         submitted = board.call(
             "workflow_submit",
             {
-                "requestId": request_id,
-                "hostId": "store-host",
-                "task": "concurrency fixture",
-                "cwd": str(self.workdir(request_id)),
-                "harness": model_service[0],
-                "provider": model_service[1],
-                "model": model_service[2],
-                "effort": effort,
-                "executionWorkspace": {"kind": "existing", "access": "write"},
+                "cwd": cwd, "title": title, "task": task,
+                "macroTaskId": "standalone",
+                "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, title, task]),
+                "buddy": ":".join((*model_service, effort)),
+                "checkout": "existing", "access": "write", "inputs": [], "writeScope": ["."],
+                "expectedSeconds": 1800,
             },
         )
         return submitted["runId"]
@@ -175,12 +178,13 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
         # The third task of the same model service waits on the model service limit, not the
         # machine ceiling: a different model service still claims.
         self.register(board, "w-a2")
-        blocked = self.claim_micro_task(board, "w-a2", "fam-a-2")
+        blocked_id = self.submit_micro_task(board, "fam-a-2")
+        blocked = admit_execution(board.client(), "n" * 32)
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "model-capacity")
         with board.store.db.read() as connection:
             reason = connection.execute(
-                "SELECT queue_reason FROM tasks WHERE request_id='fam-a-2'"
+                "SELECT queue_reason FROM tasks WHERE task_id=?", (blocked_id,)
             ).fetchone()["queue_reason"]
         self.assertEqual(reason, "model-capacity")
         self.register(board, "w-b")
@@ -338,13 +342,15 @@ class ServiceAdmissionWindowTests(BoardTestCase):
         board = self.board(max_concurrent=2, clock=clock)
         client = board.client()
         held = self.workdir('held')
-        board.submit_execution(requestId='held', task='hold', cwd=str(held), adapter='command',
-                      argv=['true'], exclusiveResources=['exclusive-fixture'])
+        board.submit_execution(requestId='held', task='hold', cwd=str(held),
+                               adapter='command', argv=['true'])
         admit_execution(client, 'held-nonce-0000000000000000000')
         for index in range(board.store.CLAIM_CANDIDATE_LIMIT + 2):
             clock.advance(1)
-            board.submit_execution(requestId=f'blocked-{index}', task='blocked', cwd=str(self.workdir(f'blocked-{index}')),
-                          adapter='command', argv=['true'], exclusiveResources=['exclusive-fixture'])
+            blocked = held / f'blocked-{index}'
+            blocked.mkdir()
+            board.submit_execution(requestId=f'blocked-{index}', task='blocked', cwd=str(blocked),
+                                   adapter='command', argv=['true'])
         clock.advance(1)
         runnable = board.submit_execution(requestId='runnable', task='free', cwd=str(self.workdir('free')),
                                  adapter='command', argv=['true'])['task']

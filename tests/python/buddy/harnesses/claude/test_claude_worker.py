@@ -13,6 +13,7 @@ from hey_my_buddy.buddy.harnesses.registry import adapter
 from hey_my_buddy.protocol import schemas
 from support import wait_for, enable_fixture_buddy
 from hey_my_buddy.blackboard.store.store import BoardStore
+from hey_my_buddy.protocol.client import BoardClient
 from blackboard.tasks.test_workflow_worker import MicroTaskWorkerTestCase
 
 
@@ -45,12 +46,10 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
 
     def execute_fixture(self):
         code, submission = self.cli("submit", json.dumps({
-            **BUDDY, "requestId": "claude-private-worker", "hostId": "host-1",
+            "macroTaskId": "standalone", "title": "claude-private-worker",
             "task": "Exercise only the mock native protocol", "cwd": str(self.repo),
-            "expectedSeconds": 20,
-            "executionWorkspace": {"kind": "worktree", "access": "write",
-                                   "base": {"kind": "commit", "ref": self.git("rev-parse", "HEAD").strip()},
-                                   "writeScope": ["tracked.txt"]}}), env=self.env())
+            "buddy": ":".join(BUDDY.values()), "checkout": "worktree", "access": "write",
+            "inputs": [], "writeScope": ["tracked.txt"], "expectedSeconds": 20}), env=self.env())
         self.assertEqual(code, 0, submission)
         run_id = submission["runId"]
         last = {}
@@ -65,8 +64,7 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
 
         view = wait_for(settled, timeout=60)
         self.assertIsNotNone(view, last)
-        code, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
-        self.assertEqual(code, 0, receipt)
+        receipt = BoardClient(self.directory, autostart=False).result(runId=run_id)
         return view, receipt
 
     def test_micro_task_worker_seals_only_a_proven_claude_result(self):

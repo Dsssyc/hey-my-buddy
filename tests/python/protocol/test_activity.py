@@ -359,7 +359,10 @@ class ActivityProjection(BoardTestCase):
                 "terminationReason": "harness-error",
             })
         self.assertEqual(client.get(runId=task["runId"])["state"], "failed")
-        client.retry(runId=task["runId"], note="second generation")
+        # Queue a second private execution generation after its confirmed stop.
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET state='queued',active_attempt_id=NULL,selected_attempt_id=NULL,revision=revision+1"
+                               " WHERE task_id=?",(task["runId"],))
         second = admit_execution(client, "b" * 32)["claim"]["attempt"]
         self.assertEqual(second["generation"], 2)
         self.assertNotEqual(second["attemptId"], attempt["attemptId"])
@@ -519,7 +522,10 @@ class ExecutionActivityForwarding(BoardTestCase):
         self.assertIsNotNone(control.handle.process.poll())
         client.submit_result(attempt["attemptId"], attempt["generation"], "c" * 32, {"status": "failed", "result": {"status": "nonzero"}, "error": "fixture-stopped",
                               "shutdownConfirmed": True, "terminationReason": "harness-error"})
-        client.retry(runId=attempt["taskId"], note="replacement generation")
+        # Queue a second private execution generation after its confirmed stop.
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET state='queued',active_attempt_id=NULL,selected_attempt_id=NULL,revision=revision+1"
+                               " WHERE task_id=?",(attempt["taskId"],))
         replacement = admit_execution(client, "e" * 32)["claim"]["attempt"]
         self.assertEqual(replacement["generation"], attempt["generation"] + 1)
         second = {"phase": "tool-running", "eventSeq": 2}

@@ -1,5 +1,5 @@
 """Host edits between sealed turns do not become Worker output at conclusion."""
-from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,15 +18,13 @@ class ExistingConclusionTests(LifecycleTestCase):
             (self.repo / directory).mkdir()
             (self.repo / directory / "result.txt").write_text("input\n", encoding="utf-8", newline="\n")
         board = self.board()
-        submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": "existing-sealed", "hostId": "host-1", "task": "Work in the ignored directories",
-            "cwd": str(self.repo), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "existing", "access": "full", "accessNote": "Use the private fixture",
-                                   "base": {"kind": "working-tree"}, "writeScope": ["cache-a", "cache-b"],
-                                   "includeUntracked": ["cache-a", "cache-b"]},
+        submitted = self.submit_run(board, {
+            "title": "existing-sealed", "task": "Work in the ignored directories",
+            "cwd": str(self.repo), "checkout": "existing", "access": "full",
+            "accessNote": "Use the private fixture", "writeScope": ["cache-a", "cache-b"],
+            "inputs": ["cache-a", "cache-b"],
         })
         run_id = submitted["runId"]
-        self.controls[run_id] = submitted["control"]
         claimed = self.claim(board, run_id)
         manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         (self.repo / "cache-a/result.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
@@ -36,10 +34,10 @@ class ExistingConclusionTests(LifecycleTestCase):
 
     def continue_run(self, board, run_id):
         view = self.view(board, run_id)
-        board.call("workflow_continue", {
-            "runId": run_id, "commandId": "next-turn", "expectedRevision": view["revision"],
-            "input": "Continue the work", **self.control(view),
-        })
+        origin = ({"requestId": view["activeRequest"]["requestId"]} if view["activeRequest"]
+                  else {"artifactId": view["finalArtifactId"]} if view["finalArtifactId"]
+                  else {"turnId": view["currentTurn"]["turnId"]})
+        board.call("workflow_continue", {"runId": run_id, **origin, "input": "Continue the work"})
 
     def test_host_commits_after_seal_can_conclude_and_release_the_existing_checkout(self):
         board, run_id, sealed = self.sealed_existing()
@@ -58,25 +56,24 @@ class ExistingConclusionTests(LifecycleTestCase):
                                              "pathsCount": 7, "pathsTruncated": False})
         self.assertIn("conclude this micro task and start a new one", error["message"])
         self.assertEqual(refused["counts"]["turns"], 1)
-        board.call("workflow_cancel", {"runId": run_id, **self.control(refused)})
+        board.call("workflow_cancel", {"runId": run_id})
         before = self.view(board, run_id)["artifacts"]
         with patch.object(workspace, "host_seal", side_effect=AssertionError("The Worker has no unsealed turn")):
             concluded = board.call("workflow_conclude", {
-                "runId": run_id, "note": "Restart from the Host's current checkout", **self.control(refused),
+                "runId": run_id, "note": "Restart from the Host's current checkout",
             })
         self.assertEqual(concluded["state"], "concluded")
-        self.assertIsNone(concluded["partialArtifactId"])
+        self.assertNotIn("artifactId", concluded)
         self.assertEqual(self.view(board, run_id)["artifacts"], before)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute(
                 "SELECT COUNT(*) FROM workspace_reservations WHERE holder_task_id=? AND state IN ('held','transferred')",
                 (run_id,),
             ).fetchone()[0], 0)
-        replacement = board.call("workflow_submit", {
-            **BUDDY, "requestId": "existing-replacement", "hostId": "host-1", "task": "Start from the new current state",
-            "cwd": str(self.repo), "submissionToken": "r" * 32,
-            "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["cache-a", "cache-b"],
-                                   "includeUntracked": ["cache-a", "cache-b"]},
+        replacement = self.submit_run(board, {
+            "title": "existing-replacement", "task": "Start from the new current state",
+            "cwd": str(self.repo), "checkout": "existing", "access": "write",
+            "writeScope": ["cache-a", "cache-b"], "inputs": ["cache-a", "cache-b"],
         })
         claimed = self.claim(board, replacement["runId"], request_id="replacement-claim")
         self.assertIsNotNone(claimed["claim"])
@@ -92,7 +89,7 @@ class ExistingConclusionTests(LifecycleTestCase):
         claimed = self.claim(board, run_id, request_id="unsealed-next-turn")
         self.assertIsNotNone(claimed["claim"])
         (self.repo / "tracked.txt").write_text("Worker wrote outside the scope\n", encoding="utf-8", newline="\n")
-        board.call("workflow_cancel", {"runId": run_id, **self.control(self.view(board, run_id))})
+        board.call("workflow_cancel", {"runId": run_id})
         attempt = claimed["claim"]["attempt"]
         board.call("execution_result", {
             "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": "n" * 16,
@@ -101,41 +98,36 @@ class ExistingConclusionTests(LifecycleTestCase):
         })
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_conclude", {
-                "runId": run_id, "note": "An unsealed Worker turn must still be checked", **self.control(self.view(board, run_id)),
+                "runId": run_id, "note": "An unsealed Worker turn must still be checked",
             })
         self.assertEqual(raised.exception.code, "WORKSPACE_SCOPE_VIOLATION")
         self.assertEqual(raised.exception.details["paths"], ["tracked.txt"])
         self.assertIsNone(self.view(board, run_id)["hostConclusion"])
 
-    def test_first_submission_base_mismatch_does_not_ask_to_conclude_a_task(self):
+    def test_first_submission_rejects_the_retired_base_selector_before_creating_a_task(self):
         base = git(self.repo, "rev-parse", "HEAD").strip()
         (self.repo / "tracked.txt").write_text("Host commit before submission\n", encoding="utf-8", newline="\n")
         git(self.repo, "add", "tracked.txt")
         git(self.repo, "commit", "-qm", "Host selected a different base")
         board = self.board()
         with self.assertRaises(BoardError) as raised:
-            board.call("workflow_submit", {
-                **BUDDY, "requestId": "initial-base-mismatch", "hostId": "host-1", "task": "Start from a selected base",
-                "cwd": str(self.repo), "submissionToken": "t" * 32,
-                "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["src"],
-                                       "base": {"kind": "working-tree", "ref": base}},
+            self.submit_run(board, {
+                "title": "initial-base-mismatch", "task": "Start from a selected base",
+                "cwd": str(self.repo), "checkout": "existing", "access": "write",
+                "writeScope": ["src"], "base": {"kind": "working-tree", "ref": base},
             })
-        self.assertEqual(raised.exception.code, "WORKSPACE_BASE_MISMATCH")
-        self.assertNotIn("conclude", str(raised.exception))
-        self.assertIn("before submitting", str(raised.exception))
-        self.assertEqual(raised.exception.details["baseCommit"], base)
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        self.assertIn("base", str(raised.exception))
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0], 0)
 
     def test_prepared_managed_continuation_seals_against_its_current_input(self):
         board = self.board()
-        submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": "adopted-handoff", "hostId": "host-1", "task": "Scoped work with an adopted output",
-            "cwd": str(self.repo), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src"]},
+        submitted = self.submit_run(board, {
+            "title": "adopted-handoff", "task": "Scoped work with an adopted output",
+            "cwd": str(self.repo), "checkout": "worktree", "access": "write", "writeScope": ["src"],
         })
         run_id = submitted["runId"]
-        self.controls[run_id] = submitted["control"]
         claimed = self.claim(board, run_id)
         claim = claimed["claim"]
         manifest = turn_manifest(self.directory, claim["turn"]["input"])
@@ -154,21 +146,21 @@ class ExistingConclusionTests(LifecycleTestCase):
         })
         view = self.view(board, run_id)
         conflict = view["workspaceConflicts"][0]
-        adopted = board.call("workflow_workspace_resolve", {
-            "runId": run_id, "commandId": "adopt-handoff", "expectedRevision": view["revision"],
-            "conflictId": conflict["conflictId"], "action": "adopt", "note": "Keep the exact stopped output",
-            "observedFingerprint": conflict["observedFingerprint"], **self.control(view),
+        adopted = board.call("workflow_continue", {
+            "runId": run_id, "requestId": view["activeRequest"]["requestId"],
+            "resolution": "adopt", "note": "Keep the exact stopped output",
+            "observedFingerprint": conflict["observedFingerprint"],
         })
-        self.assertTrue(adopted["delivered"])
+        self.assertEqual(self.view(board, run_id)["state"], "delivered")
         git(checkout, "add", ".")
         git(checkout, "commit", "-qm", "Host commits the adopted tree")
         self.continue_run(board, run_id)
         board.store.workflow.prepare_continuation_workspace({"runId": run_id})
-        board.call("workflow_cancel", {"runId": run_id, **self.control(view)})
+        board.call("workflow_cancel", {"runId": run_id})
         concluded = board.call("workflow_conclude", {
-            "runId": run_id, "note": "No turn ran after adoption", **self.control(view),
+            "runId": run_id, "note": "No turn ran after adoption",
         })
-        self.assertIsNotNone(concluded["partialArtifactId"])
+        self.assertTrue(any(row["kind"] == "partial-output" for row in self.view(board, run_id)["artifacts"]))
         self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
         self.assertFalse(checkout.exists())
 
@@ -176,24 +168,25 @@ class ExistingConclusionTests(LifecycleTestCase):
         board = self.board()
         submitted, _, _, checkout, _, view, _ = self.run_worktree(board, disposition="assistance")
         run_id = submitted["runId"]
-        decided = board.call("workflow_decide", {
-            "runId": run_id, "requestId": view["activeRequest"]["requestId"], "commandId": "same-checkout-helper",
-            "expectedRevision": view["revision"], "decision": "approve", "autoContinue": False,
-            "helpers": [{**BUDDY, "requestId": "borrow-checkout", "task": "Finish in the parent checkout",
-                         "cwd": str(checkout), "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]}}],
-            **self.control(view),
+        board.call("workflow_continue", {
+            "runId": run_id, "requestId": view["activeRequest"]["requestId"],
+            "decision": "approve", "autoContinue": False,
+            "helpers": [{"title": "borrow-checkout", "task": "Finish in the parent checkout",
+                         "cwd": str(checkout), "buddy": ":".join(BUDDY.values()),
+                         "checkout": "existing", "access": "write", "writeScope": ["."],
+                         "inputs": [], "expectedSeconds": 1800}],
         })
-        helper_id = decided["children"][0]["taskId"]
+        helper_id = self.view(board, run_id)["children"][0]["taskId"]
         claimed = self.claim(board, helper_id, request_id="same-checkout-helper-claim")
         manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         (checkout / "helper.txt").write_text("The helper's sealed work\n", encoding="utf-8", newline="\n")
         seal = workspace.seal(self.directory, manifest, helper_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal)
-        board.call("workflow_cancel", {"runId": run_id, **self.control(view)})
+        board.call("workflow_cancel", {"runId": run_id})
         concluded = board.call("workflow_conclude", {
-            "runId": run_id, "note": "No further parent turn", **self.control(view),
+            "runId": run_id, "note": "No further parent turn",
         })
-        self.assertIsNotNone(concluded["partialArtifactId"])
+        self.assertTrue(any(row["kind"] == "partial-output" for row in self.view(board, run_id)["artifacts"]))
         self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
         self.assertFalse(checkout.exists())
 

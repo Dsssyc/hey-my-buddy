@@ -1312,7 +1312,7 @@ class SessionRecordGroupingTests(WorkflowTestCase):
             with self.subTest(named=named):
                 root = self.submit(board, request_id=f"session-group-{named}", kind="worktree",
                                    cwd=str(self.workdir(f"session-group-{named}")),
-                                   **({"macroTask": {"title": "Session group", 'goal': "Session group"}} if named else {}))
+                                   **({"create_macro": {"title": "Session group", 'goal': "Session group"}} if named else {}))
                 claim = self.claim(board, run_id=root["runId"],
                                    claim_request_id=f"session-group-claim-{named}")["claim"]
                 group = console_identity(board.store, claim["task"]["taskId"],
@@ -1328,10 +1328,10 @@ class SessionRecordGroupingTests(WorkflowTestCase):
                 # the private test root is nested beneath the source repository.
                 (helper_dir / ".git").mkdir()
                 decision = self.decide(board, view, view["activeRequest"]["requestId"],
-                                       command_id=f"session-helper-{named}", helpers=[{
-                                           "requestId": f"session-child-{named}", "task": "assist",
+                                        helpers=[{
+                                           "title": f"session-child-{named}", "task": "assist",
                                            "cwd": str(helper_dir),
-                                           "executionWorkspace": {"kind": "existing", "access": "write"}}])
+                                           "workspace": {"kind": "existing", "access": "write"}}])
                 child_id = decision["children"][0]["taskId"]
                 helper = self.claim(board, run_id=child_id,
                                     claim_request_id=f"session-child-claim-{named}")["claim"]

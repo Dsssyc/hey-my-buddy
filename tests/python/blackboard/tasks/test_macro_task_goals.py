@@ -1,26 +1,102 @@
 """Macro-task goals are Host-owned display history, separate from Worker work."""
 
 import json
+import unittest
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
+from hey_my_buddy.blackboard.store.store import BoardStore
+from hey_my_buddy.blackboard.tasks import macro_tasks
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import schemas
-from support import macro_summaries
+from support import macro_summaries, private_state_dir
+
+
+class EmptyMacroTaskGoalTests(unittest.TestCase):
+    def setUp(self):
+        root = self.enterContext(private_state_dir("empty-macro-goal-"))
+        self.store = BoardStore(root / "state")
+        self.store.initialize()
+        self.addCleanup(self.store.db.close)
+        self.params = {"cwd": str(root / "source"), "projectId": "a" * 64,
+                       "repositoryPath": str(root / "source" / ".git"),
+                       "title": "Prepare review", "goal": "First goal", "creationKey": "create-v1-key"}
+
+    def test_empty_create_replay_and_amend_keep_history(self):
+        first = macro_tasks.create_macro_task(self.store, self.params)
+        self.assertFalse(first["alreadyExists"])
+        self.assertEqual(first["runs"], [])
+        replay = macro_tasks.create_macro_task(self.store, {**self.params, "goal": "Ignored replay"})
+        self.assertEqual(replay["macroTaskId"], first["macroTaskId"])
+        self.assertTrue(replay["alreadyExists"])
+        self.assertEqual(replay["goal"]["body"], "First goal")
+        changed = macro_tasks.amend_macro_task(self.store, {"macroTaskId": first["macroTaskId"],
+                                                             "goal": "Revised goal"})
+        self.assertEqual(changed["goal"]["revision"], 2)
+        self.assertFalse(changed["alreadyCurrent"])
+        again = macro_tasks.amend_macro_task(self.store, {"macroTaskId": first["macroTaskId"],
+                                                           "goal": "Revised goal"})
+        self.assertTrue(again["alreadyCurrent"])
+        self.assertEqual(again["goal"]["revision"], 2)
+        history = macro_tasks.macro_task_goal_history(self.store, {"macroTaskId": first["macroTaskId"]})
+        self.assertEqual([entry["body"] for entry in history["goals"]], ["Revised goal", "First goal"])
+
+    def test_empty_macro_is_listed_searched_and_has_an_empty_timeline(self):
+        created = macro_tasks.create_macro_task(self.store, self.params)
+        identifier = created["macroTaskId"]
+        listed = macro_summaries(macro_tasks.macro_task_list(self.store, {}))
+        self.assertEqual([row["macroTaskId"] for row in listed], [identifier])
+        self.assertEqual(listed[0]["state"], "empty")
+        self.assertEqual(listed[0]["counts"]["roots"], 0)
+        self.assertEqual(macro_summaries(macro_tasks.macro_task_list(
+            self.store, {"query": "review"}))[0]["macroTaskId"], identifier)
+        for name in ("active", "host", "review"):
+            self.assertEqual(macro_summaries(macro_tasks.macro_task_list(self.store, {"filter": name})), [])
+        timeline = macro_tasks.macro_task_timeline(self.store, {"macroTaskId": identifier})
+        self.assertEqual(timeline["rows"], [])
+        self.assertEqual(timeline["macroTask"]["goal"]["body"], "First goal")
+
+    def test_deleted_empty_macro_releases_creation_key(self):
+        from hey_my_buddy.blackboard.tasks import macro_task_deletion
+
+        first = macro_tasks.create_macro_task(self.store, self.params)
+        preview = macro_task_deletion.preview(self.store, first["macroTaskId"])
+        self.assertEqual(preview["microTaskCount"], 0)
+        self.assertEqual(preview["blockers"], [])
+        deleted = macro_task_deletion.delete(self.store, first["macroTaskId"], 0)
+        self.assertEqual(deleted["state"], "deleted")
+        with self.store.db.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM events WHERE json_extract(payload_json,'$.macroTaskId')=?",
+                (first["macroTaskId"],)).fetchone()[0], 0)
+        again = macro_tasks.create_macro_task(self.store, self.params)
+        self.assertNotEqual(again["macroTaskId"], first["macroTaskId"])
+
+    def test_project_read_pages_empty_macros_without_a_run(self):
+        first = macro_tasks.create_macro_task(self.store, self.params)
+        second = macro_tasks.create_macro_task(
+            self.store, {**self.params, "title": "Second", "creationKey": "second-key"})
+        page = macro_tasks.project_get(self.store, {"projectId": self.params["projectId"], "limit": 1})
+        self.assertEqual(page["project"]["id"], self.params["projectId"])
+        self.assertEqual(page["project"]["path"], self.params["cwd"])
+        self.assertEqual(len(page["items"]), 1)
+        self.assertIsNotNone(page["nextCursor"])
+        next_page = macro_tasks.project_get(
+            self.store, {"projectId": self.params["projectId"], "limit": 1,
+                         "before": page["nextCursor"]})
+        self.assertEqual({page["items"][0]["macroTaskId"], next_page["items"][0]["macroTaskId"]},
+                         {first["macroTaskId"], second["macroTaskId"]})
+        self.assertIsNone(next_page["nextCursor"])
 
 
 class MacroTaskGoalTests(WorkflowTestCase):
-    def amend(self, board, run, goal, *, command_id="goal-2", expected=1, **control):
-        return board.call("workflow_goal_amend", {
-            "runId": run["runId"], "commandId": command_id,
-            "goal": goal, "expectedGoalRevision": expected,
-            **(control or self.control(run)),
-        })
+    def amend(self, board, run, goal):
+        return board.call("workflow_amend", {"macroTaskId": run["macroTaskId"], "goal": goal})
 
     def test_console_goal_history_reads_all_revisions_newest_first(self):
         board = self.board()
-        run = self.submit(board, macroTask={"title": "Group", "goal": "  Original\ntext  "})
+        run = self.submit(board, create_macro={"title": "Group", "goal": "  Original\ntext  "})
         self.amend(board, run, "第二版")
-        self.amend(board, run, "Third", command_id="goal-3", expected=2)
+        self.amend(board, run, "Third")
         with board.store.db.read() as db:
             recorded = db.execute(
                 "SELECT body,revision,created_at FROM macro_task_goals"
@@ -44,8 +120,9 @@ class MacroTaskGoalTests(WorkflowTestCase):
             board.call("macro_task_goal_history", {"macroTaskId": "macro-missing"})
         self.assertEqual(absent.exception.code, "NOT_FOUND")
 
-    def test_submission_requires_goal_and_rejects_description(self):
+    def test_create_requires_goal_and_rejects_description(self):
         board = self.board()
+        cwd = str(self.workdir())
         for presentation in (
             {"title": "A group"},
             {"title": "A group", "goal": ""},
@@ -53,19 +130,19 @@ class MacroTaskGoalTests(WorkflowTestCase):
             {"title": "A group", "goal": None},
         ):
             with self.subTest(presentation=presentation), self.assertRaises(BoardError) as caught:
-                self.submit(board, macroTask=presentation)
+                board.call("workflow_create", {"cwd": cwd, "creationKey": "a" * 64, **presentation})
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as description:
-            self.submit(board, macroTask={"title": "A group", "goal": "Aim", "description": "old field"})
+            board.call("workflow_create", {"cwd": cwd, "creationKey": "a" * 64,
+                                           "title": "A group", "goal": "Aim", "description": "old field"})
         self.assertEqual(description.exception.code, "INVALID_ARGUMENT")
-        self.assertEqual(description.exception.details["field"], "description")
         self.assertIn("description", description.exception.message)
         self.assertEqual(board.store.count_tasks(), 0)
 
     def test_initial_goal_keeps_exact_body_utf8_limit_and_creation_time(self):
         board = self.board()
         body = "  First line.\n\n末行  "
-        run = self.submit(board, macroTask={"title": "Readable title", "goal": body})
+        run = self.submit(board, create_macro={"title": "Readable title", "goal": body})
         with board.store.db.read() as db:
             created = db.execute(
                 "SELECT revision,body,created_at FROM macro_task_goals WHERE macro_task_id=?",
@@ -74,7 +151,7 @@ class MacroTaskGoalTests(WorkflowTestCase):
         goal = board.call("workflow_get", {"runId": run["runId"]})["goal"]
         self.assertEqual(goal, {"body": body, "revision": 1, "createdAt": created["created_at"]})
         self.assertEqual((created["revision"], created["body"]), (1, body))
-        self.assertEqual(goal["createdAt"], run["createdAt"])
+        self.assertEqual(goal["createdAt"], board.call("workflow_get", {"macroTaskId": run["macroTaskId"]})["createdAt"])
         self.assertEqual(board.call("macro_task_timeline", {"macroTaskId": run["macroTaskId"]})["macroTask"]["goal"], goal)
         self.assertNotIn("goal", macro_summaries(board.call("macro_task_list", {}))[0])
 
@@ -82,11 +159,11 @@ class MacroTaskGoalTests(WorkflowTestCase):
         at_limit = "界" * (maximum // 3) + "x" * (maximum % 3)
         self.assertEqual(len(at_limit.encode("utf-8")), maximum)
         large = self.submit(board, request_id="max-goal", kind="worktree",
-                            macroTask={"title": "Large goal", "goal": at_limit})
+                            create_macro={"title": "Large goal", "goal": at_limit})
         self.assertEqual(board.call("workflow_get", {"runId": large["runId"]})["goal"]["body"], at_limit)
         with self.assertRaises(BoardError) as caught:
             self.submit(board, request_id="over-goal", kind="worktree",
-                        macroTask={"title": "Too large", "goal": at_limit + "x"})
+                        create_macro={"title": "Too large", "goal": at_limit + "x"})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         self.assertEqual(board.store.count_tasks(), 2)
 
@@ -94,7 +171,7 @@ class MacroTaskGoalTests(WorkflowTestCase):
         board = self.board()
         body = "x" * schemas.MAX_TASK_BYTES
         runs = [self.submit(board, request_id=f"large-{index}", kind="worktree",
-                            macroTask={"title": f"Large goal {index}", "goal": body})
+                            create_macro={"title": f"Large goal {index}", "goal": body})
                 for index in range(9)]
         page = board.call("macro_task_list", {"limit": 20})
         self.assertEqual(len(macro_summaries(page)), 9)
@@ -106,14 +183,14 @@ class MacroTaskGoalTests(WorkflowTestCase):
 
     def test_amend_updates_all_member_views_without_changing_run_revision(self):
         board = self.board()
-        first = self.submit(board, macroTask={"title": "Group", "goal": "Initial"})
+        first = self.submit(board, create_macro={"title": "Group", "goal": "Initial"})
         second = self.submit(board, request_id="second", kind="worktree", macroTaskId=first["macroTaskId"])
-        before = {run["runId"]: board.call("workflow_get", {"runId": run["runId"]})["revision"]
+        before = {run["runId"]: board.call("task_get", {"runId": run["runId"]})["task"]["revision"]
                   for run in (first, second)}
         changed = "  Revised\ngoal  "
         result = self.amend(board, second, changed)
-        self.assertEqual((result["previousGoalRevision"], result["goalRevision"]), (1, 2))
-        self.assertFalse(result["duplicate"])
+        self.assertEqual(result["goalRevision"], 2)
+        self.assertFalse(result["alreadyCurrent"])
         with board.store.db.read() as db:
             rows = db.execute(
                 "SELECT revision,body,created_at FROM macro_task_goals WHERE macro_task_id=? ORDER BY revision",
@@ -125,84 +202,65 @@ class MacroTaskGoalTests(WorkflowTestCase):
             with self.subTest(runId=run["runId"]):
                 view = board.call("workflow_get", {"runId": run["runId"]})
                 self.assertEqual(view["goal"], current)
-                self.assertEqual(view["revision"], before[run["runId"]])
+                self.assertEqual(view["task"]["revision"], before[run["runId"]])
         self.assertEqual(board.call("macro_task_timeline", {"macroTaskId": first["macroTaskId"]})["macroTask"]["goal"], current)
         self.assertNotIn("goal", macro_summaries(board.call("macro_task_list", {}))[0])
 
-    def test_amend_replay_conflict_and_stale_revision_leave_history_unchanged(self):
+    def test_amend_replay_and_distinct_goals_append_without_revision_input(self):
         board = self.board()
-        run = self.submit(board, macroTask={"title": "Group", "goal": "Initial"})
+        run = self.submit(board, create_macro={"title": "Group", "goal": "Initial"})
         first = self.amend(board, run, "Next")
         head = board.store.head()
         replay = self.amend(board, run, "Next")
-        self.assertTrue(replay["duplicate"])
-        self.assertEqual((replay["previousGoalRevision"], replay["goalRevision"]), (1, 2))
-        self.assertEqual(board.store.head(), head)
-        with self.assertRaises(BoardError) as changed:
-            self.amend(board, run, "Different")
-        self.assertEqual(changed.exception.code, "CONFLICT")
-        with self.assertRaises(BoardError) as stale:
-            self.amend(board, run, "Third", command_id="goal-3", expected=1)
-        self.assertEqual(stale.exception.code, "GOAL_REVISION_CONFLICT")
-        self.assertEqual(stale.exception.details,
-                         {"expectedGoalRevision": 1, "currentGoalRevision": 2})
+        self.assertTrue(replay["alreadyCurrent"])
+        self.assertEqual(replay["goalRevision"], 2)
         self.assertEqual(board.store.head(), head)
         self.assertEqual(board.call("workflow_get", {"runId": run["runId"]})["goal"]["body"], "Next")
-        self.assertEqual((first["previousGoalRevision"], first["goalRevision"]), (1, 2))
+        self.assertEqual(first["goalRevision"], 2)
 
-        third = self.amend(board, run, "Third", command_id="goal-3", expected=2)
+        third = self.amend(board, run, "Third")
         self.assertEqual(third["goalRevision"], 3)
-        old_replay = self.amend(board, run, "Next")
-        self.assertTrue(old_replay["duplicate"])
-        self.assertEqual(old_replay["goalRevision"], 2)
-        self.assertEqual(old_replay["goal"]["body"], "Third")
+        changed_again = self.amend(board, run, "Next")
+        self.assertFalse(changed_again["alreadyCurrent"])
+        self.assertEqual(changed_again["goalRevision"], 4)
+        self.assertEqual(board.call("workflow_get", {"runId": run["runId"]})["goal"]["body"], "Next")
 
-    def test_amend_requires_the_controlling_run_capability(self):
+    def test_amend_uses_macro_id_without_run_control(self):
         board = self.board()
-        run = self.submit(board, macroTask={"title": "Group", "goal": "Initial"})
-        foreign = self.submit(board, request_id="foreign", host_id="host-2", kind="worktree",
-                              cwd=str(self.workdir("foreign")))
-        with self.assertRaises(BoardError) as missing:
-            board.call("workflow_goal_amend", {
-                "runId": run["runId"], "commandId": "missing-control",
-                "goal": "Denied", "expectedGoalRevision": 1,
-            })
-        self.assertEqual(missing.exception.code, "UNAUTHORIZED")
-        with self.assertRaises(BoardError) as wrong:
-            self.amend(board, run, "Denied", command_id="foreign-control", **self.control(foreign))
-        self.assertEqual(wrong.exception.code, "UNAUTHORIZED")
-        with self.assertRaises(BoardError) as standalone:
-            self.amend(board, foreign, "No group", command_id="standalone-goal", expected=0)
-        self.assertEqual(standalone.exception.code, "MACRO_TASK_REQUIRED")
-        self.assertEqual(board.call("workflow_get", {"runId": run["runId"]})["goal"]["body"], "Initial")
+        run = self.submit(board, create_macro={"title": "Group", "goal": "Initial"})
+        changed = board.call("workflow_amend", {"macroTaskId": run["macroTaskId"], "goal": "Changed"})
+        self.assertEqual(changed["goalRevision"], 2)
+        with self.assertRaises(BoardError) as unknown:
+            board.call("workflow_amend", {"macroTaskId": "macro-missing", "goal": "No group"})
+        self.assertEqual(unknown.exception.code, "NOT_FOUND")
 
     def test_older_group_without_goal_accepts_first_revision(self):
         board = self.board()
-        run = self.submit(board, macroTask={"title": "Older group", "goal": "Remove in fixture"})
+        run = self.submit(board, create_macro={"title": "Older group", "goal": "Remove in fixture"})
         with board.store.db.write() as db:
             db.execute("DELETE FROM macro_task_goals WHERE macro_task_id=?", (run["macroTaskId"],))
         self.assertIsNone(board.call("workflow_get", {"runId": run["runId"]})["goal"])
-        result = self.amend(board, run, "Restored goal", command_id="first-goal", expected=0)
-        self.assertEqual((result["previousGoalRevision"], result["goalRevision"]), (0, 1))
+        result = self.amend(board, run, "Restored goal")
+        self.assertEqual(result["goalRevision"], 1)
         self.assertEqual(board.call("workflow_get", {"runId": run["runId"]})["goal"]["body"], "Restored goal")
 
     def test_deleting_group_rejects_goal_amend(self):
         board = self.board()
-        run = self.submit(board, macroTask={"title": "Group", "goal": "Initial"})
+        run = self.submit(board, create_macro={"title": "Group", "goal": "Initial"})
         with board.store.db.write() as db:
             db.execute(
                 "INSERT INTO macro_task_deletions(deletion_id,target_kind,target_id) VALUES(?,?,?)",
                 ("deleting-group", "macro-task", run["macroTaskId"]),
             )
         with self.assertRaises(BoardError) as caught:
-            self.amend(board, run, "Changed", command_id="blocked-goal")
-        self.assertEqual(caught.exception.code, "TASK_DELETING")
-        self.assertEqual(caught.exception.details["deletionId"], "deleting-group")
+            self.amend(board, run, "Changed")
+        self.assertEqual(caught.exception.code, "MACRO_TASK_DELETING")
+        self.assertEqual(caught.exception.details["macroTaskId"], run["macroTaskId"])
         self.assertEqual(board.call("workflow_get", {"runId": run["runId"]})["goal"]["body"], "Initial")
 
     def test_get_includes_every_inquiry_with_answer_and_timestamps(self):
         board = self.board()
-        run = self.submit(board, macroTask={"title": "Group", "goal": "Initial"})
+        run = self.submit(board, create_macro={"title": "Group", "goal": "Initial"})
         posted = [board.store._message_post(run["runId"], f"question-{index:02}", f"Question {index}?")["message"]
                   for index in range(schemas.MAX_INQUIRIES_PER_RUN)]
         answer = {"text": "The answer", "bytes": 10, "via": "reply-tool", "toolCallId": None,
@@ -226,7 +284,7 @@ class MacroTaskGoalTests(WorkflowTestCase):
     def test_goal_is_absent_from_worker_input_and_agent_get(self):
         board = self.board()
         sentinel = "Goal only for the Host: 叶叶叶"
-        run = self.submit(board, task="Worker instructions", macroTask={"title": "Group", "goal": sentinel})
+        run = self.submit(board, task="Worker instructions", create_macro={"title": "Group", "goal": sentinel})
         self.assertEqual(board.call("workflow_get", {"runId": run["runId"]})["goal"]["body"], sentinel)
         claim = self.claim(board, run_id=run["runId"])["claim"]
         self.assertNotIn(sentinel, json.dumps(claim, ensure_ascii=False))

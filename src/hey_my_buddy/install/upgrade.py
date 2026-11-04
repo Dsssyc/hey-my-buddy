@@ -196,6 +196,27 @@ def _rebuild_ipc_root(state: Path) -> None:
         os.close(state_fd)
 
 
+def _retire_host_files(state: Path) -> list[str]:
+    """Remove old Host-only files after the replacement service is verified."""
+    removed = [name for name in ('controls', 'submissions')
+               if private_dirs.remove_tree(state / name)]
+    if removed:
+        private_files.sync_directory(state, follow_symlinks=False)
+    return removed
+
+
+def _finish_host_retirement(state: Path, journal: dict) -> dict:
+    """Retire schema-34 Host files once; failure cannot fence a verified install."""
+    if journal['before']['schema'] >= 35:
+        return {}
+    try:
+        journal['retiredHostDirectories'] = _retire_host_files(state)
+    except (OSError, BoardError) as error:
+        journal['hostCleanupError'] = _failure_reason(error)
+        return {'hostCleanupError': journal['hostCleanupError']}
+    return {}
+
+
 def start(state: Path, target: Path) -> dict:
     from .launcher import entry_modules
     # Callers hold control-start.lock: the record is cleared before the spawn, so
@@ -592,6 +613,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                     retained = 'journal and backup retained' if backed_up is not None else 'journal retained'
                     raise BoardError('UPGRADE_RECOVERY_REQUIRED', f'Automatic rollback could not prove recovery; {retained}; rerun install to recover', journal=str(marker),
                                      reason=reason, recoveryReason=journal['recoveryFailure']) from recovery
+            host_cleanup = _finish_host_retirement(state, journal)
             write_journal(state / 'upgrade-last.json', journal)
             skill_cleanup_error = _finish_skill(skill_paths)
             journal_error = None
@@ -602,6 +624,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
             pruning = retain_runtimes(state, target, previous)
             return {'upgraded':True, **({'backup':backed_up} if backed_up is not None else {}), 'verification':evidence, 'previousRuntime':previous.name,
                     'rollback':None, 'runtimePruning':pruning,
+                    **host_cleanup,
                     **({'skillCleanupError':skill_cleanup_error} if skill_cleanup_error is not None else {}),
                     **({'journalError':journal_error} if journal_error is not None else {})}
 
@@ -624,6 +647,7 @@ def recover(state: Path, root: Path) -> dict:
         _verify_skill_generation(skill_paths, target, target_health)
         write_active_runtime(state, target, journal.get('environment'))
         journal.update(verification=evidence)
+        host_cleanup = _finish_host_retirement(state, journal)
         write_journal(state / 'upgrade-last.json', journal)
         skill_cleanup_error = _finish_skill(skill_paths)
         journal_error = None
@@ -633,6 +657,7 @@ def recover(state: Path, root: Path) -> dict:
             journal_error = str(error)
         pruning = retain_runtimes(state, target, previous)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence, 'runtimePruning':pruning,
+                **host_cleanup,
                 **({'backup':journal['backup']} if 'backup' in journal else {}),
                 **({'skillCleanupError':skill_cleanup_error} if skill_cleanup_error is not None else {}),
                 **({'journalError':journal_error} if journal_error is not None else {})}

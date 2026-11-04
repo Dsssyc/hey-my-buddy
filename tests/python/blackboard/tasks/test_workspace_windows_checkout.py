@@ -19,7 +19,7 @@ from hey_my_buddy.errors import BoardError
 def _intent(repository: Path, commit: str) -> dict:
     return {"kind": "worktree", "cwd": str(repository), "access": "write",
             "base": {"kind": "commit", "ref": commit}, "includeUntracked": [],
-            "writeScope": ["src"], "integrator": {"role": "host", "id": "host-1"}}
+            "writeScope": ["src"], "integrator": {"role": "host"}}
 
 
 def _git(repository: Path, *args: str, data: bytes | None = None) -> bytes:

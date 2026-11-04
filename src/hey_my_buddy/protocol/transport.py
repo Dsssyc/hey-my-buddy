@@ -40,15 +40,10 @@ def owner_held_message() -> str:
     """The one owner-busy explanation shared by every lifetime-lock refusal."""
     return "A board owner still holds this state directory's lifetime locks."
 
-#: CLI method -> (resource, C-Two operation). The CLI names are the only public
-#: surface; the C-Two operation names never change here. ``await`` is a CLI-level
-#: read-only wait implemented on top of these in ``blocking.py`` and never appears
-#: here. The single micro task lifecycle keeps the bare names; the advanced
-#: ``execution-*`` names manage ordinary task records created by the workflow
-#: and internal decision infrastructure.
+#: Retained top-level CLI names only. ``await`` is implemented locally over the
+#: separate internal operation registry below. A service operation never becomes
+#: callable from the CLI merely because ``await`` or a role client uses it.
 METHOD_MAP: dict[str, tuple[str, str]] = {
-    "accounts": ("control", "accounts"),
-    "ping": ("control", "ping"),
     "health": ("control", "health"),
     "harnesses": ("control", "capabilities"),
     "harness-set": ("control", "harness_set"),
@@ -57,55 +52,52 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "storage-plan": ("control", "storage_plan"),
     "storage-apply": ("control", "storage_apply"),
     "worker-sessions": ("control", "worker_sessions"),
-    # -- single micro task lifecycle ------------------------------------
+    # -- Host lifecycle -------------------------------------------------
+    "create": ("control", "workflow_create"),
+    "amend": ("control", "workflow_amend"),
     "submit": ("control", "workflow_submit"),
     "get": ("control", "workflow_get"),
-    "decide": ("control", "workflow_decide"),
     "continue": ("control", "workflow_continue"),
-    "takeover": ("control", "workflow_takeover"),
     "cancel": ("control", "workflow_cancel"),
     "accept": ("control", "workflow_accept"),
     "conclude": ("control", "workflow_conclude"),
-    "reclaim": ("control", "workflow_reclaim"),
-    "goal-amend": ("control", "workflow_goal_amend"),
-    "scope-amend": ("control", "workflow_scope_amend"),
-    "workspace-resolve": ("control", "workflow_workspace_resolve"),
-    "suggest": ("control", "workflow_suggest"),
-    # -- work macro tasks: read-only browsing of grouped micro tasks ----------
-    "macro-task-list": ("control", "macro_task_list"),
-    "macro-task-timeline": ("control", "macro_task_timeline"),
-    # -- execution records for command/decision infrastructure -----
-    "execution-cancel": ("control", "task_cancel"),
-    "execution-retry": ("control", "task_retry"),
-    "execution-acknowledge": ("control", "task_acknowledge"),
-    # -- execution observation stays distinct -------------------------------
-    "status": ("control", "task_get"),
-    "list": ("control", "task_list"),
-    "result": ("control", "task_result"),
-    "wait": ("wait", "task_wait"),
-    "watch": ("wait", "events_wait"),
-    "events": ("control", "events_read"),
     "inquire": ("control", "inquiry_observe"),
-    "messages": ("control", "message_list"),
-    "message-get": ("control", "message_get"),
-    "artifacts": ("control", "artifact_list"),
     "console": ("control", "console"),
-    "console-snapshot": ("control", "console_snapshot"),
-    "user-policy-publish": ("control", "user_policy_publish"),
-    "selection-request": ("control", "selection_request"),
-    "selection-get": ("control", "selection_get"),
-    "selection-list": ("control", "selection_list"),
-    "model-catalog-refresh": ("control", "model_catalog_refresh"),
-    "buddy-list": ("control", "buddy_list"),
+    # -- User operations ------------------------------------------------
     "stop": ("control", "service_control"),
     "restart": ("control", "service_control"),
-    "wait-capacity": ("wait", "wait_capacity"),
+    # -- Credential-scoped role commands --------------------------------
+    "suggest": ("control", "workflow_suggest"),
+    "list": ("control", "task_list"),
 }
 
-#: Methods whose response body wraps the execution task view under ``task``.
-UNWRAP_TASK = frozenset({"execution-cancel", "execution-retry", "execution-acknowledge", "status"})
-#: Methods whose response body *is* the task view (the wait route returns it directly).
-DIRECT_TASK_VIEW = frozenset({"wait"})
+#: Private calls used by await, installer, console, and credential-scoped role
+#: clients. These names are absent from the CLI registry and from Host help.
+INTERNAL_METHOD_MAP: dict[str, tuple[str, str]] = {
+    "ping": ("control", "ping"),
+    "capabilities": ("control", "capabilities"),
+    "accounts": ("control", "accounts"),
+    "workflow_get": ("control", "workflow_get"),
+    "task_get": ("control", "task_get"),
+    "task_result": ("control", "task_result"),
+    "task_wait": ("wait", "task_wait"),
+    "events_read": ("control", "events_read"),
+    "events_wait": ("wait", "events_wait"),
+    "artifact_list": ("control", "artifact_list"),
+    "message_get": ("control", "message_get"),
+    "message_list": ("control", "message_list"),
+    "macro_task_list": ("control", "macro_task_list"),
+    "macro_task_timeline": ("control", "macro_task_timeline"),
+    "task_cancel": ("control", "task_cancel"),
+    "selection_get": ("control", "selection_get"),
+    "selection_list": ("control", "selection_list"),
+    "model_catalog_refresh": ("control", "model_catalog_refresh"),
+    "buddy_list": ("control", "buddy_list"),
+    "user_policy_publish": ("control", "user_policy_publish"),
+}
+
+UNWRAP_TASK = frozenset({"task_get"})
+DIRECT_TASK_VIEW = frozenset({"task_wait"})
 
 
 class ServiceError(BoardError):
@@ -168,7 +160,7 @@ def _invoke(service, endpoint: dict, operation: str, params: dict) -> dict:
     # The token travels with the operation's own parameters and is verified by the
     # resource before any schema validation happens.
     payload = {"token": endpoint["token"], **params}
-    if operation in {'capabilities', 'buddy_list', 'model_catalog_refresh', 'workflow_submit', 'selection_request', 'console_snapshot'}:
+    if operation in {'capabilities', 'buddy_list', 'model_catalog_refresh', 'workflow_submit'}:
         payload['_harnessPathHint'] = os.environ.get('PATH', '')
     request = encode_message(payload)
     try:
@@ -521,12 +513,12 @@ def call_service(method: str, params: dict | None = None, state_dir: str | Path 
 
 
 def _call_service(method: str, params: dict | None, directory: Path) -> dict:
-    if not isinstance(method, str) or method not in METHOD_MAP:
+    if not isinstance(method, str) or method not in METHOD_MAP and method not in INTERNAL_METHOD_MAP:
         raise ServiceError("INVALID_ARGUMENT", f"Unknown method {method!r}")
     if params is not None and not isinstance(params, dict):
         raise ServiceError("INVALID_ARGUMENT", "params must be an object")
     params = dict(params or {})
-    resource, operation = METHOD_MAP[method]
+    resource, operation = (METHOD_MAP.get(method) or INTERNAL_METHOD_MAP[method])
     if method in ("stop", "restart"):
         params.setdefault("action", method)
     # Validate locally before any daemon spawn so an invalid request never starts work.
@@ -547,7 +539,7 @@ def _call_service(method: str, params: dict | None, directory: Path) -> dict:
         task = reply.get("task")
         if not isinstance(task, dict):
             raise ServiceError("INVALID_RESPONSE", "The service did not return a task")
-        return {**task, **{key: reply[key] for key in ("duplicate", "alreadyTerminal", "retry", "waitingForHost") if key in reply}}
+        return {**task, **{key: reply[key] for key in ("duplicate", "alreadyTerminal") if key in reply}}
     if method in DIRECT_TASK_VIEW:
         if not isinstance(reply.get("runId"), str):
             raise ServiceError("INVALID_RESPONSE", "The wait route did not return a task view")

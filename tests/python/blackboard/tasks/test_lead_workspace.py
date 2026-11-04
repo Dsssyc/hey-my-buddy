@@ -1,7 +1,6 @@
 """A Lead controls workspace decisions for its own real-Git micro tasks."""
 from __future__ import annotations
-from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
-from unittest.mock import patch as defer_reclaim
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, record_reference
 from admission import admit_board, admit_store
 
 import os
@@ -14,6 +13,8 @@ from protocol.fixtures import native_turn
 from blackboard.tasks.test_workflow_real import BUDDY, GIT_ENV, RealWorkspaceTestCase
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
+from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 
 
@@ -37,23 +38,28 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         return board, lead, other
 
     def _lead(self, board, request_id: str, repo: Path, worker: str, *, buddy=BUDDY, kind="existing") -> dict:
+        task = "Review and direct the child task"
+        project_id = workspace.ensure_project_id(workspace.repository_at(str(repo), allow_parent=True))
         submitted = board.call("workflow_submit", {
-            **buddy, "requestId": request_id, "hostId": "host",
-            "task": "Review and direct the child task", "cwd": str(repo),
-            "submissionToken": request_id[0] * 32, "delegationAuthority": True,
-            "executionWorkspace": {"kind": kind, "access": "full", "accessNote": "Lead review", "writeScope": ["."]},
+            "cwd": str(repo), "macroTaskId": "standalone", "title": request_id, "task": task,
+            "buddy": ":".join(buddy.values()), "checkout": kind, "access": "full",
+            "accessNote": "Lead review", "writeScope": ["."], "inputs": [],
+            "expectedSeconds": 1800, "delegationAuthority": True,
+            "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, request_id, task]),
         })
         claimed = admit_board(board, {'workerId': worker, 'claimRequestId': f'claim-{request_id}', 'nonce': worker[0] * 16, 'runId': submitted['runId']})["claim"]
         self.assertIsNotNone(claimed)
         return {"runId": submitted["runId"], "turnId": claimed["turn"]["turnId"],
-                "credential": claimed["agentCredential"], "control": submitted["control"], "claim": claimed}
+                "credential": claimed["agentCredential"], "claim": claimed}
 
     def _child(self, board, lead: dict, request_id: str, *, scope=("src",)) -> dict:
+        task = "Change the isolated checkout"
+        project_id = workspace.ensure_project_id(workspace.repository_at(str(self.repo), allow_parent=True))
         submitted = board.call("workflow_submit", {
-            **BUDDY, "credential": lead["credential"], "requestId": request_id,
-            "task": "Change the isolated checkout", "cwd": str(self.repo),
-            "submissionToken": request_id[0] * 32,
-            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": list(scope)},
+            "credential": lead["credential"], "cwd": str(self.repo), "title": request_id,
+            "task": task, "buddy": ":".join(BUDDY.values()), "checkout": "worktree",
+            "access": "write", "writeScope": list(scope), "inputs": [], "expectedSeconds": 1800,
+            "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, request_id, task]),
         })
         self.assertNotIn("control", submitted)
         with board.store.db.read() as connection:
@@ -99,14 +105,15 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         self._finish_child(board, child, claim, seal=seal)
         view = board.call("workflow_get", {"runId": child["runId"]})
         params = {
-            "runId": child["runId"], "commandId": "lead-amend",
-            "expectedRevision": view["revision"], "expectedScopeVersion": 1,
-            "writeScope": ["src", "docs"], "note": "Documentation is in the next stage",
+            "runId": child["runId"], "artifactId": view["finalArtifactId"],
+            "input": "Continue with documentation", "writeScope": ["src", "docs"],
+            "note": "Documentation is in the next stage",
         }
-        self._wrong_lead_refused(board, "workflow_scope_amend", params, other)
-        amended = board.call("workflow_scope_amend", {**params, "credential": lead["credential"]})
-        self.assertEqual(amended["scopeVersion"], 2)
-        self.assertEqual(amended["writeScope"], ["docs", "src"])
+        self._wrong_lead_refused(board, "workflow_continue", params, other)
+        board.call("workflow_continue", {**params, "credential": lead["credential"]})
+        amended = board.call("workflow_get", {"runId": child["runId"]})
+        self.assertEqual(amended["scope"]["scopeVersion"], 2)
+        self.assertEqual(amended["scope"]["writeScope"], ["src", "docs"])
 
     def test_lead_can_resolve_its_child_workspace_conflict(self):
         board, lead, other = self._board_with_leads()
@@ -121,15 +128,15 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         view = board.call("workflow_get", {"runId": child["runId"]})
         conflict = view["workspaceConflicts"][0]
         params = {
-            "runId": child["runId"], "commandId": "lead-resolve",
-            "expectedRevision": view["revision"], "conflictId": conflict["conflictId"],
-            "action": "restore", "paths": ["outside.txt"],
+            "runId": child["runId"], "requestId": view["activeRequest"]["requestId"],
+            "resolution": "restore", "paths": ["outside.txt"],
             "observedFingerprint": conflict["observedFingerprint"],
             "note": "Restore the unauthorized path",
         }
-        self._wrong_lead_refused(board, "workflow_workspace_resolve", params, other)
-        resolved = board.call("workflow_workspace_resolve", {**params, "credential": lead["credential"]})
-        self.assertTrue(resolved["resolved"])
+        self._wrong_lead_refused(board, "workflow_continue", params, other)
+        board.call("workflow_continue", {**params, "credential": lead["credential"]})
+        resolved = board.call("workflow_get", {"runId": child["runId"]})
+        self.assertEqual(resolved["workspaceConflicts"][0]["state"], "restored")
         self.assertFalse((checkout / "outside.txt").exists())
         self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
 
@@ -141,18 +148,12 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         seal = workspace.seal(self.directory, manifest, child["runId"], claim["attempt"]["attemptId"])
         self._finish_child(board, child, claim, seal=seal)
         view = board.call("workflow_get", {"runId": child["runId"]})
-        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
-            accepted = board.call("workflow_accept", {
-                "runId": child["runId"], "artifactId": view["finalArtifactId"],
-                "note": "Reviewed the sealed child output", "notRequired": "No integration target for this fixture",
-                 "credential": lead["credential"],
-            })
+        params = {"runId": child["runId"], "artifactId": view["finalArtifactId"],
+                  "note": "Reviewed the sealed child output", "notRequired": "No integration target for this fixture"}
+        self._wrong_lead_refused(board, "workflow_accept", params, other)
+        accepted = board.call("workflow_accept", {**params, "credential": lead["credential"]})
         self.assertEqual(accepted["state"], "accepted")
-        self.assertTrue(checkout.exists())
-        params = {"runId": child["runId"]}
-        self._wrong_lead_refused(board, "workflow_reclaim", params, other)
-        reclaimed = board.call("workflow_reclaim", {**params, "credential": lead["credential"]})
-        self.assertTrue(reclaimed["removed"])
+        self.assertTrue(accepted["reclaim"]["removed"])
         self.assertFalse(checkout.exists())
 
     def _concludable_lead_with_owned_checkout(self):
@@ -162,7 +163,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
         seal = workspace.seal(self.directory, manifest, child["runId"], claim["attempt"]["attemptId"])
         self._finish_child(board, child, claim, seal=seal)
-        board.call("workflow_cancel", {"runId": lead["runId"], **lead["control"]})
+        board.call("workflow_cancel", {"runId": lead["runId"]})
         attempt = lead["claim"]["attempt"]
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'l' * 16, 'status': 'cancelled', 'result': {'status': 'cancelled'}, 'shutdownConfirmed': True})
         return board, lead, child, checkout
@@ -178,7 +179,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             released.append(run_id)
             return reclaim(run_id=run_id)
         with patch.object(board.store.workflow, '_reclaim_checkout', side_effect=after_release):
-            concluded = board.call("workflow_conclude", {"runId": lead["runId"], "note": "Stop this line of work", **lead["control"]})
+            concluded = board.call("workflow_conclude", {"runId": lead["runId"], "note": "Stop this line of work"})
         self.assertEqual(set(released), {lead['runId'], child['runId']})
         self.assertEqual(concluded["state"], "concluded")
         current = board.call("workflow_get", {"runId": child["runId"]})
@@ -194,7 +195,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             console_authority={"sessionId": "fixture-console"},
         )
         self.assertEqual(concluded["state"], "concluded")
-        self.assertTrue(concluded["ownedReclaims"][0]["removed"])
+        self.assertEqual(concluded["state"], "concluded")
         self.assertEqual(board.call("workflow_get", {"runId": child["runId"]})["state"], "concluded")
         self.assertFalse(checkout.exists())
 
@@ -209,7 +210,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             seal = workspace.seal(self.directory, manifest, child["runId"], claim["attempt"]["attemptId"])
             self._finish_child(board, child, claim, seal=seal)
             children.append((child, checkout))
-        board.call("workflow_cancel", {"runId": lead["runId"], **lead["control"]})
+        board.call("workflow_cancel", {"runId": lead["runId"]})
         attempt = lead["claim"]["attempt"]
         board.call("execution_result", {
             "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": "l" * 16,
@@ -222,23 +223,24 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         def after_commit(*, run_id):
             if not attempted:
                 self.repo.rename(self.directory / "moved-after-conclusion")
-            attempted.append(run_id)
-            return reclaim(run_id=run_id)
+            result = reclaim(run_id=run_id)
+            attempted.append((run_id, result))
+            return result
 
         with patch.object(coordinator, "_reclaim_checkout", side_effect=after_commit):
             concluded = board.call("workflow_conclude", {
-                "runId": lead["runId"], "note": "Close all owned work", **lead["control"],
+                "runId": lead["runId"], "note": "Close all owned work",
             })
         self.assertEqual(concluded["state"], "concluded")
-        self.assertEqual(set(attempted), {lead["runId"], *(child["runId"] for child, _ in children)})
-        self.assertEqual(concluded["ownedReclaimTotal"], 2)
+        self.assertEqual({run_id for run_id, _ in attempted},
+                         {lead["runId"], *(child["runId"] for child, _ in children)})
         for child, checkout in children:
-            reclaim_result = next(item for item in concluded["ownedReclaims"] if item["runId"] == child["runId"])
+            reclaim_result = next(item for run_id, item in attempted if run_id == child["runId"])
             self.assertEqual(reclaim_result["reasons"], ["repository-not-found"])
             self.assertTrue(checkout.exists())
             self.assertEqual(board.call("workflow_get", {"runId": child["runId"]})["state"], "concluded")
 
-    def test_replaying_lead_conclusion_retries_blocked_owned_reclaim(self):
+    def test_replaying_lead_conclusion_keeps_identity_and_maintenance_retries_reclaim(self):
         board, lead, child, checkout = self._concludable_lead_with_owned_checkout()
         coordinator = board.store.workflow
         reclaim = coordinator._reclaim_checkout
@@ -248,19 +250,18 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
                 return {"removed": False, "reasons": ["fixture-busy"]}
             return reclaim(**kwargs)
 
-        params = {"runId": lead["runId"], "note": "Close and reclaim", **lead["control"]}
+        params = {"runId": lead["runId"], "note": "Close and reclaim"}
         with patch.object(coordinator, "_reclaim_checkout", side_effect=blocked_owned_reclaim):
             first = board.call("workflow_conclude", params)
-        self.assertFalse(first["ownedReclaims"][0]["removed"])
+        self.assertEqual(first["state"], "concluded")
         self.assertTrue(checkout.exists())
         with board.store.db.read() as connection:
             conclusions = connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0]
-        with self.assertRaises(BoardError) as caught:
-            board.call("workflow_reclaim", {"runId": lead["runId"], "targetRunId": child["runId"], **lead["control"]})
-        self.assertEqual(caught.exception.code, "UNAUTHORIZED")
         replayed = board.call("workflow_conclude", params)
-        self.assertTrue(replayed["duplicate"])
-        self.assertTrue(replayed["ownedReclaims"][0]["removed"])
+        self.assertTrue(replayed["alreadyResponded"])
+        self.assertEqual(replayed["conclusionId"], first["conclusionId"])
+        self.assertTrue(checkout.exists())
+        Reclamation(board.store).run()
         self.assertFalse(checkout.exists())
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], conclusions)

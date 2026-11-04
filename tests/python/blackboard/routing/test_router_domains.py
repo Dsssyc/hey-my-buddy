@@ -37,7 +37,7 @@ class RouterDomainTests(WorkflowTestCase):
                        "'old-ipc','debug',2,1,1,0,1)")
 
     def request(self, request_id="domain-route"):
-        return self.board_.call("selection_request", {"requestId": request_id, "task": "Fix transport ownership"})
+        return self.board_.store.decisions.request_select({"requestId": request_id, "task": "Fix transport ownership"})
 
     def packet(self, request):
         return self.board_.call("selection_get", {"decisionId": request["decisionId"],
@@ -118,9 +118,8 @@ class RouterDomainTests(WorkflowTestCase):
     def test_micro_task_project_comes_from_original_project_not_execution_checkout(self):
         self.seed_domains()
         original = str(self.workdir("project"))
-        submitted = self.board_.call("workflow_submit", {
-            "requestId": "project-route", "hostId": "host", "task": "Fix transport ownership", "cwd": original,
-            "executionWorkspace": {"kind": "worktree", "access": "write"}})
+        submitted = self.submit(self.board_, request_id="project-route", task="Fix transport ownership",
+                                cwd=original, kind="worktree", access="write", buddy="route")
         packet = self.packet({"decisionId": submitted["routing"]["decisionId"]})
         self.assertEqual(packet["project"]["path"], original)
         view = self.board_.call("task_get", {"runId": submitted["runId"]})

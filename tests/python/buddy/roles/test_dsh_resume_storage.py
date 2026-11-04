@@ -222,7 +222,7 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         self.assertEqual(native_path(foreign_binding).read_bytes(), b"fixture foreign binding")
 
         # Delivered but not yet accepted: still retained.
-        self.continue_run(board, view, command_id="continue-to-completion")
+        self.continue_run(board, view)
         second = self.claim(board, claim_request_id="c2")
         self.finish_turn(board, second, session_id="dsh-native-2")
         delivered = board.call("workflow_get", {"runId": run_id})

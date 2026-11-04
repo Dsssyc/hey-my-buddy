@@ -69,23 +69,24 @@ def observe_capable(adapter: str) -> bool:
 
 def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> dict:
     """One bounded inquiry operation: observe, ask, or read a correlated answer."""
-    schemas.reject_unknown(params, {"runId", "inquiryId", "question", "timeoutMs", "waitMs"}, "inquire")
-    if (params.get("inquiryId") is None) != (params.get("question") is None):
-        raise BoardError("INVALID_ARGUMENT", "inquiryId and question must be supplied together")
-    timeout_ms = schemas.optional_int(params, "timeoutMs", DEFAULT_TRANSPORT_TIMEOUT_MS, MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS)
-    wait_ms = schemas.optional_int(params, "waitMs", 0, 0, MAX_WAIT_MS)
+    from ...protocol.requests import parse_request, dump_request
+    from ..store.db import canonical_json, sha256_text
+    params = dump_request(parse_request("inquire", params, audience="service"))
+    timeout_ms = params.get("timeoutMs", DEFAULT_TRANSPORT_TIMEOUT_MS)
+    wait_ms = params.get("waitMs", 0)
     inquiry_id = params.get("inquiryId")
     question = params.get("question")
-    if inquiry_id is not None:
-        schemas.required_string(params, "inquiryId", max_length=128, pattern=schemas.INQUIRY_ID_PATTERN)
-        schemas.bounded_text(params, "question", max_bytes=schemas.MAX_QUESTION_BYTES)
-
+    read_existing = inquiry_id is not None
+    if read_existing:
+        message = store.message_get({"runId": params["runId"], "inquiryId": inquiry_id})["message"]
+    if question is not None:
+        inquiry_id = "inq-" + sha256_text(canonical_json(["adr032-inquiry-v1", params["runId"], question]))
     view = store.task_get({"runId": params.get("runId")})["task"]
     attempt = view.get("selectedAttempt") or {}
     adapter = view.get("adapter")
-    duplicate = False
-    recorded = None
-    if inquiry_id is not None:
+    duplicate = read_existing
+    recorded = message if read_existing else None
+    if question is not None:
         posted = store._message_post(view["runId"], inquiry_id, question)
         recorded = posted["message"]
         duplicate = bool(posted.get("duplicate"))
@@ -107,9 +108,22 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
         "unavailable": ["sessionId", "agentStatus", "inbox", "lastEvent", "activity", "replyTool"],
         "limits": LIMITS,
     }
+
+    def import_journal():
+        with store.db.write() as connection:
+            stored_attempt = store._attempt_row(connection, attempt["attemptId"])
+            journal = store._import_inquiry_journal(connection, stored_attempt)
+            head = store._head_of(connection)
+        store._notify(head)
+        return journal
+
+    imported_replay = ()
+    if channel is not None and duplicate and question is not None:
+        imported_replay = import_journal().get("imported", ())
+        recorded = store.message_get({"runId":view["runId"],"inquiryId":inquiry_id})["message"]
     if attempt_ended:
         pass
-    elif inquiry_id is not None and not can_ask:
+    elif inquiry_id is not None and not duplicate and not can_ask:
         # The adapter can be observed but cannot ask: record the honest capability
         # refusal instead of sending a question the native protocol cannot carry.
         bridge["capability"] = "observe"
@@ -119,7 +133,9 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
     elif channel is not None:
         # Only the registered binding may inject into this attempt's native turn.
         # Durable question facts are imported from its private journal below.
-        if (recorded is not None and recorded["state"] in ("queued", "claimed", "delivered")
+        if (question is not None and recorded is not None
+                and (not duplicate or recorded["state"] == "queued" and inquiry_id not in imported_replay)
+                and recorded["state"] in ("queued", "claimed", "delivered")
                 and recorded["attemptId"] == attempt.get("attemptId")):
             reply = channel.request(
                 LiveRequest(identity=channel.identity, request_id=inquiry_id, kind="inquiry",
@@ -149,14 +165,6 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
                 bridge["error"] = snapshot.error
     elif unbound_live:
         bridge["reason"] = "channel-unbound"
-
-    def import_journal():
-        with store.db.write() as connection:
-            stored_attempt = store._attempt_row(connection, attempt["attemptId"])
-            journal = store._import_inquiry_journal(connection, stored_attempt)
-            head = store._head_of(connection)
-        store._notify(head)
-        return journal
 
     # Durable question facts use the same attempt-bound reader while active and
     # finished. A missing active connection still grants no file-only fallback.
@@ -188,6 +196,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
     pending = store.message_list({"runId": view["runId"], "limit": 50})["messages"]
     return {
         "runId": view["runId"],
+        "inquiryId": inquiry_id,
         "requestId": view["requestId"],
         "status": view["state"],
         "phase": "terminal" if terminal else "active",

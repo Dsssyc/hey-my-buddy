@@ -85,7 +85,7 @@ class RouterListHealthTestCase(BoardTestCase):
             task_id, attempt_id = f"legacy-task-{self.sequence}", f"legacy-attempt-{self.sequence}"
             with self.db.write() as db:
                 db.execute(
-                    "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,'host',json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','<private>','completed',1,?,?)",
+                    "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','<private>','completed',1,?,?)",
                     (task_id, task_id, at, at))
                 db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,result_form,shutdown_confirmed,started_at,created_at,updated_at) VALUES(?,?,0,'nonce','finished','decision',?,'archived-report-v1',1,?,?,?)", (attempt_id, task_id, canonical_json(receipt), at, at, at))
         requested = {"kind": "select", "routerBuddyId": buddy_id,
@@ -288,7 +288,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
         self.set_settings(ids=[A], interval=600)
         with self.db.write() as db:
             db.execute(
-                "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES('task-live','req-live','host',json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','<private>','running',1,?,?)", (T0, T0))
+                "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES('task-live','req-live',json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','<private>','running',1,?,?)", (T0, T0))
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,created_at,updated_at) VALUES('attempt-live','task-live',1,'nonce','executing','decision',NULL,0,?,?)", (T0, T0))
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES('dec-live','running',?)", (T0,))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,requested_json,updated_at) VALUES('dec-live','req-live','live','{}',?)", (T0,))

@@ -58,7 +58,7 @@ class GitIndexSnapshotTests(unittest.TestCase):
 
     def intent(self, repo, selected=()):
         return {"kind": "worktree", "cwd": str(repo), "access": "write", "base": {"kind": "working-tree"},
-                "writeScope": ["src"], "integrator": {"role": "host", "id": "host-1"},
+                "writeScope": ["src"], "integrator": {"role": "host"},
                 "includeUntracked": list(selected)}
 
     def tree_entries(self, repo, treeish):

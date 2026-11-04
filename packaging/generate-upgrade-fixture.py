@@ -73,7 +73,7 @@ def generate(args):
     # Frozen writers include source paths in IDs, refs and Git commit messages.
     # Generate at one private canonical path, then retain the whole work tree
     # at the caller's fresh destination. Each run still starts from empty stock.
-    work = root / "tmp" / ".upgrade-fixture-generation-active"
+    work = retained.parent / ".upgrade-fixture-generation-active"
     work.mkdir(exist_ok=False)
     try:
         generate_in_canonical_slot(args, root, work)
@@ -1325,8 +1325,12 @@ def populate(args):
                 'submissionToken': 'fixture-growth-floor-token',
                 'task': 'Continue a released-writer workspace',
                 'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                'requiredCapabilities': ['workspace'],
+                'exclusiveResources': ['fixture:exclusive'],
                 'cwd': str(work / 'workspaces/accepted'),
-                'executionWorkspace': {'kind': 'existing', 'access': 'read'},
+                'executionWorkspace': {'kind': 'existing', 'access': 'read',
+                                       'base': {'kind': 'commit', 'ref': WORKSPACE_INPUT},
+                                       'targetRef': 'refs/heads/fixture-recorded-target'},
                 'macroTask': {'title': 'Released floor continuation stock'},
             })
             pending_claim = admit(nonce, pending['runId'])
@@ -1404,6 +1408,23 @@ def populate(args):
                     report(claimed, nonce, status='failed', result={
                         'status': 'failed', 'processState': {'shutdownConfirmed': True},
                     })
+            # Retired command receipts must come from the released floor's own
+            # writers. This plain task has no workflow governance and no process
+            # is launched; its result uses the same synthetic receipt path above.
+            plain_cwd = work / 'plain-command'
+            plain_cwd.mkdir()
+            plain = store.task_submit({
+                'requestId': 'fixture-retired-command-receipts', 'adapter': 'command',
+                'argv': ['fixture-never-executed'], 'cwd': str(plain_cwd),
+                'task': 'Retained receipts of retired task operations', 'expectedSeconds': 60,
+            })['task']
+            store.task_cancel({'runId': plain['runId'], 'note': 'Prepare stopped retry stock'})
+            store.task_retry({'runId': plain['runId'], 'note': 'Released retry receipt'},
+                             command_id='fixture-retired-task-retry')
+            plain_claim = admit(nonce, plain['runId'])
+            report(plain_claim, nonce, status='ok', result={'status': 'ok'})
+            store.task_acknowledge({'runId': plain['runId'], 'note': 'Released acknowledgement receipt'},
+                                   command_id='fixture-retired-task-acknowledge')
             with store.db.read() as connection:
                 stock = {}
                 for table in tables:
@@ -1789,8 +1810,8 @@ def derive_legacy_stock(args):
     """
     root = Path(__file__).resolve().parents[1]
     work, output, fixed = args.work_dir.resolve(), args.output_dir.resolve(), args.legacy_stock_for.resolve()
-    if not work.is_relative_to(root / 'tmp/w3') or not output.is_relative_to(root / 'tmp/w3'):
-        raise ValueError('Legacy derivation work and output must be under tmp/w3/')
+    if not work.is_relative_to(root / 'tmp') or not output.is_relative_to(root / 'tmp'):
+        raise ValueError('Legacy derivation work and output must be under this checkout\'s tmp/')
     work.mkdir(parents=True, exist_ok=False)
     output.mkdir(parents=True, exist_ok=False)
     base_sql = (fixed / 'board.sql').read_bytes()

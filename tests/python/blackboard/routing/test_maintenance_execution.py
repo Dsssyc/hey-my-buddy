@@ -11,6 +11,7 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 from support import BoardTestCase, FakeClock
 
 from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.buddy.roles.run_observers import MaintenanceCorrection
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
@@ -41,7 +42,7 @@ class EmptyMaintenanceTests(BoardTestCase):
             self.assertEqual(board.console_call("maintenance_start", {}), {"status": "not-configured"})
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM maintenance_runs").fetchone()[0], 0)
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM tasks WHERE owner='decision'").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM tasks WHERE adapter='decision'").fetchone()[0], 0)
 
     def test_private_material_is_bound_to_run_and_digest(self):
         board = self.board()
@@ -158,7 +159,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
             "commandId": "maintenance-settings", "configuration": {
                 "maintenanceBuddyId": BUDDY_ID, "maintenanceIntervalSeconds": 7200}})
         self.assertTrue(response["published"])
-        settings = self.board_.call("console_snapshot", {})["configuration"]
+        settings = console_snapshot_projection(self.board_.service)[0]["configuration"]
         self.assertEqual(settings["maintenanceBuddyId"], BUDDY_ID)
         self.assertEqual(settings["maintenanceIntervalSeconds"], 7200)
         with self.assertRaises(BoardError) as caught:
@@ -167,11 +168,10 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(caught.exception.code, "NOT_FOUND")
         self.board_.console_call("user_policy_publish", {
             "commandId": "maintenance-clear", "configuration": {"maintenanceBuddyId": None}})
-        self.assertIsNone(self.board_.call("console_snapshot", {})["configuration"]["maintenanceBuddyId"])
+        self.assertIsNone(console_snapshot_projection(self.board_.service)[0]["configuration"]["maintenanceBuddyId"])
 
     def test_unknown_maintenance_load_in_queue_and_in_flight_is_a_lower_bound(self):
         from hey_my_buddy.blackboard.routing.evidence import _loads
-        from hey_my_buddy.cli.cli_views import task_brief
         self.configure()
         started = self.start()
         identity = ('dsh', 'fixture', 'maintenance')
@@ -182,7 +182,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual((queued['active'], queued['queued']), (0, 1))
         self.assertEqual(queued['wait'], {'seconds': 0, 'atLeast': True, 'overdue': 0})
         task = self.board_.call('task_get', {'runId': started['runId']})['task']
-        self.assertNotIn('routerBudgetSeconds', task_brief(task))
+        self.assertIsNone(task['routerBudgetSeconds'])
         self.assertIsNone(self.board_.call('inquiry_observe', {'runId': started['runId']})['routerBudgetSeconds'])
         self.claim_maintenance(started['runId'])
         self.clock.advance(10_000)
@@ -259,9 +259,10 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         concluded = self.submit(self.board_, request_id="concluded-state", task="Investigate parser failure",
                                 cwd=str(self.workdir("concluded-state")), kind="worktree")
         self.finish_turn(self.board_, self.claim(self.board_, run_id=concluded["runId"]))
+        delivered = self.board_.call("workflow_get", {"runId": concluded["runId"]})
         self.board_.call("workflow_conclude", {"runId": concluded["runId"],
-                                                "note": "Investigation ended without acceptance",
-                                                **self.control(concluded)})
+                                                "artifactId": delivered["finalArtifactId"],
+                                                "note": "Investigation ended without acceptance"})
         self.assertEqual(self.board_.console_call("maintenance_pending", {}),
                          {"pendingMicroTaskCount": 3})
 
@@ -726,7 +727,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.finish_turn(self.board_, self.claim(self.board_, run_id=run["runId"]))
         delivered = self.board_.call("workflow_get", {"runId": run["runId"]})
         other = {**BUDDY, "model": "maintenance-other"}
-        self.continue_run(self.board_, delivered, buddy=other, command_id="two-kind-continue")
+        self.continue_run(self.board_, delivered, buddy=other)
         self.finish_turn(self.board_, self.claim(self.board_, run_id=run["runId"], nonce="n" * 16),
                          nonce="n" * 16, session_id="sess-2")
         self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": run["runId"]}))

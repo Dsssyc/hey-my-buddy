@@ -52,8 +52,8 @@ class RoutingHealthTests(BoardTestCase):
                 encoded = canonical_json(spec)
                 task_state = "completed" if receipt_status == "ok" else receipt_status
                 connection.execute(
-                    "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,?,json_set(?,'$.routerBudgetSeconds',60),?,1,'decision','<private-cwd>',?,1,?,?)",
-                    (task_id, task_id, "fixture-host", encoded, sha256_text(encoded), task_state, now, now))
+                    "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set(?,'$.routerBudgetSeconds',60),?,1,'decision','<private-cwd>',?,1,?,?)",
+                    (task_id, task_id, encoded, sha256_text(encoded), task_state, now, now))
                 connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,result_form,shutdown_confirmed,finished_at,created_at,updated_at) VALUES(?,?,1,'fixture-nonce','finished','decision',?,'archived-report-v1',1,?,?,?)", (attempt_id, task_id, canonical_json(receipt), now, now, now))
             connection.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,"

@@ -22,7 +22,7 @@ class ReadSharingTests(WorkflowTestCase):
 
     def reader(self, board, request_id, selectors=(), *, cwd=None):
         return self.submit(board, request_id=request_id, cwd=str(cwd or self.repo),
-                           executionWorkspace={"kind": "existing", "access": "read",
+                           workspace={"kind": "existing", "access": "read",
                                                "includeUntracked": list(selectors)})
 
     def manifests(self, board):
@@ -39,7 +39,7 @@ class ReadSharingTests(WorkflowTestCase):
                 patch.object(workspace, "_workspace_directory", wraps=workspace._workspace_directory) as allocate:
             with self.assertRaises(BoardError) as caught:
                 self.submit(board, request_id=request_id, cwd=str(self.repo),
-                            executionWorkspace={"kind": "existing", "access": access,
+                            workspace={"kind": "existing", "access": access,
                                                 "includeUntracked": list(selectors)})
         self.assertEqual(caught.exception.code, code)
         pin.assert_not_called()
@@ -48,7 +48,8 @@ class ReadSharingTests(WorkflowTestCase):
         self.assertEqual(sorted(str(path.relative_to(native_path(self.directory / "workspaces")))
                                 for path in native_path(self.directory / "workspaces").rglob("*")), before_state)
         with board.store.db.read() as connection:
-            self.assertIsNone(connection.execute("SELECT task_id FROM tasks WHERE request_id=?", (request_id,)).fetchone())
+            self.assertIsNone(connection.execute(
+                "SELECT r.run_id FROM workflow_runs r WHERE r.title=?", (request_id,)).fetchone())
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workspace_reservations WHERE state='held'").fetchone()[0], holders)
 
     def test_delivered_unaccepted_reader_shares_unchanged_checkout(self):
@@ -167,7 +168,7 @@ class ReadSharingTests(WorkflowTestCase):
         captured = {}
 
         def competing_writer(*args, **kwargs):
-            if args[0]["requestId"] == "racing-reader":
+            if kwargs["micro_task"]["title"] == "racing-reader":
                 captured["manifest"] = kwargs["micro_task"]["manifest"]
                 self.submit(board, request_id="winning-writer", cwd=str(self.repo))
             return original_submit(*args, **kwargs)
@@ -180,7 +181,8 @@ class ReadSharingTests(WorkflowTestCase):
         self.assertEqual(self.git(self.repo, "for-each-ref", "refs/hey-my-buddy/workspaces/" + manifest["workspaceId"]), "")
         self.assertFalse((self.directory / "workspaces" / manifest["workspaceId"]).exists())
         with board.store.db.read() as connection:
-            self.assertIsNone(connection.execute("SELECT 1 FROM tasks WHERE request_id='racing-reader'").fetchone())
+            self.assertIsNone(connection.execute(
+                "SELECT 1 FROM workflow_runs WHERE title='racing-reader'").fetchone())
 
     def test_conflicting_helper_batch_revokes_snapshots_under_shared_locks(self):
         board = self.board()
@@ -192,10 +194,10 @@ class ReadSharingTests(WorkflowTestCase):
                               for path in native_path(self.directory / "workspaces").rglob("*"))
         with self.assertRaises(BoardError) as caught:
             self.decide(board, view, view["activeRequest"]["requestId"], helpers=[
-                {"requestId": "helper-reader", "task": "read source", "cwd": str(self.repo),
-                 "executionWorkspace": {"kind": "existing", "access": "read"}},
-                {"requestId": "helper-writer", "task": "write source", "cwd": str(self.repo),
-                 "executionWorkspace": {"kind": "existing", "access": "write"}},
+                {"title": "helper-reader", "task": "read source", "cwd": str(self.repo),
+                 "workspace": {"kind": "existing", "access": "read"}},
+                {"title": "helper-writer", "task": "write source", "cwd": str(self.repo),
+                 "workspace": {"kind": "existing", "access": "write"}},
             ])
         self.assertEqual(caught.exception.code, "PREPARATION_CONFLICT")
         self.assertEqual(self.git(self.repo, "for-each-ref"), before_refs)

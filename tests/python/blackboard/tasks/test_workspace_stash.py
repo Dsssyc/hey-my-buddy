@@ -319,7 +319,6 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.controls: dict[str, dict] = {}
         self.worker = "w-stash"
         from hey_my_buddy.blackboard.tasks import workflow as workflow_module
         self._previous_workspace = workflow_module._workspace_module
@@ -344,14 +343,8 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
         board = self.board()
         self.register(board)
         queued_only = self.stash("queued only")
-        submitted = board.call("workflow_submit", {
-            "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off",
-            "requestId": "req-real-stash", "hostId": "host-1", "task": "real shared stash facts",
-            "cwd": str(self.repo), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
-        })
+        submitted = self.submit(board, request_id="req-real-stash", kind="worktree")
         run_id = submitted["runId"]
-        self.controls[run_id] = submitted["control"]
         # The user drops their stash while the task merely sits queued: the turn
         # that eventually starts must freeze its own starting state.
         self.git("stash", "drop", "stash@{0}")

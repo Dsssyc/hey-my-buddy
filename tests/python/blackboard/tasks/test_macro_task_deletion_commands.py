@@ -1,4 +1,4 @@
-"""Deletion clears receipts written by the real workflow command producers."""
+"""Deletion removes remaining command receipts and domain response facts."""
 from __future__ import annotations
 from unittest.mock import patch as defer_reclaim
 
@@ -19,7 +19,7 @@ from hey_my_buddy.blackboard.tasks import workspace as workspace_module
 
 PHYSICAL_STAGES = (
     "_delete_sessions", "_delete_workspaces",
-    "_delete_private_roots", "_delete_cli_files",
+    "_delete_private_roots",
 )
 RESPONSE_BINDINGS = (
     "runId", "targetRunId", "requestId", "continuationId", "planId",
@@ -86,36 +86,27 @@ def assert_deleted_receipts(case, board, target, expected_kinds, retained_comman
 class WorkflowDeletionCommandTests(WorkflowTestCase, ConsoleTestCase):
     def test_real_workflow_commands_are_removed_with_their_macro_task(self):
         board = self.board()
-        first = self.submit(board, request_id="commands-first", macroTask={"title": "Disposable", 'goal': "Disposable"})
+        first = self.submit(board, request_id="commands-first", create_macro={"title": "Disposable", 'goal': "Disposable"})
         self.finish_turn(board, self.claim(board), disposition="attention")
         attention = board.call("workflow_get", {"runId": first["runId"]})
         decided = self.decide(board, attention, attention["activeRequest"]["requestId"],
-                              command_id="commands-decide", decision="decline", autoContinue=False)
-        self.continue_run(board, decided, command_id="commands-continue")
+                              decision="decline")
         self.finish_turn(board, self.claim(board, claim_request_id="commands-claim-2"))
         delivered = board.call("workflow_get", {"runId": first["runId"]})
-        amended = board.store.workflow.scope_amend({
-            "runId": first["runId"], "commandId": "commands-scope",
-            "expectedRevision": delivered["revision"], "expectedScopeVersion": 1,
-            "writeScope": ["docs"], "note": "Authorize reviewed follow-up",
-            **self.control(delivered),
-        })
         with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
-            accepted = self.accept_run(board, amended)
+            accepted = self.accept_run(board, delivered)
         self.assertEqual(accepted["state"], "accepted")
 
         second = self.submit(board, request_id="commands-second", macroTaskId=first["macroTaskId"])
-        cancelled = board.call("workflow_cancel", {"runId": second["runId"],
-                                                   "commandId": "commands-cancel", **self.control(second)})
+        cancelled = board.call("workflow_cancel", {"runId": second["runId"]})
         board.call("workflow_conclude", {"runId": second["runId"],
-                                         "note": "Cancelled before execution", **self.control(cancelled)})
+                                         "note": "Cancelled before execution"})
 
-        other = self.submit(board, request_id="commands-other", macroTask={"title": "Retained", 'goal': "Retained"},
+        other = self.submit(board, request_id="commands-other", create_macro={"title": "Retained", 'goal': "Retained"},
                             cwd=str(self.workdir("commands-other")))
-        other_cancelled = board.call("workflow_cancel", {"runId": other["runId"],
-                                                         "commandId": "commands-other-cancel", **self.control(other)})
+        other_cancelled = board.call("workflow_cancel", {"runId": other["runId"]})
         board.call("workflow_conclude", {"runId": other["runId"],
-                                         "note": "Retained group", **self.control(other_cancelled)})
+                                         "note": "Retained group"})
 
         _, browser = self.open_console(board)
         status, _, raw = browser.command(
@@ -123,16 +114,11 @@ class WorkflowDeletionCommandTests(WorkflowTestCase, ConsoleTestCase):
             csrf=browser.bootstrap()["csrfToken"],
         )
         self.assertEqual(status, 200, raw)
-        retained = {command_id for command_id, row in receipt_rows(board).items()
-                    if command_id == "commands-other-cancel"
-                    or (row["kind"].startswith("workflow.")
-                        and json.loads(row["response_json"]).get("runId") == other["runId"])}
-        before, after = assert_deleted_receipts(self, board, first["macroTaskId"], {
-            "workflow.decide", "workflow.continue", "workflow.scope_amend", "workflow.accept",
-            "workflow.cancel", "workflow.conclude", "macro_task.stop",
-        }, retained, {first["runId"], second["runId"]})
+        self.assertFalse(any(row["kind"].startswith("workflow.") for row in receipt_rows(board).values()))
+        before, after = assert_deleted_receipts(self, board, first["macroTaskId"],
+                                                {"macro_task.stop"}, set(), {first["runId"], second["runId"]})
         self.assertNotIn("commands-stop", after)
-        self.assertEqual(before["commands-other-cancel"], after["commands-other-cancel"])
+        self.assertEqual(before["commands-stop"]["kind"], "macro_task.stop")
         status, _, raw = browser.command(
             "macro_task_stop", {"macroTaskId": other["macroTaskId"], "commandId": "commands-stop"},
             csrf=browser.bootstrap()["csrfToken"],
@@ -144,33 +130,38 @@ class WorkflowDeletionCommandTests(WorkflowTestCase, ConsoleTestCase):
 class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):
     register = scope_fixtures.ScopeRecoveryTestCase.register
     micro_task_submit = scope_fixtures.ScopeRecoveryTestCase.micro_task_submit
-    control = scope_fixtures.ScopeRecoveryTestCase.control
     claim = scope_fixtures.ScopeRecoveryTestCase.claim
     scope_failure = scope_fixtures.ScopeRecoveryTestCase.scope_failure
     turn_record = scope_fixtures.ScopeRecoveryTestCase.turn_record
     finish_turn = scope_fixtures.ScopeRecoveryTestCase.finish_turn
     view = scope_fixtures.ScopeRecoveryTestCase.view
     resolve = scope_fixtures.ScopeRecoveryTestCase.resolve
+    resolution_facts = scope_fixtures.ScopeRecoveryTestCase.resolution_facts
     scoped_failure = scope_fixtures.ScopeRecoveryTestCase.scoped_failure
 
     def setUp(self):
         super().setUp()
-        self.controls = {}
         self.worker = "w-deletion-commands"
         previous_workspace = workflow_module._workspace_module
         workflow_module._workspace_module = workspace_module
         self.addCleanup(setattr, workflow_module, "_workspace_module", previous_workspace)
 
-    def test_workspace_resolution_command_is_tombstoned(self):
+    def test_resolution_response_fact_is_deleted_with_its_micro_task(self):
         board, submitted, _claimed, _manifest, _checkout = self.scoped_failure()
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
         resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
-                                command_id="commands-resolve", note="Restore refused paths")
-        board.call("workflow_cancel", {"runId": submitted["runId"],
-                                       "commandId": "commands-resolved-cancel", **self.control(resolved)})
+                                note="Restore refused paths")
+        board.call("workflow_cancel", {"runId": submitted["runId"]})
+        board.call("workflow_conclude", {"runId": submitted["runId"], "note": "Resolved work closed"})
+        with board.store.db.read() as connection:
+            self.assertIsNotNone(connection.execute("SELECT decision_json FROM workflow_requests WHERE request_id=?",
+                                                    (view["activeRequest"]["requestId"],)).fetchone())
         assert_deleted_receipts(self, board, "run:" + submitted["runId"],
-                                {"workflow.workspace_resolve", "workflow.cancel"}, set(), {submitted["runId"]})
+                                set(), set(), {submitted["runId"]})
+        with board.store.db.read() as connection:
+            self.assertIsNone(connection.execute("SELECT 1 FROM workflow_requests WHERE run_id=?",
+                                                 (submitted["runId"],)).fetchone())
 
     def test_cleanup_journal_is_deleted_with_its_micro_task(self):
         board = self.board()
@@ -188,7 +179,6 @@ class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):
             accepted = board.call("workflow_accept", {
                 "runId": run_id, "artifactId": delivered["finalArtifactId"],
                 "note": "Reviewed output", "notRequired": "No separate target in this fixture",
-                 **self.control(delivered),
             })
         planned = board.store.workflow.cleanup_plan({
             "runId": run_id,
@@ -200,5 +190,5 @@ class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):
         })
         self.assertFalse(checkout.exists())
         assert_deleted_receipts(self, board, "run:" + run_id,
-                                {"workflow.accept"}, set(),
+                                set(), set(),
                                 {run_id})

@@ -4,6 +4,7 @@ import json
 import time
 from types import SimpleNamespace
 
+from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.errors import BoardError
@@ -149,7 +150,7 @@ class RouterPublicationTests(WorkflowTestCase):
         self.finish_turn(board, self.claim(board, run_id=submitted['runId']))
         delivered = board.call('workflow_get', {'runId': submitted['runId']})
         self.accept_run(board, delivered)
-        request = board.call('selection_request', {'requestId': 'route-after-sample',
+        request = board.store.decisions.request_select({'requestId': 'route-after-sample',
                                                    'task': 'choose a capable buddy'})
         decision = board.call('selection_get', {'decisionId': request['decisionId'],
                                                 'includeAudit': True})['decision']
@@ -165,7 +166,7 @@ class RouterPublicationTests(WorkflowTestCase):
         board = InProcessBoard(self.directory / (code or f"publication-{len(self._stack)}"))
         self._stack.append(board)
         self.seed(board, preferences=preferences)
-        request = board.call('selection_request', {'requestId': 'route', 'task': 'choose'})
+        request = board.store.decisions.request_select({'requestId': 'route', 'task': 'choose'})
         pass  # Admission is owned by the service.
         claim = self.claim(board, 'router', run_id=request['runId'])['claim']
         result = {**claim_tool_receipt(claim, state_dir=board.directory), 'status': 'error' if code else 'ok', 'operation': 'select',
@@ -201,12 +202,11 @@ class RouterPublicationTests(WorkflowTestCase):
     def test_reroute_waits_for_new_continuation_manifest(self):
         board = self.board()
         self.seed(board, decision_buddy=None)
-        submitted = board.call('workflow_submit', {
-            'requestId': 'frozen-reroute', 'hostId': 'host', 'task': 'Original task ' + 'T' * 130000,
-            'cwd': str(self.workdir()), 'executionWorkspace': {'kind': 'existing', 'access': 'write'}})
-        self.controls[submitted['runId']] = submitted['control']
+        submitted = self.submit(board, request_id='frozen-reroute',
+            task='Original task ' + 'T' * 130000, cwd=str(self.workdir()),
+            kind='existing', access='write', buddy='route')
         continuation_text = 'Changed continuation task ' + 'C' * 50000
-        continued = self.continue_run(board, submitted, reroute=True, input=continuation_text)
+        continued = self.continue_run(board, submitted, buddy='route', input=continuation_text)
         self.assertEqual(continued['routing']['status'], 'queued')
         self.assertIsNone(continued['routing']['source'])
         helper_text = 'H' * 12000
@@ -247,20 +247,20 @@ class RouterPublicationTests(WorkflowTestCase):
         board.console_call('user_policy_publish', {
             'commandId': 'budget-change',
             'configuration': {'routingBudget': 'deep'}})
-        configured = board.call('console_snapshot', {})['configuration']
+        configured = console_snapshot_projection(board.service)[0]['configuration']
         self.assertEqual(configured['routingBudget'], 'deep')
         self.assertEqual(configured['routerBuddyIds'], [BUDDY_ID])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
 
-    def test_budget_update_does_not_change_selection_request_replay(self):
+    def test_budget_update_does_not_change_direct_selection_replay(self):
         board = self.board()
         self.seed(board)
         params = {'requestId': 'stable-budget-request', 'task': 'choose'}
-        original = board.call('selection_request', params)
+        original = board.store.decisions.request_select(params)
         with board.store.db.write() as connection:
             connection.execute("UPDATE router_settings SET budget_preset='deep' WHERE id=1")
-        replay = board.call('selection_request', params)
+        replay = board.store.decisions.request_select(params)
         self.assertTrue(replay['duplicate'])
         self.assertEqual(replay['decisionId'], original['decisionId'])
         view = board.call('selection_get', {'decisionId': original['decisionId']})['decision']
@@ -277,14 +277,14 @@ class RouterPublicationTests(WorkflowTestCase):
         board = self.board()
         self.seed(board)
         with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
-            snapshot = board.call('console_snapshot', {})
+            snapshot = console_snapshot_projection(board.service)[0]
         buddy = next(p for p in snapshot['buddies'] if p['buddyId'] == BUDDY_ID)
         self.assertNotIn('decision', buddy['capabilities'])
         with board.store.db.read() as connection:
             recorded = json.loads(connection.execute('SELECT capabilities_json FROM buddies WHERE buddy_id=?', (BUDDY_ID,)).fetchone()[0])
         self.assertNotIn('decision', recorded)
         self.assertFalse(hasattr(DshAdapter, 'read_only_structured_verified'))
-        eligible = board.call('console_snapshot', {})
+        eligible = console_snapshot_projection(board.service)[0]
         self.assertIn('decision', next(p for p in eligible['buddies'] if p['buddyId'] == BUDDY_ID)['capabilities'])
 
     def test_outside_choice_is_rejected_and_not_abstention(self):

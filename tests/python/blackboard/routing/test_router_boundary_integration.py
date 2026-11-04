@@ -4,7 +4,6 @@ The sealed publication fixtures exercise the production completion transaction.
 Only the local catalog and workspace seam are substituted for micro-task commands.
 """
 from admission import admit_board, admit_store
-import copy
 import json
 import unittest
 from unittest.mock import patch
@@ -21,27 +20,25 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 
 TRIAL_FIELDS = {"buddyId", "identity", "index", "phase", "outcome", "code", "nativeIdentity",
                 "taskId", "attemptId", "shutdownConfirmed", "consecutiveNoAnswers", "retryAt", "usage"}
-BOUNDARY_FIELDS = {"kind", "code", "reason", "routerTrials", "candidates", "facts", "retryAt", "commands", "userAction"}
+BOUNDARY_FIELDS = {"kind", "code", "reason", "routerTrials", "candidates", "facts", "retryAt",
+                   "decisionId", "runId", "targetRunId", "helperPolicy", "continuationProblem",
+                   "actions", "userAction"}
 
 
 class BoundaryTemplateIdentityTests(unittest.TestCase):
-    def test_template_without_input_uses_its_new_command_digest(self):
+    def test_boundary_carries_facts_and_current_legal_actions(self):
         boundary = build_boundary(
             kind="router-unavailable", code=None, reason={"code": "provider-error", "params": {}},
             candidates=[{"buddyId": "buddy-stable", "harness": "dsh", "provider": "fixture",
                          "model": "alpha", "effort": "max"}],
             facts={}, router_trials=[], retry_at="2026-01-01T00:10:00.000Z",
-            decision_id="decision-stable", run_id="run-stable", revision=7, shutdown_confirmed=True)
-        choice = boundary["commands"]["continue"]["choices"][0]["params"]
-        reroute = boundary["commands"]["reroute"]["params"]
-        self.assertNotIn("note", choice)
-        self.assertNotIn("note", reroute)
-        self.assertNotIn("input", choice)
-        self.assertNotIn("input", reroute)
-        self.assertEqual(choice["commandId"],
-                         "router-continue-1a89bba36c2c1d1fb5b75511d98ee75c4f4c01ef51d610fd10d0b4457b198318")
-        self.assertEqual(reroute["commandId"],
-                         "router-reroute-a6b2b2a4a2970872ddea9d4dead412cd38c68b34b70a2cc5edfa717d72f8f1fc")
+            decision_id="decision-stable", run_id="run-stable", shutdown_confirmed=True)
+        self.assertEqual(boundary["decisionId"], "decision-stable")
+        self.assertEqual(boundary["runId"], "run-stable")
+        self.assertEqual(boundary["actions"], ["continue", "cancel"])
+        self.assertEqual(boundary["candidates"][0]["buddyId"], "buddy-stable")
+        for retired in ("commands", "commandId", "expectedRevision", "controlFile"):
+            self.assertNotIn(retired, boundary)
 
 
 class BoundaryReadingTests(RouterDispatchTestCase):
@@ -52,6 +49,15 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     report = failover.FailoverTests.report
     current_task = failover.FailoverTests.current_task
     next_claim = failover.FailoverTests.next_claim
+    def request(self, *, request_id="pick-1", task="fix the parser"):
+        return self.board_.store.decisions.request_select({"requestId": request_id, "task": task})
+
+    def tasks(self, *, state=None):
+        with self.board_.store.db.read() as db:
+            query = "SELECT task_id,state,adapter FROM tasks WHERE adapter='decision'"
+            if state is not None:
+                query += " AND state=?"
+            return db.execute(query, (state,) if state is not None else ()).fetchall()
     def claim(self, suffix="1", *, task_id=None):
         result = super().claim(suffix, task_id=task_id)
         if result["claim"]:
@@ -218,12 +224,22 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(self.router_events("router.answered"), [])
 
     def test_completed_recommendation_with_changed_execution_context_uses_program_route_reason(self):
-        request, first = self.start(micro_task=True)
-        self.report(first, self.answer(first))
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE workflow_routes SET state='needs-host' WHERE decision_id=?",
-                       (request["decisionId"],))
-        boundary = self.boundary(request["decisionId"])
+        from mock_workspace import MockWorkspace
+        from hey_my_buddy.blackboard.tasks import workflow as workflow_module
+        with patch.object(workflow_module, "_workspace_module", MockWorkspace(self.board_.directory)):
+            submitted = self.board_.call("workflow_submit", {
+                "cwd": str(self.workdir()), "macroTaskId": "standalone", "title": "routed task",
+                "task": "do the thing", "buddy": "route", "checkout": "existing", "access": "write",
+                "inputs": [], "writeScope": ["."], "expectedSeconds": 60,
+                "creationKey": "c" * 64,
+            })
+            routed = self.board_.call("workflow_get", {"runId": submitted["runId"]})["routing"]
+            first = self.claim("linked", task_id=routed["taskId"])["claim"]
+            self.report(first, self.answer(first))
+            with self.board_.store.db.write() as db:
+                db.execute("UPDATE workflow_routes SET state='needs-host' WHERE decision_id=?",
+                           (routed["decisionId"],))
+            boundary = self.boundary(routed["decisionId"])
         self.assertEqual(boundary["kind"], "routing-changed")
         self.assertIsNone(boundary["reason"])
         self.assertEqual(boundary["routerTrials"][0]["outcome"], "answered")
@@ -326,9 +342,8 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assert_packet(boundary)
         self.assertEqual(boundary["routerTrials"], [])
         self.assertIsNone(boundary["retryAt"])
-        self.assertTrue(boundary["commands"]["continue"]["blocked"])
-        self.assertEqual(boundary["commands"]["continue"]["choices"], [])
-        self.assertIsNone(boundary["commands"]["reroute"]["params"])
+        self.assertEqual(boundary["actions"], ["get", "cancel"])
+        self.assertEqual([item["buddyId"] for item in boundary["candidates"]], [A, B])
         self.assertEqual(self.tasks(), [])
         self.assertEqual(self.attempts(), [])
 
@@ -356,7 +371,13 @@ class BoundaryReadingTests(RouterDispatchTestCase):
             db.execute("DELETE FROM model_service_notes")
         current = self.boundary(request["decisionId"])
         self.assertEqual(current["facts"], frozen["facts"])
-        self.assertEqual(current["candidates"], frozen["candidates"])
+        self.assertEqual([{key: value for key, value in item.items() if key != "problem"}
+                          for item in current["candidates"]],
+                         [{key: value for key, value in item.items() if key != "problem"}
+                          for item in frozen["candidates"]])
+        self.assertTrue(all(item["problem"] == {"code": "router-out-of-bounds",
+                                                     "bound": "identity-changed"}
+                            for item in current["candidates"]))
         self.assertNotIn("later-model", canonical_json(current["facts"]))
 
     def test_skip_is_not_an_execution_or_new_failure_and_retry_time_does_not_roll(self):
@@ -417,7 +438,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     def test_unknown_stop_blocks_micro_task_commands_and_does_not_claim_prior_output(self):
         request, first = self.start()
         self.report(first, self.failure(first), status="failed", shutdown=False)
-        self.assertIsNone(self.boundary(request["decisionId"], run_id="run-1", revision=3))
+        self.assertIsNone(self.boundary(request["decisionId"], run_id="run-1"))
         self.assertEqual(self.decision_row(request["decisionId"])["status"], "running")
         self.assertEqual(self.board_.client().get(runId=first["task"]["taskId"])["attemptState"], "finalizing")
         self.assertEqual(len(self.tasks()), 1)
@@ -491,7 +512,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         boundary = self.boundary(request["decisionId"])
         self.assertEqual(boundary["routerTrials"][0]["outcome"], "stopUnknown")
         self.assertIs(boundary["routerTrials"][0]["shutdownConfirmed"], False)
-        self.assertTrue(boundary["commands"]["continue"]["blocked"])
+        self.assertEqual(boundary["actions"], ["get", "cancel"])
 
 
 class MicroTaskBoundaryTests(WorkflowTestCase):
@@ -510,46 +531,40 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
             router._write_settings(db, {**router.configuration(db), "routerBuddyIds": []})
 
     def routed(self, request_id="micro-task-1", *, access="write", kind="existing"):
-        response = self.board_.call("workflow_submit", {"requestId": request_id, "hostId": "host-1",
-            "submissionToken": "private-submission-token", "task": "Private routed implementation",
-            "cwd": str(self.workdir(request_id)), "executionWorkspace": {"kind": kind, "access": access}})
-        self.controls[response["runId"]] = response["control"]
-        return response
+        return self.submit(self.board_, request_id=request_id,
+                           task="Private routed implementation",
+                           cwd=str(self.workdir(request_id)), buddy="route", kind=kind, access=access)
 
-    def template_params(self, view, template, *, note=None):
-        params = copy.deepcopy(template)
-        self.assertEqual(params.pop("controlFile"), "<saved-control-file>")
-        params.update(self.control(view))
-        params["input"] = "Host continues the frozen micro task"
-        if note is not None:
-            params["note"] = note
+    def choice_params(self, view, buddy, *, note="Host selected the frozen buddy"):
+        boundary = view["routing"]["routingBoundary"]
+        params = {"runId": view["runId"], "requestId": view["activeRequest"]["requestId"],
+                  "input": "Host continues the frozen micro task", "buddy": buddy, "note": note}
+        if boundary["targetRunId"] is not None:
+            params["targetRunId"] = boundary["targetRunId"]
+        if boundary["helperPolicy"] is not None:
+            params["helperPolicy"] = boundary["helperPolicy"]
         return params
 
-    def test_micro_task_boundary_has_post_attention_revision_and_real_continue_tuple(self):
+    def test_boundary_exposes_request_identity_and_legal_choices(self):
         view = self.routed()
         boundary = view["routing"]["routingBoundary"]
         self.assertEqual(view["activeRequest"]["routingBoundary"], boundary)
-        choices = boundary["commands"]["continue"]["choices"]
-        self.assertFalse(boundary["commands"]["continue"]["blocked"])
-        self.assertEqual([item["buddyId"] for item in choices], [A, B])
-        for choice in choices:
-            params = choice["params"]
-            self.assertEqual(params["runId"], view["runId"])
-            self.assertEqual(params["expectedRevision"], view["revision"])
-            self.assertNotIn("input", params)
-            self.assertNotIn("note", params)
-            self.assertLessEqual(len(params["commandId"]), 128)
-        chosen = choices[1]["params"]
-        host_params = self.template_params(view, chosen)
-        host_params["note"] = "Host 选择冻结候选中的第二位 buddy 继续"
-        self.assertEqual(host_params["commandId"], chosen["commandId"])
-        continued = self.board_.call("workflow_continue", host_params)
-        self.assertEqual(continued["buddy"], chosen["buddy"])
+        self.assertEqual(boundary["runId"], view["runId"])
+        self.assertEqual(boundary["decisionId"], view["routing"]["decisionId"])
+        self.assertEqual(boundary["actions"], ["continue", "cancel"])
+        self.assertEqual([item["buddyId"] for item in boundary["candidates"]], [A, B])
+        params = self.choice_params(view, B)
+        continued = self.board_.call("workflow_continue", params)
         self.assertEqual(continued["runId"], view["runId"])
-        self.assertFalse(continued["awaitingHost"])
-        self.assertTrue(self.board_.call("workflow_continue", host_params)["duplicate"])
+        self.assertEqual(continued["requestId"], params["requestId"])
+        self.assertEqual(self.board_.call("workflow_get", {"runId": view["runId"]})["buddy"]["model"], "bravo")
+        replay = self.board_.call("workflow_continue", params)
+        self.assertTrue(replay["alreadyResponded"])
+        with self.assertRaises(BoardError) as changed:
+            self.board_.call("workflow_continue", {**params, "buddy": A})
+        self.assertEqual(changed.exception.code, "CONFLICT")
 
-    def test_zero_candidates_offer_only_an_explicit_buddy_continue_template(self):
+    def test_zero_candidates_keep_the_request_and_allow_an_explicit_buddy(self):
         from hey_my_buddy.blackboard.routing.quota_routing import record_rejection
         for mode in ("disabled", "cooling"):
             with self.subTest(mode=mode):
@@ -566,17 +581,9 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                 boundary = view["routing"]["routingBoundary"]
                 self.assertEqual(boundary["candidates"], [])
                 self.assertEqual(boundary["routerTrials"], [])
-                command = boundary["commands"]["continue"]
-                self.assertFalse(command["blocked"])
-                self.assertEqual(len(command["choices"]), 1)
-                choice = command["choices"][0]
-                self.assertIsNone(choice["buddyId"])
-                self.assertEqual(choice["params"]["buddy"],
-                                 {key: f"<{key}>" for key in ("harness", "provider", "model", "effort")})
-                self.assertEqual(choice["params"]["runId"], view["runId"])
-                self.assertEqual(choice["params"]["expectedRevision"], view["revision"])
-                self.assertTrue(boundary["commands"]["reroute"]["blocked"])
-                self.assertIsNone(boundary["commands"]["reroute"]["params"])
+                self.assertEqual(boundary["actions"], ["continue", "cancel"])
+                self.assertTrue(view["activeRequest"]["requestId"])
+                self.assertEqual(boundary["runId"], view["runId"])
                 with self.board_.store.db.read() as db:
                     self.assertEqual(db.execute("SELECT COUNT(*) FROM router_dispatches").fetchone()[0], 0)
                     self.assertEqual(router_sequence.request_snapshot(db, view["routing"]["decisionId"])
@@ -584,53 +591,217 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                 if mode == "disabled":
                     with self.board_.store.db.write() as db:
                         db.execute("UPDATE buddies SET enabled=1")
-                    params = self.template_params(view, choice["params"], note="Host supplies the now enabled buddy")
-                    params["buddy"] = {"harness": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"}
-                    continued = self.board_.call("workflow_continue", params)
+                    continued = self.board_.call("workflow_continue", self.choice_params(view, B))
                     self.assertEqual(continued["runId"], view["runId"])
-                    self.assertEqual(continued["buddy"], params["buddy"])
-                    self.assertFalse(continued["awaitingHost"])
+                    self.assertEqual(self.board_.call("workflow_get", {"runId": view["runId"]})["buddy"]["model"], "bravo")
 
-    def test_buddy_required_error_explains_same_boundary_commands(self):
+    def test_routing_boundary_requires_an_explicit_buddy_for_continuation(self):
         view = self.routed()
         with self.assertRaises(BoardError) as raised:
-            self.continue_run(self.board_, view)
+            self.board_.call("workflow_continue", {"runId": view["runId"],
+                                                   "requestId": view["activeRequest"]["requestId"],
+                                                   "input": "keep going"})
         self.assertEqual(raised.exception.code, "BUDDY_REQUIRED")
-        self.assertEqual(raised.exception.details["routingBoundary"], view["routing"]["routingBoundary"])
+        self.assertEqual(self.board_.call("workflow_get", {"runId": view["runId"]})["activeRequest"]["requestId"],
+                         view["activeRequest"]["requestId"])
 
-    def test_get_rebuilds_stable_templates_when_owner_revision_changes(self):
+    def test_reads_keep_frozen_facts_and_a_response_binds_the_request(self):
         view = self.routed()
-        before = view["routing"]["routingBoundary"]["commands"]["continue"]["choices"][0]["params"]
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET revision=revision+1 WHERE run_id=?", (view["runId"],))
-        latest = self.board_.call("workflow_get", {"runId": view["runId"]})
-        after = latest["routing"]["routingBoundary"]["commands"]["continue"]["choices"][0]["params"]
-        self.assertEqual(after["expectedRevision"], latest["revision"])
-        self.assertNotEqual(after["commandId"], before["commandId"])
-        self.assertEqual(latest["activeRequest"]["routingBoundary"], latest["routing"]["routingBoundary"])
+        original = view["routing"]["routingBoundary"]
         self.assertEqual(self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"],
-                         latest["routing"]["routingBoundary"])
-
-    def test_stored_command_input_hash_and_receipt_replay_are_unchanged_by_new_templates(self):
-        view = self.routed()
-        template = view["routing"]["routingBoundary"]["commands"]["continue"]["choices"][0]["params"]
-        params = self.template_params(view, template, note="Host keeps the recorded continuation note")
-        params.update(commandId="router-continue-50c19c335009bc53af3aee2c71a272510dd18cc3cb2848756e3fd64a5466dc19",
-                      input="继续既定微任务。")
-        self.assertNotEqual(params["commandId"], template["commandId"])
-        receipt = self.board_.call("workflow_continue", params)
+                         original)
+        params = self.choice_params(view, A, note="Host kept alpha")
+        self.board_.call("workflow_continue", params)
         with self.board_.store.db.read() as db:
-            recorded = dict(db.execute("SELECT * FROM commands WHERE command_id=?", (params["commandId"],)).fetchone())
-            continuation = dict(db.execute("SELECT * FROM workflow_continuations WHERE run_id=?",
-                                           (view["runId"],)).fetchone())
+            request = db.execute("SELECT response_kind,response_id FROM workflow_requests WHERE request_id=?",
+                                 (params["requestId"],)).fetchone()
+            continuation = db.execute("SELECT continuation_id,input_text FROM workflow_continuations WHERE run_id=?",
+                                      (view["runId"],)).fetchone()
+            workflow_receipts = db.execute("SELECT COUNT(*) FROM commands WHERE kind='workflow.continue'").fetchone()[0]
+        self.assertEqual((request["response_kind"], request["response_id"]),
+                         ("continue", continuation["continuation_id"]))
         self.assertEqual(continuation["input_text"], params["input"])
-        replay = self.board_.call("workflow_continue", params)
-        self.assertEqual(replay, {**receipt, "duplicate": True})
+        self.assertEqual(workflow_receipts, 0)
+        self.assertTrue(self.board_.call("workflow_continue", params)["alreadyResponded"])
+        with self.assertRaises(BoardError) as changed:
+            self.board_.call("workflow_continue", {**params, "note": "different"})
+        self.assertEqual(changed.exception.code, "CONFLICT")
+
+    def test_continuation_gates_report_codes_from_their_own_facts(self):
+        view = self.routed()
+        with self.board_.store.db.write() as db:
+            row = self.board_.store.decisions._row(db, view["routing"]["decisionId"])
+            self.assertEqual(_continuation_context(db, row, "missing-run", None, self.board_.directory)[:2],
+                             (False, "micro-task-not-found"))
+            self.assertEqual(_continuation_context(db, row, view["runId"], "another-owner", self.board_.directory)[:2],
+                             (True, "micro-task-not-owned"))
+            db.execute("UPDATE workflow_runs SET current_routing_id='different' WHERE run_id=?", (view["runId"],))
+            self.assertEqual(_continuation_context(db, row, view["runId"], None, self.board_.directory)[:2],
+                             (True, "workflow-routing-fenced"))
+
+    def test_disabled_candidates_report_their_own_problem(self):
+        view = self.routed()
+        original = view["routing"]["routingBoundary"]
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE buddies SET enabled=0")
+        latest = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
+        self.assertEqual(latest["facts"], original["facts"])
+        self.assertEqual(latest["actions"], ["continue", "cancel"])
+        self.assertTrue(all(item["problem"] == {"code": "router-out-of-bounds", "bound": "disabled"}
+                            for item in latest["candidates"]))
+
+    def test_frozen_candidate_identity_changes_are_visible_before_explicit_override(self):
+        view = self.routed()
+        original = view["routing"]["routingBoundary"]
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE buddies SET model='changed-model' WHERE buddy_id=?", (B,))
+        latest = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
+        self.assertEqual(latest["facts"], original["facts"])
+        chosen = next(item for item in latest["candidates"] if item["buddyId"] == B)
+        self.assertEqual(chosen["model"], "bravo")
+        self.assertEqual(chosen["problem"], {"code": "router-out-of-bounds", "bound": "identity-changed"})
+        continued = self.board_.call("workflow_continue", self.choice_params(view, B))
+        self.assertEqual(continued["state"], "executing")
+        selected = self.board_.call("workflow_get", {"runId": view["runId"]})
+        self.assertEqual(selected["buddy"]["model"], "changed-model")
+        self.assertEqual(selected["routing"]["source"], "host-override")
+
+    def test_cleanup_guard_blocks_continue_and_does_not_reacquire_checkout(self):
+        view = self.routed()
+        with self.board_.store.db.write() as db:
+            db.execute("INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,path,kind,state,"
+                       "evidence_json,retention_json,created_at) "
+                       "VALUES('private-cleanup',?,'workspace','/private-fixture','existing','applying',"
+                       "'{}','{}',?)", (view["runId"], T0))
+        boundary = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
+        self.assertEqual(boundary["continuationProblem"], "workspace-cleanup-started")
+        self.assertEqual(boundary["actions"], ["get", "cancel"])
+        with self.assertRaises(BoardError) as raised:
+            self.board_.call("workflow_continue", self.choice_params(view, A))
+        self.assertEqual(raised.exception.code, "CONFLICT")
+
+    def test_missing_workspace_ownership_blocks_continue_without_preparation(self):
+        view = self.routed(kind="worktree")
+        original = view["routing"]["routingBoundary"]
+        before = len(self.workspace.prepare_calls)
+        with self.board_.store.db.write() as db:
+            db.execute("DELETE FROM workspace_reservations WHERE holder_task_id=?", (view["runId"],))
+        boundary = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
+        self.assertEqual(boundary["continuationProblem"], "workspace-ownership-lost")
+        self.assertEqual(boundary["actions"], ["get", "cancel"])
+        self.assertEqual(boundary["candidates"], original["candidates"])
+        with self.assertRaises(BoardError) as raised:
+            self.board_.call("workflow_continue", self.choice_params(view, A))
+        self.assertEqual(raised.exception.code, "PREPARATION_CONFLICT")
+        self.assertEqual(len(self.workspace.prepare_calls), before)
+
+    def test_named_choice_is_not_locked_to_one_buddy_for_later_turns(self):
+        view = self.routed()
+        self.board_.call("workflow_continue", self.choice_params(view, A))
+        first = self.claim(self.board_, run_id=view["runId"], claim_request_id="first")
+        self.finish_turn(self.board_, first)
+        delivered = self.board_.call("workflow_get", {"runId": view["runId"]})
+        changed = self.continue_run(self.board_, delivered, buddy=B, note="Host selected bravo for the next turn")
+        self.assertEqual(changed["state"], "executing")
+        self.assertEqual(self.board_.call("workflow_get", {"runId": view["runId"]})["buddy"]["model"], "bravo")
+
+    def test_nested_routing_boundary_requires_root_and_helper_target(self):
+        root = self.routed("root", kind="worktree")
+        leaf = self.routed("leaf", kind="worktree")
+        with self.board_.store.db.write() as db:
+            db.execute("INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,state,created_at,updated_at)"
+                       " VALUES(?,?,'private-authorization','attention',?,?)",
+                       (leaf["runId"], root["runId"], T0, T0))
+            source = self.board_.store.workflow._request_row(db, leaf["runId"], leaf["activeRequest"]["requestId"])
+            self.board_.store.workflow._propagate_boundary(db, source, T0)
+        root_view = self.board_.call("workflow_get", {"runId": root["runId"]})
+        leaf_view = self.board_.call("workflow_get", {"runId": leaf["runId"]})
+        proxy = next(item for item in root_view["pendingRequests"]
+                     if (item.get("proxy") or {}).get("runId") == leaf["runId"])
+        self.assertEqual(proxy["routingBoundary"]["targetRunId"], leaf["runId"])
+        self.assertEqual(proxy["routingBoundary"]["runId"], root["runId"])
+        self.assertEqual(proxy["routingBoundary"]["decisionId"], leaf_view["routing"]["decisionId"])
+        params = {"runId": root["runId"], "targetRunId": leaf["runId"], "requestId": proxy["requestId"],
+                  "input": "Use alpha for the owned helper", "buddy": A, "note": "Host chose alpha"}
+        continued = self.board_.call("workflow_continue", params)
+        self.assertEqual(continued["runId"], root["runId"])
+        self.assertEqual(self.board_.call("workflow_get", {"runId": leaf["runId"]})["buddy"]["model"], "alpha")
+
+    def test_terminal_root_blocks_owned_helper_routing(self):
+        root = self.routed("root", kind="worktree")
+        leaf = self.routed("leaf", kind="worktree")
+        with self.board_.store.db.write() as db:
+            db.execute("INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,state,created_at,updated_at)"
+                       " VALUES(?,?,'private-authorization','attention',?,?)",
+                       (leaf["runId"], root["runId"], T0, T0))
+            source = self.board_.store.workflow._request_row(db, leaf["runId"], leaf["activeRequest"]["requestId"])
+            self.board_.store.workflow._propagate_boundary(db, source, T0)
+            db.execute("UPDATE workflow_runs SET state='cancelled' WHERE run_id=?", (root["runId"],))
+        root_view = self.board_.call("workflow_get", {"runId": root["runId"]})
+        proxy = next(item for item in root_view["pendingRequests"]
+                     if (item.get("proxy") or {}).get("runId") == leaf["runId"])
+        leaf_view = self.board_.call("workflow_get", {"runId": leaf["runId"]})
+        boundary = leaf_view["routing"]["routingBoundary"]
+        self.assertEqual(boundary["continuationProblem"], "ANCESTOR_TERMINAL")
+        self.assertEqual(boundary["actions"], ["get", "cancel"])
+        with self.assertRaises(BoardError) as raised:
+            self.board_.call("workflow_continue", {"runId": root["runId"], "targetRunId": leaf["runId"],
+                                                  "requestId": proxy["requestId"],
+                                                  "input": "continue", "buddy": A, "note": "Host chose alpha"})
+        self.assertEqual(raised.exception.code, "CONFLICT")
+
+    def test_cli_brief_get_and_await_keep_current_boundary_facts(self):
+        from hey_my_buddy.cli import blocking, cli_views
+        view = self.routed()
+        boundary = view["routing"]["routingBoundary"]
+        rendered = cli_views.render("get", view, cli_views.OUTPUT_BRIEF)
+        self.assertEqual(rendered["routing"]["routingBoundary"], boundary)
+
+        def service(method, params, state_dir):
+            response = self.board_.call(method, params)
+            return response["task"] if method == "task_get" else response
+
+        envelope = blocking.await_run({"runId": view["runId"]}, self.board_.directory, service=service)
+        for output in (cli_views.OUTPUT_FULL, cli_views.OUTPUT_BRIEF):
+            awaited = cli_views.render("await", envelope, output)
+            self.assertEqual(awaited["requestId"], view["activeRequest"]["requestId"])
+            self.assertEqual(awaited["requestKind"], view["activeRequest"]["kind"])
+            self.assertIn("continue", awaited["actions"])
+
+    def test_explicit_reroute_after_known_retry_time_uses_same_request_identity(self):
+        with self.board_.store.db.write() as db:
+            router._write_settings(db, {**router.configuration(db), "routerBuddyIds": [A, B]})
+        view = self.routed()
+        for ordinal in (0, 1):
+            current = self.board_.call("workflow_get", {"runId": view["runId"]})
+            nonce = NONCE + str(ordinal)
+            claim = admit_board(self.board_, {"workerId": "w-route", "claimRequestId": "router-" + str(ordinal),
+                                               "nonce": nonce, "runId": current["routing"]["taskId"]})["claim"]
+            self.assertIsNotNone(claim)
+            claim["nonce"] = nonce
+            output = failover.FailoverTests.failure(self, claim)
+            self.board_.call("execution_result", {"attemptId": claim["attempt"]["attemptId"],
+                "generation": claim["attempt"]["generation"], "nonce": nonce,
+                "status": "failed", "shutdownConfirmed": True, "result": output})
+        view = self.board_.call("workflow_get", {"runId": view["runId"]})
+        boundary = view["routing"]["routingBoundary"]
+        self.assertEqual(boundary["kind"], "router-unavailable")
+        self.assertEqual(boundary["retryAt"], "2026-01-01T00:10:00.000Z")
+        request_id = view["activeRequest"]["requestId"]
+        self.clock.advance(601)
+        refreshed = self.board_.call("workflow_get", {"runId": view["runId"]})
+        self.assertEqual(refreshed["activeRequest"]["requestId"], request_id)
+        continued = self.board_.call("workflow_continue", self.choice_params(refreshed, "route",
+            note="Host retried routing after its known retry time"))
+        self.assertEqual(continued["runId"], view["runId"])
+        self.assertIsNone(self.board_.call("workflow_get", {"runId": view["runId"]})["buddy"])
+        self.board_.store.workflow.prepare_continuation_workspace({"runId": view["runId"]})
+        after = self.board_.call("workflow_get", {"runId": view["runId"]})
+        self.assertEqual(after["routing"]["status"], "queued")
+        self.assertNotEqual(after["routing"]["decisionId"], view["routing"]["decisionId"])
         with self.board_.store.db.read() as db:
-            self.assertEqual(dict(db.execute("SELECT * FROM commands WHERE command_id=?", (params["commandId"],)).fetchone()),
-                             recorded)
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?",
-                                        (view["runId"],)).fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_turns").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
 
     def test_request_and_timeline_project_the_same_current_decision_reason(self):
         view = self.routed()
@@ -644,20 +815,6 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                 host = next(span for span in timeline["spans"] if span.get("requestId") == view["activeRequest"]["requestId"])
                 self.assertEqual(host["reason"], {"code": code, "params": params})
                 self.assertEqual(host["reason"], current["activeRequest"]["reason"])
-
-    def test_continuation_gates_report_codes_from_their_own_facts(self):
-        view = self.routed()
-        with self.board_.store.db.write() as db:
-            row = self.board_.store.decisions._row(db, view["routing"]["decisionId"])
-            self.assertEqual(_continuation_context(db, row, "missing-run", None, self.board_.directory)[:2],
-                             (False, "micro-task-not-found"))
-            self.assertEqual(_continuation_context(db, row, view["runId"], "another-owner", self.board_.directory)[:2],
-                             (True, "micro-task-not-owned"))
-            db.execute("UPDATE workflow_routes SET owner_generation=owner_generation+1 WHERE decision_id=?",
-                       (row["decision_id"],))
-            self.assertEqual(_continuation_context(db, row, view["runId"], None, self.board_.directory)[:2],
-                             (True, "workflow-routing-fenced"))
-
     def test_candidate_gates_use_one_code_with_precise_bound_facts(self):
         from hey_my_buddy.blackboard.routing.quota_routing import record_rejection
         view = self.routed()
@@ -688,175 +845,6 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                                      {"code": "router-out-of-bounds", "bound": bound})
                     db.execute("ROLLBACK TO candidate_gate")
                     db.execute("RELEASE candidate_gate")
-
-    def test_all_blocked_candidates_need_no_additional_command_code(self):
-        view = self.routed()
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE buddies SET enabled=0")
-        command = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]["commands"]["continue"]
-        self.assertTrue(command["blocked"])
-        self.assertIsNone(command["code"])
-        self.assertTrue(all(choice["blocked"] and choice["code"] == "router-out-of-bounds"
-                            and choice["bound"] == "disabled" for choice in command["choices"]))
-        self.assertNotIn("reason", command)
-
-    def test_frozen_candidate_is_retained_but_changed_identity_cannot_offer_legal_command(self):
-        view = self.routed()
-        original = view["routing"]["routingBoundary"]
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE buddies SET model='changed-model' WHERE buddy_id=?", (B,))
-        latest = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
-        self.assertEqual(latest["candidates"], original["candidates"])
-        self.assertEqual(latest["facts"], original["facts"])
-        choice = next(item for item in latest["commands"]["continue"]["choices"] if item["buddyId"] == B)
-        self.assertTrue(choice["blocked"])
-        self.assertEqual(choice["code"], "router-out-of-bounds")
-        self.assertEqual(choice["bound"], "identity-changed")
-        self.assertNotIn("reason", choice)
-        self.assertEqual(choice["params"]["buddy"]["model"], "bravo")
-
-    def test_cleanup_guard_blocks_templates_and_existing_continue_operation(self):
-        view = self.routed()
-        chosen = view["routing"]["routingBoundary"]["commands"]["continue"]["choices"][0]["params"]
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,path,kind,state,"
-                       "evidence_json,retention_json,created_at) "
-                       "VALUES('private-cleanup',?,'workspace','/private-fixture','existing','applying',"
-                       "'{}','{}',?)", (view["runId"], T0))
-        latest = self.board_.call("workflow_get", {"runId": view["runId"]})
-        for command in latest["routing"]["routingBoundary"]["commands"].values():
-            self.assertTrue(command["blocked"])
-            self.assertEqual(command["code"], "workspace-cleanup-started")
-            self.assertNotIn("reason", command)
-        with self.assertRaises(BoardError) as raised:
-            self.board_.call("workflow_continue", self.template_params(
-                view, chosen, note="Host 选择候选时仍需先完成工作区清理"))
-        self.assertEqual(raised.exception.code, "CONFLICT")
-
-    def test_missing_workspace_ownership_blocks_templates_without_reacquiring_it(self):
-        view = self.routed(kind="worktree")
-        original = view["routing"]["routingBoundary"]
-        params = original["commands"]["continue"]["choices"][0]["params"]
-        with self.board_.store.db.write() as db:
-            db.execute("DELETE FROM workspace_reservations WHERE holder_task_id=?", (view["runId"],))
-        boundary = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
-        self.assertTrue(boundary["commands"]["continue"]["blocked"])
-        self.assertEqual(boundary["commands"]["continue"]["code"], "workspace-ownership-lost")
-        self.assertEqual(boundary["candidates"], original["candidates"])
-        with self.assertRaises(BoardError) as raised:
-            self.board_.call("workflow_continue", self.template_params(
-                view, params, note="Host 选择候选时工作区所有权已失效"))
-        self.assertEqual(raised.exception.code, "PREPARATION_CONFLICT")
-
-    def test_locked_hard_tuple_keeps_frozen_candidates_and_blocks_other_choice(self):
-        view = self.routed()
-        original = view["routing"]["routingBoundary"]
-        with self.board_.store.db.write() as db:
-            row = db.execute("SELECT spec_json FROM tasks WHERE task_id=?", (view["runId"],)).fetchone()
-            micro_task = json.loads(row[0])
-            micro_task.update({"harness": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"})
-            db.execute("UPDATE tasks SET spec_json=? WHERE task_id=?",
-                       (canonical_json(micro_task), view["runId"]))
-            db.execute("UPDATE workflow_runs SET buddy_locked=1 WHERE run_id=?", (view["runId"],))
-        latest = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
-        self.assertEqual(latest["candidates"], original["candidates"])
-        other = next(item for item in latest["commands"]["continue"]["choices"] if item["buddyId"] == B)
-        self.assertTrue(other["blocked"])
-        self.assertEqual(other["code"], "router-out-of-bounds")
-        self.assertEqual(other["bound"], "constraints")
-        with self.assertRaises(BoardError) as raised:
-            self.board_.call("workflow_continue", self.template_params(
-                view, other["params"], note="Host 请求另一个冻结候选"))
-        self.assertEqual(raised.exception.code, "BUDDY_CONFLICT")
-
-    def test_nested_boundary_uses_root_control_and_current_owner_revision(self):
-        root, leaf = self.routed("root", kind="worktree"), self.routed("leaf", kind="worktree")
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,decision_command_id,state,"
-                       "created_at,updated_at) VALUES(?,?, 'private-request','private-authorization',"
-                       "'attention',?,?)", (leaf["runId"], root["runId"], T0, T0))
-            source = self.board_.store.workflow._request_row(db, leaf["runId"], leaf["activeRequest"]["requestId"])
-            self.board_.store.workflow._propagate_boundary(db, source, T0)
-        root = self.board_.call("workflow_get", {"runId": root["runId"]})
-        leaf = self.board_.call("workflow_get", {"runId": leaf["runId"]})
-        for choice in root["routing"]["routingBoundary"]["commands"]["continue"]["choices"]:
-            self.assertEqual(choice["params"]["helperPolicy"], "keep")
-        proxy = next(item for item in root["pendingRequests"] if (item.get("proxy") or {}).get("runId") == leaf["runId"])
-        self.assertEqual(proxy["routingBoundary"], leaf["routing"]["routingBoundary"])
-        self.assertEqual(proxy["decisionId"], leaf["routing"]["decisionId"])
-        self.assertEqual(proxy["reason"], leaf["activeRequest"]["reason"])
-        with self.board_.store.db.read() as db:
-            source, copied = (db.execute(
-                "SELECT summary,reason_code,reason_params_json,decision_id,payload_json"
-                " FROM workflow_requests WHERE request_id=?", (request_id,),
-            ).fetchone() for request_id in (leaf["activeRequest"]["requestId"], proxy["requestId"]))
-            self.assertEqual(source["decision_id"], leaf["routing"]["decisionId"])
-            self.assertEqual(copied["decision_id"], source["decision_id"])
-            self.assertIsNone(copied["summary"])
-            self.assertIsNone(copied["reason_code"])
-            self.assertIsNone(copied["reason_params_json"])
-            self.assertEqual(json.loads(copied["payload_json"])["origin"]["runId"], leaf["runId"])
-        boundary = leaf["routing"]["routingBoundary"]
-        chosen = boundary["commands"]["continue"]["choices"][0]["params"]
-        self.assertEqual(chosen["runId"], root["runId"])
-        self.assertEqual(chosen["targetRunId"], leaf["runId"])
-        self.assertEqual(chosen["expectedRevision"], root["revision"])
-        self.assertEqual(chosen["controlFile"], "<saved-control-file>")
-        self.assertNotIn("note", chosen)
-        self.assertNotIn("controlToken", canonical_json(boundary))
-        params = self.template_params(root, chosen)
-        params["note"] = "Host 指定拥有的微任务使用冻结候选"
-        continued = self.board_.call("workflow_continue", params)
-        self.assertEqual(continued["runId"], root["runId"])
-        continued_leaf = self.board_.call("workflow_get", {"runId": leaf["runId"]})
-        self.assertEqual(continued_leaf["buddy"], chosen["buddy"])
-        self.assertFalse(continued_leaf["awaitingHost"])
-
-    def test_terminal_ancestor_blocks_leaf_templates_and_continue_cannot_bypass_it(self):
-        root, leaf = self.routed("root", kind="worktree"), self.routed("leaf", kind="worktree")
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,decision_command_id,state,"
-                       "created_at,updated_at) VALUES(?,?, 'private-request','private-authorization',"
-                       "'attention',?,?)", (leaf["runId"], root["runId"], T0, T0))
-        before = self.board_.call("workflow_get", {"runId": leaf["runId"]})
-        chosen = before["routing"]["routingBoundary"]["commands"]["continue"]["choices"][0]["params"]
-        for terminal in ("cancelled", "concluded", "accepted"):
-            with self.subTest(terminal=terminal):
-                with self.board_.store.db.write() as db:
-                    db.execute("UPDATE workflow_runs SET state=?,workspace_id=CASE WHEN ? IN ('accepted','concluded') THEN NULL ELSE workspace_id END,workspace_manifest_sha256=CASE WHEN ? IN ('accepted','concluded') THEN NULL ELSE workspace_manifest_sha256 END WHERE run_id=?", (terminal, terminal, terminal, root["runId"]))
-                after = self.board_.call("workflow_get", {"runId": leaf["runId"]})
-                self.assertTrue(after["routing"]["routingBoundary"]["commands"]["continue"]["blocked"])
-                self.assertEqual(after["routing"]["routingBoundary"]["commands"]["continue"]["code"],
-                                 "ANCESTOR_TERMINAL")
-                with self.assertRaises(BoardError) as raised:
-                    self.board_.call("workflow_continue", self.template_params(
-                        root, chosen, note="Host 请求已结束的拥有任务使用冻结候选"))
-                self.assertEqual(raised.exception.code, "ANCESTOR_TERMINAL")
-
-    def test_cli_brief_get_and_await_retain_only_existing_boundary_data(self):
-        from hey_my_buddy.cli import blocking, cli_views
-        from hey_my_buddy.protocol.transport import METHOD_MAP
-        view = self.routed()
-        boundary = view["routing"]["routingBoundary"]
-        rendered = cli_views.render("get", view, cli_views.OUTPUT_BRIEF)
-        self.assertEqual(rendered["routing"]["routingBoundary"], boundary)
-
-        def service(method, params, state_dir):
-            response = self.board_.call(METHOD_MAP[method][1], params)
-            return response["task"] if method == "status" else response
-
-        envelope = blocking.await_run({"runId": view["runId"]}, self.board_.directory, service=service)
-        full = cli_views.render("await", envelope, cli_views.OUTPUT_FULL)
-        brief = cli_views.render("await", envelope, cli_views.OUTPUT_BRIEF)
-        self.assertEqual(brief["nextCommands"], full["nextCommands"])
-        self.assertTrue(brief["nextCommands"])
-        for awaited in (brief, full):
-            self.assertEqual(awaited["routingBoundary"], boundary)
-            self.assertEqual(awaited["request"]["routingBoundary"], boundary)
-            self.assertTrue(all(isinstance(item["params"]["buddy"], dict)
-                                for item in awaited["nextCommands"] if "buddy" in item["params"]))
-
-
     def test_micro_task_valid_abstention_payload_has_program_nature_before_answered_notification(self):
         with self.board_.store.db.write() as db:
             router._write_settings(db, {**router.configuration(db), "routerBuddyIds": [A, B]})
@@ -891,43 +879,6 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
             self.assertEqual(db.execute("SELECT decision_id FROM workflow_requests WHERE request_id=?",
                                         (current["activeRequest"]["requestId"],)).fetchone()[0],
                              view["routing"]["decisionId"])
-
-    def test_explicit_reroute_after_known_retry_time_continues_same_micro_task_without_model(self):
-        with self.board_.store.db.write() as db:
-            router._write_settings(db, {**router.configuration(db), "routerBuddyIds": [A, B]})
-        view = self.routed()
-        pass  # Admission is owned by the service.
-        for ordinal in (0, 1):
-            current = self.board_.call("workflow_get", {"runId": view["runId"]})
-            nonce = NONCE + str(ordinal)
-            claim = admit_board(self.board_, {'workerId': 'w-route', 'claimRequestId': 'router-' + str(ordinal), 'nonce': nonce, 'runId': current['routing']['taskId']})["claim"]
-            self.assertIsNotNone(claim)
-            claim["nonce"] = nonce
-            output = failover.FailoverTests.failure(self, claim)
-            self.board_.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'failed', 'shutdownConfirmed': True, 'result': output})
-        view = self.board_.call("workflow_get", {"runId": view["runId"]})
-        boundary = view["routing"]["routingBoundary"]
-        self.assertEqual(boundary["kind"], "router-unavailable")
-        self.assertEqual(boundary["retryAt"], "2026-01-01T00:10:00.000Z")
-        reroute = boundary["commands"]["reroute"]
-        self.assertEqual(reroute["notBefore"], boundary["retryAt"])
-        self.assertNotIn("notBefore", reroute["params"])
-        self.assertNotIn("note", reroute["params"])
-        self.clock.advance(601)
-        view = self.board_.call("workflow_get", {"runId": view["runId"]})
-        reroute = view["routing"]["routingBoundary"]["commands"]["reroute"]
-        self.assertEqual(reroute["notBefore"], self.clock.value)
-        self.assertNotIn("note", reroute["params"])
-        continued = self.board_.call("workflow_continue", self.template_params(view, reroute["params"]))
-        self.assertEqual(continued["runId"], view["runId"])
-        self.assertIsNone(continued["buddy"])
-        self.board_.store.workflow.prepare_continuation_workspace({"runId": view["runId"]})
-        refreshed = self.board_.call("workflow_get", {"runId": view["runId"]})
-        self.assertEqual(refreshed["routing"]["status"], "queued")
-        self.assertNotEqual(refreshed["routing"]["decisionId"], view["routing"]["decisionId"])
-        with self.board_.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_turns").fetchone()[0], 0)
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 2)
 
 
 if __name__ == "__main__":

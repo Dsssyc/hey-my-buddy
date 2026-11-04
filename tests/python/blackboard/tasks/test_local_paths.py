@@ -80,4 +80,5 @@ class LocalPathTests(unittest.TestCase):
                         else:
                             with self.assertRaises(BoardError) as caught:
                                 coordinator.accept(params)
-                            self.assertEqual(caught.exception.message, "target.path must be an absolute checkout path")
+                            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+                            self.assertEqual(caught.exception.details["field"], "target.path")

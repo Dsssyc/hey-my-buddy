@@ -18,18 +18,13 @@ import webbrowser
 from typing import Any, Callable, NamedTuple
 
 from ..protocol import transport
+from ..protocol.requests import parse_request as parse_public_request, dump_request
 from ..errors import BoardError
 
 #: The three actions of the one console lifecycle operation the service exposes.
 CONSOLE_ACTIONS = ("open", "status", "close")
 #: Booleans that belong to this CLI process and never reach the daemon.
 LOCAL_OPTIONS = ("browser", "wait")
-#: Exact per-action field whitelist. An unknown field is refused before any RPC.
-ACTION_FIELDS = {
-    "open": frozenset({"action", "browser", "wait"}),
-    "status": frozenset({"action"}),
-    "close": frozenset({"action", "expectedConsoleId"}),
-}
 #: Bounded observation interval while waiting for a console instance.
 POLL_SECONDS = 2.0
 #: stderr notice carrying the fallback entry URL while a wait blocks stdout.
@@ -44,41 +39,15 @@ class Request(NamedTuple):
     wait: bool
 
 
-def _local_boolean(params: dict, name: str, default: bool) -> bool:
-    value = params.get(name, default)
-    if not isinstance(value, bool):
-        raise BoardError("INVALID_ARGUMENT", f"{name} must be a boolean")
-    return value
-
-
 def parse_request(params: Any) -> Request:
-    """Validate one canonical ``console`` JSON argument and strip CLI-local fields.
-
-    Strictness is deliberate: a wrong type, an unknown field or either local option on
-    ``status``/``close`` is refused here, before any browser launch or RPC.
-    The service validates the close fence.
-    """
-    action = params.get("action", "open")
-    if not isinstance(action, str) or action not in CONSOLE_ACTIONS:
-        raise BoardError("INVALID_ARGUMENT", "action must be 'open', 'status' or 'close'")
-    for option in LOCAL_OPTIONS:
-        if option in params and option not in ACTION_FIELDS[action]:
-            raise BoardError(
-                "INVALID_ARGUMENT",
-                f"{option} is a local console option and is only valid for console open",
-            )
-    unknown = sorted(set(params) - ACTION_FIELDS[action])
-    if unknown:
-        raise BoardError("INVALID_ARGUMENT", f"Unknown console field: {unknown[0]}")
-    rpc_params = {"action": action}
-    browser = True
-    wait = False
-    if action == "open":
-        browser = _local_boolean(params, "browser", True)
-        wait = _local_boolean(params, "wait", False)
-    if action == "close" and "expectedConsoleId" in params:
-        rpc_params["expectedConsoleId"] = params["expectedConsoleId"]
-    return Request(action=action, rpc_params=rpc_params, browser=browser, wait=wait)
+    """Use the shared public request model; local choices stay out of the RPC."""
+    model = parse_public_request("console", params)
+    wire = dump_request(model)
+    return Request(action=model.action,
+                   rpc_params={"action": model.action,
+                               **{key: value for key, value in wire.items() if key not in LOCAL_OPTIONS}},
+                   browser=True if model.browser is None else model.browser,
+                   wait=False if model.wait is None else model.wait)
 
 
 def _launch_browser(url: str, enabled: bool, opener: Callable[..., Any]) -> bool:
@@ -192,7 +161,6 @@ def run(
 
 
 __all__ = [
-    "ACTION_FIELDS",
     "CONSOLE_ACTIONS",
     "FALLBACK_NOTICE",
     "LOCAL_OPTIONS",

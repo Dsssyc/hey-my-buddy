@@ -2,6 +2,7 @@
 from unittest import mock
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
+from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.errors import BoardError
@@ -37,9 +38,7 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
 
     def test_queued_continuation_still_refuses_without_cancellation(self):
         board, run, view = self.boundary()
-        self.decide(board, view, view["activeRequest"]["requestId"], autoContinue=False)
-        view = board.call("workflow_get", {"runId": run["runId"]})
-        self.continue_run(board, view)
+        self.decide(board, view, view["activeRequest"]["requestId"])
         before = self.snapshot(board)
         with self.assertRaises(BoardError) as caught:
             upgrade.idle_snapshot(board.directory)
@@ -98,23 +97,23 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
         board, run, view = self.boundary()
         upgrade.write_journal(board.directory / "upgrade.json", {})
         before = self.snapshot(board)
-        controlled = {"runId": run["runId"], **self.control(view)}
-        command = {**controlled, "commandId": "same-command"}
+        run_id = run["runId"]
+        request_id = view["activeRequest"]["requestId"]
+        buddy = ":".join(BUDDY.values())
+        created_title = "fenced fixture"
+        created_task = "inspect the fixture"
         calls = (
-            ("workflow_decide", {**command, "requestId": view["activeRequest"]["requestId"],
-                                 "expectedRevision": view["revision"], "decision": "approve"}),
-            ("workflow_continue", {**command, "expectedRevision": view["revision"],
-                                   "input": "continue", "helperPolicy": "keep"}),
-            ("workflow_accept", {**controlled, "artifactId": "fixture-output", "note": "reviewed", "notRequired": "fixture"}),
-            ("workflow_conclude", {**controlled, "note": "reviewed"}),
-            ("workflow_takeover", {**command, "expectedOwnerGeneration": 1, "newHostId": "host-2"}),
-            ("workflow_cancel", command),
-            ("workflow_scope_amend", {**command, "expectedRevision": view["revision"],
-                                      "expectedScopeVersion": 1, "writeScope": ["src"], "note": "reviewed"}),
-            ("inquiry_observe", {"runId": run["runId"], "inquiryId": "same-inquiry", "question": "status?"}),
-            ("workflow_submit", {**BUDDY, "requestId": "same-submission", "submissionToken": "t" * 32,
-                                  "hostId": "host-1", "task": "fixture", "cwd": str(self.workdir()),
-                                  "executionWorkspace": {"kind": "existing", "access": "write"}}),
+            ("workflow_continue", {"runId": run_id, "requestId": request_id, "decision": "approve"}),
+            ("workflow_continue", {"runId": run_id, "requestId": request_id, "input": "continue"}),
+            ("workflow_accept", {"runId": run_id, "artifactId": "fixture-output", "note": "reviewed", "notRequired": "fixture"}),
+            ("workflow_conclude", {"runId": run_id, "note": "reviewed"}),
+            ("workflow_cancel", {"runId": run_id, "note": "stop this fixture"}),
+            ("inquiry_observe", {"runId": run_id}),
+            ("workflow_submit", {"cwd": str(self.workdir()), "macroTaskId": "standalone",
+                                  "creationKey": _creation_key(["adr032-submit-v1", "project:fenced", created_title, created_task]),
+                                  "title": created_title, "task": created_task, "buddy": buddy,
+                                  "checkout": "existing", "access": "write", "inputs": [],
+                                  "writeScope": ["."], "expectedSeconds": 600}),
         )
         for operation, params in calls:
             with self.subTest(operation=operation):
@@ -135,7 +134,7 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
         output = io.StringIO()
         with mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(board.directory)}), \
                 contextlib.redirect_stdout(output):
-            self.assertEqual(launcher.main(["decide", "{}"]), 1)
+            self.assertEqual(launcher.main(["continue", "{}"]), 1)
         error = json.loads(output.getvalue())["error"]
         self.assertEqual(error["code"], "UPGRADE_IN_PROGRESS")
         self.assertIn("retry the same command", error["message"])

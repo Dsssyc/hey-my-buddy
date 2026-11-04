@@ -7,7 +7,7 @@ decision and the resealed handoff are all real. A failed site is never promoted
 to an authorized baseline, and a mechanical resolution never needs a model turn.
 """
 from __future__ import annotations
-from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, record_reference, artifact_manifest
 from admission import admit_board, admit_store
 
 import json
@@ -15,12 +15,14 @@ import os
 import subprocess
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from protocol.fixtures import native_turn
 from blackboard.tasks.test_workflow_real import BUDDY, GIT_ENV, RealWorkspaceTestCase
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
+from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 
@@ -28,7 +30,6 @@ from hey_my_buddy.paths import native_path
 class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.controls: dict[str, dict] = {}
         self.worker = "w-scope"
         self._previous_workspace = workflow_module._workspace_module
         workflow_module._workspace_module = workspace_module
@@ -42,20 +43,17 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         return None
 
     def micro_task_submit(self, board, *, request_id="scope-run", scope=("src",), kind="existing", cwd=None):
+        cwd = str(cwd or self.repo)
+        project_id = workspace_module.ensure_project_id(workspace_module.repository_at(cwd, allow_parent=True))
         response = board.call("workflow_submit", {
-            **BUDDY,
-            "requestId": request_id,
-            "hostId": "host-1",
+            "cwd": cwd, "macroTaskId": "standalone", "title": request_id,
             "task": "scoped real workspace task",
-            "cwd": str(cwd or self.repo),
-            "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": kind, "access": "write", "writeScope": list(scope)},
+            "buddy": ":".join(BUDDY.values()), "checkout": kind, "access": "write",
+            "writeScope": list(scope), "inputs": [], "expectedSeconds": 1800,
+            "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id,
+                                          request_id, "scoped real workspace task"]),
         })
-        self.controls[response["runId"]] = response["control"]
-        return response
-
-    def control(self, view):
-        return dict(self.controls[view["runId"]])
+        return {**self.view(board, response["runId"]), **response}
 
     @staticmethod
     def resolution_record(board, resolved):
@@ -119,36 +117,71 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def view(self, board, run_id, **extra):
         return board.call("workflow_get", {"runId": run_id, **extra})
 
-    def resolve(self, board, view, conflict, action, *, paths=None, fingerprint=None, command_id="resolve-1",
-                note=None):
+    def resolve(self, board, view, conflict, action, *, paths=None, fingerprint=None, note=None, input=None):
         params = {
             "runId": view["runId"],
-            "commandId": command_id,
-            "expectedRevision": view["revision"],
-            "conflictId": conflict["conflictId"],
-            "action": action,
+            "requestId": view["activeRequest"]["requestId"],
+            "resolution": action,
             "observedFingerprint": fingerprint or conflict["observedFingerprint"],
-            **self.control(view),
         }
         if paths is not None:
             params["paths"] = paths
         if note is not None:
             params["note"] = note
-        return board.store.workflow.workspace_resolve(params)
+        if input is not None:
+            params["input"] = input
+        reply = board.call("workflow_continue", params)
+        return self.resolution_facts(board, view["runId"], conflict["conflictId"], params["requestId"], reply)
 
-    def continue_run(self, board, view, *, command_id="continue-1"):
-        return board.call("workflow_continue", {
-            "runId": view["runId"], "commandId": command_id, "expectedRevision": view["revision"],
-            "input": "continue from the resolved state", **self.control(view),
-        })
+    def resolution_facts(self, board, run_id, conflict_id, request_id, reply):
+        """Read the detailed facts from get and immutable records after a compact action reply."""
+        self.assertFalse(set(reply) - {"runId", "state", "actions", "requestId", "requestKind",
+                                       "nextRequestId", "nextRequestKind", "artifactId", "continuationId",
+                                       "alreadyResponded", "resolutionState", "resolvedFingerprint"})
+        view = self.view(board, run_id)
+        conflict = next(row for row in view["workspaceConflicts"] if row["conflictId"] == conflict_id)
+        with board.store.db.read() as connection:
+            request = connection.execute(
+                "SELECT decision_json FROM workflow_requests WHERE request_id=?", (request_id,)
+            ).fetchone()
+            row = (connection.execute("SELECT * FROM workflow_artifacts WHERE artifact_id=?",
+                                      (conflict["artifactId"],)).fetchone() if conflict["artifactId"] else None)
+        result = json.loads(request["decision_json"])["result"]
+        record = artifact_manifest(board.directory, row) if row is not None else None
+        artifact_view = next((item for item in view["artifacts"]
+                              if item["artifactId"] == conflict["artifactId"]), None)
+        if record is not None and artifact_view is not None and "cumulativePatch" in artifact_view:
+            record = {**record, "cumulativePatch": artifact_view["cumulativePatch"]}
+        return {
+            **view, **conflict, "state": view["state"], "reply": reply,
+            "artifactId": conflict["artifactId"],
+            "resolved": conflict["state"] != "open", "resolutionState": conflict["state"],
+            "remainingPaths": conflict["conflictingPaths"], "artifact": record,
+            "resolvedFingerprint": result["resolvedFingerprint"],
+            "outputCommit": record.get("commit") if record else None,
+            "diffPath": record.get("diffPath") if record else None,
+            "changedPaths": record.get("changedPaths", []) if record else [],
+            "adoptedPaths": record.get("adoptedPaths", []) if record else [],
+            "delivered": view["state"] == "delivered", "delivery": conflict["delivery"],
+            "nextBoundaryRequestId": reply.get("nextRequestId"),
+        }
 
-    def amend(self, board, view, *, command_id="amend-1", expected_scope=1, write_scope=("docs", "src"),
-              note="the next stage may touch docs"):
-        return board.store.workflow.scope_amend({
-            "runId": view["runId"], "commandId": command_id, "expectedRevision": view["revision"],
-            "expectedScopeVersion": expected_scope, "writeScope": list(write_scope), 'note': note,
-            **self.control(view),
-        })
+    def continue_run(self, board, view, *, input="continue from the resolved state", **extra):
+        fresh = self.view(board, view["runId"])
+        params = {"runId": view["runId"], "input": input, **extra}
+        if not any(key in params for key in ("requestId", "artifactId", "turnId")):
+            if fresh["activeRequest"]:
+                params["requestId"] = fresh["activeRequest"]["requestId"]
+            elif fresh["finalArtifactId"]:
+                params["artifactId"] = fresh["finalArtifactId"]
+            elif fixed := next((row for row in fresh["artifacts"] if row["kind"] in
+                                ("output", "resolved-output", "partial-output") and
+                                row["turnId"] == fresh["currentTurn"]["turnId"]), None):
+                params["artifactId"] = fixed["artifactId"]
+            else:
+                params["turnId"] = fresh["currentTurn"]["turnId"]
+        reply = board.call("workflow_continue", params)
+        return {**self.view(board, view["runId"]), **reply}
 
     # -- scenarios -----------------------------------------------------------
     def scoped_failure(self, *, request_id="scope-run", scope=("src",), kind="existing"):
@@ -231,6 +264,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         view = self.view(board, run_id)
         self.assertEqual(view["state"], "awaiting-host")
+        self.assertEqual(manifest["version"], 6)
+        self.assertEqual(manifest["integrator"], {"role": "host"})
         self.assertEqual(view["activeRequest"]["kind"], "attention")
         conflict = view["workspaceConflicts"][0]
         self.assertEqual(conflict["state"], "open")
@@ -268,20 +303,17 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         board, submitted, claimed, manifest, checkout = self.scoped_failure()
         run_id = submitted["runId"]
         view = self.view(board, run_id)
-        self.continue_run(board, view, command_id="continue-blocked")
-        blocked = self.claim(board, run_id, request_id="claim-blocked", nonce="b" * 16)
-        self.assertIsNone(blocked["claim"], blocked)
-        self.assertEqual(blocked["reason"], "awaiting-host")
+        with self.assertRaises(BoardError) as raised:
+            self.continue_run(board, view)
+        self.assertEqual(raised.exception.code, "WORKSPACE_SCOPE_CONFLICT")
         attention = self.view(board, run_id)
         self.assertEqual(attention["state"], "awaiting-host")
-        self.assertEqual(attention["activeRequest"]["preparationError"]["code"], "WORKSPACE_SCOPE_CONFLICT")
         with board.store.db.read() as connection:
             continuation = connection.execute(
                 "SELECT state, workspace_id FROM workflow_continuations WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
                 (run_id,),
             ).fetchone()
-        self.assertEqual(continuation["state"], "invalidated")
-        self.assertIsNone(continuation["workspace_id"])
+        self.assertIsNone(continuation)
         # The failure site is preserved exactly, not captured into a new baseline.
         self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "outside the authorized scope\n")
@@ -301,7 +333,6 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertFalse((checkout / "outside.txt").exists())
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
         self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
-
         record = resolved
         self.assertEqual(record["artifact"]["action"], "restore")
         self.assertEqual(record["changedPaths"], ["src/feature.py"])
@@ -309,7 +340,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(resolved["workspaceConflicts"][0]["state"], "restored")
         self.assertEqual(resolved["workspaceConflicts"][0]["artifactId"], resolved["artifactId"])
         # The recorded resolution is the handoff of the next continuation.
-        continued = self.continue_run(board, resolved, command_id="continue-after-restore")
+        continued = self.continue_run(board, resolved)
         self.assertEqual(continued["state"], "executing")
         resumed = self.claim(board, run_id, request_id="claim-after-restore", nonce="m" * 16)
         self.assertIsNotNone(resumed["claim"], resumed)
@@ -318,6 +349,85 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(execution["inputCommit"], record["outputCommit"])
         self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
         self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
+
+    def test_full_resolution_and_input_share_one_response_and_next_turn(self):
+        board, submitted, claimed, manifest, checkout = self.scoped_failure(request_id="combined-full")
+        run_id = submitted["runId"]
+        view = self.view(board, run_id)
+        conflict = view["workspaceConflicts"][0]
+        resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
+                                note="restore before the next turn", input="finish from the legal files")
+        self.assertEqual(resolved["state"], "executing")
+        self.assertEqual(resolved["reply"]["requestId"], view["activeRequest"]["requestId"])
+        self.assertIn("continuationId", resolved["reply"])
+        self.assertEqual(resolved["resolutionState"], "restored")
+        self.assertFalse((checkout / "outside.txt").exists())
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+        with board.store.db.read() as connection:
+            continuations = connection.execute(
+                "SELECT continuation_id, input_text FROM workflow_continuations WHERE run_id=?", (run_id,)
+            ).fetchall()
+        self.assertEqual(len(continuations), 1)
+        self.assertEqual(continuations[0]["continuation_id"], resolved["reply"]["continuationId"])
+        self.assertEqual(continuations[0]["input_text"], "finish from the legal files")
+        resumed = self.claim(board, run_id, request_id="claim-combined", nonce="q" * 16)
+        self.assertIsNotNone(resumed["claim"], resumed)
+        execution = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
+        self.assertEqual(execution["inputCommit"], resolved["outputCommit"])
+        self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
+
+    def test_partial_resolution_with_input_is_rejected_before_git_changes(self):
+        board, submitted, claimed, manifest, checkout = self.scoped_failure(request_id="partial-input")
+        run_id = submitted["runId"]
+        view = self.view(board, run_id)
+        conflict = view["workspaceConflicts"][0]
+        site_before = self.state()
+        with self.assertRaises(BoardError) as raised:
+            self.resolve(board, view, conflict, "restore", paths=["outside.txt"],
+                         note="one path", input="continue too soon")
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        self.assertEqual(raised.exception.details["field"], "input")
+        self.assertEqual(self.state(), site_before)
+        self.assertEqual(self.view(board, run_id)["activeRequest"]["requestId"],
+                         view["activeRequest"]["requestId"])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?", (run_id,)
+            ).fetchone()[0], 0)
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM workflow_artifacts WHERE run_id=? AND kind='resolved-output'", (run_id,)
+            ).fetchone()[0], 0)
+
+    def test_preparation_failure_replays_combined_response_without_reapplying_resolution(self):
+        board, submitted, claimed, manifest, checkout = self.scoped_failure(request_id="combined-prep-failure")
+        run_id = submitted["runId"]
+        view = self.view(board, run_id)
+        conflict = view["workspaceConflicts"][0]
+        original = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
+                                note="restore once", input="continue once")
+        directory, paths = self.historical_record_paths(
+            manifest, run_id, claimed["claim"]["attempt"]["attemptId"], "resolve-restore")
+        sealed_before = [native_path(path).read_bytes() for path in paths]
+        with patch.object(workspace_module, "prepare", side_effect=BoardError(
+                "WORKSPACE_PREPARE_FAILED", "injected continuation preparation failure")):
+            blocked = self.claim(board, run_id, request_id="claim-prep-failed", nonce="p" * 16)
+        self.assertIsNone(blocked["claim"], blocked)
+        failed_view = self.view(board, run_id)
+        self.assertEqual(failed_view["state"], "awaiting-host")
+        self.assertEqual(failed_view["activeRequest"]["preparationError"]["code"], "WORKSPACE_PREPARE_FAILED")
+        with patch.object(workspace_module, "resolve", side_effect=AssertionError("resolution repeated")):
+            replay = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
+                                  note="restore once", input="continue once")
+        self.assertTrue(replay["reply"]["alreadyResponded"])
+        self.assertEqual(replay["reply"]["continuationId"], original["reply"]["continuationId"])
+        self.assertEqual([native_path(path).read_bytes() for path in paths], sealed_before)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?", (run_id,)
+            ).fetchone()[0], 1)
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM workflow_turns WHERE run_id=?", (run_id,)
+            ).fetchone()[0], 1)
 
     def test_thousand_scope_paths_are_stored_and_restored_through_the_board(self):
         docs = self.repo / "docs"
@@ -376,7 +486,6 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
         self.assertEqual(self.state(), before)
         current = self.view(board, run_id)
-        self.assertEqual(current["workspaceConflicts"][0]["conflictingPaths"], ["tracked.txt"])
         self.assertEqual(current["workspaceConflicts"][0]["state"], "open")
         # A stale Host observation is refused before any file is touched.
         with self.assertRaises(BoardError) as raised:
@@ -391,13 +500,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         first = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
                              note="restore once")
         # The same decision replays through the durable conflict record.
-        replay = board.store.workflow.workspace_resolve({
-            "runId": run_id, "commandId": "resolve-replay", "expectedRevision": first["revision"],
-            "conflictId": conflict["conflictId"], "action": "restore", "paths": ["outside.txt", "tracked.txt"],
-            "observedFingerprint": first["resolvedFingerprint"], 'note': "restore once",
-            **self.control(first),
-        })
-        self.assertTrue(replay["duplicate"])
+        replay = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
+                              note="restore once")
+        self.assertTrue(replay["reply"]["alreadyResponded"])
         self.assertEqual(replay["artifactId"], first["artifactId"])
         with board.store.db.read() as connection:
             attempt_id = claimed["claim"]["attempt"]["attemptId"]
@@ -431,9 +536,13 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         current = self.view(board, run_id)
         self.assertEqual(current["workspaceConflicts"][0]["state"], "open")
         self.assertEqual(current["workspaceConflicts"][0]["resolvedPaths"], ["outside.txt"])
+        self.assertEqual(current["workspaceConflicts"][0]["observedFingerprint"], partial["resolvedFingerprint"])
+        self.assertNotEqual(current["activeRequest"]["requestId"], view["activeRequest"]["requestId"])
+        with self.assertRaises(BoardError) as raised:
+            self.resolve(board, view, conflict, "abandon", note="cannot change the earlier response")
+        self.assertEqual(raised.exception.code, "CONFLICT")
         completed = self.resolve(board, current, current["workspaceConflicts"][0], "restore",
-                                 paths=["tracked.txt"], fingerprint=partial["resolvedFingerprint"],
-                                 command_id="resolve-2", note="restore the rest")
+                                 paths=["tracked.txt"], note="restore the rest")
         self.assertTrue(completed["resolved"])
         self.assertEqual(completed["resolutionState"], "restored")
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
@@ -456,7 +565,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(adopted["adoptedPaths"], ["outside.txt", "tracked.txt"])
         self.assertEqual(adopted["artifact"]["action"], "adopt")
         self.assertEqual(adopted["artifact"]["changedPaths"], ["outside.txt", "src/feature.py", "tracked.txt"])
-        continued = self.continue_run(board, adopted, command_id="continue-after-adoption")
+        continued = self.continue_run(board, adopted)
         self.assertEqual(continued["state"], "executing")
         resumed = self.claim(board, run_id, request_id="claim-adopted", nonce="k" * 16)
         execution = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
@@ -485,7 +594,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         patch = native_path(Path(abandoned["diffPath"])).read_text(encoding="utf-8")
         self.assertIn("outside.txt", patch)
         self.assertIn("value = 2", patch)
-        continued = self.continue_run(board, abandoned, command_id="continue-after-abandon")
+        continued = self.continue_run(board, abandoned)
         self.assertEqual(continued["state"], "executing")
         resumed = self.claim(board, run_id, request_id="claim-abandoned", nonce="j" * 16)
         self.assertIsNotNone(resumed["claim"], resumed)
@@ -506,18 +615,23 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         with self.assertRaises(BoardError) as mislabeled:
             workspace_module.verify_sealed_output(manifest, manifest, dict(current, version=2))
         self.assertEqual(mislabeled.exception.code, "WORKSPACE_CONFLICT")
-        for version in (1, 2):
+        self.assertEqual(current["version"], 4)
+        self.assertEqual(current["actor"], {"role": "host"})
+        for version in (1, 2, 3):
             with self.subTest(version=version):
-                historical = dict(current, version=version, reason=current["note"])
-                del historical["note"]
+                historical = dict(current, version=version)
+                if version < 3:
+                    historical["reason"] = historical.pop("note")
                 if version == 1:
                     historical["actor"] = "host:host-1"
+                else:
+                    historical["actor"] = {"role": "host", "id": "host-1"}
                 original = workspace_module._json(historical)
                 for path in paths:
                     native_path(path).write_bytes(original)
                 replay = workspace_module._resolution_record(
                     checkout, manifest, repository, directory, None, task_id=run_id, attempt_id=attempt_id,
-                    action="adopt", actor={"role": "host", "id": "host-1"}, note="later call",
+                    action="adopt", actor={"role": "host"}, note="later call",
                     conflict_fingerprint=conflict["observedFingerprint"], state_dir=self.directory)
                 self.assertEqual(replay, historical)
                 self.assertEqual([native_path(path).read_bytes() for path in paths], [original, original])
@@ -534,18 +648,23 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         attempt_id = claimed["claim"]["attempt"]["attemptId"]
         directory, paths = self.historical_record_paths(manifest, run_id, attempt_id, "abandoned")
         repository = Path(manifest["snapshot"]["repositoryPath"])
-        for version in (1, 2):
+        self.assertEqual(current["version"], 4)
+        self.assertEqual(current["actor"], {"role": "host"})
+        for version in (1, 2, 3):
             with self.subTest(version=version):
-                historical = dict(current, version=version, reason=current["note"])
-                del historical["note"]
+                historical = dict(current, version=version)
+                if version < 3:
+                    historical["reason"] = historical.pop("note")
                 if version == 1:
                     historical["actor"] = "host:host-1"
+                else:
+                    historical["actor"] = {"role": "host", "id": "host-1"}
                 original = workspace_module._json(historical)
                 for path in paths:
                     native_path(path).write_bytes(original)
                 replay = workspace_module._abandoned_record(
                     checkout, manifest, repository, directory, None, task_id=run_id, attempt_id=attempt_id,
-                    actor={"role": "host", "id": "host-1"}, note="later call",
+                    actor={"role": "host"}, note="later call",
                     conflict_fingerprint=conflict["observedFingerprint"], state_dir=self.directory)
                 self.assertEqual(replay, historical)
                 self.assertEqual([native_path(path).read_bytes() for path in paths], [original, original])
@@ -559,15 +678,18 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         manifest = turn_manifest(self.directory, first["claim"]["turn"]["input"])
         active = self.view(board, run_id)
         with self.assertRaises(BoardError) as raised:
-            self.amend(board, active, write_scope=(".", "docs"), note="retroactive")
-        self.assertEqual(raised.exception.code, "SHUTDOWN_UNCONFIRMED")
+            self.continue_run(board, active, turnId=active["currentTurn"]["turnId"],
+                              writeScope=[".", "docs"], note="retroactive")
+        self.assertIn(raised.exception.code, ("CONFLICT", "SHUTDOWN_UNCONFIRMED"))
+        self.assertEqual(self.view(board, run_id)["scope"]["scopeVersion"], 1)
         seal = workspace_module.seal(self.directory, manifest, run_id, first["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, first, seal)
         delivered = self.view(board, run_id)
         self.assertEqual(delivered["state"], "delivered")
-        amended = self.amend(board, delivered)
-        self.assertEqual(amended["scopeVersion"], 2)
-        self.assertEqual(amended["writeScope"], ["docs", "src"])
+        amended = self.continue_run(board, delivered, writeScope=["docs", "src"],
+                                    note="the next stage may touch docs")
+        self.assertEqual(amended["scope"]["scopeVersion"], 2)
+        self.assertEqual(amended["scope"]["writeScope"], ["docs", "src"])
         with board.store.db.read() as connection:
             versions = connection.execute(
                 "SELECT scope_version, write_scope_json, stopped_evidence_json FROM workflow_scope_versions"
@@ -578,8 +700,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(json.loads(versions[0]["write_scope_json"]), ["src"])
         self.assertEqual(json.loads(versions[1]["stopped_evidence_json"])["selfConfirmed"], True)
         with self.assertRaises(BoardError) as raised:
-            self.amend(board, amended, command_id="amend-stale", expected_scope=1, write_scope=(".",))
-        self.assertEqual(raised.exception.code, "REVISION_CONFLICT")
+            self.continue_run(board, delivered, artifactId=delivered["finalArtifactId"],
+                              writeScope=["."], note="try to answer the old artifact differently")
+        self.assertEqual(raised.exception.code, "CONFLICT")
 
     def test_amended_scope_applies_only_to_the_next_prepared_stage(self):
         board = self.board()
@@ -595,8 +718,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.finish_turn(board, first, seal)
         view = self.view(board, run_id)
         self.assertEqual(view["state"], "delivered")
-        amended = self.amend(board, view)
-        self.continue_run(board, amended, command_id="continue-amended")
+        amended = self.continue_run(board, view, writeScope=["docs", "src"],
+                                    note="the next stage may touch docs")
+        self.assertEqual(amended["scope"]["scopeVersion"], 2)
         resumed = self.claim(board, run_id, request_id="claim-amended", nonce="d" * 16)
         self.assertIsNotNone(resumed["claim"], resumed)
         execution = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
@@ -626,10 +750,10 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(resolved["finalArtifactId"], resolved["artifactId"])
         self.assertEqual(resolved["action"], "restore")
         self.assertEqual(resolved["workspaceConflicts"][0]["turnId"], turn_id)
-        self.assertEqual(set(resolved["delivery"]), {"resolvedFingerprint", "commandId", "deliveredAt"})
+        self.assertEqual(set(resolved["delivery"]), {"resolvedFingerprint", "deliveredAt"})
         record = self.resolution_record(board, resolved)
-        self.assertEqual(record["version"], 3)
-        self.assertEqual(record["actor"], {"role": "host", "id": "host-1"})
+        self.assertEqual(record["version"], 4)
+        self.assertEqual(record["actor"], {"role": "host"})
         self.assertEqual(record["note"], "only the refused seal failed")
         self.assertNotIn("reason", record)
         cumulative = resolved["artifact"]["cumulativePatch"]
@@ -674,14 +798,15 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             "runId": run_id, "artifactId": resolved["artifactId"],
             "note": "reviewed the Host-resolved delivery",
             "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "beforeCommit": target["before"], **self.control(resolved),
+            "beforeCommit": target["before"],
         })
+        accepted_view = self.view(board, run_id)
         self.assertEqual(accepted["state"], "accepted")
-        self.assertEqual(accepted["integration"]["state"], "verified")
-        self.assertEqual(accepted["integration"]["sourceCommit"], resolved["outputCommit"])
-        self.assertEqual(accepted["integration"]["verification"]["matchingPaths"], ["src/feature.py"])
-        self.assertEqual(accepted["resolutionDelivery"]["conflictId"], conflict["conflictId"])
-        self.assertEqual(accepted["resolutionDelivery"]["artifactId"], resolved["artifactId"])
+        self.assertEqual(accepted_view["integrations"][0]["state"], "verified")
+        self.assertEqual(accepted_view["integrations"][0]["sourceCommit"], resolved["outputCommit"])
+        self.assertEqual(accepted_view["integrations"][0]["verification"]["matchingPaths"], ["src/feature.py"])
+        self.assertEqual(accepted_view["workspaceConflicts"][0]["artifactId"], resolved["artifactId"])
+        self.assertEqual(accepted_view["workspaceConflicts"][0]["delivery"], resolved["delivery"])
         self.assertEqual(self.ledger(board, run_id), before)
 
     def test_native_scope_only_failure_is_delivered_by_adoption(self):
@@ -695,8 +820,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(adopted["action"], "adopt")
         self.assertEqual(adopted["artifact"]["action"], "adopt")
         record = self.resolution_record(board, adopted)
-        self.assertEqual(record["version"], 3)
-        self.assertEqual(record["actor"], {"role": "host", "id": "host-1"})
+        self.assertEqual(record["version"], 4)
+        self.assertEqual(record["actor"], {"role": "host"})
         self.assertEqual(record["note"], "the Host accepts this exact site")
         self.assertNotIn("reason", record)
         cumulative = adopted["artifact"]["cumulativePatch"]
@@ -723,13 +848,12 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(partial["state"], "awaiting-host")
         current = self.view(board, run_id)
         abandoned = self.resolve(board, current, current["workspaceConflicts"][0], "abandon",
-                                 command_id="resolve-abandon", fingerprint=partial["resolvedFingerprint"],
                                  note="discard this failed round")
         self.assertFalse(abandoned["delivered"])
         self.assertEqual(abandoned["resolutionState"], "abandoned")
         record = self.resolution_record(board, abandoned)
-        self.assertEqual(record["version"], 3)
-        self.assertEqual(record["actor"], {"role": "host", "id": "host-1"})
+        self.assertEqual(record["version"], 4)
+        self.assertEqual(record["actor"], {"role": "host"})
         self.assertEqual(record["note"], "discard this failed round")
         self.assertNotIn("reason", record)
         self.assertEqual(abandoned["state"], "awaiting-host")
@@ -830,17 +954,18 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.finish_turn(board, claimed, seal, disposition="assistance")
         view = self.view(board, run_id)
         self.assertEqual(view["state"], "awaiting-host")
-        approved = board.call("workflow_decide", {
-            "runId": run_id, "requestId": view["activeRequest"]["requestId"], "commandId": "decide-helper",
-            "expectedRevision": view["revision"], "decision": "approve", 'note': "one isolated helper",
+        approved = board.call("workflow_continue", {
+            "runId": run_id, "requestId": view["activeRequest"]["requestId"],
+            "decision": "approve", "note": "one isolated helper", "autoContinue": True,
             "helpers": [{
-                **BUDDY, "requestId": "helper-scope-1", "task": "helper task", "cwd": str(self.repo),
-                "executionWorkspace": {"kind": "worktree", "access": "write"},
+                "title": "helper-scope-1", "task": "helper task", "cwd": str(self.repo),
+                "buddy": ":".join(BUDDY.values()), "checkout": "worktree", "access": "write",
+                "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
             }],
-            **self.control(view),
         })
-        self.assertEqual(len(approved["children"]), 1)
-        child = approved["children"][0]["taskId"]
+        approved_view = self.view(board, run_id)
+        self.assertEqual(len(approved_view["children"]), 1)
+        child = approved_view["children"][0]["taskId"]
         child_view = self.view(board, child)
         self.assertEqual(child_view["scope"]["scopeVersion"], 1)
         self.assertEqual(child_view["scope"]["writeScope"], ["."])

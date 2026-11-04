@@ -63,6 +63,7 @@ class RealWorkspaceTestCase(BoardTestCase):
         super().setUp()
         private_environment(self)
         self.catalog_fixture()
+        self.submitted_manifests = {}
         self.repo = self.directory / "repo"
         self.repo.mkdir()
         self.git("init", "-q", "-b", "main")
@@ -109,28 +110,73 @@ class RealWorkspaceTestCase(BoardTestCase):
             "cwd": str(cwd or self.repo),
             "access": access,
             "base": {"kind": "working-tree"},
-            "integrator": {"role": "host", "id": "host-1"},
+            "integrator": {"role": "host"},
         }
         if access == "write":
             intent["writeScope"] = ["."]
         return intent
 
     def manifest_for(self, request_id: str, **options) -> dict:
+        if request_id in self.submitted_manifests:
+            return self.submitted_manifests[request_id]
         return workspace.prepare(self.directory, request_id, self._intent(request_id, **options))
 
     def submit(self, board, *, request_id="req-1", kind="existing", cwd=None, access="write"):
-        return board.call(
-            "workflow_submit",
-            {
-                **BUDDY,
-                "requestId": request_id,
-                "hostId": "host-1",
-                "task": "real workspace task",
-                "cwd": str(cwd or self.repo),
-                "submissionToken": "t" * 32,
-                "executionWorkspace": {"kind": kind, "access": access},
-            },
-        )
+        from hey_my_buddy.cli.main import _creation_key
+
+        cwd = str(cwd or self.repo)
+        project_id = workspace.ensure_project_id(workspace.repository_at(cwd, allow_parent=True))
+        params = {
+            "cwd": cwd, "macroTaskId": "standalone", "title": request_id,
+            "task": "real workspace task", "buddy": ":".join(BUDDY.values()),
+            "checkout": kind, "access": access, "expectedSeconds": 1800,
+            "creationKey": _creation_key([
+                "adr032-submit-v1", "project:" + project_id, request_id, "real workspace task",
+            ]),
+        }
+        if kind != "none":
+            params["inputs"] = []
+            if access in ("write", "full"):
+                params["writeScope"] = ["."]
+        if access == "full":
+            params["accessNote"] = "Fixture grants full access"
+        reply = board.call("workflow_submit", params)
+        from hey_my_buddy.protocol.workspace_manifest import resolve_manifest
+        with board.store.db.read() as connection:
+            run = connection.execute(
+                "SELECT workspace_id,workspace_manifest_sha256 FROM workflow_runs WHERE run_id=?",
+                (reply["runId"],),
+            ).fetchone()
+        self.submitted_manifests[request_id] = resolve_manifest(self.directory, {
+            "workspaceId": run["workspace_id"],
+            "manifestSha256": run["workspace_manifest_sha256"],
+        })
+        return {**board.call("workflow_get", {"runId": reply["runId"]}), **reply}
+
+
+    def decide_real(self, board, params):
+        """Drive a real Git boundary with current helper request fields."""
+        if "helpers" in params:
+            helpers = []
+            for index, old in enumerate(params["helpers"]):
+                checkout = old["executionWorkspace"]["kind"]
+                access = old["executionWorkspace"]["access"]
+                helper = {
+                    "title": old.get("requestId", f"helper-{index}"),
+                    "task": old["task"], "cwd": old["cwd"],
+                    "buddy": ":".join(old[key] for key in BUDDY),
+                    "checkout": checkout, "access": access,
+                    "expectedSeconds": 1800,
+                }
+                if checkout != "none":
+                    helper["inputs"] = []
+                    if access in ("write", "full"):
+                        helper["writeScope"] = ["."]
+                helpers.append(helper)
+            params["helpers"] = helpers
+            params["autoContinue"] = True
+        reply = board.call("workflow_continue", params)
+        return {**board.call("workflow_get", {"runId": params["runId"]}), **reply}
 
 
 class CumulativePatchProjectionTests(RealWorkspaceTestCase):
@@ -233,16 +279,13 @@ class DirtyInputTests(RealWorkspaceTestCase):
         output = [row for row in view["artifacts"] if row["kind"] == "output"][0]
         self.assertEqual(output["outputSnapshotSha256"], seal["snapshotSha256"])
         self.assertEqual(output["outputCommit"], seal["commit"])
-        decided = board.call(
-            "workflow_decide",
+        decided = self.decide_real(
+            board,
             {
                 "runId": run_id,
                 "requestId": view["activeRequest"]["requestId"],
-                "commandId": "decide-1",
-                "expectedRevision": view["revision"],
                 "decision": "decline",
                 "note": "continue on the sealed state",
-                **submitted["control"],
             },
         )
         self.assertEqual(decided["state"], "executing")
@@ -469,13 +512,11 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
         )
         self._finish(board, run_id, parent_claim, "assistance", parent_seal, "sess-parent-1")
         view = board.call("workflow_get", {"runId": run_id})
-        approved = board.call(
-            "workflow_decide",
+        approved = self.decide_real(
+            board,
             {
                 "runId": run_id,
                 "requestId": view["activeRequest"]["requestId"],
-                "commandId": "decide-1",
-                "expectedRevision": view["revision"],
                 "decision": "approve",
                 "note": "hand the checkout over",
                 "helpers": [
@@ -487,7 +528,6 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
                         "executionWorkspace": {"kind": "existing", "access": "write"},
                     }
                 ],
-                **submitted["control"],
             },
         )
         child = approved["children"][0]["taskId"]
@@ -576,13 +616,11 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
         )
         self._finish(board, run_id, parent_claim, "assistance", parent_seal, "sess-p1", "n" * 16)
         view = board.call("workflow_get", {"runId": run_id})
-        approved = board.call(
-            "workflow_decide",
+        approved = self.decide_real(
+            board,
             {
                 "runId": run_id,
                 "requestId": view["activeRequest"]["requestId"],
-                "commandId": "decide-1",
-                "expectedRevision": view["revision"],
                 "decision": "approve",
                 "note": "two independent helpers",
                 "helpers": [
@@ -595,7 +633,6 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
                     }
                     for index in (1, 2)
                 ],
-                **submitted["control"],
             },
         )
         seals: dict[str, dict] = {}
@@ -659,16 +696,13 @@ class WorktreeContinuationReuseTests(TransferredCheckoutContinuationTests):
         seal_one = workspace.seal(self.directory, manifest_one, run_id, first["claim"]["attempt"]["attemptId"])
         self._finish(board, run_id, first, "assistance", seal_one, "sess-w1", "n" * 16)
         view = board.call("workflow_get", {"runId": run_id})
-        board.call(
-            "workflow_decide",
+        self.decide_real(
+            board,
             {
                 "runId": run_id,
                 "requestId": view["activeRequest"]["requestId"],
-                "commandId": "wt-decide-1",
-                "expectedRevision": view["revision"],
                 "decision": "decline",
                 "note": "keep working",
-                **submitted["control"],
             },
         )
         second = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'wt-c2', 'nonce': 'm' * 16, 'runId': run_id})
@@ -705,13 +739,11 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
 
         # A helper takes the same checkout over and adds a file.
         view = board.call("workflow_get", {"runId": run_id})
-        approved = board.call(
-            "workflow_decide",
+        approved = self.decide_real(
+            board,
             {
                 "runId": run_id,
                 "requestId": view["activeRequest"]["requestId"],
-                "commandId": "r-decide-1",
-                "expectedRevision": view["revision"],
                 "decision": "approve",
                 "note": "sequential helper",
                 "helpers": [
@@ -723,7 +755,6 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
                         "executionWorkspace": {"kind": "existing", "access": "write"},
                     }
                 ],
-                **submitted["control"],
             },
         )
         child = approved["children"][0]["taskId"]
@@ -749,16 +780,13 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
 
         # Turn 3 must base on the parent's own newer seal, not the older helper seal.
         view = board.call("workflow_get", {"runId": run_id})
-        board.call(
-            "workflow_decide",
+        self.decide_real(
+            board,
             {
                 "runId": run_id,
                 "requestId": view["activeRequest"]["requestId"],
-                "commandId": "r-decide-2",
-                "expectedRevision": view["revision"],
                 "decision": "decline",
                 "note": "continue on the integrated state",
-                **submitted["control"],
             },
         )
         third = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'r-c4', 'nonce': 'j' * 16, 'runId': run_id})

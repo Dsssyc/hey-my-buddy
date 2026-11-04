@@ -4,17 +4,25 @@ from __future__ import annotations
 import unittest
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.protocol.schemas import normalize_access, normalize_execution_workspace
+from pathlib import Path
+from hey_my_buddy.protocol.requests import parse_request, dump_request
 
 
 class WorkspaceAccessTests(unittest.TestCase):
-    def test_defaults_and_full_note_are_canonical(self):
-        self.assertEqual(normalize_access({}), ("write", None))
-        self.assertEqual(normalize_access({"access": "read"}), ("read", None))
-        self.assertEqual(normalize_access({"access": "full", "accessNote": "  Need system writes  "}),
-                         ("full", "  Need system writes  "))
-        self.assertEqual(normalize_execution_workspace({"executionWorkspace": {
-            "kind": "worktree", "access": "full", "accessNote": " Need system writes "}})["writeScope"], ["."])
+    def packet(self, **changes):
+        return {"cwd":str(Path(__file__).resolve().parent),"title":"Access boundary","task":"Inspect the authorization",
+                "macroTaskId":"standalone","buddy":"route","checkout":"worktree","inputs":[],"expectedSeconds":60,
+                "access":"write","writeScope":["."],**changes}
+
+    def test_access_is_explicit_and_full_note_is_preserved(self):
+        packet = self.packet()
+        del packet["access"]
+        with self.assertRaises(BoardError):
+            parse_request("submit",packet)
+        packet = self.packet(access="full",accessNote="  Need system writes  ")
+        value = dump_request(parse_request("submit",packet))
+        self.assertEqual(value["accessNote"],packet["accessNote"])
+        self.assertEqual(value["writeScope"],["."])
 
     def test_note_is_required_only_for_full_and_must_fit_one_line(self):
         invalid = (
@@ -31,7 +39,7 @@ class WorkspaceAccessTests(unittest.TestCase):
         )
         for intent in invalid:
             with self.subTest(intent=intent), self.assertRaises(BoardError):
-                normalize_execution_workspace({"executionWorkspace": {"kind": "existing", **intent}})
+                parse_request("submit",self.packet(**intent))
 
 
 if __name__ == "__main__":

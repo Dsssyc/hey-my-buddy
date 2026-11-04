@@ -91,8 +91,11 @@ class RoutingEvidenceTests(WorkflowTestCase):
         self.assertLessEqual(abs(actual - expected), expected * (math.sqrt(1.2) - 1) + 1e-9)
 
     def conclude(self, run):
+        current = self.view(run)
         return self.board_.call("workflow_conclude", {"runId": run["runId"],
-                                "note": "Observed this synthetic outcome", **self.control(run)})
+                                "note": "Observed this synthetic outcome",
+                                **({"artifactId": current["finalArtifactId"]}
+                                   if current["state"] == "delivered" else {})})
 
     def facts(self, *buddies):
         rows = [{"buddy_id": str(index), **buddy} for index, buddy in enumerate(buddies or (BUDDY,))]
@@ -191,7 +194,7 @@ class RoutingEvidenceTests(WorkflowTestCase):
 
     def test_domain_cell_retains_rework_and_complete_usage_rule(self):
         run, _ = self.end_turn(self.new_run(), seconds=3, usage=self.usage(10, 2, 3))
-        self.continue_run(self.board_, run, command_id="review-domain")
+        self.continue_run(self.board_, run)
         run, _ = self.end_turn(run, seconds=5, usage=self.usage(20, 4, 5, completeness="partial"))
         self.accept_run(self.board_, run)
         self.classify([(run, "leaf", "review")], [("root", None, None), ("leaf", "root", None)])
@@ -256,11 +259,11 @@ class RoutingEvidenceTests(WorkflowTestCase):
         accepted, _ = self.end_turn(self.new_run())
         self.accept_run(self.board_, accepted)
         repeated_accept = self.accept_run(self.board_, accepted)
-        self.assertTrue(repeated_accept["duplicate"])
+        self.assertTrue(repeated_accept["alreadyResponded"])
         concluded, _ = self.end_turn(self.new_run(), failed=True)
         self.conclude(concluded)
         repeated_conclusion = self.conclude(concluded)
-        self.assertTrue(repeated_conclusion["duplicate"])
+        self.assertTrue(repeated_conclusion["alreadyResponded"])
         self.assertEqual(self.facts()[0]["statistics"]["overall"]["samples"], 2)
         self.assertEqual((self.facts()[0]["statistics"]["overall"]["successes"],
                           self.facts()[0]["statistics"]["overall"]["failures"]), (1, 1))
@@ -276,9 +279,9 @@ class RoutingEvidenceTests(WorkflowTestCase):
 
     def test_send_back_counts_manual_rounds_but_not_assistance_before_first_delivery(self):
         run, _ = self.end_turn(self.new_run(), disposition="assistance", seconds=3)
-        self.continue_run(self.board_, run, command_id="resolve-assistance")
+        self.continue_run(self.board_, run)
         run, _ = self.end_turn(run, seconds=10)
-        self.continue_run(self.board_, run, command_id="review-first")
+        self.continue_run(self.board_, run)
         run, _ = self.end_turn(run, seconds=30)
         self.accept_run(self.board_, run)
         stats = self.facts()[0]["statistics"]["overall"]
@@ -298,8 +301,7 @@ class RoutingEvidenceTests(WorkflowTestCase):
             self.board_.call("workflow_accept", {"runId": run["runId"],
                                                    "artifactId": run["finalArtifactId"],
                                                    "note": "Reviewed Host adjustment", "adjusted": True,
-                                                   "target": {"path": str(target), "ref": "a" * 40},
-                                                   **self.control(run)})
+                                                   "target": {"path": str(target), "ref": "a" * 40}})
             self.assertEqual(verify.call_count, 1)
         stats = self.facts()[0]["statistics"]["overall"]
         self.assertEqual((stats["successes"], stats["firstPasses"]), (1, 0))
@@ -325,8 +327,7 @@ class RoutingEvidenceTests(WorkflowTestCase):
     def test_cancellation_without_delivery_is_not_a_sample_but_delivery_counts(self):
         for disposition in ("assistance", "completed"):
             run, _ = self.end_turn(self.new_run(), disposition=disposition)
-            self.board_.call("workflow_cancel", {"runId": run["runId"], "commandId": f"cancel-{disposition}",
-                                                 **self.control(run)})
+            self.board_.call("workflow_cancel", {"runId": run["runId"]})
             self.conclude(run)
         stats = self.facts()[0]["statistics"]["overall"]
         self.assertEqual((stats["samples"], stats["failures"]), (1, 1))
@@ -334,7 +335,7 @@ class RoutingEvidenceTests(WorkflowTestCase):
     def test_last_nonability_turn_discards_the_kind_sample(self):
         for reason in ("workspace-error", "harness-error"):
             run, _ = self.end_turn(self.new_run())
-            self.continue_run(self.board_, run, command_id=f"continue-{reason}")
+            self.continue_run(self.board_, run)
             run, _ = self.end_turn(run, failed=True, category=reason,
                                    code="harness-unavailable" if reason == "harness-error" else None)
             self.conclude(run)

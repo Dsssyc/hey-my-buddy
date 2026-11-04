@@ -61,8 +61,8 @@ class InputFailureWorkflowTests(WorkflowTestCase):
         resumed = self.continue_run(board, view, input="Use a shorter task input")
         self.assertEqual(resumed["state"], "executing")
         with self.assertRaises(BoardError) as stale:
-            self.continue_run(board, view, command_id="stale-continue")
-        self.assertEqual(stale.exception.code, "REVISION_CONFLICT")
+            self.continue_run(board, view, input="different answer to the same request")
+        self.assertEqual(stale.exception.code, "CONFLICT")
 
     def test_preflight_rejection_opens_host_boundary(self):
         self.assert_stage_opens_host_boundary("preflight")

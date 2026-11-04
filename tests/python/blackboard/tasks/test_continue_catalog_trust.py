@@ -44,19 +44,23 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         """One admitted catalog and one submitted run waiting for a continuation."""
         self.evaluation.record_catalog(reading())
         submitted = self.submit(self.board, provider="fixture", model="alpha", effort="max")
+        self.finish_turn(self.board, self.claim(self.board, run_id=submitted["runId"]))
         with self.board.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id='dsh:fixture:alpha:max'")
-        return submitted
+        return self.board.call("workflow_get", {"runId": submitted["runId"]})
 
-    def continue_with(self, view, buddy, *, command_id="continue-1"):
+    def continue_with(self, view, buddy):
         """A Host continuation override without the test helper's auto-enable."""
-        return self.board.call("workflow_continue", {
-            "runId": view["runId"], "commandId": command_id,
-            "expectedRevision": view["revision"], "input": "continue with the explicit route",
-            "helperPolicy": "keep", "buddy": buddy,
+        if view["state"] == "executing":
+            self.finish_turn(self.board, self.claim(self.board, run_id=view["runId"]))
+            view = self.board.call("workflow_get", {"runId": view["runId"]})
+        response = self.board.call("workflow_continue", {
+            "runId": view["runId"], "artifactId": view["finalArtifactId"],
+            "input": "continue with the explicit route",
+            "buddy": ":".join(buddy[key] for key in ("harness", "provider", "model", "effort")),
             'note': "Route the continuation through this explicit buddy",
-            **self.control(view),
         })
+        return {**self.board.call("workflow_get", {"runId": view["runId"]}), **response}
 
     def enable_buddy(self, buddy_id):
         with self.board.store.db.write() as db:
@@ -164,13 +168,13 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertNotIn("enabled", rejected.exception.details)
         self.assertEqual(calls, ["dsh"])
 
-    def test_override_file_route_without_a_buddy_row_refuses_not_enabled(self):
-        # The operator's catalog file admits the route at validation without any
-        # recorded catalog, so no buddy row exists when the enabled
-        # gate looks for it; that missing row is itself the not-enabled refusal,
-        # with the explicit enabled:false fact and no catalog re-read.
+    def test_override_without_a_recorded_buddy_name_is_invalid_input(self):
+        # A named Host choice must identify a recorded buddy before catalog
+        # validation or the enabled gate can interpret it.
         self.catalog_fixture(reading())
         submitted = self.submit(self.board, provider="fixture", model="alpha", effort="max")
+        self.finish_turn(self.board, self.claim(self.board, run_id=submitted["runId"]))
+        submitted = self.board.call("workflow_get", {"runId": submitted["runId"]})
         with self.board.store.db.write() as db:
             db.execute("DELETE FROM buddies WHERE buddy_id='dsh:fixture:alpha:max'")
             self.assertIsNone(db.execute(
@@ -181,10 +185,8 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         with self.assertRaises(BoardError) as rejected:
             self.continue_with(submitted, IDENTITY)
         gate = rejected.exception
-        self.assertEqual(gate.code, "BUDDY_UNAVAILABLE")
-        self.assertEqual(gate.details.get("reason"), {"code": "not-enabled", "params": {}})
-        self.assertIn("enabled", gate.details, "The refusal states the enablement fact itself")
-        self.assertIs(gate.details["enabled"], False)
+        self.assertEqual(gate.code, "INVALID_ARGUMENT")
+        self.assertEqual(gate.details["buddy"], "dsh:fixture:alpha:max")
         self.assertEqual(calls, [], "The operator pin admits validation without a native re-read")
         self.assertIsNone(self.overridden_event())
 
@@ -208,7 +210,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         override = {**IDENTITY, "model": "beta"}
         enable_fixture_buddy(self.board.store, override)
         with self.assertRaises(BoardError) as missing:
-            self.continue_with(submitted, override, command_id="continue-2")
+            self.continue_with(submitted, override)
         absent = missing.exception
         self.assertEqual(absent.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(calls, ["dsh"])
@@ -229,6 +231,9 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
 
         catalog.register_catalog_reread(self.directory, reread)
         override = {**IDENTITY, "model": "beta"}  # Absent now; the re-read will list it.
+        enable_fixture_buddy(self.board.store, override)
+        with self.board.store.db.write() as db:
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id='dsh:fixture:beta:max'")
         with self.assertRaises(BoardError) as refused:
             self.continue_with(submitted, override)
         error = refused.exception
@@ -242,5 +247,5 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertEqual(self.buddy_enabled("dsh:fixture:alpha:max"), False)
         # Enabling it afterwards is the user's act, and only then does the override pass.
         self.enable_buddy("dsh:fixture:beta:max")
-        continued = self.continue_with(submitted, override, command_id="continue-2")
+        continued = self.continue_with(submitted, override)
         self.assertEqual(continued["buddy"], override)

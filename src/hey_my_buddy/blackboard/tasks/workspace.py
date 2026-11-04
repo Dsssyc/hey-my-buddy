@@ -720,7 +720,7 @@ def _intent(intent):
     base = intent.get("base")
     if not isinstance(base, dict) or set(base) - {"kind", "ref"} or base.get("kind") not in ("commit", "working-tree"):
         raise BoardError("INVALID_WORKSPACE", "Workspace base must select commit or working-tree")
-    integrator = _actor_identity(intent.get("integrator"), "Workspace integrator", ("host", "lead"))
+    integrator = _actor_identity(intent.get("integrator"), "Workspace integrator", ("host", "lead"), role_only_host=True)
     if intent.get("targetRef") is not None and (not isinstance(intent["targetRef"], str) or not intent["targetRef"].strip()):
         raise BoardError("INVALID_WORKSPACE", "targetRef must be an attribution string")
     result = dict(intent, base=dict(base), integrator=integrator)
@@ -745,7 +745,11 @@ def _intent(intent):
     return result
 
 
-def _actor_identity(value, label, roles=("host", "lead", "console")):
+def _actor_identity(value, label, roles=("host", "lead", "console"), *, role_only_host=False):
+    if role_only_host and isinstance(value, dict) and value.get("role") == "host":
+        if value != {"role": "host"}:
+            raise BoardError("INVALID_WORKSPACE", label + " records only the Host role")
+        return dict(value)
     if (not isinstance(value, dict) or set(value) != {"role", "id"}
             or value.get("role") not in roles
             or not isinstance(value.get("id"), str) or not value["id"].strip()):
@@ -1011,9 +1015,9 @@ def _record_preparation_cleanup(error, target, facts):
 def _validate_manifest(manifest):
     fields = {"version", "workspaceId", "kind", "path", "checkoutRoot", "access",
               "baseCommit", "inputCommit", "inputTree", "writeScope", "integrator", "targetRef", "exclusionPolicy", "snapshot", "manifestSha256"}
-    if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] not in (1, 2, 3, 4, 5):
+    if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] not in (1, 2, 3, 4, 5, 6):
         raise BoardError("INVALID_WORKSPACE", "Invalid workspace manifest schema")
-    fields.update({"projectId"} if manifest["version"] in (4, 5) else {"checkoutId", "repositoryId"})
+    fields.update({"projectId"} if manifest["version"] in (4, 5, 6) else {"checkoutId", "repositoryId"})
     if manifest["version"] in (1, 2) and manifest.get("access") == "full":
         fields.add("accessReason")
     if set(manifest) != fields:
@@ -1021,8 +1025,8 @@ def _validate_manifest(manifest):
     expected = _sha(_json({key: value for key, value in manifest.items() if key != "manifestSha256"}))
     if expected != manifest["manifestSha256"]:
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The workspace manifest hash does not match its contents")
-    if manifest["version"] in (2, 3, 4, 5):
-        _actor_identity(manifest["integrator"], "Workspace integrator", ("host", "lead"))
+    if manifest["version"] in (2, 3, 4, 5, 6):
+        _actor_identity(manifest["integrator"], "Workspace integrator", ("host", "lead"), role_only_host=manifest["version"] == 6)
     if manifest["exclusionPolicy"] != _EXCLUSION_POLICY:
         raise BoardError("INVALID_WORKSPACE", "Unsupported workspace exclusion policy")
     snapshot_fields = {"repositoryPath", "stagedCommit", "stagedTree", "inputRef", "stagedRef",
@@ -1037,7 +1041,7 @@ def _validate_manifest(manifest):
         if not isinstance(value, str) or not is_absolute_path(value):
             raise BoardError("INVALID_WORKSPACE", "Manifest paths must be absolute")
     snapshot = manifest["snapshot"]
-    if manifest["version"] == 5:
+    if manifest["version"] >= 5:
         if {"includeSelectors", "executionSelectors", "includedUntracked", "excludedUntracked"} & snapshot.keys():
             raise BoardError("INVALID_WORKSPACE", "A current snapshot carries a selection rule, not derived path lists")
         if manifest["kind"] == "existing":
@@ -1304,10 +1308,18 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
     manifest = _record(directory / "manifest.json")
     request_path = directory / "request.json"
     request = _record(request_path)
-    if manifest is None and request is not None and request["version"] != 5:
+    if manifest is None and request is not None and request["version"] != 6:
         raise BoardError("WORKSPACE_CONFLICT", "An unfinished historical request cannot create a new manifest")
-    request_version = manifest["version"] if manifest is not None else 5
-    _write_once(request_path, _json({"version": request_version, "requestId": request_id, "intent": intent}))
+    request_version = manifest["version"] if manifest is not None else 6
+    expected_request = {"version": request_version, "requestId": request_id, "intent": intent}
+    if request_version in (1,2,3,4,5):
+        historical_intent = dict(request["intent"])
+        if historical_intent["integrator"]["role"] == "host":
+            historical_intent["integrator"] = {"role":"host"}
+        if {**request,"intent":historical_intent} != expected_request:
+            raise BoardError("WORKSPACE_CONFLICT","The historical workspace request differs from this preparation")
+    else:
+        _write_once(request_path, _json(expected_request))
     if preparation is not None:
         preparation["replayed"] = manifest is not None
     if intent.get("executionSelection", {}).get("kind") == "seal":
@@ -1356,14 +1368,14 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
         if intent["kind"] == "existing" and source["checkoutRoot"] != actual["checkoutRoot"]:
             raise BoardError("WORKSPACE_CHANGED", "The existing checkout changed after its input was frozen")
         if intent["kind"] == "existing" and not fresh_input:
-            prepared_input = {**pinned, "version": 5, "kind": intent["kind"], "checkoutRoot": actual["checkoutRoot"], "snapshot": snapshot}
+            prepared_input = {**pinned, "version": 6, "kind": intent["kind"], "checkoutRoot": actual["checkoutRoot"], "snapshot": snapshot}
             replay = _observe(Path(actual["checkoutRoot"]), **_observation_inputs(prepared_input), state_dir=state_dir)
             if replay["fingerprint"] != pinned["snapshot"]["sourceFingerprint"]:
                 raise BoardError("WORKSPACE_CHANGED", "The existing checkout changed after its input was frozen")
         fingerprint = (pinned["snapshot"]["sourceFingerprint"] if intent["kind"] == "existing" else
                        prepared["fingerprint"])
         snapshot["executionFingerprint"] = fingerprint
-        manifest = {"version": 5, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
+        manifest = {"version": 6, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
                     "checkoutRoot": actual["checkoutRoot"], "projectId": source["projectId"], "access": intent["access"],
                     "baseCommit": pinned["baseCommit"], "inputCommit": pinned["inputCommit"], "inputTree": pinned["inputTree"],
                     "writeScope": intent["writeScope"], "integrator": intent["integrator"], "targetRef": intent["targetRef"],
@@ -1914,13 +1926,13 @@ _RECORD_BINDINGS = ("workspaceId", "taskId", "attemptId", "manifestSha256", "bas
 
 def _validate_resolution_record_schema(record):
     """Keep the field meaning of each immutable resolution format distinct."""
-    if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] not in (1, 2, 3):
+    if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] not in (1, 2, 3, 4):
         raise BoardError("WORKSPACE_CONFLICT", "Unsupported workspace resolution record version")
     kind, action = record.get("kind"), record.get("action")
     if not ((kind == "resolution" and action in ("restore", "adopt"))
             or (kind == "abandoned-site" and action == "abandon")):
         raise BoardError("WORKSPACE_CONFLICT", "Invalid workspace resolution record kind or action")
-    explanation = "note" if record["version"] == 3 else "reason"
+    explanation = "note" if record["version"] >= 3 else "reason"
     other = "reason" if explanation == "note" else "note"
     if (explanation not in record or other in record
             or record[explanation] is not None and not isinstance(record[explanation], str)):
@@ -1929,7 +1941,7 @@ def _validate_resolution_record_schema(record):
         if not isinstance(record.get("actor"), str) or not record["actor"].strip():
             raise BoardError("WORKSPACE_CONFLICT", "Invalid historical workspace resolution actor")
     else:
-        _actor_identity(record.get("actor"), "Workspace resolution actor")
+        _actor_identity(record.get("actor"), "Workspace resolution actor", role_only_host=record["version"] == 4)
 
 
 def _replay_record(directory, names, *, task_id, attempt_id, manifest):
@@ -1964,7 +1976,7 @@ def _resolution_record(root, manifest, repository, directory, observation, *, st
     patch_data = _diff(repository, manifest["inputCommit"], commit)
     snapshot = _snapshot_record(manifest, observation, tree, entries, changed, excluded_changes, task_id, attempt_id, commit, patch_data)
     snapshot["adoptedPaths"] = adopted
-    record = {"version": 3, "kind": "resolution", "action": action, "actor": actor, "note": note,
+    record = {"version": 4, "kind": "resolution", "action": action, "actor": actor, "note": note,
               "conflictFingerprint": conflict_fingerprint, "workspaceId": workspace_id, "taskId": task_id,
               "attemptId": attempt_id, "manifestSha256": manifest["manifestSha256"],
               "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"], "commit": commit,
@@ -1996,7 +2008,7 @@ def _abandoned_record(root, manifest, repository, directory, observation, *, sta
     commit = _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " abandoned " + output_id)
     patch_data = _diff(repository, manifest["inputCommit"], commit)
     snapshot = _snapshot_record(manifest, observation, tree, entries, changed, [], task_id, attempt_id, commit, patch_data)
-    record = {"version": 3, "kind": "abandoned-site", "action": "abandon", "actor": actor, "note": note,
+    record = {"version": 4, "kind": "abandoned-site", "action": "abandon", "actor": actor, "note": note,
               "conflictFingerprint": conflict_fingerprint, "workspaceId": workspace_id, "taskId": task_id,
               "attemptId": attempt_id, "manifestSha256": manifest["manifestSha256"],
               "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"], "commit": commit,
@@ -2035,13 +2047,13 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
     failed site as evidence and returns the checkout to its authorized input state.
     Compare-and-swap failures preserve the site and report the conflicting paths.
     All Git work happens here, outside any database transaction; the caller
-    rechecks owner, revision and workspace identity before recording the result.
+    rechecks the acting role and current domain and workspace identities before recording the result.
     Its ``admission_check`` runs under the workspace lock before changing the
     failed site or publishing a Git reference.
     """
     with _errors():
         _validate_manifest(manifest)
-        actor = _actor_identity(actor, "Workspace resolution actor")
+        actor = _actor_identity(actor, "Workspace resolution actor", role_only_host=True)
         if action not in RESOLUTION_ACTIONS:
             raise BoardError("INVALID_WORKSPACE", "Resolution action must be restore, adopt or abandon")
         if not isinstance(observed_fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", observed_fingerprint) is None:

@@ -37,11 +37,11 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
         # The runnable task of another model service arrives *after* the whole backlog, so
         # only the pre-window model service filter can reach it: the bounded scan of 50
         # rows is exhausted long before row 102 otherwise.
-        self.submit_micro_task(board, "runnable-b", model_service=MODEL_SERVICE_B)
+        runnable_id = self.submit_micro_task(board, "runnable-b", model_service=MODEL_SERVICE_B)
         self.register(board, "w-free")
         claim = admit_execution(board.client(), "n" * 32)
         self.assertIsNotNone(claim["claim"], claim["reason"])
-        self.assertEqual(claim["claim"]["task"]["requestId"], "runnable-b")
+        self.assertEqual(claim["claim"]["task"]["taskId"], runnable_id)
 
     def test_a_full_model_service_backlog_cannot_hide_model_less_command_work(self):
         board = self.board_
@@ -68,7 +68,8 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
             reasons = {
                 row["queue_reason"]
                 for row in connection.execute(
-                    "SELECT queue_reason FROM tasks WHERE request_id LIKE 'reason-%'"
+                    "SELECT t.queue_reason FROM tasks t JOIN workflow_runs r ON r.run_id=t.task_id"
+                    " WHERE r.title LIKE 'reason-%'"
                 )
             }
         self.assertEqual(reasons, {"model-capacity"})
@@ -95,10 +96,10 @@ class ArrivalOrderTests(StoreConcurrencyTestCase):
         # the arrival order of eligible work, not adapter, model service or any hidden
         # priority, and must skip the blocked task without visiting it.
         self.submit_micro_task(board, "order-3", model_service=MODEL_SERVICE_A)
-        self.submit_micro_task(board, "order-4", model_service=MODEL_SERVICE_B)
+        eligible_id = self.submit_micro_task(board, "order-4", model_service=MODEL_SERVICE_B)
         self.register(board, "w3")
         third = admit_execution(board.client(), "n" * 32)["claim"]
-        self.assertEqual(third["task"]["requestId"], "order-4")
+        self.assertEqual(third["task"]["taskId"], eligible_id)
 
     def test_the_machine_ceiling_is_shared_by_routing_and_business_attempts(self):
         board = self.board(max_concurrent=2)

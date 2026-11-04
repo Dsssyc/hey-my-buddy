@@ -13,9 +13,8 @@ from pathlib import Path
 import re
 import uuid
 
-from ... import private_dirs, private_files
+from ... import private_dirs
 from ...errors import BoardError
-from ...home import control_file_path, submission_file_path
 from ...protocol import schemas
 from ...protocol.reasons import reason
 from . import micro_task, storage, worker_sessions
@@ -415,52 +414,6 @@ def _delete_session_group(store, target):
     return _remove_owned_tree(private_dirs.session_group_root(store.directory, target), object_kind='session-records')
 
 
-def _delete_cli_files(store, scope):
-    with collect_skipped() as skipped:
-
-        def safe_file(path):
-            return not private_dirs.linked(path) and (not path.exists() or path.is_file())
-
-        def remove(path):
-            if not safe_file(path):
-                skipped.append({'objectKind':'cli-file','path':str(path),'reason':reason('macro-task-deletion.owner-unproven')})
-            else:
-                path.unlink(missing_ok=True)
-
-        def temporary_matches(path, **binding):
-            if not safe_file(path):
-                return False
-            try:
-                document = json.loads(private_files.read_text(path))
-            except (ValueError, BoardError):
-                return False
-            return isinstance(document,dict) and all(document.get(key) == value for key,value in binding.items())
-
-        controls = store.directory / 'controls'
-        if controls.is_dir():
-            files = list(controls.iterdir())
-            for run_id in scope.runs:
-                pattern = re.compile(re.escape(run_id) + r'\.g([1-9][0-9]*)\.json\Z')
-                temporary = re.compile(r'\.' + re.escape(run_id) + r'\.g([1-9][0-9]*)\.json\..+\.tmp\Z')
-                for path in files:
-                    match = pattern.fullmatch(path.name)
-                    if match:
-                        remove(control_file_path(store.directory,run_id,int(match[1])))
-                    else:
-                        match = temporary.fullmatch(path.name)
-                        if match and temporary_matches(path,runId=run_id,ownerGeneration=int(match[1])):
-                            remove(path)
-        submissions = store.directory / 'submissions'
-        for task in scope.task_rows:
-            path = submission_file_path(store.directory,task['request_id'])
-            remove(path)
-            if submissions.is_dir():
-                for temporary in submissions.glob('.' + path.stem + '.*.tmp'):
-                    if temporary_matches(temporary,requestId=task['request_id']):
-                        remove(temporary)
-        return skipped
-
-
 def _delete_rows(store, connection, scope, deletion):
     r,t,a,d,u = scope.runs,scope.tasks,scope.attempts,scope.decisions,scope.turns
     bindings = {'runId':r, 'targetRunId':r,
@@ -471,15 +424,8 @@ def _delete_rows(store, connection, scope, deletion):
                 'conclusionId':{x['conclusion_id'] for x in _rows(connection,'workflow_host_conclusions','run_id',r)},
                 'conflictId':{x['conflict_id'] for x in _rows(connection,'workflow_workspace_conflicts','run_id',r)}}
     bindings['macroTaskId'] = {deletion['target_id']}
-    commands = set()
-    for table,column in (('workflow_requests','decision_command_id'),('workflow_children','decision_command_id'),
-                         ('workflow_continuations','command_id'),('workflow_scope_versions','command_id'),
-                         ('workflow_workspace_conflicts','command_id'),('workflow_integrations','command_id'),
-                         ('workflow_host_conclusions','command_id')):
-        owner = 'parent_run_id' if table == 'workflow_children' else 'run_id'
-        commands.update(x[column] for x in _rows(connection,table,owner,r) if x[column])
     clauses,args = [],[]
-    for column,values in (('task_id',t),('attempt_id',a),('command_id',commands)):
+    for column,values in (('task_id',t),('attempt_id',a)):
         clause,values_args = _in(column,values)
         clauses.append(clause);args.extend(values_args)
     response_clauses,response_args = [],[]
@@ -490,8 +436,8 @@ def _delete_rows(store, connection, scope, deletion):
         response_args.append(_ids(values))
     clauses.append("((kind LIKE 'workflow.%' OR kind='macro_task.stop') AND (" + ' OR '.join(response_clauses) + '))')
     args.extend(response_args)
-    commands.update(row[0] for row in connection.execute(
-        'SELECT command_id FROM commands WHERE ' + ' OR '.join(clauses),args))
+    commands = {row[0] for row in connection.execute(
+        'SELECT command_id FROM commands WHERE ' + ' OR '.join(clauses),args)}
     clause,args = _in('command_id',commands)
     connection.execute(f'DELETE FROM commands WHERE {clause}',args)
     def remove(table, *conditions):
@@ -531,8 +477,10 @@ def _delete_rows(store, connection, scope, deletion):
     connection.execute("DELETE FROM events WHERE task_id IN (SELECT value FROM json_each(?))"
                        " OR attempt_id IN (SELECT value FROM json_each(?)) OR seq IN (SELECT value FROM json_each(?))"
                        " OR ((kind LIKE 'decision.%' OR kind LIKE 'router.%') AND json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END,'$.decisionId') IN (SELECT value FROM json_each(?)))"
-                       " OR (kind LIKE 'router.%' AND json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END,'$.requestId') IN (SELECT value FROM json_each(?)))",
-                       (_ids(t),_ids(a),_ids(outcome_events),_ids(d),_ids(scope.requests)))
+                       " OR (kind LIKE 'router.%' AND json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END,'$.requestId') IN (SELECT value FROM json_each(?)))"
+                       " OR (kind LIKE 'macro_task.%' AND json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END,'$.macroTaskId')=?)",
+                       (_ids(t),_ids(a),_ids(outcome_events),_ids(d),_ids(scope.requests),
+                        deletion['target_id'] if deletion['target_kind']=='macro-task' else None))
     remove('attempts',('attempt_id',a))
     remove('workflow_runs',('run_id',r))
     remove('tasks',('task_id',t))
@@ -615,8 +563,7 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                     _require_unused_storage(store, connection, scope, target)
         for phase,operation in (('native-session',_delete_sessions),('workspace',_delete_workspaces),
                                 ('private-root',_delete_private_roots),
-                                ('session-records',lambda store, scope: _delete_session_group(store, target)),
-                                ('cli-file',_delete_cli_files)):
+                                ('session-records',lambda store, scope: _delete_session_group(store, target))):
             try:
                 skipped = operation(store,scope)
             except (BoardError,OSError) as error:

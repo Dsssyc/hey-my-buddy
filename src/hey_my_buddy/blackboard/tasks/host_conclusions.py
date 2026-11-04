@@ -19,5 +19,4 @@ def view(row):
             "executionStatus": row["execution_status"], "note": row["note"],
             "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
             "artifactId": row["artifact_id"],
-            "actor": {"role": row["actor_role"], "id": row["actor_id"]}, "createdAt": row["created_at"],
-            "ownerGeneration": row["owner_generation"], "runRevision": row["run_revision"]}
+            "actor": {"role": row["actor_role"], **({"id": row["actor_id"]} if row["actor_id"] is not None else {})}, "createdAt": row["created_at"]}

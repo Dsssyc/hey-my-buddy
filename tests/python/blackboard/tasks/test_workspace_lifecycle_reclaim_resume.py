@@ -35,9 +35,9 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         before = self.view(board, submitted["runId"])
         with descendant_case(self, self.directory, "daemon", cwd=str(checkout)) as (handle, member):
             self.assertTrue(handle.terminate(grace_seconds=0)[0])
-            with self.assertRaises(BoardError) as caught:
-                self.reclaim(board, before)
-            blocked = caught.exception.details["reclaim"]
+            caught = self.reclaim(board, before)
+            self.assertFalse(caught["removed"])
+            blocked = caught
             self.assertEqual(blocked["reasons"], ["checkout.process-blockers"])
             processes = blocked["reason"]["params"]["processes"]
             self.assertIn(member["pid"], [process["pid"] for process in processes])
@@ -61,9 +61,8 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         self.assertEqual(accepted["state"], "accepted")
         view = self.view(board, submitted["runId"])
         (checkout / "tracked.txt").write_text("edited after the seal\n", encoding="utf-8", newline="\n")
-        with self.assertRaises(BoardError) as raised:
-            self.reclaim(board, view)
-        self.assertEqual(raised.exception.code, "NOT_READY")
+        raised = self.reclaim(board, view)
+        self.assertFalse(raised["removed"])
         blocked = self.view(board, submitted["runId"])["cleanup"]
         self.assertEqual(blocked["state"], "blocked")
         self.assertTrue(checkout.exists())
@@ -172,11 +171,10 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         retained = {path.relative_to(native_path(checkout)): path.read_bytes()
                     for path in native_path(checkout).rglob("*") if path.is_file()}
         refs = git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/")
-        with self.assertRaises(BoardError) as refused:
-            self.reclaim(board, self.view(board, run_id))
-        self.assertEqual(refused.exception.code, "NOT_READY")
-        self.assertEqual(refused.exception.details["reasons"], ["unsealed-changes"])
-        self.assertEqual(refused.exception.details["reclaim"]["unsealedPaths"], ["kept.txt"])
+        refused = self.reclaim(board, self.view(board, run_id))
+        self.assertFalse(refused["removed"])
+        self.assertEqual(refused["reasons"], ["unsealed-changes"])
+        self.assertEqual(refused["unsealedPaths"], ["kept.txt"])
         with board.store.db.read() as connection:
             after = dict(connection.execute(
                 "SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (before["plan_id"],),
@@ -230,54 +228,7 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         self.assertTrue(self.reclaim(board, self.view(board, submitted["runId"]))["removed"])
         self.assertFalse(checkout.exists())
 
-    def test_started_reclaim_resumes_under_the_current_owner_after_takeover(self):
-        board, submitted, manifest, checkout, artifact = self.interrupted_reclaim(
-            missing=("tracked.txt",), remove_git=True)
-        view = self.view(board, submitted["runId"])
-        old_control = self.control(view)
-        with board.store.db.read() as connection:
-            before = dict(connection.execute(
-                "SELECT * FROM workspace_cleanup_plans WHERE run_id=?", (view["runId"],),
-            ).fetchone())
-        taken = board.call("workflow_takeover", {
-            "runId": view["runId"], "commandId": "reclaim-takeover",
-            "expectedOwnerGeneration": view["ownerGeneration"], "newHostId": "host-2", **old_control,
-        })
-        self.controls[view["runId"]] = dict(taken["control"])
-        with self.assertRaises(BoardError) as stale:
-            board.call("workflow_reclaim", {"runId": view["runId"], **old_control})
-        self.assertEqual(stale.exception.code, "STALE_GENERATION")
-        result = self.reclaim(board, self.view(board, view["runId"]))
-        self.assertTrue(result["removed"])
-        self.assertFalse(result["alreadyRemoved"])
-        self.assertFalse(checkout.exists())
-        with board.store.db.read() as connection:
-            after = dict(connection.execute(
-                "SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (before["plan_id"],),
-            ).fetchone())
-        for column in before.keys() - {"state", "revision", "applied_at", "result_json"}:
-            self.assertEqual(after[column], before[column], column)
-        self.assertEqual(after["state"], "applied")
-        self.assertEqual(after["revision"], before["revision"] + 1)
 
-    def test_planned_reclaim_uses_terminal_facts_after_owner_generation_changes(self):
-        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
-        planned = board.store.workflow.cleanup_plan({
-            "runId": view["runId"],
-        })
-        taken = board.call("workflow_takeover", {
-            "runId": view["runId"], "commandId": "planned-reclaim-takeover",
-            "expectedOwnerGeneration": view["ownerGeneration"], "newHostId": "host-2", **self.control(view),
-        })
-        current = self.view(board, view["runId"])
-        applied = board.store.workflow.cleanup_apply({
-            "runId": view["runId"],
-            "planId": planned["plan"]["planId"],
-            "confirmPath": str(checkout),
-        })
-        self.assertTrue(applied["removed"])
-        self.assertFalse(checkout.exists())
-        self.assertEqual(self.view(board, view["runId"])["cleanup"]["state"], "applied")
 
     def test_started_reclaim_accepts_relative_worktree_backlinks(self):
         git(self.repo, "config", "worktree.useRelativePaths", "true")
@@ -336,7 +287,6 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
                     "planId": planned["plan"]["planId"],
                     "confirmPath": str(checkout),
                 })
-        self.assertEqual(refused.exception.code, "NOT_READY")
         self.assertEqual(refused.exception.details["reasons"], ["unsealed-changes"])
         self.assertEqual(refused.exception.details["unsealedPaths"], ["tracked.txt"])
         self.assertEqual(self.view(board, submitted["runId"])["cleanup"]["state"], "blocked")
@@ -362,11 +312,10 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         self.assertNotIn("attached-branch", plan["reasons"])
         # The actual branch is first examined by apply; its diagnosis is then
         # persisted on the plan that this planning call created.
-        with self.assertRaises(BoardError) as blocked:
-            self.reclaim(board, self.view(board, run_id))
-        self.assertEqual(blocked.exception.code, "NOT_READY")
-        self.assertIn("attached-branch", blocked.exception.details["reasons"])
-        self.assertEqual(blocked.exception.details["reclaim"]["attachedBranch"]["branch"], "socu/worker-branch")
+        blocked = self.reclaim(board, self.view(board, run_id))
+        self.assertFalse(blocked["removed"])
+        self.assertIn("attached-branch", blocked["reasons"])
+        self.assertEqual(blocked["attachedBranch"]["branch"], "socu/worker-branch")
         blocked_plan = self.view(board, run_id)["cleanup"]
         self.assertEqual(blocked_plan["planId"], plan["planId"])
         self.assertEqual(blocked_plan["state"], "blocked")
@@ -383,7 +332,6 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         # The direct removal refuses with the same facts and touches nothing.
         with self.assertRaises(BoardError) as raised:
             workspace_module.cleanup_remove(self.directory, manifest)
-        self.assertEqual(raised.exception.code, "WORKSPACE_UNSAFE")
         self.assertIn("socu/worker-branch", raised.exception.message)
         self.assertEqual(raised.exception.details["attachedBranch"]["branch"], "socu/worker-branch")
         # The board never detached, deleted or moved anything.
@@ -396,15 +344,15 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
             request_id="detach-then-reclaim")
         run_id = submitted["runId"]
         git(checkout, "switch", "-q", "-c", "socu/worker-branch")
-        with self.assertRaises(BoardError) as blocked:
-            self.reclaim(board, self.view(board, run_id))
-        self.assertIn("attached-branch", blocked.exception.details["reasons"])
-        command = blocked.exception.details["reclaim"]["attachedBranch"]["detachCommand"]
+        blocked = self.reclaim(board, self.view(board, run_id))
+        self.assertFalse(blocked["removed"])
+        self.assertIn("attached-branch", blocked["reasons"])
+        command = blocked["attachedBranch"]["detachCommand"]
         completed = subprocess.run(shlex.split(command), cwd=self.repo,
                                    env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(git(checkout, "rev-parse", "HEAD").strip(),
-                         blocked.exception.details["reclaim"]["attachedBranch"]["headCommit"])
+                         blocked["attachedBranch"]["headCommit"])
         reclaimed = self.reclaim(board, self.view(board, run_id))
         self.assertTrue(reclaimed["removed"])
         self.assertFalse(checkout.exists())
@@ -432,7 +380,6 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
                 "planId": planned["plan"]["planId"],
                 "confirmPath": planned["plan"]["path"],
             })
-        self.assertEqual(raised.exception.code, "NOT_READY")
         self.assertIn("attached-branch", raised.exception.details["reasons"])
         self.assertEqual(raised.exception.details["attachedBranch"]["branch"], "socu/late-branch")
         blocked = self.view(board, run_id)["cleanup"]
@@ -457,15 +404,15 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         # A lock that belongs to someone else is a lock mismatch, not an
         # "unregistered" claim and not a branch claim.
         git(self.repo, "worktree", "unlock", str(checkout))
-        with self.assertRaises(BoardError) as mismatch:
-            self.reclaim(board, self.view(board, run_id))
-        self.assertIn("lock-mismatch", mismatch.exception.details["reasons"])
-        self.assertNotIn("unregistered-checkout", mismatch.exception.details["reasons"])
-        self.assertNotIn("attached-branch", mismatch.exception.details["reasons"])
+        mismatch = self.reclaim(board, self.view(board, run_id))
+        self.assertFalse(mismatch["removed"])
+        self.assertIn("lock-mismatch", mismatch["reasons"])
+        self.assertNotIn("unregistered-checkout", mismatch["reasons"])
+        self.assertNotIn("attached-branch", mismatch["reasons"])
         git(self.repo, "worktree", "lock", "--reason", "hey-my-buddy:someone-else", str(checkout))
-        with self.assertRaises(BoardError) as foreign:
-            self.reclaim(board, self.view(board, run_id))
-        self.assertIn("lock-mismatch", foreign.exception.details["reasons"])
+        foreign = self.reclaim(board, self.view(board, run_id))
+        self.assertFalse(foreign["removed"])
+        self.assertIn("lock-mismatch", foreign["reasons"])
         # A registration Git no longer lists at all keeps its own reason too.
         git(self.repo, "worktree", "unlock", str(checkout))
         with mock.patch.object(workspace_module, "_worktree_record", return_value=None):

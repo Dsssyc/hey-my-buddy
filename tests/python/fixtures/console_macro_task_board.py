@@ -139,7 +139,6 @@ class SyntheticBoard:
         self.helpers: list[str] = []
         self.completed_attempts: list[str] = []
         self.plain: list[str] = []
-        self.controls: dict[str, dict] = {}
         self.operations = 0
 
     def __enter__(self):
@@ -187,19 +186,26 @@ class SyntheticBoard:
         return self.board.call(operation, params)
 
     def _submit(self, name, *, macro_task=None, macro_task_id=None, routed=False):
+        from hey_my_buddy.cli.main import _creation_key
+
         cwd = self.state / "fictional-project" / name
         cwd.mkdir(parents=True, exist_ok=True)
-        params = {"requestId": f"synthetic-{self.seed}-{name}", "hostId": "fictional-host",
-                  "task": f"Fictional work {name}", "title": f"Synthetic {name}", "cwd": str(cwd),
-                  "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src/feature.py"]}}
-        if not routed:
-            params.update(BUDDY)
+        title, task = f"Synthetic {name}", f"Fictional work {name}"
         if macro_task is not None:
-            params["macroTask"] = {"title": macro_task, "goal": "Fictional benchmark; no real work."}
-        if macro_task_id is not None:
-            params["macroTaskId"] = macro_task_id
-        view = self.call("workflow_submit", params)
-        self.controls[view["runId"]] = view["control"]
+            project_id = self.workspace.ensure_project_id(self.workspace.repository_at(str(cwd), allow_parent=True))
+            created = self.call("workflow_create", {"cwd": str(cwd), "title": macro_task,
+                                                    "goal": "Fictional benchmark; no real work.",
+                                                    "creationKey": _creation_key(
+                                                        ["adr032-create-v1", project_id, macro_task])})
+            macro_task_id = created["macroTaskId"]
+        owner = ("macro:" + macro_task_id if macro_task_id else "project:" +
+                 self.workspace.ensure_project_id(self.workspace.repository_at(str(cwd), allow_parent=True)))
+        params = {"task": task, "title": title, "cwd": str(cwd), "macroTaskId": macro_task_id or "standalone",
+                  "buddy": "route" if routed else BUDDY_ID, "checkout": "worktree", "access": "write",
+                  "inputs": [], "writeScope": ["src/feature.py"], "expectedSeconds": 1800,
+                  "creationKey": _creation_key(["adr032-submit-v1", owner, title, task])}
+        response = self.call("workflow_submit", params)
+        view = self.call("workflow_get", {"runId": response["runId"]})
         if routed:
             self._select(view)
         return view
@@ -240,14 +246,16 @@ class SyntheticBoard:
 
     def _helper(self, parent, name):
         view = self.call("workflow_get", {"runId": parent})
-        result = self.call("workflow_decide", {
-            "runId": parent, **self.controls[parent], "requestId": view["activeRequest"]["requestId"],
-            "commandId": f"approve-{parent}", "expectedRevision": view["revision"], "decision": "approve",
-            "helpers": [{**BUDDY, "requestId": name, "task": "Fictional helper",
-                         "cwd": str(self.state / "fictional-project"),
-                         "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src/feature.py"]}}],
+        request_id = view["activeRequest"]["requestId"]
+        self.call("workflow_continue", {
+            "runId": parent, "requestId": request_id, "decision": "approve", "autoContinue": True,
+            "helpers": [{"title": name, "task": "Fictional helper", "cwd": str(self.state / "fictional-project"),
+                         "buddy": BUDDY_ID, "checkout": "worktree", "access": "write",
+                         "inputs": [], "writeScope": ["src/feature.py"], "expectedSeconds": 1800}],
         })
-        helper = result["children"][0]["taskId"]
+        with self.board.store.db.read() as connection:
+            helper = connection.execute("SELECT child_task_id FROM workflow_children WHERE parent_run_id=?"
+                                        " AND request_id=?", (parent, request_id)).fetchone()[0]
         self.helpers.append(helper)
         self._finish(helper, disposition="assistance")
 
@@ -263,8 +271,6 @@ class SyntheticBoard:
                                 (BUDDY_ID, "dsh:deepseek-official:deepseek-v4-pro:high")],
             "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": [BUDDY_ID]},
         })
-        None
-        None
         pending, accepted = 0, 0
         for macro in range(r.macros):
             macro_task_id = None
@@ -285,7 +291,7 @@ class SyntheticBoard:
                     pending += 1
                 elif accepted < r.accepted_roots:
                     delivered = self.call("workflow_get", {"runId": run_id})
-                    self.call("workflow_accept", {"runId": run_id, **self.controls[run_id],
+                    self.call("workflow_accept", {"runId": run_id,
                                                   "artifactId": delivered["finalArtifactId"],
                                                   "note": "Synthetic fixture review only",
                                                   "notRequired": "Fictional fixture has no Git target"})

@@ -7,6 +7,7 @@ from blackboard.tasks import test_workflow as workflow_fixtures, test_workspace 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import macro_task_deletion as deletion, macro_tasks, worker_sessions, workflow, workspace
 from hey_my_buddy.paths import native_path
+from hey_my_buddy.cli.main import _creation_key
 
 
 class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
@@ -27,7 +28,7 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
 
     def test_repeated_manifest_references_count_records_checkouts_and_refs_once_without_writes(self):
         board = self.board()
-        run = self.create(board, macroTask={'title': 'Scope', 'goal': 'Scope'})
+        run = self.create(board, create_macro={'title': 'Scope', 'goal': 'Scope'})
         with board.store.db.read() as connection:
             scope = deletion._collect(connection, run['macroTaskId'], board.directory)
         self.assertEqual(len(scope.artifacts), 1)
@@ -123,7 +124,7 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
 
     def test_missing_manifest_does_not_change_sql_allocation_count(self):
         board = self.board()
-        first = self.create(board, macroTask={'title': 'Incomplete allocations', 'goal': 'Incomplete allocations'})
+        first = self.create(board, create_macro={'title': 'Incomplete allocations', 'goal': 'Incomplete allocations'})
         self.create(board, 'second', macroTaskId=first['macroTaskId'])
         with board.store.db.read() as connection:
             from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
@@ -135,12 +136,13 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
 
     def test_empty_retained_scope_is_zero(self):
         board = self.board()
-        with board.store.db.write() as connection:
-            connection.execute('INSERT INTO macro_tasks(macro_task_id,title,project_id,source_host_id,created_at,activity_at)'
-                               ' VALUES(?,?,?,?,?,?)', ('macro-empty', 'Empty scope', 'private-project',
-                                                       'host-1', board.store.now(), board.store.now()))
+        project_id = workspace.ensure_project_id(workspace.repository_at(self.repo, allow_parent=True))
+        created = board.call('workflow_create', {
+            'cwd': str(self.repo), 'title': 'Empty scope', 'goal': 'Empty scope',
+            'creationKey': _creation_key(['adr032-create-v1', project_id, 'Empty scope']),
+        })
         before = self.dump(board)
-        self.assertEqual(deletion.preview(board.store, 'macro-empty')['scope'], {
+        self.assertEqual(deletion.preview(board.store, created['macroTaskId'])['scope'], {
             'artifacts': {'count': 0, 'bytes': 0}, 'sessions': {'count': 0, 'bytes': 0}, 'checkouts': 0, 'gitRefs': 0})
         self.assertEqual(self.dump(board), before)
 
@@ -201,7 +203,7 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
     def test_deleted_target_preview_is_not_found_without_writes(self):
         board = self.board()
         run = self.create(board)
-        board.call('workflow_cancel', {'runId': run['runId'], **self.control(run)})
+        board.call('workflow_cancel', {'runId': run['runId']})
         target = 'run:' + run['runId']
         self.assertEqual(deletion.delete(board.store, target, 1)['state'], 'deleted')
         before = self.dump(board)
@@ -212,10 +214,12 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
 
     def test_blockers_use_the_same_stored_title_and_task_rules_without_loaded_timeline_rows(self):
         board = self.board()
-        first = self.create(board, macroTask={'title': 'Blocker names', 'goal': 'Blocker names'}, title='  Authored name  ')
+        first = self.create(board, create_macro={'title': 'Blocker names', 'goal': 'Blocker names'}, title='  Authored name  ')
         second = self.create(board, 'task-line', macroTaskId=first['macroTaskId'], task='  Task   first line\nLater line')
         third = self.create(board, 'no-name', macroTaskId=first['macroTaskId'])
         with board.store.db.write() as connection:
+            connection.execute('UPDATE workflow_runs SET title=NULL WHERE run_id IN (?,?)',
+                               (second['runId'], third['runId']))
             connection.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','') WHERE task_id=?",
                                (third['runId'],))
         before = self.dump(board)

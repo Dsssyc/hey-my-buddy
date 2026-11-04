@@ -1,7 +1,6 @@
-"""Private daemon cutover preserves Host receipts and retriable waits."""
+"""Private daemon cutover preserves domain responses and retriable waits."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-import copy
 from importlib import metadata
 import json
 import os
@@ -14,9 +13,7 @@ import threading
 import venv
 from unittest import mock
 from blackboard.tasks.test_workflow import WorkflowTestCase
-from private_acl import assert_private_path
 from hey_my_buddy.cli.blocking import await_run
-from hey_my_buddy.cli.main import _read_control, _scrub_and_save
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.transport import _call_service
 from hey_my_buddy.install import launcher, runtime, upgrade
@@ -125,22 +122,17 @@ class HostCutoverTests(WorkflowTestCase):
         self.assertEqual(service_entries,
                          [entry for entry in inherited_entries if entry != installer_bin])
 
-    def test_host_receipt_and_wait_can_retry_across_real_private_cutover(self):
+    def test_host_response_and_wait_can_retry_across_real_private_cutover(self):
         board = self.board()
         submitted = self.submit(board)
         claimed = self.claim(board)
         self.finish_turn(board, claimed, disposition='assistance')
         boundary = board.call('workflow_get', {'runId': submitted['runId']})
         self.assertEqual(boundary['state'], 'awaiting-host')
-        control = self.controls[submitted['runId']]
-        saved = copy.deepcopy(submitted)
-        _scrub_and_save(saved, self.directory)
-        control_file = Path(saved['controlFile'])
-        control_bytes = control_file.read_bytes()
-        request = {'runId': submitted['runId'], 'commandId': 'cutover-scope',
-                   'expectedRevision': boundary['revision'], 'expectedScopeVersion': 1,
-                   'writeScope': ['src'], 'note': 'Host reviewed', **control}
-        receipt = board.call('workflow_scope_amend', request)
+        stopped=self.submit(board,request_id="cutover-stopped",cwd=str(self.workdir("cutover-stopped")))
+        request={"runId":stopped["runId"],"note":"Stop this queued task once"}
+        response=board.call("workflow_cancel",request)
+        self.assertFalse(response["alreadyRequested"])
         before = board.call('workflow_get', {'runId': submitted['runId']})
         board.store.db.close()
         previous = self.private_runtime('previous')
@@ -156,7 +148,7 @@ class HostCutoverTests(WorkflowTestCase):
         release = threading.Event()
 
         def delayed_wait(method, params, state_dir):
-            if method == 'result':
+            if method == 'task_result':
                 entered.set()
                 self.assertTrue(release.wait(20))
             return _call_service(method, params, state_dir)
@@ -186,22 +178,20 @@ class HostCutoverTests(WorkflowTestCase):
                     self.assertEqual(saw_fence, ['preflight'])
                     waited = waiter.result(timeout=20)
                     self.assertEqual(waited['outcome'], 'waiting-host')
-                    self.assertIsNone(waited['error'])
-                    self.assertEqual(waited['request']['requestId'], before['activeRequest']['requestId'])
+                    self.assertNotIn('error',waited)
+                    self.assertEqual(waited['requestId'], before['activeRequest']['requestId'])
                 finally:
                     release.set()
             after = client.call('workflow_get', {'runId': submitted['runId']})
             self.assertEqual(after['activeRequest'], before['activeRequest'])
-            self.assertEqual(after['ownerGeneration'], before['ownerGeneration'])
-            self.assertEqual(after['revision'], before['revision'])
-            self.assertEqual(control_file.read_bytes(), control_bytes)
-            assert_private_path(self, control_file, 0o600)
-            self.assertEqual(_read_control(str(control_file)), control)
-            self.assertEqual(client.call('workflow_scope_amend', request), {**receipt, 'duplicate': True})
-            with closing(sqlite3.connect(self.directory / 'board.sqlite3')) as connection:
-                self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE command_id='cutover-scope'").fetchone()[0], 1)
-            decided = client.call('workflow_decide', {'runId': submitted['runId'],
-                'requestId': after['activeRequest']['requestId'], 'commandId': 'post-cutover-decision',
-                'expectedRevision': after['revision'], 'decision': 'approve',
-                'autoContinue': False, **_read_control(str(control_file))})
-            self.assertEqual(decided['runId'], submitted['runId'])
+            self.assertEqual(after['state'],before['state'])
+            self.assertFalse((self.directory/'controls').exists())
+            self.assertFalse((self.directory/'submissions').exists())
+            replay=client.call('workflow_cancel',request)
+            self.assertTrue(replay['alreadyRequested'])
+            self.assertEqual(replay['stopEventId'],response['stopEventId'])
+            with closing(sqlite3.connect(self.directory/'board.sqlite3')) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE task_id=? AND kind='workflow.cancelled'",(stopped['runId'],)).fetchone()[0],1)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE kind GLOB 'workflow.*'").fetchone()[0],0)
+            cancelled=client.call('workflow_cancel',{'runId':submitted['runId']})
+            self.assertEqual(cancelled['state'],'cancelled')

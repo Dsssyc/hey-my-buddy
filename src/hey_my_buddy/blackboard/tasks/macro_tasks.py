@@ -1,7 +1,7 @@
 """Human macro task metadata and bounded read projections, never execution input.
 
 A macro task groups micro tasks for browsing and archival. It owns a
-title, revisioned goal and original source attribution: it schedules no work,
+title, revisioned goal and project provenance: it schedules no work,
 grants no control and is never part of an execution spec, Worker turn input or
 selector packet. The timeline is derived on every read from the recorded task,
 attempt, turn, request, routing and event rows; the only stored projection is the
@@ -24,7 +24,6 @@ from ..routing import router, router_sequence
 from ...protocol import schemas
 from ...protocol.turn_input import turn_buddy
 from ...protocol.reasons import reason_from_json
-from ...protocol.workspace_manifest import project_id as manifest_project_id
 from ...errors import BoardError
 
 LIST_FIRST_LIMIT = 5
@@ -43,7 +42,7 @@ MACRO_TASK_PATTERN = re.compile(r"^macro-[A-Za-z0-9-]{1,120}$")
 STANDALONE_PATTERN = re.compile(r"^run:([A-Za-z0-9._:-]{1,128})$")
 _CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,512}$")
 
-LIST_PARAMETERS = frozenset({"limit", "before", "group", "hostId", "query", "filter", "sort"})
+LIST_PARAMETERS = frozenset({"limit", "before", "group", "query", "filter", "sort"})
 TIMELINE_PARAMETERS = frozenset({"macroTaskId", "limit", "query", "filter"})
 GOAL_HISTORY_PARAMETERS = frozenset({"macroTaskId"})
 
@@ -101,7 +100,6 @@ HOST_MARKERS = {
     "workflow.acknowledged": "accept",
     "workflow.host_concluded": "conclude",
     "workflow.cancelled": "cancel",
-    "workflow.takeover": "takeover",
 }
 
 
@@ -148,43 +146,75 @@ def pending_root_count(store) -> int:
         return int(connection.execute(PENDING_ROOTS_SQL).fetchone()["pending"])
 
 
-def attach_macro_task(connection, presentation: dict, *, host_id: str, manifest: dict, now: str,
-                      fixed_run=None) -> str | None:
-    """Run within the task's admission transaction; failed admission creates nothing."""
-    project_id = manifest_project_id(manifest)
-    identifier = presentation.get("macroTaskId")
-    if fixed_run is not None and not any(key in presentation for key in ("macroTask", "macroTaskId", "macroTaskOf")):
-        identifier = fixed_run["macro_task_id"]
-    if presentation.get("macroTaskOf") is not None:
-        source = connection.execute("SELECT macro_task_id FROM workflow_runs WHERE run_id=?", (presentation["macroTaskOf"],)).fetchone()
-        if source is None:
-            raise BoardError("NOT_FOUND", "macroTaskOf names an unknown run")
-        if source["macro_task_id"] is None:
-            raise BoardError("MACRO_TASK_REQUIRED", "macroTaskOf must name a run belonging to a work macro task")
-        identifier = source["macro_task_id"]
-    if fixed_run is not None and ("macroTask" in presentation or identifier != fixed_run["macro_task_id"]):
-        raise BoardError("CONFLICT", "A fix must belong to the fixed micro task's macro task")
-    if identifier is not None:
-        reject_macro_task(connection, identifier)
-        row = connection.execute("SELECT * FROM macro_tasks WHERE macro_task_id=?", (identifier,)).fetchone()
-        if row is None:
-            raise BoardError("NOT_FOUND", "Unknown macroTaskId")
-        # A fix has already proved current ownership, including after takeover.
-        if row["project_id"] != project_id or (fixed_run is None and row["source_host_id"] != host_id):
-            raise BoardError("CONFLICT", "The macro task belongs to another source project or submitting Host")
-        return identifier
-    if "macroTask" not in presentation:
+def attach_macro_task(connection, macro_task_id: str | None, *, project_id: str) -> str | None:
+    """Validate an explicit macro binding in the run admission transaction."""
+    if macro_task_id is None:
         return None
-    identifier = f"macro-{uuid.uuid4()}"
-    connection.execute(
-        "INSERT INTO macro_tasks(macro_task_id,title,project_id,source_host_id,created_at,activity_at)"
-        " VALUES(?,?,?,?,?,?)", (identifier, presentation["macroTask"]["title"], project_id, host_id, now, now),
-    )
-    connection.execute(
-        "INSERT INTO macro_task_goals(macro_task_id,revision,body,created_at) VALUES(?,1,?,?)",
-        (identifier, presentation["macroTask"]["goal"], now),
-    )
-    return identifier
+    reject_macro_task(connection, macro_task_id)
+    row = connection.execute("SELECT project_id FROM macro_tasks WHERE macro_task_id=?", (macro_task_id,)).fetchone()
+    if row is None:
+        raise BoardError("NOT_FOUND", "Unknown macroTaskId", macroTaskId=macro_task_id)
+    if row["project_id"] != project_id:
+        raise BoardError("CONFLICT", "The macro task belongs to another project", macroTaskId=macro_task_id)
+    return macro_task_id
+
+
+def create_macro_task(store, params: dict) -> dict:
+    """Create one empty Git macro task; a repeated creation key reads the original."""
+    project_id = params["projectId"]
+    creation_key = params["creationKey"]
+    now = store.now()
+    with store.db.write() as connection:
+        existing = connection.execute(
+            "SELECT macro_task_id FROM macro_tasks WHERE creation_key=?", (creation_key,),
+        ).fetchone()
+        if existing is not None:
+            return {**_macro_task_get(connection, existing["macro_task_id"]), "alreadyExists": True}
+        identifier = f"macro-{uuid.uuid4()}"
+        connection.execute(
+            "INSERT INTO macro_tasks(macro_task_id,title,project_id,project_cwd,repository_path,"
+            " creation_key,created_at,activity_at) VALUES(?,?,?,?,?,?,?,?)",
+            (identifier, params["title"], project_id, params["cwd"], params["repositoryPath"],
+             creation_key, now, now),
+        )
+        connection.execute(
+            "INSERT INTO macro_task_goals(macro_task_id,revision,body,created_at) VALUES(?,1,?,?)",
+            (identifier, params["goal"], now),
+        )
+        seq = store._append_event(connection, "macro_task.created",
+                                  payload={"macroTaskId": identifier, "actor": {"role": "host"}})
+        connection.execute("UPDATE macro_tasks SET activity_seq=? WHERE macro_task_id=?", (seq, identifier))
+        result = _macro_task_get(connection, identifier)
+        head = store._head_of(connection)
+    store._notify(head)
+    return {**result, "alreadyExists": False}
+
+
+def amend_macro_task(store, params: dict) -> dict:
+    """Append a goal version when its exact body differs from the current one."""
+    identifier, goal = params["macroTaskId"], params["goal"]
+    now = store.now()
+    with store.db.write() as connection:
+        reject_macro_task(connection, identifier)
+        current = current_goal(connection, identifier)
+        if connection.execute("SELECT 1 FROM macro_tasks WHERE macro_task_id=?", (identifier,)).fetchone() is None:
+            raise BoardError("NOT_FOUND", "Unknown macroTaskId", macroTaskId=identifier)
+        if current is not None and current["body"] == goal:
+            return {**_macro_task_get(connection, identifier), "alreadyCurrent": True}
+        revision = current["revision"] if current is not None else 0
+        connection.execute(
+            "INSERT INTO macro_task_goals(macro_task_id,revision,body,created_at) VALUES(?,?,?,?)",
+            (identifier, revision + 1, goal, now),
+        )
+        seq = store._append_event(connection, "macro_task.goal_amended",
+                                  payload={"macroTaskId": identifier, "goalRevision": revision + 1,
+                                           "actor": {"role": "host"}})
+        connection.execute("UPDATE macro_tasks SET activity_seq=?,activity_at=? WHERE macro_task_id=?",
+                           (seq, now, identifier))
+        result = _macro_task_get(connection, identifier)
+        head = store._head_of(connection)
+    store._notify(head)
+    return {**result, "alreadyCurrent": False}
 
 
 def current_goal(connection, macro_task_id: str | None) -> dict | None:
@@ -214,25 +244,116 @@ def macro_task_goal_history(store, params: dict) -> dict:
 
 
 def project(connection, macro_task_id: str) -> dict:
-    """The creating root owns the source directory and sealed Git provenance."""
-    from .workspace_bindings import MANIFEST_OWNERS_CTE
+    """Use the macro task's durable source project, even before any run exists."""
     row = connection.execute(
-        "SELECT m.project_id,r.run_id,json_extract(t.spec_json,'$.cwd') AS path"
-        " FROM macro_tasks m JOIN workflow_runs r ON r.macro_task_id=m.macro_task_id"
-        " JOIN tasks t ON t.task_id=r.run_id WHERE m.macro_task_id=? ORDER BY r.created_at,r.rowid LIMIT 1",
+        "SELECT project_id,project_cwd,repository_path FROM macro_tasks WHERE macro_task_id=?",
         (macro_task_id,),
     ).fetchone()
-    initial = connection.execute(
-        "SELECT workspace_id,input_manifest_sha256 FROM workflow_artifacts"
-        " WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1", (row["run_id"],),
-    ).fetchone()
-    owner = connection.execute(
-        f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})"
-        " SELECT repository_path FROM manifest_owners WHERE workspace_id=? AND manifest_sha256=?",
-        (initial["workspace_id"], initial["input_manifest_sha256"]),
-    ).fetchone()
-    return {"id": row["project_id"], "path": row["path"],
-            "label": micro_task.project_label(row["path"], owner["repository_path"])}
+    return {"id": row["project_id"], "kind": "git", "path": row["project_cwd"],
+            "label": micro_task.project_label(row["project_cwd"], row["repository_path"])}
+
+
+def _macro_task_get(connection, identifier: str, *, limit: int = 100, before: str | None = None,
+                    include_runs: bool = True, include_goal: bool = True) -> dict:
+    row = connection.execute("SELECT * FROM macro_tasks WHERE macro_task_id=?", (identifier,)).fetchone()
+    if row is None:
+        raise BoardError("NOT_FOUND", "Unknown macroTaskId", macroTaskId=identifier)
+    inputs = _summary_inputs(connection, [identifier], [], [])[identifier]
+    summary = _summary(connection, identifier, inputs)
+    total = len(inputs["members"])
+    if before is not None:
+        pivot = connection.execute("SELECT created_at,run_id FROM workflow_runs"
+                                   " WHERE run_id=? AND macro_task_id=?", (before, identifier)).fetchone()
+        if pivot is None:
+            raise BoardError("INVALID_ARGUMENT", "before is not a member of this macro task", field="before")
+    else:
+        pivot = None
+    roots = connection.execute(
+        "SELECT run_id,state,title,created_at,activity_at FROM workflow_runs"
+        " WHERE macro_task_id=? AND (? IS NULL OR created_at>? OR (created_at=? AND run_id>?))"
+        " ORDER BY created_at,run_id LIMIT ?",
+        (identifier, before, pivot["created_at"] if pivot else None,
+         pivot["created_at"] if pivot else None, before, limit + 1 if include_runs else 0),
+    ).fetchall() if include_runs else []
+    goal = current_goal(connection, identifier) if include_goal else None
+    goal_revision = (goal["revision"] if goal else connection.execute(
+        "SELECT COALESCE(MAX(revision),0) FROM macro_task_goals WHERE macro_task_id=?",
+        (identifier,),
+    ).fetchone()[0])
+    deleting = connection.execute("SELECT 1 FROM macro_task_deletions"
+                                  " WHERE target_kind='macro-task' AND target_id=?", (identifier,)).fetchone()
+    result = {"macroTaskId": identifier, "title": row["title"],
+            "goalRevision": goal_revision,
+            "project": project(connection, identifier), "createdAt": row["created_at"],
+            "lastActivityAt": row["activity_at"], "state": summary["state"],
+            "counts": summary["counts"], "memberCount": total,
+            "runs": [{"runId": run["run_id"], "title": run["title"], "state": run["state"],
+                      "createdAt": run["created_at"], "lastActivityAt": run["activity_at"]}
+                     for run in roots[:limit]],
+            "nextCursor": roots[limit - 1]["run_id"] if len(roots) > limit else None,
+            "actions": ["get"] if deleting else ["amend", "submit", "get"]}
+    if include_goal:
+        result["goal"] = goal
+    return result
+
+
+def macro_task_get(store, params: dict) -> dict:
+    identifier = params["macroTaskId"]
+    with store.db.read() as connection:
+        return _macro_task_get(connection, identifier, limit=params.get("limit", 100), before=params.get("before"))
+
+
+def project_get(store, params: dict) -> dict:
+    """Read bounded Git macro and standalone roots of one durable project id."""
+    identifier = params["projectId"]
+    limit = params.get("limit", 20)
+    before = params.get("before")
+    with store.db.read() as connection:
+        base = """
+WITH items AS (
+    SELECT macro_task_id AS id,created_at,'macro-task' AS kind FROM macro_tasks WHERE project_id=?
+    UNION ALL
+    SELECT run_id AS id,created_at,'standalone' AS kind FROM workflow_runs
+     WHERE standalone_project_id=? AND macro_task_id IS NULL
+)
+"""
+        first = connection.execute(base + "SELECT id,kind FROM items ORDER BY created_at,id LIMIT 1",
+                                   (identifier, identifier)).fetchone()
+        if first is None:
+            raise BoardError("NOT_FOUND", "Unknown project", projectId=identifier)
+        before_row = None
+        if before is not None:
+            before_row = connection.execute(base + "SELECT id,created_at FROM items WHERE id=?",
+                                            (identifier, identifier, before)).fetchone()
+            if before_row is None:
+                raise BoardError("INVALID_ARGUMENT", "before is not a project item", field="before")
+        items = connection.execute(
+            base + "SELECT id,kind,created_at FROM items WHERE (? IS NULL OR created_at < ?"
+            " OR (created_at=? AND id<?)) ORDER BY created_at DESC,id DESC LIMIT ?",
+            (identifier, identifier,
+             before, before_row["created_at"] if before_row else None,
+             before_row["created_at"] if before_row else None, before, limit + 1),
+        ).fetchall()
+        visible = items[:limit]
+        if first["kind"] == "macro-task":
+            project_view = project(connection, first["id"])
+        else:
+            history = connection.execute(f"{micro_task.TASK_HISTORY_SQL} WHERE task_id=?",
+                                         (first["id"],)).fetchone()
+            project_view = micro_task.metadata_from_row(history)["project"]
+        rows = []
+        for item in visible:
+            if item["kind"] == "macro-task":
+                rows.append({"kind": "macro-task", **_macro_task_get(connection, item["id"],
+                                                                       include_runs=False, include_goal=False)})
+            else:
+                run = connection.execute("SELECT * FROM workflow_runs WHERE run_id=?",
+                                         (item["id"],)).fetchone()
+                rows.append({"kind": "standalone", "runId": run["run_id"], "title": run["title"],
+                             "state": run["state"], "createdAt": run["created_at"],
+                             "actions": store.workflow._actions(connection, run)})
+        return {"project": project_view, "items": rows,
+                "nextCursor": visible[-1]["id"] if len(items) > limit else None}
 
 
 def record_activity(connection, task_id: str | None, seq: int, at: str) -> None:
@@ -265,15 +386,11 @@ def record_activity(connection, task_id: str | None, seq: int, at: str) -> None:
 def _filters(params: dict) -> tuple[dict, list[str], list[Any]]:
     """Validated member filters and their SQL predicates over ``MEMBERS_SQL`` rows."""
     query = schemas.optional_string(params, "query", max_length=micro_task.QUERY_MAX_LENGTH)
-    host_id = schemas.optional_string(params, "hostId", max_length=micro_task.HOST_ID_MAX_LENGTH)
     filter_name = schemas.optional_string(params, "filter", max_length=16) or "all"
     if filter_name not in micro_task.HISTORY_FILTERS:
         raise BoardError("INVALID_ARGUMENT", "filter must be one of: all, active, host, review")
-    clauses, values = micro_task.history_where(
-        host_id=host_id, query=query, filter_name=filter_name
-    )
-    applied = {key: value for key, value in (("query", query), ("hostId", host_id))
-               if value}
+    clauses, values = micro_task.history_where(query=query, filter_name=filter_name)
+    applied = {"query": query} if query else {}
     if filter_name != "all":
         applied["filter"] = filter_name
     return applied, clauses, values
@@ -393,7 +510,6 @@ def macro_task_list(store, params: dict) -> dict:
     ordering = f"{order_column} {direction.upper()}, group_id {direction.upper()}"
     applied, clauses, values = _filters(params)
     common_clauses, common_values = micro_task.history_where(
-        host_id=applied.get("hostId"),
         query=applied.get("query"),
     )
     before_value = schemas.optional_string(params, "before", max_length=512)
@@ -408,6 +524,11 @@ def macro_task_list(store, params: dict) -> dict:
         f"CASE WHEN base_matching=1 AND {selected_filter} THEN 1 ELSE 0 END"
         if selected_filter else "base_matching"
     )
+    macro_query = applied.get("query")
+    macro_pattern = f"%{micro_task._escape_like(macro_query)}%" if macro_query else None
+    macro_match = ("1" if macro_pattern is None else
+                   "(o.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM macro_task_goals g"
+                   " WHERE g.macro_task_id=o.macro_task_id AND g.body LIKE ? ESCAPE '\\'))")
     from . import macro_task_summary_cache as memo
 
     # The materialized relation carries only scalars consumed by the summary and
@@ -444,18 +565,33 @@ matched AS (
     SELECT group_id, MAX(base_matching) AS all_match, MAX(matching) AS selected_match,
            MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['active']} THEN 1 ELSE 0 END) AS active_match,
            MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['host']} THEN 1 ELSE 0 END) AS host_match,
-           MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['review']} THEN 1 ELSE 0 END) AS review_match
+           MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['review']} THEN 1 ELSE 0 END) AS review_match,
+           MAX(CASE WHEN {micro_task.FILTER_SQL['active']} THEN 1 ELSE 0 END) AS active_any,
+           MAX(CASE WHEN {micro_task.FILTER_SQL['host']} THEN 1 ELSE 0 END) AS host_any,
+           MAX(CASE WHEN {micro_task.FILTER_SQL['review']} THEN 1 ELSE 0 END) AS review_any
       FROM members GROUP BY group_id
 ),
+macro_text AS (
+    SELECT o.*, {macro_match} AS text_match FROM macro_tasks o
+),
+eligible AS (
+    SELECT o.macro_task_id AS group_id,o.activity_seq,o.created_at,
+           'project:' || o.project_id AS project_group,
+           CASE WHEN COALESCE(m.all_match,0)=1 OR o.text_match THEN 1 ELSE 0 END AS all_match,
+           CASE WHEN COALESCE(m.active_match,0)=1 OR (o.text_match AND COALESCE(m.active_any,0)=1)
+                THEN 1 ELSE 0 END AS active_match,
+           CASE WHEN COALESCE(m.host_match,0)=1 OR (o.text_match AND COALESCE(m.host_any,0)=1)
+                THEN 1 ELSE 0 END AS host_match,
+           CASE WHEN COALESCE(m.review_match,0)=1 OR (o.text_match AND COALESCE(m.review_any,0)=1)
+                THEN 1 ELSE 0 END AS review_match
+      FROM macro_text o LEFT JOIN matched m ON m.group_id=o.macro_task_id
+    UNION ALL
+    SELECT matched.group_id,root.activity_seq,root.created_at,'standalone' AS project_group,
+           matched.all_match,matched.active_match,matched.host_match,matched.review_match
+      FROM matched JOIN workflow_runs root ON matched.group_id='run:' || root.run_id
+),
 groups AS (
-    SELECT matched.group_id, COALESCE(o.activity_seq, root.activity_seq) AS activity_seq,
-           COALESCE(o.created_at, root.created_at) AS created_at,
-           CASE WHEN o.macro_task_id IS NULL THEN 'standalone' ELSE 'project:' || o.project_id END AS project_group
-      FROM matched
-      LEFT JOIN macro_tasks o ON o.macro_task_id=matched.group_id
-      LEFT JOIN workflow_runs root ON o.macro_task_id IS NULL
-        AND matched.group_id LIKE 'run:%' AND root.run_id=substr(matched.group_id,5)
-     WHERE matched.selected_match=1
+    SELECT * FROM eligible WHERE {applied.get("filter", "all")}_match=1
 ),
 ordered AS (
     SELECT groups.*, ROW_NUMBER() OVER (PARTITION BY project_group ORDER BY {ordering}) AS ordinal
@@ -476,7 +612,7 @@ page AS (
 stats AS (SELECT COALESCE(SUM(all_match),0) AS all_total,
                 COALESCE(SUM(active_match),0) AS active_total,
                 COALESCE(SUM(host_match),0) AS host_total,
-                COALESCE(SUM(review_match),0) AS review_total FROM matched),
+                COALESCE(SUM(review_match),0) AS review_total FROM eligible),
 latest AS (SELECT COALESCE(MAX(activity_seq),0) AS latest FROM groups)
 SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
        projects.first_key,projects.first_group_id,
@@ -494,7 +630,8 @@ SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
     # below (including a cache miss's _summary) remain from this one snapshot.
     with cache.lock, store.db.read() as connection:
         head = _head(connection)
-        rows = connection.execute(groups_sql, [*common_values, *project_values, *page_values, limit + 1]).fetchall()
+        rows = connection.execute(groups_sql, [*common_values, *([macro_pattern, macro_pattern] if macro_pattern else []),
+                                               *project_values, *page_values, limit + 1]).fetchall()
         totals = {name: int(rows[0][f"{name}_total"]) for name in ("all", "active", "host", "review")}
         changed = before is not None and int(rows[0]["latest"]) > before[2]
         groups = {}
@@ -620,7 +757,7 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
         macro_task = connection.execute("SELECT * FROM macro_tasks WHERE macro_task_id=?", (group_id,)).fetchone()
         title, title_source = macro_task["title"], "macro-task"
         group_project = project(connection, group_id)
-        source_host, created_at = macro_task["source_host_id"], macro_task["created_at"]
+        created_at = macro_task["created_at"]
         activity_seq, activity_at = macro_task["activity_seq"], macro_task["activity_at"]
         roots = [row["task_id"] for row in members if row["child_parent_run_id"] is None]
         kind = "macro-task"
@@ -628,27 +765,24 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
         root_id = group_id[len("run:"):]
         root = next((row for row in members if row["task_id"] == root_id), None)
         title, title_source = _run_title(connection, root_id)
-        metadata = micro_task.metadata_from_row(root) if root is not None else {"project": None, "sourceHostId": None}
-        group_project, source_host = metadata["project"], metadata["sourceHostId"]
+        metadata = micro_task.metadata_from_row(root) if root is not None else {"project": None}
+        group_project = metadata["project"]
         created_at = root["created_at"] if root is not None else None
         run = connection.execute("SELECT activity_seq, activity_at FROM workflow_runs WHERE run_id=?", (root_id,)).fetchone()
         activity_seq, activity_at = (run["activity_seq"], run["activity_at"]) if run is not None else (0, None)
         roots = [root_id]
         kind = "standalone"
-    current_hosts = sorted({row["current_host_id"] for row in members if row["current_host_id"]})
     return {
         "macroTaskId": group_id,
         "kind": kind,
         "title": title,
         "titleSource": title_source,
         "project": group_project,
-        "sourceHostId": source_host,
-        "currentHostIds": current_hosts,
         "createdAt": created_at,
         # The latest recorded event of any member; unknown history stays at sequence 0.
         "lastActivityAt": activity_at or created_at,
         "lastActivitySeq": int(activity_seq or 0),
-        "state": state,
+        "state": "empty" if not members and kind == "macro-task" else state,
         "counts": counts,
         "matchingRuns": int(matching),
         "rootRunIds": roots,
@@ -681,7 +815,7 @@ def macro_task_timeline(store, params: dict) -> dict:
                 raise BoardError("NOT_FOUND", "Unknown standalone micro task", macroTaskId=group_id)
         inputs = _summary_inputs(connection, [group_id], clauses, values)[group_id]
         members = inputs["executions"]
-        if not members:
+        if not members and not group_id.startswith("macro-"):
             raise BoardError("NOT_FOUND", "The group has no readable micro tasks", macroTaskId=group_id)
         summary = {**_summary(connection, group_id, inputs), "goal": current_goal(connection, group_id)}
         runs = inputs["members"]
@@ -781,6 +915,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "shutdownConfirmed": attempts == confirmed and not unproven,
         "depth": depth,
         "kind": metadata["kind"],
+        "actor": metadata["actor"],
         "delegationAuthority": metadata["delegationAuthority"],
         "leadOwnership": metadata["leadOwnership"],
         "rootLeadRunId": metadata["rootLeadRunId"],
@@ -1024,9 +1159,9 @@ def _markers(connection, run_ids: list[str]) -> list[dict]:
         if kind == "accept" and payload.get("verdict") == "rejected":
             kind = "reject"
 
-        fallback_host = payload.get("newHostId") or payload.get("microTask", {}).get("sourceHostId")
-        actor = ({"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else
-                 {"role": "host", "id": fallback_host} if fallback_host else None)
+        actor = ({"role": row["actor_role"],
+                  **({"id": row["actor_id"]} if row["actor_role"] != "host" and row["actor_id"] else {})}
+                 if row["actor_role"] else None)
         markers.append({
             "seq": row["seq"],
             "runId": row["task_id"],

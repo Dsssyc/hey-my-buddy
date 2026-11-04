@@ -6,7 +6,7 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 
 class TimelineActionPairingTests(WorkflowTestCase):
     def delivered(self, board):
-        submitted = self.submit(board, macroTask={"title": "Timeline action pairing", 'goal': "Timeline action pairing"})
+        submitted = self.submit(board, create_macro={"title": "Timeline action pairing", 'goal': "Timeline action pairing"})
         self.finish_turn(board, self.claim(board))
         return board.call("workflow_get", {"runId": submitted["runId"]})
 
@@ -30,7 +30,7 @@ class TimelineActionPairingTests(WorkflowTestCase):
         self.assertTrue(rejected[1] and continued[1])
         self.assertEqual(continued[2], rejected[2] + 1)
         self.assertEqual(rejected[4]["task_id"], continued[4]["task_id"])
-        self.assertEqual(rejected[4]["revision"], continued[4]["revision"])
+        self.assertEqual(rejected[4]["payload"]["actor"], continued[4]["payload"]["actor"])
         timeline = board.call("macro_task_timeline", {"macroTaskId": delivered["macroTaskId"]})
         pair = [event for event in timeline["events"] if event["seq"] in (rejected[2], continued[2])]
         self.assertEqual([event["kind"] for event in pair], ["reject", "continue"])

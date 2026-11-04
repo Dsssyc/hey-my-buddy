@@ -16,6 +16,7 @@ from pathlib import Path
 from blackboard.store.test_store import StoreConcurrencyTestCase
 
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.console import reads as console_reads
 
 MODEL_SERVICE_A = ("dsh", "deepseek-official", "deepseek-flash")
 MODEL_SERVICE_B = ("dsh", "deepseek-official", "deepseek-v4-pro")
@@ -75,7 +76,7 @@ class PublicationInterfaceTests(ModelServiceConcurrencyTestCase):
         self.board_.call("model_catalog_refresh", {"requestId": "catalog-seed"})
 
     def test_snapshot_reports_one_row_per_represented_model_service_with_defaults(self):
-        snapshot = self.board_.call("console_snapshot", {})
+        snapshot = console_reads.console_snapshot_projection(self.board_.service)[0]
         rows = {(row["harness"], row["provider"], row["model"]): row for row in snapshot["modelServiceConcurrency"]}
         # The fixture catalog represents two dsh model services; every row carries exactly
         # the frozen fields, effort variants collapse, and defaults apply.
@@ -109,7 +110,7 @@ class PublicationInterfaceTests(ModelServiceConcurrencyTestCase):
         with mock.patch.object(catalog_store, "buddies", side_effect=concurrent_save):
             page = self.board_.call("buddy_list", {"limit": 200})
         self.assertEqual(self.model_service_row(page, MODEL_SERVICE_A)["limit"], 2)
-        fresh = self.board_.call("console_snapshot", {})
+        fresh = console_reads.console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(self.model_service_row(fresh, MODEL_SERVICE_A)["limit"], 5)
 
     def test_active_counts_unresolved_attempts_of_the_model_service(self):
@@ -118,7 +119,7 @@ class PublicationInterfaceTests(ModelServiceConcurrencyTestCase):
         self.register(board, "w-obs2")
         self.claim_micro_task(board, "w-obs1", "obs-1")
         self.claim_micro_task(board, "w-obs2", "obs-2", model_service=MODEL_SERVICE_B)
-        snapshot = board.call("console_snapshot", {})
+        snapshot = console_reads.console_snapshot_projection(board.service)[0]
         self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_A)["active"], 1)
         self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_B)["active"], 1)
         buddies = board.call("buddy_list", {"limit": 200})
@@ -152,7 +153,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
         )
         self.assertTrue(result["published"])
         self.assertEqual(result["counts"]["modelServiceConcurrency"], 1)
-        snapshot = self.board_.call("console_snapshot", {})
+        snapshot = console_reads.console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_A)["limit"], 5)
         self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_B)["limit"], 2)
         # A later save updates only the named model service; unrelated settings persist.
@@ -161,7 +162,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
             {"harness": MODEL_SERVICE_B[0], "provider": MODEL_SERVICE_B[1], "model": MODEL_SERVICE_B[2], "limit": 1},
             command="limits-2",
         )
-        snapshot = self.board_.call("console_snapshot", {})
+        snapshot = console_reads.console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_A)["limit"], 5)
         self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_B)["limit"], 1)
 
@@ -198,7 +199,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
                      "model": MODEL_SERVICE_A[2], "limit": limit},
                     command=f"limits-{limit}",
                 )
-                snapshot = self.board_.call("console_snapshot", {})
+                snapshot = console_reads.console_snapshot_projection(self.board_.service)[0]
                 self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_A)["limit"], limit)
                 health = self.board_.call("health", {})
                 self.assertEqual(self.model_service_row(health["capacity"], MODEL_SERVICE_A)["limit"], limit)
@@ -256,7 +257,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
             )
         # The unavailable model service is no longer represented in the response, but the
         # stored setting remains and applies again when the model service returns.
-        snapshot = board.call("console_snapshot", {})
+        snapshot = console_reads.console_snapshot_projection(board.service)[0]
         self.assertNotIn(MODEL_SERVICE_B, {(row["harness"], row["provider"], row["model"]) for row in snapshot["modelServiceConcurrency"]})
         with board.store.db.read() as connection:
             row = connection.execute(
@@ -271,9 +272,11 @@ class SaveAppliesAtClaimTests(ModelServiceConcurrencyTestCase):
         self.board_ = self.board(max_concurrent=8)
         self.board_.call("model_catalog_refresh", {"requestId": "catalog-for-live-limits"})
         # Two live model-service-A attempts hold the default limit exactly.
+        self.live_run_ids = {}
         for index in range(2):
             self.register(self.board_, f"w-live{index}")
-            self.claim = self.claim_micro_task(self.board_, f"w-live{index}", f"live-{index}")
+            claim = self.claim_micro_task(self.board_, f"w-live{index}", f"live-{index}")
+            self.live_run_ids[f"live-{index}"] = claim["claim"]["task"]["taskId"]
 
     def test_lowering_never_kills_live_work_and_holds_new_claims(self):
         board = self.board_
@@ -282,7 +285,7 @@ class SaveAppliesAtClaimTests(ModelServiceConcurrencyTestCase):
         )
         # The live attempts are untouched: no cancel, no state change.
         for index in range(2):
-            view = board.call("task_get", {"requestId": f"live-{index}"})["task"]
+            view = board.call("task_get", {"runId": self.live_run_ids[f"live-{index}"]})["task"]
             self.assertEqual(view["state"], "running")
         self.register(board, "w-next")
         blocked = self.claim_micro_task(board, "w-next", "next-1")
@@ -315,9 +318,8 @@ class SaveAppliesAtClaimTests(ModelServiceConcurrencyTestCase):
         """Re-fetch the stored claim of an already-claimed fixture task."""
         with board.store.db.read() as connection:
             row = connection.execute(
-                "SELECT attempt_id, generation FROM attempts WHERE task_id="
-                "(SELECT task_id FROM tasks WHERE request_id=?)",
-                (request_id,),
+                "SELECT attempt_id, generation FROM attempts WHERE task_id=?",
+                (self.live_run_ids[request_id],),
             ).fetchone()
         return {"claim": {"attempt": {"attemptId": row["attempt_id"], "generation": row["generation"]}}}
 
@@ -330,10 +332,8 @@ class RoutingQuotaTests(ModelServiceConcurrencyTestCase):
         self.seed_decision_buddy(self.board_)
 
     def request_selection(self, board, request_id: str) -> str:
-        response = board.call(
-            "selection_request",
-            {"requestId": request_id, "task": "pick a coding buddy"},
-        )
+        response = board.store.decisions.request_select(
+            {"requestId": request_id, "task": "pick a coding buddy"})
         return response["decisionId"]
 
     def test_the_selector_model_service_quota_precedes_the_claim(self):
@@ -390,12 +390,12 @@ class RoutingQuotaTests(ModelServiceConcurrencyTestCase):
         # The routing task is blocked on the selector model service; a later, runnable
         # business task of another model service must still be reached by the scan.
         self.request_selection(board, "route-3")
-        self.submit_micro_task(board, "route-3-business", model_service=MODEL_SERVICE_B)
+        business_id = self.submit_micro_task(board, "route-3-business", model_service=MODEL_SERVICE_B)
         client = board.client()
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "n" * 32)["claim"]
         self.assertIsNotNone(claim, "a blocked routing task hid runnable business work")
-        self.assertEqual(claim["task"]["requestId"], "route-3-business")
+        self.assertEqual(claim["task"]["taskId"], business_id)
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ ExecutionSelection = SelectorsSelection | SealSelection | RecoverySelection
 
 
 def project_id(manifest: dict) -> str:
-    return manifest["projectId"] if manifest["version"] in (4, 5) else manifest["repositoryId"]
+    return manifest["projectId"] if manifest["version"] in (4, 5, 6) else manifest["repositoryId"]
 
 
 def manifest_ref(manifest: dict) -> ManifestRef:
@@ -89,7 +89,7 @@ def resolve_manifest(state_dir: Path, ref: ManifestRef) -> dict:
     except (ValueError, UnicodeError) as error:
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The referenced workspace manifest is malformed") from error
     if (not isinstance(manifest, dict) or manifest.get("workspaceId") != ref["workspaceId"]
-            or type(manifest.get("version")) is not int or manifest["version"] not in (1, 2, 3, 4, 5)):
+            or type(manifest.get("version")) is not int or manifest["version"] not in (1, 2, 3, 4, 5, 6)):
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The workspace manifest identity changed")
     digest = hashlib.sha256(_manifest_bytes({key: value for key, value in manifest.items()
                                             if key != "manifestSha256"})).hexdigest()

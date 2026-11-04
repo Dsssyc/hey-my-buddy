@@ -11,6 +11,7 @@ import unittest
 
 from support import BoardTestCase
 
+from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.errors import BoardError
 
 BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
@@ -56,7 +57,7 @@ class EvaluationTestCase(BoardTestCase):
         return caught.exception
 
     def snapshot(self, board) -> dict:
-        return board.call("console_snapshot", {})
+        return console_snapshot_projection(board.service)[0]
 
     def seed_catalog(self, board) -> dict:
         return board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
@@ -128,7 +129,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertIsInstance(snapshot["capabilities"]["selection"], bool)
         self.assertEqual(snapshot["configuration"]["defaultRoutingMode"], "fast")
         self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [])
-        self.assertIn("runs", snapshot["tasks"])
+        self.assertEqual(snapshot["tasks"], {"pendingCount": 0})
 
     def test_user_patches_preserve_omitted_fields(self):
         board = self.board()

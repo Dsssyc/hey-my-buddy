@@ -63,7 +63,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             connection.execute('UPDATE macro_tasks SET created_at=? WHERE macro_task_id=?',
                                ('2026-01-05T00:00:01.000Z', delivered_macro))
             source_macros = [tuple(row) for row in connection.execute(
-                'SELECT macro_task_id,title,project_id,source_host_id,created_at,activity_seq,activity_at '
+                'SELECT macro_task_id,title,project_id,created_at,activity_seq,activity_at '
                 'FROM macro_tasks ORDER BY rowid')]
             paths = list(connection.execute(
                 "SELECT m.project_path,(SELECT json_extract(t.spec_json,'$.cwd')"
@@ -89,9 +89,13 @@ class UpgradeFixtureTests(unittest.TestCase):
                 'SELECT macro_task_id,revision,body,created_at FROM macro_task_goals')),
                 [(delivered_macro, 1, expected_body, '2026-01-05T00:00:00.000Z')])
             self.assertEqual([tuple(row) for row in connection.execute(
-                'SELECT macro_task_id,title,project_id,source_host_id,created_at,activity_seq,activity_at '
+                'SELECT macro_task_id,title,project_id,created_at,activity_seq,activity_at '
                 'FROM macro_tasks ORDER BY rowid')], source_macros)
-            self.assertNotIn('project_path', {row[1] for row in connection.execute('PRAGMA table_info(macro_tasks)')})
+            self.assertEqual([row[0] for row in connection.execute(
+                'SELECT project_cwd FROM macro_tasks ORDER BY rowid')], [row['source_cwd'] for row in paths])
+            self.assertTrue(all(row[0] for row in connection.execute(
+                'SELECT repository_path FROM macro_tasks')))
+            self.assertNotIn('source_host_id', {row[1] for row in connection.execute('PRAGMA table_info(macro_tasks)')})
 
     def test_delivered_v3_stock_continues_and_is_accepted_after_upgrade(self):
         from admission import admit_board
@@ -132,9 +136,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         old_manifest = json.loads(raw)
         self.assertTrue(workspace.verify(old_manifest, state_dir=fixture['state'])['valid'])
         board.call('workflow_continue', {
-            'runId': run_id, 'commandId': 'schema33-v3-continue',
-            'expectedRevision': view['revision'], 'input': 'Finish the read-only review',
-            **fixture['deliveredStockControl'],
+            'runId': run_id, 'artifactId': view['finalArtifactId'],
+            'input': 'Finish the read-only review',
         })
         board.store.workflow.prepare_continuation_workspace({'runId': run_id})
         nonce = 'schema33-fixture-nonce'
@@ -199,10 +202,16 @@ class UpgradeFixtureTests(unittest.TestCase):
             'runId': run_id, 'artifactId': delivered['finalArtifactId'],
             'target': target,
             'note': 'Accepted after the v3 continuation',
-            **fixture['deliveredStockControl'],
         })
         self.assertEqual(accepted['state'], 'accepted')
-        self.assertEqual(accepted['integration']['state'], 'verified')
+        self.assertTrue(accepted['integrationId'])
+        with board.store.db.read() as connection:
+            integration = connection.execute('SELECT artifact_id FROM workflow_integrations WHERE integration_id=?',
+                                             (accepted['integrationId'],)).fetchone()
+            self.assertEqual(integration['artifact_id'], delivered['finalArtifactId'])
+            binding = connection.execute('SELECT response_kind,response_id FROM workflow_artifacts WHERE artifact_id=?',
+                                         (delivered['finalArtifactId'],)).fetchone()
+            self.assertEqual(tuple(binding), ('accept', accepted['integrationId']))
 
 
     def insert_retained_native_selections(self, fixture, connection):
@@ -234,8 +243,6 @@ class UpgradeFixtureTests(unittest.TestCase):
 
 
     def test_retained_execution_rows_remain_readable_with_no_buddy(self):
-        from hey_my_buddy.cli.cli_views import list_brief, micro_task_brief, task_brief
-
         fixture, connection = self.restored('read-old-executions')
         selections = self.insert_retained_native_selections(fixture, connection)
         turns = {}
@@ -256,17 +263,16 @@ class UpgradeFixtureTests(unittest.TestCase):
         store.initialize()
         self.addCleanup(store.db.close)
         listed = store.task_list({})
-        brief_rows = {row['runId']: row for row in list_brief(listed)['runs']}
+        listed_rows = {row['runId']: row for row in listed['runs']}
         for run_id, (adapter, _seq) in selections.items():
             with self.subTest(adapter=adapter):
                 workflow = store.workflow.get({'runId': run_id, 'includeAudit': True})
                 task = store.task_get({'runId': run_id})['task']
-                for view in (workflow, micro_task_brief(workflow), task_brief(task), brief_rows[run_id]):
-                    self.assertIsNone(view['buddy'])
+                self.assertIsNone(workflow['buddy'])
+                for view in (task, listed_rows[run_id]):
+                    self.assertIsNone(view['lineage']['buddy'])
                 self.assertNotIn('adapter', workflow)
-                self.assertNotIn('adapter', micro_task_brief(workflow))
-                self.assertEqual(task_brief(task)['adapter'], adapter)
-                self.assertEqual(brief_rows[run_id]['adapter'], adapter)
+                self.assertEqual(listed_rows[run_id]['adapter'], adapter)
                 self.assertIsNone(task['lineage']['buddy'])
                 self.assertEqual(task['adapter'], adapter)
                 self.assertIsNone(workflow['currentTurn']['buddy'])
@@ -404,7 +410,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         deleted_plans = {row['plan_id'] for row in connection.execute(
             "SELECT * FROM workspace_cleanup_plans WHERE state IN ('planned','blocked')")}
         retained_commands = {row['command_id'] for row in connection.execute(
-            "SELECT command_id FROM commands WHERE kind NOT IN ('workflow.cleanup_plan','workflow.cleanup_apply')")}
+            "SELECT command_id FROM commands WHERE kind NOT GLOB 'workflow.*'")}
         retained_events = {row['seq'] for row in connection.execute('SELECT * FROM events')
                            if row['kind'] != 'workflow.macro_task_created'
                            and json.loads(row['payload_json']).get('planId') not in deleted_plans}
@@ -451,18 +457,26 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertEqual([(row[1], row[2]) for row in actual if row[1] != 'schema_version'],
                                  [(row[1], row[2]) for row in original if row[1] != 'schema_version'])
             elif name in ('attempts', 'workflow_runs', 'workflow_children', 'workflow_continuations', 'workflow_turns', 'workflow_artifacts'):
-                removed = {'workspace_manifest_json', 'manifest_sha256'}
-                keep = [column for column in old_columns[name] if column not in removed]
-                expected = [{column: row[old_columns[name].index(column)] for column in keep} for row in original]
+                changed = {'workspace_manifest_json', 'manifest_sha256'}
+                if name == 'workflow_runs':
+                    changed.add('execution_workspace_json')
                 actual_columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
+                keep = [column for column in old_columns[name] if column in actual_columns and column not in changed]
+                expected = [{column: row[old_columns[name].index(column)] for column in keep} for row in original]
                 self.assertEqual([{column: row[actual_columns.index(column)] for column in keep} for row in actual], expected, name)
             elif name == 'macro_tasks':
-                keep = [i for i, column in enumerate(macro_columns) if column != 'project_path']
-                self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
+                actual_columns = ['rowid', *(row[1] for row in connection.execute('PRAGMA table_info(macro_tasks)'))]
+                keep = [column for column in macro_columns if column in actual_columns]
+                self.assertEqual([tuple(row[actual_columns.index(column)] for column in keep) for row in actual],
+                                 [tuple(row[macro_columns.index(column)] for column in keep) for row in original])
             elif name == 'tasks':
-                removed = {'required_capabilities', 'exclusive_resources', 'expected_seconds', 'router_budget_seconds'}
+                removed = {'required_capabilities', 'exclusive_resources', 'expected_seconds',
+                           'router_budget_seconds', 'owner', 'spec_json', 'input_fingerprint'}
                 keep = [i for i, column in enumerate(task_columns) if column not in removed]
-                self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
+                actual_columns = ['rowid', *(row[1] for row in connection.execute('PRAGMA table_info(tasks)'))]
+                names = [task_columns[i] for i in keep]
+                self.assertEqual([tuple(row[actual_columns.index(column)] for column in names) for row in actual],
+                                 [tuple(row[i] for i in keep) for row in original])
             elif name == 'attempt_process_identities':
                 keep = [i for i, column in enumerate(identity_columns) if column != 'process_group_id']
                 self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
@@ -529,9 +543,16 @@ class UpgradeFixtureTests(unittest.TestCase):
                     value.pop('target_repository_id')
                     value['target_project_id'] = None
                     value.pop('target_checkout_id')
+                    value.pop('command_id')
                     expected.append(value)
                 after_columns = ['rowid', *[column[1] for column in connection.execute('PRAGMA table_info(workflow_integrations)')]]
                 self.assertEqual([dict(zip(after_columns, row)) for row in actual], expected)
+            elif name in ('workflow_routes', 'workflow_requests', 'workflow_scope_versions',
+                          'workflow_workspace_conflicts', 'workflow_host_conclusions'):
+                current_columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
+                keep = [column for column in old_columns[name] if column in current_columns]
+                self.assertEqual([tuple(row[current_columns.index(column)] for column in keep) for row in actual],
+                                 [tuple(row[old_columns[name].index(column)] for column in keep) for row in original])
             elif name == 'commands':
                 self.assertEqual(actual, [row for row in original if row[1] in retained_commands])
             elif name == 'events':
@@ -674,10 +695,13 @@ class UpgradeFixtureTests(unittest.TestCase):
         # The floor pins alpha, which would select it without calling a Router.
         with board.store.db.write() as db:
             db.execute("DELETE FROM evaluation_preferences WHERE mode='pin'")
-        new = board.call('workflow_submit', {'requestId': 'budget-after-upgrade', 'hostId': 'fixture-host',
-                                            'task': 'Compare current routing budget views',
-                                            'cwd': str(fixture['fixtureRoot'] / 'repository'),
-                                            'executionWorkspace': {'kind': 'worktree', 'access': 'write'}})
+        from hey_my_buddy.cli.main import _host_creation_key
+        submission = {'macroTaskId': 'standalone', 'title': 'Budget after upgrade',
+                      'task': 'Compare current routing budget views', 'buddy': 'route',
+                      'cwd': str(fixture['fixtureRoot'] / 'repository'), 'checkout': 'worktree',
+                      'access': 'write', 'writeScope': ['.'], 'inputs': [], 'expectedSeconds': 1800}
+        new = board.call('workflow_submit', {**submission,
+                                            'creationKey': _host_creation_key('submit', submission)})
         new = board.call('workflow_get', {'runId': new['runId'], 'routingHistory': {}})
         expected = {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64}
         for view in (old, new):
@@ -785,7 +809,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
         self.assertTrue(upgrade.verify_started(fixture['state'], target, health, before)['retainedDataFingerprints'])
-        for table, column in (('workflow_runs', 'title'), ('workflow_children', 'role'),
+        for table, column in (('workflow_runs', 'title'), ('workflow_children', 'request_id'),
                               ('workflow_turns', 'input_json')):
             with self.subTest(table=table):
                 original = [tuple(row) for row in connection.execute(f'SELECT rowid,{column} FROM {table}')]

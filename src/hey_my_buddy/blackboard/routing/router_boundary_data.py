@@ -216,8 +216,7 @@ def _continuation_context(connection, row, run_id, owner_run_id, state_dir):
     if run_id not in {item[0] for item in owned}:
         return own_stopped, "micro-task-not-owned", None, run
     route = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (row["decision_id"],)).fetchone()
-    if (run["current_routing_id"] != row["decision_id"] or route is None or route["run_id"] != run_id
-            or route["owner_generation"] != run["owner_generation"]):
+    if (run["current_routing_id"] != row["decision_id"] or route is None or route["run_id"] != run_id):
         return own_stopped, "workflow-routing-fenced", None, run
     ancestors = connection.execute(
         "WITH RECURSIVE ancestors(id) AS (SELECT ? UNION SELECT c.parent_run_id FROM workflow_children c JOIN ancestors a ON c.child_task_id=a.id) SELECT w.* FROM workflow_runs w JOIN ancestors a ON w.run_id=a.id",
@@ -266,9 +265,6 @@ def _continuation_context(connection, row, run_id, owner_run_id, state_dir):
 def _candidate_problem(connection, candidate, request, run, now):
     published = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (candidate["buddyId"],)).fetchone()
     constraints = request.get("constraints", {})
-    if run is not None and run["buddy_locked"]:
-        spec = connection.execute("SELECT spec_json FROM tasks WHERE task_id=?", (run["run_id"],)).fetchone()
-        constraints = {**constraints, **schemas.buddy_constraints(_json(spec["spec_json"], {}))}
     bound = candidate_bound(connection, published, {**request, "constraints": constraints}, now, frozen=candidate)
     return {"code": "router-out-of-bounds", "bound": bound} if bound is not None else None
 
@@ -309,8 +305,7 @@ def _retry_at(connection, facts, trials, *, now, kind):
     return min(known, key=router_history._parse) if known else None
 
 
-def routing_boundary(connection, row, *, now, run_id=None, revision=None,
-                     owner_run_id=None, owner_revision=None, state_dir=None) -> dict | None:
+def routing_boundary(connection, row, *, now, run_id=None, owner_run_id=None, state_dir=None) -> dict | None:
     """Build a current readable Host boundary from frozen evidence, without writes."""
     route = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (row["decision_id"],)).fetchone()
     execution_changed = row["status"] == "completed" and route is not None and route["state"] in ("needs-host", "fenced")
@@ -324,7 +319,7 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
             kind="routing-changed", code=row["reason_code"],
             reason=reason_from_json(row["reason_code"], row["reason_params_json"]),
             candidates=[], facts=request, router_trials=[], retry_at=None, decision_id=row["decision_id"],
-            run_id=owner_run_id or run_id, revision=owner_revision if owner_run_id else revision,
+            run_id=owner_run_id or run_id,
             target_run_id=run_id if owner_run_id and owner_run_id != run_id else None,
             helper_policy=helper_policy, shutdown_confirmed=stopped, continuation_problem=problem,
             explicit_buddy=True)
@@ -357,15 +352,11 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     boundary = build_boundary(
         kind=kind, code=code, reason=reason, candidates=candidates, facts=facts,
         router_trials=trials, retry_at=retry_at, decision_id=row["decision_id"],
-        run_id=owner_run_id or run_id, revision=owner_revision if owner_run_id else revision,
+        run_id=owner_run_id or run_id,
         target_run_id=run_id if owner_run_id and owner_run_id != run_id else None,
         helper_policy=helper_policy, shutdown_confirmed=stopped, continuation_problem=problem)
-    choices = boundary["commands"]["continue"]["choices"]
-    for choice, candidate in zip(choices, candidates):
-        candidate_problem = _candidate_problem(connection, candidate, request, run, now)
-        choice.update(blocked=candidate_problem is not None, code=None)
-        if candidate_problem is not None:
-            choice.update(candidate_problem)
-    if choices and all(choice["blocked"] for choice in choices):
-        boundary["commands"]["continue"]["blocked"] = True
+    boundary["candidates"] = [
+        {**candidate, "problem": _candidate_problem(connection, candidate, request, run, now)}
+        for candidate in candidates
+    ]
     return boundary

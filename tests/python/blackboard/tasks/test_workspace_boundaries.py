@@ -47,7 +47,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         resolved = workspace.resolve(
             self.state, manifest, task_id="micro-task", attempt_id="attempt", action="restore", paths=None,
             observed_fingerprint=evidence["observedFingerprint"], note="restore all paths",
-            actor={"role": "host", "id": "host-1"},
+            actor={"role": "host"},
         )
         self.assertEqual(resolved["state"], "restored")
         self.assertEqual(resolved["resolvedPaths"], paths)

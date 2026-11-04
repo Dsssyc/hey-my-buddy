@@ -274,7 +274,7 @@ class RecreatedRequestTests(LifecycleTestCase):
         board = self.board()
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
                   'base': {'kind': 'working-tree'},
-                  'integrator': {'role': 'host', 'id': 'fixture-host'}}
+                  'integrator': {'role': 'host'}}
         with storage.locked(board.store):
             with board.store.workflow._submission_preparation('unrevoked-request', intent) as prepared:
                 directory = board.directory / 'workspaces' / prepared['manifest']['workspaceId']
@@ -288,7 +288,7 @@ class RecreatedRequestTests(LifecycleTestCase):
             allocation_revocations.record(board.store, directory, request_id)
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
                   'base': {'kind': 'working-tree'},
-                  'integrator': {'role': 'host', 'id': 'fixture-host'}}
+                  'integrator': {'role': 'host'}}
         write = workspace._write_once
         request_writes = []
         def write_new_request(path, data):

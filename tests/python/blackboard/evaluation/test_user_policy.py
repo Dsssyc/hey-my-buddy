@@ -1,6 +1,7 @@
 """Authenticated policy changes cannot be forged by a Host."""
 
 from support import BoardTestCase
+from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import schemas
 
@@ -57,7 +58,7 @@ class UserPolicyTests(BoardTestCase):
         payload = self.payload(grant, buddySettings=[{'buddyId': 'retired', 'enabled': False}], modelServiceNoteChanges=[{**LIVE_MODEL_SERVICE, 'text': 'prefer local evidence'}])
         self.user('user_policy_publish', payload)
         self.assertTrue(self.user('user_policy_publish', payload)['duplicate'])
-        snapshot = self.board_.call('console_snapshot', {})
+        snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(snapshot['modelServiceNotes'][0]['text'], 'prefer local evidence')
         self.assertEqual(snapshot['configuration']['routerBuddyIds'], ['retired'])
         self.assertEqual(snapshot['preferences'][0]['mode'], 'pin')
@@ -66,7 +67,7 @@ class UserPolicyTests(BoardTestCase):
     def test_note_only_change_does_not_reenable_an_unavailable_pin(self):
         grant = self.publication_params()
         self.user('user_policy_publish', self.payload(grant, preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin', 'note': 'Keep this intent while its provider is offline'}]))
-        snapshot = self.board_.call('console_snapshot', {})
+        snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(snapshot['preferences'][0]['note'], 'Keep this intent while its provider is offline')
         self.assertFalse(next(p for p in snapshot['buddies'] if p['buddyId'] == 'retired')['available'])
 
@@ -78,13 +79,13 @@ class UserPolicyTests(BoardTestCase):
             with self.subTest(note=note):
                 self.user('user_policy_publish', self.payload({}, f'note-{index}',
                           preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin', 'note': note}]))
-                self.assertEqual(self.board_.call('console_snapshot', {})['preferences'],
+                self.assertEqual(console_snapshot_projection(self.board_.service)[0]['preferences'],
                                  [{'buddyId': 'retired', 'mode': 'pin', 'note': expected}])
                 with self.board_.store.db.read() as db:
                     self.assertEqual(db.execute('SELECT note FROM evaluation_preferences').fetchone()[0], expected)
         self.user('user_policy_publish', self.payload({}, 'omitted-note',
                   preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin'}]))
-        self.assertEqual(self.board_.call('console_snapshot', {})['preferences'],
+        self.assertEqual(console_snapshot_projection(self.board_.service)[0]['preferences'],
                          [{'buddyId': 'retired', 'mode': 'pin', 'note': None}])
 
     def test_invalid_preference_notes_roll_back_the_publication(self):
@@ -96,7 +97,7 @@ class UserPolicyTests(BoardTestCase):
                           buddySettings=[{'buddyId': 'live', 'enabled': False}],
                           preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin', **field}]))
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
-            snapshot = self.board_.call('console_snapshot', {})
+            snapshot = console_snapshot_projection(self.board_.service)[0]
             self.assertEqual(snapshot['preferences'],
                              [{'buddyId': 'retired', 'mode': 'pin', 'note': 'user intent'}])
             self.assertTrue(next(b for b in snapshot['buddies'] if b['buddyId'] == 'live')['enabled'])
@@ -110,7 +111,7 @@ class UserPolicyTests(BoardTestCase):
         ]:
             with self.assertRaises(BoardError):
                 self.user('user_policy_publish', self.payload(grant, **changes))
-        snapshot = self.board_.call('console_snapshot', {})
+        snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertNotIn('tableRevision', snapshot)
         self.assertEqual(snapshot['modelServiceNotes'], [])
         self.assertTrue(next(p for p in snapshot['buddies'] if p['buddyId'] == 'live')['enabled'])

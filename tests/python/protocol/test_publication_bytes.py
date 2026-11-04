@@ -17,9 +17,7 @@ from unittest import mock
 
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.tasks import storage
-from hey_my_buddy.cli import main as cli
 from hey_my_buddy.console.console_sessions import BrowserSession, ConsoleSessions
-from hey_my_buddy.home import submission_file_path
 from hey_my_buddy.install import runtime, skill_install, upgrade
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.protocol.process_identity import NativeProcessJournal
@@ -55,24 +53,9 @@ class PublicationByteTests(unittest.TestCase):
                         b'"tokenHash": "' + b'a' * 64 + b'", "lastSeen": 1.5}]}')
             self.assertEqual(path.read_bytes(), expected)
 
-    def test_cli_submission_token_keeps_old_sorted_bytes(self):
+    def test_runtime_hint_keeps_old_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
-            with mock.patch.object(cli.secrets, "token_hex", return_value="f" * 64):
-                self.assertEqual(cli._submission_token("req-café", {}, state), "f" * 64)
-            expected = (b'{"requestId": "req-caf\\u00e9", "submissionToken": "'
-                        + b'f' * 64 + b'"}')
-            self.assertEqual(submission_file_path(state, "req-café").read_bytes(), expected)
-
-    def test_cli_control_and_runtime_hint_keep_old_bytes(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state = Path(directory)
-            with mock.patch.object(cli.time, "strftime", return_value="2026-01-02T03:04:05Z"):
-                path = cli._save_control("run-byte", {"hostId": "hôst", "ownerGeneration": 7,
-                                                     "controlToken": "f" * 64}, state)
-            expected = (b'{"hostId": "h\xc3\xb4st", "ownerGeneration": 7, "controlToken": "'
-                        + b'f' * 64 + b'", "runId": "run-byte", "savedAt": "2026-01-02T03:04:05Z"}')
-            self.assertEqual(Path(path).read_bytes(), expected)
             with mock.patch.object(runtime, "runtime_python", return_value=Path("python-café")):
                 skill_install.write_runtime_hint(state, state / "runtime")
             self.assertEqual((state / ".runtime-python").read_bytes(), b'python-caf\xc3\xa9\n')

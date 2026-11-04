@@ -46,18 +46,6 @@ RESOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:/@+-]{1,512}$")
 # -- micro-task workflow bounds ------------------------------------------------
 MAX_WORKFLOW_HELPERS = 8
 MAX_WORKFLOW_ARTIFACTS = 32
-MAX_CONTROL_TOKEN = 256
-
-#: ADR-021 decision 5: the three ways a Host may express the Worker choice.
-PARTIAL_BUDDY_HINT = (
-    "supply the complete harness/provider/model/effort quadruple to delegate directly, "
-    "or omit every buddy field and leave the choice to the Router, writing the "
-    "task's needs into the task description"
-)
-
-#: The Host control triple. ``hostId`` is attribution, ``ownerGeneration`` and
-#: ``controlToken`` are the authority: an owner name alone never authorizes.
-CONTROL_FIELDS = ("hostId", "ownerGeneration", "controlToken")
 
 #: Sentinel accepted only from the authenticated console layer and validated
 #: against a server-side registry, never trusted from a C-Two/JSON caller.
@@ -77,23 +65,11 @@ SUBMIT_FIELDS = frozenset(
         "provider",
         "effort",
         "expectedSeconds",
-        "owner",
         "requiredCapabilities",
-        "exclusiveResources",
     }
 )
 
 TERMINAL_TASK_STATES = frozenset({"completed", "concluded", "failed", "cancelled"})
-
-#: Fields accepted by workflow submission and explicit helper specifications.
-WORKFLOW_SPEC_FIELDS = frozenset({
-    "requestId", "task", "cwd", *BUDDY_FIELDS, "expectedSeconds", "owner", "requiredCapabilities", "exclusiveResources",
-})
-WORKFLOW_SUBMIT_FIELDS = WORKFLOW_SPEC_FIELDS | {"hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked", "delegationAuthority", "fixes"}
-WORKFLOW_HELPER_FIELDS = WORKFLOW_SPEC_FIELDS | {"executionWorkspace", "role"}
-MIN_SUBMISSION_TOKEN = 16
-MAX_SUBMISSION_TOKEN = 256
-
 
 def require_object(value: Any, what: str) -> dict:
     if not isinstance(value, dict):
@@ -217,12 +193,7 @@ def _argv(params: dict, adapter: str) -> list[str]:
 
 
 def normalize_spec(params: dict) -> dict:
-    """Validate one submit request into the canonical specification.
-
-    ``owner`` is attribution, not input: it is stored on the task but excluded
-    from the input fingerprint, so the same request from a different client still
-    resolves to the same task.
-    """
+    """Normalize the execution layer's explicit internal specification."""
     params = require_object(params, "submit request")
     reject_unknown(params, SUBMIT_FIELDS, "submit")
     request_id = required_string(params, "requestId", max_length=MAX_REQUEST_ID)
@@ -244,9 +215,6 @@ def normalize_spec(params: dict) -> dict:
         "task": task_text,
         "expectedSeconds": expected_duration(params),
         "requiredCapabilities": string_list(params, "requiredCapabilities", limit=MAX_CAPABILITIES),
-        "exclusiveResources": string_list(
-            params, "exclusiveResources", limit=MAX_RESOURCES, pattern=RESOURCE_ID_PATTERN
-        ),
     }
     for name in ("model", "provider", "effort"):
         value = optional_string(params, name)
@@ -313,227 +281,22 @@ def normalize_access(intent: dict) -> tuple[str, str | None]:
     return access, None
 
 
-def normalize_execution_workspace(params: dict) -> dict:
-    """Validate one explicitly chosen ``executionWorkspace`` intent.
-
-    Only the shape is checked here; the workspace module resolves refs, snapshots
-    the tree and reports unsupported cases with its own explicit errors. ``cwd``
-    and ``integrator`` are derived by the submitter from the ordinary spec's
-    ``cwd`` and the submitting Host (ADR-021 decision 17).
-    """
-    raw = params.get("executionWorkspace")
-    if raw is None:
-        raise BoardError("INVALID_ARGUMENT", "executionWorkspace is required; choose kind 'existing' or 'worktree'",
-                         field="executionWorkspace")
-    intent = require_object(raw, "executionWorkspace")
-    reject_unknown(
-        intent,
-        {"kind", "access", "accessNote", "base", "includeUntracked", "writeScope", "targetRef"},
-        "executionWorkspace",
-    )
-    kind = optional_string(intent, "kind")
-    if kind not in ("existing", "worktree"):
-        raise BoardError("INVALID_ARGUMENT", "executionWorkspace.kind must explicitly be 'existing' or 'worktree'",
-                         field="executionWorkspace.kind")
-    access, access_note = normalize_access(intent)
-    normalized: dict[str, Any] = {"kind": kind, "access": access}
-    if access_note is not None:
-        normalized["accessNote"] = access_note
-    base = intent.get("base")
-    if base is None:
-        # The documented default: the current working tree, with ref omitted (a
-        # missing ref means HEAD; an explicit null is rejected by the module).
-        normalized["base"] = {"kind": "working-tree"}
-    else:
-        base = require_object(base, "executionWorkspace.base")
-        reject_unknown(base, {"kind", "ref"}, "executionWorkspace.base")
-        base_kind = optional_string(base, "kind") or "working-tree"
-        if base_kind not in ("commit", "working-tree"):
-            raise BoardError("INVALID_ARGUMENT", "executionWorkspace.base.kind must be 'commit' or 'working-tree'")
-        base_ref = optional_string(base, "ref", max_length=512)
-        normalized["base"] = {"kind": base_kind}
-        if base_ref is not None:
-            normalized["base"]["ref"] = base_ref
-    include_untracked = string_list(intent, "includeUntracked", limit=256)
-    if include_untracked:
-        normalized["includeUntracked"] = include_untracked
-    if include_untracked and normalized["base"]["kind"] == "commit":
-        raise BoardError("INVALID_ARGUMENT", "Untracked input requires a working-tree base")
-    write_scope = string_list(intent, "writeScope", limit=256)
-    if access in ("write", "full"):
-        # An ordinary micro-task task may write inside its own checkout; the module
-        # requires the scope explicitly, so the default is the checkout root.
-        normalized["writeScope"] = write_scope or ["."]
-    elif write_scope:
-        normalized["writeScope"] = write_scope
-    target_ref = optional_string(intent, "targetRef")
-    if target_ref is not None:
-        normalized["targetRef"] = target_ref
-    return normalized
 
 
-def normalize_control(params: dict) -> dict | None:
-    """The explicit owner control triple, or ``None`` when none was supplied.
-
-    A partial triple is invalid: attribution without authority is never accepted
-    silently.
-    """
-    present = {name: params.get(name) for name in CONTROL_FIELDS if params.get(name) is not None}
-    if not present:
-        return None
-    missing = [name for name in CONTROL_FIELDS if name not in present]
-    if missing:
-        raise BoardError(
-            "INVALID_ARGUMENT",
-            f"Control fields must be supplied together; missing {missing[0]}",
-            field=missing[0],
-        )
-    host_id = required_string(params, "hostId", max_length=256)
-    generation = params.get("ownerGeneration")
-    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
-        raise BoardError("INVALID_ARGUMENT", "ownerGeneration must be a positive integer")
-    token = required_string(params, "controlToken", max_length=MAX_CONTROL_TOKEN)
-    return {"hostId": host_id, "ownerGeneration": generation, "controlToken": token}
 
 
-def require_expected_revision(params: dict) -> int:
-    value = params.get("expectedRevision")
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise BoardError("INVALID_ARGUMENT", "expectedRevision must be a nonnegative integer")
-    return value
 
 
-def _spec_fields(params: dict) -> dict:
-    """Project the declared fields after the original request was validated."""
-    spec_params: dict = {}
-    for key in WORKFLOW_SPEC_FIELDS:
-        if key in params:
-            spec_params[key] = params[key]
-    return spec_params
 
 
-def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id: str, *, presentation: dict | None = None, buddy_locked: bool = False, delegation_authority: bool = False, fixes: str | None = None) -> str:
-    """The micro-task idempotency identity: micro task, execution workspace and Host.
-
-    The task fingerprint stays the ordinary spec fingerprint; this one additionally
-    fences a replay whose workspace intent, base or Host changed, so a stable
-    requestId can never silently reuse a different prepared snapshot.
-    """
-    request = {"spec": spec, "executionWorkspace": execution_workspace, "hostId": host_id}
-    if buddy_locked:
-        request["buddyLocked"] = True
-    if delegation_authority:
-        request["delegationAuthority"] = True
-    if fixes is not None:
-        request["fixes"] = fixes
-    if presentation:
-        request["presentation"] = presentation
-    return sha256_text("workflow-v1:" + canonical_json(request))
 
 
-def normalize_presentation(params: dict) -> dict:
-    """Human display metadata is separate from every execution/selector spec."""
-    result = {}
-    if sum(key in params for key in ("macroTask", "macroTaskId", "macroTaskOf")) > 1:
-        raise BoardError("INVALID_ARGUMENT", "Supply only one of macroTask, macroTaskId or macroTaskOf")
-    if "title" in params:
-        result["title"] = " ".join(required_string(params, "title", max_length=200).split())
-    if "macroTaskOf" in params:
-        result["macroTaskOf"] = required_string(params, "macroTaskOf", max_length=128, pattern=IDENTIFIER_PATTERN)
-    if "macroTaskId" in params:
-        result["macroTaskId"] = required_string(params, "macroTaskId", max_length=128,
-                                                pattern=re.compile(r"^macro-[A-Za-z0-9-]+$"))
-    if "macroTask" in params:
-        macro_task = require_object(params["macroTask"], "macroTask")
-        reject_unknown(macro_task, {"title", "goal"}, "macroTask")
-        result["macroTask"] = {"title": " ".join(required_string(macro_task, "title", max_length=200).split())}
-        result["macroTask"]["goal"], _size = bounded_text(macro_task, "goal", max_bytes=MAX_TASK_BYTES)
-    return result
 
 
-def normalize_submission_token(params: dict) -> str | None:
-    value = params.get("submissionToken")
-    if value is None:
-        return None
-    if not isinstance(value, str) or "\0" in value:
-        raise BoardError("INVALID_ARGUMENT", "submissionToken must be a string")
-    if not (MIN_SUBMISSION_TOKEN <= len(value) <= MAX_SUBMISSION_TOKEN):
-        raise BoardError(
-            "INVALID_ARGUMENT",
-            f"submissionToken must contain {MIN_SUBMISSION_TOKEN}-{MAX_SUBMISSION_TOKEN} characters",
-        )
-    return value
 
 
-def normalize_workflow_submit(params: dict, *, lead_run_id: str | None = None) -> dict:
-    """Validate one ``workflow_submit`` request into its canonical parts."""
-    params = require_object(params, "workflow submit request")
-    reject_unknown(params, WORKFLOW_SUBMIT_FIELDS, "workflow.submit")
-    request_id = required_string(params, "requestId", max_length=MAX_REQUEST_ID)
-    host_id = None if lead_run_id is not None else required_string(params, "hostId", max_length=256)
-    submission_token = normalize_submission_token(params)
-    delegation_authority = optional_bool(params, "delegationAuthority", False)
-    if delegation_authority:
-        missing = [key for key in BUDDY_FIELDS if not params.get(key)]
-        if missing:
-            raise BoardError("INVALID_ARGUMENT",
-                             "delegationAuthority requires a complete explicit buddy, without routing "
-                             f"(missing {', '.join(missing)})", field=missing[0])
-    spec_params = _spec_fields(params)
-    spec = normalize_workflow_spec(spec_params)
-    workspace_intent = normalize_execution_workspace(params)
-    if delegation_authority and workspace_intent["access"] != "full":
-        raise BoardError("INVALID_ARGUMENT", "delegationAuthority requires executionWorkspace.access='full'",
-                         field="executionWorkspace.access")
-    # The workspace's source and integrator come from the spec and submitting Host.
-    workspace_intent["cwd"] = spec["cwd"]
-    workspace_intent["integrator"] = ({"role": "lead", "id": lead_run_id} if lead_run_id is not None
-                                      else {"role": "host", "id": host_id})
-    return {
-        "requestId": request_id,
-        "hostId": host_id,
-        "submissionToken": submission_token,
-        "spec": spec,
-        "executionWorkspace": workspace_intent,
-        "owner": spec_params.get("owner"),
-        "presentation": normalize_presentation(params),
-        "fixes": required_string(params, "fixes", max_length=128, pattern=IDENTIFIER_PATTERN) if "fixes" in params else None,
-        "buddyLocked": optional_bool(params, "buddyLocked", False),
-        "delegationAuthority": delegation_authority,
-    }
 
 
-def normalize_workflow_spec(params: dict) -> dict:
-    """Normalize a micro task whose Worker choice is complete or absent, never partial.
-
-    Ordinary internal task submission retains its execution defaults. A micro-task
-    micro task preserves exactly the harness/provider/model/effort constraints the
-    caller supplied, and ADR-021 decision 5 allows only the two complete
-    expressions: the whole quadruple (delegated directly, no Router) or none of
-    it (the Router chooses). Command execution records use the
-    separate ordinary execution submission contract.
-    """
-    supplied = [key for key in BUDDY_FIELDS if params.get(key) is not None]
-    if supplied and len(supplied) != len(BUDDY_FIELDS):
-        missing = [key for key in BUDDY_FIELDS if key not in supplied]
-        raise BoardError(
-            "INVALID_ARGUMENT",
-            "buddy fields are all-or-nothing: a coding buddy is the complete "
-            f"harness/provider/model/effort quadruple (missing {', '.join(missing)}); " + PARTIAL_BUDDY_HINT,
-            field=missing[0],
-        )
-    native_params = {key: value for key, value in params.items() if key != "harness"}
-    if params.get("harness") is not None:
-        harness = optional_string(params, "harness")
-        if harness not in CODING_HARNESSES:
-            raise BoardError("UNSUPPORTED_HARNESS", "Expected dsh, zcode, codex or claude", harness=harness)
-        native_params["adapter"] = harness
-    spec = normalize_spec(native_params)
-    if params.get("harness") is not None:
-        spec["harness"] = spec.pop("adapter")
-    else:
-        spec.pop("adapter")
-    return spec
 
 
 def buddy_constraints(spec: dict) -> dict:
@@ -547,44 +310,3 @@ def normalize_buddy(value: Any) -> dict:
     if result["harness"] not in CODING_HARNESSES:
         raise BoardError("INVALID_ARGUMENT", "buddy requires a coding harness: dsh, zcode, codex or claude")
     return result
-
-
-def normalize_helpers(params: dict, *, integrator: dict) -> list[dict]:
-    """Validate the explicit helper specifications of one approval."""
-    raw = params.get("helpers", [])
-    if raw is None:
-        return []
-    if not isinstance(raw, list) or len(raw) > MAX_WORKFLOW_HELPERS:
-        raise BoardError("INVALID_ARGUMENT", f"helpers must be a list of at most {MAX_WORKFLOW_HELPERS} entries")
-    helpers: list[dict] = []
-    seen: set[str] = set()
-    for index, entry in enumerate(raw):
-        if not isinstance(entry, dict):
-            raise BoardError("INVALID_ARGUMENT", f"helpers[{index}] must be a JSON object")
-        reject_unknown(entry, WORKFLOW_HELPER_FIELDS, f"helpers[{index}]")
-        request_id = required_string(entry, "requestId", max_length=MAX_REQUEST_ID)
-        if request_id in seen:
-            raise BoardError("INVALID_ARGUMENT", f"helpers[{index}] repeats requestId {request_id!r}")
-        seen.add(request_id)
-        spec_params = _spec_fields(entry)
-        spec = normalize_workflow_spec(spec_params)
-        workspace_intent = normalize_execution_workspace(entry)
-        # Same derivation as the parent submission: the helper's own ordinary
-        # spec cwd is the source, and the integrator is the approving Host.
-        workspace_intent["cwd"] = spec["cwd"]
-        workspace_intent["integrator"] = integrator
-        role = optional_string(entry, "role") or "helper"
-        if role not in ("helper", "integrator"):
-            raise BoardError("INVALID_ARGUMENT", f"helpers[{index}].role must be 'helper' or 'integrator'")
-        helpers.append(
-            {
-                "requestId": request_id,
-                "spec": spec,
-                "executionWorkspace": workspace_intent,
-                "integrator": role == "integrator",
-                "role": role,
-            }
-        )
-    if sum(helper["role"] == "integrator" for helper in helpers) > 1:
-        raise BoardError("INVALID_ARGUMENT", "At most one helper can be the named integrator")
-    return helpers

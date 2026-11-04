@@ -17,11 +17,10 @@ NOT_FOUND = reason('harness.not-found', operation='probe')
 
 class DeletionHarnessHealthTests(WorkflowTestCase):
     def closed(self, board, request_id, *, macro_task=None):
-        extra = {'macroTask': {'title': macro_task, 'goal': macro_task}} if macro_task else {}
+        extra = {'create_macro': {'title': macro_task, 'goal': macro_task}} if macro_task else {}
         run = self.submit(board, request_id=request_id, cwd=str(self.workdir('project')), **extra)
-        cancelled = board.call('workflow_cancel', {'runId': run['runId'], **self.control(run)})
-        board.call('workflow_conclude', {'runId': run['runId'], 'note': 'Private health fixture is settled',
-                                         **self.control(cancelled)})
+        cancelled = board.call('workflow_cancel', {'runId': run['runId']})
+        board.call('workflow_conclude', {'runId': run['runId'], 'note': 'Private health fixture is settled'})
         return run
 
     def owned_user_store_session(self, board, run):
@@ -47,7 +46,7 @@ class DeletionHarnessHealthTests(WorkflowTestCase):
 
     def physical_io_off(self):
         stack = ExitStack()
-        for stage in ('_delete_sessions', '_delete_workspaces', '_delete_private_roots', '_delete_cli_files'):
+        for stage in ('_delete_sessions', '_delete_workspaces', '_delete_private_roots'):
             stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
         return stack
 

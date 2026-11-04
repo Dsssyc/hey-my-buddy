@@ -40,11 +40,11 @@ def deletion_sql_inputs(case, manifests, artifacts=()):
                 (run_id, request_id, '{"expectedSeconds":1}', 'fixture', 1,
                  'codex', manifest['checkoutRoot'], 'cancelled', 1, now, now))
             connection.execute(
-                "INSERT OR IGNORE INTO workflow_runs(run_id,standalone_project_id,control_verifier,"
+                "INSERT OR IGNORE INTO workflow_runs(run_id,standalone_project_id,creation_key,title,"
                 "execution_workspace_json,workspace_id,workspace_manifest_sha256,state,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?)",
-                (run_id, project_id, 'fixture', '{}', identifier, manifest['manifestSha256'],
-                 'cancelled', now, now))
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (run_id, project_id, 'fixture-' + identifier, 'Fixture workspace', '{}', identifier,
+                 manifest['manifestSha256'], 'cancelled', now, now))
             connection.execute(
                 "INSERT OR IGNORE INTO workflow_artifacts(artifact_id,run_id,kind,content_form,workspace_id,"
                 "input_manifest_sha256,workspace_facts_role,workspace_kind,checkout_root,repository_path,"
@@ -253,7 +253,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def intent(self, **updates):
         return {"kind": "worktree", "cwd": str(self.repo), "access": "write", "base": {"kind": "working-tree"},
-                "writeScope": ["src"], "integrator": {"role": "host", "id": "host-1"}, **updates}
+                "writeScope": ["src"], "integrator": {"role": "host"}, **updates}
 
     def prepare(self, request="request", **updates):
         manifest = workspace.prepare(self.state, request, self.intent(**updates))
@@ -270,7 +270,8 @@ class WorkspaceTests(unittest.TestCase):
         return snapshot
 
     def legacy_full_manifest(self, manifest):
-        legacy = dict(manifest, version=2, accessReason="Original Host explanation", access="full", snapshot=self.legacy_snapshot(manifest))
+        legacy = dict(manifest, version=2, integrator={"role": "host", "id": "historical-host"},
+                      accessReason="Original Host explanation", access="full", snapshot=self.legacy_snapshot(manifest))
         legacy["repositoryId"] = legacy.pop("projectId")
         legacy["checkoutId"] = "0" * 64
         legacy["manifestSha256"] = workspace._sha(workspace._json({
@@ -280,6 +281,7 @@ class WorkspaceTests(unittest.TestCase):
         request_path = directory / "request.json"
         request = json.loads(request_path.read_bytes())
         request["version"] = 2
+        request["intent"]["integrator"] = {"role": "host", "id": "historical-host"}
         request["intent"]["access"] = "full"
         request["intent"].pop("accessNote", None)
         request["intent"]["accessReason"] = legacy["accessReason"]
@@ -287,12 +289,12 @@ class WorkspaceTests(unittest.TestCase):
         return legacy
 
     def test_integrator_is_a_structured_identity_for_new_workspaces(self):
-        for invalid in ("host:host-1", {}, {"role": "host"}, {"role": "worker", "id": "worker-1"},
+        for invalid in ("host:host-1", {}, {"role": "host", "id": "host-1"}, {"role": "worker", "id": "worker-1"},
                         {"role": "lead", "id": " "}, {"role": "host", "id": "host-1", "extra": True}):
             with self.subTest(integrator=invalid):
                 self.assert_error("INVALID_WORKSPACE", workspace._intent, self.intent(integrator=invalid))
         manifest = self.prepare(integrator={"role": "lead", "id": "lead-1"})
-        self.assertEqual(manifest["version"], 5)
+        self.assertEqual(manifest["version"], 6)
         self.assertEqual(manifest["integrator"], {"role": "lead", "id": "lead-1"})
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
 
@@ -323,6 +325,8 @@ class WorkspaceTests(unittest.TestCase):
                     legacy["checkoutId"] = "0" * 64
                 if version == 1:
                     legacy["integrator"] = "host:host-1"
+                else:
+                    legacy["integrator"] = {"role": "host", "id": "historical-host"}
                 legacy["manifestSha256"] = workspace._sha(workspace._json({
                     key: value for key, value in legacy.items() if key != "manifestSha256"}))
                 frozen = workspace._json(legacy)
@@ -334,7 +338,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_new_worktree_materializes_inputs_without_an_execution_selection(self):
         (self.repo / "source-input.txt").write_text("frozen source\n", encoding="utf-8")
         manifest = self.prepare(includeUntracked=["source-input.txt"])
-        self.assertEqual(manifest["version"], 5)
+        self.assertEqual(manifest["version"], 6)
         self.assertNotIn("executionSelection", manifest["snapshot"])
         self.assertNotIn("executionSelectors", manifest["snapshot"])
         checkout = Path(manifest["checkoutRoot"])
@@ -343,7 +347,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_full_manifest_version_keeps_legacy_reason_only_in_historical_artifacts(self):
         current = self.prepare(access="full", accessNote="Host approved this access")
-        self.assertEqual(current["version"], 5)
+        self.assertEqual(current["version"], 6)
         self.assertEqual(current["access"], "full")
         self.assertNotIn("accessNote", current)
         self.assertNotIn("accessReason", current)
@@ -371,7 +375,8 @@ class WorkspaceTests(unittest.TestCase):
     def test_v2_request_replays_without_changing_its_disk_records(self):
         current = self.prepare()
         directory = self.state / "workspaces" / current["workspaceId"]
-        old = dict(current, version=2, snapshot=self.legacy_snapshot(current))
+        old = dict(current, version=2, integrator={"role": "host", "id": "historical-host"},
+                   snapshot=self.legacy_snapshot(current))
         old["repositoryId"] = old.pop("projectId")
         old["checkoutId"] = "0" * 64
         old["manifestSha256"] = workspace._sha(workspace._json({
@@ -380,6 +385,7 @@ class WorkspaceTests(unittest.TestCase):
         request_path = directory / "request.json"
         request = json.loads(request_path.read_bytes())
         request["version"] = 2
+        request["intent"]["integrator"] = {"role": "host", "id": "historical-host"}
         request_path.write_bytes(workspace._json(request))
         before = {name: (directory / name).read_bytes() for name in ("request.json", "manifest.json")}
         self.assertEqual(self.prepare(), old)

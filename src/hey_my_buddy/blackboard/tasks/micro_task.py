@@ -2,18 +2,15 @@
 
 This module is a pure derivation over existing authoritative facts. It owns no
 state, writes nothing and adds no lifecycle: the C-Two ``task_list``,
-``console_snapshot`` and task views all read the same relation below, and the
+The console projection and task views all read the same relation below, and the
 ordinary micro-task workflow keeps ``workflow.task_extension``.
 
 Everything here is grounded in durable rows:
 
 * kind and lineage come from ``workflow_runs`` plus ``workflow_children`` (helpers)
   and ``router_dispatches``/``workflow_routes`` (internal routing decisions);
-* the original delegating Host comes from the source frozen on that run at
-  admission. Helpers use their own admission source, and routing decisions use
-  their owning run's source. Lead admissions carry ``null``;
-* the current Host is the root of the task's micro task tree, because a takeover
-  fences the whole owned graph rather than one row;
+* current ownership is derived from Lead lineage, with a nameless Host for
+  roots outside that lineage;
 * the project is the root Micro task's immutable original ``cwd`` and the
   repository identity in its pinned input manifest; a temporary execution
   worktree is never the project.
@@ -46,7 +43,6 @@ HISTORY_FILTERS = ("all", "active", "host", "review")
 QUERY_MAX_LENGTH = 200
 # A task without a recorded repository identity uses its original absolute cwd.
 PROJECT_ID_MAX_LENGTH = 4096
-HOST_ID_MAX_LENGTH = 256
 CURSOR_MAX_LENGTH = 512
 CURSOR_VERSION = 1
 
@@ -56,8 +52,8 @@ _TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,%d}$" % TASK_ID_MAX_LENGTH)
 _CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,%d}$" % CURSOR_MAX_LENGTH)
 _TIMESTAMP_PATTERN = re.compile(r"^[0-9A-Za-z:.+-]{1,64}$")
 
-#: Columns matched by ``query``. The original project path and both Host
-#: attributions are part of the contract; execution uses the task's effective
+#: Columns matched by ``query``. The original project path is part of the
+#: contract; execution uses the task's effective
 #: adapter and the resolved model.
 QUERY_COLUMNS = (
     "task_id",
@@ -66,8 +62,6 @@ QUERY_COLUMNS = (
     "route_run_title",
     "route_run_task",
     "project_path",
-    "source_host_id",
-    "current_host_id",
     "effective_adapter",
     "effective_model",
 )
@@ -201,10 +195,6 @@ SELECT
     dr.model AS router_model,
     dr.effort AS router_effort,
     COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id) AS root_run_id,
-    root_run.host_id AS root_host_id,
-    root_run.owner_generation AS root_owner_generation,
-    source_run.source_host_id AS source_host_id,
-    root_run.host_id AS current_host_id,
     CASE WHEN root_run.run_id IS NOT NULL THEN json_extract(root_task.spec_json, '$.cwd')
          WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
          ELSE json_extract(t.spec_json, '$.cwd') END AS project_path,
@@ -245,7 +235,6 @@ LEFT JOIN workflow_runs routed_run ON routed_run.run_id = dr_route.run_id
 LEFT JOIN tasks routed_task ON routed_task.task_id = routed_run.run_id
 LEFT JOIN macro_tasks routed_macro ON routed_macro.macro_task_id = routed_run.macro_task_id
 LEFT JOIN roots wr_roots ON wr_roots.task_id = dr_route.run_id
-LEFT JOIN workflow_runs source_run ON source_run.run_id = COALESCE(r.run_id, dr_route.run_id)
 LEFT JOIN tasks root_task ON root_task.task_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id)
 LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id)
 LEFT JOIN macro_tasks root_macro ON root_macro.macro_task_id=root_run.macro_task_id
@@ -302,8 +291,6 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
         kind = "execution"
     path = row["project_path"] if isinstance(row["project_path"], str) and row["project_path"] else None
     identifier = row["project_id"] if isinstance(row["project_id"], str) and row["project_id"] else None
-    source_host = row["source_host_id"] if isinstance(row["source_host_id"], str) and row["source_host_id"] else None
-    current_host = row["current_host_id"] if isinstance(row["current_host_id"], str) and row["current_host_id"] else None
     parent_run = row["delegated_parent_run_id"] if isinstance(row["delegated_parent_run_id"], str) else None
     root_run = row["root_run_id"] if isinstance(row["root_run_id"], str) else None
     buddy = _complete_buddy(row["run_buddy_json"] if micro_task else row["spec_json"])
@@ -319,13 +306,13 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
                      "macroTaskId": row["route_macro_task_id"],
                      "macroTaskTitle": row["route_macro_task_title"]}
                     if row["route_run_id"] is not None else None)
-    project = ({"id": identifier, "path": path,
+    project = ({"id": identifier, "kind": "git", "path": path,
                 "label": project_label(path, row["project_repository_path"])}
                if identifier or path else None)
     result = {
         "kind": kind,
-        "sourceHostId": source_host if root_run else None,
-        "currentHostId": current_host if root_run else None,
+        "actor": ({"role": "lead", "id": row["root_lead_run_id"]} if row["root_lead_run_id"]
+                  else {"role": "host"}) if root_run else None,
         "parentRunId": parent_run,
         "rootRunId": root_run,
         "project": project,
@@ -369,7 +356,6 @@ def history_where(
     *,
     roots_only: bool = False,
     project_id: str | None = None,
-    host_id: str | None = None,
     query: str | None = None,
     filter_name: str = "all",
 ) -> tuple[list[str], list[Any]]:
@@ -383,9 +369,6 @@ def history_where(
     if project_id:
         clauses.append("project_id = ?")
         values.append(project_id)
-    if host_id:
-        clauses.append("(source_host_id = ? OR current_host_id = ?)")
-        values.extend([host_id, host_id])
     if query:
         pattern = f"%{_escape_like(query)}%"
         clauses.append("(" + " OR ".join(f"{column} LIKE ? ESCAPE '\\'" for column in QUERY_COLUMNS) + ")")

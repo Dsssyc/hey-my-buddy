@@ -68,7 +68,7 @@ class MaintenanceDataTests(WorkflowTestCase):
         board = self.board_
         cwd = str(self.workdir("project-creator"))
         first = self.submit(board, request_id="project-creator", cwd=cwd, kind="worktree",
-                            macroTask={"title": "Project", "goal": "Private goal sentinel"})
+                            create_macro={"title": "Project", "goal": "Private goal sentinel"})
         second = self.submit(board, request_id="project-member", cwd=cwd, kind="worktree",
                              macroTaskId=first["macroTaskId"])
         for run in (first, second):
@@ -361,8 +361,8 @@ class MaintenanceDataTests(WorkflowTestCase):
             now = self.board_.store.now()
             db.execute(
                 "INSERT INTO workflow_requests(request_id,run_id,kind,summary,payload_json,"
-                "state,expected_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                ("host-boundary-test", first, "assistance", "Review evidence", "{}", "approved", 1,
+                "state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                ("host-boundary-test", first, "assistance", "Review evidence", "{}", "approved",
                  now, now),
             )
         item = next(item for item in self.packet()["microTasks"] if item["runId"] == first)
@@ -495,10 +495,10 @@ class MaintenanceDataTests(WorkflowTestCase):
                 ended = f"202{5 + number}-01-01T00:00:00Z"
                 db.execute(
                     "INSERT INTO workflow_host_conclusions"
-                    "(conclusion_id,run_id,run_revision,owner_generation,execution_status,note,"
-                    "actor_role,actor_id,command_id,created_at) VALUES(?,?,1,1,'failed','Done',"
-                    "'host','test',?,?)",
-                    (f"conclusion-{number}", run_id, f"command-{number}", ended))
+                    "(conclusion_id,run_id,execution_status,note,"
+                    "actor_role,actor_id,created_at) VALUES(?,?,'failed','Done',"
+                    "'host','test',?)",
+                    (f"conclusion-{number}", run_id, ended))
             packet = build_packet(db)
         self.assertEqual([task["runId"] for task in packet["microTasks"]], [first, second])
         self.assertEqual([task["result"]["finishedAt"] for task in packet["microTasks"]],

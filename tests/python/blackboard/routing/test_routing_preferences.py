@@ -1,14 +1,4 @@
-"""ADR-021 decision 5/17: the retired Host submission inputs are rejected.
-
-Task-local routing preferences, the submission's routing mode and fallback
-switch, the nested ``spec`` spelling and the duplicate ``executionWorkspace``
-source/integrator fields no longer exist; partial coding quadruples are
-rejected with the three remaining expressions. This suite keeps every retired
-entry point covered by a rejection test (nothing is silently deleted), while
-the parts of the old scenarios that survive — user pin/prefer/exclude, hard
-capabilities, override audit, direct micro task and sole-candidate selection —
-stay asserted under the new contract.
-"""
+"""Current Host routing inputs, selection evidence and preference boundaries."""
 from __future__ import annotations
 
 import json
@@ -19,7 +9,7 @@ from types import SimpleNamespace
 from unittest import mock
 from unittest.mock import ANY
 
-from hey_my_buddy.protocol import schemas
+from hey_my_buddy.protocol.requests import parse_request
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.roles.prompts import router_prompt
@@ -38,150 +28,84 @@ from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 NONCE = "n" * 16
 
 
-class RetiredSubmissionInputTests(unittest.TestCase):
-    """The schema rejects every removed spelling at its entry, with guidance."""
+class CurrentSubmissionInputTests(unittest.TestCase):
+    """The Host and helper request models reject retired routing spellings."""
 
     def submit_params(self, root):
-        return {"requestId": "micro-task-1", "hostId": "host-1", "task": "Inspect this checkout", "cwd": root,
-                "executionWorkspace": {"kind": "existing", "access": "write"}}
+        return {"cwd": root, "macroTaskId": "standalone", "title": "Inspect checkout",
+                "task": "Inspect this checkout", "buddy": "route", "checkout": "existing",
+                "access": "write", "inputs": [], "writeScope": ["."],
+                "expectedSeconds": 1800, "creationKey": "a" * 64}
+
+    def helper_params(self, root):
+        return {"title": "Check dependency", "task": "Check a dependency", "cwd": root,
+                "buddy": "route", "checkout": "existing", "access": "write",
+                "inputs": [], "writeScope": ["."], "expectedSeconds": 1800}
+
+    def parse_submit(self, params):
+        return parse_request("submit", params, audience="service")
+
+    def parse_helpers(self, helpers):
+        return parse_request("continue", {"runId": "root", "requestId": "request",
+                                          "decision": "approve", "autoContinue": True,
+                                          "helpers": helpers}, audience="service")
 
     def test_nested_spec_is_rejected_at_both_entries(self):
         with tempfile.TemporaryDirectory() as root:
-            with self.assertRaises(BoardError) as raised:
-                schemas.normalize_workflow_submit({**self.submit_params(root),
-                    "spec": {"task": "nested task", "cwd": root, "timeoutSeconds": 600}})
-            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-            self.assertEqual(raised.exception.details["field"], "spec")
-            with self.assertRaises(BoardError) as raised:
-                schemas.normalize_helpers({"helpers": [{
-                    "requestId": "helper", "task": "Check a dependency", "cwd": root,
-                    "executionWorkspace": {"kind": "existing", "access": "write"},
-                    "spec": {"task": "nested helper"}}]}, integrator={"role": "host", "id": "fixture-host"})
-            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+            with self.assertRaises(BoardError) as submitted:
+                self.parse_submit({**self.submit_params(root), "spec": {"task": "nested"}})
+            self.assertEqual(submitted.exception.details["field"], "spec")
+            with self.assertRaises(BoardError) as helper:
+                self.parse_helpers([{**self.helper_params(root), "spec": {"task": "nested"}}])
+            self.assertIn("spec", helper.exception.details["field"])
 
-    def test_workspace_fields_are_derived_from_submission(self):
+    def test_retired_routing_and_authority_fields_are_rejected(self):
+        removed = {"routingPreferences": [], "routingMode": "fast", "allowRoutingFallback": False,
+                   "requiredCapabilities": ["effort:high"], "exclusiveResources": ["shared"],
+                   "buddyLocked": True, "owner": "owner", "hostId": "host-1",
+                   "submissionToken": "s" * 32, "requestId": "request",
+                   "executionWorkspace": {"kind": "existing", "access": "write"}}
         with tempfile.TemporaryDirectory() as root:
-            for duplicate in ("cwd", "integrator"):
-                field = {"cwd": root} if duplicate == "cwd" else {"integrator": "host-1"}
-                with self.subTest(duplicate=duplicate):
-                    with self.assertRaises(BoardError) as raised:
-                        schemas.normalize_workflow_submit({**self.submit_params(root),
-                            "executionWorkspace": {"kind": "existing", "access": "write", **field}})
-                    self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertEqual(raised.exception.details["field"], duplicate)
-            # The normalized intent still carries both, derived from the top level.
-            normalized = schemas.normalize_workflow_submit(self.submit_params(root))
-            self.assertEqual(normalized["executionWorkspace"]["cwd"], str(Path(root).resolve()))
-            self.assertEqual(normalized["executionWorkspace"]["integrator"], {"role": "host", "id": "host-1"})
-            owned = schemas.normalize_workflow_submit({**self.submit_params(root), "owner": "named-owner"})
-            self.assertEqual(owned["executionWorkspace"]["integrator"], {"role": "host", "id": "host-1"})
-            helper = schemas.normalize_helpers({"helpers": [{
-                "requestId": "helper", "task": "Check a dependency", "cwd": root,
-                "executionWorkspace": {"kind": "existing", "access": "write"}}]}, integrator={"role": "host", "id": "fixture-host"})[0]
-            self.assertEqual(helper["executionWorkspace"]["cwd"], str(Path(root).resolve()))
-            self.assertEqual(helper["executionWorkspace"]["integrator"], {"role": "host", "id": "fixture-host"})
+            for key, value in removed.items():
+                with self.subTest(field=key), self.assertRaises(BoardError) as raised:
+                    self.parse_submit({**self.submit_params(root), key: value})
+                self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+                self.assertEqual(raised.exception.details["field"], key)
 
-    def test_helper_role_selects_the_single_integrator(self):
+    def test_helper_packet_has_no_inherited_preference_or_integrator_role(self):
         with tempfile.TemporaryDirectory() as root:
-            helper = {"requestId": "helper", "task": "Check a dependency", "cwd": root,
-                      "executionWorkspace": {"kind": "existing", "access": "write"}}
-            authority = {"role": "host", "id": "fixture-host"}
-            default = schemas.normalize_helpers({"helpers": [helper]}, integrator=authority)[0]
-            self.assertEqual((default["role"], default["integrator"]), ("helper", False))
-            selected = schemas.normalize_helpers({"helpers": [{**helper, "role": "integrator"}]},
-                                                 integrator=authority)[0]
-            self.assertEqual((selected["role"], selected["integrator"]), ("integrator", True))
-            with self.assertRaises(BoardError) as raised:
-                schemas.normalize_helpers({"helpers": [{**helper, "integrator": True}]}, integrator=authority)
-            self.assertEqual(raised.exception.details["field"], "integrator")
-            with self.assertRaises(BoardError) as raised:
-                schemas.normalize_helpers({"helpers": [
-                    {**helper, "role": "integrator"},
-                    {**helper, "requestId": "second", "role": "integrator"},
-                ]}, integrator=authority)
-            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+            helper = self.helper_params(root)
+            for key, value in (("inheritRoutingPreferences", True), ("integrator", True),
+                               ("role", "integrator"), ("requestId", "caller-helper"),
+                               ("requiredCapabilities", ["effort:high"])):
+                with self.subTest(field=key), self.assertRaises(BoardError) as raised:
+                    self.parse_helpers([{**helper, key: value}])
+                self.assertIn(key, raised.exception.details["field"])
+            approved = self.parse_helpers([helper, {**helper, "title": "another helper"}])
+            self.assertEqual(len(approved.helpers), 2)
 
-    def test_owner_attribution_never_changes_the_host_or_submission_identity(self):
+    def test_complete_buddy_name_and_explicit_required_fields(self):
         with tempfile.TemporaryDirectory() as root:
-            first = schemas.normalize_workflow_submit({**self.submit_params(root), "owner": "first-label"})
-            second = schemas.normalize_workflow_submit({**self.submit_params(root), "owner": "second-label"})
-            fingerprints = [schemas.workflow_request_fingerprint(
-                item["spec"], item["executionWorkspace"], item["hostId"]
-            ) for item in (first, second)]
-            self.assertEqual(fingerprints[0], fingerprints[1])
-            helper = schemas.normalize_helpers({"helpers": [{
-                "requestId": "helper", "task": "Inspect a dependency", "cwd": root,
-                "owner": "display-only", "executionWorkspace": {"kind": "existing"}
-            }]}, integrator={"role": "host", "id": "actual-host"})[0]
-            self.assertEqual(helper["executionWorkspace"]["integrator"], {"role": "host", "id": "actual-host"})
+            submitted = self.parse_submit({**self.submit_params(root), "buddy": ":".join(BUDDY.values())})
+            self.assertEqual(submitted.buddy, ":".join(BUDDY.values()))
+            for missing in ("buddy", "checkout", "access", "expectedSeconds", "macroTaskId"):
+                params = self.submit_params(root)
+                del params[missing]
+                with self.subTest(field=missing), self.assertRaises(BoardError) as raised:
+                    self.parse_submit(params)
+                self.assertIn(missing, raised.exception.message)
 
-    def test_unknown_routing_inputs_are_rejected(self):
-        retired = {
-            "routingPreferences": [{"match": {"harness": "dsh"}, "reason": "prefer this route"}],
-            "routingMode": "fast",
-            "allowRoutingFallback": False,
-        }
+    def test_execution_adapter_fields_are_rejected_at_both_entries(self):
         with tempfile.TemporaryDirectory() as root:
-            for key, value in retired.items():
-                with self.subTest(key=key):
-                    with self.assertRaises(BoardError) as raised:
-                        schemas.normalize_workflow_submit({**self.submit_params(root), key: value})
-                    self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertIn("Unknown", raised.exception.message)
-
-    def test_helper_inheritance_flag_is_rejected_because_nothing_is_inherited(self):
-        with tempfile.TemporaryDirectory() as root:
-            with self.assertRaises(BoardError) as raised:
-                schemas.normalize_helpers({"helpers": [{
-                    "requestId": "helper", "task": "Check a dependency", "cwd": root,
-                    "executionWorkspace": {"kind": "existing", "access": "write"},
-                    "inheritRoutingPreferences": True}]}, integrator={"role": "host", "id": "fixture-host"})
-            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-            self.assertIn("inheritRoutingPreferences", raised.exception.message)
-
-    def test_partial_quadruples_are_rejected_at_both_entries(self):
-        partials = ({"harness": "zcode"}, {"model": "candidate"}, {"harness": "dsh", "effort": "off"},
-                    {"provider": "deepseek-official", "model": "deepseek-flash"})
-        with tempfile.TemporaryDirectory() as root:
-            for partial in partials:
-                with self.subTest(partial=partial):
-                    with self.assertRaises(BoardError) as raised:
-                        schemas.normalize_workflow_submit({**self.submit_params(root), **partial})
-                    self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertIn("all-or-nothing", raised.exception.message)
-                    self.assertIn("task description", raised.exception.message)
-                    with self.assertRaises(BoardError):
-                        schemas.normalize_helpers({"helpers": [{
-                            "requestId": "helper", "task": "Check a dependency", "cwd": root,
-                            "executionWorkspace": {"kind": "existing", "access": "write"}, **partial}]}, integrator={"role": "host", "id": "fixture-host"})
-            # Both complete expressions normalize: the whole quadruple, and none of it.
-            complete = schemas.normalize_workflow_submit({**self.submit_params(root), **BUDDY})
-            self.assertEqual(schemas.buddy_constraints(complete["spec"]), BUDDY)
-            empty = schemas.normalize_workflow_submit(self.submit_params(root))
-            self.assertEqual(schemas.buddy_constraints(empty["spec"]), {})
-
-    def test_micro_task_submission_rejects_adapter_and_argv_at_both_entries(self):
-        with tempfile.TemporaryDirectory() as root:
-            helper = {"requestId": "helper", "task": "Check a dependency", "cwd": root,
-                      "executionWorkspace": {"kind": "existing", "access": "write"}}
-            for fields, field in (({"adapter": "command", "argv": ["/usr/bin/true"]}, "adapter"),
-                                  ({"adapter": "external"}, "adapter"),
-                                  ({"adapter": "dsh"}, "adapter"),
-                                  ({"adapter": None}, "adapter"),
-                                  ({"argv": ["/usr/bin/true"]}, "argv"),
-                                  ({"argv": None}, "argv")):
-                with self.subTest(fields=fields):
-                    with self.assertRaises(BoardError) as raised:
-                        schemas.normalize_workflow_submit({**self.submit_params(root), **fields})
-                    self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertIn("Unknown", raised.exception.message)
-                    self.assertEqual(raised.exception.details["field"], field)
-                    with self.assertRaises(BoardError) as raised:
-                        schemas.normalize_helpers({"helpers": [{**helper, **fields}]},
-                                                  integrator={"role": "host", "id": "fixture-host"})
-                    self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertIn("Unknown", raised.exception.message)
-                    self.assertEqual(raised.exception.details["field"], field)
+            for key, value in (("adapter", "command"), ("argv", ["/usr/bin/true"]),
+                               ("harness", "dsh"), ("model", "deepseek-flash")):
+                with self.subTest(field=key):
+                    with self.assertRaises(BoardError) as submitted:
+                        self.parse_submit({**self.submit_params(root), key: value})
+                    self.assertEqual(submitted.exception.details["field"], key)
+                    with self.assertRaises(BoardError) as helper:
+                        self.parse_helpers([{**self.helper_params(root), key: value}])
+                    self.assertIn(key, helper.exception.details["field"])
 
 
 class DecisionCapabilityTests(unittest.TestCase):
@@ -268,15 +192,10 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         })
 
     def routed(self, board, *, request_id, **extra):
-        params = {
-            "requestId": request_id, "hostId": "host-1", "submissionToken": "submission-secret-1",
-            "task": "Implement and verify the requested change", "cwd": str(self.workdir(request_id)),
-            "executionWorkspace": {"kind": "existing", "access": "write"}, **extra,
-        }
-        result = board.call("workflow_submit", params)
-        if result.get("control"):
-            self.controls[result["runId"]] = result["control"]
-        return result
+        return self.submit(board, request_id=request_id,
+                           task="Implement and verify the requested change",
+                           cwd=str(self.workdir(request_id)),
+                           buddy=extra.pop("buddy", "route"), **extra)
 
     def test_submit_rejects_the_retired_preference_and_mode_entries(self):
         board = self.board()
@@ -291,7 +210,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
                 with self.assertRaises(BoardError) as raised:
                     self.routed(board, request_id=f"rejected-{key}", **{key: value})
                 self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                self.assertIn("Unknown", raised.exception.message)
+                self.assertEqual(raised.exception.details["field"], key)
 
     def test_submit_rejects_the_nested_spec_and_duplicate_workspace_spellings(self):
         board = self.board()
@@ -301,21 +220,20 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
                         spec={"task": "nested", "cwd": str(self.workdir("nested"))})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         self.assertEqual(raised.exception.details["field"], "spec")
-        for duplicate, field in (("cwd", str(self.workdir("dup"))), ("integrator", "host-1")):
-            with self.subTest(duplicate=duplicate):
-                with self.assertRaises(BoardError):
-                    self.routed(board, request_id=f"rejected-{duplicate}",
-                                executionWorkspace={"kind": "existing", "access": "write", duplicate: field})
+        with self.assertRaises(BoardError) as wrapped:
+            board.call("workflow_submit", {
+                "cwd": str(self.workdir("rejected-workspace")), "macroTaskId": "standalone",
+                "title": "rejected-workspace", "task": "Inspect routing", "buddy": "route",
+                "checkout": "existing", "access": "write", "inputs": [], "writeScope": ["."],
+                "expectedSeconds": 1800, "creationKey": "b" * 64,
+                "executionWorkspace": {"kind": "existing", "access": "write"},
+            })
+        self.assertEqual(wrapped.exception.details["field"], "executionWorkspace")
 
-    def test_submit_rejects_partial_quadruples_but_delegates_a_complete_buddy_directly(self):
+    def test_complete_named_buddy_delegates_directly(self):
         board = self.board()
         self.seed(board)
-        with self.assertRaises(BoardError) as raised:
-            self.routed(board, request_id="rejected-effort", effort="high")
-        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        self.assertIn("all-or-nothing", raised.exception.message)
-        # The complete quadruple delegates directly: no routing task, explicit source.
-        delegated = self.routed(board, request_id="direct-buddy", **BUDDY)
+        delegated = self.routed(board, request_id="direct-buddy", buddy=BUDDY)
         self.assertEqual(delegated["routing"]["status"], "explicit")
         self.assertEqual(delegated["routing"]["source"], "original-explicit")
         self.assertEqual(delegated["buddy"], BUDDY)
@@ -354,21 +272,19 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         self.assertNotIn("routingPreferences", requested)
         self.assertNotIn("routingPreferences", micro_task)
 
-    def test_capabilities_still_filter_and_user_alternative_is_audited(self):
+    def test_permission_capability_and_user_alternative_are_audited(self):
         board = self.board()
         self.annotations(board)
-        # Two effort-high buddies keep the Router path under the capability
-        # filter; a single constrained candidate would be selected by the program.
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY),
                   preferences=[{"buddyId": THIRD_BUDDY_ID, "mode": "prefer", "note": "prefer flash-high"}])
-        view = self.routed(board, request_id="route-caps", requiredCapabilities=["effort:high"])
-        self.assertEqual(view["routing"]["requiredCapabilities"], ["effort:high", "permission:write"])
+        view = self.routed(board, request_id="route-caps")
+        self.assertEqual(view["routing"]["requiredCapabilities"], ["permission:write"])
         self.assertEqual(view["routing"]["constraints"], {})
         pass  # Admission is owned by the service.
         owned = self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id="cap-claim")
         document = owned["claim"]["decisionInput"]
-        self.assertEqual(sorted(entry["buddyId"] for entry in document["buddies"]),
-                         sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
+        self.assertIn(SECOND_BUDDY_ID, [entry["buddyId"] for entry in document["buddies"]])
+        self.assertIn(THIRD_BUDDY_ID, [entry["buddyId"] for entry in document["buddies"]])
         board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim'], state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': SECOND_BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["status"], "completed")
@@ -385,31 +301,29 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         self.finish_turn(board, self.claim(board), disposition="assistance")
         current = board.call("workflow_get", {"runId": parent["runId"]})
         with self.assertRaises(BoardError) as raised:
-            board.call("workflow_decide", {"runId": parent["runId"],
-                "requestId": current["activeRequest"]["requestId"], "commandId": "helper-inherit",
-                "expectedRevision": current["revision"], "decision": "approve", **self.control(parent),
-                "helpers": [
-                    {"requestId": "inherit-helper", "task": "Inspect first dependency", "cwd": str(self.workdir("inherit-helper")),
-                     "executionWorkspace": {"kind": "existing", "access": "write"}, "inheritRoutingPreferences": True},
-                ]})
+            board.call("workflow_continue", {"runId": parent["runId"],
+                "requestId": current["activeRequest"]["requestId"], "decision": "approve",
+                "autoContinue": True,
+                "helpers": [{"title": "inherit-helper", "task": "Inspect first dependency",
+                             "cwd": str(self.workdir("inherit-helper")), "buddy": ":".join(BUDDY.values()),
+                             "checkout": "worktree", "access": "write", "inputs": [],
+                             "writeScope": ["."], "expectedSeconds": 1800,
+                             "inheritRoutingPreferences": True}]})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         self.assertIn("inheritRoutingPreferences", raised.exception.message)
         # A plain helper carries no preference slot in its micro task.
-        approved = board.call("workflow_decide", {"runId": parent["runId"],
-            "requestId": current["activeRequest"]["requestId"], "commandId": "helper-plain",
-            "expectedRevision": current["revision"], "decision": "approve", **self.control(parent),
-            "helpers": [
-                {"requestId": "plain-helper", "task": "Inspect second dependency", "cwd": str(self.workdir("plain-helper")),
-                 "executionWorkspace": {"kind": "existing", "access": "write"}},
-            ]})
+        approved = self.decide(board, current, current["activeRequest"]["requestId"],
+                              helpers=[{"title": "plain-helper", "task": "Inspect second dependency",
+                                        "cwd": str(self.workdir("plain-helper")),
+                                        "checkout": "worktree", "access": "write"}])
         with board.store.db.read() as connection:
             children = {row["request_id"]: row["task_id"] for row in connection.execute(
                 "SELECT request_id,task_id FROM tasks WHERE task_id IN (SELECT child_task_id FROM workflow_children WHERE parent_run_id=?)",
                 (parent["runId"],),
             )}
-        plain = board.call("workflow_get", {"runId": children["plain-helper"], "includeAudit": True})
+        plain = board.call("workflow_get", {"runId": approved["children"][0]["taskId"], "includeAudit": True})
         self.assertNotIn("routingPreferences", plain["audit"]["microTask"])
-        self.assertEqual(approved["children"][0]["taskId"], children["plain-helper"])
+        self.assertEqual(len(children), 1)
 
     def test_host_override_requires_reason_and_records_no_preferences(self):
         board = self.board()
@@ -419,9 +333,9 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         # The shared fixture helper supplies a default reason for explicit
         # buddies; exercise the public request without that field.
         with self.assertRaises(BoardError) as raised:
-            board.call("workflow_continue", {"runId": view["runId"], "commandId": "override-no-reason",
-                "expectedRevision": view["revision"], "input": "keep going", "helperPolicy": "keep",
-                "buddy": BUDDY, **self.control(view)})
+            board.call("workflow_continue", {"runId": view["runId"],
+                "requestId": view["activeRequest"]["requestId"],
+                "input": "keep going", "buddy": ":".join(BUDDY.values())})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         updated = self.continue_run(board, view, buddy=BUDDY, note="Host selected the installed buddy")
         self.assertEqual(updated["routing"]["source"], "host-override")

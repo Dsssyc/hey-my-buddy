@@ -14,11 +14,11 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy import private_dirs
 from hey_my_buddy.buddy.harnesses import registry as harness_registry
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.cli.main import _creation_key
 from support import native_exists, native_is_dir, native_is_file, native_read_bytes, native_unlink, native_write_bytes
 
 
 class DeletionSharingTests(RealWorkspaceTestCase):
-    control = lifecycle_fixtures.LifecycleTestCase.control
     claim = lifecycle_fixtures.LifecycleTestCase.claim
     turn_record = lifecycle_fixtures.LifecycleTestCase.turn_record
     finish_turn = lifecycle_fixtures.LifecycleTestCase.finish_turn
@@ -27,26 +27,30 @@ class DeletionSharingTests(RealWorkspaceTestCase):
 
     def setUp(self):
         super().setUp()
-        self.controls = {}
         self.worker = 'w-deletion-sharing'
         original = workflow._workspace_module
         workflow._workspace_module = workspace
         self.addCleanup(setattr,workflow,'_workspace_module',original)
 
     def submit_group(self,board,request_id,*,kind='existing',cwd=None,write_scope=None):
+        cwd = str(cwd or self.repo)
+        project_id = workspace.ensure_project_id(workspace.repository_at(cwd, allow_parent=True))
+        created = board.call('workflow_create', {'cwd': cwd, 'title': request_id, 'goal': request_id,
+            'creationKey': _creation_key(['adr032-create-v1', project_id, request_id])})
+        task = 'Private shared-object fixture'
         run = board.call('workflow_submit',{
-            **BUDDY,'requestId':request_id,'hostId':'host-1','task':'Private shared-object fixture',
-            'cwd':str(cwd or self.repo),'submissionToken':'t'*32,'macroTask':{'title':request_id, 'goal': request_id},
-            'executionWorkspace':{'kind':kind,'access':'write','writeScope':write_scope or ['.']},
+            'cwd': cwd, 'title': request_id, 'task': task, 'macroTaskId': created['macroTaskId'],
+            'creationKey': _creation_key(['adr032-submit-v1', 'macro:' + created['macroTaskId'], request_id, task]),
+            'buddy': ':'.join(BUDDY.values()), 'checkout': kind, 'access': 'write',
+            'inputs': [], 'writeScope': write_scope or ['.'], 'expectedSeconds': 1800,
         })
-        self.controls[run['runId']] = run['control']
-        return run
+        return {**board.call('workflow_get', {'runId': run['runId']}), **run}
 
     def close(self,board,run):
-        board.call('workflow_cancel',{'runId':run['runId'],**self.control(run)})
-        return board.call('workflow_conclude',{'runId':run['runId'],'note':'No execution was admitted',**self.control(run)})
+        board.call('workflow_cancel',{'runId':run['runId']})
+        return board.call('workflow_conclude',{'runId':run['runId'],'note':'No execution was admitted'})
 
-    def test_two_existing_groups_on_the_same_host_checkout_can_both_be_deleted(self):
+    def test_two_existing_groups_on_the_same_checkout_can_both_be_deleted(self):
         board = self.board()
         initial = self.state()
         first = self.submit_group(board,'host-existing-first')
@@ -153,7 +157,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
 
     def test_each_physical_phase_retries_after_store_restart_with_real_git(self):
         stages = ('_delete_sessions', '_delete_workspaces', '_delete_private_roots',
-                  '_delete_session_group', '_delete_cli_files', '_delete_rows')
+                  '_delete_session_group', '_delete_rows')
         for index, stage in enumerate(stages):
             with self.subTest(stage=stage):
                 board = self.board()
@@ -173,10 +177,6 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                 sessions = private_dirs.session_group_root(board.directory, run['macroTaskId'])
                 sessions.mkdir(parents=True, exist_ok=True)
                 (sessions / 'phase-proof').write_bytes(b'session evidence')
-                controls = board.directory / 'controls'
-                controls.mkdir(parents=True, exist_ok=True)
-                control = controls / f"{run['runId']}.g1.json"
-                control.write_bytes(b'control evidence')
                 native = self.directory / f'native-session-{index}.jsonl'
                 foreign_native = self.directory / f'foreign-native-session-{index}.jsonl'
                 native.write_bytes(b'owned native session evidence')
@@ -221,7 +221,6 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                     self.assertEqual(foreign_native.read_bytes(), b'foreign native session evidence')
                     attempts_gone = stages.index(stage) > stages.index('_delete_private_roots')
                     sessions_gone = stages.index(stage) > stages.index('_delete_session_group')
-                    control_gone = stages.index(stage) > stages.index('_delete_cli_files')
                     self.assertEqual(native_exists(directory), not workspace_gone)
                     if not workspace_gone:
                         self.assertEqual(native_read_bytes(directory / 'manifest.json'), frozen)
@@ -229,7 +228,6 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                                      not workspace_gone)
                     self.assertEqual((attempts / 'phase-proof').exists(), not attempts_gone)
                     self.assertEqual((sessions / 'phase-proof').exists(), not sessions_gone)
-                    self.assertEqual(control.exists(), not control_gone)
                     self.assertEqual(self.git('rev-parse', foreign).strip(), head)
                     with board.store.db.read() as connection:
                         self.assertIsNotNone(connection.execute('SELECT 1 FROM macro_task_deletions WHERE target_id=?',
@@ -245,7 +243,6 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                     self.assertFalse(native_exists(directory))
                     self.assertFalse(attempts.exists())
                     self.assertFalse(sessions.exists())
-                    self.assertFalse(control.exists())
                     self.assertFalse(native.exists())
                     self.assertEqual(foreign_native.read_bytes(), b'foreign native session evidence')
                     self.assertFalse(self.git('for-each-ref', '--format=%(refname)', own_prefix))
@@ -359,7 +356,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         resolution = workspace.resolve(board.directory, manifest, task_id=borrower['runId'],
                                        attempt_id=attempt_id, action='restore', paths=['src/foreign.txt'],
                                        observed_fingerprint=fingerprint,
-                                       actor={'role': 'host', 'id': 'fixture-host'})['artifact']
+                                       actor={'role': 'host'})['artifact']
         output = workspace.seal(board.directory, manifest, borrower['runId'], attempt_id)
         cumulative = workspace.cumulative_patch(manifest, resolution, initial)
         self.assertNotEqual(initial, resolution['inputCommit'])

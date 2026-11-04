@@ -1,5 +1,6 @@
 """Real private daemon and execution process; the native CLI is an offline peer."""
 import json
+import subprocess
 from pathlib import Path
 
 from support import BoardTestCase, wait_for
@@ -25,15 +26,26 @@ class RouterFactsServiceTests(BoardTestCase):
             "configuration": {"defaultRoutingMode": "fast", "routerBuddyIds": [ids[0]]},
         })
         board.close()
+        work = self.workdir("facts")
+        (work / "README.md").write_text("Private routing fixture\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(work)], check=True)
+        subprocess.run(["git", "-C", str(work), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(work), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Fixture"], check=True)
         environment = {"HMB_CODEX_FIXTURE_CASE": "router-facts",
                        "HMB_CODEX_FIXTURE_STATE": str(self.directory / "native-state.json")}
         select_fixture(environment, self.directory, "codex", native)
         with self.daemon(env=environment):
             client = BoardClient(self.directory, autostart=False)
-            request = client.call("selection_request", {"requestId": "private-route", "task": "Read frozen routing facts"})
+            submitted = client.workflow_submit(cwd=str(work), title="Private route",
+                task="Read frozen routing facts", macroTaskId="standalone", buddy="route",
+                checkout="existing", access="read", inputs=[], expectedSeconds=1800,
+                creationKey="a" * 64)
+            routed = client.workflow_get(run_id=submitted["runId"])
+            request_id = routed["routing"]["decisionId"]
 
             def completed():
-                value = client.call("selection_get", {"decisionId": request["decisionId"], "includeAudit": True})["decision"]
+                value = client.call("selection_get", {"decisionId": request_id, "includeAudit": True})["decision"]
                 return value if value["status"] not in ("queued", "running") else None
 
             decision = wait_for(completed, timeout=30)

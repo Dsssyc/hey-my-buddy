@@ -1,151 +1,135 @@
-"""Host grants are micro-task facts, frozen into the ordinary Worker turn."""
-from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
+"""Explicit Lead grants stay frozen while submission keys identify created work."""
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from support import enable_fixture_buddy
-from hey_my_buddy.cli.cli_views import micro_task_brief
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.protocol import schemas
+from hey_my_buddy.protocol.requests import parse_request
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest
+from hey_my_buddy.cli.main import _creation_key
 
 
 class LeadGrantTests(WorkflowTestCase):
     def params(self, **extra):
-        return {**BUDDY, "requestId": "lead", "hostId": "host", "task": "Integrate the work",
-                "submissionToken": "s" * 32,
-                "cwd": str(self.workdir()), "delegationAuthority": True,
-                "executionWorkspace": {"kind": "existing", "access": "full", "accessNote": "Lead checks"},
-                **extra}
+        cwd = str(self.workdir())
+        namespace = "project:" + self.workspace.ensure_project_id(self.workspace.repository_at(cwd, allow_parent=True))
+        return {"title": "Lead", "task": "Integrate the work", "cwd": cwd,
+                "buddy": ":".join(BUDDY.values()), "macroTaskId": "standalone", "checkout": "existing",
+                "inputs": [], "access": "full", "accessNote": "Lead checks", "writeScope": ["."],
+                "expectedSeconds": 1800, "delegationAuthority": True,
+                "creationKey": _creation_key(["adr032-submit-v1", namespace, "Lead", "Integrate the work"]), **extra}
 
     def grant(self, board, **extra):
         enable_fixture_buddy(board.store, BUDDY)
         response = board.call("workflow_submit", self.params(**extra))
-        self.controls[response["runId"]] = response["control"]
-        return response
+        return {**board.call("workflow_get", {"runId": response["runId"]}), **response}
 
-    def test_grant_requires_every_explicit_buddy_field_before_catalog_or_workspace_work(self):
+    def test_grant_requires_an_explicit_named_buddy_before_catalog_or_workspace(self):
         board = self.board()
-        for absent in ((*schemas.BUDDY_FIELDS,), *((field,) for field in schemas.BUDDY_FIELDS)):
-            for missing_value in ("omitted", None, ""):
-                params = self.params()
-                for field in absent:
-                    if missing_value == "omitted":
-                        params.pop(field)
-                    else:
-                        params[field] = missing_value
-                with self.subTest(absent=absent, value=missing_value), self.assertRaises(BoardError) as caught:
-                    board.call("workflow_submit", params)
-                self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-                self.assertIn("delegationAuthority", caught.exception.message)
-                self.assertIn("missing " + ", ".join(absent), caught.exception.message)
+        for value in (None, "", "route"):
+            params = self.params(buddy=value)
+            with self.subTest(value=value), self.assertRaises(BoardError) as caught:
+                board.call("workflow_submit", params)
+            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+        params = self.params()
+        del params["buddy"]
+        with self.assertRaises(BoardError):
+            board.call("workflow_submit", params)
         self.catalog_validation.assert_not_called()
+        self.assertEqual(self.workspace.prepare_calls, [])
         self.assertEqual(board.store.count_tasks(), 0)
 
-    def test_grant_requires_full_access_and_a_boolean(self):
+    def test_grant_requires_full_access_and_only_explicit_true(self):
         board = self.board()
-        for access in (None, "read", "write"):
-            workspace = {"kind": "existing"}
-            if access is not None:
-                workspace["access"] = access
-            with self.subTest(access=access), self.assertRaises(BoardError) as caught:
-                board.call("workflow_submit", self.params(executionWorkspace=workspace))
-            self.assertIn("delegationAuthority requires executionWorkspace.access='full'", caught.exception.message)
-        for value in (None, 0, 1, "true"):
-            with self.subTest(value=value), self.assertRaises(BoardError) as caught:
+        for value in (None, False, 0, 1, "true"):
+            with self.subTest(value=value), self.assertRaises(BoardError):
                 board.call("workflow_submit", self.params(delegationAuthority=value))
-            self.assertIn("must be a boolean", caught.exception.message)
+        for access in ("read", "write"):
+            params = self.params(access=access)
+            del params["accessNote"]
+            if access == "read":
+                del params["writeScope"]
+            with self.subTest(access=access), self.assertRaises(BoardError):
+                board.call("workflow_submit", params)
         self.catalog_validation.assert_not_called()
 
     def test_helpers_cannot_carry_grants_even_when_false(self):
+        packet = self.params()
+        for key in ("macroTaskId", "creationKey"):
+            del packet[key]
         for value in (True, False):
-            helper = self.params(delegationAuthority=value)
-            helper.pop("hostId")
+            packet["delegationAuthority"] = value
             with self.subTest(value=value), self.assertRaises(BoardError) as caught:
-                schemas.normalize_helpers({"helpers": [helper]}, integrator={"role": "host", "id": "fixture-host"})
-            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-            self.assertEqual(caught.exception.details["field"], "delegationAuthority")
+                parse_request("continue", {"runId": "parent", "requestId": "request", "decision": "approve",
+                    "helpers": [packet], "autoContinue": True})
+            self.assertIn("delegationAuthority", caught.exception.message)
 
     def test_grant_requires_an_enabled_available_buddy(self):
         board = self.board()
         enable_fixture_buddy(board.store, BUDDY)
-        with board.store.db.write() as db:
-            db.execute("UPDATE buddies SET enabled=0")
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE buddies SET enabled=0")
         with self.assertRaises(BoardError) as caught:
             board.call("workflow_submit", self.params())
         self.assertEqual(caught.exception.code, "BUDDY_UNAVAILABLE")
-        self.assertEqual(caught.exception.details["reason"]["code"], "not-enabled")
         self.assertEqual(board.store.count_tasks(), 0)
         enable_fixture_buddy(board.store, BUDDY)
-        with patch("hey_my_buddy.blackboard.catalog.catalog.validate_buddy",
-                   side_effect=BoardError("BUDDY_UNAVAILABLE", "fixture route unavailable")):
-            with self.assertRaises(BoardError) as caught:
-                board.call("workflow_submit", self.params())
-        self.assertEqual(caught.exception.code, "BUDDY_UNAVAILABLE")
-        self.assertEqual(board.store.count_tasks(), 0)
-        with patch("hey_my_buddy.blackboard.catalog.catalog.validate_buddy",
-                   side_effect=BoardError("HARNESS_UNAVAILABLE", "fixture harness unavailable")):
-            with self.assertRaises(BoardError) as caught:
-                self.grant(board)
-        self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
+        for code in ("BUDDY_UNAVAILABLE", "HARNESS_UNAVAILABLE"):
+            with patch("hey_my_buddy.blackboard.catalog.catalog.validate_buddy", side_effect=BoardError(code, "unavailable")):
+                with self.assertRaises(BoardError) as caught:
+                    board.call("workflow_submit", self.params())
+                self.assertEqual(caught.exception.code, code)
         self.assertEqual(board.store.count_tasks(), 0)
 
     def test_grant_is_persisted_readable_and_frozen_with_lead_authority(self):
-        from hey_my_buddy.json_codec import decode_strict_json
         board = self.board()
         submitted = self.grant(board)
-        fetched = board.call("workflow_get", {"runId": submitted["runId"]})
-        brief = micro_task_brief(fetched)
-        listed = board.call("task_list", {})["runs"][0]
-        for view in (submitted, fetched, brief, listed["lineage"]):
-            self.assertTrue(view["delegationAuthority"])
-            self.assertEqual(view["buddy"], BUDDY)
-        self.register(board)
-        claimed = self.claim(board)
-        self.assertTrue(claimed["claim"]["turn"]["input"]["context"]["delegationAuthority"])
-        self.assertEqual(turn_manifest(self.directory, claimed["claim"]["turn"]["input"])["access"], "full")
-        with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT delegation_authority FROM workflow_runs").fetchone()[0], 1)
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 0)
-            row = db.execute(
-                "SELECT payload_json,actor_role,actor_id FROM events WHERE kind='workflow.delegation_authority_granted'").fetchone()
-            self.assertEqual(decode_strict_json(row["payload_json"]), {"buddy": BUDDY})
-            self.assertEqual((row["actor_role"], row["actor_id"]), ("host", "host"))
+        self.assertTrue(submitted["delegationAuthority"])
+        self.assertEqual(submitted["buddy"], BUDDY)
+        claim = self.claim(board)["claim"]
+        self.assertTrue(claim["turn"]["input"]["context"]["delegationAuthority"])
+        self.assertEqual(turn_manifest(self.directory, claim["turn"]["input"])["access"], "full")
+        with board.store.db.read() as connection:
+            event = connection.execute("SELECT actor_role,actor_id FROM events WHERE kind='workflow.delegation_authority_granted'").fetchone()
+            self.assertEqual(tuple(event), ("host", None))
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 0)
 
-    def test_absent_or_false_grant_has_one_identity_and_no_authority(self):
+    def test_ordinary_work_has_no_grant_and_explicit_false_is_rejected(self):
         board = self.board()
         ordinary = self.submit(board)
-        replay = self.submit(board, delegationAuthority=False)
-        self.assertTrue(replay["duplicate"])
         self.assertFalse(ordinary["delegationAuthority"])
-        self.assertFalse(board.call("task_list", {})["runs"][0]["lineage"]["delegationAuthority"])
-        self.register(board)
-        claimed = self.claim(board)
-        self.assertFalse(claimed["claim"]["turn"]["input"]["context"]["delegationAuthority"])
+        with self.assertRaises(BoardError):
+            self.submit(board, delegationAuthority=False)
+        claim = self.claim(board)["claim"]
+        self.assertFalse(claim["turn"]["input"]["context"]["delegationAuthority"])
 
-    def test_grant_is_part_of_submission_identity(self):
+    def test_same_key_preserves_the_first_grant_and_access(self):
         board = self.board()
         submitted = self.grant(board)
-        replay = self.grant(board)
-        self.assertTrue(replay["duplicate"])
-        self.assertEqual(submitted["control"], replay["control"])
-        with self.assertRaises(BoardError) as caught:
-            board.call("workflow_submit", self.params(delegationAuthority=False))
-        self.assertEqual(caught.exception.code, "CONFLICT")
+        params = self.params()
+        del params["delegationAuthority"]
+        params.update(access="read")
+        del params["writeScope"]
+        del params["accessNote"]
+        replay = board.call("workflow_submit", params)
+        self.assertEqual(replay["runId"], submitted["runId"])
+        self.assertTrue(replay["alreadyExists"])
+        self.assertEqual(replay["access"], "full")
+        self.assertTrue(board.call("workflow_get", {"runId": submitted["runId"]})["delegationAuthority"])
 
-    def test_continuation_preserves_grant_and_requires_full_access_and_explicit_choice(self):
+    def test_continuation_preserves_grant_and_requires_full_explicit_choice(self):
         board = self.board()
         submitted = self.grant(board)
-        self.register(board)
         self.finish_turn(board, self.claim(board))
         current = board.call("workflow_get", {"runId": submitted["runId"]})
-        for change in ({"access": "read"}, {"access": "write"}, {"reroute": True}):
+        for change in ({"access": "read"}, {"access": "write"}, {"buddy": "route"}):
             with self.subTest(change=change), self.assertRaises(BoardError) as caught:
                 self.continue_run(board, current, **change)
-            self.assertIn("delegationAuthority", caught.exception.message)
+            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         replacement = {**BUDDY, "effort": "high"}
         continued = self.continue_run(board, current, buddy=replacement)
         self.assertTrue(continued["delegationAuthority"])
         self.assertEqual(continued["buddy"], replacement)
-        claimed = self.claim(board, claim_request_id="next")
-        self.assertTrue(claimed["claim"]["turn"]["input"]["context"]["delegationAuthority"])
-        self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["buddy"], replacement)
+        claimed = self.claim(board, claim_request_id="next")["claim"]
+        self.assertTrue(claimed["turn"]["input"]["context"]["delegationAuthority"])
+        self.assertEqual(claimed["turn"]["input"]["context"]["buddy"], replacement)

@@ -7,6 +7,7 @@ history, and a target that moved under the review is refused.
 from __future__ import annotations
 from hey_my_buddy.protocol.workspace_manifest import turn_manifest
 from unittest.mock import patch as defer_reclaim
+import json
 import os
 from pathlib import Path
 from unittest import mock
@@ -23,6 +24,28 @@ from hey_my_buddy.paths import native_path
 
 
 class AcceptanceLifecycleTests(LifecycleTestCase):
+    def test_accept_replay_retains_the_requested_subdirectory_target(self):
+        board = self.board()
+        _submitted,_claimed,_manifest,_checkout,_seal,view,artifact = self.run_worktree(board)
+        target = self.target_with_artifact(artifact)
+        nested = target["path"] / "nested"
+        native_path(nested).mkdir()
+        packet = {"runId":view["runId"],"artifactId":artifact["artifactId"],"note":"Reviewed this exact target",
+                  "target":{"path":str(nested),"ref":"HEAD"},"beforeCommit":target["before"]}
+        first = board.call("workflow_accept",packet)
+        with mock.patch.object(workspace_module,"integration_verify",side_effect=AssertionError("replay must not verify again")):
+            replay = board.call("workflow_accept",packet)
+        self.assertTrue(replay["alreadyResponded"])
+        self.assertEqual(first["integrationId"],replay["integrationId"])
+        with board.store.db.read() as connection:
+            row = connection.execute("SELECT target_path,verification_json FROM workflow_integrations WHERE integration_id=?",
+                                     (first["integrationId"],)).fetchone()
+        self.assertEqual(row["target_path"],str(target["path"].resolve()))
+        self.assertEqual(json.loads(row["verification_json"])["requested"]["target"],packet["target"])
+        with self.assertRaises(BoardError) as refused:
+            board.call("workflow_accept",{**packet,"target":{"path":str(target["path"]),"ref":"HEAD"}})
+        self.assertEqual(refused.exception.code,"CONFLICT")
+
     # -- acceptance carries its integration evidence -------------------------
     def test_acceptance_requires_a_verified_or_not_required_decision(self):
         board = self.board()
@@ -31,7 +54,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_accept", {
                 "runId": view["runId"], "artifactId": artifact["artifactId"],
-                "note": "inspected", **self.control(view),
+                "note": "inspected",
             })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as raised:
@@ -41,26 +64,23 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
             board.call("workflow_accept", {
                 "runId": view["runId"], "artifactId": artifact["artifactId"], "note": "no",
                 "notRequired": "no", "target": {"path": str(self.repo), "ref": "HEAD"},
-                **self.control(view),
             })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         accepted = self.accept(board, view, artifact, not_required=True, reason="no separate target")
-        self.assertFalse(accepted["duplicate"])
+        self.assertFalse(accepted["alreadyResponded"])
         self.assertEqual(accepted["state"], "accepted")
-        self.assertEqual(accepted["integration"]["state"], "not-required")
-        self.assertIsNone(accepted["integration"]["target"])
-        self.assertEqual(accepted["integration"]["artifactId"], artifact["artifactId"])
+        self.assertEqual(self.view(board,submitted["runId"])["integrations"][0]["state"], "not-required")
+        self.assertIsNone(self.view(board,submitted["runId"])["integrations"][0]["target"])
+        self.assertEqual(self.view(board,submitted["runId"])["integrations"][0]["artifactId"], artifact["artifactId"])
         duplicate = board.call("workflow_accept", {
             "runId": view["runId"], "artifactId": artifact["artifactId"],
             "note": "inspected the sealed output", "notRequired": "no separate target",
-            **self.control(view),
         })
-        self.assertTrue(duplicate["duplicate"])
+        self.assertTrue(duplicate["alreadyResponded"])
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_accept", {
                 "runId": view["runId"], "artifactId": artifact["artifactId"],
                 "note": "a different review", "notRequired": "no separate target",
-                **self.control(view),
             })
         self.assertEqual(raised.exception.code, "CONFLICT")
 
@@ -73,10 +93,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         run_id = submitted["runId"]
         self.assertEqual(yielded["state"], "awaiting-host")
         # The Host continues; a second turn seals the new final output.
-        continued = board.call("workflow_continue", {
-            "runId": run_id, "commandId": "continue-two", "expectedRevision": yielded["revision"],
-            "input": "finish the micro task", **self.control(yielded),
-        })
+        continued = self.continue_run(board, {'runId': run_id, 'input': "finish the micro task"})
         self.assertEqual(continued["state"], "executing")
         second = self.claim(board, run_id, request_id="two-turns-claim-2", nonce="q" * 16)
         self.assertIsNotNone(second["claim"], second)
@@ -118,17 +135,16 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
             board.call("workflow_accept", {
                 "runId": view["runId"], "artifactId": artifact["artifactId"], "note": "x",
                 "target": {"path": str(target["path"]), "ref": "HEAD", "repositoryId": "0" * 64},
-                **self.control(view),
             })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_accept", {
                 "runId": view["runId"], "artifactId": "art-not-real", "note": "x",
-                "notRequired": "unknown", **self.control(view),
+                "notRequired": "unknown",
             })
         self.assertEqual(raised.exception.code, "NOT_FOUND")
         recorded = self.accept(board, view, artifact, target=target, reason="merged the sealed patch")
-        integration = recorded["integration"]
+        integration = recorded["integrations"][0]
         self.assertEqual(integration["state"], "verified")
         self.assertEqual(integration["target"]["path"], str(Path(target["path"]).resolve()))
         self.assertEqual(integration["target"]["projectId"], workspace_module.inspect(str(target["path"]))["projectId"])
@@ -148,7 +164,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
                 "runId": current["runId"], "artifactId": artifact["artifactId"],
                 "note": "a different review",
                 "target": {"path": str(target["path"]), "ref": "HEAD"},
-                "beforeCommit": target["before"], **self.control(current),
+                "beforeCommit": target["before"],
             })
         self.assertEqual(raised.exception.code, "CONFLICT")
 
@@ -189,10 +205,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
                 git(self.repo, "update-ref", "-d", ref)
 
         clear_workspace_refs()
-        continued = board.call("workflow_continue", {
-            "runId": run_id, "commandId": "cleared-refs-continue", "expectedRevision": yielded["revision"],
-            "input": "finish the work", **self.control(yielded),
-        })
+        continued = self.continue_run(board, {'runId': run_id, 'input': "finish the work"})
         self.assertEqual(continued["state"], "executing")
         second_claim = self.claim(board, run_id, request_id="cleared-refs-second", nonce="q" * 16)
         self.assertIsNotNone(second_claim["claim"], self.view(board, run_id)["activeRequest"])
@@ -218,10 +231,9 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
             accepted = self.accept(board, delivered, final, target=target)
         self.assertEqual(accepted["state"], "accepted")
-        with self.assertRaises(BoardError) as blocked:
-            self.reclaim(board, self.view(board, run_id))
-        self.assertEqual(blocked.exception.code, "NOT_READY")
-        self.assertIn("sealed-output-invalid", blocked.exception.details["reasons"])
+        blocked = self.reclaim(board, self.view(board, run_id))
+        self.assertFalse(blocked["removed"])
+        self.assertIn("sealed-output-invalid", blocked["reasons"])
         self.assertTrue(checkout.exists())
 
     def test_final_noop_continuation_still_requires_earlier_micro_task_change(self):
@@ -230,10 +242,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         submitted, first_claim, first_manifest, checkout, first_seal, yielded, first = self.run_worktree(
             board, request_id="noop-final", output="first output\n", disposition="assistance"
         )
-        continued = board.call("workflow_continue", {
-            "runId": submitted["runId"], "commandId": "noop-continue", "expectedRevision": yielded["revision"],
-            "input": "finish", **self.control(yielded),
-        })
+        continued = self.continue_run(board, {'runId': submitted["runId"], 'input': "finish"})
         second = self.claim(board, submitted["runId"], request_id="noop-claim", nonce="q" * 16)
         second_manifest = turn_manifest(self.directory, second["claim"]["turn"]["input"])
         final_seal = workspace_module.seal(self.directory, second_manifest, submitted["runId"],
@@ -255,7 +264,6 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
             board.call("workflow_accept", {
                 "runId": delivered["runId"], "artifactId": final["artifactId"], "note": "",
                 "adjusted": True, "target": {"path": str(blank), "ref": "HEAD"},
-                **self.control(delivered),
             })
         self.assertEqual(unreasoned.exception.code, "INVALID_ARGUMENT")
         # Confirming the difference as its own adjustment accepts against the same
@@ -264,9 +272,9 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
                                target={"path": blank, "before": before}, adjusted=True,
                                reason="the whole-micro-task change is already the Host's own edit")
         self.assertEqual(adjusted["state"], "accepted")
-        self.assertEqual(adjusted["integration"]["verification"]["differingPaths"][0]["path"], "tracked.txt")
-        self.assertNotIn("adjustments", adjusted["integration"]["verification"])
-        self.assertNotIn("unrecordedPaths", adjusted["integration"]["verification"])
+        self.assertEqual(adjusted["integrations"][0]["verification"]["differingPaths"][0]["path"], "tracked.txt")
+        self.assertNotIn("adjustments", adjusted["integrations"][0]["verification"])
+        self.assertNotIn("unrecordedPaths", adjusted["integrations"][0]["verification"])
 
     def test_deletion_and_mode_change_are_bound_to_final_tree(self):
         (self.repo / "mode.txt").write_text("executable content\n", encoding="utf-8", newline="\n")
@@ -274,12 +282,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         git(self.repo, "commit", "-qm", "add mode fixture")
         board = self.board()
         self.register(board)
-        submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": "delete-mode", "hostId": "host-1", "task": "delete and chmod",
-            "cwd": str(self.repo), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
-        })
-        self.controls[submitted["runId"]] = submitted["control"]
+        submitted = self.submit_run(board, {'task': "delete and chmod", 'cwd': str(self.repo), 'title': "delete-mode", 'checkout': "worktree", 'access': "write", 'inputs': [], 'writeScope': ["."]})
         claimed = self.claim(board, submitted["runId"], request_id="delete-mode-claim")
         manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["path"])
@@ -296,7 +299,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         target = self.target_with_artifact(artifact, name="delete-mode-target")
         recorded = self.accept(board, view, artifact, target=target)
         self.assertEqual(recorded["state"], "accepted")
-        self.assertEqual(recorded["integration"]["verification"]["matchingPaths"], ["mode.txt", "tracked.txt"])
+        self.assertEqual(recorded["integrations"][0]["verification"]["matchingPaths"], ["mode.txt", "tracked.txt"])
         self.assertEqual(git(target["path"], "ls-tree", "HEAD", "mode.txt").split()[0], "100755")
         self.assertEqual(git(target["path"], "ls-tree", "HEAD", "tracked.txt"), "")
 
@@ -308,23 +311,20 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         accepted = board.call("workflow_accept", {
             "runId": submitted["runId"], "artifactId": artifact["artifactId"],
             "note": "reviewed the first claim", "notRequired": "no separate target",
-            **self.control(view),
         })
         self.assertEqual(accepted["state"], "accepted")
-        self.assertEqual(accepted["integration"]["state"], "not-required")
+        self.assertEqual(self.view(board,submitted["runId"])["integrations"][0]["state"], "not-required")
         replay = board.call("workflow_accept", {
             "runId": submitted["runId"], "artifactId": artifact["artifactId"],
             "note": "reviewed the first claim", "notRequired": "no separate target",
-            **self.control(view),
         })
-        self.assertTrue(replay["duplicate"])
+        self.assertTrue(replay["alreadyResponded"])
         # A changed payload derives a different command and conflicts against the
         # recorded acceptance instead of relabelling the reviewed outcome.
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_accept", {
                 "runId": submitted["runId"], "artifactId": artifact["artifactId"],
                 "note": "a different claim", "notRequired": "no separate target",
-                **self.control(view),
             })
         self.assertEqual(raised.exception.code, "CONFLICT")
         with self.assertRaises(BoardError) as raised:
@@ -332,7 +332,6 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
                 "runId": submitted["runId"], "artifactId": artifact["artifactId"],
                 "note": "reviewed the first claim",
                 "target": {"path": str(self.directory / "blank-ack"), "ref": "HEAD"},
-                **self.control(view),
             })
         self.assertEqual(raised.exception.code, "CONFLICT")
 
@@ -340,13 +339,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         """An adopted out-of-scope conflict no longer blocks the delivered reclaim."""
         board = self.board()
         self.register(board)
-        submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": "adopt-reclaim", "hostId": "host-1",
-            "task": "scoped run whose only failure is the refused seal",
-            "cwd": str(self.repo), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src"]},
-        })
-        self.controls[submitted["runId"]] = submitted["control"]
+        submitted = self.submit_run(board, {'task': "scoped run whose only failure is the refused seal", 'cwd': str(self.repo), 'title': "adopt-reclaim", 'checkout': "worktree", 'access': "write", 'inputs': [], 'writeScope': ["src"]})
         claimed = self.claim(board, submitted["runId"], request_id="adopt-reclaim-claim")
         manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["path"])
@@ -365,15 +358,10 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
         self.assertEqual(conflict["state"], "open")
-        adopted = board.store.workflow.workspace_resolve({
-            "runId": submitted["runId"], "commandId": "adopt-site", "expectedRevision": view["revision"],
-            "conflictId": conflict["conflictId"], "action": "adopt",
-            "observedFingerprint": conflict["observedFingerprint"],
-            'note': "the Host adopts this exact site as the delivered outcome", **self.control(view),
-        })
+        adopted = self.continue_run(board, {'runId': submitted["runId"], 'observedFingerprint': conflict["observedFingerprint"], 'note': "the Host adopts this exact site as the delivered outcome", 'resolution': "adopt", 'requestId': self.view(board, submitted["runId"])["activeRequest"]["requestId"]})
         self.assertEqual(adopted["resolutionState"], "adopted")
-        self.assertTrue(adopted["delivered"])
-        self.assertIn("tracked.txt", adopted["adoptedPaths"])
+        self.assertEqual(self.view(board,submitted["runId"])["state"],"delivered")
+        self.assertIn("tracked.txt", self.artifact_record(board,adopted["artifactId"])["adoptedPaths"])
         delivered = self.view(board, submitted["runId"])
         resolved = next(row for row in delivered["artifacts"] if row["kind"] == "resolved-output")
         # Both the initial proof and the resumed comparison must retain the
@@ -382,7 +370,6 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
             accepted = board.call("workflow_accept", {
                 "runId": submitted["runId"], "artifactId": resolved["artifactId"],
                 "note": "reviewed the adopted site", "notRequired": "the adopted site needs no separate target",
-                 **self.control(delivered),
             })
         self.assertEqual(accepted["state"], "accepted")
         self.interrupt_reclaim(board, self.view(board, submitted["runId"]), checkout,
@@ -396,13 +383,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         """Only board-bound, Git-verified adoption records authorize out-of-scope paths."""
         board = self.board()
         self.register(board)
-        submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": "adopt-forge", "hostId": "host-1",
-            "task": "scoped run whose only failure is the refused seal",
-            "cwd": str(self.repo), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src"]},
-        })
-        self.controls[submitted["runId"]] = submitted["control"]
+        submitted = self.submit_run(board, {'task': "scoped run whose only failure is the refused seal", 'cwd': str(self.repo), 'title': "adopt-forge", 'checkout': "worktree", 'access': "write", 'inputs': [], 'writeScope': ["src"]})
         claimed = self.claim(board, submitted["runId"], request_id="adopt-forge-claim")
         manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["path"])
@@ -417,13 +398,8 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'failed', 'result': {'status': 'failed', 'processState': {'shutdownConfirmed': True}, 'workspaceSealError': seal_error, 'turnResultPath': '/tmp/turn-result.json', 'turn': self.turn_record(claim, disposition='completed')}, 'shutdownConfirmed': True, 'exitCode': 1, 'error': seal_error})
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
-        adopted = board.store.workflow.workspace_resolve({
-            "runId": submitted["runId"], "commandId": "adopt-site", "expectedRevision": view["revision"],
-            "conflictId": conflict["conflictId"], "action": "adopt",
-            "observedFingerprint": conflict["observedFingerprint"],
-            'note': "adopt this exact site", **self.control(view),
-        })
-        self.assertTrue(adopted["delivered"])
+        adopted = self.continue_run(board, {'runId': submitted["runId"], 'observedFingerprint': conflict["observedFingerprint"], 'note': "adopt this exact site", 'resolution': "adopt", 'requestId': self.view(board, submitted["runId"])["activeRequest"]["requestId"]})
+        self.assertEqual(self.view(board,submitted["runId"])["state"],"delivered")
         # A Host change beyond both the scope and the adopted site, plus a forged
         # adoption record that claims the Host already promoted exactly that path.
         (checkout / "smuggled.txt").write_text("never authorized\n", encoding="utf-8", newline="\n")
@@ -441,8 +417,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
                 }), "0", manifest["workspaceId"], manifest["manifestSha256"],
                  manifest["inputCommit"]),
             )
-        params = {"runId": submitted["runId"], "note": "the forged record must not smuggle this path",
-                  **self.control(self.view(board, submitted["runId"]))}
+        params = {"runId": submitted["runId"],"artifactId":adopted["artifactId"], "note": "the forged record must not smuggle this path"}
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_conclude", params)
         self.assertEqual(raised.exception.code, "WORKSPACE_SCOPE_VIOLATION")
@@ -478,7 +453,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
                     "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
                     "note": "a detached target is refused before any Git work",
                     "target": {"path": str(target["path"]), "ref": "HEAD"},
-                    "beforeCommit": target["before"], **self.control(root_view),
+                    "beforeCommit": target["before"],
                 })
         self.assertEqual(raised.exception.code, "UNAUTHORIZED")
         self.assertEqual(called, [], "Git verification must not run for an unauthorized target")
@@ -506,7 +481,6 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
                 "note": "content matches but the interval does not",
                 "target": {"path": str(target["path"]), "ref": before},
                 "beforeCommit": unrelated_commit,
-                **self.control(view),
             })
         self.assertEqual(raised.exception.code, "INTEGRATION_UNVERIFIED")
         self.assertFalse(raised.exception.details["verification"]["verified"])
@@ -520,44 +494,3 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         accepted = self.accept(board, self.view(board, submitted["runId"]), artifact,
                                target={"path": target["path"], "before": before, "ref": target["after"]})
         self.assertEqual(accepted["state"], "accepted")
-
-    def test_a_takeover_between_review_and_reclaim_keeps_terminal_reclamation(self):
-        board = self.board()
-        self.register(board)
-        submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
-            board, request_id="takeover-window")
-        real_plan = board.store.workflow.cleanup_plan
-        generation = {"done": False}
-        nonlocal_taken = {"control": None}
-
-        def taking_over_plan(coordinator, params):
-            if not generation["done"]:
-                # Exactly the documented window: the acceptance is committed, the
-                # automatic reclaim has not planned its removal yet, and another
-                # Host takes over the controlling micro task.
-                generation["done"] = True
-                current = self.view(board, submitted["runId"])
-                current_control = dict(self.control(current))
-                taken = board.call("workflow_takeover", {
-                    "runId": submitted["runId"], "commandId": "window-takeover",
-                    "expectedOwnerGeneration": current["ownerGeneration"], "newHostId": "host-2",
-                    **current_control,
-                })
-                nonlocal_taken["control"] = dict(taken["control"])
-            return real_plan(params)
-
-        with mock.patch.object(workflow_module.WorkflowCoordinator, "cleanup_plan", taking_over_plan):
-            accepted = self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
-        self.assertEqual(accepted["state"], "accepted")
-        self.assertTrue(accepted["reclaim"]["removed"])
-        self.assertFalse(checkout.exists())
-        taken_control = nonlocal_taken["control"]
-        # The old owner cannot even retry; the new owner's reclaim completes it.
-        old_control = dict(self.controls[submitted["runId"]])
-        self.controls[submitted["runId"]] = dict(taken_control)
-        with self.assertRaises(BoardError) as raised:
-            board.call("workflow_reclaim", {"runId": submitted["runId"], **old_control})
-        self.assertEqual(raised.exception.code, "STALE_GENERATION")
-        applied = self.reclaim(board, self.view(board, submitted["runId"]))
-        self.assertTrue(applied["removed"])
-        self.assertFalse(checkout.exists())

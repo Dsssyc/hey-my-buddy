@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from hey_my_buddy.blackboard.tasks import command_receipts
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES
 
@@ -106,7 +105,9 @@ class WorkspaceOutputViewTests(unittest.TestCase):
                "delivery_json": None, "state": "open", "action": None, "artifact_id": None,
                "actor_role": None, "actor_id": None,
                "note": None, "created_at": "now", "updated_at": "now"}
-        view = WorkflowCoordinator._conflict_view(object.__new__(WorkflowCoordinator), mock.Mock(), row)
+        connection = mock.Mock()
+        connection.execute.return_value.fetchone.return_value = None
+        view = WorkflowCoordinator._conflict_view(object.__new__(WorkflowCoordinator), connection, row)
         self.assertEqual(view["blockingPathsCount"], 3000)
         self.assertEqual(view["resolvedPathsCount"], 3000)
         self.assertEqual(view["conflictingPathsCount"], 3000)
@@ -133,23 +134,6 @@ class WorkspaceOutputViewTests(unittest.TestCase):
         self.assertEqual(len(view["evidence"]["workspace"]["unsealedPaths"]), 32)
         self.assert_bounded(view)
 
-    def test_resolution_receipt_retains_full_operation_paths_and_bounds_replay(self):
-        response = {"runId": "run", "targetRunId": "run", "conflictId": "conflict", "action": "restore",
-                    "resolutionState": "restored", "resolvedPaths": self.paths, "preservedPaths": [],
-                    "remainingPaths": [], "observedFingerprint": "before", "resolvedFingerprint": "after",
-                    "artifactId": None, "nextBoundaryRequestId": None, "delivered": False}
-        stored = command_receipts.stored_response("workflow.workspace_resolve", response)
-        self.assertEqual(stored["resolvedPaths"], self.paths)
-        coordinator = object.__new__(WorkflowCoordinator)
-        connection = mock.Mock()
-        connection.execute.return_value.fetchone.return_value = None
-        with mock.patch.object(coordinator, "_run_row", return_value={"revision": 2}), \
-             mock.patch.object(coordinator, "compact", return_value={"runId": "run"}):
-            replay = command_receipts.replay_response(coordinator, connection, "workflow.workspace_resolve", stored)
-        self.assertEqual(replay["resolvedPathsCount"], len(self.paths))
-        self.assertEqual(len(replay["resolvedPaths"]), 32)
-        self.assertTrue(replay["resolvedPathsTruncated"])
-        self.assert_bounded(replay)
 
 
 if __name__ == "__main__":

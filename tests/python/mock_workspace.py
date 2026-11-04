@@ -44,6 +44,12 @@ class MockWorkspace:
                 break
         return str(path)
 
+    def repository_at(self, cwd: str, *, allow_parent=False):
+        return self._repository_root(cwd)
+
+    def ensure_project_id(self, repository):
+        return f"repo:{self._repository_root(str(repository))}"
+
     def _checkout_identity(self, cwd: str) -> dict:
         """An allocated worktree keeps its identity when reopened as existing.
 

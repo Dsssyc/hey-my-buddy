@@ -105,10 +105,11 @@ class LeadLifecycleTests(WorkflowTestCase):
         lead, claim = self.lead(board)
         accepted = self.owned(board, claim, "accepted")
         finished, _ = self.finish_owned(board, accepted)
-        self.accept_run(board, finished)
+        self.accept_run(board, finished, credential=claim["agentCredential"])
         concluded = self.owned(board, claim, "concluded")
-        self.finish_owned(board, concluded)
-        board.call("workflow_conclude", {"runId": concluded["runId"], "note": "Not needed", **self.control(concluded)})
+        finished, _ = self.finish_owned(board, concluded)
+        board.call("workflow_conclude", {"runId": concluded["runId"], "artifactId":finished["finalArtifactId"],
+                                           "note": "Not needed", "credential":claim["agentCredential"]})
         self.finish_turn(board, {"claim": claim})
         self.assertEqual(self.current(board, lead)["state"], "delivered")
 
@@ -120,7 +121,7 @@ class LeadLifecycleTests(WorkflowTestCase):
                 child = self.owned(board, claim, "owned-" + disposition)
                 self.wait(board, claim)
                 if disposition == "cancelled":
-                    board.call("workflow_cancel", {"runId": child["runId"], **self.control(child)})
+                    board.console_call("workflow_cancel", {"runId": child["runId"]})
                 else:
                     self.finish_owned(board, child, runner_status="failed" if disposition in ("failed", "uncertain") else "ok",
                                       disposition="completed" if disposition in ("failed", "uncertain") else disposition,
@@ -142,7 +143,7 @@ class LeadLifecycleTests(WorkflowTestCase):
                 with board.store.db.read() as db:
                     event = db.execute("SELECT task_id,revision FROM events WHERE seq=?", (trigger["seq"],)).fetchone()
                     self.assertEqual(event["task_id"], child["runId"])
-                    self.assertEqual(event["revision"], self.current(board, child)["revision"])
+                    self.assertIsNone(event["revision"])
 
     def test_owned_native_resume_refusal_only_wakes_lead_if_rebuild_fails(self):
         self.executors["dsh"].native_resume = True
@@ -250,9 +251,10 @@ class LeadLifecycleTests(WorkflowTestCase):
         lead, claim = self.lead(board)
         child = self.owned(board, claim)
         view, _ = self.finish_owned(board, child, disposition="assistance")
-        helpers = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
-            "requestId": "helper", "task": "Help owned work", "cwd": str(self.workdir("helper")),
-            "executionWorkspace": {"kind": "existing", "access": "write"},
+        helpers = self.decide(board, view, view["activeRequest"]["requestId"], credential=claim["agentCredential"], helpers=[{
+            "title": "helper", "task": "Help owned work", "cwd": str(self.workdir("helper")),
+            "buddy":":".join(BUDDY.values()), "checkout":"existing", "access":"write",
+            "inputs":[],"writeScope":["."],"expectedSeconds":60,
         }])
         self.wait(board, claim)
         # The earlier assistance happened after the first Lead input and already
@@ -313,7 +315,7 @@ class LeadLifecycleTests(WorkflowTestCase):
                                  runner_status="failed" if boundary == "failed" else "ok", exit_code=1 if boundary == "failed" else 0)
                 self.finish_owned(board, child)
                 self.assertEqual(self.wakeups(board, lead), [])
-                self.continue_run(board, self.current(board, lead), command_id="continue-" + boundary)
+                self.continue_run(board, self.current(board, lead))
                 next_claim = self.claim(board, claim_request_id="resume-" + boundary, run_id=lead["runId"])["claim"]
                 facts = next_claim["turn"]["input"]["context"]["ownedMicroTasks"]
                 self.assertEqual(facts[0]["state"], "delivered")
@@ -325,12 +327,12 @@ class LeadLifecycleTests(WorkflowTestCase):
         lead, claim = self.lead(board)
         child = self.owned(board, claim)
         self.wait(board, claim)
-        self.continue_run(board, self.current(board, lead), command_id="manual-waiting")
+        self.continue_run(board, self.current(board, lead))
         manual = self.claim(board, claim_request_id="manual-turn", run_id=lead["runId"])["claim"]
         self.assertEqual(manual["turn"]["input"]["context"]["continuation"]["kind"], "manual")
         self.wait(board, manual)
         self.finish_owned(board, child)
-        self.continue_run(board, self.current(board, lead), command_id="replace-wakeup")
+        self.continue_run(board, self.current(board, lead))
         self.assertEqual(self.wakeups(board, lead)[0]["state"], "invalidated")
         next_claim = self.claim(board, claim_request_id="replace-turn", run_id=lead["runId"])["claim"]
         self.assertEqual(next_claim["turn"]["input"]["context"]["ownedMicroTasks"][0]["state"], "delivered")
@@ -371,7 +373,13 @@ class LeadLifecycleTests(WorkflowTestCase):
         lead, claim = self.lead(board)
         child = self.owned(board, claim)
         self.wait(board, claim)
-        self.continue_run(board, self.current(board, lead), helper_policy="cancel")
+        view = self.current(board,lead)
+        artifact = next(item["artifactId"] for item in view["artifacts"] if item["kind"]=="output")
+        with self.assertRaises(BoardError) as refused:
+            board.call("workflow_continue",{"runId":lead["runId"],"artifactId":artifact,
+                                            "input":"Continue the Lead","helperPolicy":"cancel"})
+        self.assertEqual(refused.exception.code,"INVALID_ARGUMENT")
+        self.continue_run(board, view)
         self.assertEqual(self.current(board, child)["state"], "executing")
         self.assertEqual(self.current(board, child)["task"]["state"], "queued")
 
@@ -387,9 +395,9 @@ class LeadLifecycleTests(WorkflowTestCase):
         child = self.owned(board, claim)
         view, _ = self.finish_owned(board, child, disposition="assistance")
         approved = self.decide(board, view, view["activeRequest"]["requestId"], credential=claim["agentCredential"],
-                               helpers=[{"requestId": "stopping-helper", "task": "Help owned work",
+                               helpers=[{"title": "stopping-helper", "task": "Help owned work",
                                          "cwd": str(self.workdir("stopping-helper")),
-                                         "executionWorkspace": {"kind": "existing", "access": "write"}}])
+                                         "workspace": {"kind": "existing", "access": "write"}}])
         helper_id = approved["children"][0]["taskId"]
         helper_claim = self.claim(board, "w2", claim_request_id="helper-to-stop", run_id=helper_id)
         self.wait(board, claim)
@@ -419,24 +427,27 @@ class LeadLifecycleTests(WorkflowTestCase):
         board = self.board()
         DecisionTestCase.seed(self, board)
         lead, claim = self.lead(board)
-        child = board.call("workflow_submit", {
-            "requestId": "stopping-routed-owned", "task": "Select an executor",
-            "cwd": str(self.workdir("stopping-routed-owned")),
-            "executionWorkspace": {"kind": "existing", "access": "write"},
-            "submissionToken": "r" * 32, "credential": claim["agentCredential"],
-        })
+        child = self.owned(board,claim,"stopping-routed-owned",cwd=str(self.workdir("stopping-routed-owned")))
+        current,_ = self.finish_owned(board,child,disposition="assistance")
+        self.continue_run(board,current,buddy="route",credential=claim["agentCredential"])
+        board.store.workflow.prepare_continuation_workspace({"runId":child["runId"]})
+        child = self.current(board,child)
+        # Consume the earlier boundary before testing this Router's own stop.
+        self.wait(board,claim)
+        claim = self.claim(board,claim_request_id="lead-before-router-stop",run_id=lead["runId"])["claim"]
+        previous_wakes = len(self.wakeups(board,lead))
         route_id = child["routing"]["taskId"]
         route_claim = self.claim(board, "router", claim_request_id="router-to-stop", run_id=route_id)["claim"]
         board.call("workflow_cancel", {"runId": child["runId"], "credential": claim["agentCredential"]})
         self.wait(board, claim)
         self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
-        self.assertEqual(self.wakeups(board, lead), [])
+        self.assertEqual(len(self.wakeups(board, lead)),previous_wakes)
         attempt = route_claim["attempt"]
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'cancelled', 'result': {'status': 'cancelled'}, 'shutdownConfirmed': True})
         self.assertEqual(self.current(board, lead)["state"], "executing")
         wakeups = self.wakeups(board, lead)
-        self.assertEqual(len(wakeups), 1)
-        trigger = json.loads(wakeups[0]["trigger_event_json"])
+        self.assertEqual(len(wakeups), previous_wakes+1)
+        trigger = json.loads(wakeups[-1]["trigger_event_json"])
         self.assertEqual(trigger["kind"], "workflow.owned_stop_reported")
         with board.store.db.read() as connection:
             event = connection.execute("SELECT payload_json FROM events WHERE seq=?", (trigger["seq"],)).fetchone()
@@ -451,14 +462,14 @@ class LeadLifecycleTests(WorkflowTestCase):
         for index in range(workflow.MAX_CHILD_VIEW + 1):
             self.owned(board, claim, "owned-" + str(index))
         self.wait(board, claim)
-        self.continue_run(board, self.current(board, lead), command_id="first-manual")
+        self.continue_run(board, self.current(board, lead))
         first = self.claim(board, claim_request_id="second-turn", run_id=lead["runId"])["claim"]
         context = first["turn"]["input"]["context"]
         self.assertEqual(len(context["ownedMicroTasks"]), workflow.MAX_CHILD_VIEW + 1)
         self.assertEqual(context["ownedMicroTasksTotal"], workflow.MAX_CHILD_VIEW + 1)
         self.assertNotIn("ownedMicroTasksTruncated", context)
         self.wait(board, first)
-        self.continue_run(board, self.current(board, lead), command_id="second-manual")
+        self.continue_run(board, self.current(board, lead))
         second = self.claim(board, claim_request_id="third-turn", run_id=lead["runId"])["claim"]
         following = second["turn"]["input"]["context"]
         self.assertEqual(following["ownedMicroTasks"], [])
@@ -537,7 +548,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.assertEqual(view["activeRequest"]["helperOutcomes"], [])
         self.assertEqual(self.wakeups(board, lead)[0]["state"], "recorded")
 
-    def test_storage_alone_reconstructs_lead_segments_wakeups_owned_turns_usage_and_takeover(self):
+    def test_storage_alone_reconstructs_lead_segments_wakeups_owned_turns_and_usage(self):
         clock = FakeClock()
         board = self.board(clock=clock)
         lead, claim = self.lead(board)
@@ -550,17 +561,14 @@ class LeadLifecycleTests(WorkflowTestCase):
             tokenUsage={"inputTokens": 10, "outputTokens": 3, "scope": "attempt", "inputBasis": "includes-cached",
                         "completeness": "complete", "source": "fixture"}))
         woken_at = clock()
-        takeover = board.call("workflow_takeover", {"runId": lead["runId"], "commandId": "takeover", "newHostId": "next-host",
-                                                    "expectedOwnerGeneration": 1, **lead["control"]})
-        self.controls[lead["runId"]] = takeover["control"]
         clock.advance(1)
         resumed = self.claim(board, claim_request_id="resumed", run_id=lead["runId"])["claim"]
         clock.advance(2)
         self.finish_turn(board, {"claim": resumed}, disposition="attention")
         boundary_at = clock()
-        self.continue_run(board, self.current(board, lead), command_id="after-review")
+        self.continue_run(board, self.current(board, lead))
         final = self.claim(board, claim_request_id="final-turn", run_id=lead["runId"])["claim"]
-        self.accept_run(board, child_view)
+        self.accept_run(board, child_view, credential=final["agentCredential"])
         clock.advance(2)
         self.finish_turn(board, {"claim": final})
         delivered_at = clock()
@@ -588,7 +596,6 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.assertEqual(owned_turn["state"], "returned")
         self.assertEqual(json.loads(owned_turn["result_json"])["result"]["tokenUsage"]["outputTokens"], 3)
         self.assertTrue(owned_turn["created_at"] <= owned_turn["updated_at"])
-        self.assertEqual(next(json.loads(row["payload_json"])["previousHostId"] for row in events if row["kind"] == "workflow.takeover"), "host-1")
         self.assertEqual(turns[2]["disposition"], "completed")
         self.assertEqual(turns[2]["updated_at"], delivered_at)
         self.assertEqual(next(row["created_at"] for row in events if row["kind"] == "workflow.acknowledged"), accepted_at)

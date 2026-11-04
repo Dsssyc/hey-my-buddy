@@ -120,7 +120,7 @@ class ReclamationTests(LifecycleTestCase):
         from hey_my_buddy.errors import BoardError
         board = self.board()
         submitted, _, manifest, checkout, _, view, _ = self.run_worktree(board, disposition='attention')
-        board.call('workflow_cancel', {'runId': view['runId'], **self.control(view)})
+        board.call('workflow_cancel', {'runId': view['runId']})
         target = 'run:' + submitted['runId']
         params = {'macroTaskId': target, 'microTaskCount': 1, 'confirm': True}
         original = workspace._git
@@ -147,14 +147,11 @@ class ReclamationTests(LifecycleTestCase):
         git(checkout, "add", ".")
         git(checkout, "commit", "-qm", "Worker committed the sealed tree")
         self.assertEqual(git(checkout, "rev-parse", "HEAD^{tree}").strip(), seal["tree"])
-        board.call("workflow_continue", {
-            "runId": view["runId"], "commandId": "manual-continue", "expectedRevision": view["revision"],
-            "input": "Continue", "helperPolicy": "keep", **self.control(view),
-        })
+        self.continue_run(board, {'runId': view["runId"], 'input': "Continue"})
         board.store.workflow.prepare_continuation_workspace({"runId": view["runId"]})
-        board.call("workflow_cancel", {"runId": view["runId"], **self.control(view)})
+        board.call("workflow_cancel", {"runId": view["runId"]})
         concluded = board.call("workflow_conclude", {
-            "runId": view["runId"], "note": "Finished before the next attempt", **self.control(view),
+            "runId": view["runId"], "note": "Finished before the next attempt",
         })
         self.assertTrue(concluded["reclaim"]["removed"], concluded)
         self.assertFalse(checkout.exists())
@@ -224,11 +221,6 @@ class ReclamationTests(LifecycleTestCase):
         changed_head = board.store.head()
         self.maintain(board)
         self.assertEqual(board.store.head(), changed_head)
-        taken = board.call('workflow_takeover', {
-            'runId': view['runId'], 'commandId': 'takeover-blocked',
-            'expectedOwnerGeneration': view['ownerGeneration'], 'newHostId': 'replacement-host',
-            **self.control(view),
-        })
         git(checkout, 'switch', '--detach', '-q')
         self.maintain(board)
         self.assertFalse(checkout.exists())
@@ -285,7 +277,7 @@ class ReclamationTests(LifecycleTestCase):
         if sys.platform == 'win32':
             self.skipTest('POSIX process cwd observation')
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
-                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
         for age, removed in ((-60, True), (60, False)):
             with self.subTest(age=age):
                 board = self.board()
@@ -336,7 +328,7 @@ class ReclamationTests(LifecycleTestCase):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         board = self.board()
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
-                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
         shell_id, shell = workspace._workspace_directory(board.directory, 'abandoned-shell')
         (shell / '.lock').touch()
         (shell / 'request.json').write_bytes(workspace._json({'requestId': 'abandoned-shell', 'version': 4, 'intent': intent}))
@@ -367,7 +359,7 @@ class ReclamationTests(LifecycleTestCase):
         board = self.board()
         manifest = workspace.prepare(board.directory, 'already-removed-checkout', {
             'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
-            'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}})
+            'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}})
         directory = Path(manifest['checkoutRoot']).parent
         workspace.cleanup_remove(board.directory, manifest)
         self.assertFalse(Path(manifest['checkoutRoot']).exists())
@@ -382,7 +374,7 @@ class ReclamationTests(LifecycleTestCase):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         board = self.board()
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
-                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
         first = workspace.prepare(board.directory, 'misplaced-manifest', intent)
         second = workspace.prepare(board.directory, 'other-allocation', intent)
         directory = Path(first['checkoutRoot']).parent
@@ -405,14 +397,7 @@ class ReclamationTests(LifecycleTestCase):
                 board = self.board(clock=clock)
                 submitted, _, _, checkout, _, yielded, _ = self.run_worktree(
                     board, request_id='parent-' + terminal, disposition='assistance')
-                decided = board.call('workflow_decide', {
-                    'runId': submitted['runId'], 'requestId': yielded['activeRequest']['requestId'],
-                    'commandId': 'borrow-' + terminal, 'expectedRevision': yielded['revision'], 'decision': 'approve',
-                    'helpers': [{**BUDDY, 'requestId': 'borrower-' + terminal, 'task': 'inspect shared files',
-                                 'cwd': str(checkout), 'executionWorkspace': {
-                                     'kind': 'existing', 'access': 'write', 'writeScope': ['.']}}],
-                    **self.control(yielded),
-                })
+                decided = self.continue_run(board, {'runId': submitted['runId'], 'requestId': yielded['activeRequest']['requestId'], 'decision': 'approve', 'helpers': [{'task': 'inspect shared files', 'cwd': str(checkout), 'title': 'borrower-' + terminal, 'buddy': ":".join(BUDDY.values()), 'checkout': 'existing', 'access': 'write', 'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800}], 'autoContinue': True})
                 child_id = decided['children'][0]['taskId']
                 if terminal == 'failed':
                     child = self.claim(board, child_id, request_id='borrower-failed-claim')['claim']
@@ -426,8 +411,8 @@ class ReclamationTests(LifecycleTestCase):
                     })
                 root = private_dirs.ensure_private_dir(private_dirs.micro_task_root(board.directory, 'dsh', child_id))
                 (root / 'failed-evidence.log').write_text('retained', encoding='utf-8')
-                board.call('workflow_cancel', {'runId': submitted['runId'], **self.control(yielded)})
-                board.call('workflow_conclude', {'runId': submitted['runId'], 'note': 'Ended the parent', **self.control(yielded)})
+                board.call('workflow_cancel', {'runId': submitted['runId']})
+                board.call('workflow_conclude', {'runId': submitted['runId'], 'note': 'Ended the parent'})
                 reclaim_native(board.store)
                 self.assertTrue(root.exists())
                 clock.advance(3 * 86400)
@@ -459,11 +444,7 @@ class ReclamationTests(LifecycleTestCase):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         from blackboard.tasks.workspace_lifecycle_case import BUDDY
         board = self.board()
-        submitted = board.call('workflow_submit', {
-            **BUDDY, 'requestId': 'running-no-maintenance-lock', 'hostId': 'host-1',
-            'task': 'Keep sealing available', 'cwd': str(self.repo), 'submissionToken': 't' * 32,
-            'executionWorkspace': {'kind': 'worktree', 'access': 'write', 'writeScope': ['.']},
-        })
+        submitted = self.submit_run(board, {'task': 'Keep sealing available', 'cwd': str(self.repo), 'title': 'running-no-maintenance-lock', 'checkout': 'worktree', 'access': 'write', 'inputs': [], 'writeScope': ['.']})
         claimed = self.claim(board, submitted['runId'], request_id='running-maintenance-claim')
         manifest = turn_manifest(board.directory, claimed['claim']['turn']['input'])
         directory = Path(manifest['checkoutRoot']).parent
@@ -557,7 +538,7 @@ class ReclamationTests(LifecycleTestCase):
                     board, request_id='macro-commit-' + str(proven), disposition='attention')
                 git(checkout, 'add', '.')
                 git(checkout, 'commit', '-qm', 'Worker committed task contents')
-                board.call('workflow_cancel', {'runId': submitted['runId'], **self.control(view)})
+                board.call('workflow_cancel', {'runId': submitted['runId']})
                 if not proven:
                     git(checkout, 'worktree', 'unlock', str(checkout))
                     git(checkout, 'worktree', 'lock', '--reason', 'foreign-allocation', str(checkout))
@@ -595,7 +576,7 @@ class ReclamationTests(LifecycleTestCase):
         board = self.board()
         _, _, _, _, _, view, artifact = self.run_worktree(board, request_id='integration-owner')
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
-                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
         manifest = workspace.prepare(board.directory, 'unregistered-integration-target', intent)
         checkout = Path(manifest['checkoutRoot'])
         before = git(checkout, 'rev-parse', 'HEAD').strip()
@@ -688,7 +669,6 @@ class ReclamationTests(LifecycleTestCase):
         from hey_my_buddy.blackboard.tasks import reclamation
         board = self.board()
         submitted = self.submit(board, request_id='cached-owner', kind='worktree')
-        self.controls[submitted['runId']] = submitted['control']
         with board.store.db.read() as connection:
             from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
             row = board.store.workflow._run_row(connection, submitted['runId'])
@@ -696,7 +676,7 @@ class ReclamationTests(LifecycleTestCase):
         maintenance = reclamation.Reclamation(board.store)
         board.store.on_change = maintenance.changed
         maintenance.run()
-        board.call('workflow_cancel', {'runId': submitted['runId'], **self.control(submitted)})
+        board.call('workflow_cancel', {'runId': submitted['runId']})
         directory = board.directory / 'workspaces' / manifest['workspaceId']
         original = (directory / 'request.json').read_bytes()
         (directory / 'request.json').write_bytes(workspace._json({'requestId': 'unknown-owner'}))
@@ -748,10 +728,9 @@ class ReclamationTests(LifecycleTestCase):
         board = self.board()
         submitted, claim, initial, checkout, _, view, _ = self.run_worktree(board, disposition='attention')
         run_id = submitted['runId']
-        board.call('workflow_continue', {'runId': run_id, 'commandId': 'prepare-before-cancel',
-                                        'expectedRevision': view['revision'], 'input': 'prepare', 'helperPolicy': 'keep', **self.control(view)})
+        self.continue_run(board, {'runId': run_id, 'input': 'prepare'})
         board.store.workflow.prepare_continuation_workspace({'runId': run_id})
-        board.call('workflow_cancel', {'runId': run_id, **self.control(view)})
+        board.call('workflow_cancel', {'runId': run_id})
         with board.store.db.read() as connection:
             run = board.store.workflow._run_row(connection, run_id)
             from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
@@ -762,7 +741,7 @@ class ReclamationTests(LifecycleTestCase):
         workspace.cumulative_patch(current, host_seal, initial['inputCommit'])
         foreign = workspace.prepare(board.directory, 'foreign-handoff', {
             'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
-            'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}})
+            'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}})
         foreign_seal = workspace.host_seal(board.directory, foreign, run_id, attempt_id)
         workspace.cumulative_patch(foreign, foreign_seal, initial['inputCommit'])
         with board.store.db.write() as connection:
@@ -776,8 +755,7 @@ class ReclamationTests(LifecycleTestCase):
             chosen = board.store.workflow._latest_handoff(connection, run, current)
         self.assertEqual(chosen['commit'], host_seal['commit'])
         cancelled = self.view(board, run_id)
-        board.call('workflow_continue', {'runId': run_id, 'commandId': 'continue-host-seal',
-                                        'expectedRevision': cancelled['revision'], 'input': 'finish', **self.control(cancelled)})
+        self.continue_run(board, {'runId': run_id, 'input': 'finish'})
         board.store.workflow.prepare_continuation_workspace({'runId': run_id})
         with board.store.db.read() as connection:
             from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
@@ -793,7 +771,7 @@ class ReclamationTests(LifecycleTestCase):
         self.assertEqual(coordinator.cleanup_plan({'runId': submitted['runId']})['plan']['planId'], first['planId'])
         replacement = workspace.prepare(board.directory, 'second-root-plan', {
             'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
-            'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'host-1'},
+            'base': {'kind': 'working-tree'}, "integrator": {"role": "host"},
         })
         with board.store.db.write() as connection:
             coordinator._pin_artifact(connection, run_id=submitted['runId'], kind='input',
@@ -829,7 +807,7 @@ class ReclamationTests(LifecycleTestCase):
         from hey_my_buddy.blackboard.tasks import checkout_processes, reclamation
         board = self.board()
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
-                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
         manifest = workspace.prepare(board.directory, 'transaction-free-orphan', intent)
         observed = []
         def outside_transaction(name, operation):
@@ -860,7 +838,7 @@ class ReclamationTests(LifecycleTestCase):
         from hey_my_buddy.blackboard.tasks import reclamation, storage
         board = self.board()
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
-                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
         manifests = [workspace.prepare(board.directory, request, intent) for request in ('blocked-one', 'blocked-two')]
         for index, manifest in enumerate(manifests):
             git(Path(manifest['checkoutRoot']), 'switch', '-q', '-c', 'private-branch-' + str(index))
@@ -895,7 +873,7 @@ class ReclamationTests(LifecycleTestCase):
         from hey_my_buddy.errors import BoardError
         from hey_my_buddy.blackboard.tasks import checkout_processes, reclamation
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
-                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
         for operation, failure in (('git', BoardError('WORKSPACE_GIT_UNKNOWN', 'fixture Git unknown')),
                                    ('git', TypeError('fixture internal defect')),
                                    ('process', BoardError('NOT_READY', 'fixture scan incomplete',
@@ -916,7 +894,7 @@ class ReclamationTests(LifecycleTestCase):
         board = self.board()
         self.run_worktree(board, request_id='retained-source')
         intent = {'kind': 'existing', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
-                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
         manifest = workspace.prepare(board.directory, 'unregistered-existing-snapshot', intent)
         directory = board.directory / 'workspaces' / manifest['workspaceId']
         Reclamation(board.store).run()
