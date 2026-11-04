@@ -22,10 +22,10 @@ class CheckoutProcessTests(unittest.TestCase):
         process.name.return_value = "python"
         return process
 
-    def observe(self, checkout, processes, **kwargs):
+    def observe(self, checkout, processes, *, allocated_at=100):
         with patch.object(guard, "_processes", return_value=(processes, True)), \
              patch.object(guard, "process_start", return_value=456):
-            return guard.require_idle_checkout(checkout, **kwargs)
+            return guard.require_idle_checkout(checkout, allocated_at=allocated_at)
 
     def blocked(self, checkout, processes, **kwargs):
         with self.assertRaises(BoardError) as caught:
@@ -35,7 +35,7 @@ class CheckoutProcessTests(unittest.TestCase):
 
     def test_real_empty_directory_scan(self):
         with tempfile.TemporaryDirectory() as directory:
-            guard.require_idle_checkout(Path(directory), first_execution_at=time.time())
+            guard.require_idle_checkout(Path(directory), allocated_at=time.time())
 
     def test_resolves_only_checkout_and_compares_complete_path_components(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -61,14 +61,14 @@ class CheckoutProcessTests(unittest.TestCase):
                  patch.object(Path, "resolve", side_effect=AssertionError("resolved another cwd")):
                 self.observe(root, [process])
 
-    def test_unreadable_cwd_excludes_only_processes_older_than_first_execution(self):
+    def test_unreadable_cwd_excludes_only_processes_older_than_allocation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self.observe(root, [self.process(psutil.AccessDenied(), created=99)], first_execution_at=100)
-            for first_execution_at in (None, 100):
-                with self.subTest(first_execution_at=first_execution_at):
-                    cause = self.blocked(root, [self.process(psutil.AccessDenied())],
-                                         first_execution_at=first_execution_at)
+            self.observe(root, [self.process(psutil.AccessDenied(), created=99)], allocated_at=100)
+            for created in (100, 101):
+                with self.subTest(created=created):
+                    cause = self.blocked(root, [self.process(psutil.AccessDenied(), created=created)],
+                                         allocated_at=100)
                     self.assertEqual(cause, {"code": "checkout.process-blockers", "params": {
                         "processes": [], "unreadableProcesses": [{"pid": 321, "startedAt": 456, "executable": "python"}]}})
 
@@ -76,7 +76,7 @@ class CheckoutProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             processes = [self.process(str(root)), self.process(psutil.AccessDenied())]
-            cause = self.blocked(root, processes, first_execution_at=50)
+            cause = self.blocked(root, processes, allocated_at=50)
             item = {"pid": 321, "startedAt": 456, "executable": "python"}
             self.assertEqual(cause, {"code": "checkout.process-blockers", "params": {
                 "processes": [item], "unreadableProcesses": [item]}})
@@ -89,12 +89,12 @@ class CheckoutProcessTests(unittest.TestCase):
             root = Path(directory).resolve()
             with patch.object(guard, "_processes", return_value=([], False)):
                 with self.assertRaises(BoardError) as caught:
-                    guard.require_idle_checkout(root)
+                    guard.require_idle_checkout(root, allocated_at=100)
                 self.assertEqual(caught.exception.details["reason"]["code"], "checkout.process-scan-failed")
             with patch.object(guard, "process_start", side_effect=[456, 789]):
                 with patch.object(guard, "_processes", return_value=([self.process(str(root))], True)):
                     with self.assertRaises(BoardError) as caught:
-                        guard.require_idle_checkout(root)
+                        guard.require_idle_checkout(root, allocated_at=100)
                 self.assertEqual(caught.exception.details["reason"]["code"], "checkout.process-scan-failed")
 
     def test_exit_during_cwd_scan_does_not_block_deletion(self):
@@ -102,4 +102,4 @@ class CheckoutProcessTests(unittest.TestCase):
             root = Path(directory).resolve()
             with patch.object(guard, "process_start", side_effect=[456, None]), \
                  patch.object(guard, "_processes", return_value=([self.process(str(root))], True)):
-                guard.require_idle_checkout(root)
+                guard.require_idle_checkout(root, allocated_at=100)

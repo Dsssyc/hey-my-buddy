@@ -163,6 +163,53 @@ def _git_in(git_dir, *args, allowed=(0,)):
     return result.stdout
 
 
+def _repository_missing(path, *, allow_parent):
+    """Prove absence from readable entries after Git rejected the location."""
+    with _errors():
+        directory = Path(path)
+        while True:
+            try:
+                entries = os.listdir(native_path(directory))
+            except OSError:
+                # No absence proof: retain the original Git failure for an
+                # unreadable location, as for any other failed Git operation.
+                return False
+            pointer = directory / ".git"
+            try:
+                facts = native_path(pointer).stat()
+            except (FileNotFoundError, NotADirectoryError):
+                pass
+            else:
+                if stat.S_ISDIR(facts.st_mode):
+                    if "HEAD" in os.listdir(native_path(pointer)):
+                        return False
+                    # Git skips an invalid .git directory and can continue up.
+                else:
+                    content = native_path(pointer).read_bytes()
+                    if not content.startswith(b"gitdir: "):
+                        return False  # Malformed metadata is not proof of absence.
+                    target_text = os.fsdecode(content[len(b"gitdir: "):]).strip()
+                    if not target_text:
+                        return False
+                    target = Path(target_text)
+                    if not is_absolute_path(target):
+                        target = directory / target
+                    try:
+                        # Follow filesystem links before '..', as Git does.
+                        # Resolve before native_path, which refuses traversal.
+                        target = Path(os.path.realpath(target, strict=True))
+                        return "HEAD" not in os.listdir(native_path(target))
+                    except (FileNotFoundError, NotADirectoryError):
+                        return True
+            # Explicit Git directories (including bare repositories) have their
+            # own metadata here, independently of a possible empty .git child.
+            if "HEAD" in entries and ("objects" in entries or "commondir" in entries):
+                return False
+            if not allow_parent or directory.parent == directory:
+                return True
+            directory = directory.parent
+
+
 def repository_at(path, *, allow_parent=False):
     """Find a repository at a known location; other read failures stay failures."""
     try:
@@ -175,20 +222,8 @@ def repository_at(path, *, allow_parent=False):
         common = _line(path, "rev-parse", "--path-format=absolute", "--git-common-dir",
                        env={} if allow_parent else {"GIT_CEILING_DIRECTORIES": str(Path(path).resolve().parent)})
     except BoardError as error:
-        if error.code == "WORKSPACE_GIT_ERROR" and any(
-                line.startswith("fatal: not a git repository") for line in error.details["stderr"].splitlines()):
-            with _errors():
-                os.listdir(path)
-                git_path = Path(path) / ".git"
-                try:
-                    git_facts = git_path.stat()
-                except (FileNotFoundError, NotADirectoryError):
-                    pass
-                else:
-                    if stat.S_ISDIR(git_facts.st_mode):
-                        os.listdir(git_path)
-                    else:
-                        git_path.read_bytes()
+        if (error.code == "WORKSPACE_GIT_ERROR" and error.details.get("returncode") == 128
+                and _repository_missing(path, allow_parent=allow_parent)):
             return None
         raise
     return str(Path(common).resolve(strict=True))
@@ -2345,6 +2380,7 @@ def _path_present(path: Path) -> bool:
     resolves: a broken symlink left at the managed path is still an occupant that a
     later proof must refuse, not an achieved removal.
     """
+    path = native_path(path)
     return path.exists() or path.is_symlink() or path.is_junction()
 
 
@@ -2579,7 +2615,7 @@ def _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed, *, st
         _write_once(checkout_root / ".git", os.fsencode(f"gitdir: {git_dir}\n"))
     tree = sealed["tree"] if sealed is not None else manifest["inputTree"]
     entries = _entries(repository, tree)
-    missing = [path for path in entries if not _path_present(native_path(checkout_root / path))]
+    missing = [path for path in entries if not _path_present(checkout_root / path)]
     if missing:
         # checkout-index without --force preserves a file that is already there.
         with _index(checkout_root, state_dir=state_dir) as environment:

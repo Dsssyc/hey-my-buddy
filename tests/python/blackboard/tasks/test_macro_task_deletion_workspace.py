@@ -17,6 +17,38 @@ from hey_my_buddy.paths import native_path
 
 
 class DeletionWorkspaceTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX cwd guard")
+    def test_without_admitted_execution_only_old_unreadable_cwd_is_excluded(self):
+        from unittest.mock import Mock
+        import psutil
+        from hey_my_buddy.blackboard.tasks import checkout_processes
+        for age, readable, deleted in ((-60, False, True), (0, False, False),
+                                      (60, False, False), (-60, True, False)):
+            with self.subTest(age=age, readable=readable):
+                manifest = self.prepare(request=f"allocation-time-{age}-{readable}")
+                checkout = Path(manifest["checkoutRoot"])
+                created = (checkout.parent / "request.json").stat().st_mtime
+                process = Mock(pid=34567)
+                process.create_time.return_value = created + age
+                process.name.return_value = "fixture-process"
+                if readable:
+                    process.cwd.return_value = str(checkout)
+                else:
+                    process.cwd.side_effect = psutil.AccessDenied()
+                with patch.object(checkout_processes, "_processes", return_value=([process], True)), \
+                     patch.object(checkout_processes, "process_start", return_value=456):
+                    if deleted:
+                        self.assertEqual(self.delete(manifest), [])
+                        self.assertFalse(checkout.exists())
+                    else:
+                        with self.assertRaises(BoardError) as caught:
+                            self.delete(manifest)
+                        cause = caught.exception.details["reason"]
+                        self.assertEqual(cause["code"], "checkout.process-blockers")
+                        key = "processes" if readable else "unreadableProcesses"
+                        self.assertEqual(cause["params"][key][0]["pid"], process.pid)
+                        self.assertTrue(checkout.exists())
+
     setUp = workspace_tests.WorkspaceTests.setUp
     _seed_repository = workspace_tests.WorkspaceTests._seed_repository
     git = workspace_tests.WorkspaceTests.git

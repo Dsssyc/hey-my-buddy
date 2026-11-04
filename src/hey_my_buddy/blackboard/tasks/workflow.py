@@ -5684,7 +5684,6 @@ class WorkflowCoordinator:
                     manifest = None
                     retained = []
                     sealed = None
-                    first_execution_at = None
                 else:
                     manifest = self._run_manifest(connection, run_row)
                     retained = self._allocation_provenance(connection, run_row)
@@ -5702,8 +5701,6 @@ class WorkflowCoordinator:
                         if proof_input is None:
                             proof_input = owned_manifest(self.board.directory, connection, *pair)
                             retained.append(proof_input)
-                    from .checkout_processes import first_execution_time
-                    first_execution_at = first_execution_time(connection, manifest)
             inspection = None
             details = {}
             if not missing and not reasons and workspace_module()._path_present(path):
@@ -5717,9 +5714,10 @@ class WorkflowCoordinator:
                     if inspection["attachedBranch"] is not None:
                         details["attachedBranch"] = inspection["attachedBranch"]
                 if not reasons and workspace_module()._path_present(path):
-                    from .checkout_processes import require_idle_checkout
+                    from .checkout_processes import allocation_created_at, require_idle_checkout
                     try:
-                        require_idle_checkout(path, first_execution_at=first_execution_at)
+                        directory = self.board.directory / "workspaces" / plan["workspace_id"]
+                        require_idle_checkout(path, allocated_at=allocation_created_at(directory))
                     except BoardError as error:
                         if error.code != "NOT_READY":
                             raise

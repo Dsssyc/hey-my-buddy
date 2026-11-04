@@ -25,6 +25,38 @@ from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 
 
 class CleanupLifecycleTests(LifecycleTestCase):
+    def test_workflow_cleanup_excludes_only_unreadable_processes_older_than_allocation(self):
+        if os.name == "nt":
+            self.skipTest("POSIX process cwd observation")
+        import psutil
+        from hey_my_buddy.blackboard.tasks import checkout_processes
+        board = self.board()
+        for age, removed in ((-60, True), (60, False)):
+            with self.subTest(age=age):
+                submitted, _claim, _manifest, checkout, _seal, view, artifact = self.run_worktree(
+                    board, request_id=f"cleanup-allocation-time-{age}")
+                target = self.target_with_artifact(artifact, name=f"allocation-time-target-{age}")
+                with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False}):
+                    self.accept(board, view, artifact, target=target)
+                view = self.view(board, submitted["runId"])
+                allocated_at = native_path(checkout.parent / "request.json").stat().st_mtime
+                process = mock.Mock(pid=34567)
+                process.cwd.side_effect = psutil.AccessDenied(pid=process.pid)
+                process.create_time.return_value = allocated_at + age
+                process.name.return_value = "fixture-unreadable-process"
+                with mock.patch.object(checkout_processes, "_processes", return_value=([process], True)), \
+                     mock.patch.object(checkout_processes, "process_start", return_value=456):
+                    if removed:
+                        self.assertTrue(self.reclaim(board, view)["removed"])
+                    else:
+                        with self.assertRaises(BoardError) as caught:
+                            self.reclaim(board, view)
+                        self.assertEqual(caught.exception.code, "NOT_READY")
+                        cause = caught.exception.details["reclaim"]["reason"]
+                        self.assertEqual(cause["code"], "checkout.process-blockers")
+                        self.assertEqual(cause["params"]["unreadableProcesses"][0]["pid"], process.pid)
+                self.assertEqual(checkout.exists(), not removed)
+
 
     def test_conclusion_keeps_the_seal_from_a_prepared_but_unstarted_continuation(self):
         board = self.board()

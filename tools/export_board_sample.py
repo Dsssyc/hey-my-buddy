@@ -224,7 +224,7 @@ def _referenced_files(records: dict, source: Path, output: Path) -> list[tuple[P
             if relative in files and files[relative][2] != artifact['record_sha256']:
                 raise ValueError('Selected output records disagree on one file identity')
             files[relative] = (source / relative, output / relative, artifact['record_sha256'])
-            record = resolve_record(source, {'recordFile': {'path': str(relative), 'sha256': artifact['record_sha256']},
+            record = resolve_record(source, {'recordFile': {'path': relative.as_posix(), 'sha256': artifact['record_sha256']},
                                              'snapshotSha256': artifact['output_snapshot_sha256']})
             patch = relative.with_suffix('.patch')
             files[patch] = (source / patch, output / patch, record['diffSha256'])

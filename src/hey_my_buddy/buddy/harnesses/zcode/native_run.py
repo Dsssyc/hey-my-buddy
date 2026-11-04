@@ -1464,7 +1464,7 @@ def _clear_inquiry_queue(outcome: _CarrierOutcome) -> None:
         if outcome.binding_path is not None:
             # A resumed session already has a binding from its predecessor.
             # Remove only this owned, previously verified mutable binding.
-            outcome.binding_path.unlink(missing_ok=True)
+            native_path(outcome.binding_path).unlink(missing_ok=True)
 
 
 def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFlag,

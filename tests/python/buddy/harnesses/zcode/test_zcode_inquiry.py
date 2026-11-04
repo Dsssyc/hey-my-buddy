@@ -896,6 +896,8 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         responses = json.loads(self.native_log(context, "interaction-responses.json"))
         self.assertEqual(responses["auth"]["error"]["code"], -32601)
         self.assertEqual(responses["browser"]["error"]["code"], -32601)
+        for request in ("auth", "browser"):
+            self.assertEqual(responses[request]["error"]["message"], "This host does not support this request")
         # No Host answer exists for either request: the refusals are counted as
         # evidence, and the turn's completed delivery stands.
         self.assertEqual(outcome.result["unsupportedNativeRequests"], 2)

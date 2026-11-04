@@ -1,38 +1,27 @@
 """Refuse checkout deletion while same-account processes use or may use its cwd."""
 from __future__ import annotations
 
-from datetime import datetime
 import os
 from pathlib import Path
 
 import psutil
 
 from ...errors import BoardError
+from ...paths import native_path
 from ...process_observation import _processes
 from ...protocol.process_start import process_start
 from ...protocol.reasons import reason
-from .workspace_bindings import MANIFEST_OWNERS_CTE
 
 
-def first_execution_time(connection, manifest: dict) -> float | None:
-    """The first admission on this physical checkout, across its logical turns.
-
-    Admission precedes the spawned execution, so it is a conservative lower
-    bound when excluding older processes. These are existing board facts.
-    """
-    value = connection.execute(
-        f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})"
-        " SELECT MIN(a.started_at) FROM workflow_turns w"
-        " JOIN attempts a ON a.attempt_id=w.attempt_id"
-        " JOIN manifest_owners o ON o.workspace_id=w.workspace_id"
-        " AND o.manifest_sha256=w.workspace_manifest_sha256"
-        " WHERE o.checkout_root=?",
-        (manifest['checkoutRoot'],),
-    ).fetchone()[0]
-    return datetime.fromisoformat(value).timestamp() if value is not None else None
+def allocation_created_at(directory: Path) -> float:
+    """request.json is written once, before this allocation creates a checkout."""
+    try:
+        return native_path(directory / 'request.json').stat().st_mtime
+    except OSError as error:
+        raise BoardError('WORKSPACE_IO_ERROR', str(error)) from error
 
 
-def require_idle_checkout(checkout: Path, *, first_execution_at: float | None = None) -> None:
+def require_idle_checkout(checkout: Path, *, allocated_at: float) -> None:
     if os.name == "nt":
         # Windows provides no supported query for another process's cwd, and
         # the OS already refuses deletion of a directory used as a cwd.
@@ -53,7 +42,7 @@ def require_idle_checkout(checkout: Path, *, first_execution_at: float | None = 
                 try:
                     cwd = process.cwd()
                 except (psutil.AccessDenied, OSError):
-                    if first_execution_at is not None and process.create_time() < first_execution_at:
+                    if process.create_time() < allocated_at:
                         continue
                     cwd = None
                 if cwd is not None and not Path(cwd).is_relative_to(root):

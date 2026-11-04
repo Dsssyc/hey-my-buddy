@@ -369,14 +369,11 @@ def _delete_sessions(store, scope):
 
 def _delete_workspaces(store, scope):
     from .macro_task_deletion_workspace import delete_workspaces
-    from .checkout_processes import first_execution_time
     with store.db.read() as connection:
-        starts = {m["checkout_root"]: first_execution_time(connection, {'checkoutRoot': m['checkout_root']})
-                  for m in scope.manifests}
         candidates = {m['workspace_id']: _project_paths(connection, m['project_id'])
                   for m in scope.manifests}
     return delete_workspaces(store, scope.manifests, scope.artifacts,
-                             first_execution_times=starts, candidate_paths=candidates,
+                             candidate_paths=candidates,
                              owned_runs=scope.runs)
 
 

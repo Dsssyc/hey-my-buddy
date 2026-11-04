@@ -280,13 +280,9 @@ def allocation_plan(store, item):
             [(manifest, item['requestId'])], directories=[str(directory)], on_reference=referenced)[0])
     checkout = directory / 'checkout'
     if not item['reasons'] and workspace._path_present(checkout):
-        from .checkout_processes import require_idle_checkout
+        from .checkout_processes import allocation_created_at, require_idle_checkout
         try:
-            # request.json is written before the checkout is created and is
-            # immutable for this allocation. Its file time is a conservative
-            # lower bound for processes that could have entered the checkout.
-            created_at = (directory / 'request.json').stat().st_mtime
-            require_idle_checkout(checkout, first_execution_at=created_at)
+            require_idle_checkout(checkout, allocated_at=allocation_created_at(directory))
         except BoardError as error:
             cause = error.details.get('reason', {})
             if (error.code != 'NOT_READY' or cause.get('code') != 'checkout.process-blockers'

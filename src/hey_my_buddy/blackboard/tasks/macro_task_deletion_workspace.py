@@ -207,24 +207,24 @@ def _remove_foreign_output_directory(directory: Path, names: set[str], identifie
     """Remove only names derived from the borrower's task and SQL input."""
     if not workspace._path_present(directory):
         return []
-    if private_dirs.linked(directory) or not directory.is_dir():
+    if private_dirs.linked(directory) or not native_path(directory).is_dir():
         return [_skip('allocation', str(directory), 'OWNER_UNPROVEN', identifier)]
     for name in names:
         path = directory / name
-        if private_dirs.linked(path) or workspace._path_present(path) and not path.is_file():
+        if private_dirs.linked(path) or workspace._path_present(path) and not native_path(path).is_file():
             return [_skip('allocation', str(path), 'OWNER_UNPROVEN', identifier)]
     conflicts = directory / 'scope-conflicts'
-    if not shared and (private_dirs.linked(conflicts) or workspace._path_present(conflicts) and not conflicts.is_dir()):
+    if not shared and (private_dirs.linked(conflicts) or workspace._path_present(conflicts) and not native_path(conflicts).is_dir()):
         return [_skip('allocation', str(conflicts), 'OWNER_UNPROVEN', identifier)]
     for name in names:
-        (directory / name).unlink(missing_ok=True)
-    if not shared and conflicts.is_dir():
+        native_path(directory / name).unlink(missing_ok=True)
+    if not shared and native_path(conflicts).is_dir():
         private_dirs.remove_tree(conflicts)
     if shared:
         return []
-    if any(directory.iterdir()):
+    if any(native_path(directory).iterdir()):
         return [_skip('allocation', str(directory), 'DEPENDENCY_RETAINED', identifier)]
-    directory.rmdir()
+    native_path(directory).rmdir()
     return []
 
 
@@ -370,11 +370,10 @@ def _remove_tombstone(state: Path, identifier: str) -> bool:
     return True
 
 
-def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, first_execution_times=None,
+def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *,
                       candidate_paths=None, owned_runs=()) -> list[dict]:
     """Remove SQL-owned checkouts, exact Git refs, and private record trees."""
     state = store.directory.resolve()
-    first_execution_times = first_execution_times or {}
     candidate_paths = candidate_paths or {}
     by_id = {}
     with collect_skipped() as skipped:
@@ -414,8 +413,8 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
                 repository = _repository_current(manifest, candidates=candidate_paths.get(identifier, ()))
                 checkout = directory / 'checkout'
                 if workspace._path_present(checkout):
-                    from .checkout_processes import require_idle_checkout
-                    require_idle_checkout(checkout, first_execution_at=first_execution_times.get(root))
+                    from .checkout_processes import allocation_created_at, require_idle_checkout
+                    require_idle_checkout(checkout, allocated_at=allocation_created_at(directory))
                 if repository is not None:
                     reasons = workspace.deletion_remove_checkout(repository, checkout,
                         workspace_id=identifier, project_id=manifest['project_id'],
@@ -457,8 +456,8 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
                     if manifest['workspace_kind'] != 'worktree' or private_dirs.linked(checkout):
                         skipped.append(_skip('allocation', str(directory), 'OWNER_UNPROVEN', identifier))
                         continue
-                    from .checkout_processes import require_idle_checkout
-                    require_idle_checkout(checkout, first_execution_at=first_execution_times.get(root))
+                    from .checkout_processes import allocation_created_at, require_idle_checkout
+                    require_idle_checkout(checkout, allocated_at=allocation_created_at(directory))
             # Windows cannot rename while the descendant lock is open.
             native_path(directory).rename(native_path(tomb))
             private_dirs.remove_tree(tomb)

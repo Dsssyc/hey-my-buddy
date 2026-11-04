@@ -81,6 +81,122 @@ def deletion_sql_inputs(case, manifests, artifacts=()):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_relative_gitfile_targets_are_resolved_before_native_io(self):
+        checkout = self.root / "relative-gitfile"
+        checkout.mkdir()
+        pointer = checkout / ".git"
+        real_native = workspace.native_path
+        def canonical_native(path):
+            self.assertTrue(Path(path).is_absolute())
+            self.assertNotIn("..", Path(path).parts)
+            return real_native(path)
+        failure = BoardError("WORKSPACE_GIT_ERROR", "Git failed", returncode=128, stderr="opaque failure")
+        for target, present in (("../repo/.git", True), ("../missing-repository", False)):
+            with self.subTest(target=target):
+                pointer.write_text("gitdir: " + target + "\n", encoding="utf-8")
+                command, env = workspace._git_command(checkout, "rev-parse", "--absolute-git-dir")
+                observed = subprocess.run(command, env=env, capture_output=True)
+                self.assertEqual(observed.returncode, 0 if present else 128)
+                expected = str(self.repo / ".git") if present else None
+                with patch.object(workspace, "native_path", side_effect=canonical_native):
+                    self.assertEqual(workspace.repository_at(checkout), expected)
+                    with patch.object(workspace, "_line", side_effect=failure):
+                        if present:
+                            with self.assertRaises(BoardError) as caught:
+                                workspace.repository_at(checkout)
+                            self.assertIs(caught.exception, failure)
+                        else:
+                            self.assertIsNone(workspace.repository_at(checkout))
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink traversal; relative target test runs on every OS")
+    def test_gitfile_resolution_follows_links_before_parent_components(self):
+        checkout = self.root / "linked-gitfile"
+        checkout.mkdir()
+        outside = self.root / "outside"
+        (outside / "nested").mkdir(parents=True)
+        (checkout / "link").symlink_to(outside / "nested", target_is_directory=True)
+        self.git("init", "--bare", "-q", str(outside / "metadata"))
+        self.git("init", "--bare", "-q", str(checkout / "missing"))
+        (checkout / "metadata").mkdir()
+        failure = BoardError("WORKSPACE_GIT_ERROR", "Git failed", returncode=128, stderr="opaque failure")
+        for target, present in (("metadata", True), ("missing", False)):
+            with self.subTest(target=target):
+                (checkout / ".git").write_text(f"gitdir: link/../{target}\n", encoding="utf-8")
+                expected = str(outside / target) if present else None
+                self.assertEqual(workspace.repository_at(checkout), expected)
+                with patch.object(workspace, "_line", side_effect=failure):
+                    if present:
+                        with self.assertRaises(BoardError) as caught:
+                            workspace.repository_at(checkout)
+                        self.assertIs(caught.exception, failure)
+                    else:
+                        self.assertIsNone(workspace.repository_at(checkout))
+
+    def test_parent_repository_proof_skips_empty_git_directories(self):
+        child = self.repo / "parent-search" / "child"
+        child.mkdir(parents=True)
+        failure = BoardError("WORKSPACE_GIT_ERROR", "Git failed", returncode=128, stderr="opaque failure")
+        for empty_git in (False, True):
+            with self.subTest(empty_git=empty_git):
+                if empty_git:
+                    (child / ".git").mkdir()
+                self.assertEqual(workspace.repository_at(child, allow_parent=True), str(self.repo / ".git"))
+                with patch.object(workspace, "_line", side_effect=failure):
+                    self.assertIsNone(workspace.repository_at(child, allow_parent=False))
+                    with self.assertRaises(BoardError) as caught:
+                        workspace.repository_at(child, allow_parent=True)
+                    self.assertIs(caught.exception, failure)
+
+    def test_repository_absence_uses_gitfile_target_not_git_diagnostic(self):
+        checkout = self.root / "gitfile-checkout"
+        checkout.mkdir()
+        pointer = checkout / ".git"
+        for target in ("../missing-repository", str(self.root / "missing-repository")):
+            pointer.write_text("gitdir: " + target + "\n", encoding="utf-8")
+            for diagnostic in ("opaque fixture failure", "fatal: gitfile does not point to a valid repository"):
+                with self.subTest(target=target, diagnostic=diagnostic):
+                    failure = BoardError("WORKSPACE_GIT_ERROR", "Git failed", returncode=128, stderr=diagnostic)
+                    with patch.object(workspace, "_line", side_effect=failure):
+                        self.assertIsNone(workspace.repository_at(checkout))
+        # A readable, live target cannot turn another Git failure into absence.
+        pointer.write_text("gitdir: " + str(self.repo / ".git") + "\n", encoding="utf-8")
+        with patch.object(workspace, "_line", side_effect=failure):
+            with self.assertRaises(BoardError) as caught:
+                workspace.repository_at(checkout)
+        self.assertIs(caught.exception, failure)
+        for malformed in ("gitdir: \n", "not a gitfile\n"):
+            pointer.write_text(malformed, encoding="utf-8")
+            with self.subTest(malformed=malformed), patch.object(workspace, "_line", side_effect=failure):
+                with self.assertRaises(BoardError) as caught:
+                    workspace.repository_at(checkout)
+            self.assertIs(caught.exception, failure)
+        plain = self.root / "plain-with-head-file"
+        plain.mkdir()
+        (plain / "HEAD").write_text("an ordinary user file\n", encoding="utf-8")
+        with patch.object(workspace, "_line", side_effect=failure):
+            self.assertIsNone(workspace.repository_at(plain))
+            with self.assertRaises(BoardError) as caught:
+                workspace.repository_at(self.repo / ".git")
+        self.assertIs(caught.exception, failure)
+
+    def test_repository_absence_never_hides_an_unreadable_gitfile_target(self):
+        checkout = self.root / "unreadable-gitfile-checkout"
+        checkout.mkdir()
+        target = self.root / "unreadable-repository"
+        target.mkdir()
+        (checkout / ".git").write_text("gitdir: " + str(target) + "\n", encoding="utf-8")
+        real_listdir = os.listdir
+        def listing(path):
+            if Path(path) == native_path(target):
+                raise PermissionError("fixture cannot read Git directory")
+            return real_listdir(path)
+        failure = BoardError("WORKSPACE_GIT_ERROR", "Git failed", returncode=128, stderr="opaque fixture failure")
+        with patch.object(workspace, "_line", side_effect=failure), patch.object(os, "listdir", side_effect=listing):
+            with self.assertRaises(BoardError) as caught:
+                workspace.repository_at(checkout)
+        self.assertEqual(caught.exception.code, "WORKSPACE_IO_ERROR")
+        self.assertIsInstance(caught.exception.__cause__, PermissionError)
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()

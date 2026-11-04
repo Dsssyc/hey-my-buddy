@@ -715,7 +715,7 @@ class NativeConnection:
             # counted as evidence and never becomes attention that would block
             # the turn's completion.
             self.unsupported_request(message)
-            self.send({"id": message["id"], "error": {"code": -32601, "message": "This Buddy execution requires a structured attention outcome"}})
+            self.send({"id": message["id"], "error": {"code": -32601, "message": "This host does not support this request"}})
             return
         if "id" in message:
             self.responses[message["id"]] = message
