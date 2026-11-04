@@ -188,6 +188,15 @@
 
 ## 委派与 Worker
 
+**Host 的身份是 Host 自己起的名字。**（2026-11-04 开发者在控制台上看到，Host 只读核对过日常黑板）
+- 现状：提交时的 `hostId` 由 Host 随手填一个字符串，黑板不核对，控制台直接显示它。日常黑板上，同一个 Claude Code Host 的所有会话都叫 `claude-code-host`；一个 Codex Host 用自己的线程号；另一些把日期和任务名写进了名字。
+- 开发者的方向：像 Worker 的四元组那样，由机制自动生成，不让 Host 自报。
+- Host 的看法：Worker 由黑板启动，四个字段都由黑板决定；Host 是用户自己的会话，黑板只能从启动器所在的进程看到它的 harness 与形态，有的 harness 还给出自己的会话号；模型与 effort 通常看不到，看不到的记为未知，也不让 Host 填。
+- 代价：`hostId` 是 Host 契约与 Host 控制三元组的一部分，存在 `workflow_runs.host_id` 与 `macro_tasks.source_host_id` 里。去掉它要动契约与存储形式，所以放进下一次存储批。
+- 第一步：做一次只读调研，弄清各 harness 的 CLI 与 app 形态，各向子进程给出了哪些关于自己的事实。依据公开源码与文档，按已安装的版本。
+
+**skill 与 Host 接口要精简。**（2026-11-04 开发者提出，等有空讨论） `SKILL.md` 已到 4,095 字节，离 4 KB 上限只差 1 字节，内容偏臃肿。讨论时一并看 Host 的方法、参数与功能里有没有该合并或删掉的；Host 先列出候选，再谈。
+
 **四个 harness 报告与判断事实的口径不一致。**（2026-11-03 开发者问起，Host 让一个 Worker 做了只读盘点；开发者同意按 Host 的方向做） ADR-023 第 3 条要求适配器只报事实、由黑板统一判定，实现里有漂移：被拒的原生请求，Codex 经 `nativeRequestMethod` 由 `schema_worker` 判定，Claude Code 只计数，DSH 只记权限决定（ZCode 已随 0.59.6 改得与 Claude Code 一致）；Claude Code 的 `rate_limit_event` 在 harness 模块里一律归为 `quota-exceeded`，直接驱动冷却；同义的证据有四个名字，模型身份的核对与“未确认”的说法四家不一；`unsupportedNativeRequests` 服务端与控制台都不读，Host 只能在原始回执里看到；黑板一侧在中断恢复与存储归属处仍按 harness 名字分支（`blackboard/tasks/workflow.py`）。方向：每一个被判断的事实在 `RunResult` 里有带类型的字段，harness 只报告，角色层统一判断；预期行为写成四个 harness 在各自的假原生端上共跑的一致性场景；写成 ADR-023 的应用，并作为集成文档里的约束。这会改跨到服务端的事实格式，单独作为一个契约版本。盘点报告留在整合检出被忽略的 `tmp/storage/patch-0596/evidence-harness-inventory/`。
 
 **ZCode 回给被拒请求的错误文字还在说要 attention。**（2026-11-03，0.59.6 验收时记下的顺带项） `buddy/harnesses/zcode/protocol.py` 对 Host 回应不了的反向请求回 `-32601`，文字仍是 “This Buddy execution requires a structured attention outcome”，而这类请求现在只记为证据、不挡完成；改成只说明这个宿主不支持该请求。
