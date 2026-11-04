@@ -435,7 +435,7 @@ none 不持有 worktree/existing 的长期 workspace_reservation，不制造空 
 | 文档 | 改写内容与依据 |
 | --- | --- |
 | skills/hey-my-buddy/SKILL.md | 十个动词加 help/console、最小委派圈与不变原则；字段细节转 help，运维只链 operations 的 Host 一节；去控制文件/接管/先 health/低层轮询。 |
-| docs/reference/host-codex.md | 等待流程只组合 await/get；不再让 Host/监视者记控制代、revision、命令号；收尾用项目/宏任务 get 找待处理集合，保留原样交回等待结果的职责。 |
+| docs/reference/host-codex.md | 等待流程只组合 await/get；不再让 Host/监视者记控制代、revision、命令号；结束前用项目/宏任务 get 找待处理集合，保留原样交回等待结果的职责。 |
 | docs/reference/host-claude-code.md | 同样更新后台 await、重发恢复与动作 id；保留原生等待/唤醒边界，不承诺尚未接入的跨回合门铃。 |
 | docs/reference/usage.md | 先 create 可空宏任务、submit 显式字段、none、continue 变体、准确整合来源、accept 固定目标/notRequired、问题事实与重发；明确新问题唤醒推迟。 |
 | docs/reference/workflow.md | 删控制能力/接管流程，新增 id 回应一致性、helper 与 Lead 谱系、未来 scope 与现场处置、结果型验收、真实停止与自动回收。 |
