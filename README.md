@@ -51,7 +51,14 @@ hey-my-buddy lets the coding agent you already work with hand parts of its work 
 4. **Review.** The Host checks the sealed result against the micro task and runs the checks. If it is not right, the Host sends it back to the same Worker for another turn.
 5. **Accept.** The Host integrates the result and accepts it; only accepted work lands in your repository.
 
-Related micro tasks form a *macro task*. The details, including Lead buddies that delegate on the Host's behalf, are in [workflow](docs/reference/workflow.md) and [architecture](docs/reference/architecture.md).
+Related micro tasks form a *macro task*. The whole loop, with routing, inquiry, sending back and a *Lead buddy* that delegates on the Host's behalf:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-en-dark.svg">
+  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, the blackboard takes the only eligible buddy or a Router buddy chooses among several; the Worker buddy runs a turn in the checkout the micro task was given; the Host can ask that running turn a question through the blackboard; the blackboard seals the checkout when the turn ends; the Host checks the Worker's report against the brief and the seal and either integrates and accepts it into your repository or sends it back to the same Worker without routing. A Lead buddy runs the same loop as Host for the micro tasks it delegates." src="docs/assets/architecture-en-light.svg" width="100%">
+</picture>
+
+The details are in [workflow](docs/reference/workflow.md) and [architecture](docs/reference/architecture.md).
 
 ## Install
 

@@ -51,7 +51,14 @@ hey-my-buddy 让你正在用的编码 agent 把一部分工作交给本机的其
 4. **审查。** Host 对照微任务审查封存的结果，并跑检查；不对就打回给同一个 Worker，再跑一个回合。
 5. **验收。** Host 整合并验收这份结果；只有验收过的工作才落进你的仓库。
 
-相关的微任务组成一个*宏任务*。包括替 Host 继续委派的 Lead buddy 在内，细节见[工作流](docs/reference/workflow.md)与[架构](docs/reference/architecture.md)。
+相关的微任务组成一个*宏任务*。完整的流程，包括路由、问询、打回，以及替 Host 继续委派的 *Lead buddy*：
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-zh-dark.svg">
+  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，黑板取唯一合适的 buddy，或由 Router buddy 在几个之中选一个；Worker buddy 在微任务分到的检出里运行一个回合；Host 可以经黑板向运行中的回合问询；回合结束时黑板封存检出；Host 对照任务书与封存核对 Worker 的报告，然后整合并验收进你的仓库，或者不经路由打回给同一个 Worker。Lead buddy 为它委派的微任务按同样的流程担任 Host。" src="docs/assets/architecture-zh-light.svg" width="100%">
+</picture>
+
+细节见[工作流](docs/reference/workflow.md)与[架构](docs/reference/architecture.md)。
 
 ## 安装
 
