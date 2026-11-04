@@ -65,7 +65,7 @@ The details are in [workflow](docs/reference/workflow.md) and [architecture](doc
 It needs [uv](https://docs.astral.sh/uv/).
 
 ```sh
-uvx hey-my-buddy@0.60.1 install
+uvx hey-my-buddy@0.61.0 install
 ```
 
 This installs one agent skill at `~/.agents/skills/hey-my-buddy`, which carries its own launcher, and a private service under `~/.local/share/hey-my-buddy` (`%LOCALAPPDATA%\hey-my-buddy` on Windows). It also links the skill at `~/.claude/skills/hey-my-buddy`, where Claude Code looks for skills. It never changes your `PATH`, shell or agent settings.
@@ -74,7 +74,7 @@ To install from a checkout of this repository instead, build the wheel and insta
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.60.1-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.61.0-py3-none-any.whl" hey-my-buddy install
 ```
 
 <details>

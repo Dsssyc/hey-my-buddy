@@ -65,7 +65,7 @@ hey-my-buddy 让你正在用的编码 agent 把一部分工作交给本机的其
 需要 [uv](https://docs.astral.sh/uv/)。
 
 ```sh
-uvx hey-my-buddy@0.60.1 install
+uvx hey-my-buddy@0.61.0 install
 ```
 
 它把一个共享的 agent skill 装到 `~/.agents/skills/hey-my-buddy`，自带启动器；私有的服务装在 `~/.local/share/hey-my-buddy` 之下（Windows 上是 `%LOCALAPPDATA%\hey-my-buddy`）。它还在 `~/.claude/skills/hey-my-buddy` 放一个指向这个 skill 的链接，Claude Code 从那里找 skill。安装不改你的 `PATH`、shell 与 agent 设置。
@@ -74,7 +74,7 @@ uvx hey-my-buddy@0.60.1 install
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.60.1-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.61.0-py3-none-any.whl" hey-my-buddy install
 ```
 
 <details>
