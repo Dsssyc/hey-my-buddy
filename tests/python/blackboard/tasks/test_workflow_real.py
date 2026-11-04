@@ -22,7 +22,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from support import BoardTestCase, enable_fixture_buddy
+from support import BoardTestCase, enable_fixture_buddy, native_write_bytes
 from private_acl import assert_private_path
 from hey_my_buddy.cli.checks import prepare_test_home
 from protocol.fixtures import native_turn
@@ -142,8 +142,8 @@ class CumulativePatchProjectionTests(RealWorkspaceTestCase):
         state = self.repo / "nested-private-state"
         relative = Path("workspaces") / ("ws-" + "a" * 32) / "outputs" / ("b" * 64) / "output.json"
         directory = (state / relative).parent
-        directory.mkdir(parents=True, mode=0o700)
-        (directory / ("cumulative-" + initial_commit + ".patch")).write_bytes(raw)
+        native_path(directory).mkdir(parents=True, mode=0o700)
+        native_write_bytes(directory / ("cumulative-" + initial_commit + ".patch"), raw)
         coordinator = SimpleNamespace(board=SimpleNamespace(directory=state),
                                       _initial_input_commit=lambda connection, run_id: initial_commit)
         row = {"content_form": "record-reference", "kind": "output", "run_id": "nested",

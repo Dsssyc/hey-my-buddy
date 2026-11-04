@@ -14,6 +14,7 @@ from unittest import mock
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33, upgrade
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
+from support import unlink_read_only
 
 
 class Schema33Tests(unittest.TestCase):
@@ -97,7 +98,7 @@ class Schema33Tests(unittest.TestCase):
         # cannot pass merely because the healthy repository was visited first.
         for path in missing.rglob('*'):
             if path.is_file():
-                path.unlink()
+                unlink_read_only(path)
         directories = {path.relative_to(missing) for path in missing.rglob('*')}
         self.assertTrue(directories)
         self.assertTrue(all(path.is_dir() for path in missing.rglob('*')))

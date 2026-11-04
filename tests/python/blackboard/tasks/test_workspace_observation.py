@@ -75,6 +75,30 @@ class WorkspaceObservationTests(unittest.TestCase):
     def blob(self, data, mode="100644"):
         return [mode, self.git("hash-object", "--stdin", data=data).strip().decode()]
 
+    def stored_blobs(self, *paths):
+        """The entries Git itself stages for untracked paths, through a scratch index.
+
+        Git stores a link's blob text from its own reading of the link, and Git
+        for Windows normalizes an absolute target's backslashes to forward
+        slashes, so the expected ids come from Git's own staging rather than
+        from the target spelling the test created."""
+        index = self.root / "git-stored-index"
+        add_command, environment = workspace._git_command(self.repo, "add", "--force", "--", *paths)
+        environment["GIT_INDEX_FILE"] = str(index)
+        added = subprocess.run(add_command, env=environment, capture_output=True, timeout=120)
+        self.assertEqual(added.returncode, 0, added.stderr.decode(errors="replace"))
+        list_command, environment = workspace._git_command(self.repo, "ls-files", "-s", "-z", "--", *paths)
+        environment["GIT_INDEX_FILE"] = str(index)
+        listed = subprocess.run(list_command, env=environment, capture_output=True, timeout=120)
+        self.assertEqual(listed.returncode, 0, listed.stderr.decode(errors="replace"))
+        entries = {}
+        for record in listed.stdout.split(b"\0"):
+            if record:
+                meta, path = record.split(b"\t", 1)
+                mode, blob_id, _stage = meta.decode().split(" ")
+                entries[path.decode()] = [mode, blob_id]
+        return entries
+
     def raw(self, data, mode="100644"):
         return [mode, hashlib.sha256(data).hexdigest()]
 
@@ -162,7 +186,8 @@ class WorkspaceObservationTests(unittest.TestCase):
         observation = self.observe(list(targets), require_selected=True)
 
         raw = {path: self.raw(os.fsencode(target), "120000") for path, target in targets.items()}
-        included = {path: self.blob(os.fsencode(target), "120000") for path, target in targets.items()}
+        included = self.stored_blobs(*targets)
+        self.assertEqual(set(included), set(targets))
         self.assert_fingerprint(observation, raw, included)
         self.assertEqual((outside / "secret").read_bytes(), b"outside bytes\n")
 

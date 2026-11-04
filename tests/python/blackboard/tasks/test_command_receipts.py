@@ -522,7 +522,9 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
                     'runId': run_id, 'planId': planned['plan']['planId'],
                     'confirmPath': planned['plan']['path'],
                 })
-            self.assertEqual(caught.exception.code, 'WORKSPACE_UNSAFE')
+            # The manifest boundary rejects the linked private directory before
+            # any workspace-layer check runs; the first boundary owns the code.
+            self.assertEqual(caught.exception.code, 'PRIVATE_PATH_UNSAFE')
             self.assertTrue(checkout.parent.is_junction())
             self.assertTrue(git_dir.exists())
         finally:

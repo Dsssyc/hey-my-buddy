@@ -32,8 +32,8 @@ class PartitionTests(unittest.TestCase):
             continuation={"kind": "host", "input": host, "note": "备注😀", "trigger": None},
             hostDecision={"requestId": "request", "decision": "continue", "note": host})
         prompt = prompts.worker_prompt(host, turn, delivery=(host, ""), credential_file='/private/证据".json')
-        expected = (resource_path("roles.worker").read_text() + "\n"
-                    + resource_path("roles.lead").read_text() + "\n\n"
+        expected = (resource_path("roles.worker").read_text(encoding="utf-8") + "\n"
+                    + resource_path("roles.lead").read_text(encoding="utf-8") + "\n\n"
                     + "Credential file path: " + canonical_json('/private/证据".json')
                     + "\n\n" + host + "\n\n" + "" + "\n\n" + host
                     + "\n\n" + canonical_json(prompt_input(turn)))
@@ -42,7 +42,7 @@ class PartitionTests(unittest.TestCase):
         self.assertEqual(prompt.parts.host_input,
             '"input":' + canonical_json(host) + ',"note":' + canonical_json("备注😀")
             + ',"hostDecision":' + canonical_json(turn["context"]["hostDecision"]))
-        self.assertIn(resource_path("roles.lead").read_text(), prompt.parts.role)
+        self.assertIn(resource_path("roles.lead").read_text(encoding="utf-8"), prompt.parts.role)
         self.assertIn(canonical_json('/private/证据".json'), prompt.parts.delivery)
         self.assertNotIn('"input":', prompt.parts.context)
         sizes = measure_prompt(prompt.parts)
@@ -54,7 +54,7 @@ class PartitionTests(unittest.TestCase):
     def test_router_role_and_schema_have_their_own_sources(self):
         schema = {"type": "object", "description": '中文😀\\"\n'}
         prompt = structured_prompt(prompts.router_prompt("Choose 中文😀"), schema)
-        self.assertEqual(prompt.parts.role, resource_path("roles.router").read_text() + "\n")
+        self.assertEqual(prompt.parts.role, resource_path("roles.router").read_text(encoding="utf-8") + "\n")
         self.assertEqual(prompt.parts.task, "Choose 中文😀")
         self.assertEqual(prompt.parts.format,
                          "\n\nReturn only one JSON value matching this schema: " + canonical_json(schema))
@@ -67,7 +67,7 @@ class PartitionTests(unittest.TestCase):
             journal = root / "inquiries.jsonl"
             journal.write_text(canonical_json({"version": 1, "inquiryId": "question", "state": "queued",
                 "question": "问题😀", "questionSha256": hashlib.sha256("问题😀".encode()).hexdigest(),
-                "askedAt": "2026-01-01T00:00:00Z", **identity}) + "\n")
+                "askedAt": "2026-01-01T00:00:00Z", **identity}) + "\n", encoding="utf-8")
             config = {"identity": identity, "inputSha256": "a" * 64, "key": "b" * 64,
                       "attentionPath": str(root / "attention.json"), "inquiryJournalPath": str(journal)}
             with mock.patch.object(inline_run, "check_prompt_input", side_effect=AssertionError("unexpected preflight")), \
@@ -92,7 +92,7 @@ class InitialCheckTests(unittest.TestCase):
             "inputFile": str(self.root / "input.json"), "taskFile": str(self.root / "task.txt"),
             "outputFile": str(self.root / "output.json"), "credentialFile": str(self.root / "credential.json"),
             "spec": {"provider": "fixture", "model": "fixture", "effort": "low"}}
-        (self.root / "task.txt").write_text('任务 中文😀\\"\n')
+        (self.root / "task.txt").write_text('任务 中文😀\\"\n', encoding="utf-8")
         self.freeze_turn()
 
     def freeze_turn(self):

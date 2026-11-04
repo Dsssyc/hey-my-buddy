@@ -402,6 +402,11 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                             'SELECT 1 FROM allocation_revocations WHERE allocation_id=?',
                             (directory.name,)).fetchone())
 
+    def allocation_files(self, directory):
+        """The allocation's file facts; the lock file holds no content meaning."""
+        return {str(path.relative_to(directory)): path.read_bytes()
+                for path in directory.rglob('*') if path.is_file() and path.name != '.lock'}
+
     def test_storage_busy_before_revoke_preserves_complete_allocation_for_maintenance(self):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         board = self.board()
@@ -412,8 +417,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 error = BoardError('ADMISSION_FAILED', 'controlled admission rejection')
                 captured = {}
                 def reject(*args, **kwargs):
-                    captured['files'] = {str(path.relative_to(directory)): path.read_bytes()
-                                         for path in directory.rglob('*') if path.is_file()}
+                    captured['files'] = self.allocation_files(directory)
                     captured['refs'] = self.git(self.repo, 'for-each-ref',
                         'refs/hey-my-buddy/workspaces/' + directory.name)
                     raise error
@@ -422,8 +426,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                         self.rejected(board, request=request, executionWorkspace={'kind': kind, 'access': 'write'})
                     self.assertIs(caught.exception, error)
                     self.assertEqual(error.details['submissionCleanup']['cleanupError']['code'], 'STORAGE_BUSY')
-                    self.assertEqual({str(path.relative_to(directory)): path.read_bytes()
-                                      for path in directory.rglob('*') if path.is_file()}, captured['files'])
+                    self.assertEqual(self.allocation_files(directory), captured['files'])
                     self.assertEqual(self.git(self.repo, 'for-each-ref',
                         'refs/hey-my-buddy/workspaces/' + directory.name), captured['refs'])
                     self.assertTrue((directory / 'manifest.json').is_file())

@@ -5,7 +5,6 @@ import ast
 import hashlib
 import json
 import os
-import shutil
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -16,6 +15,7 @@ from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, load_deliver
 from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33, schema_33_34, upgrade
 from hey_my_buddy.blackboard.store.db import Database
 from hey_my_buddy.blackboard.tasks.workspace_bindings import output_references
+from support import native_exists, native_read_bytes, native_remove_tree, native_unlink, native_write_text
 
 
 class WorkspaceReferenceUpgradeTests(unittest.TestCase):
@@ -47,7 +47,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
 
     @staticmethod
     def files(fixture):
-        return {relative: (fixture['state'] / relative).read_bytes() for relative in fixture['resourceFiles']}
+        return {relative: native_read_bytes(fixture['state'] / relative) for relative in fixture['resourceFiles']}
 
     def assert_new_structure(self, db):
         fresh = Database(self.root / 'fresh')
@@ -59,7 +59,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
         self.assertEqual([row[0] for row in db.execute('PRAGMA integrity_check')], ['ok'])
 
     def test_step_owns_its_definitions_and_does_not_import_current_code(self):
-        tree = ast.parse(Path(schema_33_34.__file__).read_text())
+        tree = ast.parse(Path(schema_33_34.__file__).read_text(encoding='utf-8'))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 self.assertEqual(node.level, 0)
@@ -108,7 +108,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
         self.assertEqual({value['state'] for value in observations}, {'observed','unknown'})
         self.assertTrue(any(value['state'] == 'observed' and value['totalCount'] > 0 for value in observations))
         self.assertTrue(any(value['state'] == 'observed' and value['totalCount'] == 0 for value in observations))
-        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
         for label, run_id in metadata['growth33RunIds'].items():
             run = db.execute('SELECT * FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()
             self.assertEqual(run['standalone_project_id'] is None, label == 'macro')
@@ -131,7 +131,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                 db.execute('RELEASE invalid_continuation')
 
     def test_supplement_provenance_and_stage_are_explicit(self):
-        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
         source = Path(__file__).resolve().parents[4]
         for stage, schema, commit in (('growth30', 30, metadata['sourceCommit']),
                                       ('growth33', 33, 'e3459d8a3b03c06d2af192382a788e051ced9a64')):
@@ -222,7 +222,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                     self.assertEqual(tuple(owner), (current['kind'],current['checkoutRoot'],current['snapshot']['repositoryPath']))
 
     def test_legacy_stock_provenance_identifies_sources_and_version_transitions(self):
-        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
         legacy = metadata['legacyStock']
         self.assertEqual(legacy['baseSha256'], hashlib.sha256((FIXTURE / 'board.sql').read_bytes()).hexdigest())
         self.assertEqual(legacy['sourceResourcesSha256'], metadata['resourcesSha256'])
@@ -238,7 +238,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
             profile = legacy['profiles'][str(version)]
             for suffix,key in (('stock.sql','sqlSha256'),('resources.json','resourcesSha256')):
                 self.assertEqual(profile[key],hashlib.sha256((FIXTURE / (stem + '-' + suffix)).read_bytes()).hexdigest())
-            resources = json.loads((FIXTURE / (stem + '-resources.json')).read_text())
+            resources = json.loads((FIXTURE / (stem + '-resources.json')).read_text(encoding='utf-8'))
             self.assertEqual(resources['sourceRunId'], metadata['stockIds']['helperParent'])
             sources = {(row['table'],row['sourceRowid']) for row in resources['sourceRows']}
             self.assertTrue({('workflow_runs',9),('workflow_continuations',1),('workflow_turns',7),('workflow_turns',9),
@@ -342,26 +342,26 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                 value = json.loads(row['workspace_manifest_json'])
                 path = fixture['state'] / 'workspaces' / value['workspaceId'] / 'manifest.json'
                 if mutation == 'missing':
-                    path.unlink()
+                    native_unlink(path)
                 elif mutation == 'shape':
-                    path.write_text('[]')
+                    native_write_text(path, '[]')
                 elif mutation == 'missing-digest':
                     value.pop('manifestSha256')
-                    path.write_text(json.dumps(value))
+                    native_write_text(path, json.dumps(value))
                 elif mutation == 'unsafe':
                     if os.name == 'nt':
                         continue
                     path.chmod(0o644)
                 elif mutation == 'input-commit':
                     value['inputCommit'] = 'f' * 40
-                    path.write_text(json.dumps(value))
+                    native_write_text(path, json.dumps(value))
                 elif mutation == 'staged-commit':
                     value['snapshot']['stagedCommit'] = 'f' * 40
-                    path.write_text(json.dumps(value))
+                    native_write_text(path, json.dumps(value))
                 else:
                     value['access' if mutation == 'content' else 'workspaceId'] = (('write' if value['access'] == 'read' else 'read')
                         if mutation == 'content' else 'ws-' + 'f' * 32)
-                    path.write_text(json.dumps(value))
+                    native_write_text(path, json.dumps(value))
                 before = list(db.iterdump())
                 with self.assertRaisesRegex(ValueError, category) as caught:
                     upgrade.upgrade_state(fixture['state'])
@@ -382,7 +382,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
         for row in selected:
             value = json.loads(row['workspace_manifest_json'])
             no_turn |= db.execute('SELECT COUNT(*) FROM workflow_turns WHERE run_id=?', (row['run_id'],)).fetchone()[0] == 0
-            (fixture['state'] / 'workspaces' / value['workspaceId'] / 'manifest.json').unlink()
+            native_unlink(fixture['state'] / 'workspaces' / value['workspaceId'] / 'manifest.json')
         self.assertTrue(no_turn)
         upgrade.upgrade_state(fixture['state'])
         for row in selected:
@@ -409,7 +409,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                                (reason, plan['plan_id']))
                     db.commit()
                 value = json.loads(row['workspace_manifest_json'])
-                (fixture['state'] / 'workspaces' / value['workspaceId'] / 'manifest.json').unlink()
+                native_unlink(fixture['state'] / 'workspaces' / value['workspaceId'] / 'manifest.json')
                 before = list(db.iterdump())
                 with self.assertRaisesRegex(ValueError, 'manifest-missing') as caught:
                     upgrade.upgrade_state(fixture['state'])
@@ -429,13 +429,13 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                            (json.dumps(evidence), plan['plan_id']))
                 db.commit()
                 directory = fixture['state'] / 'workspaces' / plan['workspace_id']
-                self.assertFalse((directory / 'checkout').exists())
-                shutil.rmtree(directory)
+                self.assertFalse(native_exists(directory / 'checkout'))
+                native_remove_tree(directory)
                 if valid:
                     upgrade.upgrade_state(fixture['state'])
                     self.assertEqual(db.execute('SELECT state FROM workspace_cleanup_plans WHERE plan_id=?',
                                                 (plan['plan_id'],)).fetchone()[0], 'applying')
-                    self.assertFalse(directory.exists())
+                    self.assertFalse(native_exists(directory))
                 else:
                     before = list(db.iterdump())
                     with self.assertRaisesRegex(ValueError, 'cleanup-proof-mismatch'):
@@ -449,9 +449,9 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
         value = json.loads(row['workspace_manifest_json'])
         self.assertFalse(Path(value['checkoutRoot']).exists())
         path = fixture['state'] / 'workspaces' / value['workspaceId'] / 'manifest.json'
-        raw = path.read_bytes()
+        raw = native_read_bytes(path)
         upgrade.upgrade_state(fixture['state'])
-        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual(native_read_bytes(path), raw)
 
     def test_inconsistent_owner_or_macro_project_refuses_the_whole_upgrade(self):
         for mutation, category in (('facts','workspace-facts-conflict'), ('project','macro-project-conflict'),

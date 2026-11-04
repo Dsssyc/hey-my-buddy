@@ -9,12 +9,12 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 import hashlib
-import os
 import re
 from pathlib import Path
 
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from hey_my_buddy.errors import BoardError
+from support import native_read_bytes, native_read_text, native_write_bytes
 
 
 class MockWorkspace:
@@ -201,8 +201,7 @@ class MockWorkspace:
         attempt_dir = Path(state_dir) / "workspaces" / manifest["workspaceId"] / "outputs" / output_id
         ensure_private_dir(attempt_dir)
         diff = attempt_dir / "output.patch"
-        diff.write_text("diff --git a/src/feature.py b/src/feature.py\nnew file mode 100644\n--- /dev/null\n+++ b/src/feature.py\n@@ -0,0 +1 @@\n+fixture\n", encoding="utf-8", newline="\n")
-        os.chmod(diff, 0o600)
+        native_write_bytes(diff, b"diff --git a/src/feature.py b/src/feature.py\nnew file mode 100644\n--- /dev/null\n+++ b/src/feature.py\n@@ -0,0 +1 @@\n+fixture\n")
         seal = {
             "version": 1,
             "workspaceId": manifest.get("workspaceId"),
@@ -220,7 +219,7 @@ class MockWorkspace:
             "snapshotSha256": (manifest.get("snapshot") and sha256_text(canonical_json(manifest["snapshot"]))) or "",
             "ref": f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/outputs/{output_id}",
             "diffPath": str(diff),
-            "diffSha256": sha256_text(diff.read_text(encoding="utf-8")),
+            "diffSha256": sha256_text(native_read_text(diff)),
             "sealedAfterShutdown": True,
             "includedUntracked": self.input_paths[manifest["workspaceId"]],
         }
@@ -249,9 +248,9 @@ class MockWorkspace:
         if original_commit != manifest["inputCommit"]:
             from hey_my_buddy.private_files import publish_bytes
             patch = patch.with_name("cumulative-" + original_commit + ".patch")
-            publish_bytes(patch, Path(artifact["diffPath"]).read_bytes(), immutable=True)
+            publish_bytes(patch, native_read_bytes(Path(artifact["diffPath"])), immutable=True)
         return {"baseCommit": original_commit, "outputCommit": artifact["commit"],
-                "path": str(patch), "sha256": sha256_text(patch.read_text()),
+                "path": str(patch), "sha256": sha256_text(native_read_text(patch)),
                 "changedPaths": artifact["changedPaths"]}
 
     # -- read helpers -------------------------------------------------------

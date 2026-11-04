@@ -32,7 +32,7 @@ class FrozenUpgradeTests(unittest.TestCase):
         self.assertFalse([node for node in ast.walk(source) if isinstance(node, ast.ImportFrom) and node.level])
 
     def test_30_to_31_matches_the_complete_pre_freeze_output(self):
-        oracle = json.loads((FIXTURE / 'schema-31-oracle.json').read_text())
+        oracle = json.loads((FIXTURE / 'schema-31-oracle.json').read_text(encoding='utf-8'))
         sql = (FIXTURE / 'board.sql').read_bytes()
         self.assertEqual(hashlib.sha256(sql).hexdigest(), oracle['fixtureSqlSha256'])
         with closing(sqlite3.connect(':memory:')) as db:
@@ -53,7 +53,7 @@ class FrozenUpgradeTests(unittest.TestCase):
 
 
 def add_schema31_stock(db):
-    for sql in (FIXTURE / 'schema-31-stock.sql').read_text().split(';'):
+    for sql in (FIXTURE / 'schema-31-stock.sql').read_text(encoding='utf-8').split(';'):
         if sql.strip():
             db.execute(sql)
 
@@ -78,14 +78,14 @@ class UpgradeChainTests(unittest.TestCase):
         """
         with closing(sqlite3.connect(':memory:')) as template:
             template.row_factory = sqlite3.Row
-            template.executescript((FIXTURE / 'board.sql').read_text())
+            template.executescript((FIXTURE / 'board.sql').read_text(encoding='utf-8'))
             if schema31:
                 schema_30_31.upgrade(template)
             tables = [row[0] for row in template.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
             before = {table: {row['rowid']: dict(row) for row in template.execute(
                 f'SELECT rowid AS rowid,* FROM "{table}"')} for table in tables}
-            template.executescript((FIXTURE / filename).read_text())
+            template.executescript((FIXTURE / filename).read_text(encoding='utf-8'))
             after = {table: {row['rowid']: dict(row) for row in template.execute(
                 f'SELECT rowid AS rowid,* FROM "{table}"')} for table in tables}
         bindings = dict(self.fixture['bindings'])
@@ -284,7 +284,7 @@ class UpgradeChainTests(unittest.TestCase):
         self.assert_current_structure()
 
     def test_terminal_reservation_stock_releases_at_the_original_host_decision_time(self):
-        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
         reader_id = self.db.execute("SELECT r.run_id FROM workspace_reservations w"
                                     " JOIN workflow_runs r ON r.run_id=w.holder_task_id"
                                     " JOIN workflow_host_conclusions h ON h.run_id=r.run_id"

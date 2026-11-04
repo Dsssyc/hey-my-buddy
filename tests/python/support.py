@@ -10,6 +10,7 @@ import errno
 import json
 import os
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -23,11 +24,11 @@ DELEGATE_ROOT = PYTHON_ROOT.parent
 if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
-from hey_my_buddy import locking  # noqa: E402
+from hey_my_buddy import locking, private_files  # noqa: E402
 from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
 from hey_my_buddy.cli.checks import prepare_test_home, remove_private_test_root, cleanup_fixture_tree  # noqa: E402
 from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference, read_execution_receipt  # noqa: E402
-from hey_my_buddy.private_dirs import attempt_root, directory_mode  # noqa: E402
+from hey_my_buddy.private_dirs import attempt_root, directory_mode, remove_tree  # noqa: E402
 from hey_my_buddy.paths import native_path  # noqa: E402
 from hey_my_buddy.blackboard.store.db import DB_FILE  # noqa: E402
 from hey_my_buddy.console.server import Console  # noqa: E402
@@ -37,6 +38,54 @@ from hey_my_buddy.protocol.contracts import CONTRACT_VERSION  # noqa: E402
 from hey_my_buddy.blackboard.service.service import BoardService, WaitAdmission, WaitService, call_operation  # noqa: E402
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry  # noqa: E402
 from hey_my_buddy.blackboard.store.store import BoardStore  # noqa: E402
+
+
+def native_read_bytes(path: Path) -> bytes:
+    """Read one private-state file through the product's own read boundary."""
+    return private_files.read_bytes(Path(path))
+
+
+def native_read_text(path: Path, *, encoding: str = "utf-8") -> str:
+    """Read private-state text with an explicit encoding on the native spelling."""
+    return native_path(Path(path)).read_text(encoding=encoding)
+
+
+def native_write_bytes(path: Path, content: bytes) -> None:
+    """Publish private-state bytes through the product's own writer."""
+    private_files.publish_bytes(Path(path), content)
+
+
+def native_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    """Publish private-state text as exact bytes, never locale newlines."""
+    private_files.publish_bytes(Path(path), text.encode(encoding))
+
+
+def native_exists(path: Path) -> bool:
+    return native_path(Path(path)).exists()
+
+
+def native_is_file(path: Path) -> bool:
+    return native_path(Path(path)).is_file()
+
+
+def native_is_dir(path: Path) -> bool:
+    return native_path(Path(path)).is_dir()
+
+
+def native_unlink(path: Path) -> None:
+    native_path(Path(path)).unlink()
+
+
+def native_remove_tree(path: Path) -> bool:
+    """Remove one private-state tree through the product's own remover."""
+    return remove_tree(Path(path))
+
+
+def unlink_read_only(path: Path) -> None:
+    """Delete one Git file even where Git marks it read-only (Windows)."""
+    if os.name == "nt":
+        os.chmod(path, stat.S_IWRITE)
+    path.unlink()
 
 
 def macro_summaries(page: dict) -> list[dict]:

@@ -13,7 +13,8 @@ from unittest.mock import patch
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from console.test_console import Browser
-from support import InProcessBoard, write_catalog_fixture, _child_environment, wait_for
+from support import (InProcessBoard, write_catalog_fixture, _child_environment, wait_for,
+                     native_exists, native_is_file, native_read_bytes, native_write_bytes)
 from private_acl import assert_private_path
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, Database
 from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA, upgrade_state
@@ -95,7 +96,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         with patch.dict(export_sample.__globals__, {"resolve_record": lambda *args: foreign}):
             sample = export_sample(board.directory, self.directory / "portable-record-sample")
         copied = (sample / row["record_path"]).with_suffix(".patch")
-        self.assertEqual(copied.read_bytes(), expected.read_bytes())
+        self.assertEqual(native_read_bytes(copied), native_read_bytes(expected))
         self.assert_source_unchanged(before, files(board.directory))
 
     def test_console_history_and_sessions_survive_and_source_bytes_do_not_change(self):
@@ -123,7 +124,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         native_path(unrelated).write_text('unselected session')
         inquiry = board.directory / 'attempts' / first['runId'] / attempt / 'inquiry.results.jsonl'
         private_dirs.ensure_private_dir(inquiry.parent)
-        inquiry.write_bytes(b'{"first":"accepted"}\n')
+        native_write_bytes(inquiry, b'{"first":"accepted"}\n')
         source_secret = board.store.db.secret.hex()
         board.store.db.close()
         before = files(board.directory)
@@ -131,7 +132,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
             source_results = dict(connection.execute('SELECT attempt_id,result_json FROM attempts'))
         output = export_sample(board.directory, self.directory / 'sample')
         assert_private_path(self, output, 0o700)
-        self.assertFalse((output / unselected_manifest.relative_to(board.directory)).exists())
+        self.assertFalse(native_exists(output / unselected_manifest.relative_to(board.directory)))
         self.assertFalse((output / 'controls').exists())
         self.assertFalse((output / 'harnesses').exists())
         self.assertEqual([p.name for p in native_path(output / 'sessions').rglob('*.jsonl')], [attempt + '.jsonl'])
@@ -154,7 +155,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
                 for form, workspace_id, record_path in referenced:
                     path = (output / 'workspaces' / workspace_id / 'manifest.json'
                             if form == 'input-reference' else output / record_path)
-                    self.assertTrue(path.is_file(), (form, path))
+                    self.assertTrue(native_is_file(path), (form, path))
                     self.assertTrue(path.is_relative_to(output))
                 for attempt_id, raw in connection.execute(
                         "SELECT attempt_id,result_json FROM attempts WHERE result_form='current-report-v2'"):
@@ -162,7 +163,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
                     result = json.loads(raw)['result'] or {}
                     for key in ('workspaceSeal', 'partialWorkspaceSeal'):
                         if key in result:
-                            self.assertTrue((output / result[key]['recordFile']['path']).is_file())
+                            self.assertTrue(native_is_file(output / result[key]['recordFile']['path']))
             meta = dict(connection.execute('SELECT key,value FROM meta'))
             self.assertEqual(meta['schema_version'], str(SCHEMA_VERSION))
             self.assertNotEqual(meta[SECRET_KEY], source_secret)
@@ -329,7 +330,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         for task, attempt in attempts:
             journal = source / 'attempts' / task / attempt / 'inquiry.results.jsonl'
             private_dirs.ensure_private_dir(journal.parent)
-            journal.write_bytes((json.dumps({'taskId': task, 'attemptId': attempt}) + '\n').encode())
+            native_write_bytes(journal, (json.dumps({'taskId': task, 'attemptId': attempt}) + '\n').encode())
         before = files(source)
         output = export_sample(source, self.directory / 'sample')
         with closing(sqlite3.connect(output / DB_FILE)) as connection:

@@ -14,6 +14,7 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy import private_dirs
 from hey_my_buddy.buddy.harnesses import registry as harness_registry
 from hey_my_buddy.errors import BoardError
+from support import native_exists, native_is_dir, native_is_file, native_read_bytes, native_unlink, native_write_bytes
 
 
 class DeletionSharingTests(RealWorkspaceTestCase):
@@ -79,7 +80,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         self.assertTrue(before)
         result = deletion.delete(board.store, second['macroTaskId'], 1)
         self.assertEqual(result['state'], 'deleted', result)
-        self.assertFalse((board.directory / 'workspaces' / identifier).exists())
+        self.assertFalse(native_exists(board.directory / 'workspaces' / identifier))
         with defer_reclaim.object(self, 'repo', copied):
             self.assertFalse(self.git('for-each-ref', '--format=%(refname)', prefix))
 
@@ -94,7 +95,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         with defer_reclaim.object(deletion, '_delete_private_roots', side_effect=OSError('later phase interrupted')):
             interrupted = deletion.delete(board.store, run['macroTaskId'], 1)
         self.assertEqual(interrupted['state'], 'deleting')
-        self.assertFalse((board.directory / 'workspaces' / workspace_id).exists())
+        self.assertFalse(native_exists(board.directory / 'workspaces' / workspace_id))
         completed = deletion.delete(board.store, run['macroTaskId'], 1)
         self.assertEqual(completed['state'], 'deleted')
 
@@ -139,7 +140,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                 "UPDATE workflow_artifacts SET content_form='sealed-inline-v1',manifest_json=?"
                 " WHERE run_id=? AND kind='input'",
                 (json.dumps(manifest), run['runId']))
-        self.assertFalse((sample_state / 'workspaces' / manifest['workspaceId']).exists())
+        self.assertFalse(native_exists(sample_state / 'workspaces' / manifest['workspaceId']))
         result = deletion.delete(sample, run['macroTaskId'], 1)
         self.assertEqual(result['state'], 'deleting', result)
         self.assertIn('macro-task-deletion.owner-unproven',
@@ -163,7 +164,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                         "SELECT workspace_id FROM workflow_artifacts WHERE run_id=? AND kind='input'",
                         (run['runId'],)).fetchone()[0]
                 directory = board.directory / 'workspaces' / workspace_id
-                frozen = (directory / 'manifest.json').read_bytes()
+                frozen = native_read_bytes(directory / 'manifest.json')
                 own_prefix = f'refs/hey-my-buddy/workspaces/{workspace_id}/'
                 self.assertTrue(self.git('for-each-ref', '--format=%(refname)', own_prefix))
                 attempts = board.directory / 'attempts' / run['runId']
@@ -221,9 +222,9 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                     attempts_gone = stages.index(stage) > stages.index('_delete_private_roots')
                     sessions_gone = stages.index(stage) > stages.index('_delete_session_group')
                     control_gone = stages.index(stage) > stages.index('_delete_cli_files')
-                    self.assertEqual(directory.exists(), not workspace_gone)
+                    self.assertEqual(native_exists(directory), not workspace_gone)
                     if not workspace_gone:
-                        self.assertEqual((directory / 'manifest.json').read_bytes(), frozen)
+                        self.assertEqual(native_read_bytes(directory / 'manifest.json'), frozen)
                     self.assertEqual(bool(self.git('for-each-ref', '--format=%(refname)', own_prefix)),
                                      not workspace_gone)
                     self.assertEqual((attempts / 'phase-proof').exists(), not attempts_gone)
@@ -241,7 +242,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                     resumed.initialize()
                     done = deletion.delete(resumed, run['macroTaskId'], 1)
                     self.assertEqual(done['state'], 'deleted', done)
-                    self.assertFalse(directory.exists())
+                    self.assertFalse(native_exists(directory))
                     self.assertFalse(attempts.exists())
                     self.assertFalse(sessions.exists())
                     self.assertFalse(control.exists())
@@ -271,7 +272,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
                 (borrower['runId'],)).fetchone()[0]
         self.assertNotEqual(borrower_commit, output['inputCommit'])
         cumulative = workspace.cumulative_patch(manifest, output, borrower_commit)
-        self.assertTrue(Path(cumulative['path']).is_file())
+        self.assertTrue(native_is_file(Path(cumulative['path'])))
         host_output = workspace.host_seal(board.directory, manifest, borrower['runId'], 'foreign-output-attempt')
         self.assertEqual(output['snapshotSha256'], host_output['snapshotSha256'])
         with board.store.db.write() as connection:
@@ -293,36 +294,36 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         workspace_dir = board.directory / 'workspaces' / manifest['workspaceId']
         output_file = workspace_dir / 'outputs' / workspace._sha(workspace._json(
             [borrower['runId'], 'foreign-output-attempt'])) / 'output.json'
-        self.assertTrue(output_file.is_file())
+        self.assertTrue(native_is_file(output_file))
         host_file = output_file.parent.with_name(output_file.parent.name + '-host') / 'output.json'
-        self.assertTrue(host_file.is_file())
+        self.assertTrue(native_is_file(host_file))
         workspace._record_scope_evidence(output_file.parent, {'observedFingerprint': 'fixture-conflict'},
                                          borrower['runId'], 'foreign-output-attempt')
         conflicts = output_file.parent / 'scope-conflicts'
-        self.assertTrue(conflicts.is_dir())
+        self.assertTrue(native_is_dir(conflicts))
         unknown = output_file.parent / 'unproven.bin'
-        unknown.write_bytes(b'foreign content')
+        native_write_bytes(unknown, b'foreign content')
         self.assertEqual(self.git('rev-parse', output['ref']).strip(), output['commit'])
         blocked = deletion.delete(board.store, borrower['macroTaskId'], 1)
         self.assertEqual(blocked['state'], 'deleting', blocked)
         self.assertIn('macro-task-deletion.dependency-retained',
                       [item['reason']['code'] for item in blocked['failures']])
-        self.assertTrue(unknown.is_file())
+        self.assertTrue(native_is_file(unknown))
         with board.store.db.read() as connection:
             self.assertIsNotNone(connection.execute('SELECT 1 FROM workflow_runs WHERE run_id=?',
                                                     (borrower['runId'],)).fetchone())
-        unknown.unlink()
+        native_unlink(unknown)
         deleted = deletion.delete(board.store, borrower['macroTaskId'], 1)
         self.assertEqual(deleted['state'], 'deleted', deleted)
-        self.assertFalse(output_file.exists())
-        self.assertFalse(Path(cumulative['path']).exists())
-        self.assertFalse(output_file.parent.exists())
-        self.assertFalse(conflicts.exists())
-        self.assertFalse(host_file.exists())
-        self.assertFalse(host_file.parent.exists())
+        self.assertFalse(native_exists(output_file))
+        self.assertFalse(native_exists(Path(cumulative['path'])))
+        self.assertFalse(native_exists(output_file.parent))
+        self.assertFalse(native_exists(conflicts))
+        self.assertFalse(native_exists(host_file))
+        self.assertFalse(native_exists(host_file.parent))
         self.assertNotIn(output['ref'], self.git('for-each-ref', '--format=%(refname)', output['ref']))
         self.assertNotIn(host_output['ref'], self.git('for-each-ref', '--format=%(refname)', host_output['ref']))
-        self.assertTrue(workspace_dir.is_dir())
+        self.assertTrue(native_is_dir(workspace_dir))
         self.assertTrue(Path(manifest['checkoutRoot']).is_dir())
         self.assertEqual(self.git('rev-parse', manifest['snapshot']['inputRef']).strip(), manifest['inputCommit'])
         self.close(board, owner)
@@ -362,7 +363,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         output = workspace.seal(board.directory, manifest, borrower['runId'], attempt_id)
         cumulative = workspace.cumulative_patch(manifest, resolution, initial)
         self.assertNotEqual(initial, resolution['inputCommit'])
-        self.assertTrue(Path(cumulative['path']).is_file())
+        self.assertTrue(native_is_file(Path(cumulative['path'])))
         with board.store.db.write() as connection:
             board.store.workflow._pin_artifact(connection, run_id=borrower['runId'], kind='input',
                                                manifest=manifest, attempt_id=None, turn_id=None,
@@ -376,13 +377,13 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         self.close(board, borrower)
         folder = board.directory / 'workspaces' / manifest['workspaceId'] / 'outputs' / workspace._sha(
             workspace._json([borrower['runId'], attempt_id]))
-        self.assertTrue((folder / 'resolve-restore.json').is_file())
-        self.assertTrue((folder / 'output.json').is_file())
-        self.assertTrue((folder / 'scope-conflicts').is_dir())
+        self.assertTrue(native_is_file(folder / 'resolve-restore.json'))
+        self.assertTrue(native_is_file(folder / 'output.json'))
+        self.assertTrue(native_is_dir(folder / 'scope-conflicts'))
         result = deletion.delete(board.store, borrower['macroTaskId'], 1)
         self.assertEqual(result['state'], 'deleted', result)
-        self.assertFalse(folder.exists())
-        self.assertFalse(Path(cumulative['path']).exists())
+        self.assertFalse(native_exists(folder))
+        self.assertFalse(native_exists(Path(cumulative['path'])))
         self.assertTrue(checkout.is_dir())
         self.assertEqual(self.git('rev-parse', manifest['snapshot']['inputRef']).strip(), manifest['inputCommit'])
         self.close(board, owner)
@@ -417,8 +418,8 @@ class DeletionSharingTests(RealWorkspaceTestCase):
             record_path = connection.execute(
                 "SELECT record_path FROM workflow_artifacts WHERE run_id=? AND kind='output'",
                 (owner['runId'],)).fetchone()[0]
-        (board.directory / 'workspaces' / manifest['workspaceId'] / 'manifest.json').unlink()
-        (board.directory / record_path).unlink()
+        native_unlink(board.directory / 'workspaces' / manifest['workspaceId'] / 'manifest.json')
+        native_unlink(board.directory / record_path)
         deleted = deletion.delete(board.store,owner['macroTaskId'],1)
         self.assertEqual(deleted['state'],'deleted',deleted)
         self.assertFalse(checkout.exists())

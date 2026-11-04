@@ -15,7 +15,14 @@ describe("the numbers and the times the detail writes", () => {
     const translated = dateTimeFormat(options);
     expect(translated).not.toBe(first);
     expect(dateTimeFormat(options)).toBe(translated);
-    const zone = vi.spyOn(Date.prototype, "toTimeString").mockReturnValue("12:00:00 GMT+0000 (Coordinated Universal Time)");
+    // The cache key is the host's own zone segment, so the mocked zone must
+    // differ from the running environment's; a UTC runner would otherwise see
+    // its real zone in the mock and keep the cache valid.
+    const realZone = new Date().toTimeString().slice(9);
+    const foreignZone = realZone.startsWith("GMT+0530")
+      ? "GMT+0630 (Myanmar Time)"
+      : "GMT+0530 (India Standard Time)";
+    const zone = vi.spyOn(Date.prototype, "toTimeString").mockReturnValue(`12:00:00 ${foreignZone}`);
     expect(dateTimeFormat(options)).not.toBe(translated);
     zone.mockRestore();
   });

@@ -9,7 +9,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from support import BoardTestCase
+from support import BoardTestCase, unlink_read_only
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.errors import BoardError
 
@@ -166,7 +166,7 @@ class ProjectMarkerTests(ProjectRepositoryCase):
         git_dir = self.repo / ".git"
         for path in git_dir.rglob("*"):
             if path.is_file():
-                path.unlink()
+                unlink_read_only(path)
         directories = {path.relative_to(git_dir) for path in git_dir.rglob("*")}
         self.assertIsNone(workspace.repository_at(str(self.repo)))
         self.assertIsNone(workspace.repository_at(str(git_dir)))
