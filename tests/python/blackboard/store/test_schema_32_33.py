@@ -14,6 +14,7 @@ from unittest import mock
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33, upgrade
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
+from hey_my_buddy.paths import native_path
 from support import unlink_read_only
 
 
@@ -96,16 +97,15 @@ class Schema33Tests(unittest.TestCase):
         (missing_id, missing), (marked_id, marked) = sorted(((old_id, self.repository), (other_id, other_git)))
         # Always empty the first candidate, so returning instead of continuing
         # cannot pass merely because the healthy repository was visited first.
-        # pathlib walks lazily, so deleting entries out of a directory that is
-        # still being enumerated has unspecified results on Windows: a skipped
-        # file survives the walk and reappears in the next one. Enumerate the
-        # complete tree first, then delete from the stable list.
-        files = [path for path in missing.rglob('*') if path.is_file()]
+        # Paths over 260 characters, like the fixture's output refs on Windows
+        # with long paths disabled, are only reachable through the native spelling.
+        native_missing = native_path(missing)
+        files = [path for path in native_missing.rglob('*') if path.is_file()]
         for path in files:
             unlink_read_only(path)
-        directories = {path.relative_to(missing) for path in missing.rglob('*')}
+        directories = {path.relative_to(native_missing) for path in native_missing.rglob('*')}
         self.assertTrue(directories)
-        self.assertEqual([], sorted(str(path.relative_to(missing)) for path in missing.rglob('*')
+        self.assertEqual([], sorted(str(path.relative_to(native_missing)) for path in native_missing.rglob('*')
                                     if not path.is_dir()))
         self.assertEqual(hashlib.sha256(json.dumps([str(missing.resolve()), missing.stat().st_ino],
                                                    ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
@@ -113,8 +113,8 @@ class Schema33Tests(unittest.TestCase):
 
         self.assertEqual(self.upgrade33(), {'sourceSchema': 32, 'targetSchema': 33})
         self.assertEqual(self.schema(), '33')
-        self.assertEqual({path.relative_to(missing) for path in missing.rglob('*')}, directories)
-        self.assertEqual([], sorted(str(path.relative_to(missing)) for path in missing.rglob('*')
+        self.assertEqual({path.relative_to(native_missing) for path in native_missing.rglob('*')}, directories)
+        self.assertEqual([], sorted(str(path.relative_to(native_missing)) for path in native_missing.rglob('*')
                                     if not path.is_dir()))
         self.assertFalse((missing / schema_32_33.PROJECT_REF).exists())
         self.assertEqual(self.project(marked), marked_id.encode())
