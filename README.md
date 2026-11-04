@@ -31,7 +31,7 @@ hey-my-buddy lets the coding agent you already work with hand parts of its work 
 - **Nothing lands unchecked.** Each Worker works in its own checkout of your repository, and the Host reviews the result and runs the checks before anything reaches your branch.
 - **Work outlives your session.** A closed terminal, a lost connection or a service restart never cancels work; pick it up again by its id.
 - **See who is doing what.** A private local console shows each piece of work as a timeline, every buddy's load and your settings.
-- **Your accounts, your plans.** Workers sign in with your own harness accounts; hey-my-buddy never keeps or forwards your credentials. See [accounts and terms](docs/terms.md).
+- **Your harnesses, as you set them up.** Workers run in your own harnesses with your settings, providers, sign-in, skills, MCP servers and hooks; hey-my-buddy changes none of them and never keeps or forwards your credentials. See [accounts and terms](docs/terms.md).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/console-timeline-en-dark.png">

@@ -31,7 +31,7 @@ hey-my-buddy 让你正在用的编码 agent 把一部分工作交给本机的其
 - **没有核对过的东西不会落地。** 每个 Worker 在你的仓库的一份单独检出里工作；Host 审查结果、跑过检查之后，才会有东西进到你的分支。
 - **工作比你的会话活得久。** 终端关掉、连接断开、服务重启都不会取消工作；凭它的标识接着处理。
 - **看得见谁在做什么。** 本机私有的控制台把每一项工作画成一条时间线，显示每个 buddy 的负载与你的设置。
-- **用你自己的账户与套餐。** Worker 用你自己的 harness 账户登录，hey-my-buddy 从不保存也不转交你的凭据。见[账户与条款](docs/terms.zh-CN.md)。
+- **用你自己配好的 harness。** Worker 跑在你自己的 harness 里，用你的设置、provider、登录、skills、MCP 与 hooks；hey-my-buddy 不改动其中任何一项，也从不保存或转交你的凭据。见[账户与条款](docs/terms.zh-CN.md)。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/console-timeline-zh-dark.png">
