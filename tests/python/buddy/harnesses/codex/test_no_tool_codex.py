@@ -48,8 +48,15 @@ class NoToolCodexTests(unittest.TestCase):
         self.cwd = self.root / "empty"
         self.cwd.mkdir(mode=0o700)
 
-    def run_case(self, case="ok", timeout=3):
+    def run_case(self, case="ok", timeout=30):
         """One fast call through the registered role controller; returns the outcome and its directory."""
+        # Cases that expect a normal answer share this budget. It must cover
+        # the spawned fixture process's whole preparation and turn: a slow
+        # Windows CI runner needed over 3 seconds before the request was even
+        # sent (the old 3-second budget cut config-mismatch off at deadline),
+        # against roughly 0.3-0.5 seconds locally, so the default keeps an
+        # order of magnitude of room. The deadline case below passes its own
+        # explicitly short budget.
         directory = self.root / ("run-" + case)
         directory.mkdir(mode=0o700)
         environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
@@ -132,12 +139,14 @@ class NoToolCodexTests(unittest.TestCase):
         select_fixture(environment, self.root, "codex", FIXTURE)
         context = ExecutionContext("task", "attempt", 1,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
-                                    "cwd": str(self.cwd), "routerBudgetSeconds": 3}, directory, {}, environment,
+                                    "cwd": str(self.cwd), "routerBudgetSeconds": 30}, directory, {}, environment,
                                    session_record_path=str(directory / "session.jsonl"))
-        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, 3)
+        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, 30)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(8))
+        # The same roomy budget run_case gives its success cases, and the same
+        # wait formula (budget plus 9) for the controller's exit.
+        self.assertIsNotNone(handle.wait(30 + 9))
         outcome = collect(handle)
         self.assertEqual(outcome.status, "ok", outcome.result)
         self.assertTrue(outcome.shutdown_confirmed)

@@ -445,13 +445,19 @@ class FastSeamTests(NativeRunCase):
         # The refusal answer completes first — the peer reads the reply with
         # the same id and records it — and only then does the role's stop take
         # effect on the driver's next boundary, with no settlement behind it.
+        # The wall-clock bound guards promptness, not correctness (the reason
+        # code below carries that): a stop dispatched at the next pump step
+        # costs the platform's spawn plus the owned stop's fixed 3-second
+        # grace — 0.3 s locally, 6.4 s on a slow Windows CI runner — while a
+        # run that waited for the deadline consumes the whole 30-second budget,
+        # so the bound sits with multiples of margin on both sides.
         os.environ["HMB_ZCODE_TEST_CASE"] = "reverse-request"
         prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         started = time.monotonic()
-        result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
+        result = run(self.fast_request(prompt, timeout=30), observer=correction.observer,
                      services=None, cancelled=lambda: False)
-        self.assertLess(time.monotonic() - started, 6, "the run waited instead of stopping on the denied fact")
+        self.assertLess(time.monotonic() - started, 15, "the run waited instead of stopping on the denied fact")
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(result.end.reason_code, "observer-interrupt")
         self.assertEqual(correction.stop_reason, "no-tool-violation")
@@ -468,14 +474,19 @@ class FastSeamTests(NativeRunCase):
             self.assertEqual(result.stop_evidence.interrupt.basis, "observer-request")
 
     def test_a_reverse_request_before_the_rpc_reply_stops_after_the_refusal(self):
+        # The same numbers as the case above: the peer never sends the pending
+        # RPC reply, so a driver that waited for it would consume the whole
+        # budget, while the refusal stop ends the run at the platform's spawn
+        # cost plus the fixed 3-second stop grace — 3.5 s locally, 6.4 s on a
+        # slow Windows CI runner — far below the bound.
         os.environ["HMB_ZCODE_TEST_CASE"] = "reverse-before-send-reply"
         prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         started = time.monotonic()
-        result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
+        result = run(self.fast_request(prompt, timeout=30), observer=correction.observer,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.reason_code, "observer-interrupt")
-        self.assertLess(time.monotonic() - started, 6, "the RPC waited for a reply after the refusal")
+        self.assertLess(time.monotonic() - started, 15, "the RPC waited for a reply after the refusal")
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(correction.stop_reason, "no-tool-violation")
         # The refused interaction's own full record travels in the retained
@@ -529,16 +540,20 @@ class FastSeamTests(NativeRunCase):
     def test_a_reverse_request_ends_the_fast_run_immediately_with_the_fact_kept(self):
         # The refused interaction is answered and recorded, and the role's stop
         # takes effect on that same pump turn: no settlement, no later unknown
-        # event and no timeout wait may be needed to end the run.
+        # event and no timeout wait may be needed to end the run. The same
+        # budget and bound as the two cases above: reverse-request exits on its
+        # own at once, while reverse-oauth sleeps and is ended by the owned
+        # group stop's fixed 3-second grace, so a slow runner's whole path
+        # stays far below the bound and a waited-out run consumes the budget.
         for case in ("reverse-request", "reverse-oauth"):
             with self.subTest(case=case):
                 os.environ["HMB_ZCODE_TEST_CASE"] = case
                 prompt = structured_prompt("Choose a buddy", SCHEMA)
                 correction = FastCorrection(SCHEMA, prompt)
                 started = time.monotonic()
-                result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
+                result = run(self.fast_request(prompt, timeout=30), observer=correction.observer,
                              services=None, cancelled=lambda: False)
-                self.assertLess(time.monotonic() - started, 6,
+                self.assertLess(time.monotonic() - started, 15,
                                 "the run waited instead of stopping on the denied fact")
                 self.assertEqual(result.end.status, "cancelled")
                 self.assertEqual(result.end.reason_code, "observer-interrupt")

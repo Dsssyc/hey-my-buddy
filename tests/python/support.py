@@ -552,6 +552,14 @@ class InProcessBoard:
         self._resources.close()
 
 
+#: How long any real-daemon readiness wait allows: a cold interpreter and full
+#: package import on a slow CI runner can take tens of seconds before health,
+#: while a healthy daemon writes nothing to its log pipes, so only the wait
+#: itself tells readiness from slowness. Shared by BoardTestCase.daemon and the
+#: real-daemon cases in protocol/test_public_state.py.
+DAEMON_READY_TIMEOUT_SECONDS = 180
+
+
 class BoardTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._stack = []
@@ -697,7 +705,7 @@ class BoardTestCase(unittest.TestCase):
             except subprocess.TimeoutExpired:  # pragma: no cover - test watchdog
                 process.kill()
 
-        deadline = time.monotonic() + 180
+        deadline = time.monotonic() + DAEMON_READY_TIMEOUT_SECONDS
         try:
             while time.monotonic() < deadline:
                 endpoint = _read_endpoint(self.directory)
