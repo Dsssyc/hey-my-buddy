@@ -22,6 +22,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
+from support import native_exists, native_read_bytes, native_unlink
 
 
 class CleanupLifecycleTests(LifecycleTestCase):
@@ -110,7 +111,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         (checkout / "partial.txt").write_text("partial change\n", encoding="utf-8")
         partial = workspace_module.seal(board.directory, manifest, run_id, claim["attempt"]["attemptId"])
         cumulative = Path(partial["diffPath"]).with_name("cumulative-" + original["inputCommit"] + ".patch")
-        self.assertFalse(cumulative.exists())
+        self.assertFalse(native_exists(cumulative))
         board.call("execution_result", {"attemptId": claim["attempt"]["attemptId"],
                    "generation": claim["attempt"]["generation"], "nonce": "q" * 16,
                    "status": "failed", "shutdownConfirmed": True, "exitCode": 1,
@@ -119,7 +120,8 @@ class CleanupLifecycleTests(LifecycleTestCase):
         failed = self.view(board, run_id)
         preserved = next(row for row in failed["artifacts"] if row["kind"] == "partial-output")
         self.assertNotIn("cumulativePatch", preserved)
-        self.assertEqual(Path(preserved["diffPath"]).read_bytes(), Path(partial["diffPath"]).read_bytes())
+        self.assertEqual(native_read_bytes(Path(preserved["diffPath"])),
+                         native_read_bytes(Path(partial["diffPath"])))
         board.call("workflow_continue", {"runId": run_id, "commandId": "resume-partial",
                    "expectedRevision": failed["revision"], "input": "Finish", **self.control(failed)})
         third = self.claim(board, run_id, request_id="partial-resume", nonce="r" * 16)
@@ -150,7 +152,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
             finally:
                 sample.close()
         # A required cumulative file that disappears is still an integrity error.
-        Path(artifact["cumulativePatch"]["path"]).unlink()
+        native_unlink(Path(artifact["cumulativePatch"]["path"]))
         with self.assertRaises(BoardError) as missing:
             self.view(board, run_id)
         self.assertEqual(missing.exception.code, "ARTIFACT_MISSING")

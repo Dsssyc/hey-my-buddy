@@ -99,6 +99,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from typing import Any
 
 PREVIEW_HEADER = "X-Hey-My-Buddy-Preview"
@@ -2919,6 +2920,14 @@ class PreviewHTTPServer(ThreadingHTTPServer):
         self.state = PreviewState()
         self.verbose = verbose
         super().__init__(address, PreviewHandler)
+
+    def server_bind(self):
+        # HTTPServer.server_bind resolves the bound host through socket.getfqdn,
+        # a reverse lookup that stalls for tens of seconds on machines whose
+        # resolver cannot answer it (the product's console server skips it for
+        # that reason). Nothing in the preview reads server_name.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
 
 
 class PreviewHandler(BaseHTTPRequestHandler):

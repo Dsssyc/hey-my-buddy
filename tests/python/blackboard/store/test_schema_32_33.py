@@ -96,12 +96,17 @@ class Schema33Tests(unittest.TestCase):
         (missing_id, missing), (marked_id, marked) = sorted(((old_id, self.repository), (other_id, other_git)))
         # Always empty the first candidate, so returning instead of continuing
         # cannot pass merely because the healthy repository was visited first.
-        for path in missing.rglob('*'):
-            if path.is_file():
-                unlink_read_only(path)
+        # pathlib walks lazily, so deleting entries out of a directory that is
+        # still being enumerated has unspecified results on Windows: a skipped
+        # file survives the walk and reappears in the next one. Enumerate the
+        # complete tree first, then delete from the stable list.
+        files = [path for path in missing.rglob('*') if path.is_file()]
+        for path in files:
+            unlink_read_only(path)
         directories = {path.relative_to(missing) for path in missing.rglob('*')}
         self.assertTrue(directories)
-        self.assertTrue(all(path.is_dir() for path in missing.rglob('*')))
+        self.assertEqual([], sorted(str(path.relative_to(missing)) for path in missing.rglob('*')
+                                    if not path.is_dir()))
         self.assertEqual(hashlib.sha256(json.dumps([str(missing.resolve()), missing.stat().st_ino],
                                                    ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                          missing_id)
@@ -109,7 +114,8 @@ class Schema33Tests(unittest.TestCase):
         self.assertEqual(self.upgrade33(), {'sourceSchema': 32, 'targetSchema': 33})
         self.assertEqual(self.schema(), '33')
         self.assertEqual({path.relative_to(missing) for path in missing.rglob('*')}, directories)
-        self.assertTrue(all(path.is_dir() for path in missing.rglob('*')))
+        self.assertEqual([], sorted(str(path.relative_to(missing)) for path in missing.rglob('*')
+                                    if not path.is_dir()))
         self.assertFalse((missing / schema_32_33.PROJECT_REF).exists())
         self.assertEqual(self.project(marked), marked_id.encode())
 
