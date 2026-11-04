@@ -9,7 +9,9 @@ hey-my-buddy runs the coding harnesses you installed, on your machine, with your
 - It starts the command-line program of the harness you installed (for Codex, the App Server that comes with the Codex CLI) without modifying it, and leaves the harness's sign-in, settings, providers and extensions as you configured them.
 - Each harness signs in with what it stores itself. hey-my-buddy does not keep, copy or forward the credentials you sign in with. Provider keys that exist only as environment variables in your shell are not passed to Workers.
 - To show whether a buddy is paid by subscription or metered, it reads only the provider and the access type from the harness's own status reply or configuration file. Keys stored in the same file are not copied or kept.
-- When work can run in parallel, it runs several Workers at once, within the limits you set in the console. All usage is made with your accounts and counts against your plans and keys.
+- When work can run in parallel, it runs several Workers at once, within the limits you set in the console. All usage is made with your accounts and counts against your plans and keys; hey-my-buddy does not track money or set spending limits.
+- When a Router buddy chooses among several buddies, the task text goes to that Router's model service, even if another model does the work.
+- Checkouts and private directories keep work apart; they are not an operating-system sandbox. A Worker acts with the permissions its harness grants.
 - It does not host harnesses for other people, resell usage or sign anyone in.
 - Session records keep what an execution displayed, which can include sensitive text from command output. They stay in the private state on your machine, are left out of backups, and are deleted when you delete their macro task, or the micro task itself when it belongs to no macro task.
 

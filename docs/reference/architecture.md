@@ -1,6 +1,11 @@
 # Architecture
 
-This page describes the current source: transport protocol 2 and schema 32; the upgrade floor is 0.54.1 (schema 30), and installation runs the remaining steps of the 30 → 31 → 32 chain ([operations](operations.md)). Startup never migrates. Installation and native verification facts remain in the [install records](../acceptance/installs/) and the other acceptance records.
+This page describes the current source: transport protocol 2 and schema 34; the upgrade floor is 0.54.1 (schema 30), and installation runs the remaining steps of the 30 → 31 → 32 → 33 → 34 chain ([operations](operations.md)). Startup never migrates. Installation and native verification facts remain in the [install records](../acceptance/installs/) and the other acceptance records.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/architecture-en-dark.svg">
+  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, the blackboard takes the only eligible buddy or a Router buddy chooses among several; the Worker buddy runs a turn in the checkout the micro task was given; the Host can ask that running turn a question through the blackboard; the blackboard seals the checkout when the turn ends; the Host checks the Worker's report against the brief and the seal and either integrates and accepts it into your repository or sends it back to the same Worker without routing. A Lead buddy runs the same loop as Host for the micro tasks it delegates." src="../assets/architecture-en-light.svg" width="100%">
+</picture>
 
 ## Process topology
 
@@ -9,7 +14,7 @@ Codex skill / CLI / private console
                   |  named C-Two RPC (private token)
         Python blackboard daemon  <-- only writer of authoritative state
           state machine + transactions + events + execution scheduler
-                  |  SQLite WAL (board.sqlite3, schema 32)
+                  |  SQLite WAL (board.sqlite3, schema 34)
         tasks / attempts / messages / artifacts
         events / command receipts / resource claims
         execution identities / shutdown evidence / execution and service issues
@@ -43,7 +48,7 @@ hey-my-buddy transports bounded JSON strings through C-Two's named Python operat
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 32) owns every authoritative fact in 67 tables. Startup accepts schema 32 only; the installer runs every remaining step from the board's own schema, supported from the upgrade floor (schema 30) ([operations](operations.md#installation)). Events and the records of scopes, workspace conflicts, integrations, cleanup plans and Host conclusions store who acted as a role (`host`, `lead`, `console`, `service`, `workflow` or `bridge`) and an identifier.
+One schema-versioned SQLite database (`board.sqlite3`, schema version 32) owns every authoritative fact in 68 tables. Startup accepts schema 34 only; the installer runs every remaining step from the board's own schema, supported from the upgrade floor (schema 30) ([operations](operations.md#installation)). Events and the records of scopes, workspace conflicts, integrations, cleanup plans and Host conclusions store who acted as a role (`host`, `lead`, `console`, `service`, `workflow` or `bridge`) and an identifier.
 
 | Group | Tables |
 | --- | --- |
@@ -205,7 +210,7 @@ The installation package transports the complete skill and runtime assets. Its i
 
 ## ADR-019 first-stage state (0.23.0)
 
-The current board uses schema 32. Ordinary access reads the ordered Router settings directly and does not read paid review certificates. Router skip windows derive from recorded no-answer outcomes plus the configurable retry interval, with no persisted circuit state. `routingHealth` reports each Router separately, counts timeouts as failures and resolves availability/current identity through the shared current-Router entry. Provider cooling is one `provider_cooling` row per harness provider while its quota rejections are unresolved; nonsecret account observations keep their existing storage and ownership.
+The current board uses schema 34. Ordinary access reads the ordered Router settings directly and does not read paid review certificates. Router skip windows derive from recorded no-answer outcomes plus the configurable retry interval, with no persisted circuit state. `routingHealth` reports each Router separately, counts timeouts as failures and resolves availability/current identity through the shared current-Router entry. Provider cooling is one `provider_cooling` row per harness provider while its quota rejections are unresolved; nonsecret account observations keep their existing storage and ownership.
 
 ## ADR-019 private-directory boundary (0.24.0)
 
@@ -217,4 +222,4 @@ The service's reclamation loop removes private micro task roots, including faile
 
 DSH Worker sessions use a micro task-shared JSONL session root for continuation; fast calls use an attempt-private root. The product session-grouping option, its workspace bridge and grouped-session listing/archiving were removed by ADR-021 decision 18, so these sessions stay separate from the native app store. Codex Worker turns store ordinary threads and SQLite state in the user's native directory; fast and review Router calls use ephemeral sessions. Its private binding records task, thread, checkout, buddy and last completed turn; old micro task-private session receipts reconstruct a new native session after ADR-030 batch 3b. 
 
-The named `worker_sessions` operation reads native identities only from authoritative receipts and lists Codex history read-only. Console macro task deletion uses that inventory to delete proven user-store sessions through the native harness operation, and removes private sessions with their owned roots. Upgrade does not implicitly alter native history in the user's harness directories. Runtime reclamation reports malformed entries separately and admits recognized older READY layouts only with positive unused-process inspection and current/previous retention. The current board uses schema 32.
+The named `worker_sessions` operation reads native identities only from authoritative receipts and lists Codex history read-only. Console macro task deletion uses that inventory to delete proven user-store sessions through the native harness operation, and removes private sessions with their owned roots. Upgrade does not implicitly alter native history in the user's harness directories. Runtime reclamation reports malformed entries separately and admits recognized older READY layouts only with positive unused-process inspection and current/previous retention. The current board uses schema 34.
