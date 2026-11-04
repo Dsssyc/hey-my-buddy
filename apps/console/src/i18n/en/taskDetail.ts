@@ -73,6 +73,14 @@ export default {
     "service-stop": "Service stopped", "unknown-stop": "Stopped (initiator unknown)", deadline: "Router exceeded its time limit", "harness-error": "Harness error",
     "transport-error": "Transport failure", "workspace-error": "Workspace error", completed: "Completed normally", wrapUpLead: "Lead wrap-up finished",
   },
+  inputFailure: {
+    name: "Input rejected", stage: { preflight: "Rejected by local preflight", "native-admission": "Rejected by native admission" },
+    harness: "Harness", limit: "Declared limit", unknownLimit: "No numeric value obtained", measured: "Measured input", total: "Total",
+    observedLimit: "Native reported limit", observedTotal: "Native reported total", nativeChars: "characters (native count)",
+    unit: { "unicode-scalars": "Unicode scalars", "utf-8-bytes": "UTF-8 bytes" },
+    part: { role: "Role", task: "Task", hostInput: "Host input", context: "Context", delivery: "Delivery", format: "Format" },
+    sent: "Native request sent", started: "Model started", yes: "Yes", no: "No",
+  },
   providerRejection: { "overloaded": "Model service overloaded", "quota-exceeded": "Quota used up", "rate-limited": "Rate limited by the native service" },
   seal: {
     name: "Seal", commit: "Commit", files: "Files: {{n}}", id: "Artifact ID", sha: "SHA-256", diff: "Diff", note: "Note",

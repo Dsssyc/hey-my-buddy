@@ -22,7 +22,7 @@ for (const { locale, width, theme } of [
     await expect(entry).toBeVisible();
     await expect(entry.locator('[data-slot="state-mark"]')).toHaveAttribute("data-kind", "hand");
     await expect(entry.locator("[data-slot=macro-entry-counts]")).toHaveCount(0);
-    await expect(page.getByRole("link", { name: zh ? /^任务 5 / : /^Tasks 5 / })).toBeVisible();
+    await expect(page.getByRole("link", { name: zh ? /^任务 7 / : /^Tasks 7 / })).toBeVisible();
     await settle(page);
     await page.screenshot({ path: `${captures}/${name}-list.png`, animations: "disabled" });
 

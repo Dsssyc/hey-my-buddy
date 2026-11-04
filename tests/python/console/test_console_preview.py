@@ -39,12 +39,34 @@ class LeadStopPreviewTests(unittest.TestCase):
         concluded = preview.workflow_get({'runId': 'preview-run-d4'})
         self.assertEqual(concluded['state'], 'concluded')
         self.assertEqual(concluded['hostConclusion']['executionStatus'], 'failed')
-        self.assertEqual(preview.pending_root_count(), 5)
+        self.assertEqual(preview.pending_root_count(), 7)
         for run_id in ('preview-run-d5-h1', 'preview-run-d5-h2'):
             self.assertEqual(preview.FIXTURES['runs'][run_id]['category'], 'ended')
             self.assertFalse(preview.matches(preview.FIXTURES['runs'][run_id], {'filter': 'active'}))
         self.assertNotIn('preview-run-b6', {row['runId'] for row in preview.macro_task_timeline(
             {'macroTaskId': preview.MACRO_B, 'filter': 'host'}, 'normal')['rows']})
+
+    def test_input_rejections_retain_the_same_frozen_facts_in_every_projection(self):
+        from hey_my_buddy.protocol.input_failure import normalize_input_failure
+        rows = preview.macro_task_timeline({'macroTaskId': preview.MACRO_INPUT}, 'normal')['rows']
+        self.assertEqual({row['runId'] for row in rows},
+                         {'preview-run-input-preflight', 'preview-run-input-native'})
+        for suffix, stage in (('input-preflight', 'preflight'), ('input-native', 'native-admission')):
+            run_id = f'preview-run-{suffix}'
+            entry = preview.FIXTURES['runs'][run_id]
+            view = preview.task_view(entry)
+            failure = view['inputFailure']
+            self.assertEqual(normalize_input_failure(failure), failure)
+            self.assertEqual(failure['stage'], stage)
+            self.assertEqual(view['workflow']['requestReason'], {'code': 'workflow.input-rejected',
+                                                               'params': {'harness': failure['harness']['name']}})
+            record = preview.workflow_get({'runId': run_id, 'includeAudit': True})
+            for item in (record['turns'][0], record['currentTurn'], record['activeRequest'],
+                         record['requests'][0], record['audit']['turns'][0], record['audit']['requests'][0]):
+                self.assertEqual(item['inputFailure'], failure)
+            self.assertEqual(record['state'], 'awaiting-host')
+            self.assertEqual(record['macroTaskId'], preview.MACRO_INPUT)
+            self.assertEqual(entry['group'], preview.MACRO_INPUT)
 
     def test_preview_root_stop_states_match_the_board_host_filter(self):
         from hey_my_buddy.blackboard.tasks.macro_tasks import _state

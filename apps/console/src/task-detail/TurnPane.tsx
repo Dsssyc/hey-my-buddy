@@ -14,6 +14,7 @@ import type { Step } from "./steps";
 import type { Artifact, Basis, Context } from "./types";
 import { LiveActivity } from "./LiveActivity";
 import { Usage } from "./usage";
+import { InputFailureFacts } from "./InputFailureFacts";
 
 /** The turn the span stands for: the compact record holds the newest, the audit all of them. */
 function turnOf(ctx: Context, attemptId: string) {
@@ -92,6 +93,7 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
   const failed = step.outcome === "failed";
   const rejected = turn?.state === "rejected";
   const rejectionCode = turn?.providerRejection?.code;
+  const inputFailure = turn?.inputFailure ?? result?.inputFailure ?? (attempt ? ctx.view.inputFailure : undefined);
   const unknown = step.outcome === "unknown";
   const reminders = { overdue: attempt?.overdue === true, possiblyStuck: attempt?.possiblyStuck === true };
   const expected = turn?.expectedSeconds ?? null;
@@ -106,7 +108,8 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
       <span>{t("activity.toolCalls", { n: attempt.activity.toolCalls ?? t("unknown") })}</span>
     </span>
     : <Usage usage={turn?.tokenUsage ?? null} />;
-  const note = rejected ? [t(`providerRejection.${rejectionCode!}`), t("turn.rerouted")].join(" · ")
+  const note = inputFailure ? t(`inputFailure.stage.${inputFailure.stage}`)
+    : rejected && rejectionCode ? [t(`providerRejection.${rejectionCode}`), t("turn.rerouted")].join(" · ")
     : [attempt?.releaseReason ? reasonText(attempt.releaseReason) : null,
       attempt?.ending ? endingText(attempt.ending, t) : rejectionCode ? t(`providerRejection.${rejectionCode}`) : null,
       failed && span.error ? span.error : null].filter(Boolean).join(" · ");
@@ -130,6 +133,7 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
         {turn?.sessionId ? <CopyableIdentifier value={turn.sessionId} /> : <span>{t("session.unrecorded")}</span>}
         {turn && <span>· {turn.resumeMode === "native-session" ? t("session.resumed") : t("session.fresh")}</span>}
       </span>} />
+    {inputFailure && <Section name={t("inputFailure.name")}><InputFailureFacts failure={inputFailure} /></Section>}
     {asked.length > 0 && <Section name={t("delegation.inquiries")}>
       {cut && <p className="text-xs text-ink3">{t("inquiry.more")}</p>}
       {asked.map(inquiry => <Ask key={inquiry.messageId} inquiry={inquiry} />)}

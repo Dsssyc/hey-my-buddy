@@ -4,6 +4,7 @@ import type { MacroTaskTimeline, TimelineBuddy, TimelineEvent, TimelineRow, Time
 import type { Task } from "../types";
 import type { TaskDetailClient } from "./client";
 import { parseTask } from "./parse";
+import type { InputFailure } from "./input-failure";
 import type { Audit, Basis, Buddy, Inquiries, Inquiry, ResultTurn, RoutingEntry, Turn, Workflow } from "./types";
 
 /**
@@ -15,6 +16,21 @@ export const CODEX: Buddy = { harness: "codex", provider: "openai", model: "gpt-
 export const OPUS: Buddy = { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
 const ROUTER: Buddy = { harness: "codex", provider: "openai", model: "gpt-6-luna", effort: "high" };
 export const HOST = { role: "host" as const, id: "codex-desktop" };
+
+export function inputFailure(known = true): InputFailure {
+  const parts = { role: 1000, task: 1000000, hostInput: 20000, context: 26000, delivery: 1000, format: 577 };
+  const declaration = { form: "cli-app-server", scope: "turn-start-text", source: "synthetic-declaration" };
+  return {
+    version: 1, stage: known ? "preflight" : "native-admission",
+    harness: { name: "codex", form: declaration.form, version: "synthetic-1.0" },
+    limit: known ? { ...declaration, state: "known", value: 1048576, unit: "unicode-scalars", versions: ["synthetic-1.0"] }
+      : { ...declaration, state: "unknown", note: "No numeric declaration" },
+    measurement: { unit: "unicode-scalars", total: 1048577, parts,
+      ...(!known ? { utf8Bytes: 2097154, utf8Parts: Object.fromEntries(Object.entries(parts).map(([key, value]) => [key, value * 2])) as typeof parts } : {}) },
+    nativeRequestSent: !known, modelStarted: known ? false : null,
+    ...(!known ? { max_chars: 1000000, actual_chars: 1048577, nativeCode: "input_too_large" } : {}),
+  };
+}
 
 export const at = (clock: string, second = 0) => `2026-09-26T${clock}:${String(second).padStart(2, "0")}Z`;
 

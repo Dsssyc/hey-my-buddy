@@ -269,7 +269,8 @@ async function assertHeaderGeometry(page: Page) {
   const header = page.locator("[data-slot=macro-overview-header]");
   await expect(header).toBeVisible();
   await expectNoSidewaysScroll(page);
-  const clipped = await header.evaluate(node => [...node.querySelectorAll<HTMLElement>("dt, dd, button")]
+  // The identifier's hit area extends beyond its 20px fact row; measure its text for clipping.
+  const clipped = await header.evaluate(node => [...node.querySelectorAll<HTMLElement>("dt, dd:not(:has([data-slot=copyable-identifier])), button, [data-slot=copyable-identifier] > span")]
     .filter(element => !element.closest('[data-slot="macro-goal-fact"]') && element.getClientRects().length && (element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1))
     .map(element => element.textContent?.trim().slice(0, 40)));
   expect(clipped, "macro header text is clipped").toEqual([]);
@@ -421,8 +422,8 @@ for (const { locale, width, theme } of [
     expect(response.ok()).toBe(true);
     const data = await response.json();
     expect(data.groups).toHaveLength(1);
-    expect(data.groups[0].macroTasks).toHaveLength(3);
-    await expect(group.locator("[data-slot=macro-entry]")).toHaveCount(8);
+    expect(data.groups[0].macroTasks).toHaveLength(4);
+    await expect(group.locator("[data-slot=macro-entry]")).toHaveCount(9);
     await expect(group.locator("[data-slot=macro-group-more]")).toHaveCount(0);
     await expect(list.locator("[data-slot=macro-group]").first().locator("[data-slot=macro-entry]")).toHaveCount(1);
     await expectNoSidewaysScroll(page);
@@ -616,7 +617,7 @@ test.describe("macro list motion", () => {
 
     const alpha = list.locator("[data-slot=macro-group]").filter({ has: page.locator(`[data-macro-task-id="${A}"]`) });
     await photographMidMotion(page, "mid-more-expand", alpha.locator("[data-slot=macro-group-more]"), alpha);
-    await expect(alpha.locator("[data-slot=macro-entry]")).toHaveCount(8);
+    await expect(alpha.locator("[data-slot=macro-entry]")).toHaveCount(9);
 
     const row = list.locator("[data-macro-task-id]").nth(1).locator("[data-slot=macro-entry]");
     await photographMidMotion(page, "mid-row-select", row, row);

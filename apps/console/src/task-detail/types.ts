@@ -1,4 +1,5 @@
 import type { Reason } from "../reason";
+import type { InputFailure } from "./input-failure";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
 import type { Actor, ActivityPhase, ProviderRejection, RoutingMode, Task, TokenUsage } from "../types";
 
@@ -22,12 +23,15 @@ export type Turn = {
   routing: { decisionId: string | null; buddyRevision: number } | null;
   tokenUsage: TokenUsage | null;
   providerRejection?: ProviderRejection;
+  inputFailure?: InputFailure;
 };
 
 /** A turn with its result; `summary` is null while the turn has returned nothing. */
 export type ResultTurn = Turn & { summary: string | null; remaining: string[] };
 
 export type CompactRequest = {
+  reason?: Reason | null;
+  inputFailure?: InputFailure;
   requestId: string;
   kind: string;
   state: string;
@@ -245,6 +249,8 @@ export type Attempt = {
 
 /** The task view of one micro task, with the parts the detail reads made definite. */
 export type TaskView = {
+  inputFailure?: InputFailure;
+  requestReason?: Reason | null;
   /** For the presentation helpers the list shares; the detail reads its own facts from the fields beside it. */
   task: Task;
   updatedAt: string;
