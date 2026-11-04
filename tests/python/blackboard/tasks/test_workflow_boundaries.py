@@ -66,7 +66,7 @@ class WorkflowBoundaryTests(WorkflowTestCase):
         root_claim = self.claim(board, "w1", claim_request_id="root-resumed", run_id=root["runId"])
         outcomes = root_claim["claim"]["turn"]["input"]["context"]["helperOutcomes"]
         self.assertEqual({outcome["taskId"] for outcome in outcomes}, {first, second})
-        self.assertTrue(all(outcome["artifact"]["outputCommit"] for outcome in outcomes))
+        self.assertTrue(all(outcome["artifact"]["sealedEvidence"]["tree"] for outcome in outcomes))
         self.finish_turn(board, root_claim)
         with board.store.db.read() as connection:
             count = connection.execute("SELECT COUNT(*) FROM events WHERE task_id=? AND kind='workflow.auto_continued'", (root["runId"],)).fetchone()[0]

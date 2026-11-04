@@ -221,12 +221,15 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         expected = sorted(str(name(kind, number)).replace(os.sep, "/")
                           for kind in ("new", "old") for number in range(file_count))
         self.assertEqual(sealed["changedPaths"], expected)
-        self.assertEqual(sealed["snapshot"]["version"], 1)
+        self.assertEqual(sealed["snapshot"]["version"], 2)
         self.assertNotIn("changedEntries", sealed["snapshot"])
         self.assertNotIn("changedEntriesTruncated", sealed["snapshot"])
         historical_bytes = {}
         if historical:
             changes = workspace_module._tree_changes(checkout, manifest["inputTree"], sealed["tree"])
+            sealed["version"] = 1
+            sealed.pop("commitKind")
+            sealed["snapshot"].pop("commitKind")
             sealed["snapshot"].pop("version")
             sealed["snapshot"]["changedEntries"] = {
                 path: [changes[path]["mode"], changes[path]["oid"]] if changes[path] is not None else None
@@ -287,7 +290,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             stored = connection.execute("SELECT verification_json FROM workflow_integrations WHERE integration_id=?",
                                         (accepted["integrations"][0]["integrationId"],)).fetchone()[0]
         self.assertEqual(set(json.loads(stored)),
-                         {"matchingPaths", "differingPaths", "missingPaths", "hostPaths", "note", "requested"})
+                         {"version", "mergeBaseCommit", "expectedTree", "matchingPaths", "differingPaths", "missingPaths",
+                          "conflictingPaths", "adjustments", "hostPaths", "note", "requested"})
         self.assertEqual(json.loads(stored)["matchingPaths"], expected)
         self.assertNotIn("verified", verification)
         self.assertNotIn("summary", verification)

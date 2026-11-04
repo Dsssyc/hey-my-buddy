@@ -278,7 +278,7 @@ class DirtyInputTests(RealWorkspaceTestCase):
         view = board.call("workflow_get", {"runId": run_id})
         output = [row for row in view["artifacts"] if row["kind"] == "output"][0]
         self.assertEqual(output["outputSnapshotSha256"], seal["snapshotSha256"])
-        self.assertEqual(output["outputCommit"], seal["commit"])
+        self.assertEqual(output["sealedEvidence"]["tree"], seal["tree"])
         decided = self.decide_real(
             board,
             {
@@ -655,7 +655,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
         for index, (child, seal) in enumerate(seals.items(), start=1):
             entry = outcomes[child]
             artifact = entry["artifact"]
-            self.assertEqual(artifact["outputCommit"], seal["commit"])
+            self.assertEqual(artifact["sealedEvidence"]["tree"], seal["tree"])
             self.assertEqual(artifact["snapshotSha256"], seal["snapshotSha256"])
             self.assertEqual(artifact["diffSha256"], seal["diffSha256"])
             self.assertEqual(artifact["inputCommit"], seal["inputCommit"])
@@ -667,19 +667,19 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
         audit = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         consumed = [row for row in audit["audit"]["continuations"] if row["state"] == "consumed"]
         self.assertTrue(consumed)
-        frozen = {row["taskId"]: row["artifact"]["outputCommit"] for row in consumed[-1]["helperOutcomes"]}
-        self.assertEqual(frozen, {child: seal["commit"] for child, seal in seals.items()})
+        frozen = {row["taskId"]: row["artifact"]["sealedEvidence"]["snapshotSha256"] for row in consumed[-1]["helperOutcomes"]}
+        self.assertEqual(frozen, {child: seal["snapshotSha256"] for child, seal in seals.items()})
         # Editing a helper worktree afterwards cannot rewrite what the parent was given.
         for entry in outcomes.values():
             native_path(Path(entry["workspace"]["path"], "later.txt")).write_text("later edit\n", encoding="utf-8", newline="\n")
         again = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         frozen_again = {
-            row["taskId"]: row["artifact"]["outputCommit"]
+            row["taskId"]: row["artifact"]["sealedEvidence"]["snapshotSha256"]
             for row in [item for item in again["audit"]["continuations"] if item["state"] == "consumed"][-1][
                 "helperOutcomes"
             ]
         }
-        self.assertEqual(frozen_again, {child: seal["commit"] for child, seal in seals.items()})
+        self.assertEqual(frozen_again, {child: seal["snapshotSha256"] for child, seal in seals.items()})
         for child, seal in seals.items():
             artifacts = board.call("workflow_get", {"runId": child})["artifacts"]
             self.assertIn(seal["snapshotSha256"], [row["outputSnapshotSha256"] for row in artifacts if row["kind"] in ("output", "resolved-output", "partial-output")])

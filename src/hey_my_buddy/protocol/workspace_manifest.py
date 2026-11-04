@@ -42,6 +42,19 @@ class RecoverySelection(TypedDict):
 ExecutionSelection = SelectorsSelection | SealSelection | RecoverySelection
 
 
+def sealed_worker_commit(record: dict) -> str | None:
+    """Only the new seal form proves a complete, directly reused Worker commit.
+
+    Historical headCommit is observation evidence, not an integration source.
+    Host outputs and resolutions always deliver a fixed cumulative patch.
+    """
+    snapshot = record.get("snapshot", {})
+    if (record.get("kind") is None and snapshot.get("version") == 2
+            and record["commitKind"] == "worker"):
+        return record["commit"]
+    return None
+
+
 def project_id(manifest: dict) -> str:
     return manifest["projectId"] if manifest["version"] in (4, 5, 6) else manifest["repositoryId"]
 

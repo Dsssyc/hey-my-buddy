@@ -14,7 +14,7 @@ from hey_my_buddy.paths import native_path
 from hey_my_buddy.private_dirs import attempt_root, native_root
 from hey_my_buddy.protocol.execution import RECEIPT, fsync_json
 from hey_my_buddy.protocol import process_identity as processes
-from hey_my_buddy.protocol.workspace_manifest import turn_manifest
+from hey_my_buddy.protocol.workspace_manifest import artifact_manifest, turn_manifest
 
 
 IDENTITY = {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 123,
@@ -80,7 +80,10 @@ class InterruptedContinuationTests(WorkflowTestCase):
         self.continue_run(board, failed)
         second = self.claim(board, claim_request_id="c2")
         document = second["claim"]["turn"]["input"]
-        self.assertEqual(turn_manifest(self.directory, document)["baseCommit"], partial["outputCommit"])
+        with board.store.db.read() as connection:
+            row = connection.execute("SELECT * FROM workflow_artifacts WHERE artifact_id=?", (partial["artifactId"],)).fetchone()
+        sealed = artifact_manifest(self.directory, row)
+        self.assertEqual(turn_manifest(self.directory, document)["baseCommit"], sealed["commit"])
         self.assertEqual(document["resumeMode"], "reconstructed-new-session")
         self.assertEqual(document["context"]["interruptedTurn"]["evidence"]["kind"], "identity-absent")
         self.assertEqual(document["context"]["interruptedTurn"]["turnId"], first["claim"]["turn"]["turnId"])

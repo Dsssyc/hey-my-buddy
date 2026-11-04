@@ -505,7 +505,7 @@ class PreparationTests(WorkflowTestCase):
         self.assertNotEqual(workspace["baseCommit"], previous["baseCommit"])
         output = next(item for item in board.call("workflow_get", {"runId": run_id})["artifacts"]
                       if item["kind"] == "output")
-        self.assertEqual(workspace["baseCommit"], output["outputCommit"])
+        self.assertEqual(workspace["inputTree"], output["sealedEvidence"]["tree"])
         self.assertEqual(native_path(Path(workspace["path"]) / "tracked.txt").read_text(encoding="utf-8"), "sealed first output\n")
 
     def test_cancel_during_git_cannot_activate_prepared_files(self):

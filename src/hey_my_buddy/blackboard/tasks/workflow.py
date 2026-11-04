@@ -39,7 +39,8 @@ from ...protocol.reasons import reason as make_reason, reason_from_json
 from ...protocol.stop import WRAP_UP_INITIATORS
 from ...protocol.turn_input import turn_buddy
 from ...protocol.workspace_manifest import (project_id, manifest_ref, resolve_manifest, turn_manifest,
-                                          artifact_manifest, record_reference, resolve_record, cumulative_patch_error)
+                                          artifact_manifest, record_reference, resolve_record, cumulative_patch_error,
+                                          sealed_worker_commit)
 from .workspace_bindings import (MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE, effective_manifest, workspace_facts, retained_manifests, owned_manifest, output_references)
 from ..routing.statistics import accumulate_infrastructure, accumulate_overall
 from . import macro_tasks, fixes as task_fixes
@@ -123,10 +124,9 @@ WRAP_UP_SECONDS = 300
 MAX_CONFLICT_VIEW = 8
 MAX_INTEGRATION_VIEW = 8
 INTEGRATION_PATH_FIELDS = (
-    "matchingPaths", "differingPaths", "missingPaths", "adjustments", "hostPaths", "unrecordedPaths",
+    "matchingPaths", "differingPaths", "missingPaths", "conflictingPaths", "adjustments", "hostPaths", "unrecordedPaths",
 )
 SCOPE_ACTIONS = ("restore", "adopt", "abandon")
-INTEGRATION_STRATEGIES = ("patch", "cherry-pick", "merge")
 FINAL_ARTIFACT_KINDS = ("output", "resolved-output")
 
 #: ``workflow_get.routingHistory`` is one bounded newest-first page of a run's own
@@ -489,7 +489,9 @@ class WorkflowCoordinator:
 
     def _cumulative_patch_view(self, row, record, connection=None):
         if row["content_form"] == "sealed-inline-v1":
-            return record.get("cumulativePatch")
+            patch = record.get("cumulativePatch")
+            return ({key: value for key, value in patch.items() if key != "outputCommit"}
+                    if patch is not None else None)
         if connection is None:
             with self.db.read() as reader:
                 return self._cumulative_patch_view(row, record, reader)
@@ -501,7 +503,7 @@ class WorkflowCoordinator:
         original = self._initial_input_commit(connection, row["run_id"])
         directory = (self.board.directory / row["record_path"]).parent
         if original == record["inputCommit"]:
-            return {"baseCommit": original, "outputCommit": record["commit"],
+            return {"baseCommit": original,
                     "path": str((self.board.directory / row["record_path"]).with_suffix(".patch")), "sha256": record["diffSha256"],
                     "changedPaths": record["changedPaths"]}
         path = directory / ("cumulative-" + original + ".patch")
@@ -517,8 +519,41 @@ class WorkflowCoordinator:
                        env={"GIT_CEILING_DIRECTORIES": str(self.board.directory.resolve().parent)})
         paths = [part.split(b"\t", 2)[2].decode("utf-8", "surrogateescape")
                  for part in changes.split(b"\0") if part]
-        return {"baseCommit": original, "outputCommit": record["commit"], "path": str(path),
+        return {"baseCommit": original, "path": str(path),
                 "sha256": hashlib.sha256(raw).hexdigest(), "changedPaths": sorted(paths)}
+
+    def _integration_source(self, row, record, cumulative, connection=None):
+        if cumulative is None:
+            return None
+        if sealed_worker_commit(record) is not None:
+            if connection is None:
+                with self.db.read() as reader:
+                    return self._integration_source(row, record, cumulative, reader)
+            original = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
+                (row["run_id"],)).fetchone()
+            initial = self._artifact_document(original)
+            seals = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind IN ('output','partial-output','resolved-output')"
+                " AND rowid<=(SELECT rowid FROM workflow_artifacts WHERE artifact_id=?) ORDER BY rowid",
+                (row["run_id"], row["artifact_id"])).fetchall()
+            if (initial["inputCommit"] == initial["baseCommit"]
+                    and all(sealed_worker_commit(self._artifact_document(seal)) is not None for seal in seals)):
+                return {"kind": "commits", "baseCommit": initial["inputCommit"], "headCommit": record["commit"]}
+        return {"kind": "patch", **{key: cumulative[key] for key in ("baseCommit", "path", "sha256") if key in cumulative}}
+
+    @staticmethod
+    def _sealed_evidence(record):
+        return {"snapshotSha256": record.get("snapshotSha256"), "tree": record.get("tree")}
+
+    def _output_delivery(self, row, record, connection=None):
+        delivery = {"sealedEvidence": self._sealed_evidence(record)}
+        if row["kind"] in ("output", "resolved-output", "partial-output"):
+            cumulative = self._cumulative_patch_view(row, record, connection)
+            if cumulative is not None:
+                delivery["cumulativePatch"] = self._bounded_path_fields(cumulative, ("changedPaths",))
+                delivery["integrationSource"] = self._integration_source(row, record, cumulative, connection)
+        return delivery
 
     def _artifact_view(self, row, *, connection=None) -> dict:
         view = {
@@ -549,10 +584,7 @@ class WorkflowCoordinator:
         if row["kind"] in ("output", "resolved-output", "partial-output"):
             if row["kind"] == "partial-output":
                 view.update(partial=True, verified=False, final=False)
-            cumulative = self._cumulative_patch_view(row, manifest, connection)
-            if isinstance(cumulative, dict):
-                view["cumulativePatch"] = WorkflowCoordinator._bounded_path_fields(cumulative, ("changedPaths",))
-            view["outputCommit"] = manifest.get("commit")
+            view.update(self._output_delivery(row, manifest, connection))
             view["diffPath"] = (str((self.board.directory / row["record_path"]).with_suffix(".patch"))
                                 if row["content_form"] == "record-reference" else manifest.get("diffPath"))
             view["diffSha256"] = manifest.get("diffSha256")
@@ -669,8 +701,7 @@ class WorkflowCoordinator:
             "state": row["state"],
             "action": row["action"],
             "artifactId": row["artifact_id"],
-            "outputCommit": output.get("commit"),
-            "outputTree": output.get("tree"),
+            **(self._output_delivery(artifact, output, connection) if artifact is not None else {}),
             "actor": {"role": row["actor_role"], **({"id": row["actor_id"]} if row["actor_id"] is not None else {})} if row["actor_role"] else None,
             "note": row["note"],
             "delivery": delivery,
@@ -696,7 +727,6 @@ class WorkflowCoordinator:
             "state": "not-required" if not_required else "verified",
             "strategy": row["strategy"],
             "target": target,
-            "sourceCommit": row["source_commit"],
             "sourceTree": row["source_tree"],
             "beforeCommit": row["before_commit"],
             "afterCommit": row["after_commit"],
@@ -2699,7 +2729,7 @@ class WorkflowCoordinator:
                     "attemptId": artifact["attempt_id"],
                     "turnId": artifact["turn_id"],
                     "inputCommit": seal.get("inputCommit"),
-                    "outputCommit": seal.get("commit"),
+                    **self._output_delivery(artifact, seal, connection),
                     "snapshotSha256": artifact["output_snapshot_sha256"],
                     "diffPath": seal.get("diffPath"),
                     "diffSha256": seal.get("diffSha256"),
@@ -3315,11 +3345,7 @@ class WorkflowCoordinator:
     def _accept_verify(self, manifest: dict, *, original_input: dict, final_input: dict,
                        target: dict, host_paths: list[str], before_commit: str | None,
                        adjusted: bool, note: str, source_repository: str | None = None) -> dict:
-        """Compare the immutable artifact with the real target and name every difference.
-
-        Without ``adjusted`` differing paths are refused; with it the same
-        comparison records those exact paths as Host adjustments bound to the note.
-        """
+        """Verify the clean three-way result, or record explicit Host adjustments."""
         module = workspace_module()
         verification = module.integration_verify(
             manifest, original_input=original_input, final_input=final_input,
@@ -3328,7 +3354,10 @@ class WorkflowCoordinator:
             host_paths=host_paths, note=note, _confirm_adjustments=adjusted,
         )
         unrecorded = sorted({item["path"] for item in verification.get("differingPaths") or []}
-                            | set(verification.get("missingPaths") or []))
+                            | set(verification.get("missingPaths") or [])
+                            | set(verification.get("conflictingPaths") or []))
+        comparison = self._bounded_path_fields(
+            {key: value for key, value in verification.items() if key != "sourceCommit"}, INTEGRATION_PATH_FIELDS)
         if not verification.get("verified") and not unrecorded:
             # Content matched but the claimed commit interval does not hold (for
             # example a beforeCommit unrelated to the target ref): the comparison
@@ -3338,20 +3367,19 @@ class WorkflowCoordinator:
                 "The target comparison does not hold; the artifact content matched but the named commit interval "
                 "does not, so no integration was recorded",
                 paths=[],
-                verification=self._bounded_path_fields(verification, INTEGRATION_PATH_FIELDS),
+                verification=comparison,
             )
         if not unrecorded:
-            verification["strategy"] = "merge" if verification.get("artifactAncestor") else "patch"
             verification["summary"] = ""
             return verification
         if not adjusted:
             raise BoardError(
                 "INTEGRATION_UNVERIFIED",
-                "The target does not contain the artifact as delivered; confirm these are your own adjustments "
-                "with adjusted:true instead of listing paths",
+                "The target differs from the clean three-way result or has conflicts; give the actual beforeCommit, "
+                "or confirm real adjustments with adjusted:true and note",
                 paths=unrecorded[:MAX_OUTPUT_PATH_VIEW], pathsCount=len(unrecorded),
                 pathsTruncated=len(unrecorded) > MAX_OUTPUT_PATH_VIEW,
-                verification=self._bounded_path_fields(verification, INTEGRATION_PATH_FIELDS),
+                verification=comparison,
             )
         if not verification.get("verified"):
             raise BoardError(
@@ -3360,9 +3388,8 @@ class WorkflowCoordinator:
                 "was recorded",
                 paths=unrecorded[:MAX_OUTPUT_PATH_VIEW], pathsCount=len(unrecorded),
                 pathsTruncated=len(unrecorded) > MAX_OUTPUT_PATH_VIEW,
-                verification=self._bounded_path_fields(verification, INTEGRATION_PATH_FIELDS),
+                verification=comparison,
             )
-        verification["strategy"] = "merge" if verification.get("artifactAncestor") else "patch"
         verification["summary"] = ""
         return verification
 
@@ -3544,7 +3571,7 @@ class WorkflowCoordinator:
             integration_id = f"int-{uuid.uuid4()}"
             connection.execute(
                 'INSERT INTO workflow_integrations(integration_id, run_id, artifact_id, strategy, binding_sha256, target_path, target_ref, target_project_id, source_commit, source_tree, before_commit, after_commit, before_tree, after_tree, verification_json, note, actor_role, actor_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                (integration_id,run_id,artifact_id,"not-required" if not_required is not None else verification["strategy"],binding_sha,"" if not_required is not None else verification["target"]["path"],"" if not_required is not None else verification["target"]["ref"],None if not_required is not None else verification["target"]["projectId"],verification.get("sourceCommit"),verification.get("sourceTree"),None if not_required is not None else verification.get("beforeCommit"),None if not_required is not None else verification.get("afterCommit"),None if not_required is not None else verification.get("beforeTree"),None if not_required is not None else verification.get("afterTree"),canonical_json({**({key: verification[key] for key in ("matchingPaths", "differingPaths", "missingPaths", "hostPaths", "note")} if not_required is None else {}),
+                (integration_id,run_id,artifact_id,"not-required" if not_required is not None else verification["strategy"],binding_sha,"" if not_required is not None else verification["target"]["path"],"" if not_required is not None else verification["target"]["ref"],None if not_required is not None else verification["target"]["projectId"],verification.get("sourceCommit"),verification.get("sourceTree"),None if not_required is not None else verification.get("beforeCommit"),None if not_required is not None else verification.get("afterCommit"),None if not_required is not None else verification.get("beforeTree"),None if not_required is not None else verification.get("afterTree"),canonical_json({**({key: verification[key] for key in ("version", "mergeBaseCommit", "expectedTree", "matchingPaths", "differingPaths", "missingPaths", "conflictingPaths", "adjustments", "hostPaths", "note")} if not_required is None else {}),
                                     "requested": {"adjusted":request_key.get("adjusted",False),"beforeCommit":request_key.get("beforeCommit"),"hostPaths":sorted(request_key["hostPaths"]),
                                                   **({"target":request_key["target"]} if "target" in request_key else {})}}),not_required,actor["role"],actor.get("id"),now,),
             )
@@ -5694,7 +5721,11 @@ class WorkflowCoordinator:
         if isinstance(seal, dict):
             if effective is None:
                 raise BoardError("TURN_INVALID", "The sealed output has no service-owned input turn")
-            workspace_module()._validate_output_record(effective, seal)
+            module = workspace_module()
+            if seal.get("version") == 2 and seal.get("kind") in (None, "host-output"):
+                module.verify_sealed_output(effective, effective, seal)
+            else:
+                module._validate_output_record(effective, seal)
             # ``verify`` accepts input manifests; a seal is the immutable output
             # record. It must name this attempt and be based on the effective input.
             for field in ("workspaceId", "taskId", "attemptId", "manifestSha256", "commit", "tree", "snapshotSha256"):
@@ -6336,7 +6367,7 @@ class WorkflowCoordinator:
                 # ``snapshotSha256`` is the output identity that was pinned.
                 "manifestSha256": seal.get("manifestSha256"),
                 "snapshotSha256": seal.get("snapshotSha256"),
-                "outputCommit": seal["commit"],
+                "sealedEvidence": self._sealed_evidence(seal),
                 "tree": seal.get("tree"),
                 "changedPaths": seal.get("changedPaths", []),
                 "outsideScope": seal.get("outsideScope", []),

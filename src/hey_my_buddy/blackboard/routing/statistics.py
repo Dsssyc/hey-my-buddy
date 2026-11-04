@@ -77,7 +77,8 @@ def samples_for_run(connection, run_id):
         " LEFT JOIN workflow_turns w ON w.turn_id=c.turn_id WHERE c.kind='manual' AND c.run_id=?", (run_id,)))
     integrations = [json.loads(row[0]) for row in connection.execute(
         "SELECT i.verification_json FROM workflow_integrations i JOIN workflow_runs r"
-        " ON r.run_id=i.run_id AND r.final_artifact_id=i.artifact_id WHERE r.run_id=? AND r.state='accepted'", (run_id,))]
+        " ON r.run_id=i.run_id AND r.final_artifact_id=i.artifact_id WHERE r.run_id=? AND r.state='accepted'"
+        " ORDER BY i.rowid", (run_id,))]
     samples = {}
     for kind, turns in groups.items():
         ability = [turn for turn in turns if turn["category"] == "ability"]
@@ -106,7 +107,10 @@ def samples_for_run(connection, run_id):
                 for item in continuations)
         first_pass = False
         if success:
-            unchanged = not any(integrations[-1].get(field) for field in ("differingPaths", "missingPaths", "hostPaths"))
+            integration = integrations[-1]
+            fields = (("adjustments", "hostPaths") if integration.get("version") == 2
+                      else ("differingPaths", "missingPaths", "hostPaths"))
+            unchanged = not any(integration.get(field) for field in fields)
             first_pass = deliveries[0] is accepted and rework == 0 and unchanged
         usage = None
         if all((turn["usage"] or {}).get("completeness") == "complete" for turn in ability):

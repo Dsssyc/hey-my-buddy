@@ -68,7 +68,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(cumulative["path"], sealed["diffPath"])
         self.assertEqual(cumulative["sha256"], sealed["diffSha256"])
         self.assertEqual(cumulative["baseCommit"], manifest["inputCommit"])
-        self.assertEqual(cumulative["outputCommit"], sealed["commit"])
+        self.assertNotIn("outputCommit", cumulative)
         self.assertEqual(list(native_path(Path(sealed["diffPath"]).parent).glob("*.patch")),
                          [native_path(Path(sealed["diffPath"]))])
 

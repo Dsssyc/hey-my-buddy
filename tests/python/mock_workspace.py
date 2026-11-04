@@ -255,7 +255,7 @@ class MockWorkspace:
             from hey_my_buddy.private_files import publish_bytes
             patch = patch.with_name("cumulative-" + original_commit + ".patch")
             publish_bytes(patch, native_read_bytes(Path(artifact["diffPath"])), immutable=True)
-        return {"baseCommit": original_commit, "outputCommit": artifact["commit"],
+        return {"baseCommit": original_commit,
                 "path": str(patch), "sha256": sha256_text(native_read_text(patch)),
                 "changedPaths": artifact["changedPaths"]}
 
@@ -275,12 +275,14 @@ class MockWorkspace:
         if _confirm_adjustments and not carried:
             adjusted_paths = changed
         return {
-            "verified": bool(carried or adjusted_paths), "strategy": "patch",
+            "version": 2, "verified": bool(carried or adjusted_paths),
+            "strategy": "three-way-adjusted" if adjusted_paths else "three-way",
             "target": {"kind": "checkout", "path": str(target.resolve()),
                        "projectId": f"repo:{target}", "ref": ref},
             "beforeCommit": before_commit, "afterCommit": ref, "beforeTree": None, "afterTree": None,
             "sourceCommit": artifact.get("commit"), "sourceTree": artifact.get("tree"),
             "artifactAncestor": False,
+            "mergeBaseCommit": original_input["inputCommit"], "expectedTree": artifact.get("tree"), "conflictingPaths": [],
             "matchingPaths": changed if carried else [],
             "differingPaths": [] if carried else [{"path": item} for item in changed],
             "missingPaths": [], "adjustments": sorted(set(adjusted_paths or ())),

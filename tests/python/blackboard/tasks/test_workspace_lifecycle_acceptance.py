@@ -152,7 +152,8 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         self.assertEqual(integration["afterCommit"], target["after"])
         self.assertEqual(integration["beforeTree"], git(target["path"], "rev-parse", target["before"] + "^{tree}").strip())
         self.assertEqual(integration["afterTree"], git(target["path"], "rev-parse", target["after"] + "^{tree}").strip())
-        self.assertEqual(integration["sourceCommit"], artifact["outputCommit"])
+        self.assertEqual(integration["sourceTree"], artifact["sealedEvidence"]["tree"])
+        self.assertNotIn("sourceCommit", integration)
         self.assertEqual(integration["verification"]["matchingPaths"], ["tracked.txt"])
         self.assertEqual(integration["verification"]["missingPaths"], [])
         self.assertEqual(recorded["state"], "accepted")
@@ -273,7 +274,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
                                reason="the whole-micro-task change is already the Host's own edit")
         self.assertEqual(adjusted["state"], "accepted")
         self.assertEqual(adjusted["integrations"][0]["verification"]["differingPaths"][0]["path"], "tracked.txt")
-        self.assertNotIn("adjustments", adjusted["integrations"][0]["verification"])
+        self.assertEqual(adjusted["integrations"][0]["verification"]["adjustments"], ["tracked.txt"])
         self.assertNotIn("unrecordedPaths", adjusted["integrations"][0]["verification"])
 
     def test_deletion_and_mode_change_are_bound_to_final_tree(self):

@@ -158,7 +158,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             "resolved": conflict["state"] != "open", "resolutionState": conflict["state"],
             "remainingPaths": conflict["conflictingPaths"], "artifact": record,
             "resolvedFingerprint": result["resolvedFingerprint"],
-            "outputCommit": record.get("commit") if record else None,
+            "evidenceCommit": record.get("commit") if record else None,
             "diffPath": record.get("diffPath") if record else None,
             "changedPaths": record.get("changedPaths", []) if record else [],
             "adoptedPaths": record.get("adoptedPaths", []) if record else [],
@@ -345,8 +345,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         resumed = self.claim(board, run_id, request_id="claim-after-restore", nonce="m" * 16)
         self.assertIsNotNone(resumed["claim"], resumed)
         execution = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
-        self.assertEqual(execution["baseCommit"], record["outputCommit"])
-        self.assertEqual(execution["inputCommit"], record["outputCommit"])
+        self.assertEqual(execution["baseCommit"], record["evidenceCommit"])
+        self.assertEqual(execution["inputCommit"], record["evidenceCommit"])
         self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
         self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
 
@@ -373,7 +373,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         resumed = self.claim(board, run_id, request_id="claim-combined", nonce="q" * 16)
         self.assertIsNotNone(resumed["claim"], resumed)
         execution = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
-        self.assertEqual(execution["inputCommit"], resolved["outputCommit"])
+        self.assertEqual(execution["inputCommit"], resolved["evidenceCommit"])
         self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
 
     def test_partial_resolution_with_input_is_rejected_before_git_changes(self):
@@ -569,7 +569,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(continued["state"], "executing")
         resumed = self.claim(board, run_id, request_id="claim-adopted", nonce="k" * 16)
         execution = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
-        self.assertEqual(execution["baseCommit"], adopted["outputCommit"])
+        self.assertEqual(execution["baseCommit"], adopted["evidenceCommit"])
         context = resumed["claim"]["turn"]["input"]["context"]
         self.assertEqual(context["latestHandoff"]["artifactId"], adopted["artifactId"])
         self.assertEqual(context["latestHandoff"]["kind"], "resolved-output")
@@ -749,6 +749,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(resolved["finalAttemptId"], attempt_id)
         self.assertEqual(resolved["finalArtifactId"], resolved["artifactId"])
         self.assertEqual(resolved["action"], "restore")
+        self.assertEqual(resolved["integrationSource"]["kind"], "patch")
         self.assertEqual(resolved["workspaceConflicts"][0]["turnId"], turn_id)
         self.assertEqual(set(resolved["delivery"]), {"resolvedFingerprint", "deliveredAt"})
         record = self.resolution_record(board, resolved)
@@ -758,7 +759,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertNotIn("reason", record)
         cumulative = resolved["artifact"]["cumulativePatch"]
         self.assertEqual(cumulative["baseCommit"], submitted["workspace"]["inputCommit"])
-        self.assertEqual(cumulative["outputCommit"], resolved["outputCommit"])
+        self.assertNotIn("outputCommit", cumulative)
         self.assertEqual(cumulative["changedPaths"], ["src/feature.py"])
         self.assertTrue(native_path(Path(cumulative["path"])).is_file())
         self.assertEqual(cumulative["path"], resolved["artifact"]["diffPath"])
@@ -803,7 +804,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         accepted_view = self.view(board, run_id)
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted_view["integrations"][0]["state"], "verified")
-        self.assertEqual(accepted_view["integrations"][0]["sourceCommit"], resolved["outputCommit"])
+        self.assertEqual(accepted_view["integrations"][0]["sourceTree"], resolved["artifact"]["tree"])
         self.assertEqual(accepted_view["integrations"][0]["verification"]["matchingPaths"], ["src/feature.py"])
         self.assertEqual(accepted_view["workspaceConflicts"][0]["artifactId"], resolved["artifactId"])
         self.assertEqual(accepted_view["workspaceConflicts"][0]["delivery"], resolved["delivery"])

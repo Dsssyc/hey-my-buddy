@@ -365,7 +365,8 @@ class AcceptRequest(Request):
     beforeCommit: RunId | None = None
     rules: ClassVar[tuple[str, ...]] = (
         "exactly one of target {path,ref} or nonempty notRequired is required",
-        "notRequired forbids adjusted, hostPaths and beforeCommit; hostPaths requires beforeCommit",
+        "notRequired forbids adjusted, hostPaths and beforeCommit",
+        "target requires beforeCommit unless its tip merge proves the previous target from its parents",
         "checkout none can only use notRequired; the service checks the stored checkout",
     )
 
@@ -376,8 +377,6 @@ class AcceptRequest(Request):
             raise ValueError("exactly one of target or notRequired is required")
         if "notRequired" in supplied and any(key in supplied for key in ("adjusted", "hostPaths", "beforeCommit")):
             raise ValueError("notRequired forbids adjusted, hostPaths and beforeCommit")
-        if self.hostPaths and self.beforeCommit is None:
-            raise ValueError("hostPaths requires beforeCommit")
         return self
 
 

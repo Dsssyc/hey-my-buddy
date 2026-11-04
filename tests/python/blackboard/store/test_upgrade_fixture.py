@@ -196,11 +196,12 @@ class UpgradeFixtureTests(unittest.TestCase):
         _git(target_repository, 'checkout', '-b', 'fixture-schema33-integration')
         target = {'path': str(target_repository), 'ref': 'refs/heads/fixture-schema33-integration'}
         verified = workspace.integration_verify(
-            seal, original_input=old_manifest, final_input=manifest, **target)
+            seal, original_input=old_manifest, final_input=manifest, before_commit=old_manifest['inputCommit'], **target)
         self.assertTrue(verified['verified'])
         accepted = board.call('workflow_accept', {
             'runId': run_id, 'artifactId': delivered['finalArtifactId'],
             'target': target,
+            'beforeCommit': old_manifest['inputCommit'],
             'note': 'Accepted after the v3 continuation',
         })
         self.assertEqual(accepted['state'], 'accepted')

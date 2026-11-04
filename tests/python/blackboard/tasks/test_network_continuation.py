@@ -52,5 +52,5 @@ class NetworkErrorContinuationTests(MicroTaskWorkerTestCase):
             self.assertEqual(code, 0, delivered)
             self.assertEqual(delivered["state"], "delivered")
             turn = delivered["audit"]["turns"][-1]
-            self.assertEqual(turn_manifest(self.directory, turn["input"])["inputCommit"], partial["outputCommit"])
+            self.assertEqual(turn_manifest(self.directory, turn["input"])["inputTree"], partial["sealedEvidence"]["tree"])
             self.assertIn("connection dropped", turn["input"]["context"]["lastAssistantMessage"]["text"])
