@@ -188,17 +188,17 @@
 
 ## 委派与 Worker
 
-**Host 的身份是 Host 自己起的名字。**（2026-11-04 开发者在控制台上看到，Host 只读核对过日常黑板）
-- 现状：提交时的 `hostId` 由 Host 随手填一个字符串，黑板不核对，控制台直接显示它。日常黑板上，同一个 Claude Code Host 的所有会话都叫 `claude-code-host`；一个 Codex Host 用自己的线程号；另一些把日期和任务名写进了名字。
-- 开发者的方向：像 Worker 的四元组那样，由机制自动生成，不让 Host 自报。
-- Host 的看法：Worker 由黑板启动，四个字段都由黑板决定；Host 是用户自己的会话，黑板只能从启动器所在的进程看到它的 harness 与形态，有的 harness 还给出自己的会话号；模型与 effort 通常看不到，看不到的记为未知，也不让 Host 填。
-- 代价：`hostId` 是 Host 契约与 Host 控制三元组的一部分，存在 `workflow_runs.host_id` 与 `macro_tasks.source_host_id` 里。去掉它要动契约与存储形式，所以放进下一次存储批。
-- 开发者随后提出：干脆不记 Host 是谁，它对黑板的完整性没有作用。Host 核对代码：
-  - 授权只靠控制凭据，即令牌与 owner generation。
-  - `hostId` 只在两处参与判断。一处是控制三元组里要求名字与记录一致，这一比较多余，代码注释自己也写着 “an owner name is attribution, not authority”。另一处是加入已有宏任务时，要求是起名相同的 Host；名字是自报的，这道检查挡不住谁。
-  - Host 的建议：删掉 `hostId` 与这两处比较；控制台的归属按谱系显示为 Host 或某个 Lead；放进下一次契约与存储批，与 skill 和接口的精简一起做。要不要仍然挡住别的 Host 加入一个宏任务，待开发者定。Host 的倾向是不挡，只要求同一个项目。
-- 第一步：做一次只读调研，弄清各 harness 的 CLI 与 app 形态，各向子进程给出了哪些关于自己的事实。依据公开源码与文档，按已安装的版本。
-- 一处实测（2026-11-04，Claude Code，在 Claude 桌面 app 4.4212.0 里）：Host 的工具命令所在的进程链是 `zsh` ← `claude` ← Claude 桌面 app；继承下来的环境里有 `CLAUDECODE=1`、`CLAUDE_CODE_ENTRYPOINT=claude-desktop`（形态）、`CLAUDE_CODE_DESKTOP_APP_VERSION`、`CLAUDE_CODE_SESSION_ID`（一个 UUID）与 `CLAUDE_EFFORT=max`，没有任何带 MODEL 的变量。所以这一种形态下，harness、形态、版本、会话号与 effort 看得到，模型看不到。会话中途换了模型或 effort 之后，这些变量会不会跟着变，没有测过。只看了变量名与这几个不含密钥的值。
+**删掉 `hostId`。**（2026-11-04 开发者定，放进下一次契约与存储批，与 skill 和接口的精简一起做）
+- 现状：提交时的 `hostId` 由 Host 随手填，黑板不核对，控制台照原样显示。日常黑板上，同一个 Claude Code Host 的所有会话都叫 `claude-code-host`；一个 Codex Host 用自己的线程号；另一些把日期和任务名写进了名字。
+- 为什么删：授权只靠控制凭据，即令牌与 owner generation。`hostId` 只在两处参与判断：
+  - 控制三元组里要求名字与记录一致。这一比较多余，代码注释自己也写着 “an owner name is attribution, not authority”。
+  - 加入已有宏任务时要求起名相同。名字是自报的，这道检查挡不住谁。
+- 经过：开发者起初想像 Worker 的四元组那样由机制生成 Host 的身份。Host 实测发现，Claude 桌面 app 4.4212.0 里能看到 harness、形态、版本、会话号与 effort，看不到模型。开发者于是改定为不记。
+- 要去掉的：
+  - submit、控制三元组与 `list` 里的 `hostId`；
+  - `workflow_runs.host_id` 与 `macro_tasks.source_host_id`；
+  - 控制台里依赖它的显示，归属改按谱系显示为 Host 或某个 Lead。
+- 不再挡别的 Host 加入一个宏任务，只要求同一个项目：一个微任务同一时刻只归一个 Host 管，换手只能经 takeover。连带的一点：`goal-amend` 仍凭某个微任务的控制凭据授权，所以宏任务里管着任何一个微任务的 Host 都能改它的目标，每次修订都留记录。
 
 **封存另造的快照提交会进到项目历史，引用会一直累积。**（2026-11-04，Gridmen 的 Host 在两个仓库里实测后，经它的会话转来开发者的反馈“快照提交这个太冗余，还多占了 git 的存储”；数字 Host 未复核）
 - 快照提交：`workspace._commit_tree` 用固定的身份 “hey-my-buddy snapshot” 与 2000-01-01 的日期另造一个提交，让对象写出后中途崩溃的恢复可以确定。交付里的 `outputCommit` 就是它。Worker 自己也提交过时，两者的父提交与树都相同。Host 照 `outputCommit` 快进或合并，这个提交就进了项目的历史；开发者对 AI 写的代码坚持普通合并，进去了就一直留着。
