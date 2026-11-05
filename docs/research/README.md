@@ -68,5 +68,6 @@
 | 2026-11-02 | [DSH 0.2.1-rc.2 把会话记录写成 v4，我们只读 v3](2026-11-02-dsh-session-record-generations.md) | DSH 读用量的修法；`docs/reference/workers.md` |
 | 2026-11-04 | [hey-my-buddy 在现有多代理编码系统中的位置：开发者三项主张的核对](2026-11-04-delegation-landscape.md) | 开发者 2026-11-04 的定位讨论；README 的“What is hey-my-buddy”一节 |
 | 2026-11-05 | [Antigravity 与 Gemini CLI 从哪里读用户级的 skill](2026-11-05-antigravity-skill-locations.md) | 安装时给 Antigravity 放 skill 链接的待办（ADR-015） |
+| 2026-11-06 | [ZCode 有没有只读模式，能不能预先放行黑板自己的工具](2026-11-06-zcode-read-only-mode.md) | 0.61.2 的 ZCode 权限档位（ADR-023） |
 
 2026-10-11 之前的四份是从各自的决定里移过来的，当时没有按上面的写法记录读到哪里为止，这一点在各份记录里照实写明。
