@@ -249,7 +249,7 @@ class TestInquiry(BoardTestCase):
         title, task_text = request_id, "do"
         submitted = client.workflow_submit(
             macroTaskId="standalone", title=title, task=task_text, cwd=str(cwd),
-            buddy=f"{harness}:{provider}:{model}:{effort}", checkout="existing",
+            buddy=f"{harness} / {provider} / {model} / {effort}", checkout="existing",
             access="full" if delegation_authority else "read",
             **({"accessNote": "Lead inquiry identity fixture", "writeScope": ["."],
                 "delegationAuthority": True} if delegation_authority else {}),
@@ -1131,7 +1131,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         title, task_text = request_id, "do"
         submitted = client.workflow_submit(
             macroTaskId="standalone", title=title, task=task_text, cwd=str(cwd),
-            buddy=f"{harness}:fixture-zcode:fixture-glm:low", checkout="existing", access="read",
+            buddy=f"{harness} / fixture-zcode / fixture-glm / low", checkout="existing", access="read",
             expectedSeconds=1800, inputs=[],
         )
         return client.get(runId=submitted["runId"])

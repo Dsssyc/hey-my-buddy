@@ -552,7 +552,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertEqual(boundary["decisionId"], view["routing"]["decisionId"])
         self.assertEqual(boundary["actions"], ["continue", "cancel"])
         self.assertEqual([item["buddyId"] for item in boundary["candidates"]], [A, B])
-        params = self.choice_params(view, B)
+        params = self.choice_params(view, "dsh / fixture / bravo / max")
         continued = self.board_.call("workflow_continue", params)
         self.assertEqual(continued["runId"], view["runId"])
         self.assertEqual(continued["requestId"], params["requestId"])
@@ -560,7 +560,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         replay = self.board_.call("workflow_continue", params)
         self.assertTrue(replay["alreadyResponded"])
         with self.assertRaises(BoardError) as changed:
-            self.board_.call("workflow_continue", {**params, "buddy": A})
+            self.board_.call("workflow_continue", {**params, "buddy": "dsh / fixture / alpha / max"})
         self.assertEqual(changed.exception.code, "CONFLICT")
 
     def test_zero_candidates_keep_the_request_and_allow_an_explicit_buddy(self):
@@ -590,7 +590,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                 if mode == "disabled":
                     with self.board_.store.db.write() as db:
                         db.execute("UPDATE buddies SET enabled=1")
-                    continued = self.board_.call("workflow_continue", self.choice_params(view, B))
+                    continued = self.board_.call("workflow_continue", self.choice_params(view, "dsh / fixture / bravo / max"))
                     self.assertEqual(continued["runId"], view["runId"])
                     self.assertEqual(self.board_.call("workflow_get", {"runId": view["runId"]})["buddy"]["model"], "bravo")
 
@@ -609,7 +609,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         original = view["routing"]["routingBoundary"]
         self.assertEqual(self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"],
                          original)
-        params = self.choice_params(view, A, note="Host kept alpha")
+        params = self.choice_params(view, "dsh / fixture / alpha / max", note="Host kept alpha")
         self.board_.call("workflow_continue", params)
         with self.board_.store.db.read() as db:
             request = db.execute("SELECT response_kind,response_id FROM workflow_requests WHERE request_id=?",
@@ -659,7 +659,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         chosen = next(item for item in latest["candidates"] if item["buddyId"] == B)
         self.assertEqual(chosen["model"], "bravo")
         self.assertEqual(chosen["problem"], {"code": "router-out-of-bounds", "bound": "identity-changed"})
-        continued = self.board_.call("workflow_continue", self.choice_params(view, B))
+        continued = self.board_.call("workflow_continue", self.choice_params(view, "dsh / fixture / changed-model / max"))
         self.assertEqual(continued["state"], "executing")
         selected = self.board_.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(selected["buddy"]["model"], "changed-model")
@@ -676,7 +676,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertEqual(boundary["continuationProblem"], "workspace-cleanup-started")
         self.assertEqual(boundary["actions"], ["get", "cancel"])
         with self.assertRaises(BoardError) as raised:
-            self.board_.call("workflow_continue", self.choice_params(view, A))
+            self.board_.call("workflow_continue", self.choice_params(view, "dsh / fixture / alpha / max"))
         self.assertEqual(raised.exception.code, "CONFLICT")
 
     def test_missing_workspace_ownership_blocks_continue_without_preparation(self):
@@ -690,17 +690,18 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertEqual(boundary["actions"], ["get", "cancel"])
         self.assertEqual(boundary["candidates"], original["candidates"])
         with self.assertRaises(BoardError) as raised:
-            self.board_.call("workflow_continue", self.choice_params(view, A))
+            self.board_.call("workflow_continue", self.choice_params(view, "dsh / fixture / alpha / max"))
         self.assertEqual(raised.exception.code, "PREPARATION_CONFLICT")
         self.assertEqual(len(self.workspace.prepare_calls), before)
 
     def test_named_choice_is_not_locked_to_one_buddy_for_later_turns(self):
         view = self.routed()
-        self.board_.call("workflow_continue", self.choice_params(view, A))
+        self.board_.call("workflow_continue", self.choice_params(view, "dsh / fixture / alpha / max"))
         first = self.claim(self.board_, run_id=view["runId"], claim_request_id="first")
         self.finish_turn(self.board_, first)
         delivered = self.board_.call("workflow_get", {"runId": view["runId"]})
-        changed = self.continue_run(self.board_, delivered, buddy=B, note="Host selected bravo for the next turn")
+        changed = self.continue_run(self.board_, delivered, buddy="dsh / fixture / bravo / max",
+                                    note="Host selected bravo for the next turn")
         self.assertEqual(changed["state"], "executing")
         self.assertEqual(self.board_.call("workflow_get", {"runId": view["runId"]})["buddy"]["model"], "bravo")
 
@@ -721,7 +722,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertEqual(proxy["routingBoundary"]["runId"], root["runId"])
         self.assertEqual(proxy["routingBoundary"]["decisionId"], leaf_view["routing"]["decisionId"])
         params = {"runId": root["runId"], "targetRunId": leaf["runId"], "requestId": proxy["requestId"],
-                  "input": "Use alpha for the owned helper", "buddy": A, "note": "Host chose alpha"}
+                  "input": "Use alpha for the owned helper", "buddy": "dsh / fixture / alpha / max",
+                  "note": "Host chose alpha"}
         continued = self.board_.call("workflow_continue", params)
         self.assertEqual(continued["runId"], root["runId"])
         self.assertEqual(self.board_.call("workflow_get", {"runId": leaf["runId"]})["buddy"]["model"], "alpha")
@@ -746,7 +748,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         with self.assertRaises(BoardError) as raised:
             self.board_.call("workflow_continue", {"runId": root["runId"], "targetRunId": leaf["runId"],
                                                   "requestId": proxy["requestId"],
-                                                  "input": "continue", "buddy": A, "note": "Host chose alpha"})
+                                                  "input": "continue", "buddy": "dsh / fixture / alpha / max",
+                                                  "note": "Host chose alpha"})
         self.assertEqual(raised.exception.code, "CONFLICT")
 
     def test_cli_brief_get_and_await_keep_current_boundary_facts(self):
