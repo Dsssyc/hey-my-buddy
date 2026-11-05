@@ -6,9 +6,9 @@
 
 批次三的删除确认、拦截、详情顶部的时间片行与 Lead 泳道四份稿，连同共用的 `batch3.css` 与实际应用的前后对照图，在实现经 Host 验收之后删除（2026-10-18，[验收记录](../../acceptance/adr029/console-batch3-lead.md)）。
 
-## ADR-032：待开发者确认
+## ADR-032：开发者已确认（2026-11-05），待实现
 
-本批是 [ADR-032 执行计划](../adr032/execution-plan.md)第 7 节与 D8 的 P6a 静态稿（2026-11-05），待开发者确认之后才实现。依据 [ADR-029](../../decisions/029-console-frontend-foundation.md)和[设计及带日期的改定](../adr029/console-frontend.md#设计)。没有改动控制台实现，没有调用模型，没有连接服务。这里只核对静态渲染，未做控制台功能验证，也不是 Host 的实现验收记录。
+本批是 [ADR-032 执行计划](../adr032/execution-plan.md)第 7 节与 D8 的 P6a 静态稿。开发者于 2026-11-05 看过四轮之后确认，P6b 按这些稿实现。依据 [ADR-029](../../decisions/029-console-frontend-foundation.md)和[设计及带日期的改定](../adr029/console-frontend.md#设计)。没有改动控制台实现，没有调用模型，没有连接服务。这里只核对静态渲染，未做控制台功能验证，也不是 Host 的实现验收记录。
 
 每种画面有独立的中英文 HTML；英文文件在扩展名前加 `.en`。样式由 `base.css` 与本批的 [adr032.css](adr032.css)组成；后者只调整静态稿的排版，颜色全部引用 `base.css`，没有新增色值。主要审阅深色图，浅色图用于同时核对文字、线与浮层。顶栏、项目列表、28px 条目、灰色选中底、详情的头部／步骤带／内容、左侧标签列及折叠记号均沿用现有页面的结构。宏任务目标沿用现有图标与浮层，主截图中收起；另附展开状态。空宏任务保留微任务名称栏与时间轴区域，五页微任务详情都放回宏任务内部，左边名称栏常驻，Lead 的成员沿用其行下方的泳道。Git 交付和验收各画一个时刻，不表示同一时刻处于两种状态。
 
@@ -22,7 +22,6 @@
 | Git 回合交付 | [打开](adr032-git-delivery.html) | [Open](adr032-git-delivery.en.html) | [中文](adr032-git-delivery-dark.png) / [English](adr032-git-delivery.en-dark.png) | [中文](adr032-git-delivery-light.png) / [English](adr032-git-delivery.en-light.png) |
 | Worker 提交区间与干净三方核验 | [打开](adr032-git-commits.html) | [Open](adr032-git-commits.en.html) | [中文](adr032-git-commits-dark.png) / [English](adr032-git-commits.en-dark.png) | [中文](adr032-git-commits-light.png) / [English](adr032-git-commits.en-light.png) |
 | 固定补丁与有调整的核验 | [打开](adr032-git-patch.html) | [Open](adr032-git-patch.en.html) | [中文](adr032-git-patch-dark.png) / [English](adr032-git-patch.en-dark.png) | [中文](adr032-git-patch-light.png) / [English](adr032-git-patch.en-light.png) |
-| 项目种类对比（非页面，待选） | [打开](adr032-project-kind.html) | [Open](adr032-project-kind.en.html) | [中文](adr032-project-kind-dark.png) / [English](adr032-project-kind.en-dark.png) | [中文](adr032-project-kind-light.png) / [English](adr032-project-kind.en-light.png) |
 
 第 1 页另附目标展开图：[中文深色](adr032-macros-goal-dark.png)、[中文浅色](adr032-macros-goal-light.png)、[English dark](adr032-macros.en-goal-dark.png)、[English light](adr032-macros.en-goal-light.png)。第 1 页另有 800 × 900 的深色窄容器图：[中文](adr032-macros-narrow.png)、[English](adr032-macros.en-narrow.png)。常规截图宽 1360、高至少 1000，使用整页截图。截图都在 HTML 旁边。
 
@@ -32,7 +31,7 @@ none 写入提示另附：[中文深色悬停](adr032-none-write-changes-hover-d
 
 none 写入行改为“改动位置 / 原文件夹”，英文“Changes in / the original folder”。悬停与键盘聚焦提示保留“黑板不另存副本 / The blackboard keeps no copy”。
 
-新增 `adr032-project-kind` 中英文对比稿，上下排列做法 A 与做法 B，每种做法分别展示 Git 项目与普通文件夹的宏任务头部。做法 A 与当前各页相同，以“仓库 / Repository”或“文件夹 / Folder”为标签；做法 B 以“项目 / Project”为标签，名字前放随文字着色的小文件夹轮廓或 Git 记号。对比稿没有控制台顶栏，仅供比较，不是页面；等开发者选定后删除这张对比稿的 HTML 与截图。当前各页继续采用做法 A。
+项目种类在宏任务头部的写法，开发者在对比稿的两种做法里选了做法 A：以“仓库 / Repository”或“文件夹 / Folder”为标签，名字前不放记号；列表里的项目组照旧用会开合的文件夹图标。对比稿选定后已删除。
 
 ## 此前修订：项目图标与提示
 
@@ -123,8 +122,6 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 | `more` | 沿用 | 更多 | More |
 | `repositoryLabel` | 拟新增或改写 | 仓库 | Repository |
 | `folderLabel` | 拟新增或改写 | 文件夹 | Folder |
-| `optionA` | 拟新增或改写 | 做法 A | Option A |
-| `optionB` | 拟新增或改写 | 做法 B | Option B |
 | `delete` | 沿用 | 删除 | Delete |
 | `cancel` | 沿用 | 取消 | Cancel |
 | `deleteTitle` | 沿用 | 删除「{title}」 | Delete “{title}” |
