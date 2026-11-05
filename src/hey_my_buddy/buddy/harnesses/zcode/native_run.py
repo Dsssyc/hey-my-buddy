@@ -159,7 +159,9 @@ def configure_mode(connection: NativeConnection, session_id: str, mode: str) -> 
     setting = settings.get("mode") if isinstance(settings, dict) else None
     actual = setting.get("current") if isinstance(setting, dict) else None
     # Native mode.current reports the underlying permission mode. plan is a
-    # separate tool restriction and is never confirmed by that readback.
+    # separate tool restriction and is never confirmed by that readback; no
+    # shared permission requests it any more, so only the deliberate mode
+    # probe reaches this branch.
     if mode == "plan" or not isinstance(actual, str) or not actual.strip():
         connection.on_unknown("permission-mode-readback-unconfirmed")
     elif actual != mode:
@@ -1011,9 +1013,16 @@ class _CarrierOutcome:
     verified_completion: dict | None = None
 
 
-def _session_mode(request: RunRequest) -> str:
-    """Map the shared permission independently of its completion carrier."""
-    return {"none": "yolo", "read": "plan", "write": "yolo", "full": "yolo"}[request.permission]
+def _session_mode() -> str:
+    """The one native mode every tool-enabled shared permission runs in.
+
+    ZCode has no read-only session and no per-tool pre-approval for a
+    headless session (docs/research/2026-11-06-zcode-read-only-mode.md), so
+    read runs in the same normal mode as write and full; only the no-tool
+    scope keeps its own creation parameters. The deliberate mode probe
+    still overrides this to measure native modes directly.
+    """
+    return "yolo"
 
 
 def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
@@ -1264,7 +1273,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
     else:
         # A read or write permission without a bound service runs the same
         # final-message carrier over the user's native tools.
-        create_params = {"mode": _session_mode(request), "mcpServers": []}
+        create_params = {"mode": _session_mode(), "mcpServers": []}
     state.create_params = create_params
     while True:
         protocol_holder[:] = []
@@ -1312,7 +1321,7 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
     mounted session service, a continuation and live observers."""
     mount = services.mount
     mode, previous = _continuation_of(request)
-    create_params = {"mode": _session_mode(request), "mcpServers": list(mount.mcp_servers)}
+    create_params = {"mode": _session_mode(), "mcpServers": list(mount.mcp_servers)}
     state.create_params = create_params
     snapshot = None
     if mode == "native-session":

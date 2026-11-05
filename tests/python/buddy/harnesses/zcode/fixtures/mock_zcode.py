@@ -379,7 +379,9 @@ def request_client(request_id, method, params):
 def interactive_attention():
     """Exercise the documented interactive requests a micro task turn cannot grant."""
     permission = request_client("server-perm-1", "interaction/requestPermission",
-                                {"sessionId": session_id, "toolCallId": "fixture-tool", "toolName": "Bash"})
+                                {"sessionId": session_id, "toolCallId": "fixture-tool", "toolName": "Bash",
+                                 "input": {"command": "printf fixture-marker"},
+                                 "prompt": "Tool Bash requires permission"})
     user_input = request_client("server-input-1", "interaction/requestUserInput",
                                 {"sessionId": session_id, "interactionId": "fixture-question"})
     unknown = request_client("server-browser-1", "interaction/browserExecute",
@@ -461,8 +463,6 @@ def handle_message(message):
             return
         send({"id": request_id, "result": {"sessionId": session_id, "accepted": True, "stateRevision": 1}})
         native_path(state.parent).mkdir(parents=True, exist_ok=True)
-        if case == "mode-plan-required":
-            assert plan_active, "resuming a plan session must reapply plan before input"
         native_path(state).write_text(json.dumps({"sessionId": session_id, "selection": selection, "permissionMode": permission_mode}), encoding="utf-8", newline="\n")
         if case == "hang":
             time.sleep(120)

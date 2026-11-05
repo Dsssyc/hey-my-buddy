@@ -68,7 +68,7 @@ for line in sys.stdin:
         if case == 'discovery' or case == 'native-config' and 'mcpServers' not in p:
             assert p['toolAllowlist'] == []
         elif case in ('write-final', 'write-post-close'):
-            assert p.get('mode') in ('yolo', 'plan') and p['mcpServers'] == []
+            assert p.get('mode') == 'yolo' and p['mcpServers'] == []
         else:
             assert p['toolAllowlist'] == [] and p['mcpServers'] == []
             assert p['offPeakToolEnabled'] is False and p['dynamicWorkflowEnabled'] is False

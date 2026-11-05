@@ -60,7 +60,7 @@ hey-my-buddy 让你正在用的编码 agent 把一部分工作交给本机的其
 需要 [uv](https://docs.astral.sh/uv/)；在 Git 仓库里工作还需要 Git 2.40 或更高版本。
 
 ```sh
-uvx hey-my-buddy@0.61.1 install
+uvx hey-my-buddy@0.61.2 install
 ```
 
 它把一个共享的 agent skill 装到 `~/.agents/skills/hey-my-buddy`，自带启动器；私有的服务装在 `~/.local/share/hey-my-buddy` 之下（Windows 上是 `%LOCALAPPDATA%\hey-my-buddy`）。装了 Claude Code 或 Antigravity 时，它还在它们找 skill 的地方放一个指向这个 skill 的链接：`~/.claude/skills/hey-my-buddy` 与 `~/.gemini/config/skills/hey-my-buddy`。安装不改你的 `PATH`、shell 与 agent 设置。
@@ -69,7 +69,7 @@ uvx hey-my-buddy@0.61.1 install
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.61.1-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.61.2-py3-none-any.whl" hey-my-buddy install
 ```
 
 <details>

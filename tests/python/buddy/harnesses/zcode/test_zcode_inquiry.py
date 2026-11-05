@@ -871,12 +871,24 @@ class LiveActivityTests(ZcodeFixtureCase):
 class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
     def test_native_interactive_requests_end_as_host_attention(self):
         context = self.context("attention", timeout=30)
-        _, outcome = self.execute(context)
+        handle, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         responses = json.loads(self.native_log(context, "interaction-responses.json"))
         self.assertEqual(responses["permission"]["result"]["decision"], "deny")
         self.assertEqual(responses["userInput"]["result"]["action"], "decline")
         self.assertEqual(responses["unknown"]["error"]["code"], -32601)
+        # The denied permission request is recorded with what it asked to
+        # approve — the bounded tool name, call id and one operation value —
+        # while its prompt text never reaches the retained attention evidence.
+        bridge = json.loads(native_path(Path(handle.request.private_state.invocation_root)
+                                        / "finish-bridge.json").read_text(encoding="utf-8"))
+        attention = json.loads(native_path(Path(bridge["attentionPath"])).read_text(encoding="utf-8"))
+        permission = attention["requests"][0]
+        self.assertEqual(permission["method"], "interaction/requestPermission")
+        self.assertEqual(permission["toolName"], "Bash")
+        self.assertEqual(permission["toolCallId"], "fixture-tool")
+        self.assertEqual(permission["operation"], "printf fixture-marker")
+        self.assertNotIn("requires permission", json.dumps(attention))
         # Only the Host-answerable refusals need attention: the permission
         # request and the question. The browser request is counted as
         # unsupported evidence instead and never blocks the turn by itself.

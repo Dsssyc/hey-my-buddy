@@ -11,6 +11,8 @@ import time
 from typing import Callable
 
 from ..native_observations import bound_native_text, native_counter
+from ..native_support import (INQUIRY_TOOL_NAME_CHARS, NATIVE_ID_CHARS,
+                              NATIVE_SUMMARY_BYTES, truncate_text, truncate_utf8)
 from ..input_admission import admission_error
 from ..session_receipts import (refusal_shaped, verify_receipt, verify_tool_refusal,
                                 verify_inquiry_receipt)
@@ -593,6 +595,38 @@ def combined_usage(rounds: list[ZcodeAttemptUsage]) -> dict | None:
     return result
 
 
+#: The input members naming one tool operation, in the Claude adapter's caliber:
+#: the first one present is the operation a permission request asks to approve.
+_PERMISSION_OPERATION_KEYS = ("command", "file_path", "path", "notebook_path", "url")
+
+
+def _permission_request_facts(params: object) -> dict:
+    """What one ``interaction/requestPermission`` request asks to approve.
+
+    The reverse request carries the tool's own identities and raw input
+    (verified against the installed app server;
+    docs/acceptance/zcode-request-input-probe.md). Only the bounded tool name,
+    tool call id and one bounded operation value are retained — the full input
+    never reaches evidence.
+    """
+    tool_name = params.get("toolName") if isinstance(params, dict) else None
+    call_id = params.get("toolCallId") if isinstance(params, dict) else None
+    inputs = params.get("input") if isinstance(params, dict) else None
+    operation = "<command or path unread>"
+    if isinstance(inputs, dict):
+        for key in _PERMISSION_OPERATION_KEYS:
+            if isinstance(inputs.get(key), str) and inputs[key]:
+                operation = inputs[key]
+                break
+    return {
+        "toolName": truncate_text(native_tool_name(tool_name), INQUIRY_TOOL_NAME_CHARS)
+                    if isinstance(tool_name, str) and tool_name else "<unknown>",
+        "toolCallId": truncate_text(call_id, NATIVE_ID_CHARS)
+                      if isinstance(call_id, str) and call_id else None,
+        "operation": truncate_utf8(operation, NATIVE_SUMMARY_BYTES, errors="replace"),
+    }
+
+
 class NativeConnection:
     """Responses and reverse requests are pumped together; no request holds a reader."""
 
@@ -749,6 +783,8 @@ class NativeConnection:
             "outcome": outcome,
             "hostAction": "no interactive Host is attached; the turn must report assistance or attention in its own structured outcome",
         }
+        if method == "interaction/requestPermission":
+            record.update(_permission_request_facts(message.get("params")))
         self.attention(record)
 
     def unsupported_request(self, message: dict) -> None:

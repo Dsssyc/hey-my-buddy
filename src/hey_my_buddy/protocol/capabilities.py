@@ -18,7 +18,7 @@ PERMISSION_LEVELS = {
     "codex": {"none": "convention", "read": "enforced", "write": "enforced", "full": "enforced"},
     "claude": {"read": "enforced", "write": "enforced", "full": "enforced"},
     "dsh": {"none": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
-    "zcode": {"none": "enforced", "read": "enforced", "write": "convention", "full": "enforced"},
+    "zcode": {"none": "enforced", "read": "convention", "write": "convention", "full": "enforced"},
 }
 
 #: The fixed sentence every unknown input-limit declaration carries: no numeric

@@ -359,7 +359,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
         self.assertNotIn("reported", result.effective_policy.tools.to_payload())
 
-    def test_router_review_uses_the_worker_plan_mode_without_a_service(self):
+    def test_router_review_uses_the_worker_normal_mode_without_a_service(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         os.environ["HMB_ZCODE_TEST_CASE"] = "write-final"
         request = self.fast_request(structured_prompt("Choose a buddy", SCHEMA))
@@ -368,7 +368,9 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.raw, '{"choice":"a"}')
-        self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "plan"})
+        # Read runs in the same normal mode as write: ZCode has no native
+        # read-only session for a headless turn.
+        self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
 
     def test_a_late_tool_frame_after_settlement_is_the_role_call_not_the_scopes(self):
         # The EOF drain hands a late tool fact to the role observer: a rule that
@@ -663,14 +665,13 @@ class WorkerSeamTests(MockNativeCase):
                 with mock.patch.object(native_run, "_open_root", wraps=original_open) as opened:
                     result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
                 self.assertEqual(result.end.status, "ok", result.end.message)
-                native_mode = "plan" if level == "read" else "yolo"
                 self.assertEqual(opened.call_args.kwargs["create_params"],
-                                 {"mode": native_mode, "mcpServers": list(services.mount.mcp_servers)})
-                self.assertEqual(result.effective_policy.tools.requested.value, {"mode": native_mode})
+                                 {"mode": "yolo", "mcpServers": list(services.mount.mcp_servers)})
+                self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
                 self.assertEqual(result.value.schema_status, "valid")
                 self.assertEqual(result.value.parsed.value["summary"], "fixture work completed")
                 self.assertEqual(PERMISSION_LEVELS["zcode"][level],
-                                 "convention" if level == "write" else "enforced")
+                                 "convention" if level in ("read", "write") else "enforced")
 
     def resume_with_levels(self, first_level, second_level, *, case="ok"):
         os.environ.update(self.environment)
@@ -704,54 +705,44 @@ class WorkerSeamTests(MockNativeCase):
         expected = json.loads(fixture.with_name("native-usage-zcode.json").read_text(encoding="utf-8"))["expectedMessages"]
         with mock.patch.dict(self.environment):
             select_fixture(self.environment, self.root, "zcode", fixture)
-            for first_level, second_level, before, after in (
-                    ("read", "write", "build", "yolo"),
-                    ("write", "read", "yolo", "yolo"),
-                    ("read", "read", "build", "build")):
+            for first_level, second_level in (
+                    ("read", "write"), ("write", "read"), ("read", "read")):
                 with self.subTest(first=first_level, second=second_level), mock.patch.object(
                         self, "base", self.base / f"usage-{first_level}-{second_level}"):
                     first, second, calls, readbacks = self.resume_with_levels(
                         first_level, second_level, case="resume-ok")
                     self.assertEqual(second.end.status, "ok", second.end.message)
                     self.assertEqual(second.native_identity.session_id, first.native_identity.session_id)
-                    mode = "plan" if second_level == "read" else "yolo"
                     self.assertIn(("session/setMode", {"sessionId": first.native_identity.session_id,
-                                                       "mode": mode}), calls)
-                    self.assertEqual(readbacks, [("session/resume", {"current": before}),
-                                                ("session/setMode", {"current": after})])
+                                                       "mode": "yolo"}), calls)
+                    self.assertEqual(readbacks, [("session/resume", {"current": "yolo"}),
+                                                ("session/setMode", {"current": "yolo"})])
                     token_usage = normalize_token_usage(second.usage.value)
                     self.assertEqual(token_usage["inputTokens"], expected["inputTokens"])
                     self.assertEqual(token_usage["nativeRecords"], expected["records"])
                     self.assertEqual(token_usage["completeness"], "complete")
 
-    def check_resumed_level(self, first_level, second_level, native_mode):
-        first, second, calls, readbacks = self.resume_with_levels(first_level, second_level,
-            case="mode-plan-required" if second_level == "read" else "ok")
+    def check_resumed_level(self, first_level, second_level):
+        first, second, calls, readbacks = self.resume_with_levels(first_level, second_level)
         self.assertEqual(second.end.status, "ok", second.end.message)
         self.assertEqual(second.native_identity.session_id, first.native_identity.session_id)
         self.assertEqual([params for method, params in calls if method == "session/setMode"],
-                         [{"sessionId": first.native_identity.session_id, "mode": native_mode}])
+                         [{"sessionId": first.native_identity.session_id, "mode": "yolo"}])
         methods = [method for method, _ in calls]
         self.assertLess(methods.index("session/resume"), methods.index("session/setMode"))
         self.assertLess(methods.index("session/setMode"), methods.index("session/setModel"))
         self.assertLess(methods.index("session/setMode"), methods.index("session/send"))
-        self.assertEqual(second.effective_policy.tools.requested.value, {"mode": native_mode})
+        self.assertEqual(second.effective_policy.tools.requested.value, {"mode": "yolo"})
         self.assertEqual(second.value.schema_status, "valid")
-        underlying = "build" if first_level == "read" else "yolo"
-        self.assertEqual(readbacks, [("session/resume", {"current": underlying}),
-                                   ("session/setMode", {"current": underlying if native_mode == "plan" else "yolo"})])
-        if native_mode == "plan":
-            self.assertEqual(dict(second.native_evidence.unknown_events.counts_by_type)
-                             ["permission-mode-readback-unconfirmed"], 1)
+        self.assertEqual(readbacks, [("session/resume", {"current": "yolo"}),
+                                   ("session/setMode", {"current": "yolo"})])
 
-    def test_read_to_write_resume_sets_yolo_on_the_same_session(self):
-        self.check_resumed_level("read", "write", "yolo")
-
-    def test_write_to_read_resume_sets_plan_on_the_same_session(self):
-        self.check_resumed_level("write", "read", "plan")
-
-    def test_read_to_read_resume_reapplies_plan_despite_build_readback(self):
-        self.check_resumed_level("read", "read", "plan")
+    def test_every_level_resume_reapplies_the_normal_mode_on_the_same_session(self):
+        # Read, write and full all run in the same native mode now, so every
+        # resumed level pair re-applies and confirms that one mode.
+        for first_level, second_level in (("read", "write"), ("write", "read"), ("read", "read")):
+            with self.subTest(first=first_level, second=second_level):
+                self.check_resumed_level(first_level, second_level)
 
     def test_resume_mode_mismatch_fails_before_model_input_and_retains_requested_mode(self):
         _first, second, calls, _readbacks = self.resume_with_levels("read", "write", case="mode-mismatch")
@@ -1064,7 +1055,7 @@ class WorkerSeamTests(MockNativeCase):
         self.assertTrue(provenance["receiptVerified"])
         self.assertEqual(provenance["toolCallId"], evidence_call(result))
 
-    def test_a_read_permission_uses_plan_mode_with_the_worker_service(self):
+    def test_a_read_permission_uses_the_write_mode_with_the_worker_service(self):
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         turn_input = self.turn_input()
@@ -1072,9 +1063,10 @@ class WorkerSeamTests(MockNativeCase):
         scoped = request.model_copy(update={"permission": "read"})
         result = run(scoped, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok")
-        # The same plan mode applies to a Worker turn and a Router review.
+        # Read runs the same normal mode as write: read-only holds by role
+        # convention alone, with no native mode enforcing it.
         self.assertIsNotNone(result.effective_policy.tools)
-        self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "plan"})
+        self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
 
 
 class NoToolReverseRequestTests(unittest.TestCase):
@@ -1100,13 +1092,61 @@ class NoToolReverseRequestTests(unittest.TestCase):
         connection = NativeConnection(process, time.monotonic() + 10, threading.Event(), no_tools=True, runtime_preferences=FALLBACK_PREFERENCES)
         connection.attention = recorded.append
         connection.messages.put({"id": 7, "method": "interaction/requestPermission",
-                                 "params": {"sessionId": "s", "kind": "shell"}})
+                                 "params": {"sessionId": "s", "toolCallId": "call-1",
+                                            "toolName": "Bash",
+                                            "input": {"command": "printf marker"},
+                                            "prompt": "Tool Bash requires permission"}})
         try:
             connection.pump()
         except Exception as error:  # noqa: BLE001 - the pump must not raise here
             self.fail(f"a no-tool reverse request raised out of the pump: {error!r}")
         self.assertEqual(recorded[0]["method"], "interaction/requestPermission")
         self.assertEqual(recorded[0]["outcome"], "refused-with-jsonrpc-error")
+        # The record carries what the request asked to approve, in the Claude
+        # adapter's caliber: bounded tool name, tool call id and one operation
+        # value; the raw input and the prompt never reach evidence.
+        self.assertEqual(recorded[0]["toolName"], "Bash")
+        self.assertEqual(recorded[0]["toolCallId"], "call-1")
+        self.assertEqual(recorded[0]["operation"], "printf marker")
+        self.assertNotIn("prompt", recorded[0])
+
+    def test_a_permission_request_without_readable_facts_stays_bounded_and_honest(self):
+        import subprocess
+        import sys
+        import threading
+        import time
+        from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeConnection
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+        def reap():
+            process.kill()
+            process.wait(timeout=5)
+            process.stdin.close()
+            process.stdout.close()
+
+        self.addCleanup(reap)
+        recorded = []
+        connection = NativeConnection(process, time.monotonic() + 10, threading.Event(),
+                                      runtime_preferences=FALLBACK_PREFERENCES)
+        connection.attention = recorded.append
+        connection.send = lambda _message: None
+        long_command = "echo " + "测" * 600
+        connection.messages.put({"id": 8, "method": "interaction/requestPermission",
+                                 "params": {"toolCallId": "call-long", "toolName": "Bash",
+                                            "input": {"command": long_command}}})
+        connection.messages.put({"id": 9, "method": "interaction/requestPermission",
+                                 "params": {"sessionId": "s"}})
+        for _ in range(2):
+            connection.pump()
+        self.assertLessEqual(len(recorded[0]["operation"].encode("utf-8")), 512)
+        self.assertTrue(recorded[0]["operation"].startswith("echo 测"))
+        # A request naming no tool and no input says so instead of inventing
+        # facts; its other members are unchanged.
+        self.assertEqual(recorded[1]["toolName"], "<unknown>")
+        self.assertIsNone(recorded[1]["toolCallId"])
+        self.assertEqual(recorded[1]["operation"], "<command or path unread>")
+        self.assertEqual(recorded[1]["method"], "interaction/requestPermission")
 
     def test_provider_headers_are_an_unsupported_host_capability_not_a_provider_ban(self):
         process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
