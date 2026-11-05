@@ -32,23 +32,23 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 | Document | Role |
 | --- | --- |
-| [reference/usage.md](reference/usage.md) | Practical path from install to reviewed result: task packets, workspace choice, supervised micro tasks, observation and background follow-up |
+| [reference/usage.md](reference/usage.md) | Practical path from install to reviewed result: explicit creation and submission, Git or no-checkout work, fixed-result review and background follow-up |
 | [reference/host.md](reference/host.md) | How any Host waits: one `await` per running micro task, what each outcome asks for, lost replies, finding open work before the turn ends, and the launcher outside the sandbox. |
 | [reference/host-codex.md](reference/host-codex.md) | Codex Host waiting flow: one monitoring-only subagent per micro task, the launcher's sandbox rule and Codex-specific limits |
 | [reference/host-claude-code.md](reference/host-claude-code.md) | Claude Code Host waiting flow: one background `await` per running micro task, the launcher's sandbox settings and the session-wakeup limits |
-| [reference/workflow.md](reference/workflow.md) | Micro task lifecycle: routing boundaries, Host decisions, helpers, continuation and takeover, workspace and artifact rules, cancellation and provider rejections |
-| [reference/workspace-lifecycle.md](reference/workspace-lifecycle.md) | Host-owned scope changes, recorded conflict recovery, verified integration and exact-worktree cleanup |
+| [reference/workflow.md](reference/workflow.md) | Micro task lifecycle: routing boundaries, response ids, helpers and Lead ownership, continuation, future authorization, fixed outputs, cancellation and provider rejections |
+| [reference/workspace-lifecycle.md](reference/workspace-lifecycle.md) | continuation authorization and site resolution, three-way Git integration or fixed-result acceptance, conclusion and automatic managed-checkout cleanup |
 | [reference/codex.md](reference/codex.md) | Codex Worker execution through the App Server of the Codex CLI: plan discovery, structured results and session bindings |
 | [reference/claude-code.md](reference/claude-code.md) | Claude Code Worker execution through the Claude Code CLI: native configuration and login, structured results, native-probe boundaries and provider rejection classification |
-| [reference/cli.md](reference/cli.md) | Complete `hey-my-buddy` command reference: parameters, defaults, bounds, result envelopes, event kinds and error codes |
+| [reference/cli.md](reference/cli.md) | Host, user operations and role entry points with combinations and examples, model-generated help, action ids and wait envelopes |
 | [reference/operations.md](reference/operations.md) | Installation and upgrade, runtime lifecycle, private state and environment, session privacy, recovery and removal |
 | [reference/evaluation.md](reference/evaluation.md) | Shared buddies, preferences, model service notes, the private console HTTP surface and the Buddy and 设置 pages |
 | [reference/console.md](reference/console.md) | Console access and CLI lifecycle, persistent sessions, buddy sections, deep links and verification |
-| [reference/macro-tasks.md](reference/macro-tasks.md) | Macro task grouping, `macro-task-list`/`macro-task-timeline` read shapes, deletion and timeline presentation |
+| [reference/macro-tasks.md](reference/macro-tasks.md) | independent macro task creation and goals, Git and folder project identity, empty groups, Host collections and console timeline/deletion reads |
 | [reference/decision.md](reference/decision.md) | The harness-neutral Router protocol in both modes: the tool-free fast request and the read-only review request, frozen candidates, answer bounds, budgets, input verification and the native capability boundary |
 | [reference/workers.md](reference/workers.md) | The four harness adapters and the model-free `command` adapter, each harness's launch and turn, receipts, bounded activity and stop evidence |
 | [reference/harness-integration.md](reference/harness-integration.md) | Adding a harness: each part to implement, its file and the test that guards it, the conformance check over every harness name and what it cannot verify |
-| [reference/architecture.md](reference/architecture.md) | Implemented topology, the C-Two contract, the schema, the shared attempt ceiling and model service concurrency, identity, recovery, catalog observation and packaging |
+| [reference/architecture.md](reference/architecture.md) | Implemented topology, contract 0.61.0, schema 35 and its five-step upgrade chain, the shared attempt ceiling and model service concurrency, identity, recovery, catalog observation and packaging |
 | [reference/harnesses.md](reference/harnesses.md) | Local harness discovery: health cache, executable selection, environment, capabilities, provider rejections and cooling, and how far each harness is verified |
 
 Detailed commands belong in their owning reference, routed from this page and from [skills/hey-my-buddy/SKILL.md](../skills/hey-my-buddy/SKILL.md).
@@ -91,6 +91,7 @@ Each ADR records the decision at its own point in time, with its dated amendment
 | [029](decisions/029-console-frontend-foundation.md) | The console's frontend foundation |
 | [030](decisions/030-harness-layer-scope.md) | What the harness layer owns: the user's harness is used as it is |
 | [031](decisions/031-one-process-per-execution.md) | One process per execution |
+| [032](decisions/032-host-interface-delegation-loop.md) | The Host delegation loop, explicit execution choices, response identities and work without a checkout |
 
 ## Acceptance records
 

@@ -1,313 +1,185 @@
 # `hey-my-buddy` CLI reference
 
-`hey-my-buddy` is the supported entrypoint: one command per operation, one JSON object argument — given as the positional argument, as `--params-file PATH`, or on standard input as `-` — and one JSON object on stdout. This page is the complete command surface and its defaults, bounds, envelopes and error codes. Usage flows are in [usage.md](usage.md); the micro task lifecycle is in [workflow.md](workflow.md); runtime lifecycle is in [operations.md](operations.md).
+The CLI presents the Host delegation loop, user operations and credential-scoped role calls separately. Contract 0.61.0 implements [ADR-032](../decisions/032-host-interface-delegation-loop.md). Request fields and legal combinations come from the same models as local `help`; this page explains how to use the entry points rather than copying their complete schemas.
 
 ## Invocation
 
 ```sh
 HMB="$HOME/.agents/skills/hey-my-buddy/scripts/hey-my-buddy"
-"$HMB" status '{"runId":"<runId>"}'
+"$HMB" help
+"$HMB" help submit
+"$HMB" help operations
+"$HMB" help role
 ```
 
-The shared skill's `scripts/hey-my-buddy` is the single launcher. It resolves its project from the skill's `package/`, or the repository root for `skills/hey-my-buddy/scripts/hey-my-buddy` in a checkout. Installation, upgrade and `HMB_DEV_SOURCE=1` use uv with Python 3.12; daily calls use the pinned runtime interpreter. From the repository root the same CLI is `uv run --frozen hey-my-buddy <command> '<json>'` or `uv run --frozen python -m hey_my_buddy.cli.main <command> '<json>'`. The JSON argument defaults to `{}`; an unknown method name prints the closest candidates (`didYouMean`) and exits 2. Service request schemas reject unknown JSON parameters with `INVALID_ARGUMENT`.
+Call the installed launcher's absolute path. The [operations guide](operations.md#launcher-sandbox-and-environment) explains sandbox access, runtime selection and private state.
 
 ## Parameter input
 
-Every method takes one JSON object. Give it exactly one way: as the positional argument, as `--params-file PATH`, or on standard input as `-` (`hey-my-buddy status -` and `hey-my-buddy status --params-file -` are the same thing). The sources are mutually exclusive — naming two exits 2 with a structured `INVALID_ARGUMENT` envelope and never calls the service. A file or stream is read as raw bytes, must decode as UTF-8 (an optional byte-order mark is accepted; invalid UTF-8 is `INVALID_ARGUMENT`), and is capped at 8 MiB, the same bound the transport accepts for one request; an oversized document is refused before any socket or daemon exists. The bytes are parsed as JSON directly and are never re-interpreted by a shell, so quoting, `$(...)`, backticks, backslashes, whitespace and non-ASCII text reach the service verbatim. Everything after parsing is identical to the positional form: `output` stays CLI-local, `controlFile` injection resolves the same private `0600` capability, the attempt-scoped credential is injected the same way, and a document that is not one JSON object fails with `INVALID_ARGUMENT`.
+Pass one JSON object as a positional argument, `--params-file PATH`, or `-` for stdin. These forms are mutually exclusive. File/stdin input is UTF-8, optionally with a BOM, and bounded at 8 MiB; its content is parsed directly and never executed by a shell. Omit inapplicable fields; explicit null is rejected except where help declares it as a value, such as restoring automatic harness detection.
+
+```sh
+"$HMB" submit --params-file /abs/packet.json
+"$HMB" get '{"runId":"<runId>","output":"full"}'
+```
 
 ## Method help
 
-`hey-my-buddy help` lists every method with a one-sentence description and the three input forms. `hey-my-buddy help METHOD` prints that method's accepted parameters with the type, default and bounds the request validator enforces, marks parameters that only apply under other inputs (`conditional`, for example `buddy` and `reroute` on `continue`, or `expectedConsoleId` on `console close`), and names the validator and source line the facts came from. Fields read out of a nested object are printed under it (`buddy.harness`, `helpers.task`); the retired nested `spec` spelling no longer exists, so the ordinary spec fields print once, where they are given. A condition the reader cannot reduce to one bound (a hash comparison, a duplicate-key check, a cross-field conflict) is printed as the readable condition from the source with its location instead of being dropped. A field the validator accepts but never bounds says exactly that; a field-name set computed at runtime is named as runtime-computed. The facts are read statically from the same request validators the service enforces, on every invocation: there is no second parameter schema to drift, and changing a validator constant changes the next `help` output. Help starts no service, worker or model, opens no socket and reads no credential. A mistyped method name prints the closest candidates and exits 2, and an unknown method name is never forwarded to the service.
-
-Every CLI name that the service answers maps to one named C-Two operation; `install`, `paths`, `help` and `await` are handled by the CLI itself, and `await` combines existing operations. The micro task lifecycle keeps the short public names (`submit`, `get`, `decide`, `continue`, `takeover`, `cancel`, `accept`, `conclude`, `reclaim`, `suggest`) for the `workflow_*` operations; `execution-cancel`, `execution-retry` and `execution-acknowledge` reach the ordinary `task_*` records that micro task turns and routing calculations run as; no method admits one. The workspace lifecycle adds `scope-amend` → `workflow_scope_amend` and `workspace-resolve` → `workflow_workspace_resolve`; [workspace-lifecycle.md](workspace-lifecycle.md) owns their fields and eligibility rules. Do not conflate the two spellings: the short name is CLI syntax, the `workflow_*` or `task_*` name is the stable operation identity.
-
-The CLI injects Host authority locally. For any mutation that requires it, `controlFile` names a private `0600` file bound to one run and owner generation; alternatively the complete `hostId` + `ownerGeneration` + `controlToken` triple may be passed explicitly. There is deliberately no implicit "latest generation" lookup, and a control file never extends an attempt-scoped agent credential: the service authorizes such a call by the credential alone. Newly returned control capabilities are saved privately and only the file path is printed.
+`help [METHOD]` describes Host requests, `help operations [METHOD]` describes user operations, and `help role [METHOD]` describes execution-credential calls. Help reads local code and starts no service, native harness or model. Fields, bounds and combination rules are generated from `protocol/requests.py`; unknown fields and invalid combinations are rejected with field paths.
 
 ## Envelope and exit status
 
-- Success prints one compact JSON object on one line and exits 0. The object is the brief output view described below unless the caller passed `"output":"full"`.
-- A failure prints `{"error":{"code":"...","message":"..."}}` and exits 1. The service can attach an `error.details` object (a revision, a resumable cursor, conflicting fingerprints, `legalEfforts`, `routingTaskId`), and the transport, `BoardClient` and CLI preserve those details. Command-line usage errors are argparse errors and exit 2.
-- A transport error or invalid response can leave the submission outcome unknown: the task may have committed before the reply was lost. Query the original `requestId`, or replay the identical submission to recover it. A different request ID can duplicate work. A `WAIT_ABANDONED` envelope ends only the wait.
-- Exit 0 only means the call returned. It is **not** task success: read `status`, `outcome`, `resultDelivered` and `shutdownConfirmed`, then inspect the artifacts.
-- `await` may print a `WAIT_ABANDONED` envelope when the wait is interrupted; the durable task keeps running and the envelope names the real recovery commands.
+JSON replies carry `contractVersion`. A successful service reply proves that operation's recorded facts, not completed work or acceptance. Errors have an `error` object with a code, message and applicable structured details. Exit 0 means no error envelope, 1 an operation error, and 2 a local usage error. Unavailable service, refused native permission and unknown stop are operational facts, not necessarily malformed input.
 
 ## Output views
 
-Every printed response stays in the calling Host model's context and is re-read on each later request, so the CLI prints a brief projection of the service response by default. `output` is a CLI-local field: `"output":"brief"` (the default) or `"output":"full"`. It is removed before the RPC, so the service, `BoardClient` and the console always receive and return the complete views, and `"output":"full"` prints the unmodified response. `console` keeps its complete response. Commands without a projection print their complete response in compact JSON. Error envelopes are never projected.
+Most commands accept the CLI-only `output: "brief"` (default) or `"full"`; it is removed before service validation. Brief action receipts carry ids, current state and `actions`. `get` reads the current run or collection; a full run view retains the brief and inquiries, while `includeAudit: true` requests persisted audit detail. Console lifecycle has its own reply. An action's advertised legality is a fact at that moment; re-read after a conflict rather than guessing another id.
 
-The projection only omits material the caller already supplied (the micro task packet and `executionWorkspace` intent), duplicates (the execution summary under `task`, a cleanup plan echoed as both `plan` and `cleanup`, `tasks` beside `runs`, turn/artifact copies inside an `await` result) and history not needed for the next decision (older turns and requests, input artifacts, fingerprints and timestamps). It keeps every identifier a following command needs, the complete `activeRequest`, workspace conflicts, errors, nonzero truncation with its counts, and the complete `shutdown` report whenever shutdown is not fully confirmed. A value the service did not report is never replaced by a default. Projected objects carry `"view":"brief"` or, for a mutation, `"view":"receipt"`. A brief `get` leaves out the task text the Host submitted; the service view and `"output":"full"` carry it whole. No reply cuts what a Worker reported: the turn's `summary` and `remaining` are whole in every view, and index reads such as lists carry no report.
+## Host commands
 
-| Command | Brief view |
-| --- | --- |
-| `get` | `runId`, `requestId`, `state`, `status`, `queueReason`, `awaitingHost`, `revision`, `ownerGeneration`, `continuationCount`, `buddy`, `routing` (`status`, `source`, `reason`, `selectedBuddy`, `decisionId`), `workspace` (`path`, `kind`, `access`, `inputCommit`), `scope` (`scopeVersion`, `writeScope`), `currentTurn` (identity, state, disposition, `summary`, `remaining`), `activeRequest`, `pendingRequests`/`openRequests` when more than one is open, compact `children`, `artifacts` limited to output artifacts (`artifactId`, `kind`, `turnId`, `manifestSha256`, `outputCommit`, `diffPath`, `diffSha256`, `changedPaths`) with an `otherArtifacts` count for the omitted inputs and manifests, `workspaceConflicts`, compact `integrations` and `cleanup`, `finalArtifactId`, `acceptedAt`, `shutdown`, `counts` and nonzero `truncated` entries. `includeAudit` and `routingHistory` are returned as requested |
-| `submit` and micro task mutations (`decide`, `continue`, `takeover`, `cancel`, `accept`, `conclude`, `reclaim`, `scope-amend`, `goal-amend`, `workspace-resolve`, `suggest`) | The `get` brief view without the turn summary, plus the operation's own result: `duplicate`, `controlFile`/`control` (never a token), `verdict`, `integrationId` and compact `integration`, compact `plan` (`planId`, `state`, `eligible`, `reasons`, `path`, retained-item counts, `result`), compact `reclaim` (`removed`, `alreadyRemoved`, `reasons`, `path`, `planId`), `removed`, and a different `targetRunId`/`targetRevision`. An unrecognized operation field is kept |
-| `await` | The envelope without `maxWaitSeconds`, `createdAt`, `cwd` and null fields; `logPaths` only when `ok` is false; a micro task result without its runner `finalText` when the turn summary is present (the summary is the whole report) |
-| `status`, `execution-*` | Task identity (`runId`, `requestId`, `createdAt`) and `state`, attempt identity/state, `resultAvailable`, `shutdownConfirmed`, acceptance fields, `buddy`, the compact `workflow` summary, `workflowShutdown`, `activity`, `inquiries` and a `title`; no `spec`, task text or runner payload |
-| `result` | The `status` view plus `attemptId`, `resultDelivered`, the verified execution `artifacts`, `resultMeta` without its duplicate artifact list, and the micro task result view (or the opaque infrastructure `result`) |
+The Host has ten verbs plus `help` and `console`. No per-run Host control credential is required. Worker and Lead execution credentials remain distinct, and their allowed calls are confined to their roles.
 
-Cancelled micro task `get` and execution `result` views expose `cancellation: {actor, note}` in both brief and full output when their own durable cancellation event exists. The optional `note` is the actor's own content; an omitted note stays null. A missing event or field stays unknown. Full execution reads expose `selectedAttempt.releaseReason` as a nullable `{code, params}` reason object, bound to the selected attempt. Reason codes and parameters are registered in `src/hey_my_buddy/protocol/reason-codes.json`; readers supply their wording. A full `get` also carries the selected attempt's `task.terminationReason`, `task.stopInitiator` and `task.graceDeadline` ([architecture](architecture.md)), and for an interrupted execution `interruptionEvidence: {kind}` in both brief and full output. A completion already recorded before micro task cancellation keeps its completed execution result.
-| `list` | `runs` rows with `runId`, `requestId`, `adapter`, `model`, `state`, `workflowState`, `awaitingHost`, `kind`, `parentRunId`, `currentHostId`, `createdAt` and a `title`; `total`, `cursor`, `nextCursor`. In full output each run's `lineage` names its kind (micro task, helper, routing calculation or command execution), a `project` that is null when none was recorded, and for a routing calculation the Router's buddy and `routingTask`, the micro task it routed with that micro task's macro task; these names are for readers only and never enter an execution's input |
+### Create and amend
 
-## Service
+`create` establishes a macro task in the project containing `cwd`, with a title and goal; it can have no micro tasks. `amend` addresses its `macroTaskId` and appends a new goal when it differs from the current one. The same current goal returns `alreadyCurrent`. Goal text is stored as written and does not enter Worker or Router input.
 
-| Command | Parameters | Behavior |
+```sh
+"$HMB" create '{"cwd":"/abs/project","title":"Storage reliability","goal":"Recover every admitted write after a crash."}'
+"$HMB" amend '{"macroTaskId":"<macroTaskId>","goal":"Recover every admitted write and verify migration from the upgrade floor."}'
+```
+
+The service derives creation identity from project and title. Repeating creation returns the original with `alreadyExists` and does not replace its goal; change the title for a new macro task.
+
+### Submit
+
+`submit` supplies `cwd`, an existing `macroTaskId` or literal `"standalone"`, title, brief, buddy choice, checkout choice, access and expected duration explicitly. `buddy` is `"route"` or a complete recorded catalog buddy name. A Git checkout is `"worktree"` or `"existing"`, captures the current working tree and requires `inputs`, including an explicit empty array. Git `write` or `full` also requires nonempty `writeScope`; `read` forbids it. `checkout: "none"` works directly in `cwd` and forbids both path arrays. `full` requires a single-line `accessNote`; other levels forbid it. Expected duration only drives reminders and routing input.
+
+```sh
+"$HMB" submit '{"cwd":"/abs/repo","macroTaskId":"<macroTaskId>","title":"Repair journal recovery","task":"Repair journal recovery in src/journal.py, run the focused checks and return the fixed output. Stop if a necessary change is outside scope.","buddy":"route","checkout":"worktree","access":"write","writeScope":["src/journal.py"],"inputs":[],"expectedSeconds":1800}'
+"$HMB" submit '{"cwd":"/abs/research","macroTaskId":"standalone","title":"Check the argument","task":"Review the supplied argument and return specific counterexamples.","buddy":"route","checkout":"none","access":"read","expectedSeconds":900}'
+```
+
+Use `fixes` only for repair of an accepted micro task. Explicitly authorized `delegationAuthority: true` requires full access and a named buddy. The service derives submission identity from macro task (or project for standalone work), title and brief. A repeated key returns the existing run with `alreadyExists` and its actual authorization and execution selection; it does not apply new settings. Change the title to redo it.
+
+### Await and get
+
+`await` observes one `runId` for a bounded window, returning a boundary, delivery, reminder or window end. It starts no task and does not stop work when the window ends. [Host waiting](host.md) owns supervision; the [envelope](#await-envelope) lists the response facts.
+
+`get` selects exactly one of `runId`, `macroTaskId` and project `cwd`. A macro task view includes its goal and members, including an empty collection; a project view includes macro tasks and standalone micro tasks. Collections accept pagination, while `includeAudit` and `routingHistory` apply only to a run. Each collection's cursor continues that collection; a run's routing history has its own numeric cursor.
+
+```sh
+"$HMB" await '{"runId":"<runId>","waitSeconds":3600}'
+"$HMB" get '{"macroTaskId":"<macroTaskId>","limit":20}'
+"$HMB" get '{"cwd":"/abs/project"}'
+"$HMB" get '{"runId":"<runId>","routingHistory":{"limit":20}}'
+```
+
+### Inquire
+
+`inquire` observes a run when given only `runId`, asks a question with `question`, or reads an existing question with its returned `inquiryId`. Question and inquiry id cannot be combined. The service derives question identity from run and question text, so repeating it returns the original inquiry. Native channel capability, delivery, answer and timeout are distinct facts.
+
+```sh
+"$HMB" inquire '{"runId":"<runId>","question":"Which check currently blocks completion?"}'
+"$HMB" inquire '{"runId":"<runId>","inquiryId":"<inquiryId>"}'
+```
+
+### Continue
+
+`continue` answers exactly one returned `requestId`, `artifactId` or `turnId`. A boundary can take `decision: "approve"` or `"decline"`; approved helpers need complete submission packets and explicit `autoContinue`. A declined boundary forbids helpers and that flag. An artifact or failed turn requires new `input`; use the failed turn id only when it has no fixed result. Identical action replays are recognized; another action on the same answered fact conflicts.
+
+```sh
+"$HMB" continue '{"runId":"<runId>","requestId":"<requestId>","decision":"decline","note":"The proposed helper is unnecessary; return the current findings."}'
+"$HMB" continue '{"runId":"<runId>","artifactId":"<artifactId>","input":"Address the failed acceptance case and rerun the checks.","buddy":"route","note":"Choose an available buddy for this continuation."}'
+```
+
+With continuation input, `buddy` selects routing or a complete named buddy; a change requires a note. Access and write scope changes take effect only on the new turn. Live helpers require an explicit `helperPolicy`, absent when none are live. A workspace-site reply uses `requestId`, `resolution: "restore"`, `"adopt"` or `"abandon"`, and the observed fingerprint; adopt and abandon require a note and forbid path selection. Resolution alone opens no turn; adding input continues only after resolution succeeds. [Workflow](workflow.md#host-boundaries-and-requests) and [workspace lifecycle](workspace-lifecycle.md) own these checks.
+
+### Accept, conclude and cancel
+
+`accept` binds the exact `artifactId`, review note and either `target: {path, ref}` or a reasoned `notRequired`. Supply the target's `beforeCommit` unless its tip merge containing the artifact proves it from the parents. Git 2.40 or newer supplies three-way verification. Real changes by the Host require `adjusted` and a note; `hostPaths` names real changes outside artifact paths within the same before/after interval. A micro task without a checkout accepts only `notRequired`.
+
+```sh
+"$HMB" accept '{"runId":"<runId>","artifactId":"<artifactId>","note":"Reviewed the fixed output and checked the integrated target.","target":{"path":"/abs/repo","ref":"main"},"beforeCommit":"<before-commit>"}'
+"$HMB" accept '{"runId":"<runId>","artifactId":"<artifactId>","note":"Checked the answer against the brief.","notRequired":"Answer-only work; no repository integration."}'
+```
+
+`conclude` ends stopped failed, cancelled or delivered work that will not be accepted. Name the fixed `artifactId` when one is being ended; otherwise `runId` and a note suffice. `cancel` locates the micro task only by `runId` with an optional note and records ordered stop intent. `targetRunId` on applicable lifecycle calls addresses an authorized helper through its controlling run; it cannot reach a Lead-owned micro task from an ordinary Host. Neither operation bypasses real stop evidence. Cleanup blocked after acceptance or conclusion is retried by the service.
+
+```sh
+"$HMB" conclude '{"runId":"<runId>","artifactId":"<artifactId>","note":"Reviewed the stopped output; no further work will be accepted."}'
+"$HMB" cancel '{"runId":"<runId>","note":"The user asked to stop this work."}'
+```
+
+### Console
+
+`console` opens the loopback console, reads its lifecycle state or closes the named instance. Browser launch and foreground waiting options apply only to opening; an instance identity applies only to closing. [Console access](console.md) and [operations](operations.md) own session and runtime details.
+
+```sh
+"$HMB" console '{"action":"open","browser":false}'
+"$HMB" console '{"action":"close","expectedConsoleId":"<console-id>"}'
+```
+
+## User operations
+
+These top-level commands have separate `help operations` documentation. [Host operations](operations.md#host-operations) says when an authorized Host uses them and what needs the user's agreement.
+
+| Command | Purpose and combinations | Example |
 | --- | --- | --- |
-| `ping` | none | Authenticated process liveness: status, protocol/contract/schema versions, service id, PID and the stored persistence error; no integrity or runtime inspection. Internal client attachment uses this operation |
-| `health` | none | Protocol/contract/schema versions, service id, state dir, runtime identity and stability, model `capacity` (`totalLimit`, `totalActive`, `models` entries `{harness, provider, model, limit, active}`), `maxConcurrent`, `serviceIssues` (problems the service recorded about itself, such as an admission error, until they are resolved), `waitCapacity`, integrity and active work |
-| `harnesses` | optional `includeUnavailable`, `refresh`, `harness` | Connector reports under `adapters`, recorded `harnesses` health, `localCapabilities`, named operations and wait admission |
-| `accounts` | none | Each harness's cached native login status and billing type, without a native refresh |
-| `quota-redetect` | `requestId`, `harness`, `provider` | Clear that provider's current cooling period, keeping its rejection count; no model or balance query. Reuse `requestId` after a lost reply; changed inputs conflict |
-| `runtime` | optional `destination` | Runtime identity, installed-runtime description and source-leak report |
-| `restart` | optional `note`, `drainSeconds` 0–120 (default 10) | Detaches the daemon without cancelling owned work; running executions survive. With no running daemon returns `alreadyStopped` and starts nothing |
-| `stop` | optional `note`, `drainSeconds` 0–120 (default 10) | Cancels queued tasks, writes durable cancel intent for active attempts, drains and returns `unresolvedAttempts`. With no running daemon returns `alreadyStopped` |
+| `health` | Full service, persistence, routing and wait-capacity diagnostics; no parameters. | `"$HMB" health '{}'` |
+| `harnesses` | Read cached availability; refresh all or one named harness. | `"$HMB" harnesses '{"refresh":true,"harness":"codex"}'` |
+| `harness-set` | Select an absolute executable path; null restores automatic detection. | `"$HMB" harness-set '{"harness":"codex","path":null}'` |
+| `quota-redetect` | Clear one harness/provider cooldown with its own operation identity; no model or quota probe. | `"$HMB" quota-redetect '{"harness":"dsh","provider":"deepseek-official","requestId":"clear-1"}'` |
+| `runtime` | Inspect pinned runtime identity and source leakage, optionally at a destination. | `"$HMB" runtime '{}'` |
+| `install` | Install or upgrade this distribution locally; no parameters. | `"$HMB" install '{}'` |
+| `paths` | Read installation locations locally; no parameters. | `"$HMB" paths '{}'` |
+| `storage-plan` | Generate a private storage plan; no parameters. | `"$HMB" storage-plan '{}'` |
+| `storage-apply` | Apply a named plan with confirmation and its own replay identity. | `"$HMB" storage-apply '{"planId":"<planId>","commandId":"storage-1","confirm":true}'` |
+| `worker-sessions` | Read proven native session identities; no parameters. | `"$HMB" worker-sessions '{}'` |
+| `restart` | Restart the service with optional drain duration and note; executions can outlive it. | `"$HMB" restart '{"note":"Restart the service after the requested repair."}'` |
+| `stop` | Stop the service with optional drain duration and note; report unknown shutdown truthfully. | `"$HMB" stop '{"drainSeconds":30,"note":"The user requested a service stop."}'` |
+| `relocate` | Record a known marked Git project's new location using only cwd; no stop or cleanup. | `"$HMB" relocate '{"cwd":"/abs/moved-repo"}'` |
 
-## Micro task lifecycle
+```sh
+"$HMB" help operations storage-apply
+"$HMB" health '{}'
+"$HMB" harness-set '{"harness":"codex","path":null}'
+"$HMB" relocate '{"cwd":"/abs/moved-repo"}'
+```
 
-The [workflow guide](workflow.md) gives complete packets and examples. These operations use the existing task/attempt queue; `runId` remains the logical micro task across turns. A normal structured yield makes `await` return `outcome: "waiting-host"`, while an approved helper or authorized continuation path can continue within the same wait. The workspace-lifecycle controls are owned by [workspace-lifecycle.md](workspace-lifecycle.md), which includes the complete accept/conclude/reclaim example and the eligibility rules behind each operation.
+The storage operation's `commandId` and the cooldown operation's `requestId` remain their own identities. They do not add fields to Host lifecycle requests. [Operations](operations.md#storage-wire-shapes) owns the storage plan and reply forms.
 
-| Command | Parameters | Behavior |
-| --- | --- | --- |
-| `submit` | ordinary flat submit fields, `hostId`, `executionWorkspace` and `submissionToken` | Prepare a fixed workspace, admit a micro task and route its execution buddy; return the compact view plus owner-private `control`/`controlFile` |
-| `get` | `runId`, optional `includeAudit`, `routingHistory` | Compact owner, revision, routing, turn, request, helper, artifact and shutdown view, the macro task's current `goal` (`body`, `revision`, `createdAt`; null without one) and every inquiry of the micro task under `inquiries` (question, answer, state and times), with the whole task text under `microTask`; no control tokens. `includeAudit:true` adds full turns, requests, continuations, reservations, suggestions and the immutable original spec; `routingHistory` requests one bounded page of this run's route records |
-| `decide` | `runId`, active `requestId`, `commandId`, `expectedRevision`, control, `decision: approve\|decline`, optional `note`, explicit `helpers` (≤8), `autoContinue` (default true) | Record Host authority; create approved helpers or decline without failing the micro task |
-| `continue` | `runId`, optional `targetRunId` (defaults to `runId`), `commandId`, `expectedRevision`, required `input` (string or object, at most 1 MiB like the task text), optional `note`, `helperPolicy: keep\|cancel` while helpers are live, `buddy`, `reroute`, `access` with `accessNote` when it is `full`, optional `cwd` (where a moved repository is now; it only locates the repository) | Record new input and invalidate all older unconsumed continuations, including manual inputs and automatic triggers; adopt a complete buddy or reroute the same micro task when ownership permits; a given `access` applies from the next turn on, and omitting it keeps the current level |
-| `takeover` | `runId`, `commandId`, `expectedOwnerGeneration`, `newHostId`, optional `expectedRevision`, control | Rotate control capability/generation; do not restart work |
-| `cancel` | `runId`, optional `commandId`, optional `note` (no default content), control | Fence the micro task and complete owned descendant graph; record cancellation separately from aggregate stop evidence |
-| `accept` | `runId`, `targetRunId`, required `artifactId`, required `note` (≤10000 bytes); either `target {path, ref}` or a nonempty `notRequired` reason string; optional `adjusted`, `hostPaths` (≤256, requires `beforeCommit`), `beforeCommit`, control | Accept the exact delivered artifact: the service verifies the integration against the real target itself and reclaims the checkout. Differing paths are refused with their names first; the Host's own adjustments are confirmed with `adjusted: true`. The same payload replays, a changed payload conflicts |
-| `scope-amend` | `runId`, `commandId`, `expectedRevision`, `expectedScopeVersion`, `writeScope` (≤256), `note` (≤10000 UTF-8 bytes), control | Append one authorized scope version for the next stage after every related attempt and descendant is confirmed stopped; never re-authorizes an active attempt or rewrites earlier turns |
-| `goal-amend` | `runId` (any micro task of the macro task), `commandId`, `goal` (≤ `MAX_TASK_BYTES` UTF-8 bytes, stored as written), `expectedGoalRevision` (0 when no goal is recorded), control | Append one revision of the macro task's goal; a stale `expectedGoalRevision` is refused with `GOAL_REVISION_CONFLICT` and nothing is overwritten, a replayed `commandId` returns its stored receipt, a macro task being deleted refuses; the reply adds `previousGoalRevision` and `goalRevision` |
-| `workspace-resolve` | `runId`, `commandId`, `expectedRevision`, `conflictId`, `action: restore\|adopt\|abandon`, `observedFingerprint` (sha256), optional `paths` (restore), `note` for adopt/abandon, control | Settle one recorded out-of-scope failure site by compare-and-swap restore, explicit adopt or abandon; mechanical resolution needs no further model turn |
-| `conclude` | `runId`, `targetRunId`, required `note` (≤10000 bytes), control | End a failed, cancelled or delivered-unaccepted micro task: seal unsealed managed changes as an independent Host partial output, record the conclusion beside the real execution result and reclaim the checkout; unresolved conflicts, pending continuations or live helpers refuse instead |
-| `reclaim` | `runId`, `targetRunId`, optional `cwd` (where a moved repository is now; it only locates the repository), control | Reclaim this micro task's own registered managed checkout after a blocked reclaim; the service also retries every 60 seconds; a blocked removal reports its reasons and changes nothing |
-| `suggest` | `runId`, required `body` (≤4000 bytes) | Record one bounded suggestion; an agent-scoped caller may suggest only on its own task |
-| `await` | `requestId` or `runId`; optional `waitSeconds` (1–86400, default 86400) | CLI-level wait on an existing task; it consumes a due reminder, recording its delivery, and never starts, resumes, retries or cancels work |
+## Role calls
 
-Submit fields are `requestId` (required, ≤128), `hostId` (required for a Host, ≤256; a Lead's submission takes it from the Lead's execution credential and refuses an explicit `hostId`, `owner` or macro task field), `task` (required, ≤1 MiB), `cwd` (required absolute existing directory), optional `harness` (`dsh`, `zcode`, `codex`, `claude`), `model`, `provider`, `effort` (all four or none; `adapter` and `argv` are refused); `expectedSeconds` (1–86400, default 1800; an expected duration, not a deadline; the former `timeoutSeconds` is refused), `fixes` (the `runId` of an accepted micro task this one fixes; [workflow](workflow.md#fixes)), `owner`, `requiredCapabilities` (≤32), `exclusiveResources` (≤32), required `executionWorkspace`, optional `submissionToken` (16–256 chars) and `delegationAuthority` (a Lead: it requires a complete buddy and `executionWorkspace.access: "full"`; [usage](usage.md#a-lead-for-a-large-macro-task)). Spec fields are given flat; the nested `spec` object, `executionWorkspace.cwd`, `executionWorkspace.integrator`, `routingPreferences`, `routingMode` and `allowRoutingFallback` are retired spellings, each rejected with its own message. Display metadata sits outside the spec: a root-level `title` (1–200 characters, whitespace normalized) and one of `macroTask: {title}`, `macroTaskId` (`macro-…`) or `macroTaskOf`; they enter the request fingerprint but never the execution spec, Worker input or Router packet ([macro tasks](macro-tasks.md)). Any other field is rejected.
+`help role` lists calls authorized by execution credentials. The launcher reads the credential and issuing board from the role's credential file. Worker calls can read their own run and leave `suggest` with a bounded body; scoped inquiry and observation stay within the credential. Lead calls can submit, page through, read, await, inquire about, continue, accept, conclude and cancel their owned micro tasks. The role-only `list` is that Lead's paginated inventory, with `limit` and returned cursor as `before`. A Lead submission takes a named buddy and inherits macro task and ownership from its credential. It cannot grant delegation authority or select a project collection to widen access.
 
-`executionWorkspace` is a required object, and its `kind` must explicitly be `existing` or `worktree`; omitting the object or its kind is `INVALID_ARGUMENT`. It accepts `access: read|write|full` (default write; `full` needs a one-line `accessNote` of at most 10000 UTF-8 bytes, and a buddy whose harness does not provide the chosen level is refused with `UNSUPPORTED_CAPABILITY`; the four built-in harnesses provide all three), `base: {kind: commit|working-tree, ref?}` (default working-tree), `includeUntracked` (≤256, requires a working-tree base), `writeScope` (≤256; write access defaults to `["."]`) and optional attribution-only `targetRef`. Source `cwd` and `integrator` are derived from the top-level `cwd` and the submitting Host; supplying either inside `executionWorkspace` is rejected. Include/write paths are checkout-root-relative; write access needs a nonempty scope. Workspace preparation is idempotent by request ID and records exact input commits; no automatic branch merge or force-clean occurs. Git-ignored runtime data is excluded unless explicitly selected.
+```sh
+"$HMB" help role submit
+"$HMB" get '{}'
+"$HMB" suggest '{"body":"The remaining failure needs a change outside this task scope."}'
+"$HMB" list '{"limit":20}'
+"$HMB" submit '{"cwd":"/abs/research","title":"Check the cited premise","task":"Check the premise against the supplied evidence and return counterexamples.","buddy":"<complete-buddy-name>","checkout":"none","access":"read","expectedSeconds":900}'
+```
 
-DSH session grouping is removed ([ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md)): each DSH micro task uses its own private native session root, and a `workspace` field on a submission is rejected as unknown. `executionWorkspace` is the Git isolation contract and never meant session grouping.
-
-A complete explicit `harness`/`provider`/`model`/`effort` quadruple is validated against the installed native catalog and delegated directly; a partial quadruple is rejected with the fields it lacks and the two accepted forms (the complete quadruple, or none of it so that routing chooses); an omitted quadruple is routed: the only eligible buddy is taken directly, and among several the Router chooses with the bounded evaluation table. The mode is `configuration.defaultRoutingMode`; the retired `routingMode` and `allowRoutingFallback` inputs are rejected. No legal candidate or no available Router in the selected mode produces a durable routing attention boundary that `decide` refuses and `continue` resolves with `buddy` or `reroute:true`. See [workflow.md#buddy-and-routing](workflow.md#buddy-and-routing).
-
-Continuation reuses the currently allocated actual checkout, prepares a new fixed input there and preserves the original submission specification. The returned `workspace` describes the current effective allocation; `executionWorkspace` retains the original intent. Helper outcomes identify the selected attempt/generation and include only that attempt's sealed output reference, with explicit artifact attempt/turn IDs. Use the output commit and snapshot/diff hashes for integration rather than a moving branch or working directory.
-
-`get` distinguishes the following request and shutdown fields:
-
-| Field | Meaning |
-| --- | --- |
-| `activeRequest` | Full current open Host boundary, or `null`; includes nullable `summary`, a nullable `{code, params}` `reason`, `decisionId`, `proxy`, `origin`, `routing` and any `preparationError`; content requests also carry `attempted`, `neededWork`, `expectedArtifacts`, `acceptance` and `suggestedBuddyId`, while system requests carry a reason or reference their routing decision; use the top-level current `revision` for the decision |
-| `pendingRequests` | Bounded open-request queue including the current active request; at most 5 compact entries |
-| `counts.openRequests` | Complete open-request count, including the active request and entries omitted from the compact queue |
-| `truncated.pendingRequests` | Number of open-request entries omitted from `pendingRequests` |
-| `routing` | `status`, `decisionId`, `taskId`, `attemptId`, `generation`, `selectedBuddy`, nullable reason object `reason`, nullable Router `note`, `constraints`, `source` (`model-selection` for a Router choice, `single-candidate` for the program's sole-candidate direct selection, `no-candidate` for a zero-candidate Host boundary; each record keeps the source its own frozen basis supports), `routingMode` (actual) |
-| `proxy`, `origin` on a request | Immediate source `{runId, requestId}` and original requesting leaf `{runId, requestId}` for nested attention |
-| `shutdown` | `selfConfirmed`, `descendantsConfirmed`, full `unconfirmedCount`, up to 32 `unconfirmedRunIds`, and boolean `truncated` |
-
-Do not add `activeRequest` to `counts.openRequests`: it is already included. Compact responses limit recent request summaries to 5, turns to 10, children to 32 and artifacts to 32; `counts` and `truncated` describe the complete collections and omitted entries. After deciding the active request, use the returned or freshly read boundary and revision for the next decision. Another request can become active immediately, and sibling completion does not discard outstanding requests.
-
-For nested attention, submit `decide` against the root run and its active proxy request using that root's control. The service validates the owned chain to `origin` and resumes the requesting leaf; the root token cannot authorize a direct mutation of a different run ID. Intermediate runs wait for their dependencies. `continue` may pass `targetRunId` to deliver input or a buddy to an owned descendant without adopting another owner's capability; an unrelated run is `UNAUTHORIZED`.
-
-At most eight helpers are authorized by one decision, and their specs accept the ordinary flat task fields, `harness`, `executionWorkspace` and `role` (`helper`, the default, or `integrator`). At most one helper per approval may be the named integrator. The retired `inheritRoutingPreferences` flag is rejected: task-local routing preferences no longer exist, so there is nothing to inherit. Continuation input shares the task text bound of 1 MiB. The turn input has no bound of its own: the model's context window is the real limit, and a native refusal fails the turn with its native reason. The structured outcome is bounded to 64 KiB as a whole, with no bound on its arrays or their items. DSH and ZCode report `native-session` for a proven previous session bound to the same micro task, checkout and buddy; without a proven previous session or with a changed buddy, they report `reconstructed-new-session`, and so does DSH when the continuation changes the permission level. Codex reports `native-session` only for a proven binding whose last stored native turn still completes, and otherwise reconstructs explicitly. A missing or mismatched binding on a native-session request is rejected. Use the exact same command ID and payload to resolve an uncertain response. Re-read and reconsider after a revision/owner-generation conflict.
-
-### Host workflow fields
-
-`submit` adds top-level `macroTaskOf` (run identifier, up to 128 characters) and `buddyLocked` (boolean, default false). Only one of `macroTask`, `macroTaskId` and `macroTaskOf` may be supplied. The referenced run must have a macro task with the same original Host and project; `NOT_FOUND` and `MACRO_TASK_REQUIRED` distinguish unknown and ungrouped runs. Display metadata stays out of execution and routing input.
-
-`continue` hands the micro task off to another buddy when it supplies the complete `buddy` and a nonempty `note`: while the micro task is queued, at a boundary, or after it failed or was cancelled; while a turn is active it is refused with `CONFLICT` until `cancel` has a confirmed stop. `buddyLocked:true` fences incompatible changes. It preserves the run and allocated checkout, and continuing a delivered micro task records the negative review with the Host's opinion next to the immutable artifact. `get` reports the lock, partial artifacts and current Host conclusion. `accept` adds `hostPaths` (up to 256 relative paths) with the required `beforeCommit`; verified paths must occur in the target commit interval and be outside the whole artifact's paths.
-
-At an `awaiting-host` boundary, `accept` with the exact current sealed `artifactId` can finish the micro task after verified integration and confirmed lineage shutdown. `conclude` ends a failed, cancelled or delivered-unaccepted micro task with a required note: unsealed managed changes are sealed as an independent Host partial output, the original execution status is retained in `hostConclusion.executionStatus`, and the micro task enters terminal `concluded`. The automatic reclaim keeps the recorded acceptance or conclusion and reports its reasons when blocked; a later `reclaim` retries subject to the same stop, identity, dependency and unsealed-change checks. The [workflow contract](workflow.md) owns these transitions.
-
-Output artifacts may include `cumulativePatch` with its original micro task input commit, output commit, path and hash; when the turn input is the original micro task input, a new seal's `cumulativePatch.path` equals `diffPath` and its hash equals `diffSha256`. Existing seals may name separate files for the same patch. `partial-output` is explicitly partial, unverified and non-final. A brief `get` keeps the `output` and `resolved-output` artifacts and counts a `partial-output` among the omitted ones, which a full `get` shows; a brief `await` result may carry the partial output. Brief projections keep `hostConclusion`, `buddyLocked` and `providerCooling`. Execution and turn views carry `tokenUsage`; null or null counters mean unknown. Input tokens include cached input, so cache must not be added again.
-
-## Macro tasks
-
-| Command | Parameters | Behavior |
-| --- | --- | --- |
-| `macro-task-list` | optional `group` (`project:<projectId>` or `standalone`), `limit` 1–100 (5 per group without `group`, 20 with it), `before` (only with `group`), `hostId`, `query` (≤200), `filter` (`all`, `active`, `host`, `review`), `sort` (`activity-desc` by default, `activity-asc`, `created-desc`, `created-asc`) | `groups` (every matching project group and the standalone group, each with `id`, `project`, `total`, `macroTasks` and its own `nextCursor`), `totals`, the event `cursor` and `changed` |
-| `macro-task-timeline` | `macroTaskId` (`macro-…` or `run:<rootRunId>`), optional `limit` 1–200 (default 100), `query`, `filter` | One group's rows, spans (≤800) and Host markers (≤800) with totals, per-collection truncation flags, `filtered` and `scopeComplete` |
-
-Both are Host/user reads with no model call or publication, refused to attempt-scoped credentials; the [macro tasks reference](macro-tasks.md) owns their shapes. Deletion preview and deletion are console-only operations, with no Host or Worker CLI command; [operations](operations.md#worker-session-history) owns their gates, native-session removal and deletion receipts. Their responses are bounded and printed without a brief projection.
-
-## Execution records
-
-Execution records back micro task turns, routing calculations and the check suite's model-free `command` executions; no method admits one ([ADR-007](../decisions/007-neutral-core-and-single-current-contract.md)). A micro-task run's execution record requires its Host control for authorization and then still refuses with `MICRO_TASK_REQUIRED`, pointing at `cancel`, `continue` or `accept`.
-
-| Command | Parameters | Behavior |
-| --- | --- | --- |
-| `execution-cancel` | `runId` or `requestId`; optional `note`, `requestedBy` | Queued task → `cancelled`; active attempt gets a durable cancel request (`cancelRequestedAt`) and becomes `cancelling`. Unrelated dsh work is untouched |
-| `execution-retry` | `runId` or `requestId`; optional `note`, `requestedBy` | Requeue an eligible failed, cancelled or reconciliation-needed task; its next admission creates a new generation. Clears previous acceptance (archived in events). Completed tasks cannot be retried; `SHUTDOWN_UNCONFIRMED` refuses retry while shutdown is unverified; internal decision runs are not retried |
-| `execution-acknowledge` | `runId` or `requestId`, plus `note` (required, ≤10000 bytes), `verdict` (default accepted), optional `evidence` (≤32), `acknowledgedBy` | Records review of a persisted result with confirmed shutdown. Never changes execution status; a different repeated note or verdict is `CONFLICT` |
+The credential-scoped lifecycle verbs use the same response ids and applicable combinations described above; a role cannot widen the selector by adopting a Host request form. A Worker credential cannot act as Host, an expired execution credential is refused, and a Lead cannot control another Lead's tasks or change user settings. [Workflow](workflow.md#delegation-authority-lead) owns the role lifecycle.
 
 ## Execution observation
 
-Observation stays separate from the micro task boundary. `status`, `result`, `list`, `artifacts` and `events` read execution records; `wait` and `watch` use the dedicated bounded wait resource; `inquire` is bounded read-only observation or one correlated question to a live root whose harness declares `inquiry`.
-
-| Command | Parameters | Behavior |
-| --- | --- | --- |
-| `status` | `runId` or `requestId` | Task view: state, `queueReason`, revision, selected attempt, worker, artifacts, inquiry counts; a micro-task run also exposes `workflowState`, `awaitingHost`, `workflowShutdown`, `ownerGeneration`, `continuationCount` and the active request kind/summary |
-| `result` | selector | Task view plus the adapter outcome under `result` and commit metadata under `resultMeta` (`status`, `error`, `exitCode`, `signal`, `shutdownConfirmed`, `completedAt`); `NOT_READY` before a persisted result exists |
-| `list` | `limit` 1–100 (default 20), `offset`, `state`, `adapter`; optional `before`, `rootsOnly`, `query`, `projectId`, `hostId`, `filter` | Tasks newest first, with filtered `total`, the event `cursor`, and nullable history `nextCursor` |
-| `artifacts` | `runId` or `attemptId` | Verified artifact records (kind, location, content hash, size) |
-| `events` | `after` cursor, `limit` 1–200 (default 100), `runId` | Committed events with `events`, `cursor`, `head`, `truncated` |
-| `watch` | `after` cursor, `timeoutMs` 0–30000 (default 30000), `limit`, `runId` | Bounded event wait on the dedicated wait resource; adds `timedOut` |
-| `wait` | `runId`, optional `afterRevision`, `timeoutMs` 0–30000 (default 30000), `consumeReminders` (default false) with a required `reminderWaitId` | Bounded wait for one task to change or finish; returns the task view, with a due `reminder` when `consumeReminders` is set (the reminder is consumed once per `reminderWaitId`) |
-| `wait-capacity` | none | Wait admission counters `capacity`, `admitted`, `rejected`, `available` |
-
-`wait` and `watch` never cold-start a service: with no running daemon they return `SERVICE_UNAVAILABLE`. When every admitted wait slot is busy the service returns a resumable `WAIT_OVERLOAD` whose `details` carry `cursor`, `retryAfterMs` and `capacity`; the message says no task state changed and the caller should retry from the same cursor. (The CLI preserves these details in its error envelope.) Event-producing business operations commit the state change and event together. The long call to each execution does not emit an event; the event stream is a replayable outbox.
-
-Event kinds include `task.submitted`, `task.cancel_requested`, `task.cancelled`, `task.completed`, `task.failed`, `task.retried`, `task.review_archived`, `task.accepted`, `task.rejected`, `workflow.review_rejected`, `workflow.host_concluded`, `execution.admitted`, `attempt.progress`, `attempt.activity`, `attempt.released`, `attempt.uncertain`, `execution.deadline`, `execution.shutdown_confirmed`, `execution.materials_cleaned`, `execution.issue`, `execution.issue_resolved`, `execution.connected`, `execution.unknown`, `service.issue`, `service.issue_resolved`, `message.posted`, `message.updated`, `workflow.routing_requested`, `workflow.routing_resolved`, `workflow.routing_needs_host`, `workflow.buddy_validated`, `workflow.boundary_updated`, `workflow.helper_admitted`, `workflow.helper_settled`, `workflow.helper_resumed`, `workflow.auto_continued`, `workflow.continued`, `workflow.request_approved`, `workflow.takeover`, `workflow.cancelled`, `workflow.late_turn`, `workflow.workspace_prepared`, `workflow.workspace_preparation_failed`, `workflow.scope_amended`, `workflow.workspace_resolved`, `workflow.integration_recorded`, `workflow.cleanup_planned`, `workflow.cleanup_blocked`, `workflow.cleanup_applying`, `workflow.cleanup_applied`, `decision.requested`, `decision.started`, `decision.completed`, `decision.needs_host`, `decision.failed`, `decision.cancelled`, `decision.selection_rerouted` and `evaluation.*` publication events. `attempt.claimed`, `attempt.reconciled`, `attempt.lease_expired` and `worker.registered` are no longer written; they remain only in the history of a board upgraded from schema 22. Periodic state is replaced, not accumulated: `attempt.activity` keeps only the latest event of each attempt, and `harness.checked`, `harness.probe_unknown` and `harness.account_observed` only the latest of each harness. Writing a new one removes the older one in the same transaction, sequence numbers never go back, and a watcher whose cursor points at a removed event continues with the next one.
-
-A workspace preparation failure opens an attention request and invalidates that continuation while preserving the original micro task and recovery files; `activeRequest.preparationError` carries its code (up to 100 characters) and message (up to 2000). A Git command that does not finish within 60 seconds ends as `WORKSPACE_GIT_UNKNOWN`: nothing is judged broken, the continuation stays queued and its preparation can be retried, and no attention request is opened. A Git failure is `WORKSPACE_GIT_ERROR`, and the service records with it the command line, the Git operation, the exit status and the bounded tail of standard output and standard error, with flags saying whether each was cut. For a failed preparation these details are kept in the attention request and also appear in the compact view under `activeRequest.preparationError.details`, path lists in the shared bounded form (a sample with exact counts). A continuation whose `existing` checkout changed after the previous turn was sealed fails with `WORKSPACE_BASE_MISMATCH`, `handoffCommit` and the differing `paths`; the way on is to cancel and conclude that micro task and start a new one from the current checkout state. A first submission whose explicit `base.ref` differs from the working tree fails with the same code, `baseCommit` and `paths`; `preparationError` also carries a reason object when one is recorded, and command errors retain their structured details. Transient `WORKSPACE_BUSY` lock contention instead leaves the continuation queued and emits no failure boundary. Until a continuation has a prepared manifest, admission skips it with `awaiting-workspace-preparation`; other claimable tasks remain eligible.
-
-For history paging, pass the previous page's opaque `nextCursor` as `before` (at most 512 characters); it is distinct from the integer event `cursor`. Rows are ordered by descending creation time and run ID, and the strict keyset remains stable when newer rows arrive. A nonzero `offset` cannot be combined with `before`. `rootsOnly:true` restricts the list to main micro tasks; the default remains all execution records. `query` (at most 200 characters) searches micro task text, run ID, source project, recorded Hosts and execution adapter/model; `%` and `_` are literal text. `projectId` (at most 4096 characters) matches the recorded project ID, and `hostId` (at most 256) matches original or current Host. `filter` is `all`, `active` (including reconciliation-needed), `host` or `review`. Filtering happens before the limit, `total` counts all matching records independently of the cursor, and `nextCursor:null` marks the last page. Every task read includes the [micro task metadata](evaluation.md#console-http-surface); missing original attribution remains unknown.
-
-### Display summary
-
-Index reads (micro task lists, history rows, console snapshots) carry no Worker report; the report is read whole from `await`, `get` or `result`. A turn's frozen input list is named by `workspace.manifestFile` (and `workspaceManifestFile` in results): the path of the complete `manifest.json` in the private state with its `sha256`, like the patch files; the file goes with its allocation when the checkout is reclaimed.
-
-Micro task titles in macro task and timeline reads come from the explicit run `title`, then the trimmed first line of the original task. Without either, `title` is null; `titleSource` remains `title`, `task` or `none` according to the source. A Worker result summary is displayed separately. Display whitespace is normalized and these titles are bounded to 200 Unicode characters. Host markers carry their event `kind` and optional `note`, with no `label`. The original task and recorded execution/acceptance status remain independently visible. Search matches the original task and existing history fields.
+The Host reads run facts with `get` and waits with `await`. Internal execution, message, artifact and event operations remain for the service, execution processes and console where required; their existence does not make them CLI methods. No public entry admits a model-free execution record.
 
 ## Messages and inquiry
 
-| Command | Parameters | Behavior |
-| --- | --- | --- |
-| `inquire` | `runId`; optional `inquiryId`+`question` (together), `timeoutMs` 100–5000 (default 1500), `waitMs` 0–30000 (default 0) | Read-only observation, or one correlated question to the run's own live agent when its adapter declares the `inquiry` capability |
-| `messages` | optional `runId`, `state`, `limit` 1–200 (default 50) | Lists messages for that task, or all tasks when no task is selected; `requestId` is not accepted |
-| `message-get` | `messageId`, or a task selector plus `inquiryId` | Reads one inquiry and its recorded answer without resubmitting the question |
-
-Inquiry rules:
-
-- `inquiryId` matches `[A-Za-z0-9._:-]{1,128}`. Repeating an id with different text is a `CONFLICT` for active and terminal tasks. Re-reading through `inquire` requires both the same text and the same id; `message-get` reads it by identity alone.
-- Message states are `queued` (recorded, waiting for a delivery boundary), `claimed` (consumed for a proposed step, not delivery), `delivered` (the run's durable commit), `answered` (a correlated reply was recorded), `discarded` (dropped before a boundary) and `unavailable` (no bridge, a terminal task, or a question that can no longer be claimed or answered). When an attempt ends, the service first imports the deliveries and answers recorded in that attempt's inquiry journal, then settles the rest: a question never delivered ends `unavailable` with `inquiry-queued-at-attempt-end`, a delivered one never answered with `inquiry-delivered-at-attempt-end`. A question asked after the root turn ended is `unavailable` with `inquiry-root-turn-ended`.
-- Inquiry answers require the run's correlated reply tool; assistant prose is not an answer. Questions and answers are each bounded at 4000 UTF-8 bytes and at most 32 inquiries are retained per task (`TOO_MANY_INQUIRIES` beyond that).
-- `waitMs` waits until the question is answered or can no longer be answered, at most for the given bound; `timeoutMs` bounds each request to the run's live channel. Neither changes the task's expected duration, a Router's budget or a stop's grace period, and an inquiry never wakes a terminal agent. A harness with cooperative delivery (DSH) takes the question only at the Worker's next checkpoint.
-- A question still `queued` or `delivered` when `waitMs` runs out has no answer yet; check `inquiry.answer.available` (and `message.state`) before reporting an answer. An `answered` journal record without usable text is downgraded to `delivered` with a `{code, params}` reason rather than reported as answered. Message and inquiry `reason` fields are nullable reason objects; question and answer text remain content.
-- The no-question form reports durable state plus a bounded `live` observation (`agentStatus`, inbox depth, `lastEvent` and up to 20 activity entries, plus native diagnostics in `live.error`); fields it cannot observe are named in `live.unavailable` instead of being reported as zero. The brief view carries an ordinary task's `expectedSeconds` and omits `routerBudgetSeconds`. Full task views carry a Router call's `routerBudgetSeconds`, whose `null` value means no time limit; neither view computes a deadline.
-- `live.agentStatus: "running"` means an agent driver is active, not that it is making progress; raw model reasoning is never exposed. A live call that does not get through is reported in `bridge.reason`: `transport-unreachable`, `transport-window-expired` or `reply-invalid` from the channel, a refusal code from an endpoint such as `binding-unavailable`, `queue-full` or `request-window-expired`, or the statement that the owning Worker has not attached this live run. A refusal by the run's own inquiry bridge is `bridge-refused` with its code in `bridge.error`. None of these means the run has stopped, and the question stays pending unless the bridge reported that its turn already ended. A recorded answer carries its provenance (`live-bridge` or `bridge-journal`).
-- DSH declares `inquiry`. Codex and Claude Code declare `inquiry` with `live.deliveryMode: "realtime"`: the question enters the running root turn and is read at the model's next decision, and a question that arrives after the turn has ended is refused as unavailable. ZCode declares `observe` and realtime `inquiry`: it sends guide input only while the root is running and its finish is not scheduled. The private session's automatic queue execution is disabled; a matching root drained event proves delivery, and native root tool evidence plus a signed receipt binds the answer. Final-answer or late input can remain undelivered; held questions are withdrawn at settlement and unanswered questions become unavailable. Failed withdrawal disables native continuation without replacing a completed result. See [harness integration](harness-integration.md#inquiry-delivery) for the native version and verification boundary. A journal write refusal is also recorded as unavailable (`journal-unavailable`). `command` mounts no inquiry bridge; task status and any recorded activity remain readable. `bridge.canObserve` and `bridge.canAsk` distinguish observation from correlated questions.
+Use `inquire` for live observation, questions and old answers. Full `get` retains the brief and inquiry history for acceptance review. Native inquiry capability and actual delivery evidence are described in [workers](workers.md#live-channel).
 
 ## Evaluation, routing and console
 
-`console` opens the fixed private loopback URL without login by default. If Settings requires login, it opens a single-use 10-minute entry; sessions have no 30-day expiry and can be revoked in Settings. The CLI launches the browser by default; `browser:false` suppresses launch, while `wait:true` keeps the CLI attached to the exact console instance and requests an identity-fenced console close on Ctrl-C. These booleans are local to open and never reach the service. Status/close and the wait observer never cold-start a daemon. `console-snapshot` reads authoritative data without a browser session or model invocation. See [console.md](console.md) for browser sessions and [evaluation.md](evaluation.md) for policy and evidence semantics.
+User policy publication, model discovery, buddy catalog/history and detailed routing reads are console-server operations. They are not CLI methods. `get` carries this run's routing facts and bounded routing history, while `submit` and `await` carry actionable routing reasons. Use the console for global settings; [evaluation](evaluation.md) owns its authenticated HTTP surface.
 
-| Command | Parameters | Behavior |
-| --- | --- | --- |
-| `console` | `action`: `open` (default), `status`, `close`; CLI-only `browser` (default true) and `wait` (default false) for open; optional `expectedConsoleId` for close | Open returns the fixed `url` and `expiresAt:null` by default, or a one-use URL with its expiry when `requireLogin:true`, plus public `consoleId`, `running`, `alreadyRunning`, asset metadata and CLI `browserOpened`. Status has no entry URL. Fenced close refuses to close a replacement instance |
-| `console-snapshot` | none | `eventCursor`, Router `configuration`, bounded available buddies and the ordered Router list, `modelServiceConcurrency`, buddy `preferences`, `modelServiceNotes`, latest 50 decisions and latest 100 tasks; `unavailableBuddyCount` is separate |
-| `model-catalog-refresh` | optional `requestId` (≤128) | Explicit native metadata discovery; one monotone `observationId` per request publishes per-harness facts and preserves existing human state. Each harness reports `status: complete\|unknown` with a nullable `{code, params}` reason and `accountStatus: confirmed\|unknown\|not-applicable`, plus `appliedHarnesses` and `staleHarnesses`; only a complete reading whose account status is `confirmed` or `not-applicable` is trusted, a model missing from it becomes pending and is confirmed absent only by a further trusted reading at least one hour later, and a late older response is skipped. New buddies are disabled and enabled state is never reset. No model call |
-| `buddy-list` | optional `includeUnavailable`, `limit` (1–200, default 100), `after` buddy cursor, `query` (≤200 characters, at most 8 terms), `harness` | Bounded active/unavailable buddy page with `preferences`, `modelServiceNotes`, per-model-service `modelServiceConcurrency` (`active` occupancy is read-only observation) and nextCursor; unavailable entries are hidden unless requested |
-| `user-policy-publish` | `commandId`, optional `buddySettings`, `preferenceChanges`, `modelServiceNoteChanges`, `modelServiceConcurrency`, `configuration` | Authenticated console only. Model service notes are at most 4000 characters; `modelServiceConcurrency` patches are `{harness, provider, model, limit}` entries that reject `active` and other derived fields. `preferenceChanges` patch one buddy's preference `{buddyId, mode, note}` (the user's own note, at most 10000 UTF-8 bytes, stored as null when empty); a null mode deletes that stored row, an empty model service note clears it, and omitted fields remain unchanged. Program model/catalog fields cannot be written |
-| `selection-request` | `requestId`, `task` (at most 1 MiB), optional `requiredCapabilities` (the hard budget comes from the routing budget preset in the Router settings) | Durable bounded routing request; returns `decision`, `decisionId`, `status`, `runId` (nullable) and `duplicate` |
-| `selection-get` | `decisionId`, optional `includeAudit` (default `false`) | Compact routing summary with nullable reason object `reason`, nullable Router `note`, frozen `selectedBuddy`, `decisionModel`, `evidence`, `usage`, `budget`, `nativeIdentity`, `stopEvidence`, `inputVerification`, `routingMode`; audit mode includes persisted input/output and hash |
-| `selection-list` | optional `limit` (1–100, default 20), positive integer `before` (≤2^63−1) | Read-only compact history, page by page: returns `decisions` and `nextCursor`, and `total` counts every decision record; no model invocation |
+## Errors and recovery
 
-A settings publication is identified by its `commandId` and carries no revision: of two saves of the same field the later one stands, the same command sent again returns its receipt without rewriting what was saved since, the same ID with different content is refused as a command identity conflict, an invalid service token or a forged console identity is `UNAUTHORIZED`, and a publication without a console identity is `FORBIDDEN`. Explicit null and omission are different inputs.
-
-Buddy fields are `buddyId`, `label`, `harness`, `provider`, `model`, `effort`, `effortRank`, `available`, `enabled`, `capabilities`, `contextWindow`, `description`, `source`, optional reason object `unavailableReason` and native `unavailableContent`, `catalogState` with nullable reason object `catalogReason`, and `catalogStatus` (`available`, `pending` or `unavailable`) with `pendingSince` while pending. `catalogStatus` is the catalog's judgment of the model and is separate from `available`: a pending model stays available, and a buddy excluded by harness health or a retired effort keeps `catalogStatus: available` with its own `unavailableReason`. `effortRank` is the zero-based position in that model's current native effort list, or null when no position is known; it orders efforts within that harness/provider/model and does not compare harnesses. Identity fields cannot be changed under the same buddy ID, and availability must be backed by recorded discovery. A preference is `{buddyId, mode, note}` with `mode` `prefer`, `pin` or `exclude`; a buddy without one has no entry. Configuration accepts ordered unique `routerBuddyIds`, integer `routerRetryIntervalSeconds` (1–2147483647, default 600), `defaultRoutingMode` (`fast` or `review`) and optional `routingBudget` (`brief`, `standard` or `deep`; the retired `quick` is refused); the snapshot returns `eventCursor`, the effective budget preset and the read-only `routingBudgetLimits`.
-
-Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed` and `cancelled`. A nullable `runId` means no model was started. `routingMode` reports the frozen mode; current views have no automatic fallback fields. No-answer advances to the next frozen Router only after confirmed stop; valid abstention, changed circumstances, cancellation and unknown stop do not advance. Exhausting the list stops at the Host boundary with `routerTrials`, frozen facts/candidates, known retry time and owner-bound command templates; the Host supplies `input` and any required `note` before sending a continuation. Timeout/budget failures count toward `routingHealth.failureCount` and its genuine-failure streak while retaining their diagnostic counters. Internal attempts are cancelled by `execution-cancel`, never acknowledged as business work.
-
-## Defaults and bounds
-
-| Setting | Default | Bounds |
-| --- | --- | --- |
-| Parameter document (positional, `--params-file` or `-`) | `{}` | one JSON object; a file or standard input is UTF-8 with a BOM accepted and at most 8 MiB, a positional argument is parsed as given and bounded by the RPC message limit (`MESSAGE_TOO_LARGE`); the sources are mutually exclusive |
-| Expected duration `expectedSeconds` | 1800 s | 1–86400 s; not a deadline, nothing is stopped when it passes |
-| CLI `await` wait window | 86400 s | 1–86400 s |
-| `wait` / `watch` timeout | 30000 ms | 0–30000 ms |
-| `inquire` answer wait (`waitMs`) | 0 ms | 0–30000 ms |
-| `inquire` bridge request `timeoutMs` | 1500 ms | 100–5000 ms |
-| Event page `limit` | 100 | 1–200 |
-| `list` page `limit` | 20 | 1–100 |
-| `messages` page `limit` | 50 | 1–200 |
-| Task text (micro task or selection request) and continuation input | — | 1 MiB |
-| Question / answer | — | 4000 UTF-8 bytes each |
-| Inquiries retained per task | — | 32 |
-| Acknowledgment note / evidence | — | 10000 bytes / 32 entries |
-| Artifacts per result / location | — | 100 / absolute path ≤4096 characters |
-| Helpers per Host decision | — | 8 |
-| Routing budget preset | `standard` | `brief` 60 s/8 calls, `standard` 300 s/24 calls, `deep` 600 s/64 calls for review routing; fast routing has no tool-call budget and a fixed 60 s deadline; the selection call's `routerBudgetSeconds` is 60 s for fast routing or the review preset timeout, plus a 10 s Worker shutdown margin; new maintenance calls have no time limit; full task views expose `routerBudgetSeconds: null`, and brief views omit that field |
-| Compact micro task view | 5 requests / 10 turns / 32 children / 32 artifacts | `counts`/`truncated` describe omissions |
-| Concurrent attempts `HMB_MAX_CONCURRENT` | 8 | 1–32; one machine-wide ceiling shared by routing and execution |
-| Concurrent attempts of a model service | 2 | any positive integer per exact harness/provider/model (a value beyond a 64-bit integer is refused); user-set on the model card, hot at the next admission |
-| Wait capacity `HMB_WAIT_CAPACITY` | 32 | 1–48; leaves native RPC callbacks available for control operations |
-
-## Error codes
-
-| Code | Meaning |
-| --- | --- |
-| `INVALID_ARGUMENT` | A parameter is missing, unknown or out of bounds; also a malformed, non-object, non-UTF-8 or oversized parameter document |
-| `UNKNOWN_METHOD` | The CLI method name is unknown; the envelope's `didYouMean` lists the closest candidates and the process exits 2 |
-| `NOT_FOUND` | The selector matches no task, worker, message or artifact |
-| `SUBMISSION_REPLAY_UNAVAILABLE` | The `requestId` belongs to a submission recorded before schema 21, whose fingerprint the upgrade cleared; submit with a new `requestId` |
-| `NOT_READY` | No persisted result/attempt exists yet (for example `result` before completion) |
-| `CONFLICT` | The same identity with changed input: changed submit input, changed inquiry text, a different repeated acknowledgement, a closed boundary or an already-published command |
-| `REVISION_CONFLICT` | A stale revision tried to mutate state |
-| `STALE_GENERATION` | A replaced attempt or owner generation tried to act |
-| `UNAUTHORIZED` | The private token, control capability or worker receipt was rejected, or a continuation target is not an owned descendant |
-| `ANCESTOR_TERMINAL` | A cancelled, accepted or concluded ancestor blocks descendant continuation |
-| `SHUTDOWN_UNCONFIRMED` | Retry, replacement or a continuation was refused because the previous stop is not verified |
-| `ILLEGAL_TRANSITION` | The state machine refuses that task/attempt transition |
-| `ALREADY_RUNNING` | Another daemon already holds this state directory's ownership lock |
-| `ATTEMPT_FINISHED` | Progress or a mutation arrived after the attempt finished |
-| `HARNESS_UNAVAILABLE` / `UNSUPPORTED_HARNESS` | The harness cannot run here / is not `dsh`, `zcode`, `codex` or `claude` |
-| `MICRO_TASK_REQUIRED` | Coding work or a micro task record was addressed through the advanced execution path; use the micro task command |
-| `BUDDY_REQUIRED` | A routing boundary must be resolved with a complete buddy or a reroute |
-| `BUDDY_CONFLICT` | A supplied buddy conflicts with the micro task's locked original buddy fields |
-| `BUDDY_UNAVAILABLE` / `INVALID_BUDDY` | The catalog does not offer the tuple, after at most one bounded re-read of that harness per 180 seconds; details carry a `{code, params}` `reason` and, when a trusted reading exists, `catalogReadAt`. For any named buddy (`submit`, helpers named in `decide`, `continue`), the not-enabled reason object with `enabled: false` means the catalog admits the tuple and the user has not enabled it; it is refused before any checkout is prepared / the installed tuple changed and must be chosen again |
-| `CATALOG_INVALID` / `CATALOG_UNAVAILABLE` | Native model discovery returned unusable data / was not performed |
-| `INVALID_WORKSPACE` | A workspace path or scope is absolute, escapes the checkout, names `.git` or does not exist |
-| `WORKSPACE_CHANGED` / `WORKSPACE_CONFLICT` | A compare-and-swap found the site changed since it was recorded / the recorded conflict does not match the site |
-
-| `INTEGRATION_UNVERIFIED` | The artifact was not present in the claimed target; no integration record was created |
-| `PLAN_EXPIRED` | The storage inventory plan expired; inspect again before applying it |
-| `STATE_INTEGRITY` | A micro-task run lacks its required recorded scope; preserve the state and repair a verified offline copy instead of inventing authority |
-
-| `ARTIFACT_MISSING` / `ARTIFACT_MISMATCH` | A claimed artifact failed validation and no completed result was published |
-| `TOO_MANY_INQUIRIES` | The 32-inquiry retention limit for the task was reached |
-| `WAIT_OVERLOAD` | Every admitted wait slot is busy; the service's `details.cursor` says where to resume |
-| `WAIT_ABANDONED` | The wait was interrupted; the task was not cancelled |
-| `SERVICE_UNAVAILABLE` | The service could not be reached, or no service runs for `wait`/`watch` |
-| `SERVICE_START_FAILED` / `SERVICE_START_TIMEOUT` | The daemon failed to start or become ready |
-| `SERVICE_START_UNSUPPORTED` | Windows: the process that starts the service runs in a Job that forbids leaving it, so the service could not outlive that process; start it from a terminal outside such a Job ([operations](operations.md#installation)) |
-| `RESULT_NOT_AVAILABLE` | `await` found a terminal run without a persisted result; the execution status is still reported honestly |
-| `RUNTIME_INSTALL_FAILED` / `UV_NOT_FOUND` / `RUNTIME_NOT_READY` | Stable-runtime installation or pinning failed; see [operations.md](operations.md#runtime-lifecycle) |
-| `FORBIDDEN` | An attempt-scoped credential tried to use Host authority |
-| `MESSAGE_TOO_LARGE` / `INVALID_RESPONSE` | The request or the service response exceeded the transport bound / was malformed |
-| `INTERNAL_ERROR` | Unexpected service failure; the message names the operation and the exception, and the service writes the traceback to its `control.log` |
-
-| `CONSOLE_SESSION_EXPIRED` / `CONSOLE_ENTRY_EXPIRED` | The browser session is unavailable / the one-use entry is used or expired; reopen through the CLI |
-| `CONSOLE_LIMIT` | The bounded collection of pending entries or active browser sessions is full |
+Input errors name the field and legal combinations. `CONFLICT` can mean an answered or superseded fact: read the current run instead of choosing a new response id yourself. `SHUTDOWN_UNCONFIRMED` preserves process uncertainty and held resources. Integration failures name the comparison problem; they do not create acceptance. An execution issue can require an operation described in [Host operations](operations.md#host-operations). A lost creation reply is recovered by resending the same creation input; lost action replies by resending that exact action.
 
 ## `await` envelope
 
-`await` builds one envelope: `runId`, `requestId`, `status`, `workflowState`, `outcome`, `ok`, `resultAvailable`, `resultDelivered`, `terminationReason`, `interruptionEvidence`, `shutdownConfirmed`, `shutdown`, `acceptedAt`, `revision`, `createdAt`, `updatedAt`, `cwd`, `logPaths`, `waitedSeconds`, `waitSeconds`, `maxWaitSeconds`, `timedOut`, `result`, `recovery` and `error`; the default [brief view](#output-views) prints it without the constant and null fields; a reminder adds `reminder` and `microTaskComplete: false`. A wait slices its window into bounded 30-second service waits, changes nothing about the task except consuming a due reminder, and never cold-starts a service for `wait`/`watch`. The first service error ends it with `outcome: "unavailable"`, `ok: false` and recovery commands; another `await` on the same `runId` resumes observation.
+The envelope contains `runId`, task `status`, `workflowState`, `outcome`, `actions`, wait duration/window, `timedOut` and aggregate `shutdownConfirmed`. At a Host boundary it carries `requestId` and `requestKind`; a fixed output carries `artifactId`. Applicable replies also include shutdown detail, routing, queue reason, reminders, input failure, execution/service issues and result evidence. A micro task without a checkout can carry `unsealedChanges`.
 
-`outcome` is the terminal task status (`completed`, `concluded`, `failed`, `cancelled`, `reconciliation-needed`), `waiting-host` for a micro task at a decision boundary, `expected-duration` or `native-silence` for a reminder that leaves the micro task running, `wait-timeout` when this call's window ended first, `completed-no-result` when a completed run has no deliverable result, or `unavailable` when the service could not be reached while waiting. A micro task has an expected duration, not a deadline; a Router call that exhausts its budget fails with `router-budget-exhausted`. The `recovery` block names real commands with the existing run ID (`hey-my-buddy status`, `hey-my-buddy await`, `hey-my-buddy result`, `hey-my-buddy get`, `hey-my-buddy cancel`). `ok` is true only when the outcome is `completed` **and** this envelope carries the result payload **and** no error was recorded.
-
-A micro task Host boundary additionally reports `microTaskComplete: false`, the current `request`, compact turn/artifact context, a compact result view and `nextCommands`: for assistance or ordinary attention, approve/decline command lines that use the saved `controlFile` and name the exact revision; at a routing boundary, the board's own continuations from `routingBoundary` as `{method, params}` objects (complete `buddy` choices, and `reroute` with its `notBefore`), while the envelope also carries `routingBoundary`. Use `get` to inspect all pending requests. Micro task views expose `workflowState` and `workflowShutdown`. The wait envelope carries the aggregate shutdown under `shutdown`, and its `shutdownConfirmed` requires both `selfConfirmed` and `descendantsConfirmed`. `unconfirmedCount` covers the complete owned lineage including the root when applicable; the ID list is bounded and may be truncated. Logical `workflowState: "cancelled"` does not assert that descendants stopped. The wait continues on committed stop evidence, even when the root task is already terminal, and returns `wait-timeout` with unconfirmed shutdown if its own window expires first. A missing PID does not satisfy this evidence requirement.
-
-### Macro task presentation
-
-`submit.macroTask` is `{title, goal}`. `goal` is required: the goal statement in Markdown or plain text, stored exactly as written, at most `MAX_TASK_BYTES` UTF-8 bytes; the retired `description` is refused by name. The goal is display metadata, excluded from execution and selection and included in submission replay identity; `goal-amend` appends revisions. The skill requires a ≤30-character intent title on new micro tasks, while the optional 200-character API limit remains unchanged. Macro task read shapes add `counts.accepted` (accepted roots) and timeline row `taskSummary`, and the timeline's macro task carries the current `goal`; see [macro tasks](macro-tasks.md). The console-only `macro_task_stop` is not a Host CLI command; ordinary Host `cancel` and its control capability remain unchanged.
-
-## Maintenance commands
-
-`install '{}'` is local to a package launcher: it places the shared skill in `~/.agents/skills/hey-my-buddy` unless the installed generation already matches (the contract, every distributed file's bytes and the active runtime), links `~/.claude/skills/hey-my-buddy`, upgrades the service of an existing board itself with the new package's code (there is no separate `upgrade` command) and returns `{skill: {path, version, contract, placement}, claude: {path, status}, service, writePaths, diagnostics}`; a foreign skill or Claude Code target is `SKILL_TARGET_CONFLICT`, a Claude Code link that cannot be created is `CLAUDE_LINK_FAILED` (both before any upgrade) and a Worker credential is `UNAUTHORIZED`. `paths '{}'` is local and read-only: it starts no service and returns where things live — `skill {dir, installed, version, launcher}`, `claude {path, status}` (`linked`, `missing` or `conflict`), `invokedFrom`, `data {stateDir, board, attempts, workspaces, backup, serviceLog}` and `runtime {root, active}`. A completed cutover's `service.result` carries `{upgraded, backup, verification, previousRuntime, rollback, runtimePruning}` and may add `skillCleanupError` or `journalError`; failure returns a nonzero CLI status and either verified rollback evidence or a retained recovery journal. Running the same fixed-version `install` again resumes an interrupted journal. Ordinary commands cannot mutate while an installation's journal exists (`UPGRADE_IN_PROGRESS`). Busy work is `UPGRADE_NOT_IDLE`, returned only when the contract version changes.
-
-`storage-plan '{}'` and `storage-apply '{"planId":"stg-…","commandId":"…","confirm":true}'` map to named `storage_plan` and `storage_apply` operations. [Operations](operations.md#storage-wire-shapes) owns the exact plan/result shapes, protection rules and 15-minute expiry. Reuse the same commandId after an unknown reply or interrupted deletion; changing its plan conflicts. Neither command stops a process. Browser access adds only these two operations to the existing whitelist.
-
-## Local harness commands
-
-Every CLI JSON envelope carries `contractVersion`. A reply to a request that names a Host (`hostId`, also supplied by a control file) or one of its micro tasks (`runId` or `requestId`) also carries `waitingForHost` while that Host has micro tasks waiting for it: `{"host": n, "review": m}` with only the nonzero counts, each equal to the `total` of `list` with that `hostId`, that `filter` and otherwise default parameters. Requests made with an attempt-scoped credential, as a Lead makes them, never carry it. `harnesses` returns the connector reports and the recorded `harnesses` health; `harnesses '{"refresh":true,"harness":"codex"}'` performs an explicit bounded rescan (omit `harness` for all). `harness-set '{"harness":"codex","path":"/absolute/path/to/codex"}'` maps to `harness_set`, and `path:null` restores automatic detection; the later write wins. Manual paths require Host or authenticated-console authority. [Harnesses](harnesses.md) owns status, retry and diagnostic semantics.
-
-`harness_prepare` is an internal operation of the execution process, authenticated by `attemptId`, `generation`, `nonce` and `commandId`; `retry` or `failedOnly` additionally binds `healthRevision`. It returns the selected health record and records attempt provenance; one proven pre-model retry is permitted. An execution cannot use this operation to change a manual path.
-
-## Review eligibility
-
-`harnesses` exposes local health, capabilities and each harness's declared permission levels without a model call; a declaration is not a measured sandbox check. Eligibility is not a paid certificate; runtime effective-policy, tool evidence, budget, frozen-input and actual stop checks remain mandatory.
-
-## Worker session history
-
-`worker-sessions` maps to the named `worker_sessions` operation and takes no parameters. It reads only board-recorded native identities and reports `sessions`, `count` and `nativeAccess:false`, labelling Codex historical user-store and private micro task threads; the listing itself offers no native mutation. Console macro task deletion removes its proven user-store sessions through the native Codex operation ([operations](operations.md#worker-session-history)). It lists no DSH sessions: they are execution-private, and the grouped-session listing and archiving were removed with the grouping feature ([ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md)). Worker credentials are denied. [Operations](operations.md#worker-session-history) owns the read boundary and the upgrade boundary.
+`delivered` asks for review of the fixed artifact. `waiting-host` asks for a response to its request. `expected-duration` and `native-silence` are reminders; `wait-timeout` and `unavailable` end only this wait. A missing or unreadable terminal receipt can return `result-unavailable`. The advertised `actions` come from the authoritative run view; the envelope supplies no full command templates. This batch adds no new-issue wakeup condition. Follow [host.md](host.md) for all waiting decisions.

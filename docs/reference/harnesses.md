@@ -24,6 +24,8 @@ The Worker obtains its selected command through the named `harness_prepare` oper
 
 ## Diagnostics and manual paths
 
+These are user operations, listed by `help operations`; [Host operations](operations.md#host-operations) owns their authorization and use. Role credentials do not authorize changing user settings. Host routing reasons arrive with submission, waiting and run reads rather than requiring a diagnostics preflight.
+
 `hey-my-buddy harnesses '{}'` reads the recorded status; `hey-my-buddy harnesses '{"refresh":true}'` detects all harnesses, and `hey-my-buddy harnesses '{"refresh":true,"harness":"codex"}'` detects one. Responses contain each harness's `status`, selected path/command/version/source, bounded candidate diagnostics, nullable `{code, params}` `reason`, `checkedAt`, `expiresAt`, `revision` and `manualPath`. Candidate diagnostics also carry reason objects; `account.reason` is a nullable reason object, and catalog readings carry their own `reason` separately. Codes and named parameters are registered in `src/hey_my_buddy/protocol/reason-codes.json`; readers supply wording and repair advice. `unknown`, `missing`, `login-required` and `unhealthy` are unavailable; `ready` passed the handshake. No diagnostic command invokes a model.
 
 `hey-my-buddy harness-set '{"harness":"codex","path":"/absolute/path/to/codex"}'` sets a user-selected path and detects it; a null path restores automatic discovery. An attempt-scoped agent credential cannot change this setting. The authenticated Buddy page offers the same detection and advanced path controls, including failed detection and login guidance.
