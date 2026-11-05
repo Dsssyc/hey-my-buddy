@@ -81,6 +81,8 @@
 
 ## 安装与存储
 
+**安装时也给 Antigravity 放 skill 的链接。**（2026-11-05 开发者提出：Antigravity 不读 `~/.agents/skills` 下的 skill） 现在安装只给 Claude Code 放链接（`~/.claude/skills/hey-my-buddy`），而且不看 Claude Code 在不在，总会建出 `~/.claude/skills`。按 Antigravity 的公开文档，它的 App、CLI 与 IDE 都从 `~/.gemini/config/skills/` 读全局的 skill，没有提 `~/.agents/skills`；Gemini CLI 读 `~/.agents/skills`，不用另放（[调研记录](../research/2026-11-05-antigravity-skill-locations.md)）。建议定成一条原则，不为 Antigravity 单列：凡是不读 `~/.agents/skills` 的 harness，它的主目录存在时，安装在它读 skill 的用户级目录里放一个指向共享 skill 的链接，Claude Code 与 Antigravity 同样处理；`paths` 照实报告每一个链接。开工之前要确认两件事：Antigravity 是否跟随符号链接与 Windows 的目录联接；用哪个目录判断装了 Antigravity（`~/.gemini` 是 Gemini CLI 与它共用的）。动的是安装路径，按安装的力度验收，写进 ADR-015 作为一次应用；不改契约，随 0.61.0 之后的一个补丁版本做。
+
 **删除路径按回合找仓库时，按 `attempt_id` 查事件没有索引。**（2026-11-05 ADR-032 的 P5 验收时 Host 读代码记下，未量） `blackboard/tasks/projects.py` 的 `known_repository_paths` 为每个候选回合执行 `SELECT seq FROM events WHERE attempt_id=? AND kind IN (...) ORDER BY seq DESC LIMIT 1`；`events` 上只有 `(task_id, seq)` 与 `(kind, seq DESC)` 两个索引，这一句大概走 kind 的索引往回扫。删除宏任务与回收时它按项目只算一次，日常还没有觉得慢。建议：先在导出的样本上量一次删除一个大宏任务的耗时，量出问题再改成按 `task_id` 加回合条件查，或者加索引；加索引是存储形式的变化，要随存储批次。
 
 **Windows 上看不到别的进程是否以检出为工作目录。**（2026-10-31 Windows 测试欠账第二批验收时 Opus 独立审查提出，Host 核对过） `require_idle_checkout` 在 Windows 上直接返回，回收先删文件、删到目录时才失败；用户在检出里开着终端时，里面的文件可能已被删掉。办法：先把整个检出目录改名，改名成功才算没人占用，再删改名后的目录。下一批 Windows 的改动里做。

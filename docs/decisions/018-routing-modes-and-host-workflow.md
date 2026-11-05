@@ -29,7 +29,7 @@ ADR-014 的 Router 在限定预算内只读查看代码仓库再做选择，要�
 
 ### 第二部分：Host 工作流
 
-11. **SKILL.md 只写长期工作流。** 删去版本说明与发布状态（例如"尚未安装"），安装与发布事实只放在 `docs/acceptance/`；SKILL.md 只保留每次委派都需要的核心流程，控制在约 4 KB，细节放在 `references/` 中按需读取，减少 Host 每次激活 skill 的成本。SKILL.md 同时写明：先看 `health` 的路由状态再决定是否依赖路由，后续委派沿用同一工作目标。
+11. **SKILL.md 只写长期工作流。** 删去版本说明与发布状态（例如"尚未安装"），安装与发布事实只放在 `docs/acceptance/`；SKILL.md 只保留每次委派都需要的核心流程，控制在约 4 KB，细节放在 `references/` 中按需读取，减少 Host 每次激活 skill 的成本。SKILL.md 同时写明：先看 `health` 的路由状态再决定是否依赖路由，后续委派沿用同一工作目标。2026-11-05 修订：[ADR-032](032-host-interface-delegation-loop.md) 让 `submit` 与 `await` 的回复自带路由的原因，skill 不再要求先看 `health`；同日按开发者的建议，等待的写法改为一份所有 Host 共用的 [Host 指南](../reference/host.md)，Codex 与 Claude Code 各留一页，只写它们自己的原生等待机制、沙箱设置与限制，别的 Host 只读共用的那一份。
 12. **任务包可以从文件或标准输入传入。** 每个方法除单个 JSON 参数外，还接受 `--params-file <路径>` 与 `-`（从标准输入读取），语义完全相同，避免长任务文本的 shell 转义与超长命令行。
 13. **按方法的帮助。** `buddy help` 列出全部方法与一句说明；`buddy help <方法>` 列出参数、默认值与界限，内容由现有参数校验生成，不另写一份；方法名写错时给出最接近的候选。
 14. **后续委派加入同一工作目标。** 提交时可以用 `objectiveOf: "<runId>"` 加入该 run 所属的工作目标，Host 不必从之前的回执里复制 `objectiveId`。
