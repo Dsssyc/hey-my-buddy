@@ -40,22 +40,17 @@ hey-my-buddy 让你正在用的编码 agent 把一部分工作交给本机的其
 
 ## 怎样工作
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/overview-zh-dark.svg">
-  <img alt="你用平常的话告诉 Host buddy。Host 把微任务委派给黑板，黑板选出一个 Worker buddy；Worker 在自己的检出里干活，封存的结果经黑板回到 Host，Host 审查之后把它验收进你的仓库。" src="docs/assets/overview-zh-light.svg" width="100%">
-</picture>
-
 1. **委派。** Host 写一个*微任务*：做什么、可以改哪些文件、怎样检查，再把它交给*黑板*。黑板是本机的一个服务，每一步都记下来。
 2. **执行。** 黑板选出一个 Worker：合格的只有一个就直接用它，有几个就由 *Router buddy* 从中选，Host 也可以点名。Worker 在自己的检出里工作，或者不要检出，在 Host 指定的文件夹里工作。Host 可以向运行中的回合问询；Worker 需要决定时，会停下来问。
 3. **封存。** 回合结束时，黑板按当时的样子封存这份检出，结果之后不会再变。不要检出的工作，黑板固定的是 Worker 交回的结果，文件夹里的改动不封存。
-4. **审查。** Host 对照微任务审查封存的结果，并跑检查；不对就打回，再跑一个回合，默认还是同一个 Worker，Host 也可以换一个。
+4. **审查。** Host 对照微任务审查结果，并跑检查；不对就打回，再跑一个回合，默认还是同一个 Worker，Host 也可以换一个。
 5. **验收。** Host 把封存的结果整合进你的仓库并验收；只有验收过的工作才落进仓库。不要检出的工作，验收时不需要整合。
 
 相关的微任务组成一个*宏任务*。完整的流程，包括路由、问询、打回，以及替 Host 继续委派的 *Lead buddy*：
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-zh-dark.svg">
-  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，黑板取唯一合适的 buddy，或由 Router buddy 在候选之中选一个，没有合适的就交回 Host；Worker buddy 在自己的检出里，或者直接在你的目录里运行一个回合；Host 可以经黑板向运行中的回合问询；回合结束时产物被固定下来，等待 Host 验收；Host 把任务书、Worker 的报告与产物相互对照，然后验收，或者打回，默认交给同一个 Worker。Git 项目只并入验收过的工作。Lead buddy 委派自己名下的微任务，并负责验收。" src="docs/assets/architecture-zh-light.svg" width="100%">
+  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，黑板取唯一合适的 buddy，或由 Router buddy 在候选之中选一个，没有合适的就交回 Host；Worker buddy 在自己的检出里，或者直接在你的文件夹里运行一个回合；Host 可以经黑板向运行中的回合问询；回合结束时产物被固定下来，等待 Host 验收；Host 把任务书、Worker 的报告与产物相互对照，然后验收，或者打回，默认交给同一个 Worker。Git 项目只并入验收过的工作。Lead buddy 委派自己名下的微任务，并负责验收。" src="docs/assets/architecture-zh-light.svg" width="100%">
 </picture>
 
 细节见[工作流](docs/reference/workflow.md)与[架构](docs/reference/architecture.md)。

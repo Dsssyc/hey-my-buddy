@@ -40,22 +40,17 @@ hey-my-buddy lets the coding agent you already work with hand parts of its work 
 
 ## How it works
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/overview-en-dark.svg">
-  <img alt="You ask your Host buddy in plain words. The Host delegates a micro task to the blackboard, which picks a Worker buddy; the Worker runs in its own checkout, and its sealed result returns through the blackboard to the Host, which reviews it and accepts it into your repository." src="docs/assets/overview-en-light.svg" width="100%">
-</picture>
-
 1. **Delegate.** The Host writes a *micro task*: what to do, which files it may change and how to check it. It hands the micro task to the *blackboard*, a local service that keeps every step.
 2. **Run.** The blackboard picks a Worker: the only one that fits, or a *Router buddy*'s choice among several, unless the Host names one. The Worker works in its own checkout, or directly in the folder the Host names. The Host can ask the running turn a question; when the Worker needs a decision, it stops and asks.
 3. **Seal.** When the turn ends, the blackboard seals the checkout as it stood, so the result cannot change afterwards. For work done directly in a folder it fixes the Worker's result instead; the folder itself is not sealed.
-4. **Review.** The Host checks the sealed result against the micro task and runs the checks. If it is not right, the Host sends it back for another turn, to the same Worker unless it names another.
+4. **Review.** The Host checks the result against the micro task and runs the checks. If it is not right, the Host sends it back for another turn, to the same Worker unless it names another.
 5. **Accept.** The Host integrates the sealed result into your repository and accepts it; only accepted work lands there. A result from work done directly in a folder is accepted without integration.
 
 Related micro tasks form a *macro task*. The whole loop, with routing, inquiry, sending back and a *Lead buddy* that delegates on the Host's behalf:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-en-dark.svg">
-  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, the blackboard takes the only eligible buddy or a Router buddy chooses among the candidates, and when none fits the micro task goes back to the Host; a Worker buddy runs a turn in its own checkout or directly in your directory; the Host can ask a running turn a question through the blackboard; when the turn ends its output is fixed and waits for the Host's acceptance; the Host checks the brief, the Worker's report and the output against one another, then accepts the output or sends it back, by default to the same Worker. A Git project takes in only accepted work. A Lead buddy delegates micro tasks of its own and accepts them." src="docs/assets/architecture-en-light.svg" width="100%">
+  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, the blackboard takes the only eligible buddy or a Router buddy chooses among the candidates, and when none fits the micro task goes back to the Host; a Worker buddy runs a turn in its own checkout or directly in your folder; the Host can ask a running turn a question through the blackboard; when the turn ends its output is fixed and waits for the Host's acceptance; the Host checks the brief, the Worker's report and the output against one another, then accepts the output or sends it back, by default to the same Worker. A Git project takes in only accepted work. A Lead buddy delegates micro tasks of its own and accepts them." src="docs/assets/architecture-en-light.svg" width="100%">
 </picture>
 
 The details are in [workflow](docs/reference/workflow.md) and [architecture](docs/reference/architecture.md).
