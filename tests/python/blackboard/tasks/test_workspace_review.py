@@ -24,6 +24,9 @@ class WorkspaceReviewTests(unittest.TestCase):
         self.repo.mkdir()
         self.state = self.root / "state"
         self.git("init", "-q")
+        # Local fetch drops the caller's -c options before starting upload-pack.
+        # Its source repository must also allow long sealed-ref paths on Windows.
+        self.git("config", "core.longpaths", "true")
         self.git("config", "user.name", "Workspace Review")
         self.git("config", "user.email", "review@example.invalid")
         (self.repo / "src").mkdir()

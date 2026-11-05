@@ -12,6 +12,7 @@ from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.routing.statistics import samples_for_run
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol.workspace_manifest import artifact_manifest, record_reference, turn_manifest
 
 
@@ -56,6 +57,22 @@ class GitDeliveryTests(unittest.TestCase):
     def verify(self, manifest, sealed, target, **extra):
         return workspace.integration_verify(sealed, original_input=manifest, final_input=manifest,
                                             path=str(target), ref="HEAD", **extra)
+
+    def test_fetch_sealed_ref_from_a_long_source_path(self):
+        repository = self.root / ("long-source-" + "x" * 80)
+        native_path(self.repo).rename(native_path(repository))
+        self.repo = repository
+        manifest, checkout = self.fixture()
+        self.worker_commit(checkout)
+        sealed = workspace.seal(self.state, manifest, "task", "attempt")
+        ref_path = self.repo / ".git" / sealed["ref"]
+        self.assertGreater(len(str(ref_path)), 260)
+        self.assertEqual(native_path(ref_path).read_text().strip(), sealed["commit"])
+
+        target = self.target(manifest)
+        self.git("fetch", "-q", str(self.repo), sealed["ref"], cwd=target)
+
+        self.assertEqual(self.git("rev-parse", "FETCH_HEAD", cwd=target).decode().strip(), sealed["commit"])
 
     def test_multiple_worker_commits_are_reused_and_recovered_without_reobserving_head(self):
         manifest, checkout = self.fixture()
