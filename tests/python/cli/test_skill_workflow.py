@@ -60,7 +60,7 @@ class SkillWorkflowTests(unittest.TestCase):
 
     def test_waiting_pointers_name_codex_and_claude_paths(self):
         """The skill routes waiting to the per-Host guides instead of describing either flow."""
-        for guide in ("host-codex.md", "host-claude-code.md"):
+        for guide in ("host.md", "host-codex.md", "host-claude-code.md"):
             with self.subTest(guide=guide):
                 self.assertIn(f"(../../docs/reference/{guide})", self.text)
         self.assertNotIn("#waiting-from-", self.text)
@@ -92,6 +92,13 @@ class HostGuideTests(unittest.TestCase):
     """Each per-Host guide carries only its own waiting flow, sandbox allowance and limits."""
 
     MARKERS = {
+        "host.md": (
+            "one `await` per running micro task",  # the shared wait loop
+            "waitSeconds",  # a foreground wait fits the command tool's time limit
+            "If a reply is lost",  # resending returns the original
+            "Before the turn ends",  # open work is found on the blackboard, not in memory
+            "LAUNCH_ACCESS_DENIED",  # the launcher runs outside the sandbox
+        ),
         "host-codex.md": (
             "monitoring-only native subagent",  # one monitor per running micro task
             "fork_turns",  # the monitor spawns with an empty history

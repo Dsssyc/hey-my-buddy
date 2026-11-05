@@ -33,6 +33,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 | Document | Role |
 | --- | --- |
 | [reference/usage.md](reference/usage.md) | Practical path from install to reviewed result: task packets, workspace choice, supervised micro tasks, observation and background follow-up |
+| [reference/host.md](reference/host.md) | How any Host waits: one `await` per running micro task, what each outcome asks for, lost replies, finding open work before the turn ends, and the launcher outside the sandbox. |
 | [reference/host-codex.md](reference/host-codex.md) | Codex Host waiting flow: one monitoring-only subagent per micro task, the launcher's sandbox rule and Codex-specific limits |
 | [reference/host-claude-code.md](reference/host-claude-code.md) | Claude Code Host waiting flow: one background `await` per running micro task, the launcher's sandbox settings and the session-wakeup limits |
 | [reference/workflow.md](reference/workflow.md) | Micro task lifecycle: routing boundaries, Host decisions, helpers, continuation and takeover, workspace and artifact rules, cancellation and provider rejections |
