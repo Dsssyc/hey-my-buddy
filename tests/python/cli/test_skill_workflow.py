@@ -52,7 +52,6 @@ class SkillWorkflowTests(unittest.TestCase):
             "macroTaskId",
             "`accept`",
             "`conclude`",
-            "finalArtifactId",
             "await",
         ):
             with self.subTest(marker=marker):

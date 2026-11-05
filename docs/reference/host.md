@@ -14,7 +14,7 @@ Act on the reply's `outcome`, using the ids it carries:
 - `wait-timeout` or `unavailable` ends only that wait: wait again for the same `runId`.
 - Any other outcome is a stopped micro task: read the full `get` and act on its `actions`.
 
-Answer exactly the ids a reply gives, never ones remembered from an earlier reply. If a reply is lost, send the same request again: it returns the original instead of acting twice. Do not poll `get` beside a wait.
+Answer exactly the ids a reply gives, never ones remembered from an earlier reply. If a reply is lost, send the same request again, whatever the command: it returns the original instead of acting twice. Do not poll `get` beside a wait.
 
 ## Before the turn ends
 
