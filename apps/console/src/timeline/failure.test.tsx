@@ -43,7 +43,7 @@ if (writerFixture) it("renders stored Host conclusions from the real writer repl
     render(<TooltipProvider>
       <RowName row={row} rows={timeline.rows} tabIndex={0} current={false} fresh={false}
         onClick={vi.fn()} onEnter={vi.fn()} onLeave={vi.fn()} onFocus={vi.fn()} onBlur={vi.fn()}/>
-      <Track row={row} spans={spans} events={events} scale={scale} nowMs={nowMs} ongoing={false}
+      <Track row={row} spans={spans} events={events} scale={scale} nowMs={nowMs}
         selected={false} buddyColors={colors} onSelect={vi.fn()} onOpen={vi.fn()}
         onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()}/>
     </TooltipProvider>);

@@ -6,6 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
 import { buddyColorsFor } from "../timeline/buddyColors";
+import { NowLine } from "../timeline/NowLine";
 import { Axis, Track } from "../timeline/Tracks";
 import { fragmentHitPath, WaitingDiamond, TIMELINE_OUTSET_PX as SLACK } from "../timeline/trackMarks";
 import { timelineScaleInput } from "../timeline/scale";
@@ -166,7 +167,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
           <Axis compact scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs}/>
         </ZoomRuler>
         <div className="relative">
-          <Track row={row} spans={spans} events={events} scale={scale} nowMs={nowMs} ongoing={input.nowAtEnd}
+          <Track row={row} spans={spans} events={events} scale={scale} nowMs={nowMs}
             selected={false} selectedKey={selectedKey} tabKey={selectedKey} buddyColors={buddyColors} height={STRIP_PX} selectionRef={trackSelection} itemLinks={links.items}
             onOpen={(_runId, key) => links.onItem(key)} onSelect={() => {}}
             onHover={() => {}} onFocusSpan={() => {}} onMarker={() => {}}/>
@@ -181,6 +182,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
               <WaitingDiamond x={x(wait.startMs)} y={middle} kind="review"/>,
               `settle:${row.runId}`)}
           </>)}
+          {input.nowAtEnd && <NowLine x={SLACK + scale.toX(nowMs)!}/>}
         </div>
       </div>}
     </ScrollArea>

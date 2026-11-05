@@ -28,6 +28,7 @@ import type { LaneGroup } from "./lanes";
 import { markerAt, markerHasKey, markerKey } from "./MarkerCluster";
 import { eventActions } from "./events";
 import type { TimelineMarker } from "./MarkerCluster";
+import { NowLine } from "./NowLine";
 import { Axis, Track, spanReadout, markerReadout } from "./Tracks";
 import { TIMELINE_OUTSET_PX as SLACK_PX } from "./trackMarks";
 import { useViewPreference } from "../view-preferences";
@@ -202,7 +203,7 @@ export function TaskWork(props: TaskWorkProps) {
     buddyColors, scale: scale!,
     // A closed track has no moving end or silence duration to redraw.
     nowMs: input!.nowAtEnd || spansByRow.get(row.runId)?.some(span => span.reminders?.possiblyStuck) ? nowMs : instant(timeline!.observedAt)!,
-    ongoing: input!.nowAtEnd, buddies: props.buddies, onOpen: props.onOpen, onSelect: select,
+    buddies: props.buddies, onOpen: props.onOpen, onSelect: select,
     onFocusSpan: (span: TimelineSpan | null) => { setPointerScreenX(null); setHoveredRow(null); setHoveredSpan(null); setFocusedMarker(null); setFocusedSpan(span); },
     onHover: (span: TimelineSpan | null) => { setHoveredMarker(null); setHoveredSpan(span); if (span) setHoveredRow(null); },
   });
@@ -321,17 +322,20 @@ export function TaskWork(props: TaskWorkProps) {
             <div className="bg-ruler"/></>}
         </ZoomRuler>
       </div>
-      {layout.lanes.map((lane, index) => <section key={lane.lead.runId} data-slot="timeline-lane" className={cn("border-t border-line bg-card", index > 0 && "mt-6")}>
-        {laneHeader(lane)}
-        <Collapsible open={!collapsedLanes.has(lane.lead.runId)}>
-          <CollapsibleContent>
-            <div id={`lane-${lane.lead.runId}`}>{lane.members.map(row => trackRow(row, lane.lead))}</div>
-          </CollapsibleContent>
-        </Collapsible>
-      </section>)}
-      {layout.lanes.length > 0 && layout.ordinary.length > 0 && <div className="sticky left-0 mt-6 flex h-9 w-max items-center bg-background px-4 text-xs text-ink3">{t("otherMicroTasks")}</div>}
-      {layout.ordinary.map(row => trackRow(row))}
-      {rows.length === 0 && <p className="sticky left-0 w-fit p-6 text-sm text-ink2">{t("noUnfinishedMicroTasks")}</p>}
+      <div data-slot="timeline-rows" className="relative isolate">
+        {layout.lanes.map((lane, index) => <section key={lane.lead.runId} data-slot="timeline-lane" className={cn("border-t border-line bg-card", index > 0 && "mt-6")}>
+          {laneHeader(lane)}
+          <Collapsible open={!collapsedLanes.has(lane.lead.runId)}>
+            <CollapsibleContent>
+              <div id={`lane-${lane.lead.runId}`}>{lane.members.map(row => trackRow(row, lane.lead))}</div>
+            </CollapsibleContent>
+          </Collapsible>
+        </section>)}
+        {layout.lanes.length > 0 && layout.ordinary.length > 0 && <div className="sticky left-0 mt-6 flex h-9 w-max items-center bg-background px-4 text-xs text-ink3">{t("otherMicroTasks")}</div>}
+        {layout.ordinary.map(row => trackRow(row))}
+        {rows.length === 0 && <p className="sticky left-0 w-fit p-6 text-sm text-ink2">{t("noUnfinishedMicroTasks")}</p>}
+        {input.nowAtEnd && <NowLine x={originX + scale.toX(nowMs)!}/>}
+      </div>
     </div>}
   </ScrollArea>
     {!narrow && <NameDivider width={nameWidth} onChange={setNameWidth}/>}

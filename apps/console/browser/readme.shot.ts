@@ -64,7 +64,8 @@ for (const language of ["en", "zh"] as const) {
         await expect(page.locator('[data-key="span:host:readme-guide-location"]')).toBeVisible();
         await expect(page.locator('[data-key="span:queue:readme-package"]')).toBeVisible();
         expect(await page.locator('[data-slot=timeline-break]').count()).toBeGreaterThan(0);
-        expect(await page.locator('[data-slot=timeline-now]').count()).toBeGreaterThan(0);
+        await expect(page.locator('[data-slot=timeline-rows] > [data-slot=timeline-now]')).toHaveCount(1);
+        await expect(page.locator('[data-slot=timeline-track] [data-slot=timeline-now]')).toHaveCount(0);
         await expect(page.locator('[data-slot=event-cluster]').first()).toBeVisible();
         await expect(page.locator('[data-slot=inquiry-mark]')).toBeVisible();
         await expect(page.locator('[data-slot=silent-tail]')).toBeVisible();

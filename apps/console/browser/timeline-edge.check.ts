@@ -22,7 +22,7 @@ for (const width of [1440, 390]) for (const theme of ["light", "dark"]) {
         const canvas = node.querySelector('[data-slot=timeline-canvas]')!;
         return { right, view: node.getBoundingClientRect().right, padding: parseFloat(getComputedStyle(node).paddingRight),
           scrollWidth: node.scrollWidth, clientWidth: node.clientWidth, canvas: canvas.getBoundingClientRect().right,
-          ppm: canvas.getAttribute('data-ppm'), now: node.querySelector('[data-slot=timeline-now]')!.getBoundingClientRect().right,
+          ppm: canvas.getAttribute('data-ppm'), now: (() => { const line = node.querySelector('[data-slot=timeline-now]')!.getBoundingClientRect(); return line.left + line.width / 2; })(),
           axis: Math.max(...[...node.querySelectorAll('[data-slot=axis-baseline], [data-slot=axis-edge]')].map(line => line.getBoundingClientRect().right)) };
       });
       await testInfo.attach('fitted-geometry', { body: JSON.stringify(geometry, null, 2), contentType: 'application/json' });
@@ -39,7 +39,7 @@ for (const width of [1440, 390]) for (const theme of ["light", "dark"]) {
         expect(paint.right).toBeCloseTo(geometry.right, 1);
         expect(paint.background).toBe(paint.filter);
       }
-      for (const row of [page.locator('[data-slot=timeline-lane-lead]').first(), page.locator('[data-slot=timeline-row]').first(), page.locator('[data-slot=timeline-canvas] > [data-slot=timeline-row]').first()]) {
+      for (const row of [page.locator('[data-slot=timeline-lane-lead]').first(), page.locator('[data-slot=timeline-row]').first(), page.locator('[data-slot=timeline-rows] > [data-slot=timeline-row]').first()]) {
         const track = row.locator('[data-slot=timeline-track]');
         await track.hover();
         await expect(track.locator('[data-slot=selected-row]')).toBeAttached();

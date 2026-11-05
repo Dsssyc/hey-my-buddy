@@ -41,7 +41,7 @@ for (const theme of ["dark", "light"] as const) for (const width of [1440, 390])
       const rows = [
         { kind: "Lead header", row: page.locator('[data-slot=timeline-lane-lead]').first() },
         { kind: "lane member", row: page.locator('[data-slot=timeline-lane] [data-slot=timeline-row]').first() },
-        { kind: "ordinary row", row: page.locator('[data-slot=timeline-canvas] > [data-slot=timeline-row]').first() },
+        { kind: "ordinary row", row: page.locator('[data-slot=timeline-rows] > [data-slot=timeline-row]').first() },
       ];
       for (const { kind, row } of rows) {
         const name = row.locator('[data-slot=timeline-row-name]');

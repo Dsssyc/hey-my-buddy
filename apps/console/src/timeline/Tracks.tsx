@@ -150,8 +150,8 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds, co
 type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
 const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
 
-const TrackView = memo(function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = 52, surface = "background", selectionRef, itemLinks }: {
-  row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number; ongoing: boolean;
+const TrackView = memo(function Track({ row, spans, events, scale, nowMs, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = 52, surface = "background", selectionRef, itemLinks }: {
+  row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number;
   buddies?: readonly FriendlyBuddy[] | null; selected: boolean; tabKey?: string | null; boundary?: HTMLElement | null;
   /** Only this fragment is outlined; the selected row has its own neutral wash. */
   selectedKey?: string | null;
@@ -300,7 +300,6 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, ongoin
   return <svg data-slot="timeline-track" viewBox={`${-INSET_PX} 0 ${scale.widthPx + INSET_PX * 2} ${height - 1}`} width={scale.widthPx + INSET_PX * 2} height={height} preserveAspectRatio="none" className="block max-w-none select-none overflow-hidden border-t text-xs" aria-label={t("track", { title: displayTitle(row.titleSource, row.title).fullText })}>
     {ruler}<IdlePattern id={pattern}/>{scale.breaks.map(gap => <rect aria-hidden="true" data-slot="timeline-break" key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={height} fill={`url(#${pattern})`}/>)}
     {selected && <rect aria-hidden="true" pointerEvents="none" data-slot="selected-row" x={-INSET_PX} width={scale.widthPx + INSET_PX * 2} height={height} className="fill-selected-row"/>}
-    {ongoing && <line aria-hidden="true" data-slot="timeline-now" x1={scale.toX(nowMs)!} x2={scale.toX(nowMs)!} y2={height} className="stroke-live opacity-60"/>}
     {acceptance && <line data-slot="acceptance-wait" x1={Math.min(acceptance.start + 6, acceptance.end)} x2={acceptance.end} y1={middle} y2={middle} strokeWidth={acceptanceOpen ? 2 : 1.5} strokeDasharray={acceptanceOpen ? "5 4" : undefined} className={acceptanceOpen ? "stroke-hand-mark" : "stroke-ink3"}/>}
     {owned.map(entry => <line key={entry.wait.startMs} data-slot="owned-wait" x1={entry.start} x2={entry.end} y1={middle} y2={middle} strokeWidth={entry.wait.open ? 2 : 1.5} strokeDasharray={entry.wait.open ? "5 4" : undefined} className={entry.wait.open ? "stroke-hand-mark" : "stroke-ink3"}/>)}
     {positioned.map(({ span, start, end, execution, outcome }) => {

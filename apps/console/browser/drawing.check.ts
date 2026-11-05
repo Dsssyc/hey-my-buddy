@@ -197,8 +197,8 @@ test.describe("unreached expected duration", () => {
     await open(page, `#tasks/${macro}`);
     const track = page.locator('[data-slot="timeline-track"]').filter({ has: page.locator('[data-key="span:execution:att-a3-1"]') });
     await expect(track.locator('[data-slot="expected-mark"]')).toHaveCount(0);
-    const nowX = Number(await track.locator('[data-slot="timeline-now"]').getAttribute("x1"));
-    const axisEnd = Number(await page.locator('[data-slot=axis-baseline]').getAttribute("x2"));
+    const nowX = await page.locator('[data-slot="timeline-now"]').evaluate(node => { const box = node.getBoundingClientRect(); return box.left + box.width / 2; });
+    const axisEnd = await page.locator('[data-slot=axis-baseline]').evaluate(node => node.getBoundingClientRect().right);
     expect(axisEnd).toBeCloseTo(nowX);
     await track.locator('[data-key="span:execution:att-a3-1"]').hover();
     await expect(page.locator('[data-slot="timeline-status"]')).toContainText("Expected 4 h");
