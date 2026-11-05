@@ -39,7 +39,7 @@ class LeadOwnedTests(WorkflowTestCase):
     # Other lifecycle tests reuse these fixture methods with their own TestCase.
     def lead(self, board, name="lead", worker="w1", **extra):
         enable_fixture_buddy(board.store, BUDDY)
-        submitted = self.submit(board, request_id=name, cwd=str(self.workdir(name)), access="full",
+        submitted = self.submit(board, request_id=name, cwd=extra.pop("cwd", str(self.workdir(name))), access="full",
                                 delegationAuthority=True, **extra)
         self.register(board, worker)
         claim = self.claim(board, worker, claim_request_id="claim-" + name, run_id=submitted["runId"])
@@ -99,11 +99,61 @@ class LeadOwnedTests(WorkflowTestCase):
     def test_lead_cannot_supply_owner_macro_or_another_grant(self):
         board = self.board()
         _lead, claim = self.lead(board)
-        for change in ({"macroTaskId": "forged"}, {"hostId": "forged"},
+        for change in ({"macroTaskId": "forged"}, {"hostId": "forged"}, {"buddy": "route"},
                        {"delegationAuthority": True}, {"owner": "forged"}):
             with self.subTest(change=change), self.assertRaises(BoardError) as raised:
                 self.owned(board, claim, "forged-" + next(iter(change)), **change)
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+
+    def test_two_leads_list_and_get_only_their_own_tasks(self):
+        board = self.board(max_concurrent=2)
+        first, first_claim = self.lead(board, name="first-lead", kind="worktree",
+                                       create_macro={"title": "Shared group", "goal": "Shared group"})
+        _, second_claim = self.lead(board, name="second-lead", worker="w2", kind="worktree",
+                                    macroTaskId=first["macroTaskId"], cwd=first["microTask"]["cwd"])
+        owned = [self.owned(board, first_claim, name=name) for name in ("first-a", "first-b")]
+        foreign = self.owned(board, second_claim, name="second-a")
+        credential = {"credential": first_claim["agentCredential"]}
+        page = board.call("task_list", {"limit": 1, **credential})
+        self.assertEqual(page["total"], 2)
+        seen = {row["runId"] for row in page["runs"]}
+        self.assertIsNotNone(page["nextCursor"])
+        last = board.call("task_list", {"limit": 1, "before": page["nextCursor"], **credential})
+        self.assertEqual(last["total"], 2)
+        self.assertIsNone(last["nextCursor"])
+        seen.update(row["runId"] for row in last["runs"])
+        self.assertEqual(seen, {row["runId"] for row in owned})
+        second_page = board.call("task_list", {"credential": second_claim["agentCredential"]})
+        self.assertEqual([row["runId"] for row in second_page["runs"]], [foreign["runId"]])
+        for operation, params in (("workflow_get", {"runId": foreign["runId"]}),
+                                  ("workflow_cancel", {"runId": foreign["runId"]}),
+                                  ("workflow_continue", {"runId": foreign["runId"], "input": "foreign"})):
+            with self.subTest(operation=operation), self.assertRaises(BoardError) as raised:
+                board.call(operation, {**params, **credential})
+            self.assertEqual(raised.exception.code, "FORBIDDEN")
+
+    def test_suggest_is_bound_to_the_worker_or_lead_execution(self):
+        board = self.board(max_concurrent=2)
+        lead, lead_claim = self.lead(board)
+        child = self.owned(board, lead_claim)
+        self.register(board, "w2")
+        worker = self.claim(board, "w2", run_id=child["runId"])["claim"]
+        for claim, run_id, other in ((worker, child["runId"], lead["runId"]),
+                                     (lead_claim, lead["runId"], child["runId"])):
+            credential = {"credential": claim["agentCredential"]}
+            result = board.call("workflow_suggest", {"body": "Own execution suggestion", **credential})
+            self.assertEqual(result["runId"], run_id)
+            with self.assertRaises(BoardError) as raised:
+                board.call("workflow_suggest", {"runId": other, "body": "Foreign suggestion", **credential})
+            self.assertEqual(raised.exception.code, "FORBIDDEN")
+            with self.assertRaises(BoardError) as raised:
+                board.call("project_relocate", {"cwd": str(self.workdir()), **credential})
+            self.assertEqual(raised.exception.code, "FORBIDDEN")
+        with board.store.db.read() as connection:
+            rows = connection.execute("SELECT run_id,attempt_id FROM workflow_suggestions").fetchall()
+        self.assertEqual({tuple(row) for row in rows},
+                         {(child["runId"], worker["attempt"]["attemptId"]),
+                          (lead["runId"], lead_claim["attempt"]["attemptId"])})
 
     def test_lead_credential_cannot_read_collection_or_foreign_run(self):
         board = self.board()

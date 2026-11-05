@@ -473,6 +473,11 @@ class ConsoleWireRequest(Request):
         return self
 
 
+class RelocateRequest(Request):
+    """Record a marked Git project's new location without stopping or reclaiming work."""
+    cwd: Cwd = Field(description="Directory in the moved Git project; its existing marker identifies it")
+
+
 HOST_REQUESTS: dict[str, type[Request]] = {
     "create": CreateRequest, "amend": AmendRequest, "submit": SubmitRequest,
     "await": AwaitRequest, "get": GetRequest, "inquire": InquireRequest,
@@ -487,6 +492,7 @@ OPERATIONS_REQUESTS: dict[str, type[Request]] = {
     "storage-plan": EmptyRequest, "storage-apply": StorageApplyRequest,
     "worker-sessions": EmptyRequest,
     "restart": ServiceControlRequest, "stop": ServiceControlRequest,
+    "relocate": RelocateRequest,
 }
 ROLE_REQUESTS: dict[str, type[Request]] = {
     "submit": LeadSubmitRequest, "get": RoleGetRequest, "await": AwaitRequest,
@@ -530,6 +536,7 @@ OPERATION_TO_METHOD = {
     "capabilities": "harnesses", "harness_set": "harness-set", "quota_redetect": "quota-redetect",
     "runtime_info": "runtime", "storage_plan": "storage-plan", "storage_apply": "storage-apply",
     "worker_sessions": "worker-sessions",
+    "project_relocate": "relocate",
     "service_control": "stop",
 }
 

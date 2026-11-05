@@ -9,9 +9,9 @@ from ... import private_dirs
 from ...paths import native_path
 from ...errors import BoardError
 from ...protocol.reasons import reason
-from . import workspace
+from . import projects, workspace
 from .macro_task_deletion_progress import collect_skipped
-from .workspace_bindings import MANIFEST_OWNERS_CTE, output_record_id, output_references
+from .workspace_bindings import MANIFEST_OWNERS_CTE, output_record_id, output_references, repository_reference
 
 
 _PREFIX = "refs/hey-my-buddy/workspaces/"
@@ -39,10 +39,7 @@ def _skip(kind: str, path: str, code: str, workspace_id: str | None = None) -> d
 def _repository_current(manifest: dict, *, candidates=()) -> Path | None:
     # The locator's original-checkout rule and its candidate retained/input
     # proof are also the deletion rules. All values here are SQL owner facts.
-    reference = {'version': 4, 'workspaceId': manifest['workspace_id'], 'kind': manifest['workspace_kind'],
-                 'checkoutRoot': manifest['checkout_root'], 'projectId': manifest['project_id'],
-                 'inputCommit': manifest['input_commit'],
-                 'snapshot': {'repositoryPath': manifest['repository_path']}}
+    reference = repository_reference(manifest)
     repository = workspace.locate_repository(reference, candidates=candidates, repair=False)
     return Path(repository) if repository is not None else None
 
@@ -299,14 +296,8 @@ def _delete_foreign_outputs(store, by_id, artifacts, owned_runs) -> list[dict]:
                                                           state / 'workspaces' / identifier / 'outputs', directory)):
                 skipped.append(_skip('allocation', str(directory), 'OWNER_UNPROVEN', identifier))
                 continue
-            candidates = connection.execute(
-                f'WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})'
-                ' SELECT DISTINCT o.repository_path FROM manifest_owners o'
-                ' JOIN workflow_runs r ON r.run_id=o.owner_run_id'
-                ' LEFT JOIN macro_tasks m ON m.macro_task_id=r.macro_task_id'
-                ' WHERE COALESCE(m.project_id,r.standalone_project_id)=?',
-                (owner['project_id'],)).fetchall()
-            repository = _repository_current(owner, candidates=tuple(row['repository_path'] for row in candidates))
+            candidates = projects.known_repository_paths(connection, owner['project_id'])
+            repository = _repository_current(owner, candidates=candidates)
             if repository is None:
                 skipped.append(_skip('ref', ref, 'DEPENDENCY_RETAINED', identifier))
                 continue

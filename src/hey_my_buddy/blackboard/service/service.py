@@ -51,6 +51,7 @@ CONTROL_OPERATIONS = (
     "runtime_info",
     "storage_plan",
     "storage_apply",
+    "project_relocate",
     "worker_sessions",
     "task_get",
     "task_list",
@@ -140,7 +141,7 @@ class _BaseResource:
                 )
             workflow_module.set_request_scope(scope)
             try:
-                common_cli = {"health", "capabilities", "harness.set", "quota.redetect", "runtime.info", "storage.plan", "storage.apply", "worker.sessions", "service.control", "console"}
+                common_cli = {"health", "capabilities", "harness.set", "quota.redetect", "runtime.info", "storage.plan", "storage.apply", "project.relocate", "worker.sessions", "service.control", "console"}
                 if operation in common_cli:
                     from ...protocol.requests import parse_request, dump_request
                     params = dump_request(parse_request(operation.replace(".", "_"), params, audience="service"))
@@ -336,6 +337,10 @@ class BoardService(_BaseResource):
     def storage_apply(self, request_json: str) -> str:
         from ..tasks import storage
         return self._guard("storage.apply", request_json, lambda params: storage.apply(self.store, params))
+
+    def project_relocate(self, request_json: str) -> str:
+        from ..tasks import projects
+        return self._guard("project.relocate", request_json, lambda params: projects.relocate(self.store, params))
 
     def runtime_info(self, request_json: str) -> str:
         def handler(params: dict) -> dict:

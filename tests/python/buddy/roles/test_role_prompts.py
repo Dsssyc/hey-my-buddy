@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
+import re
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -16,6 +17,7 @@ from hey_my_buddy.buddy.roles.worker_services import ATTENTION_REFUSAL, FINISH_D
 from hey_my_buddy.install.runtime import resource_path
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol.workspace_manifest import manifest_ref
+from hey_my_buddy.protocol.requests import ROLE_REQUESTS
 from hey_my_buddy.blackboard.routing.router import render_prompt
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -273,6 +275,15 @@ class RolePromptTests(unittest.TestCase):
                       "`includeAudit:true`", "`ownedMicroTasksTotal`", "frozen facts cursor"):
             self.assertIn(value, role)
         self.assertNotIn("all their current states", role)
+
+    def test_lead_commands_and_submission_match_the_role_contract(self):
+        role = resource_path("roles.lead").read_text(encoding="utf-8")
+        commands = next(line for line in role.splitlines() if line.startswith("- Your commands are "))
+        self.assertEqual(set(re.findall(r"`([^`]+)`", commands.split(". Run", 1)[0])), set(ROLE_REQUESTS))
+        self.assertIn("On `submit`, give a complete buddy name.", role)
+        self.assertIn("derives your macro task and ownership from the execution credential", role)
+        self.assertIn("help role <method>", role)
+        self.assertNotIn("hostId", role)
 
     def test_router_role_and_full_prompt_hashes_are_fixed(self):
         self.assertEqual(hashlib.sha256(resource_path("roles.router").read_bytes()).hexdigest(),

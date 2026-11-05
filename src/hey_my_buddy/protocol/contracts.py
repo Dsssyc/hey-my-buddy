@@ -74,6 +74,9 @@ class BuddyControl:
     def storage_apply(self, request_json: str) -> str:
         ...
 
+    def project_relocate(self, request_json: str) -> str:
+        ...
+
     def worker_sessions(self, request_json: str) -> str:
         ...
 

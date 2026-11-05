@@ -56,6 +56,17 @@ class HelpTests(unittest.TestCase):
             with self.subTest(arguments=arguments), self.assertRaises(BoardError):
                 parse_request("help", {"arguments": arguments}, audience="local")
 
+    def test_relocate_help_belongs_to_operations_and_has_only_cwd(self):
+        self.assertNotIn("  relocate:", help_text())
+        self.assertNotIn("  relocate:", help_text("role"))
+        self.assertIn("  relocate:", help_text("operations"))
+        detail = help_text("operations", "relocate")
+        self.assertIn("cwd (required)", detail)
+        self.assertIn("existing marker", detail)
+        self.assertNotIn("projectId", detail)
+        model = parse_request("relocate", {"cwd": str(Path.cwd())}, audience="operations")
+        self.assertEqual(set(dump_request(model)), {"cwd"})
+
 
 class RequestTests(unittest.TestCase):
     def setUp(self):

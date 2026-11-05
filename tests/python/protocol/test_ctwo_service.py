@@ -24,6 +24,28 @@ from hey_my_buddy.protocol.client import BoardClient
 
 
 class TestNamedContract(BoardTestCase):
+    def test_relocate_crosses_the_named_contract_and_rejects_extra_fields(self):
+        repository = self.workdir("repository")
+        subprocess.run(["git", "init", "-q", str(repository)], check=True,
+                       env=_child_environment(self.directory), capture_output=True)
+        with self.daemon():
+            client = BoardClient(self.directory, autostart=False)
+            created = client.workflow_create(cwd=str(repository), title="Relocation", goal="Track project")
+            project = client.workflow_get(macroTaskId=created["macroTaskId"])["project"]
+            moved = self.directory / "moved-repository"
+            repository.rename(moved)
+            result = client.relocate(cwd=str(moved))
+            self.assertEqual(result["project"], {"id": project["id"], "kind": "git",
+                                                 "path": str(moved), "label": "moved-repository"})
+            self.assertIn("project_relocate", client.capabilities()["operations"]["control"])
+            endpoint = self._endpoint()
+            with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as control:
+                denied = json.loads(control.project_relocate(json.dumps({"token": "wrong", "cwd": str(moved)})))
+                self.assertEqual(denied["error"]["code"], "UNAUTHORIZED")
+                rejected = json.loads(control.project_relocate(json.dumps({"token": endpoint["token"],
+                                                                           "cwd": str(moved), "projectId": "forged"})))
+                self.assertEqual(rejected["error"]["code"], "INVALID_ARGUMENT")
+
     def test_idle_waits_reuse_one_named_connection_across_timeouts(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1", "HMB_WAIT_CAPACITY": "1"}):
             client = BoardClient(self.directory, autostart=False)

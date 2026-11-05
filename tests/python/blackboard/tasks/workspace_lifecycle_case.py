@@ -169,7 +169,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         params = {"runId": view["runId"]}
         params.update(extra)
         try:
-            return board.store.workflow._reclaim_checkout(run_id=params.get("targetRunId", params["runId"]), **({"cwd": params["cwd"]} if "cwd" in params else {}))
+            return board.store.workflow._reclaim_checkout(run_id=params.get("targetRunId", params["runId"]))
         except BoardError as error:
             error.add_note(repr(error.details))
             raise

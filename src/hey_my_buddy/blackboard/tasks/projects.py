@@ -9,6 +9,7 @@ from ...errors import BoardError
 from ...json_codec import canonical_json
 from ...protocol.workspace_manifest import project_id
 from . import workspace
+from .workspace_bindings import MANIFEST_OWNERS_CTE
 
 
 def folder_id(path: str) -> str:
@@ -108,6 +109,61 @@ def record(connection, identity: dict) -> None:
         "ON CONFLICT(project_id) DO UPDATE SET kind=excluded.kind,path=excluded.path",
         (identity["projectId"], identity["projectKind"], identity["projectPath"]),
     )
+
+
+def known_repository_paths(connection, identifier: str) -> tuple[str, ...]:
+    """Current project location, followed by locations from the publication journal."""
+    current = connection.execute("SELECT path FROM projects WHERE project_id=? AND kind='git'",
+                                 (identifier,)).fetchone()
+    located = []
+    owner_join = (" JOIN manifest_owners o ON o.workspace_id=x.workspace_id AND o.manifest_sha256=x.digest"
+                  " JOIN workflow_runs r ON r.run_id=o.owner_run_id"
+                  " LEFT JOIN macro_tasks m ON m.macro_task_id=r.macro_task_id")
+    candidates = (
+        "SELECT a.rowid AS position,a.run_id,a.attempt_id,a.kind,a.workspace_id,a.input_manifest_sha256 AS digest"
+        " FROM workflow_artifacts a WHERE a.kind IN ('input','turn-input')"
+        " UNION ALL SELECT c.rowid,c.run_id,NULL,'continuation',c.workspace_id,c.workspace_manifest_sha256"
+        " FROM workflow_continuations c WHERE c.workspace_id IS NOT NULL"
+        " UNION ALL SELECT t.rowid,t.run_id,t.attempt_id,'receipt',t.workspace_id,t.workspace_manifest_sha256"
+        " FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id WHERE a.result_json IS NOT NULL"
+    )
+    for row in connection.execute(
+            f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE}), candidates AS ({candidates})"
+            " SELECT x.*,o.repository_path FROM candidates x" + owner_join +
+            " WHERE COALESCE(m.project_id,r.standalone_project_id)=?", (identifier,)):
+        if row['kind'] == 'input':
+            event = connection.execute("SELECT seq FROM events WHERE task_id=? AND kind IN ('task.submitted','workflow.helper_admitted') ORDER BY seq DESC LIMIT 1", (row['run_id'],)).fetchone()
+        elif row['kind'] == 'continuation':
+            event = connection.execute("SELECT seq FROM events WHERE task_id=? AND kind='workflow.workspace_prepared' AND json_extract(payload_json,'$.manifestSha256')=? ORDER BY seq DESC LIMIT 1", (row['run_id'],row['digest'])).fetchone()
+        else:
+            event = connection.execute("SELECT seq FROM events WHERE attempt_id=? AND kind IN ('execution.received','workflow.turn_returned','workflow.turn_failed','workflow.turn_rejected') ORDER BY seq DESC LIMIT 1", (row['attempt_id'],)).fetchone()
+        if event is not None:
+            located.append((event['seq'], row['position'], row['repository_path']))
+    paths = [current["path"]] if current is not None else []
+    paths.extend(path for _, _, path in sorted(located, reverse=True))
+    return tuple(dict.fromkeys(paths))
+
+
+def relocate(store, params: dict) -> dict:
+    """Record a known Git project at its marked location, without touching executions."""
+    directory = _directory(params["cwd"])
+    repository, root = _source(directory, workspace)
+    identifier = workspace.read_project_id(repository) if repository is not None else None
+    if identifier is None:
+        raise BoardError("PROJECT_MARKER_REQUIRED", "relocate requires an existing Git project marker; "
+                         "a moved or renamed ordinary folder is a new project", cwd=str(directory))
+    with store.db.write() as connection:
+        previous = connection.execute("SELECT path FROM projects WHERE project_id=?", (identifier,)).fetchone()
+        if previous is None:
+            raise BoardError("NOT_FOUND", "The marked Git project is not recorded on this blackboard",
+                             projectId=identifier)
+        record(connection, {"projectId": identifier, "projectKind": "git", "projectPath": root})
+        store._append_event(connection, "project.relocated",
+                            payload={"projectId": identifier, "path": root, "previousPath": previous["path"]})
+        result = {"project": view(connection, identifier)}
+        head = store._head_of(connection)
+    store._notify(head)
+    return result
 
 
 def prune_if_unreferenced(connection, project_ids) -> None:

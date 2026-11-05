@@ -41,7 +41,7 @@ from ...protocol.turn_input import NONE_TURN_INPUT_VERSION, turn_buddy
 from ...protocol.workspace_manifest import (project_id, manifest_ref, resolve_manifest, turn_manifest,
                                           artifact_manifest, record_reference, resolve_record, cumulative_patch_error,
                                           sealed_worker_commit)
-from .workspace_bindings import (MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE, effective_manifest, workspace_facts, retained_manifests, owned_manifest, output_references)
+from .workspace_bindings import (MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE, effective_manifest, workspace_facts, retained_manifests, owned_manifest, output_references, repository_reference)
 from ..routing.statistics import accumulate_infrastructure, accumulate_overall
 from . import macro_tasks, projects, fixes as task_fixes
 from . import host_conclusions
@@ -185,39 +185,9 @@ def workspace_module():
     return _workspace_module
 
 
-def known_repository_paths(connection, manifest: dict) -> tuple[str, ...]:
-    """Published repository locations, ordered by their existing event journal."""
-    identifier = project_id(manifest)
-    located = []
-    owner_join = (" JOIN manifest_owners o ON o.workspace_id=x.workspace_id AND o.manifest_sha256=x.digest"
-                  " JOIN workflow_runs r ON r.run_id=o.owner_run_id"
-                  " LEFT JOIN macro_tasks m ON m.macro_task_id=r.macro_task_id")
-    candidates = (
-        "SELECT a.rowid AS position,a.run_id,a.attempt_id,a.kind,a.workspace_id,a.input_manifest_sha256 AS digest"
-        " FROM workflow_artifacts a WHERE a.kind IN ('input','turn-input')"
-        " UNION ALL SELECT c.rowid,c.run_id,NULL,'continuation',c.workspace_id,c.workspace_manifest_sha256"
-        " FROM workflow_continuations c WHERE c.workspace_id IS NOT NULL"
-        " UNION ALL SELECT t.rowid,t.run_id,t.attempt_id,'receipt',t.workspace_id,t.workspace_manifest_sha256"
-        " FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id WHERE a.result_json IS NOT NULL"
-    )
-    for row in connection.execute(
-            f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE}), candidates AS ({candidates})"
-            " SELECT x.*,o.repository_path FROM candidates x" + owner_join +
-            " WHERE COALESCE(m.project_id,r.standalone_project_id)=?", (identifier,)):
-        if row['kind'] == 'input':
-            event = connection.execute("SELECT seq FROM events WHERE task_id=? AND kind IN ('task.submitted','workflow.helper_admitted') ORDER BY seq DESC LIMIT 1", (row['run_id'],)).fetchone()
-        elif row['kind'] == 'continuation':
-            event = connection.execute("SELECT seq FROM events WHERE task_id=? AND kind='workflow.workspace_prepared' AND json_extract(payload_json,'$.manifestSha256')=? ORDER BY seq DESC LIMIT 1", (row['run_id'],row['digest'])).fetchone()
-        else:
-            event = connection.execute("SELECT seq FROM events WHERE attempt_id=? AND kind IN ('execution.received','workflow.turn_returned','workflow.turn_failed','workflow.turn_rejected') ORDER BY seq DESC LIMIT 1", (row['attempt_id'],)).fetchone()
-        if event is not None:
-            located.append((event['seq'], row['position'], row['repository_path']))
-    return tuple(dict.fromkeys(path for _, _, path in sorted(located, reverse=True)))
-
-
 def repository_candidates(db, manifest: dict) -> tuple[str, ...]:
     with db.read() as connection:
-        return known_repository_paths(connection, manifest)
+        return projects.known_repository_paths(connection, project_id(manifest))
 
 
 def _turn_input_context(input_json: str) -> dict:
@@ -4018,7 +3988,7 @@ class WorkflowCoordinator:
 
 
 
-    def _reclaim_checkout(self, *, run_id: str, cwd: str | None = None) -> dict:
+    def _reclaim_checkout(self, *, run_id: str) -> dict:
         """Reclaim from terminal board facts, independently of a Host generation."""
         with self.db.read() as connection:
             reject_deleting_run(connection, run_id)
@@ -4052,14 +4022,12 @@ class WorkflowCoordinator:
         planned = None
         try:
             repository = None
-            if missing and cwd is not None:
-                repository = workspace_module().repository_at(cwd, allow_parent=True)
             if not missing:
                 with self._cleanup_allocation_lock(self.board.directory, physical):
                     with self.db.read() as connection:
                         reject_deleting_run(connection, run_id)
                     repository = workspace_module().locate_repository(
-                        physical, cwd=cwd, candidates=lambda: repository_candidates(self.db, physical),
+                        physical, candidates=lambda: repository_candidates(self.db, physical),
                         repair=True, removal_started=interrupted)
                     if repository is None:
                         raise BoardError("WORKSPACE_REPOSITORY_NOT_FOUND", "The workspace repository is unavailable",
@@ -4633,6 +4601,8 @@ class WorkflowCoordinator:
                     self.board.directory / "workspaces" / plan["workspace_id"])
                 if missing:
                     allocation, owner = self._missing_cleanup_proof(connection, run_row, plan)
+                    reference = repository_reference(owner)
+                    candidates = projects.known_repository_paths(connection, owner["project_id"])
                     reasons, evidence, retention = self._cleanup_reasons(
                         connection, run_row, task, None, checkout_root=plan["path"],
                         workspace_id=allocation["manifestWorkspaceId"],
@@ -4679,6 +4649,11 @@ class WorkflowCoordinator:
                             raise
                         reasons.extend(error.details.get("reasons") or [error.details["reason"]["code"]])
                         details.update({key: value for key, value in error.details.items() if key != "reasons"})
+            if missing and not reasons and repository is None:
+                repository = workspace_module().locate_repository(reference, candidates=candidates, repair=False)
+                if repository is None:
+                    raise BoardError("WORKSPACE_REPOSITORY_NOT_FOUND", "The workspace repository is unavailable",
+                                     checkoutRoot=plan["path"], projectId=owner["project_id"])
             reasons = sorted(set(reasons))
             now = self.now()
             with self.db.write() as connection:
@@ -4717,7 +4692,7 @@ class WorkflowCoordinator:
             if missing:
                 removed = workspace_module().cleanup_remove_missing(
                     self.board.directory, allocation, project_id=owner["project_id"],
-                    repository=repository or owner["repository_path"])
+                    repository=repository)
             else:
                 removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained,
                                                            resume=resume, proof=inspection, repository=repository)

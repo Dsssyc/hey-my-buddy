@@ -17,6 +17,13 @@ FROM workflow_continuations WHERE workspace_facts_role='owner'
 """
 
 
+def repository_reference(owner) -> dict:
+    """Use SQL owner facts for the locator's project and retained input proof."""
+    return {"version": 4, "workspaceId": owner["workspace_id"], "kind": owner["workspace_kind"],
+            "checkoutRoot": owner["checkout_root"], "projectId": owner["project_id"],
+            "inputCommit": owner["input_commit"], "snapshot": {"repositoryPath": owner["repository_path"]}}
+
+
 def output_record_id(run_id, attempt_id):
     """The physical output directory identity, independent of stored refs."""
     return hashlib.sha256(json.dumps([run_id, attempt_id], sort_keys=True,

@@ -58,7 +58,7 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
             replay = board.call("workflow_continue", request)
         self.assertTrue(replay["alreadyResponded"])
 
-    def test_reclaim_missing_repository_preserves_plan_then_uses_request_candidate(self):
+    def test_reclaim_missing_repository_preserves_plan_then_uses_relocated_project(self):
         board, submitted, manifest, checkout, _artifact, accepted = self.accepted_worktree(
             request_id="relocate-reclaim")
         moved = self._move_repository()
@@ -80,8 +80,9 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
             self.assertEqual(connection.execute(
                 "SELECT COUNT(*) FROM workspace_cleanup_plans WHERE run_id=?", (submitted["runId"],)
             ).fetchone()[0], 0)
-        result = self.reclaim(board, accepted, cwd=str(moved))
-        self.assertTrue(result["removed"])
+        board.call("project_relocate", {"cwd": str(moved)})
+        Reclamation(board.store).run()
+        self.assertEqual(self.view(board, submitted["runId"])["cleanup"]["state"], "applied")
         self.assertFalse(checkout.exists())
 
     def test_accept_commits_then_reports_missing_repository_and_retries(self):
@@ -97,7 +98,8 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         with board.store.db.read() as connection:
             self.assertIsNotNone(connection.execute(
                 "SELECT 1 FROM tasks WHERE task_id=? AND accepted_at IS NOT NULL", (submitted["runId"],)).fetchone())
-        reclaimed = self.reclaim(board, self.view(board, submitted["runId"]), cwd=str(moved))
+        board.call("project_relocate", {"cwd": str(moved)})
+        reclaimed = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(reclaimed["removed"])
         self.assertFalse(checkout.exists())
 
@@ -107,12 +109,12 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         moved = self._move_repository()
         later = self.submit_at(board, title="new-location-evidence",
                                task="record the new project location", cwd=moved, access="write")
-        from hey_my_buddy.blackboard.tasks.workflow import known_repository_paths
+        from hey_my_buddy.blackboard.tasks.projects import known_repository_paths
         with board.store.db.write() as connection:
             connection.execute("UPDATE events SET created_at='2000-01-01T00:00:00Z' WHERE task_id=?",
                                (later["runId"],))
         with board.store.db.read() as connection:
-            self.assertEqual(known_repository_paths(connection, manifest)[0], str(moved / ".git"))
+            self.assertEqual(known_repository_paths(connection, manifest["projectId"])[0], str(moved))
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         Reclamation(board.store).run()
         self.assertEqual(self.view(board, submitted["runId"])["cleanup"]["state"], "applied")

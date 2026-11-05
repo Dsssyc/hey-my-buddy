@@ -41,6 +41,9 @@ class BoardClient:
     def capabilities(self) -> dict:
         return self.call("capabilities")
 
+    def relocate(self, *, cwd: str) -> dict:
+        return self.call("project_relocate", {"cwd": cwd})
+
     # -- tasks --------------------------------------------------------------
     def get(self, **selector: Any) -> dict:
         return self.call("task_get", selector)["task"]

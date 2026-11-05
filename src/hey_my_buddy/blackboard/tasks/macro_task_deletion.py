@@ -238,17 +238,6 @@ def _storage_in_use(store, connection, scope):
     return [{'objectKind':kind,'holderRunIds':sorted(ids)} for kind,ids in sorted(holders.items())]
 
 
-def _project_paths(connection, project_id):
-    """Published SQL locations of the same project, including later runs."""
-    rows = connection.execute(
-        f'WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})'
-        ' SELECT DISTINCT o.repository_path FROM manifest_owners o'
-        ' JOIN workflow_runs r ON r.run_id=o.owner_run_id'
-        ' LEFT JOIN macro_tasks m ON m.macro_task_id=r.macro_task_id'
-        ' WHERE COALESCE(m.project_id,r.standalone_project_id)=?', (project_id,)).fetchall()
-    return tuple(row['repository_path'] for row in rows)
-
-
 def _unavailable_harnesses(connection, scope):
     """A session in a harness user store needs that harness for its deletion."""
     involved = {}
@@ -304,7 +293,7 @@ def _scope_summary(store, scope, connection):
             refs_known = False
     if refs_known:
         for identifier, manifest in manifests.items():
-            candidates = _project_paths(connection, manifest['project_id'])
+            candidates = projects.known_repository_paths(connection, manifest['project_id'])
             repository = _repository_current(manifest, candidates=candidates)
             if repository is None:
                 refs_known = False
@@ -369,7 +358,7 @@ def _delete_sessions(store, scope):
 def _delete_workspaces(store, scope):
     from .macro_task_deletion_workspace import delete_workspaces
     with store.db.read() as connection:
-        candidates = {m['workspace_id']: _project_paths(connection, m['project_id'])
+        candidates = {m['workspace_id']: projects.known_repository_paths(connection, m['project_id'])
                   for m in scope.manifests}
     return delete_workspaces(store, scope.manifests, scope.artifacts,
                              candidate_paths=candidates,

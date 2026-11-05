@@ -51,6 +51,7 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "runtime": ("control", "runtime_info"),
     "storage-plan": ("control", "storage_plan"),
     "storage-apply": ("control", "storage_apply"),
+    "relocate": ("control", "project_relocate"),
     "worker-sessions": ("control", "worker_sessions"),
     # -- Host lifecycle -------------------------------------------------
     "create": ("control", "workflow_create"),

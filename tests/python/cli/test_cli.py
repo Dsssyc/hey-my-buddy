@@ -31,7 +31,7 @@ class SurfaceTests(unittest.TestCase):
         self.assertEqual(set(transport.METHOD_MAP), set(cli.METHODS) - {"await", "install", "paths"})
         for retired in ("decide", "takeover", "reclaim", "goal-amend", "scope-amend",
                         "workspace-resolve", "status", "result", "events", "wait", "watch",
-                        "execution-retry", "execution-acknowledge", "wait-capacity", "relocate"):
+                        "execution-retry", "execution-acknowledge", "wait-capacity"):
             with self.subTest(retired=retired):
                 self.assertNotIn(retired, cli.METHODS)
                 self.assertNotIn(retired, transport.METHOD_MAP)
@@ -45,6 +45,17 @@ class SurfaceTests(unittest.TestCase):
     def test_role_only_names_require_an_execution_credential_before_rpc(self):
         with mock.patch.object(cli, "_call_service", side_effect=AssertionError("must not call")):
             status, result = invoke("suggest", {"body": "check the file"})
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"]["code"], "FORBIDDEN")
+
+    def test_relocate_is_an_operation_and_execution_credentials_cannot_call_it(self):
+        self.assertIn("relocate", OPERATIONS_REQUESTS)
+        self.assertNotIn("relocate", HOST_REQUESTS)
+        self.assertNotIn("relocate", ROLE_REQUESTS)
+        self.assertEqual(transport.METHOD_MAP["relocate"], ("control", "project_relocate"))
+        document = {"token": "private", "stateDir": "/private/board", "taskId": "worker"}
+        with mock.patch.object(cli, "_call_service", side_effect=AssertionError("must not call")):
+            status, result = invoke("relocate", {"cwd": "/new/location"}, document=document)
         self.assertEqual(status, 1)
         self.assertEqual(result["error"]["code"], "FORBIDDEN")
 
@@ -70,6 +81,14 @@ class CreationRequestTests(unittest.TestCase):
         self.assertEqual(status, 0, result)
         self.assertEqual(calls, [("create", {"cwd": str(self.root), "title": "Analysis", "goal": "Compare outputs"})])
         self.assertEqual(result["actions"], ["amend", "submit", "get"])
+
+    def test_relocate_sends_only_the_validated_cwd(self):
+        response = {"project": {"id": "project", "kind": "git", "path": str(self.root), "label": self.root.name}}
+        with mock.patch.object(cli, "_call_service", return_value=response) as service:
+            status, result = invoke("relocate", {"cwd": str(self.root), "output": "full"})
+        self.assertEqual(status, 0)
+        self.assertEqual(result["project"], response["project"])
+        service.assert_called_once_with("relocate", {"cwd": str(self.root)}, self.root / "private-state")
 
     def test_standalone_submit_sends_one_validated_public_request(self):
         calls = []
