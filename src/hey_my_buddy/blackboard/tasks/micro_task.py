@@ -11,9 +11,9 @@ Everything here is grounded in durable rows:
   and ``router_dispatches``/``workflow_routes`` (internal routing decisions);
 * current ownership is derived from Lead lineage, with a nameless Host for
   roots outside that lineage;
-* the project is the root Micro task's immutable original ``cwd`` and the
-  repository identity in its pinned input manifest; a temporary execution
-  worktree is never the project.
+* the project is the root Micro task's immutable original ``cwd`` and frozen
+  project kind; Git provenance comes from its pinned input manifest when one
+  exists. A temporary execution worktree is never the project.
 
 ``t.*`` is carried through the relation, so a resolved row is also a valid task row
 for :meth:`hey_my_buddy.blackboard.store.store.BoardStore._decorate`.
@@ -202,6 +202,9 @@ SELECT
         COALESCE(root_run.standalone_project_id, root_macro.project_id)
          WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
          ELSE NULL END AS project_id,
+    CASE WHEN root_run.run_id IS NOT NULL THEN root_run.project_kind
+         WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
+         ELSE 'git' END AS project_kind,
     (SELECT owner.repository_path
        FROM workflow_artifacts artifact JOIN manifest_owners owner
          ON owner.workspace_id=artifact.workspace_id
@@ -306,7 +309,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
                      "macroTaskId": row["route_macro_task_id"],
                      "macroTaskTitle": row["route_macro_task_title"]}
                     if row["route_run_id"] is not None else None)
-    project = ({"id": identifier, "kind": "git", "path": path,
+    project = ({"id": identifier, "kind": row["project_kind"], "path": path,
                 "label": project_label(path, row["project_repository_path"])}
                if identifier or path else None)
     result = {

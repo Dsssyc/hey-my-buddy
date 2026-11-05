@@ -17,7 +17,7 @@ import re
 import uuid
 from typing import Any
 
-from . import fixes, micro_task, reminders
+from . import fixes, micro_task, projects as project_records, reminders
 from .request_reasons import request_reason
 from .macro_task_deletion_guard import reject_macro_task
 from ..routing import router, router_sequence
@@ -160,7 +160,7 @@ def attach_macro_task(connection, macro_task_id: str | None, *, project_id: str)
 
 
 def create_macro_task(store, params: dict) -> dict:
-    """Create one empty Git macro task; a repeated creation key reads the original."""
+    """Create one empty macro task; a repeated creation key reads the original."""
     project_id = params["projectId"]
     creation_key = params["creationKey"]
     now = store.now()
@@ -170,12 +170,13 @@ def create_macro_task(store, params: dict) -> dict:
         ).fetchone()
         if existing is not None:
             return {**_macro_task_get(connection, existing["macro_task_id"]), "alreadyExists": True}
+        project_records.record(connection, params)
         identifier = f"macro-{uuid.uuid4()}"
         connection.execute(
-            "INSERT INTO macro_tasks(macro_task_id,title,project_id,project_cwd,repository_path,"
-            " creation_key,created_at,activity_at) VALUES(?,?,?,?,?,?,?,?)",
-            (identifier, params["title"], project_id, params["cwd"], params["repositoryPath"],
-             creation_key, now, now),
+            "INSERT INTO macro_tasks(macro_task_id,title,project_id,project_kind,project_cwd,repository_path,"
+            " creation_key,created_at,activity_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (identifier, params["title"], project_id, params["projectKind"], params["cwd"],
+             params["repositoryPath"], creation_key, now, now),
         )
         connection.execute(
             "INSERT INTO macro_task_goals(macro_task_id,revision,body,created_at) VALUES(?,1,?,?)",
@@ -246,10 +247,10 @@ def macro_task_goal_history(store, params: dict) -> dict:
 def project(connection, macro_task_id: str) -> dict:
     """Use the macro task's durable source project, even before any run exists."""
     row = connection.execute(
-        "SELECT project_id,project_cwd,repository_path FROM macro_tasks WHERE macro_task_id=?",
+        "SELECT project_id,project_kind,project_cwd,repository_path FROM macro_tasks WHERE macro_task_id=?",
         (macro_task_id,),
     ).fetchone()
-    return {"id": row["project_id"], "kind": "git", "path": row["project_cwd"],
+    return {"id": row["project_id"], "kind": row["project_kind"], "path": row["project_cwd"],
             "label": micro_task.project_label(row["project_cwd"], row["repository_path"])}
 
 
@@ -304,11 +305,21 @@ def macro_task_get(store, params: dict) -> dict:
 
 
 def project_get(store, params: dict) -> dict:
-    """Read bounded Git macro and standalone roots of one durable project id."""
+    """Read bounded macro and standalone roots of one durable project id."""
     identifier = params["projectId"]
     limit = params.get("limit", 20)
     before = params.get("before")
     with store.db.read() as connection:
+        current = connection.execute("SELECT 1 FROM projects WHERE project_id=?", (identifier,)).fetchone()
+        if current is None:
+            identity = params.get("projectFacts")
+            if identity is None or identity["projectId"] != identifier:
+                raise BoardError("NOT_FOUND", "Unknown project", projectId=identifier)
+            path = identity["projectPath"]
+            project_view = {"id": identifier, "kind": identity["projectKind"], "path": path,
+                            "label": micro_task.project_label(path, None)}
+        else:
+            project_view = project_records.view(connection, identifier)
         base = """
 WITH items AS (
     SELECT macro_task_id AS id,created_at,'macro-task' AS kind FROM macro_tasks WHERE project_id=?
@@ -317,10 +328,6 @@ WITH items AS (
      WHERE standalone_project_id=? AND macro_task_id IS NULL
 )
 """
-        first = connection.execute(base + "SELECT id,kind FROM items ORDER BY created_at,id LIMIT 1",
-                                   (identifier, identifier)).fetchone()
-        if first is None:
-            raise BoardError("NOT_FOUND", "Unknown project", projectId=identifier)
         before_row = None
         if before is not None:
             before_row = connection.execute(base + "SELECT id,created_at FROM items WHERE id=?",
@@ -335,12 +342,6 @@ WITH items AS (
              before_row["created_at"] if before_row else None, before, limit + 1),
         ).fetchall()
         visible = items[:limit]
-        if first["kind"] == "macro-task":
-            project_view = project(connection, first["id"])
-        else:
-            history = connection.execute(f"{micro_task.TASK_HISTORY_SQL} WHERE task_id=?",
-                                         (first["id"],)).fetchone()
-            project_view = micro_task.metadata_from_row(history)["project"]
         rows = []
         for item in visible:
             if item["kind"] == "macro-task":

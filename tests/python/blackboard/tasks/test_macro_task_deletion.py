@@ -421,8 +421,9 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                                       " WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
                                       (helper['runId'],)).fetchone()
             db.execute("INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,access,"
+                       "project_kind,checkout,"
                        "workspace_id,workspace_manifest_sha256,expected_seconds,state,created_at,updated_at)"
-                       " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                       " VALUES(?,?,?,?,?,?,'git','existing',?,?,?,?,?,?)",
                        ("lead-tree-turn", helper["runId"], 1, "initial", "{}", "write",
                         helper_input['workspace_id'], helper_input['input_manifest_sha256'], 60,
                         "returned", now, now))
@@ -500,8 +501,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                            "adapter,shutdown_confirmed,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                            (attempt_id, task_id, generation, "fixture", "finished", "dsh", 1, now, now))
                 db.execute("INSERT INTO workflow_turns(turn_id,run_id,attempt_id,generation,turn_index,"
-                           "resume_mode,input_json,workspace_id,workspace_manifest_sha256,access,expected_seconds,state,created_at,updated_at)"
-                           " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           "resume_mode,input_json,project_kind,checkout,workspace_id,workspace_manifest_sha256,access,expected_seconds,state,created_at,updated_at)"
+                           " VALUES(?,?,?,?,?,?,?,'git','existing',?,?,?,?,?,?,?)",
                            (f"turn-{generation}", task_id, attempt_id, generation, generation,
                             "initial", "{}", initial['workspace_id'], initial['input_manifest_sha256'],
                             "write", 60, "returned", now, now))
@@ -635,7 +636,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_requests SET state='declined' WHERE request_id='pending-request'")
             db.execute("INSERT INTO workflow_continuations(continuation_id,run_id,kind,"
-                       "input_text,workspace_facts_role,state,created_at) VALUES(?,?,?,?,?,?,?)",
+                       "input_text,checkout,workspace_facts_role,state,created_at) VALUES(?,?,?,?,'existing',?,?,?)",
                        ("pending-continuation", run["runId"], "manual", "private", "pending", "recorded", now))
         self.assertIn("macro-task-deletion.queued", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
@@ -938,8 +939,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             original = db.execute("SELECT workspace_id,input_manifest_sha256 FROM workflow_artifacts"
                                   " WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1", (other['runId'],)).fetchone()
             db.execute('INSERT INTO workflow_turns(turn_id,run_id,attempt_id,turn_index,resume_mode,previous_session_id,'
-                       'input_json,workspace_id,workspace_manifest_sha256,access,expected_seconds,state,created_at,updated_at)'
-                       ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                       'input_json,project_kind,checkout,workspace_id,workspace_manifest_sha256,access,expected_seconds,state,created_at,updated_at)'
+                       " VALUES(?,?,?,?,?,?,?,'git','existing',?,?,?,?,?,?,?)",
                        ('interrupted-native-turn',other['runId'],'interrupted-resume',1,'native-session',session_id,
                         '{}',original['workspace_id'],original['input_manifest_sha256'],
                         'write',60,'interrupted',now,now))

@@ -309,7 +309,7 @@ class LifecycleTests(WorkflowTestCase):
                                                         (turn_id,)).fetchone()[0], raw)
         with board.store.db.write() as connection:
             connection.execute('UPDATE workflow_turns SET input_json=? WHERE turn_id=?',
-                               (json.dumps({**original, 'version': 5}), turn_id))
+                               (json.dumps({**original, 'version': 6}), turn_id))
         with self.assertRaises(BoardError) as unknown:
             board.call('workflow_get', {'runId': submitted['runId']})
         self.assertEqual(unknown.exception.code, 'TURN_INVALID')

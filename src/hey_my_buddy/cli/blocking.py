@@ -65,7 +65,8 @@ def _view(run: dict, *, outcome: str, started: float, wait_seconds: int,
         view["artifactId"] = artifact_id
     if run.get("workflowShutdown") is not None:
         view["shutdown"] = run["workflowShutdown"]
-    for key in ("executionIssues", "serviceIssues", "queueReason", "routing", "reminder", "inputFailure"):
+    for key in ("executionIssues", "serviceIssues", "queueReason", "routing", "reminder", "inputFailure",
+                'checkout', 'unsealedChanges', 'folderChangesNotice'):
         if key in run:
             view[key] = run[key]
     selected = run.get("selectedAttempt")
@@ -97,7 +98,8 @@ def _workflow_facts(run: dict, *, service: Callable[..., dict], state_dir: Path)
     if run.get("workflowState") is None:
         return run
     view = service("workflow_get", {"runId": run["runId"]}, state_dir)
-    return {**run, "workflowState": view["state"], "actions": view["actions"],
+    return {**run, **{key: view[key] for key in ('checkout', 'unsealedChanges', 'folderChangesNotice') if key in view},
+            "workflowState": view["state"], "actions": view["actions"],
             "artifactId": view.get("finalArtifactId"), "activeRequest": view.get("activeRequest")}
 
 

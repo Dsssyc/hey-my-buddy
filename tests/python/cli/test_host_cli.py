@@ -149,7 +149,15 @@ class LeadCreationKeyTests(unittest.TestCase):
              mock.patch.object(cli,"_project_id",return_value="submitted-project") as project:
             key = cli._lead_creation_key(packet,document=document,credential="lead-token",state_dir=None)
         self.assertEqual(key,cli._creation_key(["adr032-submit-v1","project:submitted-project","Child","Inspect another project"]))
-        project.assert_called_once_with(packet["cwd"])
+        project.assert_called_once_with(packet["cwd"],None)
+
+    def test_standalone_lead_keeps_different_target_projects_in_distinct_namespaces(self):
+        packet = {'title': 'Review', 'task': 'Inspect the evidence'}
+        with mock.patch.object(cli, '_call_service', return_value={'macroTaskId': None, 'project': {'id': 'lead-project'}}), \
+             mock.patch.object(cli, '_project_id', side_effect=lambda cwd, state: cwd):
+            keys = [cli._lead_creation_key({**packet, 'cwd': cwd}, document={'taskId': 'lead-run'},
+                    credential='lead-token', state_dir=None) for cwd in ('/target/project-a', '/target/project-b')]
+        self.assertNotEqual(keys[0], keys[1])
 
     def test_grouped_lead_uses_its_macro_namespace(self):
         packet = {"cwd":"/submitted/project","title":"Child","task":"Inspect another project"}

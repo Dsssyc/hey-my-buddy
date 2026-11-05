@@ -1,4 +1,4 @@
-"""Schema 34 → 35: remove Host control stock and add direct response fences.
+"""Schema 34 → 35: direct responses, frozen project facts and typed results.
 
 This step owns its DDL and conversion. The installer supplies the transaction and
 disables foreign keys around the rebuild, then checks all references before commit.
@@ -10,6 +10,11 @@ import json
 
 
 TABLE_DDL = {
+    'projects': """CREATE TABLE projects (
+    project_id TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL CHECK (kind IN ('git','folder')),
+    path       TEXT NOT NULL
+)""",
     'resource_claims': """CREATE TABLE resource_claims (
     claim_id    TEXT PRIMARY KEY,
     task_id     TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
@@ -62,9 +67,10 @@ TABLE_DDL = {
     'macro_tasks': """CREATE TABLE macro_tasks (
     macro_task_id       TEXT PRIMARY KEY,
     title              TEXT NOT NULL,
-    project_id         TEXT NOT NULL,
+    project_id         TEXT NOT NULL REFERENCES projects(project_id) ON DELETE RESTRICT,
+    project_kind       TEXT NOT NULL CHECK (project_kind IN ('git','folder')),
     project_cwd       TEXT NOT NULL,
-    repository_path   TEXT NOT NULL,
+    repository_path   TEXT,
     creation_key      TEXT,
     created_at         TEXT NOT NULL,
     activity_seq       INTEGER NOT NULL DEFAULT 0,
@@ -73,7 +79,9 @@ TABLE_DDL = {
     'workflow_runs': """CREATE TABLE workflow_runs (
     run_id                  TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
     macro_task_id            TEXT REFERENCES macro_tasks(macro_task_id) ON DELETE RESTRICT,
-    standalone_project_id    TEXT,
+    standalone_project_id    TEXT REFERENCES projects(project_id) ON DELETE RESTRICT,
+    project_kind             TEXT NOT NULL CHECK (project_kind IN ('git','folder')),
+    checkout                 TEXT NOT NULL CHECK (checkout IN ('existing','worktree','none')),
     title                   TEXT,
     activity_seq            INTEGER NOT NULL DEFAULT 0,
     activity_at             TEXT,
@@ -98,8 +106,10 @@ TABLE_DDL = {
     delegation_authority INTEGER NOT NULL DEFAULT 0 CHECK (delegation_authority IN (0,1)),
     CHECK ((macro_task_id IS NULL AND standalone_project_id IS NOT NULL)
         OR (macro_task_id IS NOT NULL AND standalone_project_id IS NULL)),
-    CHECK ((state IN ('accepted','concluded') AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
-        OR (state NOT IN ('accepted','concluded') AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL))
+    CHECK ((checkout='none' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
+        OR (checkout IN ('existing','worktree') AND project_kind='git' AND
+            ((state IN ('accepted','concluded') AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
+            OR (state NOT IN ('accepted','concluded') AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL))))
 )""",
     'workflow_routes': """CREATE TABLE workflow_routes (
     decision_id         TEXT PRIMARY KEY REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
@@ -117,8 +127,10 @@ TABLE_DDL = {
         CHECK (resume_mode IN ('initial','reconstructed-new-session','native-session')),
     previous_session_id TEXT,
     input_json          TEXT NOT NULL,
-    workspace_id        TEXT NOT NULL,
-    workspace_manifest_sha256 TEXT NOT NULL,
+    project_kind        TEXT NOT NULL CHECK (project_kind IN ('git','folder')),
+    checkout            TEXT NOT NULL CHECK (checkout IN ('existing','worktree','none')),
+    workspace_id        TEXT,
+    workspace_manifest_sha256 TEXT,
     response_kind       TEXT,
     response_id         TEXT,
     -- Frozen access for this turn, independent of later run intent changes.
@@ -132,6 +144,9 @@ TABLE_DDL = {
     CHECK ((response_kind IS NULL) = (response_id IS NULL)),
     CHECK (response_kind IS NULL OR response_kind='continue'),
     CHECK ((access='full') = (access_note IS NOT NULL)),
+    CHECK ((checkout='none' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
+        OR (checkout IN ('existing','worktree') AND project_kind='git'
+            AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL)),
     UNIQUE(run_id, turn_index)
 )""",
     'workflow_requests': """CREATE TABLE workflow_requests (
@@ -186,7 +201,8 @@ TABLE_DDL = {
     helper_outcomes_json TEXT NOT NULL DEFAULT '[]',
     workspace_id      TEXT,
     workspace_manifest_sha256 TEXT,
-    workspace_facts_role TEXT NOT NULL CHECK (workspace_facts_role IN ('pending','owner','reference')),
+    checkout          TEXT NOT NULL CHECK (checkout IN ('existing','worktree','none')),
+    workspace_facts_role TEXT NOT NULL CHECK (workspace_facts_role IN ('pending','owner','reference','none')),
     workspace_kind    TEXT CHECK (workspace_kind IN ('existing','worktree')),
     checkout_root     TEXT,
     repository_path   TEXT,
@@ -201,7 +217,10 @@ TABLE_DDL = {
     CHECK (buddy_selection_json IS NULL OR json_valid(buddy_selection_json)),
     CHECK (access_selection_json IS NULL OR json_valid(access_selection_json)),
     CHECK (resolution_json IS NULL OR json_valid(resolution_json)),
-    CHECK ((workspace_facts_role='pending' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
+    CHECK ((checkout='none' AND workspace_facts_role='none' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
+            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)
+        OR (checkout IN ('existing','worktree') AND ((workspace_facts_role='pending' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
             AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
             AND input_commit IS NULL AND staged_commit IS NULL)
         OR (workspace_facts_role='owner' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
@@ -209,7 +228,7 @@ TABLE_DDL = {
             AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
         OR (workspace_facts_role='reference' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
             AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
-            AND input_commit IS NULL AND staged_commit IS NULL)),
+            AND input_commit IS NULL AND staged_commit IS NULL)))),
     CHECK ((kind IN ('manual','helper') AND trigger_event_json IS NULL)
         OR (kind='lead-wakeup' AND trigger_event_json IS NOT NULL
             AND json_valid(trigger_event_json) AND json_type(trigger_event_json)='object'))
@@ -281,8 +300,9 @@ TABLE_DDL = {
     run_id          TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     turn_id         TEXT,
     attempt_id      TEXT,
-    kind            TEXT NOT NULL CHECK (kind IN ('input','turn-input','output','resolved-output','partial-output','abandoned-site','shared-refs')),
-    content_form    TEXT NOT NULL CHECK (content_form IN ('sealed-inline-v1','input-reference','record-reference')),
+    generation      INTEGER,
+    kind            TEXT NOT NULL CHECK (kind IN ('input','turn-input','output','resolved-output','partial-output','abandoned-site','shared-refs','result')),
+    content_form    TEXT NOT NULL CHECK (content_form IN ('sealed-inline-v1','input-reference','record-reference','result-reference')),
     manifest_json   TEXT,
     workspace_id    TEXT,
     input_manifest_sha256 TEXT,
@@ -306,18 +326,24 @@ TABLE_DDL = {
     created_at      TEXT NOT NULL,
     CHECK ((response_kind IS NULL) = (response_id IS NULL)),
     CHECK (response_kind IS NULL OR response_kind IN ('accept','continue','conclude')),
-    CHECK (response_kind IS NULL OR kind IN ('output','resolved-output','partial-output','abandoned-site')),
+    CHECK (response_kind IS NULL OR kind IN ('output','resolved-output','partial-output','abandoned-site','result')),
     CHECK ((kind IN ('input','turn-input') AND workspace_id IS NOT NULL AND input_manifest_sha256 IS NOT NULL
             AND output_snapshot_sha256 IS NULL AND shared_refs_sha256 IS NULL)
         OR (kind IN ('output','resolved-output','partial-output','abandoned-site') AND workspace_id IS NULL
             AND input_manifest_sha256 IS NULL AND output_snapshot_sha256 IS NOT NULL AND shared_refs_sha256 IS NULL)
         OR (kind='shared-refs' AND workspace_id IS NULL AND input_manifest_sha256 IS NULL
-            AND output_snapshot_sha256 IS NULL AND shared_refs_sha256 IS NOT NULL)),
+            AND output_snapshot_sha256 IS NULL AND shared_refs_sha256 IS NOT NULL)
+        OR (kind='result' AND workspace_id IS NULL AND input_manifest_sha256 IS NULL
+            AND output_snapshot_sha256 IS NULL AND shared_refs_sha256 IS NULL)),
     CHECK ((content_form='sealed-inline-v1' AND manifest_json IS NOT NULL AND record_path IS NULL AND record_sha256 IS NULL)
         OR (content_form='input-reference' AND kind='input' AND manifest_json IS NULL
             AND record_path IS NULL AND record_sha256 IS NULL)
         OR (content_form='record-reference' AND kind IN ('output','resolved-output','partial-output','abandoned-site')
-            AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)),
+            AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)
+        OR (content_form='result-reference' AND kind='result' AND turn_id IS NOT NULL AND attempt_id IS NOT NULL
+            AND generation IS NOT NULL AND generation > 0 AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)),
+    CHECK ((kind='result') = (content_form='result-reference')),
+    CHECK (kind='result' OR generation IS NULL),
     CHECK ((kind='input' AND workspace_facts_role='owner' AND workspace_kind IS NOT NULL
             AND checkout_root IS NOT NULL AND repository_path IS NOT NULL
             AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
@@ -360,6 +386,8 @@ TABLE_DDL = {
 }
 
 INDEX_DDL = (
+    """CREATE UNIQUE INDEX workflow_artifacts_result_unique
+    ON workflow_artifacts(run_id, attempt_id) WHERE kind='result'""",
     """CREATE INDEX resource_claims_state_idx ON resource_claims(state)""",
     """CREATE INDEX events_decision_status_idx ON events(kind, seq DESC)
     WHERE kind IN ('decision.completed','decision.failed','decision.needs_host','decision.cancelled')""",
@@ -454,8 +482,44 @@ def _convert_mutable_intent(stock):
         run['execution_workspace_json'] = _json(intent)
 
 
+def _project_facts(stock):
+    """Freeze old Git facts from the retained database, without opening a cwd."""
+    tasks = {row['task_id']: row for row in stock['tasks']}
+    macros = {row['macro_task_id']: row for row in stock['macro_tasks']}
+    runs = {row['run_id']: row for row in stock['workflow_runs']}
+    projects = {}
+    owners = {}
+    for macro in macros.values():
+        macro['project_kind'] = 'git'
+        projects[macro['project_id']] = {'project_id': macro['project_id'], 'kind': 'git',
+                                         'path': macro['project_cwd']}
+    for artifact in stock['workflow_artifacts']:
+        if artifact['kind'] == 'input' and artifact['workspace_facts_role'] == 'owner':
+            owners[artifact['workspace_id'], artifact['input_manifest_sha256']] = artifact['workspace_kind']
+    for continuation in stock['workflow_continuations']:
+        if continuation['workspace_facts_role'] == 'owner':
+            owners[continuation['workspace_id'], continuation['workspace_manifest_sha256']] = continuation['workspace_kind']
+    for run in runs.values():
+        run['project_kind'] = 'git'
+        run['checkout'] = json.loads(run['execution_workspace_json'])['kind']
+        if run['macro_task_id'] is None:
+            identifier = run['standalone_project_id']
+            projects[identifier] = {'project_id': identifier, 'kind': 'git',
+                                    'path': json.loads(tasks[run['run_id']]['spec_json'])['cwd']}
+    for turn in stock['workflow_turns']:
+        turn['project_kind'] = 'git'
+        frozen = json.loads(turn['input_json'])
+        turn['checkout'] = (owners[turn['workspace_id'], turn['workspace_manifest_sha256']]
+                            if frozen['version'] == 4 else frozen['executionWorkspace']['kind'])
+    for continuation in stock['workflow_continuations']:
+        continuation['checkout'] = (owners[continuation['workspace_id'], continuation['workspace_manifest_sha256']]
+                                     if continuation['workspace_id'] is not None else runs[continuation['run_id']]['checkout'])
+    stock['projects'] = list(projects.values())
+
+
 def _rebuild(connection, table, rows):
-    connection.execute(f'DROP TABLE "{table}"')
+    if table != "projects":
+        connection.execute(f'DROP TABLE "{table}"')
     connection.execute(TABLE_DDL[table])
     columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{table}")'))]
     insert = f'INSERT INTO "{table}"({",".join(columns)}) VALUES({",".join("?" for _ in columns)})'
@@ -463,10 +527,11 @@ def _rebuild(connection, table, rows):
 
 
 def upgrade(connection):
-    stock = {table: _rows(connection, table) for table in TABLE_DDL}
+    stock = {table: _rows(connection, table) for table in TABLE_DDL if table != 'projects'}
     sequences = list(connection.execute('SELECT rowid,name,seq FROM sqlite_sequence ORDER BY rowid'))
     _macro_paths(stock)
     _convert_mutable_intent(stock)
+    _project_facts(stock)
     active_exclusive = connection.execute(
         "SELECT claim_id FROM resource_claims WHERE kind='exclusive' AND state!='released' LIMIT 1").fetchone()
     if active_exclusive is not None:

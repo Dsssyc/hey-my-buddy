@@ -40,11 +40,14 @@ def deletion_sql_inputs(case, manifests, artifacts=()):
                 (run_id, request_id, '{"expectedSeconds":1}', 'fixture', 1,
                  'codex', manifest['checkoutRoot'], 'cancelled', 1, now, now))
             connection.execute(
+                "INSERT OR IGNORE INTO projects(project_id,kind,path) VALUES(?,'git',?)",
+                (project_id, manifest['checkoutRoot']))
+            connection.execute(
                 "INSERT OR IGNORE INTO workflow_runs(run_id,standalone_project_id,creation_key,title,"
-                "execution_workspace_json,workspace_id,workspace_manifest_sha256,state,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (run_id, project_id, 'fixture-' + identifier, 'Fixture workspace', '{}', identifier,
-                 manifest['manifestSha256'], 'cancelled', now, now))
+                "project_kind,checkout,execution_workspace_json,workspace_id,workspace_manifest_sha256,state,created_at,updated_at)"
+                " VALUES(?,?,?,?,'git',?,?,?,?,?,?,?)",
+                (run_id, project_id, 'fixture-' + identifier, 'Fixture workspace', manifest['kind'],
+                 '{}', identifier, manifest['manifestSha256'], 'cancelled', now, now))
             connection.execute(
                 "INSERT OR IGNORE INTO workflow_artifacts(artifact_id,run_id,kind,content_form,workspace_id,"
                 "input_manifest_sha256,workspace_facts_role,workspace_kind,checkout_root,repository_path,"

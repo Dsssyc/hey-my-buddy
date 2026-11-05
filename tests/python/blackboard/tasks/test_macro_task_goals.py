@@ -17,7 +17,8 @@ class EmptyMacroTaskGoalTests(unittest.TestCase):
         self.store = BoardStore(root / "state")
         self.store.initialize()
         self.addCleanup(self.store.db.close)
-        self.params = {"cwd": str(root / "source"), "projectId": "a" * 64,
+        self.params = {"cwd": str(root / "source"), "projectPath": str(root / "source"),
+                       "projectId": "a" * 64, "projectKind": "git",
                        "repositoryPath": str(root / "source" / ".git"),
                        "title": "Prepare review", "goal": "First goal", "creationKey": "create-v1-key"}
 

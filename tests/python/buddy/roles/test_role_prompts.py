@@ -78,6 +78,25 @@ def prompt_input(turn: dict) -> dict:
 
 
 class RolePromptTests(unittest.TestCase):
+    def test_none_turn_uses_supplied_cwd_without_git_verification_or_seal(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-none-role-") as temporary:
+            state = Path(temporary)
+            ordinary = state / "ordinary"
+            ordinary.mkdir()
+            workspace = {"kind": "none", "path": str(ordinary), "projectId": "folder-project",
+                         "projectKind": "folder", "access": "write", "integrator": {"role": "host"}}
+            context = ExecutionContext(
+                task_id="task", attempt_id="attempt", generation=1,
+                spec={"task": "answer"}, directory=state / "attempt", runtime={},
+                environment={"HMB_STATE_DIR": str(state)},
+                turn={"turnId": "turn", "input": {"version": 5, "executionWorkspace": workspace}},
+            )
+            with mock.patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module") as git:
+                turn_io.verify_workspace(context)
+                self.assertEqual(context.cwd, str(ordinary))
+                self.assertEqual(turn_io.seal_workspace(context), (None, None))
+                git.assert_not_called()
+
     def test_wrap_up_prompt_is_packaged_beside_worker_role_text(self):
         prompt = prompts.wrap_up_prompt()
         self.assertEqual(prompt, resource_path("roles.wrap_up").read_text(encoding="utf-8"))

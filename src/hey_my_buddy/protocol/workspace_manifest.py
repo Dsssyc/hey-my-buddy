@@ -56,6 +56,8 @@ def sealed_worker_commit(record: dict) -> str | None:
 
 
 def project_id(manifest: dict) -> str:
+    if manifest.get("kind") == "none":
+        return manifest["projectId"]
     return manifest["projectId"] if manifest["version"] in (4, 5, 6) else manifest["repositoryId"]
 
 
@@ -113,12 +115,15 @@ def resolve_manifest(state_dir: Path, ref: ManifestRef) -> dict:
 
 
 def turn_manifest(state_dir: Path, turn_input: dict) -> dict:
-    """A new turn has a reference; archived turn versions froze the body."""
+    """Resolve a Git reference or return a none turn's explicit execution context."""
     version = turn_input["version"]
     if type(version) is not int:
         raise BoardError("TURN_INVALID", "Unsupported turn input version")
     if version == 4:
         return resolve_manifest(state_dir, turn_input["executionWorkspace"])
+    if version == 5:
+        from .turn_input import none_execution_workspace
+        return none_execution_workspace(turn_input.get("executionWorkspace"))
     if version in (1, 2, 3):
         return turn_input["executionWorkspace"]
     raise BoardError("TURN_INVALID", "Unsupported turn input version")

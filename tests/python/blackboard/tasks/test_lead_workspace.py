@@ -280,12 +280,18 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         (checkout / 'src' / 'feature.py').write_text('value = 2\n', encoding='utf-8', newline='\n')
         sealed = workspace.seal(self.directory, manifest, child['runId'], claim['attempt']['attemptId'])
         self._finish_child(board, child, claim, seal=sealed)
+        before = workspace._line(target, 'rev-parse', 'HEAD')
         subprocess.run(['git', '-C', str(target), 'apply', sealed['diffPath']], env={**os.environ, **GIT_ENV}, check=True)
         subprocess.run(['git', '-C', str(target), 'add', '.'], env={**os.environ, **GIT_ENV}, check=True)
         subprocess.run(['git', '-C', str(target), 'commit', '-qm', 'Lead integrated child'], env={**os.environ, **GIT_ENV}, check=True)
+        tree = workspace._line(target, 'rev-parse', 'HEAD^{tree}')
+        merged = workspace._line(target, 'commit-tree', tree, '-p', before, '-p', sealed['commit'],
+                                 '-m', 'Lead integration proof')
+        workspace._git(target, 'update-ref', 'HEAD', merged)
         view = board.call('workflow_get', {'runId': child['runId']})
         accepted = board.call('workflow_accept', {'runId': child['runId'], 'artifactId': view['finalArtifactId'],
-            'target': {'path': str(target), 'ref': 'HEAD'}, 'note': 'Lead reviewed its integration', 'credential': lead['credential']})
+            'target': {'path': str(target), 'ref': 'HEAD'}, 'beforeCommit': before,
+            'note': 'Lead reviewed its integration', 'credential': lead['credential']})
         self.assertEqual(accepted['state'], 'accepted')
         self.assertTrue(accepted['reclaim']['removed'], accepted)
         self.assertTrue(target.exists())

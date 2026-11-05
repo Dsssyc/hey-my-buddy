@@ -1196,6 +1196,10 @@ class BoardStore:
             view["resultMeta"] = {key: value for key, value in payload.items() if key != "result"}
             view["attemptId"] = attempt["attempt_id"]
             view["resultDelivered"] = view["result"] is not None
+            turn = connection.execute('SELECT checkout,access FROM workflow_turns WHERE attempt_id=?',
+                                      (attempt['attempt_id'],)).fetchone()
+            if turn is not None and turn['checkout'] == 'none':
+                view.update(self.workflow._none_notice(turn['access']))
         return view
 
     def task_cancel(self, params: dict, *, command_id: str | None = None, initiator: str = "unknown") -> dict:
@@ -2665,7 +2669,12 @@ class BoardStore:
                 rows = connection.execute(
                     "SELECT * FROM artifacts WHERE task_id=? ORDER BY created_at", (task["task_id"],)
                 ).fetchall()
-        return {"artifacts": [self._artifact_view(row) for row in rows]}
+            results = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE kind='result' AND "
+                + ('attempt_id=?' if params.get('attemptId') else 'run_id=?') + ' ORDER BY rowid',
+                (params.get('attemptId') or task['task_id'],)).fetchall()
+            return {"artifacts": [self._artifact_view(row) for row in rows]
+                    + [self.workflow._artifact_view(row, connection=connection) for row in results]}
 
     # -- recovery ------------------------------------------------------------
     @staticmethod

@@ -5,7 +5,6 @@ import argparse
 import hashlib
 import json
 import sys
-from pathlib import Path
 
 from ..errors import BoardError
 from ..install.launcher import agent_credential_document, credential_state_dir, take_agent_credential_document
@@ -89,34 +88,27 @@ def _help_command(arguments: list[str]) -> int:
         _usage_error("INVALID_ARGUMENT", error.message, **error.details)
 
 
-def _project_id(cwd: str) -> str:
-    """Use the same project marker that workspace capture binds to Git output."""
-    from ..blackboard.tasks import workspace
-    try:
-        directory = Path(cwd).resolve(strict=True)
-        if not directory.is_dir():
-            raise BoardError("WORKSPACE_UNAVAILABLE", "cwd is not a directory", cwd=cwd)
-    except OSError as error:
-        raise BoardError("WORKSPACE_UNAVAILABLE", "The cwd directory is unavailable", cwd=cwd,
-                         reason=str(error)) from error
-    repository = workspace.repository_at(directory, allow_parent=True)
-    if repository is None:
-        # The folder-project branch is implemented with P4. An absent Git marker
-        # must never be replaced by a path-derived key for a Git submission.
-        raise BoardError("WORKSPACE_UNSUPPORTED", "This stage requires a Git project at cwd", cwd=cwd)
-    return workspace.ensure_project_id(repository)
+def _project_id(cwd: str, state_dir) -> str:
+    """Use the service's project resolution before deriving a Host creation key."""
+    return _call_service("get", {"cwd": cwd}, state_dir)["project"]["id"]
 
 
 def _creation_key(parts: list[str]) -> str:
     return hashlib.sha256(canonical_json(parts).encode("utf-8")).hexdigest()
 
 
-def _host_creation_key(method: str, params: dict) -> str:
-    project_id = _project_id(params["cwd"])
+def _host_creation_key(method: str, params: dict, *, state_dir=None) -> str:
     if method == "create":
+        if state_dir is None:
+            raise ValueError("state_dir is required to resolve a project creation key")
+        project_id = _project_id(params["cwd"], state_dir)
         return _creation_key(["adr032-create-v1", project_id, params["title"]])
-    namespace = ("project:" + project_id if params["macroTaskId"] == "standalone"
-                 else "macro:" + params["macroTaskId"])
+    if params["macroTaskId"] == "standalone":
+        if state_dir is None:
+            raise ValueError("state_dir is required to resolve a project creation key")
+        namespace = "project:" + _project_id(params["cwd"], state_dir)
+    else:
+        namespace = "macro:" + params["macroTaskId"]
     return _creation_key(["adr032-submit-v1", namespace, params["title"], params["task"]])
 
 
@@ -124,7 +116,7 @@ def _lead_creation_key(params: dict, *, document: dict, credential: str, state_d
     """Read only this Lead's own binding before deriving the delegated create key."""
     own = _call_service("workflow_get", {"runId": document["taskId"], "credential": credential}, state_dir)
     macro_task_id = own.get("macroTaskId")
-    namespace = "macro:" + macro_task_id if macro_task_id else "project:" + _project_id(params["cwd"])
+    namespace = "macro:" + macro_task_id if macro_task_id else "project:" + own["project"]["id"]
     return _creation_key(["adr032-submit-v1", namespace, params["title"], params["task"]])
 
 
@@ -171,11 +163,9 @@ def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DO
             parsed = parse_request(args.method, params, audience=audience)
             wire = dump_request(parsed)
             if args.method in ("create", "submit"):
-                if args.method == "submit" and wire["checkout"] == "none":
-                    raise BoardError("WORKSPACE_UNSUPPORTED", "checkout none is pending the project/none stage")
                 wire["creationKey"] = (_lead_creation_key(wire, document=credential_document,
                     credential=credential, state_dir=state_dir) if credential is not None
-                    else _host_creation_key(args.method, wire))
+                    else _host_creation_key(args.method, wire, state_dir=state_dir))
             if args.method == "install":
                 from ..install.skill_install import install
                 result = install(wire)

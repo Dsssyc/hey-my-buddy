@@ -259,11 +259,11 @@ def read_project_id(repository):
     return _project_refs(repository)[0]
 
 
-def ensure_project_id(repository):
+def ensure_project_id(repository, *, preferred=None):
     project = read_project_id(repository)
     if project is not None:
         return project
-    project = secrets.token_hex(32)
+    project = preferred if preferred is not None else secrets.token_hex(32)
     oid = _line(repository, "hash-object", "-t", "blob", "-w", "--stdin", data=project.encode("ascii"))
     try:
         _git(repository, "update-ref", "--no-deref", "refs/hey-my-buddy/project", oid, "0" * len(oid))
@@ -276,6 +276,11 @@ def ensure_project_id(repository):
             raise
         return winner
     return project
+
+
+def project_root(cwd):
+    """Canonical source checkout root without requiring a committed HEAD."""
+    return str(Path(_line(cwd, "rev-parse", "--show-toplevel")).resolve(strict=True))
 
 
 def locate_repository(manifest, *, cwd=None, candidates=(), repair=True, removal_started=False):

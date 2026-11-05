@@ -11,6 +11,19 @@ from hey_my_buddy.buddy.runtime.partial_outputs import capture, enrich
 
 
 class PartialOutputSafetyTests(unittest.TestCase):
+    def test_none_failed_turn_does_not_attempt_git_partial_seal(self):
+        context = self.context()
+        context.turn_input = {"version": 5, "executionWorkspace": {
+            "kind": "none", "path": "/private/fixture", "projectId": "folder-project",
+            "projectKind": "folder", "access": "write", "integrator": {"role": "host"}}}
+        context.effective_workspace = context.turn_input["executionWorkspace"]
+        result = AdapterOutcome("failed", result={"modelStarted": True}, shutdown_confirmed=True)
+        with patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module") as git:
+            self.assertFalse(enrich(context, result))
+            git.assert_not_called()
+        self.assertNotIn("partialWorkspaceSeal", result.result)
+        self.assertNotIn("partialSealError", result.result)
+
     def context(self):
         return SimpleNamespace(turn_input={"version": 4, "executionWorkspace": {
                                    "workspaceId": "ws-" + "a" * 32, "manifestSha256": "b" * 64}},

@@ -65,7 +65,7 @@ def _rebind_workspace_owners(connection, records: dict) -> None:
         for row in records[table]:
             if table == "workflow_artifacts" and row["kind"] != "input":
                 continue
-            if row["workspace_facts_role"] == "pending":
+            if row["workspace_facts_role"] in ("pending", "none"):
                 continue
             candidates.setdefault((row["workspace_id"], row[digest_column]), []).append(row)
     for (workspace_id, digest), rows in candidates.items():
@@ -132,6 +132,11 @@ def _select(connection, source_schema: int) -> tuple[dict[str, list[dict]], list
         f'SELECT * FROM ({RUN_GROUPS_SQL}) WHERE run_id IN ({",".join("?" for _ in selected)})', selected)}
     macros = {group for group in groups.values() if not group.startswith('run:')}
     records['macro_tasks'] = _rows(connection, 'macro_tasks', 'macro_task_id', macros)
+    if source_schema >= 35:
+        project_ids = {row['project_id'] for row in records['macro_tasks']}
+        project_ids.update(row['standalone_project_id'] for row in records['workflow_runs']
+                           if row['standalone_project_id'] is not None)
+        records['projects'] = _rows(connection, 'projects', 'project_id', project_ids)
     for run in records['workflow_runs']:
         group = groups[run['run_id']]
         if not group.startswith('run:'):
@@ -235,6 +240,17 @@ def _referenced_files(records: dict, source: Path, output: Path) -> list[tuple[P
                     and cumulative_patch_error(artifact, attempts.get(artifact['attempt_id'])) is None):
                 cumulative = relative.parent / ('cumulative-' + original + '.patch')
                 files[cumulative] = (source / cumulative, output / cumulative, None)
+        elif artifact['content_form'] == 'result-reference':
+            attempt = attempts[artifact['attempt_id']]
+            expected = private_dirs.attempt_root(source, attempt['adapter'], attempt['task_id'],
+                                                 attempt['attempt_id']) / 'result-receipt.json'
+            relative = Path(artifact['record_path'])
+            if (relative.is_absolute() or '..' in relative.parts
+                    or relative.as_posix() != expected.relative_to(source).as_posix()):
+                raise ValueError('Selected result receipt is outside its bound attempt')
+            if relative in files and files[relative][2] != artifact['record_sha256']:
+                raise ValueError('Selected result receipts disagree on one file identity')
+            files[relative] = (source / relative, output / relative, artifact['record_sha256'])
     for turn in records['workflow_turns']:
         document = json.loads(turn['input_json'])
         if document['version'] != 4:

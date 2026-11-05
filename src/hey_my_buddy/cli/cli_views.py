@@ -8,7 +8,7 @@ OUTPUT_BRIEF = "brief"
 
 _RUN_BRIEF = (
     "runId", "state", "status", "actions", "macroTaskId", "project", "title", "goal", "task", "cancellation",
-    "queueReason", "access", "accessNote", "buddy", "delegationAuthority",
+    "queueReason", "access", "accessNote", "checkout", "unsealedChanges", "folderChangesNotice", "buddy", "delegationAuthority",
     "leadOwnership", "ownedMicroTasks", "activeRequest", "currentTurn",
     "finalArtifactId", "shutdown", "counts", "truncated", "routing", "workspace",
     "artifacts", "children", "workspaceConflicts", "integrations", "hostConclusion",

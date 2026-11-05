@@ -25,6 +25,9 @@ class Schema34To35Tests(unittest.TestCase):
         path = fixture['state'] / 'board.sqlite3'
         with sqlite3.connect(path) as connection:
             connection.row_factory = sqlite3.Row
+            expected_projects = {row[0] for row in connection.execute('SELECT project_id FROM macro_tasks')}
+            expected_projects.update(json.loads(row[0])['repositoryId'] for row in connection.execute(
+                "SELECT manifest_json FROM workflow_artifacts WHERE kind='input'"))
             self.assertIn('role', {row['name'] for row in connection.execute('PRAGMA table_info(workflow_children)')})
             self.assertGreater(connection.execute("SELECT COUNT(*) FROM workflow_children WHERE role='helper'").fetchone()[0], 0)
             selected = connection.execute("SELECT task_id,spec_json FROM tasks"
@@ -63,6 +66,13 @@ class Schema34To35Tests(unittest.TestCase):
         self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 30, 'targetSchema': 35})
         with sqlite3.connect(path) as connection:
             connection.row_factory = sqlite3.Row
+            self.assertEqual({row['project_id'] for row in connection.execute('SELECT * FROM projects')}, expected_projects)
+            self.assertEqual({row['kind'] for row in connection.execute('SELECT * FROM projects')}, {'git'})
+            for table in ('macro_tasks', 'workflow_runs', 'workflow_turns'):
+                self.assertEqual({row[0] for row in connection.execute(f'SELECT project_kind FROM {table}')}, {'git'})
+            for table in ('workflow_runs', 'workflow_turns', 'workflow_continuations'):
+                self.assertTrue({row[0] for row in connection.execute(f'SELECT checkout FROM {table}')}
+                                <= {'existing', 'worktree'})
             self.assertNotIn('role', {row['name'] for row in connection.execute('PRAGMA table_info(workflow_children)')})
             self.assertEqual({row[0]: {key:value for key,value in json.loads(row[1]).items() if key in ('base','targetRef')}
                               for row in connection.execute('SELECT run_id,execution_workspace_json FROM workflow_runs')},bases)

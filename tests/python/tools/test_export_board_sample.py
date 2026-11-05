@@ -13,7 +13,7 @@ from unittest.mock import patch
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from console.test_console import Browser
-from support import (InProcessBoard, write_catalog_fixture, _child_environment, wait_for,
+from support import (InProcessBoard, write_catalog_fixture, _child_environment, wait_for, enable_fixture_buddy,
                      native_exists, native_is_file, native_read_bytes, native_write_bytes)
 from private_acl import assert_private_path
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, Database
@@ -67,7 +67,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
     def accepted(self, board, name, **options):
         run = self.submit(board, request_id=name, **options)
         claim = self.claim(board, run_id=run['runId'])
-        self.finish_turn(board, claim)
+        self.finish_turn(board, claim, seal=options.get('kind') != 'none')
         delivered = board.call('workflow_get', {'runId': run['runId']})
         board.call('workflow_accept', {'runId': run['runId'],
             'artifactId': delivered['finalArtifactId'], 'note': 'Synthetic acceptance',
@@ -98,6 +98,59 @@ class ExportBoardSampleTests(WorkflowTestCase):
         copied = (sample / row["record_path"]).with_suffix(".patch")
         self.assertEqual(native_read_bytes(copied), native_read_bytes(expected))
         self.assert_source_unchanged(before, files(board.directory))
+
+    def test_result_reference_copies_the_bound_original_receipt(self):
+        board = self.source_board()
+        run, attempt_id = self.accepted(board, 'result-reference-sample', kind='none')
+        with board.store.db.read() as connection:
+            relative, digest = connection.execute("SELECT record_path,record_sha256 FROM workflow_artifacts WHERE kind='result'").fetchone()
+        receipt = board.directory / relative
+        board.store.db.close()
+        before = files(board.directory)
+        output = export_sample(board.directory, self.directory / 'receipt-sample')
+        self.assertEqual(native_read_bytes(output / relative), native_read_bytes(receipt))
+        with closing(sqlite3.connect(output / DB_FILE)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT record_path,record_sha256 FROM workflow_artifacts WHERE kind='result'").fetchone(),
+                (relative, digest))
+        self.assert_source_unchanged(before, files(board.directory))
+
+    def test_result_reference_rejects_a_receipt_outside_its_attempt(self):
+        board = self.source_board()
+        run, attempt_id = self.accepted(board, 'result-reference-invalid', kind='none')
+        with board.store.db.write() as connection:
+            connection.execute(
+                "UPDATE workflow_artifacts SET record_path='harnesses/other/result-receipt.json' WHERE kind='result'")
+        board.store.db.close()
+        with self.assertRaisesRegex(ValueError, 'outside its bound attempt'):
+            export_sample(board.directory, self.directory / 'invalid-receipt-sample')
+        self.assertFalse((self.directory / 'invalid-receipt-sample').exists())
+
+    def test_none_results_keep_each_attempt_harness_after_buddy_changes(self):
+        board = self.source_board()
+        run = self.submit(board, request_id='two-harness-results', kind='none')
+        first = self.claim(board, run_id=run['runId'])
+        self.finish_turn(board, first, seal=False)
+        artifact = board.call('workflow_get', {'runId': run['runId']})['finalArtifactId']
+        replacement = {'harness': 'codex', 'provider': 'openai', 'model': 'fixture', 'effort': 'low'}
+        enable_fixture_buddy(board.store, replacement)
+        board.call('workflow_continue', {'runId': run['runId'], 'artifactId': artifact,
+            'input': 'Inspect again with the selected buddy', 'buddy': ':'.join(replacement.values()),
+            'note': 'A second native harness is authorized'})
+        second = self.claim(board, run_id=run['runId'], claim_request_id='second-harness')
+        self.finish_turn(board, second, seal=False)
+        final = board.call('workflow_get', {'runId': run['runId']})['finalArtifactId']
+        board.call('workflow_accept', {'runId': run['runId'], 'artifactId': final,
+            'note': 'Both answers checked', 'notRequired': 'Answers only'})
+        for claimed in (first, second):
+            board.store.complete_execution_cleanup(claimed['claim']['attempt']['attemptId'])
+        with board.store.db.read() as connection:
+            results = [row[0] for row in connection.execute("SELECT record_path FROM workflow_artifacts WHERE kind='result'")]
+        self.assertEqual({Path(path).parts[1] for path in results}, {'dsh', 'codex'})
+        board.store.db.close()
+        output = export_sample(board.directory, self.directory / 'two-harness-sample')
+        for relative in results:
+            self.assertEqual(native_read_bytes(output / relative), native_read_bytes(board.directory / relative))
 
     def test_console_history_and_sessions_survive_and_source_bytes_do_not_change(self):
         board = self.source_board()
@@ -131,6 +184,9 @@ class ExportBoardSampleTests(WorkflowTestCase):
         with closing(sqlite3.connect(board.directory / DB_FILE)) as connection:
             source_results = dict(connection.execute('SELECT attempt_id,result_json FROM attempts'))
             source_keys = dict(connection.execute('SELECT run_id,creation_key FROM workflow_runs'))
+            macro_project = connection.execute(
+                'SELECT project_id FROM macro_tasks WHERE macro_task_id=?',
+                (first['macroTaskId'],)).fetchone()[0]
         output = export_sample(board.directory, self.directory / 'sample')
         assert_private_path(self, output, 0o700)
         self.assertFalse(native_exists(output / unselected_manifest.relative_to(board.directory)))
@@ -146,6 +202,8 @@ class ExportBoardSampleTests(WorkflowTestCase):
             self.assertTrue(columns.isdisjoint({'control_verifier', 'submission_verifier'}))
             self.assertEqual(dict(connection.execute('SELECT run_id,creation_key FROM workflow_runs')),
                              {run_id: source_keys[run_id] for run_id in (first['runId'], second['runId'])})
+            self.assertEqual(connection.execute('SELECT project_id FROM projects').fetchall(),
+                             [(macro_project,)])
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM agent_credentials').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT SUM(samples),SUM(successes) FROM kind_statistics').fetchone(), (2, 2))
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM kind_cell_statistics').fetchone()[0], 0)
@@ -199,6 +257,10 @@ class ExportBoardSampleTests(WorkflowTestCase):
         database = Database(source)
         database.initialize()
         with database.write() as connection:
+            connection.execute('INSERT INTO projects(project_id,kind,path) VALUES(?,?,?)',
+                               ('sample-project', 'folder', str(source / 'sample-project')))
+            connection.execute('INSERT INTO projects(project_id,kind,path) VALUES(?,?,?)',
+                               ('unselected-project', 'folder', str(source / 'unselected-project')))
             for number in reversed(range(103)):
                 identifier = f'run-{number:03d}'
                 time = f'2026-01-01T00:{number // 60:02d}:{number % 60:02d}.000Z'
@@ -206,8 +268,9 @@ class ExportBoardSampleTests(WorkflowTestCase):
                     "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at,accepted_at) VALUES(?,?,json_set('{}','$.expectedSeconds',10),'hash',1,'dsh','fixture','completed',1,?,?,?)",
                     (identifier, identifier, time, time, time))
                 connection.execute(
-                    'INSERT INTO workflow_runs(run_id,execution_workspace_json,standalone_project_id,state,created_at,updated_at) '
-                    "VALUES(?,'{}','sample-project','accepted',?,?)", (identifier, time, time))
+                    'INSERT INTO workflow_runs(run_id,execution_workspace_json,standalone_project_id,'
+                    'project_kind,checkout,state,created_at,updated_at) '
+                    "VALUES(?,'{}','sample-project','folder','none','accepted',?,?)", (identifier, time, time))
         database.close()
         before = files(source)
         result = subprocess.run([sys.executable, str(TOOL), str(self.directory / 'sample'), '--source', str(source)],
@@ -217,6 +280,8 @@ class ExportBoardSampleTests(WorkflowTestCase):
         with closing(sqlite3.connect(self.directory / 'sample' / DB_FILE)) as connection:
             self.assertEqual([row[0] for row in connection.execute('SELECT run_id FROM workflow_runs ORDER BY rowid')],
                              [f'run-{number:03d}' for number in range(3, 103)])
+            self.assertEqual(connection.execute('SELECT project_id FROM projects').fetchall(),
+                             [('sample-project',)])
         self.assert_source_unchanged(before, files(source))
 
     def test_invalid_selected_execution_is_not_published(self):

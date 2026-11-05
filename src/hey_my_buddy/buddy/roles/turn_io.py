@@ -54,6 +54,9 @@ def inquiry_paths(context: ExecutionContext) -> dict:
 
 def verify_workspace(context: ExecutionContext) -> None:
     manifest = turn_manifest(Path(context.environment["HMB_STATE_DIR"]), context.turn_input)
+    if context.turn_input["version"] == 5:
+        context.effective_workspace = manifest
+        return
     from ...blackboard.tasks.workflow import workspace_module
     routing = (context.turn_input.get("context") or {}).get("routing") or {}
     workspace_module().verify(manifest, state_dir=Path(context.environment["HMB_STATE_DIR"]),
@@ -107,6 +110,8 @@ def validate_outcome(outcome: object, *, delegation_authority: bool = False) -> 
 
 def seal_workspace(context: ExecutionContext) -> tuple[dict | None, str | None]:
     manifest = context.effective_workspace
+    if context.turn_input["version"] == 5:
+        return None, None
     state_dir = context.environment["HMB_STATE_DIR"]
     try:
         from ...blackboard.tasks.workflow import workspace_module

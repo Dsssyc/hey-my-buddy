@@ -480,11 +480,14 @@ class SubmissionPreparationRaceTests(MicroTaskWorkerTestCase):
 
     def test_cli_creation_key_is_deterministic_across_threads(self):
         from hey_my_buddy.cli import main as cli
+        from unittest import mock
         params = {"cwd": str(self.repo), "title": "req-race", "task": "same work",
                   "macroTaskId": "standalone"}
-        keys = self._race(lambda: cli._host_creation_key("submit", params))
+        with mock.patch.object(cli, "_call_service", return_value={"project": {"id": "stable-project"}}):
+            keys = self._race(lambda: cli._host_creation_key("submit", params, state_dir=self.directory))
+            expected = cli._host_creation_key("submit", params, state_dir=self.directory)
         self.assertEqual(len(set(keys)), 1, keys)
-        self.assertEqual(keys[0], cli._host_creation_key("submit", params))
+        self.assertEqual(keys[0], expected)
 
 
 

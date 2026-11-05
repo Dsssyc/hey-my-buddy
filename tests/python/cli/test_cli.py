@@ -66,6 +66,8 @@ class CreationKeyTests(unittest.TestCase):
     def test_create_replay_and_worktree_subdirectory_use_one_project_key(self):
         calls = []
         def service(method, params, state_dir):
+            if method == "get":
+                return {"project": {"id": "project-id"}, "items": []}
             calls.append((method, dict(params)))
             return {"macroTaskId": "mt-1", "status": "open", "actions": ["amend", "submit", "get"]}
         with mock.patch.object(cli, "_call_service", side_effect=service):
@@ -82,6 +84,8 @@ class CreationKeyTests(unittest.TestCase):
     def test_standalone_submit_key_binds_project_title_and_task(self):
         calls = []
         def service(method, params, state_dir):
+            if method == "get":
+                return {"project": {"id": "project-id"}, "items": []}
             calls.append(dict(params))
             return {"runId": "run-1", "status": "queued", "actions": ["await", "inquire", "cancel"]}
         packet = {"cwd": str(self.root), "macroTaskId": "standalone", "title": "Review",

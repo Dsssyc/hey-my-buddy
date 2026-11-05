@@ -58,7 +58,13 @@ FROM workflow_runs r
 
 
 def effective_manifest(state_dir, connection, run_row):
-    """Read the current reference or the explicitly selected terminal evidence."""
+    """Read Git evidence or the explicitly recorded none execution context."""
+    if run_row['checkout'] == 'none':
+        choice = json.loads(run_row['execution_workspace_json'])
+        return {'kind': 'none', 'path': choice['cwd'], 'projectId': choice['projectId'],
+                'projectKind': run_row['project_kind'], 'access': choice['access'],
+                'integrator': choice['integrator'],
+                **({'accessNote': choice['accessNote']} if choice['access'] == 'full' else {})}
     if run_row["state"] not in ("accepted", "concluded"):
         return resolve_manifest(state_dir, {
             "workspaceId": run_row["workspace_id"],
@@ -114,7 +120,7 @@ def retained_manifests(state_dir, connection, run_id):
         document = artifact_manifest(state_dir, row)
         manifests[(row["workspace_id"], row["input_manifest_sha256"])] = document
     for row in connection.execute(
-            "SELECT * FROM workflow_turns WHERE run_id=? ORDER BY turn_index", (run_id,)):
+            "SELECT * FROM workflow_turns WHERE run_id=? AND checkout!='none' ORDER BY turn_index", (run_id,)):
         pair = row["workspace_id"], row["workspace_manifest_sha256"]
         if pair not in manifests:
             manifests[pair] = turn_manifest(state_dir, json.loads(row["input_json"]))

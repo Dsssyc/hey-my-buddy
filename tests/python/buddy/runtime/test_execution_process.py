@@ -83,6 +83,24 @@ class ExecutionEndpointTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             validate_claim_turn({**claim, "agentCredential": None})
 
+    def test_none_claim_requires_explicit_folder_context(self):
+        base = {"task": {"taskId": "task", "spec": {"adapter": "codex"}},
+                "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                "agentCredential": "private-fixture"}
+        workspace = {"kind": "none", "path": str(Path.cwd()), "projectId": "folder-project",
+                     "projectKind": "folder", "access": "read", "integrator": {"role": "host"}}
+        claim = {**base, "turn": {"turnId": "turn-1", "input": {
+            "version": 5, "executionWorkspace": workspace}}}
+        validate_claim_turn(claim)
+        for invalid in ({**workspace, "workspaceId": "ws-fake"},
+                        {**workspace, "path": "relative"},
+                        {**workspace, "access": "full"},
+                        {**workspace, "projectKind": "unknown"}):
+            with self.subTest(workspace=invalid), self.assertRaises(BoardError) as caught:
+                validate_claim_turn({**claim, "turn": {"turnId": "turn-1", "input": {
+                    "version": 5, "executionWorkspace": invalid}}})
+            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+
     def test_decision_claim_requires_explicit_mode_buddy_and_budget(self):
         base = {"task": {"taskId": "task", "spec": {"adapter": "decision"}},
                 "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}

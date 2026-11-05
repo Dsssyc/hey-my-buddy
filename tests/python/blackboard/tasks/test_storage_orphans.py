@@ -84,11 +84,15 @@ class StorageOrphanTests(WorkflowTestCase):
             sealed = artifact_manifest(board.directory, connection.execute(
                 'SELECT * FROM workflow_artifacts WHERE artifact_id=?',
                 (view['finalArtifactId'],)).fetchone())
+        integrated = self.git(self.repo, 'commit-tree', sealed['tree'],
+                              '-p', manifest['inputCommit'], '-p', sealed['commit'],
+                              '-m', 'private integration proof')
         with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
             accepted = board.call('workflow_accept', {
                 'runId': delivered['runId'], 'artifactId': view['finalArtifactId'],
                 'note': 'Private ref integration regression',
-                'target': {'path': str(checkout), 'ref': sealed['commit']}})
+                'target': {'path': str(checkout), 'ref': integrated},
+                'beforeCommit': manifest['inputCommit']})
         integration = board.call('workflow_get',{'runId':delivered['runId']})['integrations'][0]
         self.assertEqual(integration['state'], 'verified')
         self.assertEqual(integration['target']['path'], str(checkout))
@@ -229,11 +233,11 @@ class StorageOrphanTests(WorkflowTestCase):
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workflow_continuations
                 (continuation_id,run_id,kind,input_text,
-                 workspace_id,workspace_manifest_sha256,workspace_facts_role,
+                 workspace_id,workspace_manifest_sha256,checkout,workspace_facts_role,
                  workspace_kind,checkout_root,repository_path,input_commit,staged_commit,state,created_at)
-                VALUES (?,?,'manual','input',?,?,'owner',?,?,?,?,?,'invalidated',?)''',
+                VALUES (?,?,'manual','input',?,?,?,'owner',?,?,?,?,?,'invalidated',?)''',
                 ('retained-continuation', parent['runId'], manifest['workspaceId'], manifest['manifestSha256'],
-                 manifest['kind'], manifest['checkoutRoot'], manifest['snapshot']['repositoryPath'],
+                 manifest['kind'], manifest['kind'], manifest['checkoutRoot'], manifest['snapshot']['repositoryPath'],
                  manifest['inputCommit'], manifest['snapshot']['stagedCommit'], '2026-01-01T00:00:00Z'))
         self.assert_retained(checkout, planned)
 

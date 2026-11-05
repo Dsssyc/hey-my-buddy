@@ -478,8 +478,10 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
         CHECK (resume_mode IN ('initial','reconstructed-new-session','native-session')),
     previous_session_id TEXT,
     input_json          TEXT NOT NULL,
-    workspace_id        TEXT NOT NULL,
-    workspace_manifest_sha256 TEXT NOT NULL,
+    project_kind        TEXT NOT NULL CHECK (project_kind IN ('git','folder')),
+    checkout            TEXT NOT NULL CHECK (checkout IN ('existing','worktree','none')),
+    workspace_id        TEXT,
+    workspace_manifest_sha256 TEXT,
     response_kind       TEXT,
     response_id         TEXT,
     -- Frozen access for this turn, independent of later run intent changes.
@@ -493,6 +495,9 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     CHECK ((response_kind IS NULL) = (response_id IS NULL)),
     CHECK (response_kind IS NULL OR response_kind='continue'),
     CHECK ((access='full') = (access_note IS NOT NULL)),
+    CHECK ((checkout='none' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
+        OR (checkout IN ('existing','worktree') AND project_kind='git'
+            AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL)),
     UNIQUE(run_id, turn_index)
 );
 """
@@ -505,7 +510,9 @@ WORKFLOW_RUNS_DDL = """
 CREATE TABLE IF NOT EXISTS workflow_runs (
     run_id                  TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
     macro_task_id            TEXT REFERENCES macro_tasks(macro_task_id) ON DELETE RESTRICT,
-    standalone_project_id    TEXT,
+    standalone_project_id    TEXT REFERENCES projects(project_id) ON DELETE RESTRICT,
+    project_kind             TEXT NOT NULL CHECK (project_kind IN ('git','folder')),
+    checkout                 TEXT NOT NULL CHECK (checkout IN ('existing','worktree','none')),
     title                   TEXT,
     activity_seq            INTEGER NOT NULL DEFAULT 0,
     activity_at             TEXT,
@@ -530,8 +537,10 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     delegation_authority INTEGER NOT NULL DEFAULT 0 CHECK (delegation_authority IN (0,1)),
     CHECK ((macro_task_id IS NULL AND standalone_project_id IS NOT NULL)
         OR (macro_task_id IS NOT NULL AND standalone_project_id IS NULL)),
-    CHECK ((state IN ('accepted','concluded') AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
-        OR (state NOT IN ('accepted','concluded') AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL))
+    CHECK ((checkout='none' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
+        OR (checkout IN ('existing','worktree') AND project_kind='git' AND
+            ((state IN ('accepted','concluded') AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
+            OR (state NOT IN ('accepted','concluded') AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL))))
 );
 """
 
@@ -548,12 +557,20 @@ CREATE TABLE IF NOT EXISTS workflow_children (
 
 WORKFLOW_TABLES = (
     """
+CREATE TABLE IF NOT EXISTS projects (
+    project_id TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL CHECK (kind IN ('git','folder')),
+    path       TEXT NOT NULL
+);
+""",
+    """
 CREATE TABLE IF NOT EXISTS macro_tasks (
     macro_task_id       TEXT PRIMARY KEY,
     title              TEXT NOT NULL,
-    project_id         TEXT NOT NULL,
+    project_id         TEXT NOT NULL REFERENCES projects(project_id) ON DELETE RESTRICT,
+    project_kind       TEXT NOT NULL CHECK (project_kind IN ('git','folder')),
     project_cwd       TEXT NOT NULL,
-    repository_path   TEXT NOT NULL,
+    repository_path   TEXT,
     creation_key      TEXT,
     created_at         TEXT NOT NULL,
     activity_seq       INTEGER NOT NULL DEFAULT 0,
@@ -650,7 +667,8 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
     helper_outcomes_json TEXT NOT NULL DEFAULT '[]',
     workspace_id      TEXT,
     workspace_manifest_sha256 TEXT,
-    workspace_facts_role TEXT NOT NULL CHECK (workspace_facts_role IN ('pending','owner','reference')),
+    checkout          TEXT NOT NULL CHECK (checkout IN ('existing','worktree','none')),
+    workspace_facts_role TEXT NOT NULL CHECK (workspace_facts_role IN ('pending','owner','reference','none')),
     workspace_kind    TEXT CHECK (workspace_kind IN ('existing','worktree')),
     checkout_root     TEXT,
     repository_path   TEXT,
@@ -665,7 +683,10 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
     CHECK (buddy_selection_json IS NULL OR json_valid(buddy_selection_json)),
     CHECK (access_selection_json IS NULL OR json_valid(access_selection_json)),
     CHECK (resolution_json IS NULL OR json_valid(resolution_json)),
-    CHECK ((workspace_facts_role='pending' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
+    CHECK ((checkout='none' AND workspace_facts_role='none' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
+            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)
+        OR (checkout IN ('existing','worktree') AND ((workspace_facts_role='pending' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
             AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
             AND input_commit IS NULL AND staged_commit IS NULL)
         OR (workspace_facts_role='owner' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
@@ -673,7 +694,7 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
             AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
         OR (workspace_facts_role='reference' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
             AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
-            AND input_commit IS NULL AND staged_commit IS NULL)),
+            AND input_commit IS NULL AND staged_commit IS NULL)))),
     CHECK ((kind IN ('manual','helper') AND trigger_event_json IS NULL)
         OR (kind='lead-wakeup' AND trigger_event_json IS NOT NULL
             AND json_valid(trigger_event_json) AND json_type(trigger_event_json)='object'))
@@ -853,16 +874,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS agent_credentials_attempt_unique
     """
 CREATE INDEX IF NOT EXISTS agent_credentials_run_idx ON agent_credentials(run_id, state);
 """,
-    # Immutable pinned manifests (prepared inputs and sealed outputs). A worktree
-    # may be removed later; these references stay readable.
+    # Fixed Git inputs/outputs and none execution receipts have distinct forms.
+    # A worktree may be removed later; these references stay readable.
     """
 CREATE TABLE IF NOT EXISTS workflow_artifacts (
     artifact_id     TEXT PRIMARY KEY,
     run_id          TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     turn_id         TEXT,
     attempt_id      TEXT,
-    kind            TEXT NOT NULL CHECK (kind IN ('input','turn-input','output','resolved-output','partial-output','abandoned-site','shared-refs')),
-    content_form    TEXT NOT NULL CHECK (content_form IN ('sealed-inline-v1','input-reference','record-reference')),
+    generation      INTEGER,
+    kind            TEXT NOT NULL CHECK (kind IN ('input','turn-input','output','resolved-output','partial-output','abandoned-site','shared-refs','result')),
+    content_form    TEXT NOT NULL CHECK (content_form IN ('sealed-inline-v1','input-reference','record-reference','result-reference')),
     manifest_json   TEXT,
     workspace_id    TEXT,
     input_manifest_sha256 TEXT,
@@ -886,18 +908,24 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
     created_at      TEXT NOT NULL,
     CHECK ((response_kind IS NULL) = (response_id IS NULL)),
     CHECK (response_kind IS NULL OR response_kind IN ('accept','continue','conclude')),
-    CHECK (response_kind IS NULL OR kind IN ('output','resolved-output','partial-output','abandoned-site')),
+    CHECK (response_kind IS NULL OR kind IN ('output','resolved-output','partial-output','abandoned-site','result')),
     CHECK ((kind IN ('input','turn-input') AND workspace_id IS NOT NULL AND input_manifest_sha256 IS NOT NULL
             AND output_snapshot_sha256 IS NULL AND shared_refs_sha256 IS NULL)
         OR (kind IN ('output','resolved-output','partial-output','abandoned-site') AND workspace_id IS NULL
             AND input_manifest_sha256 IS NULL AND output_snapshot_sha256 IS NOT NULL AND shared_refs_sha256 IS NULL)
         OR (kind='shared-refs' AND workspace_id IS NULL AND input_manifest_sha256 IS NULL
-            AND output_snapshot_sha256 IS NULL AND shared_refs_sha256 IS NOT NULL)),
+            AND output_snapshot_sha256 IS NULL AND shared_refs_sha256 IS NOT NULL)
+        OR (kind='result' AND workspace_id IS NULL AND input_manifest_sha256 IS NULL
+            AND output_snapshot_sha256 IS NULL AND shared_refs_sha256 IS NULL)),
     CHECK ((content_form='sealed-inline-v1' AND manifest_json IS NOT NULL AND record_path IS NULL AND record_sha256 IS NULL)
         OR (content_form='input-reference' AND kind='input' AND manifest_json IS NULL
             AND record_path IS NULL AND record_sha256 IS NULL)
         OR (content_form='record-reference' AND kind IN ('output','resolved-output','partial-output','abandoned-site')
-            AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)),
+            AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)
+        OR (content_form='result-reference' AND kind='result' AND turn_id IS NOT NULL AND attempt_id IS NOT NULL
+            AND generation IS NOT NULL AND generation > 0 AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)),
+    CHECK ((kind='result') = (content_form='result-reference')),
+    CHECK (kind='result' OR generation IS NULL),
     CHECK ((kind='input' AND workspace_facts_role='owner' AND workspace_kind IS NOT NULL
             AND checkout_root IS NOT NULL AND repository_path IS NOT NULL
             AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
@@ -926,6 +954,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS workflow_artifacts_input_unique
     ON workflow_artifacts(run_id, attempt_id, input_manifest_sha256) WHERE input_manifest_sha256 IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_artifacts_output_unique
     ON workflow_artifacts(run_id, attempt_id, output_snapshot_sha256) WHERE output_snapshot_sha256 IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_artifacts_result_unique
+    ON workflow_artifacts(run_id, attempt_id) WHERE kind='result';
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_artifacts_shared_refs_unique
     ON workflow_artifacts(run_id, attempt_id, shared_refs_sha256) WHERE shared_refs_sha256 IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_artifacts_workspace_owner_unique
