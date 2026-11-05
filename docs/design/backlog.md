@@ -32,8 +32,6 @@
 
 ## 控制台
 
-**两个控制台测试还在用已撤下的 `execution-cancel`。**（2026-11-05，ADR-032 的 skill 冷读之后 Host 查到） 0.61.0 的 CLI 已没有 `execution-cancel`（服务里的 `task_cancel` 还在，由控制台调用）。`tests/python/console/test_console_sessions.py` 在清理时调用 `self.cli('execution-cancel', …)` 而不看返回码，这一步现在什么都不做，测试照样通过；`tests/python/console/test_console.py` 有一句注释还说这个 CLI 操作对 Host 可用。建议：清理改走现在的 Host 动词 `cancel` 并检查它的返回，注释删掉；随下一批控制台或测试的改动做。
-
 **目标卡片的宽度重复了正文的常量；复制按钮只有 20px 高。**（2026-11-03，微任务“头部 ID 对齐与目标卡片宽度”验收时记下的顺带项） `apps/console/src/index.css` 里 `.goal-card` 的宽度写成 `calc(38 * 14.5px + 48px + 2px + var(--goal-history-width))`，历史栏的宽度又以 220px、110px 各写一遍，与 `.goal-body` 的字号、行宽和内边距重复，以后改正文的字号，卡片就会对不上。建议让卡片宽度随内容（例如 `width: fit-content`，由正文自己的 `max-width` 决定），不再重复常量。另外 `CopyableIdentifier` 的按钮从 24px 降到了 20px，低于 WCAG 2.5.8 的 24px 目标尺寸；要确认四处用法里间距例外都成立，不成立就用不改变行高的办法把点击区放大。
 
 **Buddy 页一项浏览器检查偶发失败。**（2026-11-02，0.59.1 验收时） `apps/console/browser/maintenance-controls.check.ts` 的 running light 390px 一项：从“模型输出中”按 Tab 再按 Shift+Tab 之后，5 秒内没有等到“最近原生活动”的提示。这一项只打开 Buddy 页，任务页没有挂载；同一份构建单独重跑 7 次失败 2 次（都在刚跑完浏览器全量之后），改动之前的基线 7 次全过，两边交替各 4 次全过。原因没有查明；再出现时在失败的那一刻留下 error-context 再定。
