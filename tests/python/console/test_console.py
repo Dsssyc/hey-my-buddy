@@ -779,7 +779,6 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         self.assertEqual(status, 403, body)
         self.assertEqual(json.loads(body)["error"]["code"], "FORBIDDEN")
         self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["state"], "queued")
-        # The same existing execution-cancel operation remains available to the Host.
         self.assertEqual(board.call("task_cancel", {"runId": run_id})["task"]["state"], "cancelled")
 
     def test_selection_list_is_reachable_over_the_console_boundary(self):

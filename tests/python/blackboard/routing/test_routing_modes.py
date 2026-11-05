@@ -1,6 +1,7 @@
 """Single Router mode and durable routing facts; no native model calls."""
 from admission import admit_execution
 import uuid
+import os
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router
@@ -173,7 +174,7 @@ class RoutingModesTests(BoardTestCase):
         self.assertNotIn('secret-tree', prompt)
 
     def test_mode_and_fallback_are_retired_submission_input(self):
-        valid = {"cwd": "/tmp/fixture", "macroTaskId": "standalone", "title": "test",
+        valid = {"cwd": os.path.abspath(os.curdir), "macroTaskId": "standalone", "title": "test",
                  "task": "x", "buddy": "route", "checkout": "existing", "access": "read",
                  "inputs": [], "expectedSeconds": 60}
         for payload in ({"routingMode": "quick"}, {"routingMode": "fast"}, {"routingMode": None},

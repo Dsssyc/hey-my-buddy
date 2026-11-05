@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from hey_my_buddy.console.console_sessions import MAX_ENTRIES, MAX_SESSIONS, ENTRY_SECONDS
 from hey_my_buddy.errors import BoardError
 from console.test_console import Browser, ConsoleTestCase, http_call
-from support import _child_environment, wait_for
+from support import BoardClient, _child_environment, wait_for
 from private_acl import assert_private_path
 
 
@@ -303,5 +303,6 @@ class ConsoleForegroundTests(ConsoleTestCase):
                     child.communicate(timeout=10)
                 reader.join(5)
                 self.assertFalse(reader.is_alive(), 'CLI notice reader remained after child exit')
-                self.cli('execution-cancel', json.dumps({'runId': task['runId'], 'note': 'private test cleanup'}))
+                cancelled = BoardClient(self.directory).cancel(runId=task['runId'], note='private test cleanup')
+                self.assertIn(cancelled['state'], ('cancelling', 'cancelled'))
                 self.cli('await', json.dumps({'runId': task['runId'], 'waitSeconds': 15}))

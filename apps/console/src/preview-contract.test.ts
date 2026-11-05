@@ -62,7 +62,7 @@ function resolveFixtures(): { directory: string; generated: boolean } {
   const configured = process.env.HMB_PREVIEW_FIXTURES;
   if (configured) return { directory: resolve(configured), generated: false };
   const python = process.env.HMB_PREVIEW_PYTHON;
-  const command = python ? [python] : ["uv", "run", "--no-project", "python"];
+  const command = python ? [python] : ["uv", "run", "--frozen", "python"];
   const directory = mkdtempSync(join(tmpdir(), "hey-my-buddy-preview-"));
   const previewEnvironment = { ...process.env };
   for (const key of ["HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
