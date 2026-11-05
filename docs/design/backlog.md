@@ -192,6 +192,8 @@
 
 ## 委派与 Worker
 
+**`help` 把只能省略的字段也显示成可以是 null。**（2026-11-05 ADR-032 参考文档的盲审指出，Host 读代码核实） `cli/cli_help.py` 直接输出请求模型生成的 schema，可省略的字段带着 `anyOf … null` 与 `default: null`；而请求模型默认拒绝显式的 null，只有 `nullable_fields` 里的字段例外，目前只有 `harness-set` 的 `path`（`protocol/requests.py`）。照 help 写出 `"includeAudit": null` 这样的请求会被拒绝。建议：help 按 `nullable_fields` 呈现，可省略的字段只写“可省略”，能显式传 null 的才显示 null；随下一批改到 help 的工作顺带做。
+
 **执行层的内部规格还留着两个默认值。**（2026-11-05 写 ADR-032 文档时 Host 读代码记下） `protocol/schemas.py` 的 `normalize_spec` 只给检查套件写命令执行用（`tests/python/support.py` 的 `submit_execution`），却仍把没写的 `adapter` 当成 `dsh`、没写的 `expectedSeconds` 当成 1,800 秒：前者随即被“编程用的 harness 必须走微任务”拒绝，只把“没写”变成了另一种错误。`blackboard/routing/decision.py` 两处 `request.get("expectedSeconds", DEFAULT_EXPECTED_SECONDS)` 在 ADR-032 把 `expectedSeconds` 改为必填之后，看起来已经没有不带它的调用方，要先核对。建议：两处都改为必填，删掉 `DEFAULT_EXPECTED_SECONDS`；随下一批同一块的工作顺带做。
 
 **删掉 `hostId`。**（2026-11-04 开发者定，放进下一次契约与存储批，与 skill 和接口的精简一起做）
