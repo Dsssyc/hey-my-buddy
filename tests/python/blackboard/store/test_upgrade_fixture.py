@@ -1182,10 +1182,15 @@ class UpgradeFixtureTests(unittest.TestCase):
         for row in upgraded.execute('SELECT * FROM workspace_cleanup_plans'):
             self.assertNotIn('expiresAt', WorkflowCoordinator._plan_view(row))
 
-    def test_cleanup_stock_records_its_original_generator_and_fixed_floor(self):
+    def test_stock_provenance_uses_current_generator_and_fixed_floor(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         root = Path(__file__).resolve().parents[4]
-        self.assertEqual(metadata['generatorSha256'], 'a3113a5b19f125cedfe435653db26ebb87594738be9f20c1cb7835f76d8f10f7')
+        generator_sha256 = _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes())
+        for field in ('generatorSha256', 'cleanupStockGeneratorSha256', 'reservationStockGeneratorSha256',
+                      'deliveredStockGeneratorSha256', 'growth30GeneratorSha256', 'growth33GeneratorSha256'):
+            with self.subTest(field=field):
+                self.assertEqual(metadata[field], generator_sha256)
+        self.assertEqual(metadata['legacyStock']['generatorSha256'], generator_sha256)
         self.assertNotIn('baseGeneratorSha256', metadata)
         self.assertEqual(metadata['cleanupStockGeneratorSha256'], metadata['generatorSha256'])
         self.assertEqual(metadata['cleanupStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
