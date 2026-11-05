@@ -299,6 +299,11 @@ def normalize_access(intent: dict) -> tuple[str, str | None]:
 
 
 
+def buddy_name(identity: dict) -> str:
+    """The Host-facing buddy writing: 'harness / provider / model / effort'."""
+    return " / ".join(identity[key] for key in BUDDY_FIELDS)
+
+
 def buddy_constraints(spec: dict) -> dict:
     return {key: spec[key] for key in BUDDY_FIELDS if key in spec}
 

@@ -78,7 +78,8 @@ def _buddy(value: str) -> str:
 
 
 BUDDY_NAME_DESCRIPTION = ("'route', or one buddy's complete name 'harness / provider / model / effort'"
-                          " with ' / ' between the four parts, as the console's Buddy page lists each buddy")
+                          " with ' / ' between the four parts, as the console's Buddy page lists each buddy;"
+                          " `get` with buddies reads every enabled buddy's name")
 
 Title = Annotated[str, Field(min_length=1, max_length=200, description="Nonempty title, at most 200 characters"), AfterValidator(_title)]
 Text = Annotated[str, Field(json_schema_extra={"x-maxUtf8Bytes": MAX_TEXT_BYTES}),
@@ -212,24 +213,26 @@ class RoutingHistoryRequest(Request):
 
 
 class GetRequest(Request):
-    """Read one run, macro task or project."""
+    """Read one run, macro task, project or the enabled buddies."""
     runId: RunId | None = None
     macroTaskId: RunId | None = None
     cwd: Cwd | None = None
+    buddies: Literal[True] | None = Field(default=None, description="Read the enabled buddies; true is the only value")
     limit: Annotated[int, Field(strict=True, ge=1, le=100)] | None = None
     before: Annotated[str, Field(min_length=1, max_length=512), AfterValidator(_nonempty)] | None = None
     includeAudit: bool | None = None
     routingHistory: RoutingHistoryRequest | None = None
     rules: ClassVar[tuple[str, ...]] = (
-        "exactly one of runId, macroTaskId, cwd is required",
+        "exactly one of runId, macroTaskId, cwd, buddies is required",
+        "buddies accepts only true and lists every enabled buddy by its complete name with whether it can take work now",
         "includeAudit and routingHistory apply only to a run; limit and before apply only to a collection",
     )
 
     @model_validator(mode="after")
     def _selector(self):
         supplied = self.model_fields_set
-        if sum(name in supplied for name in ("runId", "macroTaskId", "cwd")) != 1:
-            raise ValueError("exactly one of runId, macroTaskId or cwd is required")
+        if sum(name in supplied for name in ("runId", "macroTaskId", "cwd", "buddies")) != 1:
+            raise ValueError("exactly one of runId, macroTaskId, cwd or buddies is required")
         if "runId" in supplied and any(name in supplied for name in ("limit", "before")):
             raise ValueError("limit and before apply only to a collection")
         if "runId" not in supplied and any(name in supplied for name in ("includeAudit", "routingHistory")):

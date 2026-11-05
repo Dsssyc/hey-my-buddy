@@ -210,7 +210,8 @@ def named_buddy(connection, name: str) -> dict | None:
     if row is None:
         raise BoardError("INVALID_ARGUMENT",
                          "buddy must be 'route' or one recorded buddy written"
-                         " 'harness / provider / model / effort', as the console's Buddy page lists it",
+                         " 'harness / provider / model / effort'; read the enabled"
+                         " names with `get` and its buddies selector",
                          buddy=name)
     return dict(row)
 
@@ -1907,6 +1908,8 @@ class WorkflowCoordinator:
     def get(self, params: dict) -> dict:
         from ...protocol.requests import parse_request, dump_request
         request = dump_request(parse_request("get", params, audience="service"))
+        if "buddies" in request:
+            return self._buddies_get(request)
         if "macroTaskId" in request:
             return macro_tasks.macro_task_get(self.board, request)
         if "cwd" in request:
@@ -1932,6 +1935,35 @@ class WorkflowCoordinator:
             if request.get("includeAudit"):
                 view["audit"] = self._audit(connection, run)
             return view
+
+    def _buddies_get(self, request: dict) -> dict:
+        """One page of the enabled buddies, by the service's own buddy read.
+
+        The catalog read pages ascending by its buddy id, so the page cursor
+        names the last listed buddy and the next page resumes after it; the
+        projection keeps each entry to its complete name, whether it can take
+        work now, and the recorded reasons when it cannot: the provider
+        cooldown's deadline and the catalog's unavailability reason.
+        """
+        from ..catalog import catalog_store
+        before = request.get("before")
+        if before is not None:
+            with self.db.read() as connection:
+                if connection.execute("SELECT 1 FROM buddies WHERE buddy_id=?", (before,)).fetchone() is None:
+                    raise BoardError("INVALID_ARGUMENT", "before is not a recorded buddy", field="before")
+        page = catalog_store.buddies(self.board.evaluation,
+                                     {'limit': request.get('limit', 100), 'after': before or '',
+                                      'includeUnavailable': True, 'enabled': True})
+        entries = []
+        for view in page['buddies']:
+            entry = {'name': schemas.buddy_name(view),
+                     'available': view['available'] and not view['providerCooling']}
+            if view['providerCooling']:
+                entry['coolingUntil'] = view['providerCooling']['coolingUntil']
+            if 'unavailableReason' in view:
+                entry['unavailableReason'] = view['unavailableReason']
+            entries.append(entry)
+        return {'buddies': entries, 'nextCursor': page['nextCursor']}
 
     def _inquiries(self, connection, run_id: str) -> list[dict]:
         return [self.board._message_view(row) for row in connection.execute(

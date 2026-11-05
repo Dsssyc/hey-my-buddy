@@ -51,6 +51,11 @@ class HelpTests(unittest.TestCase):
         self.assertIn("Nested HelperRequest fields:", help_text("continue"))
         self.assertIn("Nested IntegrationTarget fields:", help_text("accept"))
         self.assertIn("Nested RoutingHistoryRequest fields:", help_text("get"))
+        get_help = help_text("get")
+        self.assertIn("buddies (optional)", get_help)
+        self.assertIn("true is the only value", get_help)
+        self.assertIn("exactly one of runId, macroTaskId, cwd, buddies is required", get_help)
+        self.assertIn("limit and before apply only to a collection", get_help)
         self.assertIn("maxUtf8Bytes", help_text("role", "suggest"))
         self.assertNotIn("creationKey", help_text("role", "submit"))
         self.assertNotIn("import ast", Path(cli_help.__file__).read_text())
@@ -141,6 +146,11 @@ class RequestTests(unittest.TestCase):
     def test_get_selector_and_inquiry_identity(self):
         self.assert_invalid("get", {"runId": "run-1", "cwd": self.cwd}, "exactly one")
         self.assert_invalid("get", {"macroTaskId": "mt-1", "includeAudit": True}, "includeAudit")
+        self.assert_invalid("get", {"runId": "run-1", "buddies": True}, "exactly one")
+        self.assert_invalid("get", {"buddies": False}, "buddies")
+        self.assert_invalid("get", {"buddies": True, "includeAudit": True}, "includeAudit")
+        self.assertEqual(dump_request(parse_request("get", {"buddies": True, "limit": 2, "before": "opaque-page-token"})),
+                         {"buddies": True, "limit": 2, "before": "opaque-page-token"})
         self.assertEqual(dump_request(parse_request("get", {"macroTaskId": "mt-1", "before": "opaque-page-token"}))["before"],
                          "opaque-page-token")
         self.assertEqual(dump_request(parse_request("get", {"runId": "run-1",

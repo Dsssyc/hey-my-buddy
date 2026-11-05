@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import re
+from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from hey_my_buddy.errors import BoardError
-from support import enable_fixture_buddy
+from support import FakeClock, enable_fixture_buddy
 
 
 class HostWorkflowTests(WorkflowTestCase):
@@ -121,3 +122,79 @@ class HostWorkflowTests(WorkflowTestCase):
                 self.submit(board, buddy=name, request_id="refused")
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
             self.assertIn("harness / provider / model / effort", raised.exception.message)
+            self.assertIn("buddies", raised.exception.message)
+
+
+class GetBuddiesTests(WorkflowTestCase):
+    """`get` with its buddies selector reads the enabled buddies by name."""
+
+    ENABLED = ("dsh:deepseek-official:deepseek-flash:high",
+               "dsh:deepseek-official:deepseek-flash:off",
+               "dsh:deepseek-official:deepseek-v4-pro:high")
+
+    def setUp(self):
+        super().setUp()
+        self.catalog_fixture()
+        self.clock = FakeClock("2026-01-01T00:00:00.000Z")
+        board = self.board(clock=self.clock)
+        board.evaluation._clock = self.clock
+        board.call("model_catalog_refresh", {"requestId": "catalog"})
+        board.console_call("user_policy_publish", {"commandId": "enable",
+            "buddySettings": [{"buddyId": item, "enabled": True} for item in self.ENABLED],
+            "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": []}})
+        self.enabled_board = board
+
+    def names(self, reply):
+        return [entry["name"] for entry in reply["buddies"]]
+
+    def test_lists_only_enabled_buddies_by_complete_name_ready_for_work(self):
+        reply = self.enabled_board.call("workflow_get", {"buddies": True})
+        self.assertEqual(self.names(reply), [
+            "dsh / deepseek-official / deepseek-flash / high",
+            "dsh / deepseek-official / deepseek-flash / off",
+            "dsh / deepseek-official / deepseek-v4-pro / high",
+        ])
+        for entry in reply["buddies"]:
+            self.assertEqual(set(entry), {"name", "available"})
+            self.assertTrue(entry["available"])
+        self.assertIsNone(reply["nextCursor"])
+
+    def test_pages_by_limit_and_before_and_refuses_a_cursor_that_names_no_buddy(self):
+        first = self.enabled_board.call("workflow_get", {"buddies": True, "limit": 2})
+        self.assertEqual(self.names(first), [
+            "dsh / deepseek-official / deepseek-flash / high",
+            "dsh / deepseek-official / deepseek-flash / off",
+        ])
+        self.assertEqual(first["nextCursor"], "dsh:deepseek-official:deepseek-flash:off")
+        second = self.enabled_board.call("workflow_get", {"buddies": True, "limit": 2,
+                                                          "before": first["nextCursor"]})
+        self.assertEqual(self.names(second), ["dsh / deepseek-official / deepseek-v4-pro / high"])
+        self.assertIsNone(second["nextCursor"])
+        with self.assertRaises(BoardError) as raised:
+            self.enabled_board.call("workflow_get", {"buddies": True, "before": "dsh:absent:model:off"})
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        self.assertIn("before is not a recorded buddy", raised.exception.message)
+
+    def test_a_buddy_that_cannot_take_work_carries_its_recorded_reasons(self):
+        from hey_my_buddy.blackboard.evaluation.native_observations import persist
+        with self.enabled_board.store.db.write() as connection:
+            connection.execute("UPDATE buddies SET available=0, unavailable_code='catalog.model-absent',"
+                               " unavailable_params_json='{}'"
+                               " WHERE buddy_id='dsh:deepseek-official:deepseek-v4-pro:high'")
+            persist(connection, {"attempt_id": "synthetic-denial", "adapter": "dsh", "model_harness": "dsh",
+                                 "model_provider": "deepseek-official", "started_at": self.clock()},
+                    {"providerRejection": {"code": "quota-exceeded", "nativeCode": "1310",
+                                           "source": "synthetic/dsh-denial", "observedAt": self.clock(),
+                                           "resetsAt": None, "rejectionPhase": "before-model"}},
+                    status="failed", shutdown_confirmed=True, now=self.clock())
+        with patch("hey_my_buddy.blackboard.routing.quota_routing.utc_now", self.clock):
+            reply = self.enabled_board.call("workflow_get", {"buddies": True})
+        by_name = {entry["name"]: entry for entry in reply["buddies"]}
+        self.assertEqual(by_name["dsh / deepseek-official / deepseek-v4-pro / high"],
+                         {"name": "dsh / deepseek-official / deepseek-v4-pro / high", "available": False,
+                          "coolingUntil": "2026-01-01T00:30:00.000Z",
+                          "unavailableReason": {"code": "catalog.model-absent", "params": {}}})
+        for name in ("dsh / deepseek-official / deepseek-flash / high",
+                     "dsh / deepseek-official / deepseek-flash / off"):
+            self.assertEqual(by_name[name],
+                             {"name": name, "available": False, "coolingUntil": "2026-01-01T00:30:00.000Z"})

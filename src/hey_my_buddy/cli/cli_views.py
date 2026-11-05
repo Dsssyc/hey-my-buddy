@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..protocol.schemas import buddy_name
+
 OUTPUT_FULL = "full"
 OUTPUT_BRIEF = "brief"
 
@@ -19,11 +21,6 @@ _RUN_BRIEF = (
 #: The service records a buddy identity as its four columns; this is the one
 #: key set that names a complete buddy, the same shape every view carries.
 _IDENTITY_FIELDS = frozenset({"harness", "provider", "model", "effort"})
-
-
-def buddy_name(identity: dict) -> str:
-    """The Host-facing buddy writing: 'harness / provider / model / effort'."""
-    return " / ".join(identity[key] for key in ("harness", "provider", "model", "effort"))
 
 
 def _named_buddies(value: Any) -> Any:

@@ -273,7 +273,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
 
 def buddies(evaluation, params):
     from ...protocol import schemas
-    schemas.reject_unknown(params, {'limit', 'after', 'includeUnavailable', 'query', 'harness'}, 'buddy.list')
+    schemas.reject_unknown(params, {'limit', 'after', 'includeUnavailable', 'query', 'harness', 'enabled'}, 'buddy.list')
     limit = params.get('limit', 100)
     if type(limit) is not int or not 1 <= limit <= 200:
         raise BoardError('INVALID_ARGUMENT', 'limit must be between 1 and 200')
@@ -288,6 +288,8 @@ def buddies(evaluation, params):
     if harness:
         clauses.append('p.harness=?')
         values.append(harness)
+    if schemas.optional_bool(params, 'enabled', False):
+        clauses.append('p.enabled=1')
     for term in query.split()[:8]:
         escaped = term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         clauses.append("(p.buddy_id LIKE ? ESCAPE '\\' OR p.label LIKE ? ESCAPE '\\' OR p.model LIKE ? ESCAPE '\\' OR p.provider LIKE ? ESCAPE '\\' OR p.harness LIKE ? ESCAPE '\\')")
