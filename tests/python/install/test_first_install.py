@@ -26,9 +26,12 @@ class SkillInstallTests(unittest.TestCase):
     def setUp(self):
         self.base = Path(tempfile.mkdtemp(prefix="hey-my-buddy-install-")).resolve()
         self.addCleanup(self.cleanup_private)
+        self.private_home = self.base / "home"
+        (self.private_home / ".claude").mkdir(parents=True)
         self.agents = self.base / "agents/skills"
         self.claude = self.base / "claude/skills"
-        self.environment = {"HMB_AGENT_SKILLS_DIR": str(self.agents),
+        self.environment = {"HOME": str(self.private_home), "USERPROFILE": str(self.private_home),
+                            "HMB_AGENT_SKILLS_DIR": str(self.agents),
                             "HMB_CLAUDE_SKILLS_DIR": str(self.claude),
                             "HMB_STATE_DIR": str(self.base / "state"),
                             "HMB_RUNTIME_ROOT": str(self.base / 'runtime'),
@@ -68,7 +71,7 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(result["skill"]["placement"], "installed")
         self.assertTrue((skill / "SKILL.md").is_file())
         self.assertTrue(os.access(skill / "scripts/hey-my-buddy", os.X_OK))
-        self.assertEqual(result["claude"]["status"], "linked")
+        self.assertEqual(result["harnessLinks"]["claude"]["status"], "linked")
         link = self.claude / "hey-my-buddy"
         self.assertTrue(link.is_junction() if os.name == 'nt' else link.is_symlink())
         self.assertEqual(os.path.realpath(self.claude / "hey-my-buddy"), os.path.realpath(skill))
@@ -82,8 +85,8 @@ class SkillInstallTests(unittest.TestCase):
         result = self.install()
         self.assertEqual(result["skill"]["placement"], "already-current")
         self.assertEqual((self.agents / "hey-my-buddy/skill.json").stat().st_mtime_ns, before)
-        self.assertEqual(result["claude"]["status"], "linked")
-        self.assertEqual(self.install()["claude"]["status"], "already-linked")
+        self.assertEqual(result["harnessLinks"]["claude"]["status"], "linked")
+        self.assertEqual(self.install()["harnessLinks"]["claude"]["status"], "already-linked")
 
     def test_a_different_version_replaces_the_skill_without_leftovers(self):
         self.install()
@@ -151,17 +154,17 @@ class SkillInstallTests(unittest.TestCase):
 
     def test_a_failed_claude_link_fails_before_the_service_and_rerun_recovers(self):
         from hey_my_buddy.errors import BoardError
-        with patch("hey_my_buddy.install.skill_install._create_claude_link", side_effect=OSError(1, "Operation not permitted")), \
+        with patch("hey_my_buddy.install.skill_install._create_link", side_effect=OSError(1, "Operation not permitted")), \
                 patch("hey_my_buddy.install.upgrade.upgrade") as service:
             with self.assertRaises(BoardError) as caught:
                 self.install()
             service.assert_not_called()
-        self.assertEqual(caught.exception.code, "CLAUDE_LINK_FAILED")
+        self.assertEqual(caught.exception.code, "SKILL_LINK_FAILED")
         self.assertFalse((self.agents / "hey-my-buddy").exists())
         self.assertFalse((self.claude / "hey-my-buddy").exists())
         result = self.install()
         self.assertEqual(result["skill"]["placement"], "installed")
-        self.assertEqual(result["claude"]["status"], "linked")
+        self.assertEqual(result["harnessLinks"]["claude"]["status"], "linked")
 
     def test_failed_publication_removes_only_the_new_claude_link_and_restores_the_skill(self):
         from hey_my_buddy.install import skill_install
@@ -174,6 +177,29 @@ class SkillInstallTests(unittest.TestCase):
         link = self.claude / skill_install.SKILL
         self.assertFalse(link.exists() or link.is_symlink() or link.is_junction())
         self.assertTrue((skill / 'SKILL.md').read_text(encoding='utf-8').endswith('old skill'))
+
+    def test_failed_second_harness_link_rolls_back_the_skill_and_first_link(self):
+        from hey_my_buddy.errors import BoardError
+        from hey_my_buddy.install import skill_install
+        (self.private_home / '.gemini/antigravity').mkdir(parents=True)
+        create = skill_install._create_link
+        def fail_antigravity(link, target):
+            if link == self.private_home / '.gemini/config/skills/hey-my-buddy':
+                raise OSError('injected Antigravity link failure')
+            create(link, target)
+        with patch.object(skill_install, '_create_link', side_effect=fail_antigravity):
+            with self.assertRaises(BoardError) as caught:
+                self.install()
+        self.assertEqual(caught.exception.code, 'SKILL_LINK_FAILED')
+        self.assertFalse(skill_install._is_link(self.claude / 'hey-my-buddy'))
+        self.assertFalse((self.agents / 'hey-my-buddy').exists())
+        self.assertFalse((self.base / 'state/active-runtime.json').exists())
+        result = self.install()
+        self.assertEqual({name: report['status'] for name, report in result['harnessLinks'].items()},
+                         {'claude': 'linked', 'antigravity': 'linked'})
+        self.assertEqual(result['diagnostics']['harnessLinks'], result['harnessLinks'])
+        self.assertNotIn('claude', result)
+        self.assertNotIn('claudeLink', result['diagnostics'])
 
     def test_windows_data_root_is_local_app_data(self):
         from pathlib import PurePosixPath
@@ -195,9 +221,9 @@ class SkillInstallTests(unittest.TestCase):
             self.install()
             after = paths({})
         self.assertFalse(before["skill"]["installed"])
-        self.assertEqual(before["claude"]["status"], "missing")
+        self.assertEqual(before["harnessLinks"]["claude"]["status"], "missing")
         self.assertTrue(after["skill"]["installed"])
-        self.assertEqual(after["claude"]["status"], "linked")
+        self.assertEqual(after["harnessLinks"]["claude"]["status"], "linked")
         self.assertEqual(after["skill"]["launcher"], str(self.agents / "hey-my-buddy/scripts/hey-my-buddy"))
         state = os.path.realpath(self.base / "state")
         self.assertEqual(after["data"]["stateDir"], state)

@@ -357,9 +357,11 @@ def _failure_reason(error: Exception) -> dict:
 
 
 def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
+    if any(key in journal for key in ('claudeLink', 'claudeLinkWasMissing', 'createdClaudeLink')):
+        raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal uses the retired Claude-only link form')
     if not journal.get('skillTarget'):
         return None
-    from .skill_install import agent_skills_home, claude_skills_home, _is_link, SKILL
+    from .skill_install import agent_skills_home, harness_link_locations, _is_link, SKILL
     try:
         target, staged, previous = (Path(journal[name]) for name in ('skillTarget', 'skillStage', 'skillPrevious'))
         expected = resolved_path(agent_skills_home()) / SKILL
@@ -371,8 +373,16 @@ def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
                 or staged.name != '.hey-my-buddy-upgrade-stage-' + suffix
                 or previous.name != '.hey-my-buddy-upgrade-previous-' + suffix):
             raise ValueError('unsafe skill paths')
-        if journal.get('claudeLink') and Path(journal['claudeLink']).absolute() != claude_skills_home() / SKILL:
-            raise ValueError('unsafe Claude link')
+        facts = journal['harnessLinks']
+        locations = harness_link_locations()
+        if not isinstance(facts, dict) or facts.keys() != locations.keys():
+            raise ValueError('invalid harness link inventory')
+        for name, fact in facts.items():
+            if (not isinstance(fact, dict) or set(fact) != {'path', 'existedBefore', 'enabled', 'created'}
+                    or not isinstance(fact['path'], str) or Path(fact['path']) != locations[name][0]
+                    or any(type(fact[key]) is not bool for key in ('existedBefore', 'enabled', 'created'))
+                    or (fact['created'] and (fact['existedBefore'] or not fact['enabled']))):
+                raise ValueError('unsafe harness link fact')
         return target, staged, previous
     except (BoardError, KeyError, TypeError, ValueError):
         raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal skill paths do not match this installation') from None
@@ -390,10 +400,8 @@ def _restore_skill(journal: dict, paths: tuple[Path, Path, Path] | None) -> None
         shutil.rmtree(native_path(target))
     if native_path(staged).exists():
         shutil.rmtree(native_path(staged))
-    link = journal.get('claudeLink')
-    from .skill_install import _is_link, _remove_claude_link
-    if journal.get('claudeLinkWasMissing') and link and _is_link(Path(link)) and resolved_path(Path(link)) == target:
-        _remove_claude_link(Path(link))
+    from .skill_install import _restore_links
+    _restore_links(journal['harnessLinks'], target)
 
 
 def _publish_skill(journal: dict, paths: tuple[Path, Path, Path] | None) -> None:
@@ -403,10 +411,8 @@ def _publish_skill(journal: dict, paths: tuple[Path, Path, Path] | None) -> None
     if native_path(target).exists():
         native_path(target).rename(native_path(previous))
     native_path(staged).rename(native_path(target))
-    from .skill_install import _link_claude
-    linked = _link_claude(target)
-    if linked['status'] == 'linked':
-        journal['createdClaudeLink'] = linked['path']
+    from .skill_install import _link_harnesses
+    _link_harnesses(target, journal['harnessLinks'])
 
 
 def _verify_skill_generation(paths: tuple[Path, Path, Path] | None, target: Path, health: dict) -> None:
@@ -524,11 +530,9 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
             journal = {'startedAt': utc_now(), 'previous': str(previous), 'target': str(target), 'phase': 'preflight',
                        'contractChanged': contract_changed, 'before':before, 'environment':preserved}
             if skill_stage is not None:
-                from .skill_install import claude_skills_home, SKILL
-                claude_link = claude_skills_home() / SKILL
+                from .skill_install import _link_facts
                 journal.update(skillTarget=str(skill_target), skillStage=str(skill_stage), skillPrevious=str(skill_previous),
-                               skillHadPrevious=native_path(skill_target).exists(), claudeLink=str(claude_link),
-                               claudeLinkWasMissing=not native_path(claude_link).exists() and not _is_link(claude_link))
+                               skillHadPrevious=native_path(skill_target).exists(), harnessLinks=_link_facts())
             write_journal(marker, journal)
             backed_up = None
             active = previous

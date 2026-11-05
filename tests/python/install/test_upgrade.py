@@ -19,7 +19,7 @@ from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy import locking, private_dirs
 from hey_my_buddy.blackboard.tasks import storage
 from hey_my_buddy.install import upgrade
-from hey_my_buddy.install import launcher
+from hey_my_buddy.install import launcher, skill_install
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
@@ -221,7 +221,7 @@ class UpgradeTests(BoardTestCase):
              mock.patch.object(upgrade, 'detach'), \
              mock.patch.object(upgrade, 'start', return_value=health) as start, \
              mock.patch.object(upgrade, 'retain_runtimes', return_value={'complete': True}), \
-             mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}), \
+             mock.patch('hey_my_buddy.install.skill_install._link_harnesses', return_value={'status': 'already-linked'}), \
              mock.patch.object(upgrade.shutil, 'rmtree', side_effect=refuse_previous):
             result = upgrade.upgrade(state, skill_source=source, skill_target=skill)
         self.assertTrue(result['upgraded'], result)
@@ -246,7 +246,8 @@ class UpgradeTests(BoardTestCase):
         old_skill.mkdir(parents=True)
         journal = {'phase': 'verified', 'contractChanged': False, 'previous': str(previous), 'target': str(target),
                    'before': {'schema': SCHEMA_VERSION}, 'expected': {}, 'skillTarget': str(skill),
-                   'skillStage': str(staged), 'skillPrevious': str(old_skill)}
+                   'skillStage': str(staged), 'skillPrevious': str(old_skill),
+                   'harnessLinks': skill_install._link_facts()}
         upgrade.write_journal(state / 'upgrade.json', journal)
         with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=skill.parent), \
              mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
@@ -354,9 +355,9 @@ class UpgradeTests(BoardTestCase):
             (directory / 'SKILL.md').write_text(value, encoding="utf-8", newline="\n")
             (directory / 'scripts/hey-my-buddy').write_text(value + ' launcher', encoding="utf-8", newline="\n")
         journal = {'skillTarget': str(skill), 'skillStage': str(staged),
-                   'skillPrevious': str(previous), 'skillHadPrevious': True}
+                   'skillPrevious': str(previous), 'skillHadPrevious': True, 'harnessLinks': {}}
         with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=skill.parent), \
-             mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}):
+             mock.patch('hey_my_buddy.install.skill_install._link_harnesses', return_value={'status': 'already-linked'}):
             upgrade._publish_skill(journal, (skill, staged, previous))
             self.assertEqual((skill / 'SKILL.md').read_text(encoding="utf-8"), 'new')
             upgrade._restore_skill(journal, (skill, staged, previous))
@@ -366,6 +367,35 @@ class UpgradeTests(BoardTestCase):
         self.assertFalse(staged.exists())
         self.assertEqual(json.loads((old_skill / 'skill.json').read_text(encoding="utf-8")), {'name': 'buddy'})
         self.assertTrue(old_link.is_symlink())
+
+    def test_recovery_rejects_retired_link_facts_before_files_or_service_change(self):
+        state = self.directory / 'retired-journal'
+        state.mkdir()
+        skill = self.directory / 'skills/hey-my-buddy'
+        staged = skill.with_name('.hey-my-buddy-upgrade-stage-' + 'a' * 32)
+        previous = skill.with_name('.hey-my-buddy-upgrade-previous-' + 'a' * 32)
+        for directory in (skill, staged, previous):
+            directory.mkdir(parents=True)
+            (directory / 'keep').write_bytes(b'retained')
+        for key, value in (('claudeLink', str(self.directory / 'claude/hey-my-buddy')),
+                           ('claudeLinkWasMissing', True), ('createdClaudeLink', 'retired-link')):
+            with self.subTest(key=key):
+                journal = {'contractChanged': False, 'skillTarget': str(skill),
+                           'skillStage': str(staged), 'skillPrevious': str(previous), key: value}
+                upgrade.write_journal(state / 'upgrade.json', journal)
+                before = {str(path.relative_to(self.directory)): path.read_bytes() if path.is_file() else None
+                          for path in self.directory.rglob('*')}
+                with mock.patch.object(upgrade, 'probe') as probe, \
+                     mock.patch.object(upgrade, 'start') as start, \
+                     mock.patch.object(upgrade, 'detach') as detach, \
+                     mock.patch.object(upgrade, 'command') as command:
+                    with self.assertRaises(BoardError) as caught:
+                        upgrade.recover(state, self.directory / 'runtimes')
+                self.assertEqual(caught.exception.code, 'UPGRADE_RECOVERY_REQUIRED')
+                for operation in (probe, start, detach, command):
+                    operation.assert_not_called()
+                self.assertEqual(before, {str(path.relative_to(self.directory)): path.read_bytes() if path.is_file() else None
+                                          for path in self.directory.rglob('*')})
 
     def test_recovery_rejects_unrelated_skill_paths_before_deleting(self):
         unrelated = self.directory / 'unrelated'

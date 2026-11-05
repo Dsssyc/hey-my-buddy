@@ -1,8 +1,8 @@
 """``hey-my-buddy install``: place the shared skill once and bring the service to it (ADR-015).
 
-The canonical copy lives in ``~/.agents/skills/hey-my-buddy`` (read by Codex); Claude Code
-reaches it through ``~/.claude/skills/hey-my-buddy``, a directory link to that directory. A
-second Host running the same version finds the marker and only repairs the link.
+The canonical copy lives in ``~/.agents/skills/hey-my-buddy``. Harnesses that need
+their own skill location reach it through directory links when their home exists. A
+second Host running the same version finds the marker and only repairs those links.
 The new package coordinates the skill swap and service cutover under one
 upgrade journal; the old installed launcher never chooses the candidate code.
 """
@@ -38,7 +38,7 @@ def _is_link(path: Path) -> bool:
     return native_path(path).is_symlink() or native_path(path).is_junction()
 
 
-def _create_claude_link(link: Path, target: Path) -> None:
+def _create_link(link: Path, target: Path) -> None:
     if os.name == "nt":
         from ..windows_files import WindowsFileAPI
         # The target is stored as link content; keep its ordinary absolute path.
@@ -47,7 +47,7 @@ def _create_claude_link(link: Path, target: Path) -> None:
         native_path(link).symlink_to(target, target_is_directory=True)
 
 
-def _remove_claude_link(link: Path) -> None:
+def _remove_link(link: Path) -> None:
     """Remove only the link, including a junction whose target is missing."""
     if native_path(link).is_junction():
         native_path(link).rmdir()
@@ -127,41 +127,85 @@ def _place(source: Path, target: Path, marker: dict) -> tuple[str, Path | None]:
     return ("updated" if current else "installed"), previous
 
 
-def _link_claude(target: Path) -> dict:
-    """Use an NTFS junction on Windows and a symbolic link on POSIX.
+def harness_link_locations() -> dict[str, tuple[Path, tuple[Path, ...]]]:
+    home = Path.home()
+    return {
+        "claude": (claude_skills_home() / SKILL, (home / ".claude",)),
+        "antigravity": (home / ".gemini/config/skills" / SKILL,
+                        (home / ".gemini/antigravity", home / ".gemini/antigravity-cli")),
+    }
 
-    There is no copy fallback: a second copy could silently drift from the canonical
-    skill. Anything that prevents the link fails the install before the service is
-    upgraded; rerunning after the fix skips the already-placed skill.
-    """
-    home = claude_skills_home()
-    link = home / SKILL
-    if _check_claude_link(target):
-        return {"path": str(link), "status": "already-linked"}
+
+def _link_facts() -> dict:
+    return {name: {"path": str(link), "existedBefore": native_path(link).exists() or _is_link(link),
+                   "enabled": any(native_path(home).is_dir() for home in homes), "created": False}
+            for name, (link, homes) in harness_link_locations().items()}
+
+
+def _link_status(link: Path, target: Path) -> str:
+    if _is_link(link):
+        return "linked" if resolved_path(link) == resolved_path(target) else "conflict"
+    return "conflict" if native_path(link).exists() else "missing"
+
+
+def _check_link(link: Path, target: Path) -> bool:
+    status = _link_status(link, target)
+    if status == "conflict":
+        raise BoardError("SKILL_TARGET_CONFLICT", f"{link} is not a link to the shared skill; move it away before installing")
+    return status == "linked"
+
+
+def _check_harness_links(target: Path) -> None:
+    for fact in _link_facts().values():
+        if fact["enabled"]:
+            _check_link(Path(fact["path"]), target)
+
+
+def _harness_link_report(target: Path) -> dict:
+    reports = {}
+    for name, fact in _link_facts().items():
+        status = _link_status(Path(fact["path"]), target)
+        report = {"path": fact["path"], "status": status}
+        if status == "missing" and not fact["enabled"]:
+            report.update(status="skipped", reason="harness directory does not exist")
+        reports[name] = report
+    return reports
+
+
+def _link_skill(link: Path, target: Path) -> str:
+    """Use an NTFS junction on Windows and a symbolic link on POSIX, never a copy."""
+    if _check_link(link, target):
+        return "already-linked"
     try:
-        native_path(home).mkdir(parents=True, exist_ok=True)
-        _create_claude_link(link, target)
-        if _claude_status(target) != "linked":
-            _remove_claude_link(link)
+        native_path(link.parent).mkdir(parents=True, exist_ok=True)
+        _create_link(link, target)
+        if _link_status(link, target) != "linked":
+            _remove_link(link)
             raise OSError("the created directory link does not resolve to the canonical skill")
     except OSError as error:
-        raise BoardError("CLAUDE_LINK_FAILED",
+        raise BoardError("SKILL_LINK_FAILED",
                          f"Could not link {link} to {target} ({error.strerror or error}). "
                          + ("Use writable directories on a local NTFS volume and check the target; " if os.name == "nt" else
                             "Check the target and permissions on the link directory; ")
                          + "then rerun the fixed-version package install command.") from None
-    return {"path": str(link), "status": "linked"}
+    return "linked"
 
 
-def _check_claude_link(target: Path) -> bool:
-    link = claude_skills_home() / SKILL
-    if _is_link(link):
-        if resolved_path(link) != resolved_path(target):
-            raise BoardError("SKILL_TARGET_CONFLICT", f"{link} links to another skill; move it away before installing")
-        return True
-    elif native_path(link).exists():
-        raise BoardError("SKILL_TARGET_CONFLICT", f"{link} is a separate directory; move it away before installing")
-    return False
+def _restore_links(facts: dict, target: Path) -> None:
+    for fact in facts.values():
+        link = Path(fact["path"])
+        if fact["enabled"] and not fact["existedBefore"] and _is_link(link) and resolved_path(link) == resolved_path(target):
+            _remove_link(link)
+
+
+def _link_harnesses(target: Path, facts: dict) -> dict:
+    reports = _harness_link_report(target)
+    for name, fact in facts.items():
+        if fact["enabled"]:
+            status = _link_skill(Path(fact["path"]), target)
+            fact["created"] = status == "linked"
+            reports[name] = {"path": fact["path"], "status": status}
+    return reports
 
 
 def install(params: dict) -> dict:
@@ -171,7 +215,8 @@ def install(params: dict) -> dict:
     home = agent_skills_home()
     state = check_state_root(get_state_dir(), create=True)
     from .runtime import runtime_root
-    planned_paths = [str(home / SKILL), str(claude_skills_home() / SKILL), str(state), str(runtime_root())]
+    planned_paths = [str(home / SKILL), *(fact["path"] for fact in _link_facts().values() if fact["enabled"]),
+                     str(state), str(runtime_root())]
     from ..protocol.contracts import CONTRACT_VERSION
     print(json.dumps({'contractVersion': CONTRACT_VERSION, 'action': 'install-plan', 'writePaths': planned_paths}), file=sys.stderr, flush=True)
     native_path(home).mkdir(parents=True, exist_ok=True)
@@ -184,7 +229,7 @@ def install(params: dict) -> dict:
         if (state / 'upgrade.json').exists():
             from .upgrade import upgrade
             recovery_result = upgrade(state)
-        _check_claude_link(target)
+        _check_harness_links(target)
         source = packaged_skill()
         if source is None:
             built = private_dirs.make_temporary_dir(prefix=".hey-my-buddy-source-",
@@ -202,12 +247,17 @@ def install(params: dict) -> dict:
             active = selected_runtime(state, allow_overrides=False)
             expected = runtime.runtime_dir(source / 'package')
             if active == expected:
-                claude = _link_claude(target)
-                write_runtime_hint(target, active)
+                facts = _link_facts()
+                try:
+                    links = _link_harnesses(target, facts)
+                    write_runtime_hint(target, active)
+                except Exception:
+                    _restore_links(facts, target)
+                    raise
                 return {'skill': {'path': str(target), 'version': marker['version'], 'contract': marker['contract'], 'placement': 'already-current'},
-                        'claude': claude, 'service': {'action': 'none', 'reason': 'same complete generation'}, 'writePaths': planned_paths,
+                        'harnessLinks': links, 'service': {'action': 'none', 'reason': 'same complete generation'}, 'writePaths': planned_paths,
                         **({'recovery': recovery_result} if recovery_result is not None else {}),
-                        'diagnostics': {'skillInstalled': True, 'claudeLink': claude['status'], 'runtimeMaterialized': True,
+                        'diagnostics': {'skillInstalled': True, 'harnessLinks': links, 'runtimeMaterialized': True,
                                         'launcher': str(target / 'scripts/hey-my-buddy')}}
         if pointer.exists() and not (state / "control.json").exists():
             from .launcher import selected_runtime
@@ -229,7 +279,7 @@ def install(params: dict) -> dict:
             if result.get("error"):
                 error = result["error"]
                 raise BoardError(error["code"], error["message"], **{**error.get('details', {}), **{k: v for k, v in result.items() if k != "error"}})
-            claude = {"path": str(claude_skills_home() / SKILL), "status": _claude_status(target)}
+            links = _harness_link_report(target)
             service = {"action": "upgrade", "result": result}
         else:
             from . import runtime
@@ -242,18 +292,16 @@ def install(params: dict) -> dict:
             if ready.get("sourceCommit") != marker.get("sourceCommit"):
                 raise BoardError("INSTALL_GENERATION_MISMATCH", "Skill and materialized runtime came from different source generations")
             placement, previous_skill = (("already-current", None) if resolved_path(source) == resolved_path(target) else _place(source, target, marker))
-            created_link = False
+            facts = _link_facts()
             try:
-                claude = _link_claude(target)
-                created_link = claude["status"] == "linked"
+                links = _link_harnesses(target, facts)
                 from ..private_dirs import ensure_private_dir
                 ensure_private_dir(state)
                 write_runtime_hint(target, Path(installed['runtimeDir']))
                 write_active_runtime(state, Path(installed["runtimeDir"]))
             except Exception:
                 pointer.unlink(missing_ok=True)
-                if created_link:
-                    _remove_claude_link(claude_skills_home() / SKILL)
+                _restore_links(facts, target)
                 if previous_skill is not None:
                     shutil.rmtree(native_path(target))
                     native_path(previous_skill).rename(native_path(target))
@@ -276,21 +324,14 @@ def install(params: dict) -> dict:
         os.close(lock)
     result = {"skill": {"path": str(target), "version": marker["version"], "contract": marker["contract"],
                         "placement": placement},
-              "claude": claude, "service": service,
+              "harnessLinks": links, "service": service,
               **({'recovery': recovery_result} if recovery_result is not None else {}),
               **({'skillCleanupError': skill_cleanup_error} if skill_cleanup_error is not None else {})}
     result['writePaths'] = planned_paths
-    result['diagnostics'] = {'skillInstalled': True, 'claudeLink': claude['status'], 'runtimeMaterialized': True,
+    result['diagnostics'] = {'skillInstalled': True, 'harnessLinks': links, 'runtimeMaterialized': True,
                              'launcher': str(target / 'scripts/hey-my-buddy'),
                              'next': 'A new Host session loads the skill. This session can use the absolute launcher path outside its sandbox.'}
     return result
-
-
-def _claude_status(target: Path) -> str:
-    link = claude_skills_home() / SKILL
-    if _is_link(link):
-        return "linked" if resolved_path(link) == resolved_path(target) else "conflict"
-    return "conflict" if native_path(link).exists() else "missing"
 
 
 def paths(params: dict) -> dict:
@@ -308,7 +349,7 @@ def paths(params: dict) -> dict:
         "skill": {"dir": str(target), "installed": marker is not None,
                   "version": marker.get("version") if marker else None,
                   "launcher": str(target / "scripts" / SKILL)},
-        "claude": {"path": str(claude_skills_home() / SKILL), "status": _claude_status(target)},
+        "harnessLinks": _harness_link_report(target),
         "invokedFrom": str(running) if running else str(project_root()),
         "data": {"stateDir": str(state), "board": str(state / "board.sqlite3"),
                  "attempts": str(state / "attempts"), "workspaces": str(state / "workspaces"),
