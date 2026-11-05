@@ -142,6 +142,11 @@ class CleanupLifecycleTests(LifecycleTestCase):
 
     def test_sample_export_preserves_recovered_partial_output(self):
         board,run_id,artifact=self.partial_output_recovery()
+        # A sample carries a run only with the applied plan its own reclamation
+        # recorded, so the deferred checkout is reclaimed here exactly as the
+        # product would have done at acceptance: through its own reclaim.
+        reclaimed = self.reclaim(board, self.view(board, run_id))
+        self.assertTrue(reclaimed["removed"], reclaimed)
         import tempfile
         from tools.test_export_board_sample import export_sample
         from support import InProcessBoard

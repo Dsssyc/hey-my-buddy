@@ -9,8 +9,10 @@ to selected attempts are exported. Each selected micro task's applied cleanup
 plans travel with it, so the private service reading the sample never plans a
 reclamation inside the source state; a run whose checkout the source has not
 reclaimed is left out rather than pointing maintenance at a live checkout. The
-destination retains the source schema and is published only after the candidate
-passes the stop checks.
+one judge is the staged sample itself, upgraded as an install would upgrade it:
+what the product's own candidate query still names there decides the exclusion,
+and the destination retains the source schema and is published only after that
+query falls silent and the stop checks pass.
 """
 from __future__ import annotations
 
@@ -58,12 +60,9 @@ class _CandidateStore:
         yield self._connection
 
 
-def _reclamation_candidates(connection, run_ids) -> set[str]:
-    """Name the runs the service's own query would still reclaim.
-
-    ``run_ids`` is None for every run of the board, as the staged check reads it.
-    """
-    return set(workspace_candidates(_CandidateStore(connection), task_ids=run_ids))
+def _reclamation_candidates(connection) -> set[str]:
+    """Name the runs the service's own maintenance query would still reclaim."""
+    return set(workspace_candidates(_CandidateStore(connection)))
 
 
 def _rows(connection, table: str, column: str, values) -> list[dict]:
@@ -126,14 +125,8 @@ def _select(connection, source_schema: int,
         "WHERE r.state='accepted' AND t.accepted_at IS NOT NULL "
         "ORDER BY t.accepted_at DESC, r.run_id DESC LIMIT ?", (MAX_TASKS,))]
     selected.reverse()
+    # `excluded` holds the runs the staged sample's own upgraded check named.
     selected = [run_id for run_id in selected if run_id not in excluded]
-    if source_schema >= 34:
-        # The workspace facts this query reads exist in this form from schema 34.
-        # A run whose checkout the source has not reclaimed cannot ride along:
-        # the sample would show the private service a live source checkout that
-        # only its own applied plan could ever exclude.
-        excluded = excluded | _reclamation_candidates(connection, selected)
-        selected = [run_id for run_id in selected if run_id not in excluded]
     runs = {row["run_id"]: row for row in _rows(connection, "workflow_runs", "run_id", selected)}
     records = {"workflow_runs": [runs[run_id] for run_id in selected]}
     routes = _rows(connection, "workflow_routes", "run_id", selected)
@@ -346,7 +339,7 @@ def _staged_candidates(stage: Path, source_schema: int) -> set[str]:
     if source_schema == SCHEMA_VERSION:
         with closing(sqlite3.connect(stage / DB_FILE)) as connection:
             connection.row_factory = sqlite3.Row
-            return _reclamation_candidates(connection, None)
+            return _reclamation_candidates(connection)
     with tempfile.TemporaryDirectory(prefix='.board-sample-upgrade-') as temporary:
         upgraded = Path(temporary) / 'state'
         private_dirs.ensure_private_dir(upgraded)
@@ -358,7 +351,7 @@ def _staged_candidates(stage: Path, source_schema: int) -> set[str]:
             raise ValueError(f'The staged sample cannot upgrade: {error.message}') from error
         with closing(sqlite3.connect(upgraded / DB_FILE)) as connection:
             connection.row_factory = sqlite3.Row
-            return _reclamation_candidates(connection, None)
+            return _reclamation_candidates(connection)
 
 
 def export_sample(source: Path, output: Path) -> Path:
@@ -373,7 +366,7 @@ def export_sample(source: Path, output: Path) -> Path:
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
         raise ValueError(f'Refusing nonempty output: {output}')
     excluded: set[str] = set()
-    while True:
+    for rebuild in (False, True):
         # One short SQLite snapshot covers all selected rows and session identities.
         # Close it before building the destination or copying immutable finished sessions.
         # No product store is opened against the source; no write/WAL pragma is issued.
@@ -424,17 +417,20 @@ def export_sample(source: Path, output: Path) -> Path:
                     writer.rollback()
                     raise
             remaining = _staged_candidates(stage, int(version))
-            if remaining:
-                # A source below schema 34 cannot name its candidates while it is
-                # read; the staged sample can, and the run is left out of the next
-                # attempt instead of being published with a live source checkout.
-                excluded |= remaining
-                continue
-            os.chmod(stage / DB_FILE, 0o600)
-            if output.exists():
-                output.rmdir()  # Only an empty destination can be replaced.
-            stage.rename(output)
-        return output
+            if not remaining:
+                os.chmod(stage / DB_FILE, 0o600)
+                if output.exists():
+                    output.rmdir()  # Only an empty destination can be replaced.
+                stage.rename(output)
+                return output
+        if not rebuild:
+            # The one judge is the staged sample itself, upgraded exactly as the
+            # opening service's install would and read with the product's own
+            # candidate query: the runs it names hold checkouts the source has
+            # not reclaimed, and the sample is built once more without them.
+            excluded = remaining
+    raise ValueError('Sample still names unreclaimed checkouts after one rebuild: '
+                     + ', '.join(sorted(remaining)))
 
 
 def main(argv: list[str] | None = None) -> int:

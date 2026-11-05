@@ -316,9 +316,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
             with self.subTest(assignment=assignment):
                 board = InProcessBoard(self.directory / ('source-' + str(len(self._stack))))
                 self._stack.append(board)
-                # An existing checkout keeps the run selected; a worktree run
-                # without an applied plan is left out before validation runs.
-                run, attempt = self.accepted(board, 'accepted-' + str(len(self._stack)))
+                run, attempt = self.accepted(board, 'accepted-' + str(len(self._stack)), kind='worktree')
                 with board.store.db.write() as connection:
                     connection.execute('UPDATE attempts SET execution_state=\'finished\',shutdown_confirmed=1,cleanup_pending=0')
                     connection.execute(f'UPDATE attempts SET {assignment} WHERE attempt_id=?', (attempt,))
@@ -333,7 +331,9 @@ class ExportBoardSampleTests(WorkflowTestCase):
 
     def test_uncertain_ownership_after_confirmed_stop_is_exported(self):
         # A lost connection freezes ownership at 'uncertain'; the stop facts
-        # below are the only stop evidence the sample must show.
+        # below are the only stop evidence the sample must show. An existing
+        # checkout keeps the run selected: the double never applies a cleanup
+        # plan, and a worktree run without one no longer rides along.
         board = InProcessBoard(self.directory / 'source')
         self._stack.append(board)
         run, attempt = self.accepted(board, 'accepted')
@@ -378,6 +378,28 @@ class ExportBoardSampleTests(WorkflowTestCase):
                               connection.execute('SELECT * FROM workspace_cleanup_plans')},
                              {applied_source['plan_id']: applied_source})
             self.assertFalse((output / 'attempts' / retained['runId']).exists())
+
+    def test_still_unreclaimed_after_one_rebuild_is_refused(self):
+        board = self.source_board()
+        self.accepted(board, 'retained-worktree', kind='worktree')
+        board.store.db.close()
+        original = export_sample.__globals__['_staged_candidates']
+        checks = []
+
+        def staged(stage, schema):
+            result = original(stage, schema)
+            checks.append(result)
+            # A second opinion that never falls silent stands for a drifted
+            # candidate query: the tool must refuse, not loop or publish.
+            return result or {'always-unreclaimed'}
+
+        output = self.directory / 'refused'
+        with patch.dict(export_sample.__globals__, {'_staged_candidates': staged}):
+            with self.assertRaisesRegex(ValueError, 'after one rebuild'):
+                export_sample(board.directory, output)
+        self.assertEqual(len(checks), 2)
+        self.assertFalse(output.exists())
+        self.assertEqual(list(self.directory.glob('.board-sample-*')), [])
 
     def test_empty_sample_empty_output_and_nonempty_output_refusal(self):
         board = self.source_board()
@@ -624,7 +646,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         self.assertEqual(upgrade_state(sample), {'sourceSchema': 34, 'targetSchema': SCHEMA_VERSION})
         with closing(sqlite3.connect(sample / DB_FILE)) as connection:
             connection.row_factory = sqlite3.Row
-            self.assertEqual(export_sample.__globals__['_reclamation_candidates'](connection, None), set())
+            self.assertEqual(export_sample.__globals__['_reclamation_candidates'](connection), set())
         self.assert_source_unchanged(before, files(source))
 
     def test_private_service_opens_a_schema34_sample_without_planning_source_reclamations(self):
@@ -637,7 +659,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
             exported_plans = {row['plan_id']: dict(row) for row in
                               connection.execute('SELECT * FROM workspace_cleanup_plans')}
             self.assertTrue(exported_plans)
-            self.assertEqual(export_sample.__globals__['_reclamation_candidates'](connection, None), set())
+            self.assertEqual(export_sample.__globals__['_reclamation_candidates'](connection), set())
         # The real private service opens the upgraded sample. Its maintenance
         # pass must plan nothing inside the source state and record no issue;
         # the poll gives the daemon's first pass time to run to completion.
