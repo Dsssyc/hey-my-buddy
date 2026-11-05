@@ -4,7 +4,7 @@ This page describes the current source: transport protocol 2 and schema 34; the 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/architecture-en-dark.svg">
-  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, the blackboard takes the only eligible buddy or a Router buddy chooses among several; the Worker buddy runs a turn in the checkout the micro task was given; the Host can ask that running turn a question through the blackboard; the blackboard seals the checkout when the turn ends; the Host checks the Worker's report against the brief and the seal and either integrates and accepts it into your repository or sends it back to the same Worker without routing. A Lead buddy runs the same loop as Host for the micro tasks it delegates." src="../assets/architecture-en-light.svg" width="100%">
+  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, the blackboard takes the only eligible buddy or a Router buddy chooses among the candidates, and when none fits the micro task goes back to the Host; a Worker buddy runs a turn in its own checkout or directly in your directory; the Host can ask a running turn a question through the blackboard; when the turn ends its output is fixed and waits for the Host's acceptance; the Host checks the brief, the Worker's report and the output against one another, then accepts the output or sends it back, by default to the same Worker. A Git project takes in only accepted work. A Lead buddy delegates micro tasks of its own and accepts them." src="../assets/architecture-en-light.svg" width="100%">
 </picture>
 
 ## Process topology

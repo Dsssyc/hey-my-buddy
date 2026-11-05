@@ -55,7 +55,7 @@ hey-my-buddy 让你正在用的编码 agent 把一部分工作交给本机的其
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-zh-dark.svg">
-  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，黑板取唯一合适的 buddy，或由 Router buddy 在几个之中选一个；Worker buddy 在微任务分到的检出里运行一个回合；Host 可以经黑板向运行中的回合问询；回合结束时黑板封存检出；Host 对照任务书与封存核对 Worker 的报告，然后整合并验收进你的仓库，或者不经路由打回给同一个 Worker。Lead buddy 为它委派的微任务按同样的流程担任 Host。" src="docs/assets/architecture-zh-light.svg" width="100%">
+  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，黑板取唯一合适的 buddy，或由 Router buddy 在候选之中选一个，没有合适的就交回 Host；Worker buddy 在自己的检出里，或者直接在你的目录里运行一个回合；Host 可以经黑板向运行中的回合问询；回合结束时产物被固定下来，等待 Host 验收；Host 把任务书、Worker 的报告与产物相互对照，然后验收，或者打回，默认交给同一个 Worker。Git 项目只并入验收过的工作。Lead buddy 委派自己名下的微任务，并负责验收。" src="docs/assets/architecture-zh-light.svg" width="100%">
 </picture>
 
 细节见[工作流](docs/reference/workflow.md)与[架构](docs/reference/architecture.md)。
