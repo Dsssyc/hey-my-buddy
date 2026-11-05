@@ -16,7 +16,7 @@ Call the installed launcher's absolute path. The [operations guide](operations.m
 
 ## Parameter input
 
-Pass one JSON object as a positional argument, `--params-file PATH`, or `-` for stdin. These forms are mutually exclusive. File/stdin input is UTF-8, optionally with a BOM, and bounded at 8 MiB; its content is parsed directly and never executed by a shell. Omit inapplicable fields; explicit null is rejected except where help declares it as a value, such as restoring automatic harness detection.
+Pass one JSON object as a positional argument, `--params-file PATH`, or `-` for stdin. These forms are mutually exclusive. File/stdin input is UTF-8, optionally with a BOM, and bounded at 8 MiB; its content is parsed directly and never executed by a shell. Omit inapplicable fields: an explicit null is rejected everywhere except the one field whose request model allows it, `harness-set`'s `path`, where null restores automatic harness detection. Help prints the schema's `anyOf`, so a field that shows `null` there is not permission to send one.
 
 ```sh
 "$HMB" submit --params-file /abs/packet.json
