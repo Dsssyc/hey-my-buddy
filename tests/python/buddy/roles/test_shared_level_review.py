@@ -177,11 +177,11 @@ class DshSharedLevelReviewTests(_ReviewCases, DshNativeCase):
 class ZcodeSharedLevelReviewTests(_ReviewCases, ZcodeNativeCase):
     harness = "zcode"
     provider, model, effort = "fixture-api", "fixture-model", "low"
-    native_policy = {"mode": "plan"}
+    native_policy = {"mode": "yolo"}
 
     def prepare_fixture(self, *, correction=False):
         # This copy of the offline fake app server gives the Router's own
-        # schema-shaped answer while retaining its native plan-mode assertions.
+        # schema-shaped answer while retaining its native yolo-mode assertion.
         source = self.fake.read_text(encoding="utf-8")
         source = source.replace('{"choice":"a"}', ANSWER)
         source = source.replace("elif case in ('write-final', 'write-post-close'):",
