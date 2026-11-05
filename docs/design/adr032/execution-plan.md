@@ -26,7 +26,7 @@ Host 提供的 2026-11-05 日常数据：900 个微任务的控制代均为 1，
 | storage-plan | 用户运维 CLI；控制台共用 storage_plan | CS:113、FE/api.ts:488–490；保留显式生成清理计划。 |
 | storage-apply | 用户运维 CLI；控制台共用 storage_apply | CS:114、FE/api.ts:498–504；保留固定 planId、确认及运维重放。 |
 | worker-sessions | 用户运维 CLI | SV:55 的服务操作及 blackboard/tasks/worker_sessions.py；原生会话操作继续要求已有身份与停止证据。 |
-| submit | Host 动词；Lead 凭证变体 | W:1708–1860、buddy/roles/texts/lead.txt:3–11；改新显式字段、CLI 派生新建键及 none 分支。 |
+| submit | Host 动词；Lead 凭证变体 | W:1708–1860、buddy/roles/texts/lead.txt:3–11；改新显式字段、服务入口推出新建键及 none 分支。 |
 | get | Host 动词；Lead/Worker 限域读取；控制台共用 | W:1991–2026、CS:108、FE/task-detail/client.ts:30–39；新增宏任务/项目列表，角色凭证不能借这些选择器扩读。 |
 | decide | 删除 CLI 与旧命名操作，能力进 continue | W:2183–2290、SV:723–730；helper 审批、边界回答、autoContinue 进入 continue 分支。 |
 | continue | Host 动词；Lead 凭证变体 | W:2828–3010；合并边界、scope 与现场处置，换 buddy 统一 route 或完整名字。 |
@@ -331,7 +331,7 @@ Worker/Lead 的执行凭证保留：SV:216–246 先认证，坏凭证不降为 
 
 新建键的逻辑形式：create 为项目+规范化 title；submit 为 macroTaskId（独立则项目）+title+原文 task，用带类型/版本前缀的规范化序列化与 SHA-256，避免拼接歧义。title 沿 S:440 归一空白，task 保留原文；不混入时间、Host、随机 token、HEAD 或文件内容。键在准入事务受唯一约束保护，完成角色与请求形状校验后先查已有键，命中直接回原事实，不用新字段再做目录/能力/输入准备；未命中才冻结输入和路由（W:1746–1749）；同键即返回原对象，包括已结束对象及原 access/buddy/checkout，其他字段变化也不拒绝、不更新原授权。重做换标题，删除宏任务后同标题再建算新对象，不加 tombstone。
 
-旧行的 creation_key 明确为空，部分唯一索引只覆盖非空键；不回填、不合并旧同名行、不建第二份 request_fingerprint。tasks.request_id 是既有执行/内部记录身份，不能与新的回应 requestId 混同。新建键按 ADR:44 由 CLI 推出；核心任务验证取得稳定项目身份、计算键与重发的完整调用链，不预设跨进程拼键协议。
+旧行的 creation_key 明确为空，部分唯一索引只覆盖非空键；不回填、不合并旧同名行、不建第二份 request_fingerprint。tasks.request_id 是既有执行/内部记录身份，不能与新的回应 requestId 混同。新建键由服务在 create 与 submit 的入口推出（P4 实施时由 CLI 改到服务，见 ADR-032 第 4 条），不预设跨进程拼键协议。
 
 ## 4. schema 34 → 35 与库存
 
@@ -501,7 +501,7 @@ P2 独立审查输入为核心交付相对基线的固定差异、ADR/本轮决�
 | C1/阶段 | 全部 CLI 入口改模型且删 AST；模型/schema/删控制/回应与新建键合为一个核心任务，并在此升 0.61.0；立即独立审查，之后各阶段串行叠产出且自己接线。未有使用证据的功能不新建 tools，控制资源 task_wait 无产品调用方则删。 |
 | inquire | Host 不编 inquiryId；机制按 runId+question 推出，回复给 id 读回原问题；同问题重发取第一次结果，要再问须换说法。 |
 
-新建键的计算位置按 ADR:44 保持 CLI 推出，逻辑字段、同键返回与旧行无键均已定。CLI 首次辨识 Git 项目及 folder 转 Git 时取得稳定身份的具体调用链尚未实现验证，P1 必须交出这项证据及回复丢失重发检查；这是实现验证项，不重新开放计算位置或设计一套拼键协议。
+新建键由服务在 create 与 submit 的入口推出，逻辑字段、同键返回与旧行无键均已定。计划原定由 CLI 推出；P4 实施时发现项目身份只有服务能完整解析（folder 转 Git 要看黑板上的记录），Lead 也无权先读项目，整合 Host 于 2026-11-05 决定改到服务入口，见 ADR-032 第 4 条。
 
 主要风险是删 Host 守卫时误删真实角色/执行/停止边界、多个动词绕开同一个回应槽、复用 Worker 提交后漏改旧的一父提交假设、none 的 CHECK 放宽到允许 Git 缺输入。用核心即时独立审查、各阶段受影响检查、冻结字节比对及最后真实样本演练控制这些实际改动；不为已放弃的多 Host 互斥、旧格式重放或未发生的情况另建机制。
 
