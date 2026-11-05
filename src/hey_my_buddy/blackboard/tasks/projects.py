@@ -157,6 +157,8 @@ def relocate(store, params: dict) -> dict:
         if previous is None:
             raise BoardError("NOT_FOUND", "The marked Git project is not recorded on this blackboard",
                              projectId=identifier)
+        if previous["path"] == root:
+            return {"project": view(connection, identifier)}
         record(connection, {"projectId": identifier, "projectKind": "git", "projectPath": root})
         store._append_event(connection, "project.relocated",
                             payload={"projectId": identifier, "path": root, "previousPath": previous["path"]})
@@ -169,12 +171,15 @@ def relocate(store, params: dict) -> dict:
 def prune_if_unreferenced(connection, project_ids) -> None:
     """Discard projects whose last macro and standalone roots were removed."""
     for identifier in project_ids:
-        connection.execute(
+        deleted = connection.execute(
             "DELETE FROM projects WHERE project_id=?"
             " AND NOT EXISTS (SELECT 1 FROM macro_tasks WHERE project_id=?)"
             " AND NOT EXISTS (SELECT 1 FROM workflow_runs WHERE standalone_project_id=?)",
             (identifier, identifier, identifier),
-        )
+        ).rowcount
+        if deleted:
+            connection.execute("DELETE FROM events WHERE kind LIKE 'project.%'"
+                               " AND json_extract(payload_json,'$.projectId')=?", (identifier,))
 
 
 def require_capture_identity(identity: dict, manifest: dict | None) -> None:

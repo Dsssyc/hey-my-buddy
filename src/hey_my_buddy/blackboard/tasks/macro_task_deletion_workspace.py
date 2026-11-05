@@ -225,7 +225,7 @@ def _remove_foreign_output_directory(directory: Path, names: set[str], identifie
     return []
 
 
-def _delete_foreign_outputs(store, by_id, artifacts, owned_runs) -> list[dict]:
+def _delete_foreign_outputs(store, by_id, artifacts, owned_runs, project_paths) -> list[dict]:
     """Remove a borrower's exact output while the workspace owner remains."""
     state = store.directory.resolve()
     scope_ids = json.dumps(sorted(owned_runs))
@@ -296,8 +296,10 @@ def _delete_foreign_outputs(store, by_id, artifacts, owned_runs) -> list[dict]:
                                                           state / 'workspaces' / identifier / 'outputs', directory)):
                 skipped.append(_skip('allocation', str(directory), 'OWNER_UNPROVEN', identifier))
                 continue
-            candidates = projects.known_repository_paths(connection, owner['project_id'])
-            repository = _repository_current(owner, candidates=candidates)
+            project_id = owner['project_id']
+            if project_id not in project_paths:
+                project_paths[project_id] = projects.known_repository_paths(connection, project_id)
+            repository = _repository_current(owner, candidates=project_paths[project_id])
             if repository is None:
                 skipped.append(_skip('ref', ref, 'DEPENDENCY_RETAINED', identifier))
                 continue
@@ -362,10 +364,10 @@ def _remove_tombstone(state: Path, identifier: str) -> bool:
 
 
 def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *,
-                      candidate_paths=None, owned_runs=()) -> list[dict]:
+                      project_paths=None, owned_runs=()) -> list[dict]:
     """Remove SQL-owned checkouts, exact Git refs, and private record trees."""
     state = store.directory.resolve()
-    candidate_paths = candidate_paths or {}
+    project_paths = {} if project_paths is None else project_paths
     by_id = {}
     with collect_skipped() as skipped:
         for manifest in manifests:
@@ -380,7 +382,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *,
                                          'OWNER_UNPROVEN', identifier))
         if skipped:
             return skipped
-        skipped.extend(_delete_foreign_outputs(store, by_id, artifacts, owned_runs))
+        skipped.extend(_delete_foreign_outputs(store, by_id, artifacts, owned_runs, project_paths))
         if skipped:
             return skipped
         expected = _expected_refs(by_id, artifacts)
@@ -401,7 +403,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *,
                 blocked_roots[root] = identifier
                 continue
             with workspace._lock(directory, create=False):
-                repository = _repository_current(manifest, candidates=candidate_paths.get(identifier, ()))
+                repository = _repository_current(manifest, candidates=project_paths.get(manifest['project_id'], ()))
                 checkout = directory / 'checkout'
                 if workspace._path_present(checkout):
                     from .checkout_processes import allocation_created_at, require_idle_checkout
@@ -424,7 +426,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *,
                 if identifier != blocked_roots[root] and workspace._path_present(directory):
                     skipped.append(_skip('allocation', str(directory), 'DEPENDENCY_RETAINED', identifier))
                 continue
-            repository = _repository_current(manifest, candidates=candidate_paths.get(identifier, ()))
+            repository = _repository_current(manifest, candidates=project_paths.get(manifest['project_id'], ()))
             if repository is not None:
                 ref_skips = _delete_refs(repository, identifier, expected[identifier])
                 skipped.extend(ref_skips)

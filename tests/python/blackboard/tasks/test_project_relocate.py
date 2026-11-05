@@ -6,12 +6,73 @@ import shutil
 from unittest.mock import patch
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
-from hey_my_buddy.blackboard.tasks import macro_task_deletion, workspace
+from hey_my_buddy.blackboard.tasks import macro_task_deletion, projects, workspace
 from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
 from hey_my_buddy.errors import BoardError
 
 
 class ProjectRelocateTests(LifecycleTestCase):
+    def test_project_events_are_removed_with_its_last_macro_task(self):
+        board = self.board()
+        first, last = [board.call("workflow_create", {"cwd": str(self.repo), "title": title, "goal": title})
+                       for title in ("First group", "Last group")]
+        moved = self.directory / "moved-empty-project"
+        self.repo.rename(moved)
+        result = board.call("project_relocate", {"cwd": str(moved)})
+        identifier = result["project"]["id"]
+        other = self.directory / "other-project"
+        git(self.directory, "clone", "-q", str(moved), str(other))
+        board.call("workflow_create", {"cwd": str(other), "title": "Other group", "goal": "Other group"})
+        other_moved = self.directory / "other-moved-project"
+        other.rename(other_moved)
+        other_id = board.call("project_relocate", {"cwd": str(other_moved)})["project"]["id"]
+        self.assertEqual(macro_task_deletion.delete(board.store, first["macroTaskId"], 0)["state"], "deleted")
+        with board.store.db.read() as connection:
+            self.assertIsNotNone(connection.execute("SELECT 1 FROM projects WHERE project_id=?", (identifier,)).fetchone())
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='project.relocated'"
+                                                " AND json_extract(payload_json,'$.projectId')=?", (identifier,)).fetchone()[0], 1)
+        self.assertEqual(macro_task_deletion.delete(board.store, last["macroTaskId"], 0)["state"], "deleted")
+        with board.store.db.read() as connection:
+            self.assertIsNone(connection.execute("SELECT 1 FROM projects WHERE project_id=?", (identifier,)).fetchone())
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind LIKE 'project.%'"
+                                                " AND json_extract(payload_json,'$.projectId')=?", (identifier,)).fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='project.relocated'"
+                                                " AND json_extract(payload_json,'$.projectId')=?", (other_id,)).fetchone()[0], 1)
+
+    def test_relocate_at_the_recorded_root_does_not_write_or_advance_head(self):
+        board = self.board()
+        board.call("workflow_create", {"cwd": str(self.repo), "title": "Same location", "goal": "Same location"})
+        moved = self.directory / "unchanged-location"
+        self.repo.rename(moved)
+        first = board.call("project_relocate", {"cwd": str(moved)})
+        nested = moved / "nested"
+        nested.mkdir()
+        head = board.store.head()
+        with board.store.db.read() as connection:
+            changes = connection.total_changes
+        for cwd in (moved, nested):
+            self.assertEqual(board.call("project_relocate", {"cwd": str(cwd)}), first)
+            self.assertEqual(board.store.head(), head)
+            with board.store.db.read() as connection:
+                self.assertEqual(connection.total_changes, changes)
+
+    def test_preview_and_deletion_compute_locations_once_for_multiple_workspaces(self):
+        board = self.board()
+        macro = board.call("workflow_create", {"cwd": str(self.repo), "title": "Shared project", "goal": "Shared project"})
+        for title in ("One workspace", "Another workspace"):
+            submitted = self.submit_run(board, {"cwd": str(self.repo), "title": title, "task": title,
+                                               "macroTaskId": macro["macroTaskId"], "checkout": "worktree", "access": "read"})
+            board.call("workflow_cancel", {"runId": submitted["runId"]})
+            board.call("workflow_conclude", {"runId": submitted["runId"], "note": "No execution was admitted"})
+        with patch.object(projects, "known_repository_paths", wraps=projects.known_repository_paths) as locations:
+            preview = macro_task_deletion.preview(board.store, macro["macroTaskId"])
+        self.assertEqual(preview["blockerTotal"], 0)
+        self.assertEqual(locations.call_count, 1)
+        with patch.object(projects, "known_repository_paths", wraps=projects.known_repository_paths) as locations:
+            deleted = macro_task_deletion.delete(board.store, macro["macroTaskId"], 2)
+        self.assertEqual(deleted["state"], "deleted", deleted)
+        self.assertEqual(locations.call_count, 1)
+
     def test_relocate_enables_preview_and_deletion_without_a_new_submission(self):
         board, submitted, manifest, checkout, _artifact, _accepted = self.accepted_worktree()
         prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"

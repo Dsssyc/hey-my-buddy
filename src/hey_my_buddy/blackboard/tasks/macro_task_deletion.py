@@ -292,9 +292,12 @@ def _scope_summary(store, scope, connection):
                 raise
             refs_known = False
     if refs_known:
+        project_paths = {}
         for identifier, manifest in manifests.items():
-            candidates = projects.known_repository_paths(connection, manifest['project_id'])
-            repository = _repository_current(manifest, candidates=candidates)
+            project_id = manifest['project_id']
+            if project_id not in project_paths:
+                project_paths[project_id] = projects.known_repository_paths(connection, project_id)
+            repository = _repository_current(manifest, candidates=project_paths[project_id])
             if repository is None:
                 refs_known = False
                 break
@@ -358,10 +361,10 @@ def _delete_sessions(store, scope):
 def _delete_workspaces(store, scope):
     from .macro_task_deletion_workspace import delete_workspaces
     with store.db.read() as connection:
-        candidates = {m['workspace_id']: projects.known_repository_paths(connection, m['project_id'])
-                  for m in scope.manifests}
+        project_paths = {identifier: projects.known_repository_paths(connection, identifier)
+                         for identifier in {m['project_id'] for m in scope.manifests}}
     return delete_workspaces(store, scope.manifests, scope.artifacts,
-                             candidate_paths=candidates,
+                             project_paths=project_paths,
                              owned_runs=scope.runs)
 
 

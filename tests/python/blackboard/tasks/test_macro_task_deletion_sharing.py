@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from blackboard.tasks import workspace_lifecycle_case as lifecycle_fixtures
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
-from hey_my_buddy.blackboard.tasks import macro_task_deletion as deletion, workspace, workflow
+from hey_my_buddy.blackboard.tasks import macro_task_deletion as deletion, projects, workspace, workflow
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy import private_dirs
 from hey_my_buddy.buddy.harnesses import registry as harness_registry
@@ -373,8 +373,10 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         self.assertTrue(native_is_file(folder / 'resolve-restore.json'))
         self.assertTrue(native_is_file(folder / 'output.json'))
         self.assertTrue(native_is_dir(folder / 'scope-conflicts'))
-        result = deletion.delete(board.store, borrower['macroTaskId'], 1)
+        with defer_reclaim.object(projects, 'known_repository_paths', wraps=projects.known_repository_paths) as locations:
+            result = deletion.delete(board.store, borrower['macroTaskId'], 1)
         self.assertEqual(result['state'], 'deleted', result)
+        self.assertEqual(locations.call_count, 1)
         self.assertFalse(native_exists(folder))
         self.assertFalse(native_exists(Path(cumulative['path'])))
         self.assertTrue(checkout.is_dir())

@@ -366,7 +366,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         self.repo.rename(moved)
         skipped = self.delete_many(
             [manifest],
-            candidate_paths={manifest["workspaceId"]: (str(moved),)},
+            project_paths={manifest["projectId"]: (str(moved),)},
         )
         self.assertEqual(skipped, [])
         self.assertFalse(checkout.exists())
@@ -381,7 +381,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         with patch.object(workspace, "_git_in", side_effect=AssertionError("existing checkout was repaired")):
             skipped = self.delete_many(
                 [manifest],
-                candidate_paths={manifest["workspaceId"]: (str(moved),)},
+                project_paths={manifest["projectId"]: (str(moved),)},
             )
         self.assertEqual(skipped, [])
         self.assertTrue(moved.is_dir())
@@ -399,7 +399,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         different_object = self.git('rev-parse', 'HEAD^{tree}', cwd=copied).strip()
         self.git('update-ref', anchor, different_object, cwd=copied)
         self.assertEqual(self.delete_many(
-            [manifest], candidate_paths={manifest['workspaceId']: (str(copied), str(moved))}), [])
+            [manifest], project_paths={manifest['projectId']: (str(copied), str(moved))}), [])
         self.assertFalse(self.git('for-each-ref', '--format=%(refname)', prefix, cwd=moved))
         self.assertEqual(self.git('rev-parse', anchor, cwd=copied).strip(), different_object)
 
