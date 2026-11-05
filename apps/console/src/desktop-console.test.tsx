@@ -25,18 +25,18 @@ function catalog(): Buddy[] {
     available: true, enabled: enabled.has([p.harness, p.model, p.effort].join(":")), capabilities: [],
     contextWindow: null, source: "catalog:fixture", description: "" }));
 }
-function microTask(runId: string, sourceHostId = "codex-source", projectId = "source-project"): Task {
+function microTask(runId: string, projectId = "source-project"): Task {
   return { runId, task: `目标 ${runId}`, state: "queued", owner: "worker:unrelated-label", cwd: `/runtime/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-24T10:00:00Z", updatedAt: "2026-09-24T10:00:00Z", acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
-    workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
-    lineage: { kind: "micro-task", sourceHostId, currentHostId: "current-host", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
-      project: { id: projectId, label: projectId, path: `/source/${projectId}` },
+    workflow: { checkout: "worktree", projectKind: "git", state: "executing", awaitingHost: false, revision: 1 },
+    lineage: { kind: "micro-task", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
+      project: { kind: "git" as const, id: projectId, label: projectId, path: `/source/${projectId}` },
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } } };
 }
 /** The compact collaboration record of a micro task, as `workflow_get` sends it. */
 type Workflow = Record<string, unknown>;
 function workflow(task: Task): Workflow {
-  return { runId: task.runId, hostId: "current-host", revision: 1, state: "awaiting-host", buddy: null, buddyLocked: false, delegationAuthority: false,
+  return { checkout: "worktree", project: { kind: "git" }, runId: task.runId, revision: 1, state: "awaiting-host", buddy: null, delegationAuthority: false,
     routing: null, turns: [], currentTurn: null, requests: [], counts: { turns: 0, openRequests: 1 }, children: [], artifacts: [], integrations: [],
     finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
     activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open", createdAt: "2026-09-24T10:00:00Z", decidedAt: null, childTaskId: null, routing: false,
@@ -76,7 +76,7 @@ function fixture(records: Task[] = []) {
       snapshot: vi.fn(async () => structuredClone(snapshot)), command,
     task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
     macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(roots.map(t => macroTaskSummary({ macroTaskId: `run:${t.runId}`, kind: "standalone", title: t.task, titleSource: "task", project: t.lineage?.project ?? null }))),
-      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, cursor: 0, changed: false })),
+      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
     macroTaskTimeline: vi.fn(async (macroTaskId: string) => ({ timeline: timelineOfRecords(macroTaskId, records), verifiedAtMs: null })) } as unknown as ConsoleApi;
   return { snapshot, records, api, command, workflows };
 }

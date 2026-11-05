@@ -17,7 +17,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["dark", "
       await open(page, `#tasks/${A}?sort=created-asc`);
       await expect(page).not.toHaveURL(/sort=/);
       const projects = page.locator("[data-slot=macro-group]");
-      await expect(projects).toHaveCount(3);
+      await expect(projects).toHaveCount(4);
       const initialOrder = await projects.evaluateAll(nodes => nodes.map(node => node.getAttribute("data-group-id")));
       const originalBeta = await rows(group(page, beta));
       const historyLength = await page.evaluate(() => history.length);

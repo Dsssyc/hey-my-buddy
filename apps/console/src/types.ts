@@ -12,7 +12,7 @@ const reason = z.custom<Reason>(isReason);
 
 export const ACTOR_ROLES = ["host", "lead", "console", "service", "workflow", "bridge"] as const;
 export type ActorRole = (typeof ACTOR_ROLES)[number];
-export type Actor = { role: ActorRole; id: string };
+export type Actor = { role: "host"; id?: string } | { role: Exclude<ActorRole, "host">; id: string };
 
 /** The five recorded states of one harness in the console snapshot. */
 const harnessStatus = z.enum(["unknown", "ready", "missing", "login-required", "unhealthy"]);
@@ -137,11 +137,9 @@ type Decision = {
 };
 export type Lineage = {
   kind: "micro-task" | "helper" | "decision" | "execution";
-  sourceHostId: string | null;
-  currentHostId: string | null;
   parentRunId: string | null;
   rootRunId: string | null;
-  project: { id: string; path: string | null; label: string } | null;
+  project: { id: string; kind: "git" | "folder"; path: string | null; label: string } | null;
   routingTask?: { runId: string; title: string | null; titleSource: "title" | "first-line" | null; macroTaskId: string | null; macroTaskTitle: string | null } | null;
   buddy: { harness: string; provider: string; model: string; effort: string } | null;
   delegationAuthority?: boolean;
@@ -162,7 +160,6 @@ export type Task = {
   /** The execution the task view's per-attempt facts are about: the one running, and the last one chosen. */
   activeAttemptId?: string | null;
   selectedAttemptId?: string | null;
-  owner: string | null;
   cwd: string;
   revision: number;
   createdAt: string;
@@ -187,8 +184,8 @@ export type Task = {
   workflow?: {
     state: string;
     awaitingHost: boolean;
-    hostId: string | null;
-    ownerGeneration: number;
+    checkout?: "none" | "worktree" | "existing";
+    projectKind?: "git" | "folder";
     revision: number;
     requestSummary?: string;
     /** Host-authored explicit micro task title; null or absent means fallback. */

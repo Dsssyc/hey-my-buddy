@@ -1,4 +1,5 @@
 import i18n from "i18next";
+import { z } from "zod";
 import { ApiError } from "../api";
 import { parseActor } from "../actor";
 import { isReason } from "../reason";
@@ -124,6 +125,9 @@ function parseTurn(value: unknown): Turn {
     state: str(turn.state, "turn.state"), disposition: strOrNull(turn.disposition, "turn.disposition"),
     createdAt: str(turn.createdAt, "turn.createdAt"), updatedAt: str(turn.updatedAt, "turn.updatedAt"),
     buddy: parseBuddy(turn.buddy, "turn.buddy"),
+    checkout: oneOf(turn.checkout, ["none", "worktree", "existing"] as const, "turn.checkout"),
+    projectKind: oneOf(turn.projectKind, ["git", "folder"] as const, "turn.projectKind"),
+    access: oneOf(turn.access, ["read", "write", "full"] as const, "turn.access"),
     routing: routing && { decisionId: strOrNull(routing.decisionId, "turn.routing"), buddyRevision: int(routing.buddyRevision, "turn.routing") },
     tokenUsage: parseTokenUsage(turn.tokenUsage),
     inputFailure: parseInputFailure(turn.inputFailure, "turn.inputFailure"),
@@ -167,13 +171,19 @@ function parseOpenRequest(value: unknown): OpenRequest {
 function parsePatch(value: unknown): CumulativePatch | null {
   const patch = recOrNull(value, "cumulativePatch");
   return patch && {
-    baseCommit: strOrNull(patch.baseCommit, "cumulativePatch"), outputCommit: strOrNull(patch.outputCommit, "cumulativePatch"),
+    baseCommit: strOrNull(patch.baseCommit, "cumulativePatch"),
     path: strOrNull(patch.path, "cumulativePatch"), sha256: strOrNull(patch.sha256, "cumulativePatch"),
     changedPaths: strings(patch.changedPaths, "cumulativePatch"),
   };
 }
 
-const OUTPUT_KINDS = ["output", "resolved-output", "partial-output"] as const;
+const OUTPUT_KINDS = ["output", "resolved-output", "partial-output", "result"] as const;
+const fileRefSchema = z.object({ path: z.string(), sha256: z.string() });
+const sealedEvidenceSchema = z.object({ snapshotSha256: z.string(), tree: z.string() });
+const integrationSourceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("commits"), baseCommit: z.string(), headCommit: z.string() }),
+  z.object({ kind: z.literal("patch"), baseCommit: z.string(), path: z.string(), sha256: z.string() }),
+]);
 
 /**
  * The sealed outputs of the micro task. Its other seals (the input it was
@@ -185,20 +195,26 @@ function parseArtifacts(value: unknown): Artifact[] {
     const artifact = rec(item, "artifact");
     if (!OUTPUT_KINDS.includes(artifact.kind as never)) return [];
     const kind = artifact.kind as Artifact["kind"];
-    const contentForm = oneOf(
-      artifact.contentForm, ["sealed-inline-v1", "record-reference"] as const, "artifact.contentForm");
-    const snapshotSha256 = contentForm === "record-reference"
-      ? str(artifact.outputSnapshotSha256, "artifact.outputSnapshotSha256")
-      : str(artifact.manifestSha256, "artifact.manifestSha256");
-    const record = contentForm === "record-reference" ? rec(artifact.recordFile, "artifact.recordFile") : null;
+    const contentForm = oneOf(artifact.contentForm, ["sealed-inline-v1", "record-reference", "result-reference"] as const, "artifact.contentForm");
+    if ((kind === "result") !== (contentForm === "result-reference")) refuse("artifact.contentForm");
+    const sealedEvidence = kind === "result" ? null : sealedEvidenceSchema.safeParse(artifact.sealedEvidence);
+    if (sealedEvidence && !sealedEvidence.success && contentForm !== "sealed-inline-v1") refuse("artifact.sealedEvidence");
+    if (contentForm === "record-reference" && !fileRefSchema.safeParse(artifact.recordFile).success) refuse("artifact.recordFile");
+    const integrationSource = kind === "result" || artifact.integrationSource == null ? null : integrationSourceSchema.safeParse(artifact.integrationSource);
+    if (integrationSource && !integrationSource.success) refuse("artifact.integrationSource");
+    const resultFile = kind === "result" ? fileRefSchema.safeParse(artifact.resultFile) : null;
+    if (resultFile && !resultFile.success) refuse("artifact.resultFile");
     return [{
       artifactId: str(artifact.artifactId, "artifact.artifactId"), kind,
       attemptId: str(artifact.attemptId, "artifact.attemptId"),
-      manifestSha256: snapshotSha256,
-      contentForm, outputSnapshotSha256: contentForm === "record-reference" ? snapshotSha256 : undefined,
-      recordFile: record && { path: str(record.path, "artifact.recordFile.path"),
-        sha256: str(record.sha256, "artifact.recordFile.sha256") },
-      outputCommit: strOrNull(artifact.outputCommit, "artifact.outputCommit"),
+      contentForm,
+      sealedEvidence: sealedEvidence?.success ? sealedEvidence.data : null,
+      legacyEvidence: contentForm === "sealed-inline-v1" ? { manifestSha256: str(artifact.manifestSha256, "artifact.manifestSha256") } : null,
+      integrationSource: integrationSource?.success ? integrationSource.data : null,
+      runId: kind === "result" ? str(artifact.runId, "artifact.runId") : null,
+      generation: kind === "result" ? int(artifact.generation, "artifact.generation") : null,
+      resultFile: resultFile?.success ? resultFile.data : null,
+      unsealedChanges: kind === "result" && artifact.unsealedChanges === true,
       diffPath: strOrNull(artifact.diffPath, "artifact.diffPath"),
       changedPaths: strings(artifact.changedPaths, "artifact.changedPaths"),
       partial: kind === "partial-output",
@@ -212,13 +228,31 @@ function parseIntegration(value: unknown): Integration {
   const integration = rec(value, "integration");
   const target = recOrNull(integration.target, "integration.target");
   const verification = recOrNull(integration.verification, "integration.verification") ?? {};
+  const version = intOrNull(verification.version, "integration.verification.version");
+  const differingPaths = list(verification.differingPaths ?? [], "integration.verification.differingPaths").map(item => {
+    const path = rec(item, "integration.verification.differingPaths");
+    return { path: str(path.path, "integration.verification.differingPaths.path"),
+      expectedMode: strOrNull(path.expectedMode, "integration.verification.differingPaths.expectedMode"),
+      expectedOid: strOrNull(path.expectedOid, "integration.verification.differingPaths.expectedOid"),
+      artifactMode: strOrNull(path.artifactMode, "integration.verification.differingPaths.artifactMode"),
+      artifactOid: strOrNull(path.artifactOid, "integration.verification.differingPaths.artifactOid") };
+  });
   return {
     integrationId: str(integration.integrationId, "integration.integrationId"),
     artifactId: str(integration.artifactId, "integration.artifactId"),
-    state: str(integration.state, "integration.state"), strategy: str(integration.strategy, "integration.strategy"),
+    state: str(integration.state, "integration.state"), strategy: oneOf(integration.strategy,
+      ["three-way", "three-way-adjusted", "merge", "patch", "not-required"] as const, "integration.strategy"),
     target: target && { path: strOrNull(target.path, "integration.target"), ref: strOrNull(target.ref, "integration.target") },
     beforeCommit: strOrNull(integration.beforeCommit, "integration.beforeCommit"),
     afterCommit: strOrNull(integration.afterCommit, "integration.afterCommit"),
+    verification: { version, mergeBaseCommit: strOrNull(verification.mergeBaseCommit, "integration.verification.mergeBaseCommit"),
+      expectedTree: strOrNull(verification.expectedTree, "integration.verification.expectedTree"), differingPaths,
+      conflictingPaths: strings(verification.conflictingPaths, "integration.verification.conflictingPaths"),
+      adjustments: strings(verification.adjustments, "integration.verification.adjustments"),
+      hostPaths: strings(verification.hostPaths, "integration.verification.hostPaths"),
+      artifactMode: strOrNull(verification.artifactMode, "integration.verification.artifactMode"),
+      artifactOid: strOrNull(verification.artifactOid, "integration.verification.artifactOid"),
+      note: strOrNull(verification.note, "integration.verification.note") },
     hostPaths: strings(verification.hostPaths, "integration.verification"),
     note: strOrNull(integration.note, "integration.note"),
     actor: actorOrNull(integration.actor, "integration.actor"), createdAt: str(integration.createdAt, "integration.createdAt"),
@@ -234,7 +268,6 @@ function parseConclusion(value: unknown): HostConclusion {
     artifactId: strOrNull(conclusion.artifactId, "hostConclusion.artifactId"),
     attemptId: strOrNull(conclusion.attemptId, "hostConclusion.attemptId"),
     actor: actor(conclusion.actor, "hostConclusion.actor"), createdAt: str(conclusion.createdAt, "hostConclusion.createdAt"),
-    runRevision: intOrNull(conclusion.runRevision, "hostConclusion.runRevision"),
   };
 }
 
@@ -276,10 +309,15 @@ export function parseWorkflow(value: unknown, runId: string): Workflow {
   const counts = rec(workflow.counts, "workflow.counts");
   const shutdown = recOrNull(workflow.shutdown, "workflow.shutdown");
   const workspace = recOrNull(workflow.workspace, "workflow.workspace");
+  const project = rec(workflow.project, "workflow.project");
+  const taskSummary = rec(workflow.task, "workflow.task");
   return {
-    runId, revision: int(workflow.revision, "workflow.revision"), state: str(workflow.state, "workflow.state"),
-    hostId: strOrNull(workflow.hostId, "workflow.hostId"), buddy: parseBuddy(workflow.buddy, "workflow.buddy"),
-    buddyLocked: bool(workflow.buddyLocked, "workflow.buddyLocked"), delegationAuthority: bool(workflow.delegationAuthority, "workflow.delegationAuthority"),
+    runId, taskRevision: int(taskSummary.revision, "workflow.task.revision"), state: str(workflow.state, "workflow.state"),
+    buddy: parseBuddy(workflow.buddy, "workflow.buddy"),
+    checkout: oneOf(workflow.checkout, ["none", "worktree", "existing"] as const, "workflow.checkout"),
+    projectKind: oneOf(project.kind, ["git", "folder"] as const, "workflow.project.kind"),
+    unsealedChanges: workflow.unsealedChanges === true,
+    delegationAuthority: bool(workflow.delegationAuthority, "workflow.delegationAuthority"),
     routing: parseRouting(workflow.routing),
     turns: list(workflow.turns, "workflow.turns").map(parseTurn),
     currentTurn: workflow.currentTurn === null || workflow.currentTurn === undefined ? null : parseResultTurn(workflow.currentTurn),
@@ -369,7 +407,6 @@ export function parseAudit(value: unknown, runId: string): { audit: Audit; routi
   const audit = rec(reply.audit, "audit");
   return {
     audit: {
-      revision: int(reply.revision, "audit.revision"),
       turns: list(audit.turns, "audit.turns").map(parseResultTurn),
       continuations: list(audit.continuations, "audit.continuations").map(parseContinuation),
       requests: list(audit.requests, "audit.requests").map(parseAuditRequest),
@@ -487,7 +524,7 @@ const LINEAGE_KINDS = ["micro-task", "helper"] as const;
 function parseLineage(value: unknown): Rec {
   const lineage = rec(value, "task.lineage");
   oneOf(lineage.kind, LINEAGE_KINDS, "task.lineage.kind");
-  for (const key of ["sourceHostId", "currentHostId", "parentRunId", "rootRunId", "rootLeadRunId"]) {
+  for (const key of ["parentRunId", "rootRunId", "rootLeadRunId"]) {
     if (lineage[key] === undefined) refuse(`task.lineage.${key}`);
     strOrNull(lineage[key], `task.lineage.${key}`);
   }
@@ -495,6 +532,7 @@ function parseLineage(value: unknown): Rec {
   const project = recOrNull(lineage.project, "task.lineage.project");
   if (project) {
     str(project.id, "task.lineage.project.id");
+    oneOf(project.kind, ["git", "folder"] as const, "task.lineage.project.kind");
     str(project.label, "task.lineage.project.label");
     strOrNull(project.path, "task.lineage.project.path");
   }
@@ -517,7 +555,9 @@ export function parseTask(value: unknown, runId: string): TaskView {
   const lineage = parseLineage(task.lineage);
   const workflow = rec(task.workflow, "task.workflow");
   str(workflow.state, "task.workflow.state");
-  for (const key of ["hostId", "title", "macroTaskId"]) strOrNull(workflow[key], `task.workflow.${key}`);
+  for (const key of ["title", "macroTaskId"]) strOrNull(workflow[key], `task.workflow.${key}`);
+  oneOf(workflow.checkout, ["none", "worktree", "existing"] as const, "task.workflow.checkout");
+  oneOf(workflow.projectKind, ["git", "folder"] as const, "task.workflow.projectKind");
   return {
     task: task as unknown as Task, updatedAt: task.updatedAt as string, acceptanceNote: strOrNull(task.acceptanceNote, "task.acceptanceNote"), attempt: parseAttempt(task),
     inputFailure: parseInputFailure(task.inputFailure, "task.inputFailure"),

@@ -10,17 +10,16 @@ import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 
 const summary = (macroTaskId: string, lastActivitySeq: number, overrides: Partial<MacroTaskSummary> = {}): MacroTaskSummary => ({
   macroTaskId, kind: "macro-task", title: macroTaskId, titleSource: "macro-task", summary: null,
-  project: { id: "p1", label: "项目一", path: "/p1" }, sourceHostId: "host-a", currentHostIds: [],
-  createdAt: "2026-09-26T01:00:00Z", lastActivityAt: "2026-09-26T01:00:00Z", lastActivitySeq,
+  project: { kind: "git" as const, id: "p1", label: "项目一", path: "/p1" }, createdAt: "2026-09-26T01:00:00Z", lastActivityAt: "2026-09-26T01:00:00Z", lastActivitySeq,
   state: "active", counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 1, host: 0, review: 0, ended: 0,
     stoppableRoots: 1, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 },
   matchingRuns: 1, rootRunIds: [macroTaskId], ...overrides,
 });
-const project = (id: string) => ({ id, label: id, path: `/${id}` });
+const project = (id: string) => ({ id, kind: "git" as const, label: id, path: `/${id}` });
 const page = (rows: MacroTaskSummary[], nextCursor: string | null = null, changed = false, groupTotal?: number): MacroTaskPage =>
   ({ groups: macroTaskGroups(rows, nextCursor).map(group => groupTotal === undefined ? group : { ...group, total: groupTotal }),
-    totals: { all: groupTotal ?? rows.length, active: groupTotal ?? rows.length, host: 0, review: 0 }, cursor: 10, changed });
-const query: MacroTaskQuery = { query: "", hostId: "", filter: "all" };
+    totals: { all: groupTotal ?? rows.length, active: groupTotal ?? rows.length, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 10, changed });
+const query: MacroTaskQuery = { query: "", filter: "all" };
 
 function harness(readVerifiedAt?: (value: unknown) => number | null, active = true, strict = false) {
   const requests: { query: MacroTaskQuery; signal?: AbortSignal; resolve: (value: MacroTaskPage) => void; reject: (error: Error) => void }[] = [];
@@ -352,4 +351,17 @@ describe("visibility and verification guards", () => {
     await act(async () => f.requests[1]!.resolve(page([summary("fresh", 2)])));
     expect(ids(f)).toEqual(["fresh"]);
   });
+});
+
+
+it("uses the service's page sizes for both saved order and further pages", async () => {
+  localStorage.setItem(VIEW_PREFERENCE_PREFIX + "macro-task-sort:project:p1", "created-asc");
+  const f = harness(); await startRead();
+  const body = { ...page([summary("first", 3)], "older"), defaults: { firstLimit: 2, groupLimit: 7 } };
+  await act(async () => f.requests[0]!.resolve(body));
+  expect(f.requests[1]!.query).toMatchObject({ group: "project:p1", sort: "created-asc", limit: 2 });
+  await act(async () => f.requests[1]!.resolve(body));
+  act(() => f.result.current.more("project:p1"));
+  expect(f.requests[2]!.query).toMatchObject({ group: "project:p1", before: "older", limit: 7 });
+  await act(async () => f.requests[2]!.resolve({ ...body, groups: body.groups.map(group => ({ ...group, nextCursor: null })) }));
 });

@@ -304,9 +304,12 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         // Continuation input belongs to its own step; a later turn retains its result and seal.
         await step(page, turn(2)).click();
         await expect(pane(page)).not.toContainText("路径边界也核对一遍");
-        const seal = pane(page).getByRole("button", { name: new RegExp(locale === "zh-CN" ? "封存" : "Seal") });
-        await seal.click();
-        await expect(pane(page).getByText("SHA-256").first()).toBeVisible();
+        const seal = pane(page).getByRole("group", { name: locale === "zh-CN" ? "封存证据" : "Sealed evidence", exact: true });
+        const toggle = seal.locator('[data-slot="collapsible-trigger"]');
+        await toggle.click();
+        await expect(seal.getByText(locale === "zh-CN" ? "快照摘要" : "Snapshot digest")).toHaveCount(0);
+        await toggle.click();
+        await expect(seal.getByText(locale === "zh-CN" ? "快照摘要" : "Snapshot digest")).toBeVisible();
         await expectDetailWhole(page, { skipTitle: true });
         await step(page, handoff).click();
         await expect(pane(page)).toContainText("deepseek-flash");
@@ -384,7 +387,11 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await open(page, `#tasks/${A}/preview-run-a1/8`);
         await expect(pane(page).locator("h3").first()).toContainText(acceptance);
         await expect(pane(page)).toContainText(integration);
-        await pane(page).getByRole("button", { name: /refs\/heads\/synthetic-preview/ }).click();
+        const integrationRow = pane(page).getByRole("group", { name: integration, exact: true });
+        const toggle = integrationRow.locator('[data-slot="collapsible-trigger"]');
+        await toggle.click();
+        await expect(integrationRow.locator("dl")).toBeHidden();
+        await toggle.click();
         await expect(pane(page)).toContainText("docs/reference/console.md");
         await expect(pane(page)).toContainText("refs/heads/synthetic-preview");
         await expectDetailWhole(page, { skipTitle: true });

@@ -48,10 +48,10 @@ describe("a stop that is not confirmed", () => {
 });
 
 describe("the integration and the acceptance", () => {
-  const output: Artifact = { artifactId: "art-final", kind: "output", contentForm: "sealed-inline-v1", attemptId: "att-2", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
+  const output: Artifact = { artifactId: "art-final", kind: "output", contentForm: "sealed-inline-v1", attemptId: "att-2", sealedEvidence: null, legacyEvidence: { manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1" }, integrationSource: null, runId: null, generation: null, resultFile: null, unsealedChanges: false,
     diffPath: null, changedPaths: ["a.ts"], partial: false, verified: null, final: null, cumulativePatch: null };
   const verified: Integration = { integrationId: "int-1", artifactId: "art-final", state: "verified", strategy: "merge", target: { path: "~/p", ref: "main" },
-    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", hostPaths: ["new-integration.ts"], note: null, actor: HOST, createdAt: at("11:03") };
+    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", verification: { version: null, mergeBaseCommit: null, expectedTree: null, differingPaths: [], conflictingPaths: [], adjustments: [], hostPaths: ["new-integration.ts"], artifactMode: null, artifactOid: null, note: null }, hostPaths: ["new-integration.ts"], note: null, actor: HOST, createdAt: at("11:03") };
   const integrated = () => {
     const found = timeline();
     found.events.push(event(4, "integrate", at("11:03")));
@@ -63,7 +63,8 @@ describe("the integration and the acceptance", () => {
     await ready();
     expect(pane().textContent).toContain("等待验收");
     expect(pane().textContent).not.toContain("已结束");
-    await userEvent.setup().click(within(pane()).getByRole("button", { name: /已验证.*main/ }));
+    expect(within(pane()).getByRole("button", { name: "已核实" }).getAttribute("aria-expanded")).toBe("true");
+    expect(within(pane()).getByRole("group", { name: "核验结果" }).textContent).toContain("历史核验");
     expect(pane().textContent).toContain("new-integration.ts");
     expect(strip().querySelector('[data-key="settle:m1"]')!.getAttribute("aria-label")).toContain("等待验收");
     expect(head().textContent).toContain("等待验收");
@@ -76,7 +77,8 @@ describe("the integration and the acceptance", () => {
     open({ step: 8, timeline: integrated(), replies: { workflow: workflow({ artifacts: [partial, resolved, output], finalArtifactId: "art-resolved",
       integrations: [{ ...verified, artifactId: "art-resolved" }, { ...older, artifactId: "art-resolved" }] }) } });
     await ready();
-    await userEvent.setup().click(within(pane()).getByRole("button", { name: /已验证.*main/ }));
+    expect(within(pane()).getByRole("button", { name: "已核实" }).getAttribute("aria-expanded")).toBe("true");
+    expect(within(pane()).getByRole("group", { name: "核验结果" }).textContent).toContain("历史核验");
     expect(pane().textContent).toContain("new-integration.ts");
     expect(pane().textContent).not.toContain("old-integration.ts");
     cleanup();
@@ -436,6 +438,11 @@ describe("the turn that ended otherwise than it should", () => {
   });
 
   it("names the person who stopped it only when the stopper was a person, and the console or the service never by a name", async () => {
+    ended({ state: "cancelled", cancellation: { actor: { role: "host" }, note: "Host stopped this turn" }, selectedAttempt: { stopInitiator: "host", result: { terminationReason: "forced-stop" } } });
+    await ready();
+    expect(pane().textContent).toContain("Host 停止");
+    expect(pane().textContent).not.toContain("undefined");
+    cleanup();
     ended({ state: "cancelled", cancellation: { actor: { role: "host", id: "old-actor" }, note: null }, selectedAttempt: { stopInitiator: "console", result: { terminationReason: "console-stop" } } });
     await ready();
     expect(pane().textContent).toContain("控制台停止");
@@ -463,27 +470,21 @@ describe("the turn that ended otherwise than it should", () => {
   });
 });
 
-describe("the seal of a turn", () => {
-  const sealed = (overrides: Partial<Artifact>): Artifact => ({ artifactId: "art-p", kind: "partial-output", contentForm: "sealed-inline-v1", attemptId: "att-1", manifestSha256: "b".repeat(64), outputCommit: "9aa8b7c6d5",
-    diffPath: "/d.diff", changedPaths: ["src/a.py"], partial: true, verified: false, final: false, cumulativePatch: null, ...overrides });
-
-  it("says a partial output is neither verified nor final, and gives its hash and its paths", async () => {
-    const f = open({ step: 3, replies: { workflow: workflow({ artifacts: [sealed({ cumulativePatch: { baseCommit: "d286db0aa", outputCommit: "9aa8b7c6d5", path: "/p.patch", sha256: "a".repeat(64), changedPaths: ["src/a.py", "src/b.py"] } })] }) } });
+describe("delivery evidence", () => {
+  it("shows a fixed result without a Git seal or patch", async () => {
+    const fixed: Artifact = { artifactId: "result-1", kind: "result", contentForm: "result-reference", attemptId: "att-1",
+      sealedEvidence: null, legacyEvidence: null, integrationSource: null, runId: "m1", generation: 1,
+      resultFile: { path: "<state>/result.json", sha256: "a".repeat(64) }, unsealedChanges: true,
+      diffPath: null, changedPaths: [], partial: false, verified: null, final: null, cumulativePatch: null };
+    const record = workflow({ checkout: "none", projectKind: "folder", artifacts: [fixed], unsealedChanges: true,
+      turns: [{ ...workflow().turns[1]!, checkout: "none", projectKind: "folder", access: "write" }] });
+    open({ step: 3, replies: { workflow: record } });
     await ready();
-    const seal = await within(pane()).findByRole("button", { name: /封存/ });
-    expect(seal.textContent).toContain("部分产物");
-    await f.user.click(seal);
-    await waitFor(() => expect(pane().textContent).toContain("部分、未验证、非最终"));
-    expect(pane().textContent).toContain("b".repeat(64));
-    expect(pane().textContent).toContain("src/b.py");
-  });
-
-  it("writes the parts of a cumulative patch that were not recorded as unrecorded, not as empty", async () => {
-    const f = open({ step: 3, replies: { workflow: workflow({ artifacts: [sealed({ kind: "output", partial: false, verified: null, final: null,
-      cumulativePatch: { baseCommit: "d286db0aa", outputCommit: null, path: null, sha256: null, changedPaths: [] } })] }) } });
-    await f.user.click(await within(await (async () => { await ready(); return pane(); })()).findByRole("button", { name: /封存/ }));
-    await waitFor(() => expect(pane().textContent).toContain("累计补丁"));
-    expect(pane().textContent!.match(/未记录/g)!.length).toBeGreaterThanOrEqual(3);
+    const paneText = pane().textContent!;
+    expect(paneText).toContain("固定结果");
+    expect(paneText).toContain("原文件夹");
+    expect(paneText).not.toContain("封存证据");
+    expect(paneText).not.toContain("整合来源");
   });
 });
 
@@ -528,11 +529,11 @@ describe("the delegation", () => {
     expect(pane().textContent).toContain("未记录项目");
   });
 
-  it("says the delegator is not recorded when it is not, and shows the title, not the result, in the head", async () => {
-    open({ step: 1, replies: { task: task({ lineage: { ...task().lineage, sourceHostId: null, currentHostId: null } }) } });
+  it("shows Host ownership and the task title in the head", async () => {
+    open({ step: 1, replies: { task: task() } });
     await ready();
     expect(pane().textContent).not.toContain("原始委派方");
-    expect(pane().querySelector("[data-slot=pane-title]")?.textContent).toContain("codex-desktop");
+    expect(pane().querySelector("[data-slot=pane-title]")?.textContent).toContain("Host");
     expect(head().querySelector("h2")!.textContent).toBe("微任务详情");
     expect(head().textContent).not.toContain("第二轮：详情页已经按回合重做。");
   });

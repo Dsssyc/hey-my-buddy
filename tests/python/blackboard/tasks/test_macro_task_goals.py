@@ -48,8 +48,14 @@ class EmptyMacroTaskGoalTests(unittest.TestCase):
         self.assertEqual([row["macroTaskId"] for row in listed], [identifier])
         self.assertEqual(listed[0]["state"], "empty")
         self.assertEqual(listed[0]["counts"]["roots"], 0)
-        self.assertEqual(macro_summaries(macro_tasks.macro_task_list(
-            self.store, {"query": "review"}))[0]["macroTaskId"], identifier)
+        self.assertEqual(macro_tasks.macro_task_list(self.store, {})["defaults"],
+                         {"firstLimit": macro_tasks.LIST_FIRST_LIMIT,
+                          "groupLimit": macro_tasks.LIST_GROUP_LIMIT})
+        for query in ("review", "source", identifier):
+            with self.subTest(query=query):
+                result = macro_tasks.macro_task_list(self.store, {"query": query})
+                self.assertEqual([row["macroTaskId"] for row in macro_summaries(result)], [identifier])
+                self.assertEqual(result["totals"]["all"], 1)
         for name in ("active", "host", "review"):
             self.assertEqual(macro_summaries(macro_tasks.macro_task_list(self.store, {"filter": name})), [])
         timeline = macro_tasks.macro_task_timeline(self.store, {"macroTaskId": identifier})

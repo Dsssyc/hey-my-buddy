@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
-import { actorRoleText, stopActorText } from "../actor";
+import { actorText, stopActorText } from "../actor";
 import { formatCoolingTime, formatList } from "../i18n/format";
 import { quad } from "./names";
 import { Paths } from "./parts";
@@ -16,7 +16,7 @@ export function endingText(ending: Ending, t: TFunction<"taskDetail">): string {
   return [
     cause ? t("ending.cause", { cause }) : ending.stoppedBy || ending.rejectionCode ? null : t("ending.unrecorded"),
     ending.stoppedBy ? stopActorText(ending.stoppedBy) : null,
-    ending.actor ? `${actorRoleText(ending.actor.role)} · ${ending.actor.id}` : null,
+    ending.actor ? actorText(ending.actor) : null,
     ending.note,
     ending.rejectionCode ? t(`providerRejection.${ending.rejectionCode}`) : null,
   ].filter(Boolean).join(" · ");

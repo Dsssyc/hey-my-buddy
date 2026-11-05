@@ -41,7 +41,7 @@ const initial = (): Snapshot => ({
   capabilities: { selection: false },
 });
 
-const emptyMacroTasks = () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, cursor: 0, changed: false });
+const emptyMacroTasks = () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false });
 
 afterEach(() => {
   cleanup();

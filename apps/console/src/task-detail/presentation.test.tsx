@@ -37,10 +37,10 @@ describe("the common step presentation", () => {
     await ready();
     expect(pane().textContent).not.toMatch(/微任务 ID|原始委派方|当前负责方/);
     expect(pane().querySelector('[data-state][aria-describedby]')).toBeNull();
-    f.reads.held.task.lineage!.currentHostId = "replacement-host";
+    f.reads.held.task.lineage!.rootLeadRunId = "lead-1";
     await f.user.click(document.querySelector('[data-slot=detail-header] button[aria-label="重新读取"]')!);
-    expect(await within(pane()).findByText("当前负责方")).toBeTruthy();
-    expect(pane().textContent).toContain("replacement-host");
+    expect(await within(pane()).findByText("Lead · lead-1")).toBeTruthy();
+    expect(pane().textContent).toContain("lead-1");
     expect(pane().textContent).not.toContain("原始委派方");
   });
 
@@ -62,7 +62,7 @@ describe("the common step presentation", () => {
     expect(pane().querySelector('[data-slot="pane-title"]')?.textContent).toContain("批准");
     expect(pane().querySelectorAll("dt").length).toBeGreaterThan(0);
     expect([...pane().querySelectorAll("dt")].map(node => node.textContent)).not.toEqual(expect.arrayContaining(["谁", "决定", "时刻"]));
-    expect(pane().textContent!.match(/Host · codex-desktop/g)).toHaveLength(1);
+    expect(pane().textContent).not.toContain("codex-desktop");
     expect(pane().querySelector(".text-hand")).toBeNull();
   });
 

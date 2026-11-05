@@ -5,7 +5,7 @@ import { useState } from "react";
 import i18n from "i18next";
 import { formatDuration } from "../i18n/format";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { macroTaskTimelineFixture } from "../macro-task-fixtures";
+import { emptyMacroTaskTimelineFixture, macroTaskTimelineFixture } from "../macro-task-fixtures";
 import type { TimelineBuddy, TimelineRow } from "../macro-task-types";
 import { RowName } from "./RowName";
 import type { TaskWorkProps } from "./TaskWork";
@@ -707,4 +707,18 @@ it("sums a lane's elapsed and execution time from its own rows alone", () => {
   expect(summary.elapsedMs).toBeGreaterThan(0);
   expect(summary.executionMs).toBe((46 + 10 + 3 + 22 + 26) * 60_000);
   expect(summary.usage).toEqual({ input: null, cached: null, output: null, partial: false });
+});
+
+
+it("keeps the name column, filter and empty timeline for an empty macro task", async () => {
+  const timeline = emptyMacroTaskTimelineFixture();
+  setup({ timeline, summary: timeline.macroTask });
+  const stage = document.querySelector('[data-slot="timeline-empty-stage"]')!;
+  expect(stage.querySelector('[data-slot="task-names"]')?.textContent).toContain("没有已提交的微任务");
+  expect(stage.querySelector('[data-slot="timeline-row-count"]')?.textContent).toBe("0");
+  expect(document.querySelector('[data-slot="timeline-status"]')).toBeTruthy();
+  expect(stage.children).toHaveLength(2);
+  expect(document.querySelector('[data-slot="timeline-canvas"]')).toBeNull();
+  await userEvent.click(within(stage as HTMLElement).getByRole("button", { name: "只看未结束的" }));
+  expect(stage.textContent).toContain("没有已提交的微任务");
 });

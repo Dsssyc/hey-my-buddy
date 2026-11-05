@@ -80,7 +80,8 @@ for (const [locale, theme] of [["zh-CN", "dark"], ["zh-CN", "light"], ["en-US", 
       await expect(menu.getByRole("menuitem")).toHaveCount(2);
       await page.screenshot({ path: `${shots}/entry-menu-${suffix}` });
       const header = page.locator("[data-slot=macro-detail]");
-      await expect(header.locator("[data-slot=macro-menu-button], [data-slot=macro-stop-action], [data-slot=macro-delete-action]")).toHaveCount(0);
+      await expect(header.locator("[data-slot=macro-menu-button]")).toHaveCount(1);
+      await expect(header.locator("[data-slot=macro-stop-action], [data-slot=macro-delete-action]")).toHaveCount(0);
       await menu.getByRole("menuitem", { name: zh ? "停止宏任务" : "Stop macro task", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: zh ? "停止宏任务" : "Stop macro task", exact: true });
       await dialog.getByRole("button", { name: zh ? "确认停止宏任务" : "Confirm stop", exact: true }).click();
@@ -131,7 +132,7 @@ for (const [locale, theme] of [["zh-CN", "dark"], ["zh-CN", "light"], ["en-US", 
       await page.route("**/api/macro-tasks?*", async route => {
         const response = await route.fetch(), body = await response.json() as MacroTaskPage;
         const first = body.groups[0], row = first.macroTasks[0];
-        const extra = Array.from({ length: 12 }, (_, index) => ({ ...first, id: `project:menu-${index}`, project: { id: `menu-${index}`, label: `Menu ${index}`, path: null }, total: 1, nextCursor: null,
+        const extra = Array.from({ length: 12 }, (_, index) => ({ ...first, id: `project:menu-${index}`, project: { ...first.project, id: `menu-${index}`, label: `Menu ${index}`, path: null }, total: 1, nextCursor: null,
           macroTasks: [{ ...row, macroTaskId: `macro-menu-${index}`, title: `Menu entry ${index}` }] }));
         await route.fulfill({ json: { ...body, groups: [...body.groups, ...extra] } });
       });

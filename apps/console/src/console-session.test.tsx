@@ -33,9 +33,9 @@ const FLASH = "dsh / deepseek-official / deepseek-flash";
 function microTask(runId: string, task: string, extra: Partial<Task> = {}): Task {
   return { runId, task, state: "queued", owner: "worker:fixture", cwd: `/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-24T10:00:00Z", updatedAt: "2026-09-24T10:00:00Z", acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
-    workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
-    lineage: { kind: "micro-task", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
-      project: { id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },
+    workflow: { checkout: "worktree", projectKind: "git", state: "executing", awaitingHost: false, revision: 1 },
+    lineage: { kind: "micro-task", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
+      project: { kind: "git" as const, id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } },
     ...extra };
 }
@@ -43,7 +43,7 @@ function microTask(runId: string, task: string, extra: Partial<Task> = {}): Task
 /** The compact collaboration record of a micro task, as `workflow_get` sends it. */
 type Workflow = Record<string, unknown>;
 function workflow(task: Task, overrides: Workflow = {}): Workflow {
-  return { runId: task.runId, hostId: "current-host", revision: 1, state: "awaiting-host", buddy: null, buddyLocked: false, delegationAuthority: false,
+  return { checkout: "worktree", project: { kind: "git" }, runId: task.runId, revision: 1, state: "awaiting-host", buddy: null, delegationAuthority: false,
     routing: null, turns: [], currentTurn: null, requests: [], counts: { turns: 0, openRequests: 1 }, children: [], artifacts: [], integrations: [],
     finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
     activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open", createdAt: "2026-09-25T10:00:00Z", decidedAt: null, childTaskId: null, routing: false,
@@ -127,7 +127,7 @@ function fixture(options: {
   const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
     snapshot, command, task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
     macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(roots.map(row => macroTaskSummary({ macroTaskId: `run:${row.runId}`, kind: "standalone", title: row.task, titleSource: "task", project: row.lineage?.project ?? null }))),
-      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, cursor: 0, changed: false })),
+      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
     macroTaskTimeline: vi.fn(async (macroTaskId: string) => ({ timeline: timelineOfRecords(macroTaskId, records), verifiedAtMs: null })) } as unknown as ConsoleApi;
   return { api, command, operations, published, snapshot,
     state: () => state,
@@ -448,7 +448,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   });
 
   it("keeps micro task details read-only across sessions and leaves routing readable", async () => {
-    const awaiting = microTask("browse-task", "可浏览任务", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
+    const awaiting = microTask("browse-task", "可浏览任务", { workflow: { checkout: "worktree", projectKind: "git", state: "awaiting-host", awaitingHost: true, revision: 1 } });
     const workflows = new Map<string, Workflow>([["browse-task", workflow(awaiting, {
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" },
       routing: { status: "completed", decisionId: "decision-1", source: "model-selection" },
@@ -480,7 +480,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   ];
 
   it.each(failedPolls)("keeps micro task details readable with no writes after a failed poll (%s)", async (_label, failure) => {
-    const awaiting = microTask("gated-micro-task", "断线待协助目标", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
+    const awaiting = microTask("gated-micro-task", "断线待协助目标", { workflow: { checkout: "worktree", projectKind: "git", state: "awaiting-host", awaitingHost: true, revision: 1 } });
     const workflows = new Map<string, Workflow>([["gated-micro-task", workflow(awaiting)]]);
     const f = fixture({ records: [awaiting], workflows, failAfter: 1, failWith: failure });
     const user = userEvent.setup();

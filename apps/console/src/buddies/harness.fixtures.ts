@@ -126,7 +126,7 @@ export function fixture(options: FixtureOptions = {}) {
     command,
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
     // Mirrors the real api helpers: the existing command route, no new path.
     harnessRefresh: vi.fn(async (csrfToken: string, harness?: string) => {
       const reply = await command("capabilities",

@@ -2,7 +2,7 @@ import { cleanup, render as baseRender, screen, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTaskOverview } from "./MacroTaskOverview";
-import { macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { emptyMacroTaskTimelineFixture, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import { TooltipProvider } from "./components/ui/tooltip";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -17,13 +17,13 @@ describe("the macro task header", () => {
     const head = screen.getByRole("heading", { name: timeline.macroTask.title! }).closest("header")!;
     expect(head.querySelector("h2")?.hasAttribute("title")).toBe(false);
     expect(within(head).getByText("hey-my-buddy")).toBeTruthy();
-    expect(within(head).getByText("codex-desktop")).toBeTruthy();
-    expect([...head.querySelectorAll('[data-slot="macro-overview-facts"] dt')].map(node => node.textContent)).toEqual(["项目", "Host", "历时", "ID"]);
+    expect(within(head).queryByText("codex-desktop")).toBeNull();
+    expect([...head.querySelectorAll('[data-slot="macro-overview-facts"] dt')].map(node => node.textContent)).toEqual(["仓库", "历时", "ID"]);
     expect(head.querySelector('[data-slot="macro-overview-counts"]')?.textContent).toContain("1进行中");
     expect(head.querySelector('[data-slot="macro-overview-counts"]')?.textContent).toContain("2已验收");
     expect(within(head).getByRole("button", { name: "列表开关" })).toBeTruthy();
     expect(within(head).getByRole("button", { name: "停止" })).toBeTruthy();
-    expect(head.querySelector('[data-slot="macro-goal-trigger"]')?.getAttribute("aria-label")).toBe("目标说明");
+    expect(head.querySelector('[data-slot="macro-goal-trigger"]')?.getAttribute("aria-label")).toBe("查看目标说明");
     expect(screen.queryByRole("dialog", { name: "目标说明" })).toBeNull();
     const user = userEvent.setup();
     await user.click(within(head).getByRole("button", { name: "‹ 宏任务" }));
@@ -70,4 +70,19 @@ describe("the macro task header", () => {
     expect(review.querySelector("path")?.getAttribute("fill")).toBe("none");
     expect(review.querySelector("path")?.getAttribute("class")).toBe("stroke-hand-mark");
   });
+});
+
+
+it("shows the empty macro task's folder and zero members with its goal", () => {
+  const timeline = emptyMacroTaskTimelineFixture();
+  render(<MacroTaskOverview readGoals={vi.fn()} summary={null} timeline={timeline} loading={false}
+    stale={false} onBackToList={() => {}} />);
+  const header = document.querySelector("header")!;
+  expect(within(header).getByText("文件夹")).toBeTruthy();
+  expect(within(header).getByText("Field notes")).toBeTruthy();
+  expect(within(header).getByText("0 个成员")).toBeTruthy();
+  expect(header.querySelector('[data-slot="macro-goal-trigger"]')).toBeTruthy();
+  expect(header.querySelectorAll('[data-slot^="macro-overview-count-"]')).toHaveLength(0);
+  expect(within(header).queryByRole("button", { name: "时间统计" })).toBeNull();
+  expect(within(header).queryByText("Host")).toBeNull();
 });

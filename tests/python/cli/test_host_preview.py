@@ -360,7 +360,7 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertTrue(any(patch["complete"] for patch in patches))
         for path in workflows:
             fixture = json.loads((fixtures / path).read_text(encoding="utf-8"))
-            base = fixture["workspace"]["inputCommit"]
+            base = fixture["workspace"].get("inputCommit")
             for item in fixture["artifacts"]:
                 patch = item.get("cumulativePatch")
                 if patch:
@@ -370,6 +370,46 @@ class PreviewFixtureTest(unittest.TestCase):
         host_paths = [entry for facts in workflows.values() for entry in facts["hostPaths"]]
         self.assertTrue(any(host_paths), "the preview must record one integration with Host paths")
         self.assertTrue(any(not entry for entry in host_paths), "the preview must also keep Host paths empty")
+
+        empty = json.loads((fixtures / "normal/timeline-macro-empty.json").read_text(encoding="utf-8"))
+        self.assertEqual("empty", empty["macroTask"]["state"])
+        self.assertEqual(0, empty["macroTask"]["counts"]["roots"])
+        self.assertEqual(([], [], []), (empty["rows"], empty["spans"], empty["events"]))
+        self.assertTrue(empty["macroTask"]["goal"]["body"])
+        self.assertEqual("folder", empty["macroTask"]["project"]["kind"])
+        folder = json.loads((fixtures / "normal/timeline-macro-folder.json").read_text(encoding="utf-8"))
+        self.assertEqual("folder", folder["macroTask"]["project"]["kind"])
+        self.assertEqual({"preview-run-none-read", "preview-run-none-write"},
+                         {row["runId"] for row in folder["rows"]})
+        for access in ("read", "write"):
+            run_id = f"preview-run-none-{access}"
+            workflow = json.loads((fixtures / f"normal/workflow-{run_id}.json").read_text(encoding="utf-8"))
+            self.assertEqual(("none", access, "folder"),
+                             (workflow["checkout"], workflow["access"], workflow["project"]["kind"]))
+            self.assertEqual("none", workflow["workspace"]["kind"])
+            result = next(item for item in workflow["artifacts"] if item["kind"] == "result")
+            self.assertEqual("result-reference", result["contentForm"])
+            self.assertEqual(f"<state>/attempts/{run_id}/att-none-{access}-1/result-receipt.json",
+                             result["resultFile"]["path"])
+            self.assertFalse({"outputCommit", "diffPath", "cumulativePatch"} & set(result))
+            self.assertEqual(access == "write", workflow.get("unsealedChanges", False))
+            self.assertEqual("delivered", workflow["state"])
+            self.assertEqual([], workflow["integrations"])
+            self.assertNotIn("hostId", workflow)
+            self.assertNotIn("ownerGeneration", workflow)
+            self.assertNotIn("buddyLocked", workflow)
+            self.assertNotIn("revision", workflow)
+        for source, strategy in (("commits", "three-way"), ("patch", "three-way-adjusted")):
+            workflow = json.loads((fixtures / f"normal/workflow-preview-run-git-{source}.json").read_text(encoding="utf-8"))
+            delivered = next(item for item in workflow["artifacts"] if item["kind"] == "output")
+            self.assertEqual(source, delivered["integrationSource"]["kind"])
+            self.assertTrue(delivered["sealedEvidence"]["snapshotSha256"])
+            integration = workflow["integrations"][0]
+            self.assertEqual(strategy, integration["strategy"])
+            verification = integration["verification"]
+            self.assertEqual(2, verification["version"])
+            self.assertEqual(source == "patch", bool(verification["adjustments"]))
+            self.assertEqual(source == "patch", bool(verification["conflictingPaths"]))
 
 
 class SessionFixtureTest(unittest.TestCase):
@@ -575,25 +615,23 @@ class PreviewDeletionTest(unittest.TestCase):
 
     def test_macro_task_list_sort_matches_requested_order(self) -> None:
         preview = self.preview
-        older = [f"macro-preview-list-{index}" for index in range(1, 7)]
-        expected = {
-            "activity-desc": [preview.MACRO_B, preview.MACRO_A, preview.MACRO_INPUT, preview.MACRO_C,
-                              *reversed(older[-2:]), preview.STANDALONE_GROUP],
-            "activity-asc": [*older[:5], preview.MACRO_B, preview.STANDALONE_GROUP],
-            "created-desc": [preview.MACRO_A, preview.MACRO_INPUT, preview.MACRO_C,
-                             *reversed(older[-2:]), preview.MACRO_B, preview.STANDALONE_GROUP],
-            "created-asc": [*older[:5], preview.MACRO_B, preview.STANDALONE_GROUP],
-        }
         with self.server() as server:
             status, default = self.call(server, "/api/macro-tasks")
             self.assertEqual(200, status)
-            self.assertEqual(expected["activity-desc"], [row["macroTaskId"] for row in macro_summaries(default)])
-            for sort, order in expected.items():
+            self.assertEqual({"firstLimit": 5, "groupLimit": 20}, default["defaults"])
+            self.assertEqual(default, self.call(server, "/api/macro-tasks?sort=activity-desc")[1])
+            self.assertTrue({preview.MACRO_EMPTY, preview.MACRO_FOLDER, preview.MACRO_DELIVERY} <=
+                            {row["macroTaskId"] for row in macro_summaries(default)})
+            for sort in ("activity-desc", "activity-asc", "created-desc", "created-asc"):
                 with self.subTest(sort=sort):
                     status, result = self.call(server, f"/api/macro-tasks?sort={sort}")
                     self.assertEqual(200, status)
-                    self.assertEqual(order, [row["macroTaskId"] for row in macro_summaries(result)])
                     self.assertEqual(default["totals"], result["totals"])
+                    field = "lastActivitySeq" if sort.startswith("activity") else "createdAt"
+                    for group in result["groups"]:
+                        values = [(row[field], row["macroTaskId"]) for row in group["macroTasks"]]
+                        self.assertEqual(sorted(values, reverse=sort.endswith("desc")), values)
+                        self.assertLessEqual(len(values), result["defaults"]["firstLimit"])
             for sort in ("random", "", "created-desc&sort=activity-asc"):
                 status, result = self.call(server, f"/api/macro-tasks?sort={sort}")
                 self.assertEqual((400, "INVALID_ARGUMENT"), (status, result["error"]["code"]))

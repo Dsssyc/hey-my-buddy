@@ -13,7 +13,7 @@ describe("awaiting review", () => {
     const delivered = task({
       state: "completed", resultAvailable: true, shutdownConfirmed: true,
       workflowShutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
-      workflow: { state: "delivered", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 },
+      workflow: { checkout: "worktree", projectKind: "git", state: "delivered", awaitingHost: false, revision: 1 },
     });
     expect(needsReview(delivered)).toBe(true);
     expect(needsReview({ ...delivered, workflow: undefined, workflowShutdown: undefined })).toBe(true);
@@ -26,13 +26,13 @@ describe("awaiting review", () => {
 
 describe("Lead ownership display", () => {
   it("shows a helper's Lead boundary through its root even without direct ownership", () => {
-    const boundary = task({ state: "completed", workflow: { state: "awaiting-host", awaitingHost: true, hostId: "host", ownerGeneration: 1, revision: 1 } });
+    const boundary = task({ state: "completed", workflow: { checkout: "worktree", projectKind: "git", state: "awaiting-host", awaitingHost: true, revision: 1 } });
     expect(taskStatus(boundary)).toBe("awaiting-host");
-    expect(taskStatus({ ...boundary, lineage: { kind: "micro-task", sourceHostId: "host", currentHostId: "host", parentRunId: null,
-      rootRunId: "run-1", rootLeadRunId: "lead-1", project: { id: "p", path: null, label: "p" }, buddy: null,
+    expect(taskStatus({ ...boundary, lineage: { kind: "micro-task", parentRunId: null,
+      rootRunId: "run-1", rootLeadRunId: "lead-1", project: { kind: "git" as const, id: "p", path: null, label: "p" }, buddy: null,
       leadOwnership: { leadRunId: "lead-1", leadTurnId: "turn-1", createdAt: boundary.createdAt } } })).toBe("awaiting-lead");
-    expect(taskStatus({ ...boundary, lineage: { kind: "helper", sourceHostId: "host", currentHostId: "host", parentRunId: "run-1",
-      rootRunId: "run-1", rootLeadRunId: "lead-1", project: { id: "p", path: null, label: "p" }, buddy: null,
+    expect(taskStatus({ ...boundary, lineage: { kind: "helper", parentRunId: "run-1",
+      rootRunId: "run-1", rootLeadRunId: "lead-1", project: { kind: "git" as const, id: "p", path: null, label: "p" }, buddy: null,
       leadOwnership: null } })).toBe("awaiting-lead");
     expect(taskStatus({ ...boundary, workflow: { ...boundary.workflow!, state: "waiting-owned" } })).toBe("waiting-owned");
   });
@@ -40,13 +40,13 @@ describe("Lead ownership display", () => {
 
 describe("micro task title rule (0.16 T1)", () => {
   it("prefers the explicit workflow title over everything else", () => {
-    const title = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 3, title: "修复标题" } }));
+    const title = taskTitle(task({ workflow: { checkout: "worktree", projectKind: "git", state: "delivered", awaitingHost: false, revision: 3, title: "修复标题" } }));
     expect(title.text).toBe("修复标题");
     expect(title.source).toBe("title");
   });
 
   it("uses the task line when there is no explicit title", () => {
-    const title = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 3 } }));
+    const title = taskTitle(task({ workflow: { checkout: "worktree", projectKind: "git", state: "delivered", awaitingHost: false, revision: 3 } }));
     expect(title.text).toBe("第一行标题");
     expect(title.source).toBe("task");
   });
@@ -54,7 +54,7 @@ describe("micro task title rule (0.16 T1)", () => {
   it("falls back to the trimmed first task line without an explicit title or workflow", () => {
     expect(taskTitle(task()).text).toBe("第一行标题");
     expect(taskTitle(task()).source).toBe("task");
-    expect(taskTitle(task({ workflow: { state: "executing", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 1 } })).text)
+    expect(taskTitle(task({ workflow: { checkout: "worktree", projectKind: "git", state: "executing", awaitingHost: false, revision: 1 } })).text)
       .toBe("第一行标题");
   });
 
@@ -67,17 +67,17 @@ describe("micro task title rule (0.16 T1)", () => {
     // Host-revised 0.16: the shared tooltip keeps the COMPLETE first line.
     expect(title.fullText).toBe(long);
     expect(title.fullText).toBe(long);
-    const explicit = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 1, title: "完整显式标题" } }));
+    const explicit = taskTitle(task({ workflow: { checkout: "worktree", projectKind: "git", state: "delivered", awaitingHost: false, revision: 1, title: "完整显式标题" } }));
     expect(explicit.fullText).toBe("完整显式标题");
   });
 
   it("normalizes whitespace in an explicit title to single spaces", () => {
-    const title = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 2, title: "a\tb  c\r\nd　e" } }));
+    const title = taskTitle(task({ workflow: { checkout: "worktree", projectKind: "git", state: "delivered", awaitingHost: false, revision: 2, title: "a\tb  c\r\nd　e" } }));
     expect(title.text).toBe("a b c d e");
   });
 
   it("names an unnamed microTask only when the title and first line are empty", () => {
-    expect(taskTitle(task({ task: "   \n\t ", workflow: { state: "queued", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 0 } })).text)
+    expect(taskTitle(task({ task: "   \n\t ", workflow: { checkout: "worktree", projectKind: "git", state: "queued", awaitingHost: false, revision: 0 } })).text)
       .toBe("未命名微任务");
     expect(taskTitle(task({ task: "", workflow: undefined })).source).toBe("none");
     expect(taskTitle(task({ task: "", workflow: undefined })).text).toBe("未命名微任务");
@@ -85,7 +85,7 @@ describe("micro task title rule (0.16 T1)", () => {
 
   it("treats empty and whitespace titles as absent", () => {
     const workflow = (title: string | null | undefined) => ({
-      state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 2, title,
+      state: "delivered", awaitingHost: false, revision: 2, title,
     }) as Task["workflow"];
     for (const broken of ["", "  \r\n\t ", null, undefined]) {
       expect(taskTitle(task({ workflow: workflow(broken) })).text).toBe("第一行标题");

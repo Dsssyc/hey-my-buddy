@@ -7,7 +7,6 @@ import {
   concurrencyLimit,
   modelServices,
   preferredVariant,
-  taskHost,
   taskProject,
 } from "./console-data";
 import type { Preference, Buddy, Task } from "./types";
@@ -21,18 +20,15 @@ const buddy = (buddyId: string, harness: string, provider: string, effort: strin
 afterEach(async () => { await i18n.changeLanguage("zh"); });
 
 describe("console grouping and recorded attribution", () => {
-  it("keeps the recorded delegator distinct from a later Host owner, including Lead-owned helper trees", async () => {
-    const task = { lineage: { sourceHostId: null, currentHostId: "host-after-takeover", rootLeadRunId: "root-lead",
-      leadOwnership: { leadRunId: "direct-lead" } } } as Task;
-    expect(taskHost(task)).toBe("Lead · direct-lead");
-    expect(workflowOwnerText(task)).toBe("host-after-takeover");
+  it("reads Host and Lead ownership from the recorded lineage", async () => {
+    const task = { lineage: { rootLeadRunId: "root-lead",
+      leadOwnership: { leadRunId: "direct-lead" } } } as unknown as Task;
+    expect(workflowOwnerText(task)).toBe("Lead · direct-lead");
     task.lineage!.leadOwnership = null;
-    expect(taskHost(task)).toBe("Lead · root-lead");
-    task.lineage!.sourceHostId = "original-host";
-    expect(taskHost(task)).toBe("original-host");
+    expect(workflowOwnerText(task)).toBe("Lead · root-lead");
     await i18n.changeLanguage("en");
-    expect(taskHost({} as Task)).toBe("Delegator not recorded");
-    expect(taskHost({ lineage: { rootLeadRunId: "lead-run" } } as Task)).toBe("Lead · lead-run");
+    expect(workflowOwnerText({} as Task)).toBe("Host");
+    expect(workflowOwnerText({ lineage: { rootLeadRunId: "lead-run" } } as Task)).toBe("Lead · lead-run");
   });
   it("orders each model's efforts by its native catalog rank, then puts unranked efforts last by name", () => {
     const native = [
@@ -82,14 +78,14 @@ describe("console grouping and recorded attribution", () => {
   });
 
   it("uses backend source metadata and never guesses a project or Host from execution cwd or owner", () => {
-    const task = { runId: "micro-task", cwd: "/runtime/worktrees/generated", owner: "worker:guess" } as Task;
+    const task = { runId: "micro-task", cwd: "/runtime/worktrees/generated", owner: "worker:guess" } as unknown as Task;
     expect(taskProject(task)).toBeNull();
-    expect(taskHost(task)).toBe("未记录委派方");
-    task.lineage = { kind: "helper", sourceHostId: "codex-original", currentHostId: "codex-new",
+    expect(workflowOwnerText(task)).toBe("Host");
+    task.lineage = { kind: "helper",
       parentRunId: "parent", rootRunId: "root", rootLeadRunId: null, routingTask: null,
-      project: { id: "repo-id", path: "/source/project", label: "Project" }, buddy: null };
+      project: { kind: "git", id: "repo-id", path: "/source/project", label: "Project" }, buddy: null };
     expect(taskProject(task)).toEqual(task.lineage.project);
-    expect(taskHost(task)).toBe("codex-original");
+    expect(workflowOwnerText(task)).toBe("Host");
   });
 });
 

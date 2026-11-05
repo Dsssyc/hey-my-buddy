@@ -4,17 +4,17 @@ import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
 import { retainEqual } from "./retain-equal";
 import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
-import type { MacroTaskFilter, MacroTaskGroup, MacroTaskQuery, MacroTaskSort } from "./macro-task-types";
+import type { MacroTaskFilter, MacroTaskGroup, MacroTaskPage, MacroTaskQuery, MacroTaskSort } from "./macro-task-types";
 import { readChoiceViewPreference, storeViewPreference } from "./view-preferences";
 
-type PageState = { groups: MacroTaskGroup[]; totals: Record<MacroTaskFilter, number> };
-const emptyPage = (): PageState => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 } });
+type PageState = { groups: MacroTaskGroup[]; totals: Record<MacroTaskFilter, number>; defaults: MacroTaskPage["defaults"] | null };
+const emptyPage = (): PageState => ({ defaults: null, groups: [], totals: { all: 0, active: 0, host: 0, review: 0 } });
 const identities = (groups: MacroTaskGroup[]) => groups.map(group => [group.id, group.macroTasks.map(row => row.macroTaskId)]);
 const sortPreference = (groupId: string) => `macro-task-sort:${groupId}`;
 const readSort = (groupId: string) => readChoiceViewPreference(sortPreference(groupId), ["activity-desc", "activity-asc", "created-desc", "created-asc"] as const);
 
 /** Each group owns its keyset. Refreshes replay the loaded extent of each group. */
-export function useMacroTaskList(api: ConsoleApi, query: Pick<MacroTaskQuery, "query" | "filter" | "hostId">, active: boolean) {
+export function useMacroTaskList(api: ConsoleApi, query: Pick<MacroTaskQuery, "query" | "filter">, active: boolean) {
   const [revision, setRevision] = useState(0);
   // An open view owns the order its cursors were read with. Another window's
   // stored choice is picked up by a new view, never midway through paging.
@@ -60,7 +60,7 @@ export function useMacroTaskList(api: ConsoleApi, query: Pick<MacroTaskQuery, "q
     request.current = controller; pending.current = true;
     if (foreground) { setLoading(true); setError(""); }
     try {
-      const next = await api.macroTasks({ ...params, ...(group ? { group: group.id, sort: groupSort(group.id) ?? "activity-desc", before: group.nextCursor!, limit: 20 } : {}) }, controller.signal);
+      const next = await api.macroTasks({ ...params, ...(group ? { group: group.id, sort: groupSort(group.id) ?? "activity-desc", before: group.nextCursor!, limit: loaded.defaults!.groupLimit } : {}) }, controller.signal);
       if (version !== generation.current || controller.signal.aborted) return;
       let checked = api.readVerifiedAt?.(next) ?? null;
       let groups = next.groups;
@@ -70,7 +70,7 @@ export function useMacroTaskList(api: ConsoleApi, query: Pick<MacroTaskQuery, "q
       if (!group) groups = await Promise.all(next.groups.map(async first => {
         const sort = groupSort(first.id);
         if (sort) {
-          const ordered = await api.macroTasks({ ...params, group: first.id, sort, limit: 5 }, controller.signal);
+          const ordered = await api.macroTasks({ ...params, group: first.id, sort, limit: next.defaults.firstLimit }, controller.signal);
           changed ||= ordered.changed;
           const time = api.readVerifiedAt?.(ordered) ?? null;
           checked = checked === null || time === null ? null : Math.min(checked, time);
@@ -99,7 +99,7 @@ export function useMacroTaskList(api: ConsoleApi, query: Pick<MacroTaskQuery, "q
         const known = new Set(group.macroTasks.map(row => row.macroTaskId));
         setPage(previous => retainEqual(previous, { groups: previous.groups.map(item => item.id !== group.id ? item : {
           ...tail, macroTasks: [...item.macroTasks, ...tail.macroTasks.filter(row => !known.has(row.macroTaskId))],
-        }), totals: next.totals }));
+        }), defaults: next.defaults, totals: next.totals }));
         if (changed) setReorder(previous => previous ?? { count: null });
       } else if (mode === "poll" && loaded.groups.length) {
         const nextById = new Map(groups.map(item => [item.id, item]));
@@ -111,10 +111,10 @@ export function useMacroTaskList(api: ConsoleApi, query: Pick<MacroTaskQuery, "q
             .map(row => byId.get(row.macroTaskId) ?? row) };
         });
         const orderChanged = JSON.stringify(identities(groups)) !== JSON.stringify(identities(retained));
-        setPage(previous => retainEqual(previous, { groups: orderChanged ? retained : groups, totals: next.totals }));
+        setPage(previous => retainEqual(previous, { groups: orderChanged ? retained : groups, defaults: next.defaults, totals: next.totals }));
         if (orderChanged || changed) setReorder(previous => previous ?? { count: null });
       } else {
-        setPage(previous => retainEqual(previous, { groups, totals: next.totals }));
+        setPage(previous => retainEqual(previous, { groups, defaults: next.defaults, totals: next.totals }));
         needsFirst.current = false;
         setReorder(changed ? { count: null } : null);
       }

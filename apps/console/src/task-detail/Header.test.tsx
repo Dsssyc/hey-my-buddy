@@ -40,7 +40,7 @@ for (const language of ["zh", "en"] as const) describe(`micro task state in ${la
         rootLeadRunId: entry.lead ? "lead-1" : null } });
     const conclusion = "conclusion" in entry ? {
       conclusionId: "conclusion-1", executionStatus: entry.conclusion, note: null, reason: null,
-      artifactId: null, attemptId: "att-2", actor: HOST, createdAt: at("11:05"), runRevision: 9,
+      artifactId: null, attemptId: "att-2", actor: HOST, createdAt: at("11:05"),
     } : null;
     const view = render(<TooltipProvider><Header view={parseTask(record, "m1")}
       workflow={entry.loaded ? workflow({ state: entry.state, hostConclusion: conclusion }) : null} turns={2}

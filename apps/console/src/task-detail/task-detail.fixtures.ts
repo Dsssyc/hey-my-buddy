@@ -15,7 +15,7 @@ import type { Audit, Basis, Buddy, Inquiries, Inquiry, ResultTurn, RoutingEntry,
 export const CODEX: Buddy = { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" };
 export const OPUS: Buddy = { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
 const ROUTER: Buddy = { harness: "codex", provider: "openai", model: "gpt-6-luna", effort: "high" };
-export const HOST = { role: "host" as const, id: "codex-desktop" };
+export const HOST = { role: "host" as const };
 
 export function inputFailure(known = true): InputFailure {
   const parts = { role: 1000, task: 1000000, hostInput: 20000, context: 26000, delivery: 1000, format: 577 };
@@ -38,13 +38,13 @@ export const at = (clock: string, second = 0) => `2026-09-26T${clock}:${String(s
 export function task(overrides: Record<string, unknown> = {}): Task {
   const { selectedAttempt, ...rest } = overrides;
   return {
-    runId: "m1", task: "实现微任务详情，左边是步骤，右边是这一步的内容。", state: "completed", owner: null, cwd: "/work/m1",
+    runId: "m1", task: "实现微任务详情，左边是步骤，右边是这一步的内容。", state: "completed", cwd: "/work/m1",
     spec: {},
     revision: 5, createdAt: at("10:00"), updatedAt: at("11:00"), acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
     activeAttemptId: null, selectedAttemptId: "att-2", resultAvailable: true, shutdownConfirmed: true,
-    lineage: { kind: "micro-task", sourceHostId: "codex-desktop", currentHostId: "codex-desktop", parentRunId: null, rootRunId: "m1", rootLeadRunId: null,
-      project: { id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" }, buddy: OPUS },
-    workflow: { state: "delivered", awaitingHost: false, hostId: "codex-desktop", ownerGeneration: 1, revision: 9, title: "微任务详情", macroTaskId: "macro-1" },
+    lineage: { kind: "micro-task", parentRunId: null, rootRunId: "m1", rootLeadRunId: null,
+      project: { id: "p1", kind: "git", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" }, buddy: OPUS },
+    workflow: { state: "delivered", awaitingHost: false, checkout: "worktree", projectKind: "git", revision: 9, title: "微任务详情", macroTaskId: "macro-1" },
     selectedAttempt: { attemptId: "att-2", startedAt: at("10:42"), finishedAt: at("11:00"), error: null, shutdownConfirmed: true, tokenUsage: null,
       reminders: { overdue: false, possiblyStuck: false, lastNativeEventAt: null, toolInProgress: false },
       result: { terminationReason: "completed", result: { finalText: "完成。" } }, ...(selectedAttempt as object | undefined) },
@@ -56,7 +56,7 @@ function turn(index: number, overrides: Partial<Turn> = {}): Turn {
   return {
     turnId: `turn-${index}`, turnIndex: index, attemptId: `att-${index}`, expectedSeconds: 1800, resumeMode: index === 1 ? "initial" : "native-session",
     sessionId: `01a2f7c4-${index}e31`.padEnd(36, "0"), state: "returned", disposition: "completed", createdAt: at(index === 1 ? "10:02" : "10:42"),
-    updatedAt: at(index === 1 ? "10:30" : "11:00"), buddy: index === 1 ? CODEX : OPUS, routing: index === 1 ? { decisionId: "decision-1", buddyRevision: 1 } : { decisionId: null, buddyRevision: 2 },
+    updatedAt: at(index === 1 ? "10:30" : "11:00"), checkout: "worktree", projectKind: "git", access: "write", buddy: index === 1 ? CODEX : OPUS, routing: index === 1 ? { decisionId: "decision-1", buddyRevision: 1 } : { decisionId: null, buddyRevision: 2 },
     tokenUsage: { inputTokens: 23400, cachedInputTokens: 18000, outputTokens: 3100, source: "codex-native", scope: "attempt", inputBasis: "includes-cached" },
     ...overrides,
   };
@@ -69,7 +69,7 @@ export const NO_BASIS: Basis = { constraints: {}, requiredCapabilities: [], cand
 export function workflow(overrides: Partial<Workflow> = {}): Workflow {
   const turns = [turn(2), turn(1)];
   return {
-    runId: "m1", revision: 9, state: "delivered", hostId: "codex-desktop", buddy: OPUS, buddyLocked: false, delegationAuthority: false,
+    runId: "m1", taskRevision: 9, state: "delivered", checkout: "worktree", projectKind: "git", unsealedChanges: false, buddy: OPUS, delegationAuthority: false,
     routing: { status: "completed", decisionId: "decision-1", source: "model-selection", basis: NO_BASIS },
     turns, currentTurn: result(2, "第二轮：详情页已经按回合重做。", ["浏览器检查还要补两项"]),
     activeRequest: null,
@@ -82,7 +82,6 @@ export function workflow(overrides: Partial<Workflow> = {}): Workflow {
 
 export function audit(overrides: Partial<Audit> = {}): Audit {
   return {
-    revision: 9,
     turns: [result(1, "第一轮：读完了旧的详情，列出了要删的部分。"), result(2, "第二轮：详情页已经按回合重做。", ["浏览器检查还要补两项"])],
     continuations: [{ continuationId: "cont-1", turnId: "turn-2", kind: "manual", note: "批准后继续", createdAt: at("10:41"),
       input: "继续。读取样例目录已获批准；顺带核对路径边界。" }],

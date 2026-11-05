@@ -379,7 +379,16 @@ export function TaskWork(props: TaskWorkProps) {
     {props.error && <div role="alert" className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-hand-wash px-4 py-2 text-xs text-hand">{t("timelineReadFailed", { at: clockTime(timeline?.observedAt) })}<span className="wrap-anywhere">{props.error}</span><Button variant="outline" size="sm" aria-busy={props.loading} disabled={props.loading} onClick={props.onRetry}>{t(props.loading ? "loading" : "retry")}</Button></div>}
     {props.stale && !props.error && <p role="status" className="border-b bg-hand-wash px-4 py-2 text-xs text-hand">{t("staleTimeline")}</p>}
     {!timeline && props.loading ? <div role="status" className="flex flex-1 animate-pulse items-center justify-center motion-reduce:animate-none">{t("loading")}</div>
-      : timeline && timeline.rows.length === 0 && !open ? <p className="p-6 text-sm text-ink2">{t("noMicroTasks")}</p> : <>
+      : timeline && timeline.rows.length === 0 && !open ? <>
+        <div data-slot="timeline-empty-stage" className="grid min-h-0 min-w-0 flex-1" style={{ gridTemplateColumns: `${nameWidth}px minmax(0,1fr)` }}>
+          <div data-slot="task-names" className="min-w-0 border-r border-line bg-card">
+            <div className="border-b border-line">{rowFilter}</div>
+            <p className="p-6 text-sm text-ink2">{t("noMicroTasks")}</p>
+          </div>
+          <div aria-label={t("microTasks")} className="min-w-0 bg-background"><div className="h-9 border-b border-line bg-ruler"/></div>
+        </div>
+        <div data-slot="timeline-status" className="flex min-h-9 shrink-0 items-center justify-end border-t bg-card px-4 py-1.5 text-xs text-ink2 sm:px-6"><Legend/></div>
+      </> : <>
         {open
           ? <div data-slot="timeline-detail-stage" className="relative grid min-h-0 min-w-0 flex-1" style={{ gridTemplateColumns: narrow ? "minmax(0,1fr)" : `${nameWidth}px minmax(0,1fr)` }}>
             <ScrollArea className={cn("min-h-0 min-w-0 bg-card", narrow && "hidden")}

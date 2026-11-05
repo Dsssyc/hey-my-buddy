@@ -7,22 +7,22 @@ import { actorText, parseActor, stopActorText, workflowOwnerText } from "./actor
 afterEach(async () => { await i18n.changeLanguage("zh"); });
 
 describe("recorded actor roles", () => {
-  it("keeps a Host's Lead-like name separate from its role and refuses the retired wire form", () => {
-    const host = { role: "host" as const, id: "lead:literal-name" };
-    expect(parseActor(host)).toEqual(host);
-    expect(actorText(host)).toBe("Host · lead:literal-name");
+  it("shows Host by role and preserves real Lead identities", () => {
+    expect(parseActor({ role: "host" })).toEqual({ role: "host" });
+    expect(actorText({ role: "host" })).toBe("Host");
+    expect(actorText({ role: "host", id: "historical-name" })).toBe("Host");
+    expect(parseActor({ role: "host", id: "historical-name" })).toEqual({ role: "host" });
     expect(actorText({ role: "lead", id: "literal-name" })).toBe("Lead · literal-name");
     expect(parseActor("lead:literal-name")).toBeNull();
     expect(parseActor({ role: "worker", id: "retired-role" })).toBeNull();
     expect(parseActor({ role: "host", id: { token: "invalid" } })).toBeNull();
   });
 
-  it("uses the explicit Lead relationship for an absent Host and records absence honestly", () => {
-    expect(workflowOwnerText({}, null)).toBe("未记录");
+  it("uses the explicit Lead relationship and otherwise shows Host", () => {
+    expect(workflowOwnerText({})).toBe("Host");
     expect(workflowOwnerText({ lineage: {
-      currentHostId: null, rootLeadRunId: "lead-run",
-    } } as Parameters<typeof workflowOwnerText>[0], null)).toBe("Lead · lead-run");
-    expect(workflowOwnerText({}, "lead:literal-host")).toBe("lead:literal-host");
+      kind: "micro-task", parentRunId: null, rootRunId: "run", project: null, buddy: null, rootLeadRunId: "lead-run",
+    } })).toBe("Lead · lead-run");
   });
 
   it("writes role labels in the browser's language", async () => {

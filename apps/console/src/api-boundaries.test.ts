@@ -233,7 +233,7 @@ describe("storage, macro task and version response boundaries", () => {
   });
   it("keeps permissive timeline projections and integer cursors while checking summary safe counts", async () => {
     const macroTask = { ...macroTaskSummary(), createdAt: "bad", lastActivityAt: "bad", extra: true };
-    const page = { groups: [{ ...macroTaskGroups([macroTask])[0], nextCursor: "" }], totals: { all: 0, active: 0, host: 0, review: 0 }, cursor: -unsafe, changed: false, extra: true };
+    const page = { groups: [{ ...macroTaskGroups([macroTask])[0], nextCursor: "" }], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: -unsafe, changed: false, extra: true };
     await expect(apiFor(page).macroTasks({})).resolves.toMatchObject(page);
     for (const value of [{ ...page, groups: [{ ...page.groups[0], macroTasks: [{ ...macroTask, lastActivitySeq: unsafe }] }] },
       { ...page, groups: [{ ...page.groups[0], macroTasks: [{ ...macroTask, counts: { ...macroTask.counts, roots: -1 } }] }] },
@@ -253,7 +253,7 @@ describe("storage, macro task and version response boundaries", () => {
   it("requires every summary field and count while keeping its exact enums and nullable fields", async () => {
     const summary = macroTaskSummary();
     const read = (value: unknown) => apiFor({ groups: [{ ...macroTaskGroups([summary])[0], macroTasks: [value] }], totals: { all: 0, active: 0, host: 0, review: 0 },
-      cursor: 0, changed: false }).macroTasks({});
+      defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false }).macroTasks({});
     for (const key of Object.keys(summary)) {
       await expect(read(without(summary, key))).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
@@ -262,11 +262,11 @@ describe("storage, macro task and version response boundaries", () => {
       await expect(read({ ...summary, counts: { ...summary.counts, [key]: Number.MAX_SAFE_INTEGER } })).resolves.toBeDefined();
     }
     for (const [key, values] of Object.entries({ kind: ["macro-task", "standalone"],
-      titleSource: ["macro-task", "title", "task", "none"], state: ["host", "active", "review", "ended"] })) {
+      titleSource: ["macro-task", "title", "task", "none"], state: ["host", "active", "review", "ended", "empty"] })) {
       for (const value of values) await expect(read({ ...summary, [key]: value })).resolves.toBeDefined();
       await expect(read({ ...summary, [key]: "other" })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
-    for (const key of ["title", "project", "sourceHostId", "createdAt", "lastActivityAt"]) {
+    for (const key of ["title", "project", "createdAt", "lastActivityAt"]) {
       await expect(read({ ...summary, [key]: null })).resolves.toBeDefined();
       await expect(read({ ...summary, [key]: undefined })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }

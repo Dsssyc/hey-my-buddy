@@ -21,17 +21,16 @@ const heading = () => document.querySelector("[data-slot=detail-header] h2") as 
 const ready = () => waitFor(() => expect(document.querySelector("[data-slot=detail-pane]")).toBeTruthy());
 
 describe("the micro task title rule in the detail (0.16 T1)", () => {
-  it.each(["zh", "en"])("shows the original Lead independently of a later owner in %s", async language => {
+  it.each(["zh", "en"])("shows the recorded Lead owner in %s", async language => {
     await i18n.changeLanguage(language);
     try {
-      const lead = task({ lineage: { ...task().lineage!, sourceHostId: null, currentHostId: "host-takeover", rootLeadRunId: "lead-run",
+      const lead = task({ lineage: { ...task().lineage!, rootLeadRunId: "lead-run",
         leadOwnership: { leadRunId: "lead-run", leadTurnId: "lead-turn", createdAt: at("10:00") } } });
-      detail({ task: lead, workflow: workflow({ hostId: "host-takeover" }) });
+      detail({ task: lead, workflow: workflow() });
       await ready();
-      const original = await screen.findByText(language === "zh" ? "原始委派方" : "Originally delegated by", { selector: "dt" });
-      expect(original.nextElementSibling!.textContent).toBe("Lead · lead-run");
-      const current = screen.getByText(language === "zh" ? "当前负责方" : "Current owner", { selector: "dt" });
-      expect(current.nextElementSibling!.textContent).toBe("host-takeover");
+      const owner = await screen.findByText(language === "zh" ? "归属" : "Owner", { selector: "dt" });
+      expect(owner.nextElementSibling!.textContent).toBe("Lead · lead-run");
+      expect(screen.queryByText(language === "zh" ? "原始委派方" : "Originally delegated by")).toBeNull();
     } finally { await i18n.changeLanguage("zh"); }
   });
 
@@ -79,8 +78,8 @@ describe("the micro task title rule in the detail (0.16 T1)", () => {
     await ready();
     expect(heading().textContent).toBe("微任务详情");
     await waitFor(() => expect(document.querySelector("[data-slot=detail-pane]")!.textContent).toContain("第二轮：详情页已经按回合重做。"));
-    reads.held.workflow = workflow({ revision: 10, currentTurn: { ...workflow().currentTurn!, summary: "历史记录刷新后的最新结论" } });
-    reads.held.audit = audit({ revision: 10, turns: [result(1, "第一轮"), result(2, "历史记录刷新后的最新结论")] });
+    reads.held.workflow = workflow({ taskRevision: 10, currentTurn: { ...workflow().currentTurn!, summary: "历史记录刷新后的最新结论" } });
+    reads.held.audit = audit({ turns: [result(1, "第一轮"), result(2, "历史记录刷新后的最新结论")] });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 3100)); });
     await waitFor(() => expect(document.querySelector("[data-slot=detail-pane]")!.textContent).toContain("历史记录刷新后的最新结论"));
     expect(heading().textContent).toBe("微任务详情");

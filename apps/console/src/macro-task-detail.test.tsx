@@ -30,22 +30,21 @@ function taskFixture(runId: string): Task {
   const base: Task = { runId, task: `目标 ${runId}`, state: "completed", owner: "fixture", cwd: `/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-26T01:12:00Z", updatedAt: "2026-09-26T01:12:00Z", acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
     resultAvailable: true, shutdownConfirmed: true,
-    lineage: { kind: runId === "r3" ? "helper" : "micro-task", sourceHostId: "codex-desktop", currentHostId: "codex-desktop",
-      parentRunId: runId === "r3" ? "r2" : null, rootRunId: runId === "r3" ? "r2" : runId, rootLeadRunId: null,
-      project: { id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" },
+    lineage: { kind: runId === "r3" ? "helper" : "micro-task", parentRunId: runId === "r3" ? "r2" : null, rootRunId: runId === "r3" ? "r2" : runId, rootLeadRunId: null,
+      project: { kind: "git" as const, id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" },
       buddy: { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" }, routingTask: null } };
   // Every micro task of the macro task has a collaboration record; r2 waits for its Host.
-  base.workflow = { state: runId === "r2" ? "awaiting-host" : "delivered", awaitingHost: runId === "r2", hostId: "codex-desktop", ownerGeneration: 2, revision: 1, macroTaskId: "macro-1" };
+  base.workflow = { checkout: "worktree", projectKind: "git", state: runId === "r2" ? "awaiting-host" : "delivered", awaitingHost: runId === "r2", revision: 1, macroTaskId: "macro-1" };
   return base;
 }
 
 /** The compact collaboration record as `workflow_get` sends it. */
 function workflowFixture(task: Task) {
-  return { runId: task.runId, hostId: "codex-desktop", revision: 1, state: task.workflow!.state, buddy: null, buddyLocked: false, delegationAuthority: false,
+  return { checkout: "worktree", project: { kind: "git" }, runId: task.runId, revision: 1, state: task.workflow!.state, buddy: null, delegationAuthority: false,
     routing: null, turns: [], currentTurn: null, activeRequest: null, requests: [], counts: { turns: 0, openRequests: 0 },
     children: task.runId === "r2" ? [{ taskId: "r3", role: "helper", state: "succeeded" }] : [],
     artifacts: [], integrations: [], finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
-    task: { lineage: task.lineage } };
+    task: { revision: task.revision, lineage: task.lineage } };
 }
 
 type Pending = { promise: Promise<unknown>; resolve: (value: unknown) => void };
@@ -105,7 +104,7 @@ function harness(options: StopOptions = {}) {
     command,
     task: vi.fn(async (runId: string) => structuredClone(tasks.get(runId) ?? taskFixture(runId))),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(listed), totals: { all: listed.length, active: listed.length, host: 0, review: 0 }, cursor: 41, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(listed), totals: { all: listed.length, active: listed.length, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 41, changed: false })),
     macroTaskTimeline: timelineReader,
   } as unknown as ConsoleApi;
   const refresh = vi.fn(async () => structuredClone(snapshot));
@@ -280,7 +279,7 @@ describe("the detail of a micro task in its macro task", () => {
     await openSpan(f, "s-r1-q");
     // The next list read returns an empty page (a refresh or filter gap); the
     // timeline's own summary keeps the detail alive.
-    (f.api.macroTasks as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, cursor: 41, changed: false });
+    (f.api.macroTasks as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 41, changed: false });
     // The existing bounded periodic read is the trigger; there is no shell broadcast.
     await waitFor(() => expect(f.api.macroTasks).toHaveBeenCalledTimes(2), { timeout: 4500 });
     expect(screen.getByRole("group", { name: "这个微任务的各步" })).toBeTruthy();

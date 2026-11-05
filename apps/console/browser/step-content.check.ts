@@ -137,10 +137,11 @@ for (const width of [1280, 390]) test.describe(`common step content dark zh ${wi
         await expect(pane(page).getByRole("heading", { name: "Host 验收说明" })).toBeVisible();
         await expect(pane(page).locator("li code")).toHaveText("layout.tsx");
         await expect(pane(page).getByText("已验收", { exact: true })).toHaveCount(1);
-        await expect(pane(page).getByText("SHA-256", { exact: true })).toHaveCount(0);
-        await pane(page).getByRole("button", { name: /文件 1/ }).click();
-        await expect(pane(page).getByText("SHA-256", { exact: true })).toBeVisible();
-        await pane(page).getByRole("button", { name: /文件 1/ }).click();
+        const seal = pane(page).getByRole("group", { name: "封存证据", exact: true });
+        await expect(seal.getByText("快照摘要", { exact: true })).toBeVisible();
+        await seal.locator('[data-slot="collapsible-trigger"]').click();
+        await expect(seal.getByText("快照摘要", { exact: true })).toHaveCount(0);
+        await seal.locator('[data-slot="collapsible-trigger"]').click();
       }
       await page.mouse.move(0, 0);
       await settle(page);

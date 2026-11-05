@@ -61,11 +61,11 @@ for (const language of ["zh", "en"]) test(`header controls and goal geometry ${l
   expect(button.x - before.x - before.width, "goal button immediately follows the title").toBeCloseTo(6, 0);
   expect(Math.abs(button.y + button.height / 2 - before.y - before.height / 2)).toBeLessThan(1);
   await expect(trigger).toHaveAttribute("data-size", "icon-sm");
-  await expect(header.locator('[data-slot="macro-overview-facts"] dt')).toHaveText(language === "zh" ? ["项目", "Host", "历时", "ID"] : ["Project", "Host", "Elapsed", "ID"]);
+  await expect(header.locator('[data-slot="macro-overview-facts"] dt')).toHaveText(language === "zh" ? ["仓库", "历时", "ID"] : ["Repository", "Elapsed", "ID"]);
   await expect(title).toHaveAttribute("data-overflow", "false");
   await noHint(page, title);
   await trigger.hover();
-  await expect(page.getByRole("tooltip")).toHaveText(language === "zh" ? "目标说明" : "Goal");
+  await expect(page.getByRole("tooltip")).toHaveText(language === "zh" ? "查看目标说明" : "View goal description");
   await page.mouse.move(0, 0);
   if (language === "zh") await shot(page, "zh-dark-1280-header");
   await trigger.click();

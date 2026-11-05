@@ -56,7 +56,7 @@ for (const scene of [
   await expect(trigger.locator("svg.lucide-target")).toHaveCount(1);
   const header = page.locator('[data-slot="macro-overview-header"]');
   const facts = header.locator('[data-slot="macro-overview-facts"]');
-  await expect(facts.locator("dt")).toHaveText(scene.language === "zh" ? ["项目", "Host", "历时", "ID"] : ["Project", "Host", "Elapsed", "ID"]);
+  await expect(facts.locator("dt")).toHaveText(scene.language === "zh" ? ["仓库", "历时", "ID"] : ["Repository", "Elapsed", "ID"]);
   expect(reads).toBe(0);
   await mkdir(captures, { recursive: true });
   await page.screenshot({ path: `${captures}/${name}-closed.png` });
@@ -233,7 +233,7 @@ for (const font of [null, '"Courier New", monospace']) for (const width of [1280
   releaseList();
   const copy = facts.getByRole("button", { name: `复制标识 ${macro}`, exact: true });
   await expect(copy).toBeVisible();
-  await expect(facts.locator(":scope > div")).toHaveCount(4);
+  await expect(facts.locator(":scope > div")).toHaveCount(3);
   if (font) await facts.evaluate((element, family) => { (element as HTMLElement).style.fontFamily = family; }, font);
   const geometry = () => facts.locator(":scope > div, dt, dd, button, [data-slot=copyable-identifier] > span, svg").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()));
   const before = await geometry();

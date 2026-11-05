@@ -1,7 +1,5 @@
 import type { ModelService, ModelServiceConcurrencyEntry, Preference, Buddy, Task } from "./types";
 import { catalogPending, buddyName } from "./buddy-name";
-import i18n from "i18next";
-import { actorText } from "./actor";
 
 export const modelServiceKey = (p: ModelService) => JSON.stringify([p.harness, p.provider, p.model]);
 
@@ -94,10 +92,4 @@ export function preferredVariant(modelService: ModelServiceGroup, preferences: P
 }
 export function taskProject(task: Task) {
   return task.lineage?.project ?? null;
-}
-/** Recorded source attribution survives takeover; current ownership is separate. */
-export function taskHost(task: Task) {
-  if (task.lineage?.sourceHostId) return task.lineage.sourceHostId;
-  const lead = task.lineage?.leadOwnership?.leadRunId ?? task.lineage?.rootLeadRunId;
-  return lead ? actorText({ role: "lead", id: lead }) : i18n.t("shell:actor.unrecordedDelegator");
 }

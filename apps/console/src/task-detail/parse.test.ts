@@ -38,35 +38,35 @@ const seals = [
   { artifactId: "s-refs", kind: "shared-refs", attemptId: "a1", turnId: "t1", sourceTaskId: "m1", manifestSha256: "c".repeat(64), createdAt: "t", sharedStash: { state: "observed" } },
 ];
 const output = { artifactId: "o1", kind: "output", contentForm: "sealed-inline-v1", attemptId: "a1", turnId: "t1", sourceTaskId: "m1", manifestSha256: "d".repeat(64), createdAt: "t",
-  outputCommit: "c2", diffPath: "/d.diff", diffSha256: "e".repeat(64), changedPaths: ["a.ts"], cumulativePatch: { baseCommit: "c1", outputCommit: "c2", path: "/p", sha256: "f".repeat(64), changedPaths: ["a.ts"] } };
+  sealedEvidence: { snapshotSha256: "e".repeat(64), tree: "2".repeat(40) }, diffPath: "/d.diff", diffSha256: "e".repeat(64), changedPaths: ["a.ts"], cumulativePatch: { baseCommit: "c1", path: "/p", sha256: "f".repeat(64), changedPaths: ["a.ts"] } };
 const partial = { ...output, artifactId: "o2", kind: "partial-output", partial: true, verified: false, final: false, cumulativePatch: undefined };
 
 const turn = { turnId: "t1", turnIndex: 1, attemptId: "a1", expectedSeconds: 1800, resumeMode: "initial", sessionId: null, state: "returned", disposition: "completed",
-  createdAt: "x", updatedAt: "y", buddy: { harness: "codex", provider: "openai", model: "m", effort: "high" }, routing: { decisionId: null, buddyRevision: 1 }, tokenUsage: null };
+  createdAt: "x", updatedAt: "y", checkout: "worktree", projectKind: "git", access: "write", buddy: { harness: "codex", provider: "openai", model: "m", effort: "high" }, routing: { decisionId: null, buddyRevision: 1 }, tokenUsage: null };
 const reply = (overrides: Record<string, unknown> = {}) => ({
-  runId: "m1", revision: 3, state: "executing", hostId: null, buddy: null, buddyLocked: false, delegationAuthority: false, routing: null,
+  runId: "m1", state: "executing", checkout: "worktree", project: { kind: "git" }, buddy: null, delegationAuthority: false, routing: null,
   turns: [], currentTurn: null, activeRequest: null, requests: [], counts: { turns: 0, openRequests: 0 }, children: [], artifacts: [], integrations: [],
-  finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: null, task: {}, ...overrides,
+  finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: null, task: { revision: 3 }, ...overrides,
 });
 
 describe("the compact collaboration record", () => {
   it("reads a system request and an automatic conclusion with null authored text", () => {
     const reason = { code: "lead.result-refused", params: { disposition: "completed", unfinished: [{ runId: "child", state: "executing" }], total: 1 } };
     const conclusion = { conclusionId: "c", executionStatus: "failed", note: null, reason: { code: "lead.owned-concluded", params: { leadRunId: "lead" } },
-      artifactId: null, attemptId: null, actor: HOST, createdAt: "t", runRevision: 1 };
+      artifactId: null, attemptId: null, actor: HOST, createdAt: "t" };
     const parsed = parseWorkflow(reply({ activeRequest: { requestId: "r", kind: "attention", state: "open", createdAt: "t", decidedAt: null,
       childTaskId: null, routing: false, summary: null, reason, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null },
       hostConclusion: conclusion }), "m1");
     expect(parsed.activeRequest).toMatchObject({ summary: null, reason });
-    expect(parsed.hostConclusion).toEqual(conclusion);
+    expect(parsed.hostConclusion).toEqual({ ...conclusion, actor: { role: "host" } });
   });
   it("belongs to the run asked for, with a revision", () => {
-    expect(parseWorkflow(reply(), "m1")).toMatchObject({ runId: "m1", revision: 3, buddyLocked: false, delegationAuthority: false, counts: { turns: 0, openRequests: 0 } });
+    expect(parseWorkflow(reply(), "m1")).toMatchObject({ runId: "m1", taskRevision: 3, delegationAuthority: false, counts: { turns: 0, openRequests: 0 } });
   });
 
   it("refuses another run's record, and a record that lacks what the service always sends, all the same way", () => {
-    for (const bad of [reply({ runId: "other" }), reply({ revision: undefined }), reply({ revision: 1.5 }), reply({ counts: { openRequests: 0 } }),
-      reply({ buddyLocked: undefined }), reply({ turns: "none" }), reply({ children: [{ taskId: "h", role: "helper", state: "delivered" }] }), null, "text"]) {
+    for (const bad of [reply({ runId: "other" }), reply({ task: {} }), reply({ task: { revision: 1.5 } }), reply({ counts: { openRequests: 0 } }),
+      reply({ checkout: undefined }), reply({ turns: "none" }), reply({ children: [{ taskId: "h", role: "helper", state: "delivered" }] }), null, "text"]) {
       expect(() => parseWorkflow(bad, "m1")).toThrow(ApiError);
       expect(() => parseWorkflow(bad, "m1")).toThrow(expect.objectContaining({ code: "INVALID_RESPONSE" }));
     }
@@ -77,7 +77,7 @@ describe("the compact collaboration record", () => {
     expect(parsed.artifacts.map(item => [item.artifactId, item.kind, item.partial, item.verified, item.final])).toEqual([
       ["o1", "output", false, null, null], ["o2", "partial-output", true, false, false],
     ]);
-    expect(parsed.artifacts[0]!.cumulativePatch).toMatchObject({ baseCommit: "c1", outputCommit: "c2", changedPaths: ["a.ts"] });
+    expect(parsed.artifacts[0]!.cumulativePatch).toMatchObject({ baseCommit: "c1", changedPaths: ["a.ts"] });
     expect(parsed.artifacts[1]!.cumulativePatch).toBeNull();
     // A sealed output must name its attempt: that is what files it under a turn.
     expect(() => parseWorkflow(reply({ artifacts: [{ ...output, attemptId: null }] }), "m1")).toThrow(ApiError);
@@ -85,18 +85,16 @@ describe("the compact collaboration record", () => {
   });
 
   it("reads a referenced output record with its file identity", () => {
-    const referenced = { ...output, manifestSha256: undefined, contentForm: "record-reference",
+    const referenced = { ...output, manifestSha256: undefined, contentForm: "record-reference", sealedEvidence: { snapshotSha256: "d".repeat(64), tree: "tree-1" },
       outputSnapshotSha256: "d".repeat(64), recordFile: { path: "/private/output.json", sha256: "e".repeat(64) } };
     const parsed = parseWorkflow(reply({ artifacts: [referenced] }), "m1");
     expect(parsed.artifacts[0]).toMatchObject({ contentForm: "record-reference",
-      manifestSha256: "d".repeat(64), outputSnapshotSha256: "d".repeat(64),
-      recordFile: referenced.recordFile });
+      sealedEvidence: { snapshotSha256: "d".repeat(64), tree: "tree-1" } });
     expect(() => parseWorkflow(reply({ artifacts: [{ ...referenced, recordFile: undefined }] }), "m1")).toThrow(ApiError);
   });
 
   it("reads a user's lock, and a turn without its recorded route as unrecorded", () => {
-    const parsed = parseWorkflow(reply({ buddyLocked: true, turns: [{ ...turn, routing: null, buddy: null, tokenUsage: null }] }), "m1");
-    expect(parsed.buddyLocked).toBe(true);
+    const parsed = parseWorkflow(reply({ turns: [{ ...turn, routing: null, buddy: null, tokenUsage: null }] }), "m1");
     expect(parsed.turns[0]).toMatchObject({ routing: null, tokenUsage: null, buddy: null });
   });
 
@@ -110,9 +108,9 @@ describe("the compact collaboration record", () => {
 
   it("refuses a Host conclusion without its actor, and an actor that is not one", () => {
     const conclusion = { conclusionId: "c", attemptId: null, executionStatus: "failed", note: "n", artifactId: null,
-      actor: { role: "host", id: "codex-desktop" }, createdAt: "t", ownerGeneration: 1, runRevision: 3 };
-    expect(parseWorkflow(reply({ hostConclusion: conclusion }), "m1").hostConclusion?.actor).toEqual({ role: "host", id: "codex-desktop" });
-    for (const actor of [null, { role: "robot", id: "x" }, { role: "host", id: "" }]) {
+      actor: { role: "host" }, createdAt: "t" };
+    expect(parseWorkflow(reply({ hostConclusion: conclusion }), "m1").hostConclusion?.actor).toEqual({ role: "host" });
+    for (const actor of [null, { role: "robot", id: "x" }, { role: "lead" }]) {
       expect(() => parseWorkflow(reply({ hostConclusion: { ...conclusion, actor } }), "m1")).toThrow(ApiError);
     }
   });
@@ -132,7 +130,7 @@ describe("the audit", () => {
   const result = { ...turn, summary: "结果", remaining: ["还差一项"] };
   const entry = { decisionId: "d1", status: "completed", source: "single-candidate", selectedBuddy: { harness: "dsh", provider: "p", model: "m", effort: "off", buddyId: "x", label: "L" },
     routerBuddy: null, routingMode: "review", reason: null, note: null };
-  const audit = { runId: "m1", revision: 4, audit: { turns: [result], continuations: [], requests: [], hostConclusions: [] }, routingHistory: { entries: [entry], nextCursor: 12, total: 40 } };
+  const audit = { runId: "m1", audit: { turns: [result], continuations: [], requests: [], hostConclusions: [] }, routingHistory: { entries: [entry], nextCursor: 12, total: 40 } };
 
   it("carries every turn with its result, the Host's inputs, the requests and the first page of the routes", () => {
     const parsed = parseAudit(audit, "m1");
@@ -155,7 +153,7 @@ describe("the audit", () => {
       { ...request, decision: { decision: "approve", note: "可以", actor: { role: "lead", id: "l" } } },
       { ...request, state: "open", decidedAt: null },
     ] } }, "m1").audit.requests;
-    expect(adopted!.decision).toEqual({ decision: null, note: null, actor: { role: "host", id: "h" } });
+    expect(adopted!.decision).toEqual({ decision: null, note: null, actor: { role: "host" } });
     expect(approved!.decision).toEqual({ decision: "approve", note: "可以", actor: { role: "lead", id: "l" } });
     expect(open!.decision).toBeNull();
   });
@@ -278,7 +276,7 @@ describe("the task view", () => {
   it("refuses malformed metadata and actors while accepting an unrecorded project", () => {
     expect(() => parseTask(task({ lineage: { ...task().lineage, kind: "other" } }), "m1")).toThrow(ApiError);
     expect(parseTask(task({ lineage: { ...task().lineage, project: null } }), "m1").task.lineage?.project).toBeNull();
-    expect(() => parseTask(task({ lineage: { ...task().lineage, sourceHostId: 7 } }), "m1")).toThrow(ApiError);
+    expect(() => parseTask(task({ lineage: { ...task().lineage, rootLeadRunId: 7 } }), "m1")).toThrow(ApiError);
     expect(() => parseTask(task({ state: "cancelled", cancellation: { actor: { role: "robot", id: "x" }, note: null } }), "m1")).toThrow(ApiError);
     expect(() => parseTask(task({ selectedAttempt: { reminders: null } }), "m1")).toThrow(ApiError);
   });
@@ -323,9 +321,9 @@ describe("the task view", () => {
 
   it("writes how an attempt ended: a normal end is none, any other has its cause, who stopped it, why, and a native limit", () => {
     expect(parseTask(task(), "m1").attempt!.ending).toBeNull();
-    const stopped = parseTask(task({ state: "cancelled", cancellation: { actor: { role: "host", id: "codex-desktop" }, note: "不再需要" },
+    const stopped = parseTask(task({ state: "cancelled", cancellation: { actor: { role: "host" }, note: "不再需要" },
       selectedAttempt: attempt({ stopInitiator: "host", result: { terminationReason: "forced-stop" } }) }), "m1").attempt!.ending;
-    expect(stopped).toEqual({ cause: "forced-stop", stoppedBy: "host", actor: { role: "host", id: "codex-desktop" }, note: "不再需要", rejectionCode: null });
+    expect(stopped).toEqual({ cause: "forced-stop", stoppedBy: "host", actor: { role: "host" }, note: "不再需要", rejectionCode: null });
     const limited = parseTask(task({ state: "failed", providerRejection: { code: "rate-limited" }, selectedAttempt: attempt({ result: { terminationReason: "harness-error" } }) }), "m1").attempt!.ending;
     expect(limited).toMatchObject({ cause: "harness-error", stoppedBy: null, rejectionCode: "rate-limited" });
     const overloaded = parseTask(task({ state: "failed", providerRejection: { code: "overloaded", nativeCode: "serverOverloaded" },

@@ -9,6 +9,7 @@ import { StateMark } from "@/components/ui/state-mark";
 import { CopyableIdentifier } from "@/components/CopyableIdentifier";
 import { formatDuration } from "../i18n/format";
 import { taskStatus, taskTitle } from "../task-state";
+import { workflowOwnerText } from "../actor";
 import type { Task } from "../types";
 import type { TaskView, Workflow } from "./types";
 
@@ -80,6 +81,7 @@ export function Header({ view, workflow, turns, endMs, error, busy, onRefresh, o
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-x-4 @max-[650px]:order-2 @max-[650px]:w-full @max-[650px]:flex-wrap @max-[650px]:gap-2">
         <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums @max-[650px]:basis-full">
+          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("delegation.owner")}</dt><dd className="min-w-0 wrap-anywhere">{workflowOwnerText(view.task)}</dd></div>
           <div className="flex gap-1.5"><dt className="text-ink3">{t("header.elapsed")}</dt><dd>{Number.isFinite(start) ? formatDuration(Math.max(0, endMs - start)) : t("unrecorded")}</dd></div>
           {turns !== null && <div className="flex gap-1.5"><dt className="text-ink3">{t("header.turns")}</dt><dd>{turns}</dd></div>}
         </dl>

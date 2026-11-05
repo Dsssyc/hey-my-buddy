@@ -94,7 +94,7 @@ for (const font of [null, '"Courier New", monospace']) for (const width of [1440
   await writeFile(testInfo.outputPath("measurements.json"), JSON.stringify(measurements, null, 2));
 });
 
-for (const width of [1440, 390]) test(`shared identifiers in detail header, turn and acceptance ${width}`, async ({ page }, testInfo) => {
+for (const width of [1440, 390]) test(`shared identifiers in header and turn, sealed evidence in acceptance ${width}`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: 1000 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => {
@@ -121,11 +121,11 @@ for (const width of [1440, 390]) test(`shared identifiers in detail header, turn
   await page.screenshot({ path: testInfo.outputPath("turn.png") });
   await page.locator('[data-slot="detail-strip"]').getByRole("button", { name: /^已验收(?: ·|$)/ }).click();
   const pane = page.locator('[data-slot="detail-pane"]');
-  await pane.getByRole("button", { name: /·.*文件/ }).first().click();
-  const commit = pane.locator('dl [data-slot="copyable-identifier"]');
-  await expect(commit).toBeVisible();
-  const commitId = await identifierGeometry(commit);
-  expect(Math.abs(commitId.iconOffset)).toBeLessThanOrEqual(1);
-  expect(Math.abs(commitId.labelBaseline! - commitId.valueBaseline)).toBeLessThanOrEqual(1);
+  // Acceptance now exposes the seal's artifact identity rather than a snapshot commit control.
+  const evidence = pane.getByRole("group", { name: "封存证据", exact: true });
+  await expect(evidence).toBeVisible();
+  const artifactId = await evidence.locator("code").first().innerText();
+  await expect(evidence.locator("dl dd").first()).toHaveText(artifactId);
+  await expect(evidence).toContainText("快照摘要");
   await page.screenshot({ path: testInfo.outputPath("acceptance.png") });
 });

@@ -23,7 +23,7 @@ describe("input rejection at the console response boundary", () => {
       record.currentTurn!.inputFailure = failure;
       record.activeRequest = { ...history.requests[0]!, inputFailure: failure, reason };
       record.requests[0] = record.activeRequest;
-      const parsed = parseWorkflow(record, "m1");
+      const parsed = parseWorkflow({ ...record, project: { kind: "git" }, task: { revision: record.taskRevision } }, "m1");
       expect(parsed.turns[0]!.inputFailure).toEqual(failure);
       expect(parsed.currentTurn!.inputFailure).toEqual(failure);
       expect(parsed.activeRequest!.inputFailure).toEqual(failure);

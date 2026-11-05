@@ -19,7 +19,7 @@ function harness(body = goal.body) {
 }
 it("reads history only on click, renders Markdown, switches full revisions in the same card and restores focus on Escape", async () => {
   const { readGoals, timeline, user } = harness();
-  const trigger = screen.getByRole("button", { name: "目标说明" });
+  const trigger = screen.getByRole("button", { name: "查看目标说明" });
   expect(readGoals).not.toHaveBeenCalled();
   await user.hover(trigger);
   expect(screen.queryByRole("dialog", { name: "目标说明" })).toBeNull();
@@ -45,7 +45,7 @@ it("copies the identifier in place, closes on outside click, rereads on reopen a
   await user.click(copy);
   expect(write).toHaveBeenCalledWith("macro-1");
   expect(copy.querySelector(".lucide-check")).toBeTruthy();
-  const trigger = screen.getByRole("button", { name: "目标说明" });
+  const trigger = screen.getByRole("button", { name: "查看目标说明" });
   await user.click(trigger);
   await screen.findByRole("dialog", { name: "目标说明" });
   await user.click(screen.getByRole("button", { name: "外部按钮" }));
@@ -65,7 +65,7 @@ it("uses the card's own width for the goal line origin and keeps a right-hand tr
   });
   const { user, readGoals } = harness();
   readGoals.mockResolvedValueOnce({ macroTaskId: "macro-1", goals: [goal] });
-  await user.click(screen.getByRole("button", { name: "目标说明" }));
+  await user.click(screen.getByRole("button", { name: "查看目标说明" }));
   const card = await screen.findByRole("dialog", { name: "目标说明" });
   await waitFor(() => expect(card.querySelector('[data-slot="macro-goal-scroll"]')?.getAttribute("data-history")).toBe("false"));
   expect(card.querySelector(".goal-history")).toBeNull();
@@ -74,7 +74,7 @@ it("uses the card's own width for the goal line origin and keeps a right-hand tr
   expect(card.style.getPropertyValue("--goal-left")).toBe("573px");
   expect(card.style.getPropertyValue("--goal-right")).toBe("0px");
   await user.keyboard("{Escape}");
-  await user.click(screen.getByRole("button", { name: "目标说明" }));
+  await user.click(screen.getByRole("button", { name: "查看目标说明" }));
   await waitFor(() => expect(screen.getByRole("dialog").querySelector('[data-slot="macro-goal-scroll"]')?.getAttribute("data-history")).toBe("true"));
   expect(screen.getByRole("navigation", { name: "历史" })).toBeTruthy();
 });
@@ -86,7 +86,7 @@ it("omits the goal button when the record has none", () => {
 
 it("keeps single goal line breaks while rendering Markdown and the existing GFM extensions", async () => {
   const { user } = harness("第一行\n第二行\n\n**Markdown** 与 ~~旧内容~~\n\n| 名称 | 值 |\n| --- | --- |\n| 项目 | 目标 |");
-  await user.click(screen.getByRole("button", { name: "目标说明" }));
+  await user.click(screen.getByRole("button", { name: "查看目标说明" }));
   const card = await screen.findByRole("dialog", { name: "目标说明" });
   const body = card.querySelector('[data-slot="macro-goal-body"]')!;
   await waitFor(() => expect(body.querySelector("br")).not.toBeNull());

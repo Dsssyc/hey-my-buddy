@@ -186,7 +186,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const totals = { ...list.totals };
   for (const row of list.rows) if (deletedIds.has(row.macroTaskId)) {
     --totals.all;
-    if (row.state !== "ended") --totals[row.state];
+    if (row.state !== "ended" && row.state !== "empty") --totals[row.state];
   }
   const timeline = useMacroTaskTimeline(api, selected && !deletedIds.has(selected) ? selected : null, active);
   useEffect(() => {
@@ -269,7 +269,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         go({ ...(item === undefined ? location : overview), macroTaskId: selected, runId, step }, "replace", item ?? origin);
       }}
       onBack={backToTimeline} onOpenRun={next => openRun(next)} />}
-    headerActions={stopControl} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
+    headerActions={<>{stopControl}{selectedSummary && entryActions(selectedSummary)}</>} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
     buddies={snapshot.buddies} onOpen={(runId, key) => openRun(runId, key)} onClose={backToTimeline}
     onRetry={() => void timeline.retry()}
     onBackToList={() => { setShowNarrowList(true); if (listCollapsed) onExpandList(); }} /> : null;

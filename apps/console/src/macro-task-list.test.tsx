@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render as baseRender, screen, waitFor, within } fro
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTaskList } from "./MacroTaskList";
-import { listFixture, macroTaskGroups } from "./macro-task-fixtures";
+import { emptyMacroTaskTimelineFixture, listSummary, listFixture, macroTaskGroups } from "./macro-task-fixtures";
 import type { MacroTaskListProps } from "./MacroTaskList";
 import type { MacroTaskSummary } from "./macro-task-types";
 import i18n from "i18next";
@@ -51,7 +51,7 @@ describe("macro task list", () => {
 
   it("keeps a real project whose id is standalone distinct from the standalone group", () => {
     const p = props();
-    const projectRow = { ...row(p), project: { id: "standalone", label: "独立项目", path: null } };
+    const projectRow = { ...row(p), project: { kind: "git" as const, id: "standalone", label: "独立项目", path: null } };
     const standaloneRow = row(p, "run:3f0e");
     p.groups = macroTaskGroups([projectRow, standaloneRow]);
     render(<MacroTaskList {...p}/>);
@@ -192,4 +192,16 @@ describe("macro task list", () => {
     fireEvent.pointerLeave(region);
     expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
   });
+});
+
+
+it("keeps empty macro tasks selectable without an ended or execution mark", async () => {
+  const empty = listSummary(emptyMacroTaskTimelineFixture().macroTask);
+  const p = { ...props(), groups: macroTaskGroups([empty]), totals: { all: 1, active: 0, host: 0, review: 0 } };
+  render(<MacroTaskList {...p}/>);
+  const entry = document.querySelector('[data-slot="macro-entry"]')!;
+  expect(entry.querySelector('[data-slot="state-mark"]')).toBeNull();
+  expect(entry.textContent).toBe("梳理归档");
+  await userEvent.click(entry);
+  expect(p.onSelect).toHaveBeenCalledWith(empty.macroTaskId);
 });

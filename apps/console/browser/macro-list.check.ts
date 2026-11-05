@@ -11,8 +11,8 @@ const captures = fileURLToPath(new URL("../../../tmp/filter-row", import.meta.ur
 const groupCaptures = fileURLToPath(new URL("../../../tmp/macro-list-groups", import.meta.url));
 
 const words = [
-  { locale: "zh-CN", list: "宏任务列表", macro: "宏任务", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目、Host 或 ID", noMatch: "没有匹配的宏任务", empty: "还没有宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，更新排序" },
-  { locale: "en-US", list: "Macro task list", macro: "Macro tasks", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search title, project, Host or ID", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", stop: "Stop macro task", time: "Time statistics", update: "New activity; update order" },
+  { locale: "zh-CN", list: "宏任务列表", macro: "宏任务", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目或 ID", noMatch: "没有匹配的宏任务", empty: "还没有宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，更新排序" },
+  { locale: "en-US", list: "Macro task list", macro: "Macro tasks", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search titles, projects or IDs", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", stop: "Stop macro task", time: "Time statistics", update: "New activity; update order" },
 ] as const;
 
 const countGroups = [
@@ -300,8 +300,8 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await expect(page).toHaveURL(new RegExp(`#tasks/${B}$`));
       const list = page.locator("[data-slot=macro-list]");
       await expect(list).toBeVisible();
-      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(6);
-      await expect(list.locator("[data-slot=macro-group-heading]")).toHaveCount(3);
+      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(8);
+      await expect(list.locator("[data-slot=macro-group-heading]")).toHaveCount(4);
       await expect(list.locator("[data-slot=macro-group-heading]").last()).toHaveAttribute("aria-expanded", "false");
       await assertListGeometry(page, width);
       await assertSelectedTabUnderline(page);
@@ -329,10 +329,10 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await expect(list.getByText(w.noMatch)).toBeVisible();
       await photograph(page, "unmatched", w.locale, width, theme);
       await list.getByRole("textbox", { name: w.search }).fill("");
-      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(6);
+      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(8);
 
       await list.locator("[data-slot=macro-group-heading]").last().click();
-      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(7);
+      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(9);
       await list.locator("[data-slot=macro-group-heading]").last().click();
       await list.locator(`[data-macro-task-id="${A}"] [data-slot=macro-entry]`).click();
       await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
@@ -372,9 +372,13 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
 
     test("shows an empty board and preserves existing rows after an interrupted read", async ({ page }) => {
       await themeBeforeLoad(page, theme);
-      await page.route(/\/api\/macro-tasks(?:\?|$)/, route => route.fulfill({ json: {
-        groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, cursor: 21, changed: false,
-      } }));
+      await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
+        const response = await route.fetch();
+        const { defaults } = await response.json();
+        await route.fulfill({ json: {
+          defaults, groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, cursor: 21, changed: false,
+        } });
+      });
       await open(page, "#tasks");
       await expect(page.getByRole("heading", { name: w.empty })).toBeVisible();
       await expect(page.locator("[data-slot=macro-first-use]")).toBeVisible();
@@ -382,11 +386,11 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await photograph(page, "empty", w.locale, width, theme);
       await page.unrouteAll();
       await page.reload();
-      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(6);
+      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(8);
       await page.route(/\/api\/macro-tasks(?:\?|$)/, route => route.fulfill({ json: { malformed: true } }));
       await expect(page.getByRole("alert").filter({ hasText: w.offline })).toBeVisible({ timeout: 7000 });
       await expect(page.locator("[data-slot=macro-offline]")).toBeVisible();
-      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(6);
+      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(8);
       await expect(page.getByRole("button", { name: w.retry })).toBeVisible();
       await photograph(page, "offline", w.locale, width, theme);
     });
@@ -403,7 +407,7 @@ for (const { locale, width, theme } of [
     await themeBeforeLoad(page, theme);
     await open(page, "#tasks");
     const list = page.locator("[data-slot=macro-list]");
-    await expect(list.locator("[data-slot=macro-group]")).toHaveCount(3);
+    await expect(list.locator("[data-slot=macro-group]")).toHaveCount(4);
     await expect(list.locator("[data-slot=macro-group]").last()).toContainText(locale === "zh-CN" ? "独立微任务" : "Standalone micro tasks");
     const group = list.locator("[data-slot=macro-group]").filter({ has: page.locator(`[data-macro-task-id="${A}"]`) });
     await expect(group.locator("[data-slot=macro-entry]")).toHaveCount(5);
@@ -422,8 +426,8 @@ for (const { locale, width, theme } of [
     expect(response.ok()).toBe(true);
     const data = await response.json();
     expect(data.groups).toHaveLength(1);
-    expect(data.groups[0].macroTasks).toHaveLength(4);
-    await expect(group.locator("[data-slot=macro-entry]")).toHaveCount(9);
+    expect(data.groups[0].macroTasks).toHaveLength(5);
+    await expect(group.locator("[data-slot=macro-entry]")).toHaveCount(10);
     await expect(group.locator("[data-slot=macro-group-more]")).toHaveCount(0);
     await expect(list.locator("[data-slot=macro-group]").first().locator("[data-slot=macro-entry]")).toHaveCount(1);
     await expectNoSidewaysScroll(page);
@@ -617,7 +621,7 @@ test.describe("macro list motion", () => {
 
     const alpha = list.locator("[data-slot=macro-group]").filter({ has: page.locator(`[data-macro-task-id="${A}"]`) });
     await photographMidMotion(page, "mid-more-expand", alpha.locator("[data-slot=macro-group-more]"), alpha);
-    await expect(alpha.locator("[data-slot=macro-entry]")).toHaveCount(9);
+    await expect(alpha.locator("[data-slot=macro-entry]")).toHaveCount(10);
 
     const row = list.locator("[data-macro-task-id]").nth(1).locator("[data-slot=macro-entry]");
     await photographMidMotion(page, "mid-row-select", row, row);

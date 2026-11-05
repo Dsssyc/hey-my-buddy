@@ -1,17 +1,17 @@
-import { useState } from "react";
-import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { CopyableIdentifier } from "../components/CopyableIdentifier";
 import { reasonText } from "../i18n/reason";
 import { formatDuration } from "../i18n/format";
 import { Ask } from "./ask";
 import { BasisFold, endingText } from "./facts";
-import { Band, Facts, Fold, Section, Lines, Paths, MomentRange, Pane, PaneTitle } from "./parts";
+import { Band, Facts, Fold, Section, Lines, MomentRange, Pane, PaneTitle } from "./parts";
 import { quad } from "./names";
 import type { ContentTabs } from "./parts";
 import type { Step } from "./steps";
-import type { Artifact, Basis, Context } from "./types";
+import type { Basis, Context } from "./types";
+import { DeliveryEvidence } from "./DeliveryEvidence";
+import { Hint } from "@/components/hint";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { LiveActivity } from "./LiveActivity";
 import { Usage } from "./usage";
 import { InputFailureFacts } from "./InputFailureFacts";
@@ -26,52 +26,6 @@ function basisOf(ctx: Context, attemptId: string, decisionId: string | null): Ba
   if (decisionId !== null) return ctx.bases[decisionId] ?? null;
   return ctx.workflow.currentTurn?.attemptId === attemptId && ctx.workflow.routing?.decisionId === null ? ctx.workflow.routing.basis : null;
 }
-
-/** The sealed output shares the step's label column; opening it reveals the evidence. */
-function Seal({ artifact, ctx }: { artifact: Artifact; ctx: Context }) {
-  const { t } = useTranslation("taskDetail");
-  const [open, setOpen] = useState(false);
-  const integration = ctx.workflow.integrations.find(record => record.artifactId === artifact.artifactId);
-  const patch = artifact.cumulativePatch;
-  const short = (commit: string | null) => (commit ? commit.slice(0, 7) : null);
-  const files = artifact.changedPaths.length;
-  const unknown = t("unrecorded");
-  return <Section name={t("seal.name")}><Collapsible open={open} onOpenChange={setOpen}>
-    <CollapsibleTrigger aria-label={`${t("seal.name")} · ${short(artifact.outputCommit) ?? unknown}`} className="flex w-full flex-wrap items-baseline gap-x-2.5 gap-y-1 text-left text-xs">
-      <Disclosure open={open} className="self-center text-ink2" />
-      <span className="min-w-0 font-mono wrap-anywhere">{short(artifact.outputCommit) ?? unknown}</span>
-      <span className="whitespace-nowrap font-mono text-ink2">{patch?.baseCommit && artifact.outputCommit ? `${short(patch.baseCommit)} → ${short(artifact.outputCommit)}` : null}</span>
-      <span className="text-ink2">
-        {artifact.partial ? `${t("seal.partial")} · ` : artifact.kind === "resolved-output" ? `${t("seal.resolved")} · ` : null}
-        {t("seal.files", { n: files >= 32 ? "32+" : files })}
-      </span>
-    </CollapsibleTrigger>
-    <CollapsibleContent>
-      <div className="space-y-3 py-3">
-        <Facts items={[
-          [t("seal.id"), artifact.artifactId, true],
-          [t("seal.sha"), artifact.manifestSha256, true],
-          ...(artifact.diffPath ? [[t("seal.diff"), artifact.diffPath, true] as [string, string, boolean]] : []),
-          ...(artifact.partial ? [[t("seal.note"), t("seal.partialNote")] as [string, string]] : []),
-          [t("seal.integration.name"), integration ? t(`seal.integration.${integration.state === "not-required" ? "notRequired" : "verified"}`) : t("seal.integration.none")],
-        ]} />
-        {patch && <div>
-          <p className="mb-1.5 text-xs text-ink3">{t("seal.patch")}</p>
-          <Facts items={[
-            [t("seal.base"), patch.baseCommit ?? unknown, true], [t("seal.output"), patch.outputCommit ?? unknown, true],
-            [t("seal.path"), patch.path ?? unknown, true], [t("seal.sha"), patch.sha256 ?? unknown, true],
-            ...(patch.changedPaths.length ? [[t("seal.paths"), <Paths key="paths" items={patch.changedPaths} />] as [string, ReactNode]] : []),
-          ]} />
-        </div>}
-        {integration && integration.hostPaths.length > 0 && <div>
-          <p className="mb-1.5 text-xs text-ink3">{t("seal.host")}</p>
-          <Paths items={integration.hostPaths} />
-        </div>}
-      </div>
-    </CollapsibleContent>
-  </Collapsible></Section>;
-}
-
 
 /**
  * One turn of the micro task: who ran it and what it cost, then what happened in
@@ -89,6 +43,8 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
   const index = turn?.turnIndex ?? step.turnIndex;
   const asked = ctx.asked[step.key] ?? [];
   const sealed = ctx.workflow.artifacts.filter(item => item.attemptId === attemptId);
+  const fixed = sealed.find(item => item.kind === "result") ?? null;
+  const none = turn?.checkout === "none";
   const running = step.outcome === "running";
   const failed = step.outcome === "failed";
   const rejected = turn?.state === "rejected";
@@ -123,22 +79,30 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
       {expected !== null && <span className="tabular-nums text-ink3">{t("turn.expected", { time: formatDuration(expected * 1000) })}</span>}
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>}>
-    <Band role="Worker" identity={quad(buddy) ?? <span className="font-sans text-ink3">{t("unrecorded")}</span>}
+    {!none && <Band role="Worker" identity={quad(buddy) ?? <span className="font-sans text-ink3">{t("unrecorded")}</span>}
       end={!turn?.routing ? <span className="text-ink3">{t("origin.unrecorded")}</span>
         : <span>{
-          turn.routing.decisionId === null ? (ctx.workflow.buddyLocked ? t("origin.locked") : t("origin.host"))
+          turn.routing.decisionId === null ? t("origin.host")
             : ctx.routing.find(entry => entry.decisionId === turn.routing!.decisionId)?.source === "single-candidate" ? t("origin.single") : null}</span>}
       second={second}
       secondEnd={<span className="inline-flex flex-wrap items-baseline gap-x-1.5">
         {turn?.sessionId ? <CopyableIdentifier value={turn.sessionId} /> : <span>{t("session.unrecorded")}</span>}
         {turn && <span>· {turn.resumeMode === "native-session" ? t("session.resumed") : t("session.fresh")}</span>}
-      </span>} />
+      </span>} />}
+    {none && <>
+      <Section name={t("delivery.access")}>{turn.access}</Section>
+      <Section name={t("delivery.cwd")}><code>{ctx.workflow.cwd ?? ctx.view.task.cwd}</code></Section>
+      <Section name={t("delivery.checkout")}>none</Section>
+      {(turn.access === "write" || turn.access === "full") && <Section name={t("delivery.changes")}>
+        <Hint delayFocus text={t("delivery.noCopy")}><button type="button" className="text-left text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring">{t("delivery.originalFolder")}</button></Hint>
+      </Section>}
+    </>}
     {inputFailure && <Section name={t("inputFailure.name")}><InputFailureFacts failure={inputFailure} /></Section>}
     {asked.length > 0 && <Section name={t("delegation.inquiries")}>
       {cut && <p className="text-xs text-ink3">{t("inquiry.more")}</p>}
       {asked.map(inquiry => <Ask key={inquiry.messageId} inquiry={inquiry} />)}
     </Section>}
-    {!running && <Section name={t("result.name")}>
+    {!none && !running && <Section name={t("result.name")}>
       {rejected ? <p className="text-ink2">{t("turn.rerouted")}</p> : request
         ? <p>{t("turn.requestNext")}</p> : result === null || result.summary === null
           ? <p className="text-ink3">{ctx.audit ? t("unrecorded") : t("loading")}</p>
@@ -146,6 +110,17 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
       {!request && result && result.remaining.length > 0 && <Lines items={result.remaining} className="mt-2 text-ink2" />}
       {basis && <BasisFold basis={basis} />}
     </Section>}
-    {sealed.map(artifact => <Seal key={artifact.artifactId} artifact={artifact} ctx={ctx} />)}
+    {sealed.map(artifact => <DeliveryEvidence key={artifact.artifactId} artifact={artifact} />)}
+    {none && fixed && <Section name={t("delivery.execution")}><Collapsible>
+      <CollapsibleTrigger className="flex items-center gap-2 text-left text-sm"><Disclosure open={false} className="text-ink2 [[data-state=open]>&]:rotate-90"/>{fixed.runId}</CollapsibleTrigger>
+      <CollapsibleContent><Facts items={[
+        [t("delivery.runId"), fixed.runId!, true], [t("delivery.turnId"), turn!.turnId, true],
+        [t("delivery.attemptId"), fixed.attemptId, true], [t("delivery.generation"), String(fixed.generation)],
+      ]}/></CollapsibleContent>
+    </Collapsible></Section>}
+    {none && !running && <Section name={t("delivery.content")}>
+      {result?.summary === null || !result ? <p className="text-ink3">{ctx.audit ? t("unrecorded") : t("loading")}</p> : <Fold text={result.summary || t("unrecorded")} />}
+      {result && result.remaining.length > 0 && <Lines items={result.remaining} className="mt-2 text-ink2" />}
+    </Section>}
   </Pane>;
 }

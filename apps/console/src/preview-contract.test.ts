@@ -172,16 +172,12 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
     } else {
       const runId = entry.request?.runId ?? "";
       const { value: workflow } = await createTaskDetailClient(api, "fixture-csrf").workflow(runId);
-      expect(workflow.hostId === null || typeof workflow.hostId === "string").toBe(true);
       if (workflow.hostConclusion?.actor) expect(parseActor(workflow.hostConclusion.actor)).toEqual(workflow.hostConclusion.actor);
       for (const record of workflow.integrations) if (record.actor) expect(parseActor(record.actor)).toEqual(record.actor);
       const t = i18n.getFixedT(null, "taskDetail");
       const conclusion = workflow.hostConclusion;
       outcome.facts = {
         runId: workflow.runId,
-        hostId: workflow.hostId,
-        revision: workflow.revision,
-        buddyLocked: workflow.buddyLocked,
         hostConclusion: conclusion && {
           executionStatus: conclusion.executionStatus,
           statusLabel: t(`acceptance.status.${conclusion.executionStatus}` as "acceptance.status.failed", { defaultValue: conclusion.executionStatus }),

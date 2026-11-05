@@ -15,25 +15,24 @@ def configure(p: ModuleType, language: str) -> None:
     glm = {"harness": "zcode", "provider": "zai", "model": "glm-5.3", "effort": "high"}
     flash = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "max"}
     claude = {"harness": "claude", "provider": "anthropic", "model": "claude-opus-5-5", "effort": "high"}
-    p.HOST_A = "host-atlas"
     p.LIST_PADDING_COUNT = 0
     p.COOLING_UNTIL = p.instant(10, 30)
     p.PROJECTS = {
-        "alpha": {"id": "synthetic-atlas", "path": "~/projects/atlas", "label": text("Atlas search", "Atlas 搜索")},
-        "beta": {"id": "synthetic-orbit", "path": "~/projects/orbit", "label": text("Orbit docs", "Orbit 文档")},
+        "alpha": {"id": "synthetic-atlas", "kind": "git", "path": "~/projects/atlas", "label": text("Atlas search", "Atlas 搜索")},
+        "beta": {"id": "synthetic-orbit", "kind": "git", "path": "~/projects/orbit", "label": text("Orbit docs", "Orbit 文档")},
     }
     titles = [text("Ship offline search", "交付离线搜索"), text("Refresh the guide", "更新使用指南"),
               text("Audit export formats", "核对导出格式"), text("Trim the index", "精简搜索索引")]
     groups = (p.MACRO_A, p.MACRO_B, p.MACRO_C, p.MACRO_PALETTE)
     p.MACRO_TASKS = {group: {"title": title, "goal": None, "project": "alpha" if i != 1 else "beta",
-                           "host": p.HOST_A, "createdAt": p.instant(8 if i == 0 else 6, 0)}
+                           "createdAt": p.instant(8 if i == 0 else 6, 0)}
                      for i, (group, title) in enumerate(zip(groups, titles))}
     p.MACRO_TASKS[p.MACRO_A]["goal"] = {
         "body": text("A compact index, typo-tolerant ranking and a release ready for review.",
                      "精简索引、容错排序，以及等待评审的发布候选。"),
         "revision": 1, "createdAt": p.MACRO_TASKS[p.MACRO_A]["createdAt"],
     }
-    host = p.host_actor(p.HOST_A)
+    host = p.host_actor()
     lead_id = "readme-lead"
     lead_actor = {"role": "lead", "id": lead_id}
     rows = []
@@ -43,7 +42,6 @@ def configure(p: ModuleType, language: str) -> None:
         entry = p.run(identifier, project="alpha", group=p.MACRO_A, title=text(en, zh), title_source="title",
                       task_text=text(en, zh), created=created, updated=kwargs.pop("updated", created),
                       state=state, status=status, category=category, buddy=buddy,
-                      hosts=(None, None) if owner else (p.HOST_A, p.HOST_A),
                       lead_owner=(lead_id, "turn-att-readme-lead-1") if owner else None, **kwargs)
         rows.append(entry)
         return entry
@@ -67,11 +65,12 @@ def configure(p: ModuleType, language: str) -> None:
         latest = entry["attempts"][-1]
         if not entry["artifacts"] or entry["artifacts"][-1]["attemptId"] != latest["attemptId"]:
             entry["artifacts"].append(p.artifact(f"output-{entry['runId']}", latest["attemptId"],
-                p.digest(entry["runId"])[:40], f"~/artifacts/{entry['runId']}.diff", [f"changes/{entry['runId']}.json"]))
+                f"~/artifacts/{entry['runId']}.diff", [f"changes/{entry['runId']}.json"]))
         artifact = entry["artifacts"][-1]
         integration = p.integration(f"integration-{entry['runId']}", artifact["artifactId"],
-                                    latest["attemptId"], actor["id"])
-        integration.update(actor=actor, sourceCommit=artifact["outputCommit"])
+                                    latest["attemptId"])
+        integration["actor"] = actor
+        integration["sourceTree"] = artifact["sealedEvidence"]["tree"]
         integration["verification"]["matchingPaths"] = artifact["changedPaths"]
         entry["integrations"].append(integration)
         entry.update(state="accepted", category="ended", acceptedAt=when, updatedAt=when, resultAvailable=True)
@@ -113,8 +112,7 @@ def configure(p: ModuleType, language: str) -> None:
     dispatch(tokenizer, lead_actor)
     tokenizer["spans"].append(p.span("queue:readme-tokenizer", "queue", p.instant(9, 7), p.instant(9, 9), "admitted"))
     first = execution(tokenizer, p.instant(9, 9), p.instant(9, 15), glm)
-    original = p.artifact("readme-tokenizer-v1", first, p.digest("tokenizer-v1")[:40],
-                          "~/artifacts/tokenizer-v1.diff", ["src/tokenizer.py"])
+    original = p.artifact("readme-tokenizer-v1", first, "~/artifacts/tokenizer-v1.diff", ["src/tokenizer.py"])
     tokenizer["artifacts"].append(original)
     # workflow_continue from a delivered artifact emits review_rejected; the
     # next admission consumes it and preserves the event (workflow.py).
@@ -122,8 +120,7 @@ def configure(p: ModuleType, language: str) -> None:
         eventKind="workflow.review_rejected", artifact_id=original["artifactId"], attempt_id=first,
         verdict="rejected", note=text("Include mixed-script words.", "补上混合文字的分词。")))
     second = execution(tokenizer, p.instant(9, 17), p.instant(9, 25), claude)
-    tokenizer["artifacts"].append(p.artifact("readme-tokenizer-v2", second, p.digest("tokenizer-v2")[:40],
-        "~/artifacts/tokenizer-v2.diff", ["src/tokenizer.py"]))
+    tokenizer["artifacts"].append(p.artifact("readme-tokenizer-v2", second, "~/artifacts/tokenizer-v2.diff", ["src/tokenizer.py"]))
     tokenizer["continuations"].append(p.continuation("readme-tokenizer-next", second,
         text("Include mixed-script words and rerun the fixtures.", "补上混合文字并重新核对样例。"),
         request_id=None, created=p.instant(9, 16)))
@@ -137,7 +134,7 @@ def configure(p: ModuleType, language: str) -> None:
     failure = text("The sample corpus could not be decoded.", "样例语料解码失败。")
     aid = execution(ranking, p.instant(8, 13), p.instant(8, 24), glm, error=failure)
     ranking["hostConclusion"] = p.host_conclusion("readme-ranking-conclusion", attempt_id=aid,
-        execution_status="failed", note=failure, artifact_id=None, actor=host, created_at=p.instant(8, 26), run_revision=3)
+        execution_status="failed", note=failure, artifact_id=None, actor=host, created_at=p.instant(8, 26))
     ranking["updatedAt"] = p.instant(8, 26)
     ranking["markers"].append(p.marker(p.instant(8, 26), "conclude", actor=host, attempt_id=aid))
 
@@ -159,8 +156,7 @@ def configure(p: ModuleType, language: str) -> None:
                buddy=flash, result=True)
     dispatch(fix)
     aid = execution(fix, p.instant(9, 8), p.instant(9, 24), flash)
-    art = p.artifact("readme-corpus-output", aid, p.digest("corpus-output")[:40],
-                     "~/artifacts/corpus.diff", ["src/corpus.py"])
+    art = p.artifact("readme-corpus-output", aid, "~/artifacts/corpus.diff", ["src/corpus.py"])
     fix["artifacts"].append(art)
     accept(fix, p.instant(9, 25))
 
@@ -185,7 +181,7 @@ def configure(p: ModuleType, language: str) -> None:
                         "lastToolActivityAt": p.instant(9, 40), "toolName": None,
                         "counts": {"modelTurns": 4, "toolCalls": 12}}
     live["messages"].append(p.message("readme-regression-inquiry", aid,
-        text("Which case is still running?", "还在跑哪一个用例？"), author=p.HOST_A,
+        text("Which case is still running?", "还在跑哪一个用例？"),
         created=p.instant(9, 56), state="delivered", delivered=p.instant(9, 56, 2)))
 
     queued = task("readme-package", "Package the release candidate", "打包发布候选", p.instant(9, 55),
@@ -223,7 +219,7 @@ def configure(p: ModuleType, language: str) -> None:
                 if item["result"] is not None and item["result"]["status"] == "ok" and not any(
                         artifact["attemptId"] == item["attemptId"] for artifact in entry["artifacts"]):
                     output = p.artifact(f"output-{item['attemptId']}", item["attemptId"],
-                        p.digest(item["attemptId"])[:40], f"~/artifacts/{item['attemptId']}.diff", [],
+                        f"~/artifacts/{item['attemptId']}.diff", [],
                         final=item["disposition"] == "completed")
                     output.update(sourceTaskId=entry["runId"], createdAt=item["finishedAt"])
                     entry["artifacts"].append(output)

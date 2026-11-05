@@ -19,8 +19,11 @@ export type Turn = {
   createdAt: string;
   updatedAt: string;
   buddy: Buddy | null;
-  /** The frozen route of this turn; null when it was not recorded. A null decision is a Host's own pick. */
+  /** The frozen route of this turn; null when it was not recorded. */
   routing: { decisionId: string | null; buddyRevision: number } | null;
+  checkout: "none" | "worktree" | "existing";
+  projectKind: "git" | "folder";
+  access: "read" | "write" | "full";
   tokenUsage: TokenUsage | null;
   providerRejection?: ProviderRejection;
   inputFailure?: InputFailure;
@@ -53,23 +56,24 @@ export type OpenRequest = CompactRequest & {
 
 export type CumulativePatch = {
   baseCommit: string | null;
-  outputCommit: string | null;
   path: string | null;
   sha256: string | null;
   changedPaths: string[];
 };
 
-/** A sealed output of a turn: the only artifacts the detail draws. */
+/** An output seal or a fixed result from one turn. */
 export type Artifact = {
   artifactId: string;
-  kind: "output" | "resolved-output" | "partial-output";
+  kind: "output" | "resolved-output" | "partial-output" | "result";
   attemptId: string;
-  manifestSha256: string;
-  /** The database form and source identities remain visible for audit views. */
-  contentForm: "sealed-inline-v1" | "record-reference";
-  outputSnapshotSha256?: string;
-  recordFile?: { path: string; sha256: string } | null;
-  outputCommit: string | null;
+  contentForm: "sealed-inline-v1" | "record-reference" | "result-reference";
+  sealedEvidence: { snapshotSha256: string; tree: string } | null;
+  legacyEvidence: { manifestSha256: string } | null;
+  integrationSource: { kind: "commits"; baseCommit: string; headCommit: string } | { kind: "patch"; baseCommit: string; path: string; sha256: string } | null;
+  runId: string | null;
+  generation: number | null;
+  resultFile: { path: string; sha256: string } | null;
+  unsealedChanges: boolean;
   diffPath: string | null;
   changedPaths: string[];
   partial: boolean;
@@ -83,10 +87,15 @@ export type Integration = {
   integrationId: string;
   artifactId: string;
   state: string;
-  strategy: string;
+  strategy: "three-way" | "three-way-adjusted" | "merge" | "patch" | "not-required";
   target: { path: string | null; ref: string | null } | null;
   beforeCommit: string | null;
   afterCommit: string | null;
+  verification: { version: number | null; mergeBaseCommit: string | null; expectedTree: string | null;
+    differingPaths: { path: string; expectedMode: string | null; expectedOid: string | null;
+      artifactMode: string | null; artifactOid: string | null }[];
+    conflictingPaths: string[]; adjustments: string[]; hostPaths: string[];
+    artifactMode: string | null; artifactOid: string | null; note: string | null };
   hostPaths: string[];
   note: string | null;
   actor: Actor | null;
@@ -102,7 +111,6 @@ export type HostConclusion = {
   attemptId: string | null;
   actor: Actor;
   createdAt: string;
-  runRevision: number | null;
 };
 
 export type Routing = {
@@ -116,11 +124,12 @@ export type Routing = {
 /** The compact collaboration record of a micro task (`workflow_get {runId}`). */
 export type Workflow = {
   runId: string;
-  revision: number;
+  taskRevision: number;
   state: string;
-  hostId: string | null;
   buddy: Buddy | null;
-  buddyLocked: boolean;
+  checkout: "none" | "worktree" | "existing";
+  projectKind: "git" | "folder";
+  unsealedChanges: boolean;
   delegationAuthority: boolean;
   routing: Routing | null;
   /** The newest turns only; `counts.turns` is how many there are. */
@@ -154,7 +163,6 @@ export type Audit = {
   continuations: Continuation[];
   requests: AuditRequest[];
   hostConclusions: HostConclusion[];
-  revision: number;
 };
 
 /** One recorded routing decision of a micro task (`workflow_get`'s `routingHistory`). */

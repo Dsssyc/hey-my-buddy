@@ -37,7 +37,7 @@ const SONNET: TimelineBuddy = { harness: "claude", provider: "anthropic", model:
 
 export const OBSERVED_AT = "2026-09-26T08:12:00Z";
 
-const project = (id: string, label: string, path: string) => ({ id, label, path });
+const project = (id: string, label: string, path: string) => ({ id, kind: "git" as const, label, path });
 
 export function macroTaskSummary(overrides: Partial<MacroTaskSummary> = {}): MacroTaskSummary {
   return {
@@ -46,8 +46,6 @@ export function macroTaskSummary(overrides: Partial<MacroTaskSummary> = {}): Mac
     title: "宏任务时间轴：设计、接口与实现",
     titleSource: "macro-task",
     project: project("p1", "hey-my-buddy", "~/projects/hey-my-buddy"),
-    sourceHostId: "codex-desktop",
-    currentHostIds: ["codex-desktop"],
     createdAt: "2026-09-26T01:12:00Z",
     lastActivityAt: "2026-09-26T08:12:00Z",
     lastActivitySeq: 41,
@@ -109,7 +107,7 @@ function span(spanId: string, runId: string, kind: TimelineSpan["kind"], startAt
 }
 
 function event(seq: number, runId: string, kind: TimelineEvent["kind"], at: string, overrides: Partial<TimelineEvent> = {}): TimelineEvent {
-  return { seq, runId, kind, at, decision: null, verdict: null, state: null, strategy: null, note: null, actor: { role: "host", id: "codex-desktop" },
+  return { seq, runId, kind, at, decision: null, verdict: null, state: null, strategy: null, note: null, actor: { role: "host" },
     attemptId: null, requestId: null, artifactId: null, ...overrides };
 }
 
@@ -194,13 +192,24 @@ export function listFixture(): MacroTaskSummary[] {
         stoppableRoots: 0, stoppableHelpers: 0, delivered: 1, awaitingHost: 0 } }),
     macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone", title: "修复标题回退在 CRLF 输入下的显示，补充回归测试并核对两处相关调用的输出稳定性与提示文案",
       titleSource: "task", lastActivitySeq: 22, lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
-      sourceHostId: "codex-cli",
       counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
         stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 } }),
     macroTaskSummary({ macroTaskId: "macro-4", title: "DSH 插件在 Windows 路径下的沙箱回归排查",
       project: project("p2", "dsh-harness", "~/projects/dsh-harness"),
-      sourceHostId: "dsh-host-02", lastActivitySeq: 39, lastActivityAt: "2026-09-26T08:11:00Z", state: "host",
+      lastActivitySeq: 39, lastActivityAt: "2026-09-26T08:11:00Z", state: "host",
       counts: { roots: 2, helpers: 0, accepted: 0, failed: 0, active: 1, host: 1, review: 0, ended: 0,
         stoppableRoots: 1, stoppableHelpers: 0, delivered: 0, awaitingHost: 1 } }),
   ];
+}
+
+/** A macro task with its own folder and goal, before any micro task is submitted. */
+export function emptyMacroTaskTimelineFixture(): MacroTaskTimeline {
+  const timeline = macroTaskTimelineFixture();
+  const counts = Object.fromEntries(Object.keys(timeline.macroTask.counts).map(key => [key, 0])) as MacroTaskSummary["counts"];
+  return { ...timeline,
+    macroTask: { ...timeline.macroTask, macroTaskId: "macro-archive", title: "梳理归档",
+      project: { id: "field-notes", kind: "folder", label: "Field notes", path: "~/Projects/field-notes" },
+      counts, matchingRuns: 0, rootRunIds: [], state: "empty" },
+    rows: [], spans: [], events: [], totals: { rows: 0, spans: 0, events: 0, allRows: 0 },
+  };
 }

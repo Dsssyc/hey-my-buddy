@@ -4,11 +4,11 @@ import { useTranslation } from "react-i18next";
 import { Section } from "./parts";
 import { StateMark } from "@/components/ui/state-mark";
 import { actorText, workflowOwnerText } from "../actor";
-import { taskHost, taskProject } from "../console-data";
+import { taskProject } from "../console-data";
 import { displayTitle } from "../macro-task-display";
 import type { Step } from "./steps";
 import { Ask } from "./ask";
-import { Facts, Fold, LinkButton, Moment, Pane, PaneTitle } from "./parts";
+import { Fold, LinkButton, Moment, Pane, PaneTitle } from "./parts";
 import type { Context } from "./types";
 
 /** The word and the mark a helper micro task's state has. */
@@ -36,25 +36,15 @@ export function DelegationPane({ step, ctx }: { step: Step; ctx: Context }) {
   const fixes = row?.fixes ?? null;
   const fixedBy = row?.fixedBy ?? [];
   const sender = step.events[0]?.actor;
-  const owner = workflowOwnerText(task, workflow.hostId);
-  const original = taskHost(task);
-  const leadId = task.lineage?.leadOwnership?.leadRunId ?? task.lineage?.rootLeadRunId ?? null;
-  const originalId = task.lineage?.sourceHostId ?? leadId;
-  const ownerId = task.lineage?.currentHostId ?? workflow.hostId ?? task.workflow?.hostId ?? leadId;
-  const transferred = originalId !== null && ownerId !== null && originalId !== ownerId;
+  const owner = workflowOwnerText(task);
   const asked = ctx.asked.delegation ?? [];
   return <Pane title={
     <PaneTitle title={t("step.delegation")}>
-      <span>{sender ? actorText(sender) : original}</span>
+      <span>{sender ? actorText(sender) : owner}</span>
       <Moment at={step.at ?? task.createdAt} />
     </PaneTitle>}>
     <Section name={t("delegation.task")}><Fold text={task.task} /></Section>
-    {transferred && <Section name={t("delegation.source")}>
-      <Facts items={[
-        ...(originalId !== sender?.id ? [[t("delegation.originalDelegator"), original] as [string, string]] : []),
-        ...(ownerId !== sender?.id ? [[t("delegation.currentOwner"), owner] as [string, string]] : []),
-      ]} />
-    </Section>}
+    <Section name={t("delegation.owner")}>{owner}</Section>
     <Section name={t("delegation.project")}>{project?.label ?? t("delegation.unknownProject")}</Section>
     <Section name={t("delegation.cwd")}><span className="font-mono text-xs">{workflow.cwd ?? task.cwd}</span></Section>
     {parent && <Section name={t("delegation.parent")}><LinkButton onClick={() => ctx.open(parent)}>{title(parent)}</LinkButton></Section>}

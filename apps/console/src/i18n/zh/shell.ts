@@ -75,8 +75,6 @@ export default {
   },
   identifier: { copy: "复制标识 {{value}}", copied: "已复制", failed: "复制失败，请重试" },
   actor: {
-    delegator: "委派方：{{source}}", originalDelegator: "原始委派方", unrecordedDelegator: "未记录委派方",
-    currentOwner: "当前管理方",
     unknownOrigin: "未记录发起者", microTask: "微任务 {{id}}",
     events: {
       dispatch: "{{time}} {{role}} 派发「{{title}}」", approved: "{{time}} {{role}} 批准了「{{title}}」的请求",

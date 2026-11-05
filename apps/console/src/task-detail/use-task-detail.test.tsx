@@ -28,7 +28,7 @@ describe("what the detail of a micro task reads", () => {
     render(<Probe reads={reads} />);
     await settle();
     expect(latest.view?.task.runId).toBe("m1");
-    expect(latest.workflow?.revision).toBe(9);
+    expect(latest.workflow?.taskRevision).toBe(9);
     expect(latest.audit?.turns).toHaveLength(2);
     expect(latest.routing).toHaveLength(1);
     expect(latest.inquiries).toEqual({ items: [], more: false });
@@ -46,9 +46,9 @@ describe("what the detail of a micro task reads", () => {
     await settle(3000);
     expect(calls(reads.workflow)).toBe(first + 2);
     expect(calls(reads.audit)).toBe(1);
-    reads.held.workflow = workflow({ revision: 10 });
+    reads.held.workflow = workflow({ taskRevision: 10 });
     await settle(3000);
-    expect(latest.workflow?.revision).toBe(10);
+    expect(latest.workflow?.taskRevision).toBe(10);
     expect(calls(reads.audit)).toBe(2);
     // The task moves with the record: it is read again when the record moved.
     expect(calls(reads.task)).toBe(2);
@@ -85,7 +85,7 @@ describe("what the detail of a micro task reads", () => {
     (reads.workflow as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new ApiError("NETWORK", "无法连接本地黑板"));
     await settle(3000);
     expect(latest.error).toContain("无法连接本地黑板");
-    expect(latest.workflow?.revision).toBe(9);
+    expect(latest.workflow?.taskRevision).toBe(9);
     expect(latest.view?.task.runId).toBe("m1");
     await settle(3000);
     expect(latest.error).toBe("");
@@ -125,15 +125,15 @@ describe("what the detail of a micro task reads", () => {
   it("lets an older reply that arrives late replace nothing the newer one wrote", async () => {
     const reads = client();
     let release!: () => void;
-    (reads.workflow as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ value: workflow({ revision: 3 }) }); }));
+    (reads.workflow as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ value: workflow({ taskRevision: 3 }) }); }));
     render(<Probe reads={reads} />);
     await settle();
     await act(async () => { latest.refresh(); });
     await settle();
-    expect(latest.workflow?.revision).toBe(9);
+    expect(latest.workflow?.taskRevision).toBe(9);
     await act(async () => { release(); });
     await settle();
-    expect(latest.workflow?.revision).toBe(9);
+    expect(latest.workflow?.taskRevision).toBe(9);
   });
 });
 

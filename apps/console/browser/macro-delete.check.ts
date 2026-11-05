@@ -34,7 +34,9 @@ async function deletionFixture(page: Page, blocked = false, scope: MacroTaskDele
   let deleteAttempts = 0;
   const commands: { operation: string; params: Record<string, unknown> }[] = [];
   await page.route("**/api/macro-tasks?*", async route => {
-    await route.fulfill({ json: { groups: deleted ? [] : [{ id: `project:${timeline.macroTask.project!.id}`,
+    const response = await route.fetch();
+    const { defaults } = await response.json();
+    await route.fulfill({ json: { defaults, groups: deleted ? [] : [{ id: `project:${timeline.macroTask.project!.id}`,
       project: timeline.macroTask.project, total: 1, macroTasks: [listSummary(timeline.macroTask)], nextCursor: null }],
       totals: { all: deleted ? 0 : 1, active: deleted ? 0 : 1, host: 0, review: 0 }, cursor: 41, changed: false } });
   });

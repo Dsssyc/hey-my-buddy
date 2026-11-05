@@ -69,9 +69,8 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
         </div>
       </div>
         <dl data-slot="macro-overview-facts" className="mt-1.5 flex flex-wrap items-baseline @min-[761px]:col-span-2 @min-[761px]:row-start-2 @min-[761px]:mt-0 gap-x-5 gap-y-0.5 text-xs leading-5 tabular-nums">
-          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("project")}</dt><dd className="min-w-0 wrap-anywhere text-ink">{shown.project?.label ?? t("unrecorded")}</dd></div>
-          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("host")}</dt><dd className="min-w-0 wrap-anywhere text-ink">{shown.sourceHostId ?? t("unrecorded")}</dd></div>
-          <div className="flex gap-1.5"><dt className="shrink-0 text-ink3">{t("elapsed")}</dt><dd><Popover key={shown.macroTaskId} open={active && statsOpen} onOpenChange={setStatsOpen}>
+          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t(shown.project ? shown.project.kind === "git" ? "repositoryLabel" : "folderLabel" : "project")}</dt><dd className="min-w-0 wrap-anywhere text-ink">{shown.project?.label ?? t("unrecorded")}</dd></div>
+          {shown.counts.roots + shown.counts.helpers === 0 ? <div data-slot="macro-overview-members">{t("members", { n: formatNumber(0) })}</div> : <div className="flex gap-1.5"><dt className="shrink-0 text-ink3">{t("elapsed")}</dt><dd><Popover key={shown.macroTaskId} open={active && statsOpen} onOpenChange={setStatsOpen}>
             <PopoverTrigger asChild><button type="button" className="inline-flex items-center border-b border-dotted border-ink3 text-left text-ink transition-colors duration-150 hover:border-ink hover:text-ink focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none" aria-label={t("statsTitle")}>{elapsed}</button></PopoverTrigger>
             <PopoverContent ref={statsContent} align="start" aria-label={t("statsTitle")} className="w-[34rem] max-w-[calc(100vw-2rem)]"
               onOpenAutoFocus={event => { event.preventDefault(); statsContent.current?.focus(); }}>
@@ -98,10 +97,9 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
                     {metrics!.limitations.length > 0 && <p data-slot="time-stats-limitations" className="text-xs text-ink2">{t("limitations")}{formatList(metrics!.limitations.map(entry => t(`limitation.${entry.key}`)))}</p>}
                     {stale && <p className="text-xs text-ink2">{t("stale", { time: formatMoment(Date.parse(timeline.observedAt), clock) })}</p>}
                   </>}
-                <p className="mt-2 text-xs text-ink2">{t("sourceHost", { host: shown.sourceHostId || t("unrecorded") })} · {t("currentHost", { host: shown.currentHostIds.length ? formatList(shown.currentHostIds) : t("unrecorded") })}</p>
               </div>
             </PopoverContent>
-          </Popover></dd></div>
+          </Popover></dd></div>}
           {/* The single-line fact owns its line box; the 24px button extends its hit area with negative margins. */}
           <div className="flex h-5 min-w-0 items-baseline gap-1.5"><dt className="shrink-0 text-ink3">{t("identifier")}</dt><dd className="flex min-w-0"><CopyableIdentifier key={shown.macroTaskId} value={shown.macroTaskId}/></dd></div>
         </dl>

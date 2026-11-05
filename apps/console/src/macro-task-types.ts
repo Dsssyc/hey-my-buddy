@@ -7,13 +7,13 @@ import type { RoutingMode } from "./types";
 export type MacroTaskSort = "activity-desc" | "activity-asc" | "created-desc" | "created-asc";
 export type MacroTaskFilter = "all" | "active" | "host" | "review";
 /** Disjoint member states in display priority 待决定 (host) > 进行中 (active) > 待验收 (review) > 已结束 (ended). */
-type MacroTaskCategory = MacroTaskSummary["state"];
+type MacroTaskCategory = Exclude<MacroTaskSummary["state"], "empty">;
 const macroTaskSummaryFields = z.looseObject({
   macroTaskId: z.string().min(1), kind: z.enum(["macro-task", "standalone"]), title: z.string().nullable(),
   titleSource: z.enum(["macro-task", "title", "task", "none"]),
-  project: z.looseObject({ id: z.string(), path: z.string().nullable(), label: z.string() }).nullable(),
-  sourceHostId: z.string().nullable(), currentHostIds: z.array(z.string()), createdAt: z.string().nullable(),
-  lastActivityAt: z.string().nullable(), lastActivitySeq: safeCount, state: z.enum(["host", "active", "review", "ended"]),
+  project: z.looseObject({ id: z.string(), kind: z.enum(["git", "folder"]), path: z.string().nullable(), label: z.string() }).nullable(),
+  createdAt: z.string().nullable(),
+  lastActivityAt: z.string().nullable(), lastActivitySeq: safeCount, state: z.enum(["host", "active", "review", "ended", "empty"]),
   counts: z.looseObject({ roots: safeCount, helpers: safeCount, accepted: safeCount, failed: safeCount,
     active: safeCount, host: safeCount, review: safeCount, ended: safeCount, stoppableRoots: safeCount,
     stoppableHelpers: safeCount, delivered: safeCount, awaitingHost: safeCount }),
@@ -29,7 +29,7 @@ const macroTaskDetailSchema = macroTaskSummaryFields.extend({
 export type MacroTaskSummary = z.infer<typeof macroTaskSummarySchema>;
 export type MacroTaskDetail = z.infer<typeof macroTaskDetailSchema>;
 export type MacroTaskQuery = {
-  limit?: number; before?: string; group?: string; hostId?: string;
+  limit?: number; before?: string; group?: string;
   query?: string; filter?: MacroTaskFilter; sort?: MacroTaskSort;
 };
 export const macroTaskGroupSchema = z.object({
@@ -38,6 +38,7 @@ export const macroTaskGroupSchema = z.object({
 });
 export type MacroTaskGroup = z.infer<typeof macroTaskGroupSchema>;
 export const macroTaskPageSchema = z.object({
+  defaults: z.object({ firstLimit: z.int().positive(), groupLimit: z.int().positive() }),
   groups: z.array(macroTaskGroupSchema), totals: z.looseObject({ all: safeCount, active: safeCount, host: safeCount, review: safeCount }),
   cursor: integer, changed: z.boolean(),
 });

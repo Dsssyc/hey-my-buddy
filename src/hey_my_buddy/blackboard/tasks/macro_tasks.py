@@ -528,7 +528,10 @@ def macro_task_list(store, params: dict) -> dict:
     macro_query = applied.get("query")
     macro_pattern = f"%{micro_task._escape_like(macro_query)}%" if macro_query else None
     macro_match = ("1" if macro_pattern is None else
-                   "(o.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM macro_task_goals g"
+                   "(o.macro_task_id LIKE ? ESCAPE '\\' OR o.title LIKE ? ESCAPE '\\'"
+                   " OR o.project_id LIKE ? ESCAPE '\\' OR o.project_cwd LIKE ? ESCAPE '\\'"
+                   " OR o.repository_path LIKE ? ESCAPE '\\'"
+                   " OR EXISTS (SELECT 1 FROM macro_task_goals g"
                    " WHERE g.macro_task_id=o.macro_task_id AND g.body LIKE ? ESCAPE '\\'))")
     from . import macro_task_summary_cache as memo
 
@@ -631,7 +634,7 @@ SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
     # below (including a cache miss's _summary) remain from this one snapshot.
     with cache.lock, store.db.read() as connection:
         head = _head(connection)
-        rows = connection.execute(groups_sql, [*common_values, *([macro_pattern, macro_pattern] if macro_pattern else []),
+        rows = connection.execute(groups_sql, [*common_values, *([macro_pattern] * 6 if macro_pattern else []),
                                                *project_values, *page_values, limit + 1]).fetchall()
         totals = {name: int(rows[0][f"{name}_total"]) for name in ("all", "active", "host", "review")}
         changed = before is not None and int(rows[0]["latest"]) > before[2]
@@ -682,7 +685,8 @@ SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
         if group is not None and not result_groups:
             result_groups.append({"id": group, "project": None, "total": 0,
                                   "macroTasks": [], "nextCursor": None})
-    return {"groups": result_groups, "totals": totals, "cursor": head, "changed": changed}
+    return {"groups": result_groups, "totals": totals, "cursor": head, "changed": changed,
+            "defaults": {"firstLimit": LIST_FIRST_LIMIT, "groupLimit": LIST_GROUP_LIMIT}}
 
 
 def _members(connection, group_id: str) -> list:
