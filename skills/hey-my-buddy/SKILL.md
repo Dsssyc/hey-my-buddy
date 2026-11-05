@@ -25,7 +25,7 @@ Installing, health, storage and relocation are the user's operations ([operation
 
 ## Capabilities and authority
 
-[Harnesses](../../docs/reference/harnesses.md) own capabilities. Sign-in stays the user's. `access` limits writing and execution, not reading: a Worker reads what its harness allows, a checkout is no OS sandbox, and the brief and what the Worker sends its model reach the provider; keep secrets out of the brief.
+[Harnesses](../../docs/reference/harnesses.md) own capabilities. Sign-in stays the user's. `access` asks the harness to limit writing and execution, not reading: a Worker reads what its harness allows, a checkout is no OS sandbox, and the brief and what the Worker sends its model reach the provider; keep secrets out of the brief.
 
 A Lead (`delegationAuthority`) only at the user's explicit request, confirmed first ([usage](../../docs/reference/usage.md)).
 

@@ -2,11 +2,6 @@
 
 This page describes the current source: `CONTRACT_VERSION` 0.61.0, transport protocol 2 and schema 35; the upgrade floor is 0.54.1 (schema 30), and installation runs the remaining steps of the 30 → 31 → 32 → 33 → 34 → 35 chain ([operations](operations.md)). Startup never migrates. Installation and native verification facts remain in the [install records](../acceptance/installs/) and the other acceptance records.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/architecture-en-dark.svg">
-  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, the blackboard takes the only eligible buddy or a Router buddy chooses among the candidates, and when none fits the micro task goes back to the Host; a Worker buddy runs a turn in its own checkout or directly in your folder; the Host can ask a running turn a question through the blackboard; when the turn ends its output is fixed and waits for the Host's acceptance; the Host checks the brief, the Worker's report and the output against one another, then accepts the output or sends it back, by default to the same Worker. A Git project takes in only accepted work. A Lead buddy delegates micro tasks of its own and accepts them." src="../assets/architecture-en-light.svg" width="100%">
-</picture>
-
 ## Process topology
 
 ```text
