@@ -172,7 +172,7 @@ class ExistingConclusionTests(LifecycleTestCase):
             "runId": run_id, "requestId": view["activeRequest"]["requestId"],
             "decision": "approve", "autoContinue": False,
             "helpers": [{"title": "borrow-checkout", "task": "Finish in the parent checkout",
-                         "cwd": str(checkout), "buddy": ":".join(BUDDY.values()),
+                         "cwd": str(checkout), "buddy": " / ".join(BUDDY.values()),
                          "checkout": "existing", "access": "write", "writeScope": ["."],
                          "inputs": [], "expectedSeconds": 1800}],
         })

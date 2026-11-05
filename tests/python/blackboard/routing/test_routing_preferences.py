@@ -86,8 +86,8 @@ class CurrentSubmissionInputTests(unittest.TestCase):
 
     def test_complete_buddy_name_and_explicit_required_fields(self):
         with tempfile.TemporaryDirectory() as root:
-            submitted = self.parse_submit({**self.submit_params(root), "buddy": ":".join(BUDDY.values())})
-            self.assertEqual(submitted.buddy, ":".join(BUDDY.values()))
+            submitted = self.parse_submit({**self.submit_params(root), "buddy": " / ".join(BUDDY.values())})
+            self.assertEqual(submitted.buddy, " / ".join(BUDDY.values()))
             for missing in ("buddy", "checkout", "access", "expectedSeconds", "macroTaskId"):
                 params = self.submit_params(root)
                 del params[missing]
@@ -305,7 +305,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
                 "requestId": current["activeRequest"]["requestId"], "decision": "approve",
                 "autoContinue": True,
                 "helpers": [{"title": "inherit-helper", "task": "Inspect first dependency",
-                             "cwd": str(self.workdir("inherit-helper")), "buddy": ":".join(BUDDY.values()),
+                             "cwd": str(self.workdir("inherit-helper")), "buddy": " / ".join(BUDDY.values()),
                              "checkout": "worktree", "access": "write", "inputs": [],
                              "writeScope": ["."], "expectedSeconds": 1800,
                              "inheritRoutingPreferences": True}]})
@@ -335,7 +335,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_continue", {"runId": view["runId"],
                 "requestId": view["activeRequest"]["requestId"],
-                "input": "keep going", "buddy": ":".join(BUDDY.values())})
+                "input": "keep going", "buddy": " / ".join(BUDDY.values())})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         updated = self.continue_run(board, view, buddy=BUDDY, note="Host selected the installed buddy")
         self.assertEqual(updated["routing"]["source"], "host-override")

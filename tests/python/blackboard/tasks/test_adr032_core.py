@@ -131,7 +131,7 @@ class CoreContractTests(WorkflowTestCase):
         waiting = board.call("workflow_get",{"runId":root["runId"]})
         granted = self.decide(board,waiting,waiting["activeRequest"]["requestId"],autoContinue=False,helpers=[{
             "title":"helper","task":"Inspect a dependency","cwd":str(self.workdir("proxy-helper")),
-            "buddy":":".join(BUDDY.values()),"checkout":"worktree","access":"read",
+            "buddy":" / ".join(BUDDY.values()),"checkout":"worktree","access":"read",
             "inputs":[],"expectedSeconds":60,
         }])
         child_id = granted["children"][0]["taskId"]
@@ -219,7 +219,7 @@ class CoreContractTests(WorkflowTestCase):
         waiting=board.call("workflow_get",{"runId":root["runId"]})
         granted=self.decide(board,waiting,waiting["activeRequest"]["requestId"],autoContinue=False,helpers=[{
             "title":"helper", "task":"Inspect one isolated dependency", "cwd":str(self.workdir("helper")),
-            "buddy":":".join(BUDDY.values()), "checkout":"worktree", "access":"write",
+            "buddy":" / ".join(BUDDY.values()), "checkout":"worktree", "access":"write",
             "inputs":[], "writeScope":["."], "expectedSeconds":60,
         }])
         helper=granted["children"][0]
@@ -251,7 +251,7 @@ class CoreContractTests(WorkflowTestCase):
         prepared = len(self.workspace.prepare_calls)
         replay = board.call("workflow_submit", {
             "cwd": first["microTask"]["cwd"], "title": "replay", "task": "do the thing",
-            "macroTaskId": "standalone", "buddy": "nonexistent:provider:model:effort", "checkout": "worktree",
+            "macroTaskId": "standalone", "buddy": "nonexistent / provider / model / effort", "checkout": "worktree",
             "access": "full", "accessNote": "A different selection must not change the first admission",
             "writeScope": ["."], "inputs": [], "expectedSeconds": 60,
         })

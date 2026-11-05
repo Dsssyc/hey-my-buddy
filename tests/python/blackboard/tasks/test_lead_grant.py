@@ -12,7 +12,7 @@ class LeadGrantTests(WorkflowTestCase):
     def params(self, **extra):
         cwd = str(self.workdir())
         return {"title": "Lead", "task": "Integrate the work", "cwd": cwd,
-                "buddy": ":".join(BUDDY.values()), "macroTaskId": "standalone", "checkout": "existing",
+                "buddy": " / ".join(BUDDY.values()), "macroTaskId": "standalone", "checkout": "existing",
                 "inputs": [], "access": "full", "accessNote": "Lead checks", "writeScope": ["."],
                 "expectedSeconds": 1800, "delegationAuthority": True, **extra}
 

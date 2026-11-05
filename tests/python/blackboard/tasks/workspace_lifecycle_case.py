@@ -80,7 +80,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         return None
 
     def submit_run(self, board, params):
-        params={"macroTaskId":"standalone", "buddy":":".join(BUDDY.values()), "inputs":[], "expectedSeconds":1800, **params}
+        params={"macroTaskId":"standalone", "buddy":" / ".join(BUDDY.values()), "inputs":[], "expectedSeconds":1800, **params}
         reply=board.call("workflow_submit",params)
         return {**self.view(board,reply["runId"]),**reply}
 
@@ -449,7 +449,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             board, request_id=request_id, output="root output\n", disposition="assistance"
         )
         run_id = submitted["runId"]
-        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "helper owns its own worktree", 'cwd': str(self.repo), 'title': f"{request_id}-helper", 'buddy': ":".join(BUDDY.values()), 'checkout': "worktree", 'access': "write", 'inputs': [], 'writeScope': ["."], 'expectedSeconds': 1800}], 'autoContinue': True})
+        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "helper owns its own worktree", 'cwd': str(self.repo), 'title': f"{request_id}-helper", 'buddy': " / ".join(BUDDY.values()), 'checkout': "worktree", 'access': "write", 'inputs': [], 'writeScope': ["."], 'expectedSeconds': 1800}], 'autoContinue': True})
         self.assertEqual(decided["decision"], "approve")
         helper_id = decided["children"][0]["taskId"]
         with board.store.db.read() as connection:
@@ -484,7 +484,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             board, request_id=request_id, output="root output\n", disposition="assistance"
         )
         run_id = submitted["runId"]
-        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "scoped helper", 'cwd': str(self.repo), 'title': f"{request_id}-helper", 'buddy': ":".join(BUDDY.values()), 'checkout': "worktree", 'access': "write", 'inputs': [], 'writeScope': ["src"], 'expectedSeconds': 1800}], 'autoContinue': True})
+        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "scoped helper", 'cwd': str(self.repo), 'title': f"{request_id}-helper", 'buddy': " / ".join(BUDDY.values()), 'checkout': "worktree", 'access': "write", 'inputs': [], 'writeScope': ["src"], 'expectedSeconds': 1800}], 'autoContinue': True})
         helper_id = decided["children"][0]["taskId"]
         helper_claim = self.claim(board, helper_id, request_id=f"{request_id}-helper-claim", nonce="s" * 16)
         self.assertIsNotNone(helper_claim["claim"], helper_claim)

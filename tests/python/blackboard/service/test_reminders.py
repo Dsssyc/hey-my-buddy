@@ -48,7 +48,7 @@ class ReminderBoardTests(BoardTestCase):
             submitted = self.client.workflow_submit(
                  macroTaskId="standalone", title="reminder-native",
                 task="Observe native activity", cwd=str(self.workdir()),
-                buddy=":".join(DSH_BUDDY.values()), checkout="existing", access="read",
+                buddy=" / ".join(DSH_BUDDY.values()), checkout="existing", access="read",
                 inputs=[], expectedSeconds=expected_seconds,
             )
         claim = self.board_instance.store.admit_execution("a" * 64, task_id=submitted["runId"])
@@ -219,7 +219,7 @@ class ReminderPrivateServiceTests(BoardTestCase):
         with self.daemon(env=env):
             code, submitted = self.cli("submit", json.dumps({
                 "macroTaskId": "standalone", "title": "native-reminder-live", "task": "Observe native activity",
-                "cwd": str(repo), "buddy": ":".join(DSH_BUDDY.values()), "checkout": "existing",
+                "cwd": str(repo), "buddy": " / ".join(DSH_BUDDY.values()), "checkout": "existing",
                 "access": "read", "inputs": [], "expectedSeconds": 120,
             }), env=env)
             self.assertEqual(code, 0, submitted)

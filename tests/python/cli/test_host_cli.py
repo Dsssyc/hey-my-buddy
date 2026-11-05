@@ -37,6 +37,11 @@ class HelpTests(unittest.TestCase):
         submit = help_text("submit")
         for field in ("cwd", "macroTaskId", "title", "task", "buddy", "checkout", "access", "expectedSeconds", "inputs", "writeScope"):
             self.assertIn(field, submit)
+        for label, detail, count in (("submit", submit, 1),
+                                     ("continue and its helper packets", help_text("continue"), 2)):
+            self.assertEqual(detail.count("'harness / provider / model / effort'"), count,
+                             f"{label} help must state the buddy name writing")
+        self.assertIn("console's Buddy page", submit)
         self.assertIn("checkout none forbids inputs and writeScope", submit)
         self.assertNotIn("creationKey", submit)
         self.assertNotIn("controlFile", submit)
@@ -128,7 +133,7 @@ class RequestTests(unittest.TestCase):
         self.assert_invalid("workflow_create", {**create, "creationKey": "a" * 64}, "creationKey",
                             audience="service")
         lead = {key: value for key, value in packet.items() if key != "macroTaskId"}
-        lead["buddy"] = "dsh:provider:model:off"
+        lead["buddy"] = "dsh / provider / model / off"
         self.assertEqual(dump_request(parse_request("workflow_submit", lead, audience="lead")), lead)
         self.assert_invalid("workflow_submit", {**lead, "creationKey": "b" * 64}, "creationKey",
                             audience="lead")

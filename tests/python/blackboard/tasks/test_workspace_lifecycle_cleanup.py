@@ -217,7 +217,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         submitted, _claim, _manifest, checkout, _seal, yielded, _artifact = self.run_worktree(
             board, request_id='borrowed-evidence', disposition='assistance')
         run_id = submitted['runId']
-        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded['activeRequest']['requestId'], 'decision': 'approve', 'helpers': [{'task': 'inspect the shared checkout', 'cwd': str(checkout), 'title': 'evidence-helper', 'buddy': ":".join(BUDDY.values()), 'checkout': 'existing', 'access': 'write', 'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800}], 'autoContinue': True})
+        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded['activeRequest']['requestId'], 'decision': 'approve', 'helpers': [{'task': 'inspect the shared checkout', 'cwd': str(checkout), 'title': 'evidence-helper', 'buddy': " / ".join(BUDDY.values()), 'checkout': 'existing', 'access': 'write', 'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800}], 'autoContinue': True})
         helper_id = decided['children'][0]['taskId']
         claim = self.claim(board, helper_id, request_id='evidence-helper-claim')['claim']
         attempt = claim['attempt']
@@ -617,7 +617,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
             board, request_id="helper-owner", disposition="assistance"
         )
         run_id = submitted["runId"]
-        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "helper on the parent checkout", 'cwd': str(checkout), 'title': "borrow-helper", 'buddy': ":".join(BUDDY.values()), 'checkout': "existing", 'access': "write", 'inputs': [], 'writeScope': ["."], 'expectedSeconds': 1800}], 'autoContinue': True})
+        decided = self.continue_run(board, {'runId': run_id, 'requestId': yielded["activeRequest"]["requestId"], 'decision': "approve", 'helpers': [{'task': "helper on the parent checkout", 'cwd': str(checkout), 'title': "borrow-helper", 'buddy': " / ".join(BUDDY.values()), 'checkout': "existing", 'access': "write", 'inputs': [], 'writeScope': ["."], 'expectedSeconds': 1800}], 'autoContinue': True})
         self.assertEqual(decided["decision"], "approve")
         helper_id = decided["children"][0]["taskId"]
         with board.store.db.read() as connection:

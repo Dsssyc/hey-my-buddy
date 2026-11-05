@@ -45,7 +45,7 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
             {
                 "cwd": cwd, "title": title, "task": task,
                 "macroTaskId": "standalone",
-                "buddy": ":".join((*model_service, effort)),
+                "buddy": " / ".join((*model_service, effort)),
                 "checkout": "existing", "access": "write", "inputs": [], "writeScope": ["."],
                 "expectedSeconds": 1800,
             },

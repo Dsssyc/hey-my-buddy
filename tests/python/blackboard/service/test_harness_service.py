@@ -134,7 +134,7 @@ class HarnessServiceTests(BoardTestCase):
         with patch.object(self.board.workflow,'submit_normalized',side_effect=submit), patch.object(self.service.harnesses,'refresh') as refresh:
             self.assertTrue(self.call('workflow_submit',**base)['admitted'])
             refresh.assert_not_called()
-            self.assertTrue(self.call('workflow_submit',**{**base,'buddy':':'.join(buddy.values())})['admitted'])
+            self.assertTrue(self.call('workflow_submit',**{**base,'buddy':' / '.join(buddy.values())})['admitted'])
             refresh.assert_called_once_with('codex',force=True)
 
     def test_manual_path_write_uses_latest_value(self):
@@ -172,9 +172,9 @@ class HarnessServiceTests(BoardTestCase):
             enable_fixture_buddy(self.board,{'harness':harness,'provider':'fixture','model':'fixture','effort':'high'})
         with patch.object(self.board.workflow,'continue_run',return_value={}), patch.object(self.service.harnesses,'refresh') as refresh:
             self.call('workflow_continue',runId='run',requestId='boundary',input='Continue',
-                      buddy='codex:fixture:fixture:high',note='Choose this installed route')
+                      buddy='codex / fixture / fixture / high',note='Choose this installed route')
             self.call('workflow_continue',runId='run',requestId='boundary',decision='approve',autoContinue=True,helpers=[{
-                'title':'helper','task':'Bounded helper','cwd':str(self.directory),'buddy':'dsh:fixture:fixture:high',
+                'title':'helper','task':'Bounded helper','cwd':str(self.directory),'buddy':'dsh / fixture / fixture / high',
                 'checkout':'worktree','access':'read','inputs':[],'expectedSeconds':60}])
         self.assertEqual([call.args[0] for call in refresh.call_args_list],['codex','dsh'])
 

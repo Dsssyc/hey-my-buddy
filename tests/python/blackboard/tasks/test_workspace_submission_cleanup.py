@@ -73,7 +73,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self._submission_request_ids[request] = self.creation_request_id(request, macro_task_id=macro_task_id)
         return board.store.workflow.submit({
             'cwd': str(self.repo), 'macroTaskId': macro_task_id, 'title': request,
-            'task': 'do the thing', 'buddy': ':'.join(workflow_tests.BUDDY.values()),
+            'task': 'do the thing', 'buddy': ' / '.join(workflow_tests.BUDDY.values()),
             'checkout': choice['kind'], 'access': choice.get('access', 'write'),
             'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800, **options,
         })
@@ -825,7 +825,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         enable_fixture_buddy(board.store, workflow_tests.BUDDY)
         helpers = [board.store.workflow._normalize_helper({
             'title': f'shared-reader-{index}', 'task': f'read {index}', 'cwd': str(checkout),
-            'buddy': ':'.join(workflow_tests.BUDDY.values()), 'checkout': 'existing',
+            'buddy': ' / '.join(workflow_tests.BUDDY.values()), 'checkout': 'existing',
             'access': 'read', 'inputs': [], 'expectedSeconds': 1800,
         }, request_id='shared-readers', index=index, integrator={'role': 'host'})
             for index in (1, 2)]

@@ -253,7 +253,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         view, _ = self.finish_owned(board, child, disposition="assistance")
         helpers = self.decide(board, view, view["activeRequest"]["requestId"], credential=claim["agentCredential"], helpers=[{
             "title": "helper", "task": "Help owned work", "cwd": str(self.workdir("helper")),
-            "buddy":":".join(BUDDY.values()), "checkout":"existing", "access":"write",
+            "buddy":" / ".join(BUDDY.values()), "checkout":"existing", "access":"write",
             "inputs":[],"writeScope":["."],"expectedSeconds":60,
         }])
         self.wait(board, claim)

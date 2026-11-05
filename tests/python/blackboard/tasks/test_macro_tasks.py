@@ -825,7 +825,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         owned_title, owned_task = 'Owned work', 'Do owned work'
         owned = board.call('workflow_submit', {
             'title': owned_title, 'task': owned_task, 'cwd': lead['task']['cwd'],
-            'buddy': ':'.join(BUDDY.values()), 'checkout': 'worktree', 'access': 'write',
+            'buddy': ' / '.join(BUDDY.values()), 'checkout': 'worktree', 'access': 'write',
             'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800,
             'credential': claim['agentCredential'],
         })

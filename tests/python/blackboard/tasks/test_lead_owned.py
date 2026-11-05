@@ -54,7 +54,7 @@ class LeadOwnedTests(WorkflowTestCase):
         cwd = extra.pop("cwd", lead["microTask"]["cwd"])
         checkout = extra.pop("checkout", extra.pop("kind", "worktree"))
         access = extra.pop("access", "write")
-        buddy = extra.pop("buddy", ":".join(BUDDY.values()))
+        buddy = extra.pop("buddy", " / ".join(BUDDY.values()))
         packet = {"credential": credential, "cwd": cwd, "title": title, "task": task,
                   "buddy": buddy, "checkout": checkout, "access": access, "expectedSeconds": 600,
                   "inputs": [], **extra}

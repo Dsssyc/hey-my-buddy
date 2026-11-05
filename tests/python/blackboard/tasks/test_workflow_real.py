@@ -126,7 +126,7 @@ class RealWorkspaceTestCase(BoardTestCase):
         cwd = str(cwd or self.repo)
         params = {
             "cwd": cwd, "macroTaskId": "standalone", "title": request_id,
-            "task": "real workspace task", "buddy": ":".join(BUDDY.values()),
+            "task": "real workspace task", "buddy": " / ".join(BUDDY.values()),
             "checkout": kind, "access": access, "expectedSeconds": 1800,
         }
         if kind != "none":
@@ -159,7 +159,7 @@ class RealWorkspaceTestCase(BoardTestCase):
                 helper = {
                     "title": old.get("requestId", f"helper-{index}"),
                     "task": old["task"], "cwd": old["cwd"],
-                    "buddy": ":".join(old[key] for key in BUDDY),
+                    "buddy": " / ".join(old[key] for key in BUDDY),
                     "checkout": checkout, "access": access,
                     "expectedSeconds": 1800,
                 }

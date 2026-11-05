@@ -56,7 +56,7 @@ class ClaimStashTestCase(BoardTestCase):
         task = 'claim stash task'
         response = board.call("workflow_submit", {
             "cwd": cwd, "title": title, "task": task, "macroTaskId": "standalone",
-            "buddy": ':'.join(selected.values()), "checkout": "existing", "access": "write",
+            "buddy": ' / '.join(selected.values()), "checkout": "existing", "access": "write",
             "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
         })
         if required := extra.get("requiredCapabilities"):

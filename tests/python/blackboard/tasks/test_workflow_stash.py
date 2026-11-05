@@ -68,7 +68,7 @@ class WorkflowStashTestCase(BoardTestCase):
         submitted = board.call("workflow_submit", {
             "cwd": cwd, "title": title, "task": task,
             "macroTaskId": "standalone",
-            "buddy": ":".join(BUDDY.values()), "checkout": "existing", "access": "write",
+            "buddy": " / ".join(BUDDY.values()), "checkout": "existing", "access": "write",
             "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
         })
         self.run_id = submitted["runId"]
@@ -152,7 +152,7 @@ class StartFactFreezingTests(WorkflowStashTestCase):
         task = "queued change task"
         submitted = board.call("workflow_submit", {
             "cwd": cwd, "title": title, "task": task, "macroTaskId": "standalone",
-            "buddy": ":".join(BUDDY.values()), "checkout": "existing", "access": "write",
+            "buddy": " / ".join(BUDDY.values()), "checkout": "existing", "access": "write",
             "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
         })
         self.run_id = submitted["runId"]

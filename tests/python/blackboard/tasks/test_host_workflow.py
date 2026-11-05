@@ -103,20 +103,21 @@ class HostWorkflowTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute("UPDATE buddies SET enabled=0 WHERE effort='high'")
         with self.assertRaises(BoardError) as raised:
-            self.submit(board, buddy=":".join(replacement.values()), request_id="disabled")
+            self.submit(board, buddy=" / ".join(replacement.values()), request_id="disabled")
         self.assertEqual(raised.exception.code, "BUDDY_UNAVAILABLE")
 
-    def test_catalog_sanitized_buddy_id_resolves_to_its_complete_tuple(self):
+    def test_buddy_name_is_the_console_quad_and_never_the_catalog_primary_key(self):
         board = self.board()
         identity = {**BUDDY, "model": "fixture/model"}
-        raw = ":".join(identity.values())
-        buddy_id = re.sub(r"[^A-Za-z0-9._:-]", "-", raw)
+        buddy_id = re.sub(r"[^A-Za-z0-9._:-]", "-", ":".join(identity.values()))
         with board.store.db.write() as connection:
             connection.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,enabled,available)"
                                " VALUES(?,?,?,?,?,?,1,1)",
                                (buddy_id, "Sanitized fixture", *identity.values()))
-        submitted = self.submit(board, buddy=buddy_id, request_id="sanitized")
+        submitted = self.submit(board, buddy=" / ".join(identity.values()), request_id="quad-name")
         self.assertEqual(submitted["buddy"], identity)
-        with self.assertRaises(BoardError) as raised:
-            self.submit(board, buddy=raw, request_id="raw-name")
-        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        for name in (buddy_id, ":".join(identity.values()), "dsh / deepseek-official / absent-model / off"):
+            with self.subTest(name=name), self.assertRaises(BoardError) as raised:
+                self.submit(board, buddy=name, request_id="refused")
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+            self.assertIn("harness / provider / model / effort", raised.exception.message)

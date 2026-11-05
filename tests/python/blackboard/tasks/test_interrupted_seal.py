@@ -32,7 +32,7 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         task = "recover stopped workspace"
         submitted = board.call("workflow_submit", {
             "cwd": str(self.repo), "macroTaskId": "standalone", "title": title, "task": task,
-            "buddy": ":".join(BUDDY.values()), "checkout": "existing", "access": access,
+            "buddy": " / ".join(BUDDY.values()), "checkout": "existing", "access": access,
             "inputs": [], "expectedSeconds": 1800,
             **({"writeScope": scope or ["."]} if access != "read" else {}),
         })

@@ -77,6 +77,9 @@ def _buddy(value: str) -> str:
     return value
 
 
+BUDDY_NAME_DESCRIPTION = ("'route', or one buddy's complete name 'harness / provider / model / effort'"
+                          " with ' / ' between the four parts, as the console's Buddy page lists each buddy")
+
 Title = Annotated[str, Field(min_length=1, max_length=200, description="Nonempty title, at most 200 characters"), AfterValidator(_title)]
 Text = Annotated[str, Field(json_schema_extra={"x-maxUtf8Bytes": MAX_TEXT_BYTES}),
                  AfterValidator(lambda value: _bounded(value, MAX_TEXT_BYTES))]
@@ -136,7 +139,7 @@ class _Submission(Request):
     cwd: Cwd = Field(description="Existing absolute work directory")
     title: Title
     task: Text = Field(description="Nonempty task, at most 1 MiB UTF-8")
-    buddy: BuddyName = Field(description="'route' or a complete recorded catalog buddyId")
+    buddy: BuddyName = Field(description=BUDDY_NAME_DESCRIPTION)
     checkout: Checkout
     access: Access
     expectedSeconds: ExpectedSeconds
@@ -274,7 +277,7 @@ class ContinueRequest(Request):
     helpers: Annotated[list[HelperRequest], Field(min_length=1, max_length=8)] | None = None
     autoContinue: bool | None = None
     helperPolicy: Literal["keep", "cancel"] | None = None
-    buddy: BuddyName | None = None
+    buddy: BuddyName | None = Field(default=None, description=BUDDY_NAME_DESCRIPTION)
     access: Access | None = None
     writeScope: Paths | None = None
     accessNote: Note | None = None

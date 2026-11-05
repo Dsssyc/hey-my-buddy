@@ -159,7 +159,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         replacement = {'harness': 'codex', 'provider': 'openai', 'model': 'fixture', 'effort': 'low'}
         enable_fixture_buddy(board.store, replacement)
         board.call('workflow_continue', {'runId': run['runId'], 'artifactId': artifact,
-            'input': 'Inspect again with the selected buddy', 'buddy': ':'.join(replacement.values()),
+            'input': 'Inspect again with the selected buddy', 'buddy': ' / '.join(replacement.values()),
             'note': 'A second native harness is authorized'})
         second = self.claim(board, run_id=run['runId'], claim_request_id='second-harness')
         self.finish_turn(board, second, seal=False)

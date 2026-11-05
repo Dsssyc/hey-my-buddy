@@ -24,7 +24,7 @@ class NoneWorkflowTests(WorkflowTestCase):
         cwd = str(cwd or self.workdir())
         enable_fixture_buddy(board.store, BUDDY)
         packet = {'cwd': cwd, 'title': title, 'task': title, 'macroTaskId': macro or 'standalone',
-                  'buddy': ':'.join(BUDDY.values()), 'checkout': 'none', 'access': access,
+                  'buddy': ' / '.join(BUDDY.values()), 'checkout': 'none', 'access': access,
                   'expectedSeconds': 30}
         if lead is not None:
             packet.pop('macroTaskId')
@@ -311,7 +311,7 @@ class NoneWorkerTurnTests(MicroTaskWorkerTestCase):
     def test_offline_native_worker_runs_at_folder_cwd_publishes_receipt_and_accepts(self):
         folder = self.workdir('ordinary-folder')
         task = {'cwd': str(folder), 'title': 'Answer in folder', 'task': 'run the mock turn',
-                'macroTaskId': 'standalone', 'buddy': ':'.join(BUDDY.values()),
+                'macroTaskId': 'standalone', 'buddy': ' / '.join(BUDDY.values()),
                 'checkout': 'none', 'access': 'write', 'expectedSeconds': 30}
         with self.daemon(env=self.env()):
             code, submitted = self.cli('submit', json.dumps(task), env=self.env())

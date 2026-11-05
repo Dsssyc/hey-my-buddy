@@ -40,7 +40,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         task = "Review and direct the child task"
         submitted = board.call("workflow_submit", {
             "cwd": str(repo), "macroTaskId": "standalone", "title": request_id, "task": task,
-            "buddy": ":".join(buddy.values()), "checkout": kind, "access": "full",
+            "buddy": " / ".join(buddy.values()), "checkout": kind, "access": "full",
             "accessNote": "Lead review", "writeScope": ["."], "inputs": [],
             "expectedSeconds": 1800, "delegationAuthority": True,
         })
@@ -53,7 +53,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         task = "Change the isolated checkout"
         submitted = board.call("workflow_submit", {
             "credential": lead["credential"], "cwd": str(self.repo), "title": request_id,
-            "task": task, "buddy": ":".join(BUDDY.values()), "checkout": "worktree",
+            "task": task, "buddy": " / ".join(BUDDY.values()), "checkout": "worktree",
             "access": "write", "writeScope": list(scope), "inputs": [], "expectedSeconds": 1800,
         })
         self.assertNotIn("control", submitted)

@@ -15,7 +15,7 @@ class DeletionAdmissionTests(LifecycleTestCase):
     def submit_case(self, board, *, title, task, cwd, checkout, write_scope, macro_task_id="standalone"):
         return board.call("workflow_submit", {
             "cwd": str(cwd), "macroTaskId": macro_task_id, "title": title, "task": task,
-            "buddy": ":".join(BUDDY.values()), "checkout": checkout, "access": "write",
+            "buddy": " / ".join(BUDDY.values()), "checkout": checkout, "access": "write",
             "writeScope": list(write_scope), "inputs": [], "expectedSeconds": 1800,
         })
 

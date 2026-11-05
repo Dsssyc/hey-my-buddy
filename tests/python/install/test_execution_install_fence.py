@@ -194,7 +194,7 @@ class ExecutionInstallFenceTests(BoardTestCase):
             created = self.client().call("workflow_submit", {
                  "macroTaskId": "standalone", "title": "fenced-activity",
                 "task": "Complete a gated offline fixture turn", "cwd": str(repo),
-                "buddy": "dsh:deepseek-official:deepseek-flash:max", "checkout": "existing",
+                "buddy": "dsh / deepseek-official / deepseek-flash / max", "checkout": "existing",
                 "access": "write", "inputs": [], "writeScope": ["."], "expectedSeconds": 120})
             self.assertTrue(wait_for(started.exists, timeout=60), created)
             attempt = self.running(created["runId"])["selectedAttempt"]

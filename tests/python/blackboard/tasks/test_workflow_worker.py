@@ -91,7 +91,7 @@ class MicroTaskWorkerTestCase(BoardTestCase):
                 {
                     "title": request_id,
                     "macroTaskId": "standalone",
-                    "buddy": ":".join(BUDDY.values()),
+                    "buddy": " / ".join(BUDDY.values()),
                     "task": "run the mock turn",
                     "cwd": str(self.repo),
                     "checkout": "existing", "access": "write", "inputs": [],
@@ -104,7 +104,7 @@ class MicroTaskWorkerTestCase(BoardTestCase):
     def submit_direct(self, board, *, title="fixture-run", task="run the mock turn", checkout="existing",
                       access="write", delegation_authority=False):
         params = {"cwd": str(self.repo), "title": title, "task": task, "macroTaskId": "standalone",
-                  "buddy": ":".join(BUDDY.values()), "checkout": checkout, "access": access,
+                  "buddy": " / ".join(BUDDY.values()), "checkout": checkout, "access": access,
                   "inputs": [], "expectedSeconds": 1800}
         if access in ("write", "full"):
             params["writeScope"] = ["."]
@@ -123,7 +123,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                 with self.subTest(fields=fields):
                     code, response = self.cli('submit', json.dumps({
                         'title': f'execution-record-{index}', 'macroTaskId': 'standalone',
-                        'buddy': ':'.join(BUDDY.values()), 'task': 'separate execution',
+                        'buddy': ' / '.join(BUDDY.values()), 'task': 'separate execution',
                         'cwd': str(self.repo), 'checkout': 'existing', 'access': 'write',
                         'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800,
                         **fields,
@@ -260,7 +260,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             code, refused = self.cli(
                 "submit",
                 json.dumps({"title": "forged", "task": "x", "cwd": str(self.repo),
-                            "buddy": ":".join(BUDDY.values()), "checkout": "existing", "access": "write",
+                            "buddy": " / ".join(BUDDY.values()), "checkout": "existing", "access": "write",
                             "inputs": [], "writeScope": ["."], "expectedSeconds": 1800}),
                 env=env,
             )
@@ -341,7 +341,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                                           capture_output=True, text=True, encoding="utf-8")
                 self.assertEqual(prepared.returncode, 0, prepared.stderr)
             child_request = {"title": "launcher-owned", "task": "Do bounded work",
-                             "buddy": ":".join(BUDDY.values()), "cwd": str(child_repo),
+                             "buddy": " / ".join(BUDDY.values()), "cwd": str(child_repo),
                              "checkout": "existing", "access": "write", "inputs": [],
                              "writeScope": ["."], "expectedSeconds": 1800}
             # Source-check fixture bypasses only installed-runtime selection;
@@ -401,7 +401,7 @@ class ConsoleWorkflowRouteTests(MicroTaskWorkerTestCase):
             "workflow_submit",
             {
                 "title": "console-req-2", "task": "console submission", "macroTaskId": "standalone",
-                "buddy": ":".join(BUDDY.values()), "cwd": str(self.repo),
+                "buddy": " / ".join(BUDDY.values()), "cwd": str(self.repo),
                 "checkout": "worktree", "access": "write", "inputs": [],
                 "writeScope": ["."], "expectedSeconds": 1800,
             },
@@ -476,7 +476,7 @@ class SubmissionPreparationRaceTests(MicroTaskWorkerTestCase):
 
     def test_service_submission_replays_across_threads(self):
         params = {"cwd": str(self.repo), "title": "req-race", "task": "same work",
-                  "macroTaskId": "standalone", "buddy": ":".join(BUDDY.values()),
+                  "macroTaskId": "standalone", "buddy": " / ".join(BUDDY.values()),
                   "checkout": "none", "access": "read", "expectedSeconds": 1800}
         with self.daemon(env=self.env()):
             BoardClient(self.directory, autostart=False).workflow_create(

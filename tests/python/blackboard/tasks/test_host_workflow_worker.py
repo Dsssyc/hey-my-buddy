@@ -32,7 +32,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
     def provider_rejection(self):
         submitted = self.call("submit", {"macroTaskId": "standalone", "title": "Quota recovery",
             "task": "Implement the fixture change", "cwd": str(self.repo),
-            "buddy": ":".join(BUDDY.values()), "checkout": "worktree", "access": "write",
+            "buddy": " / ".join(BUDDY.values()), "checkout": "worktree", "access": "write",
             "inputs": [], "writeScope": ["."], "expectedSeconds": 600})
         # A terminal failed micro task is an await outcome, not a CLI transport error.
         _code, stopped = self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}), env=self.env(), timeout=110)
@@ -66,7 +66,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             submitted, failed, partial = self.provider_rejection()
             path = failed["workspace"]["path"]
             continued = self.call("continue", {"runId": failed["runId"], "artifactId": partial["artifactId"],
-                "buddy": ":".join({**BUDDY, "effort": "high"}.values()),
+                "buddy": " / ".join({**BUDDY, "effort": "high"}.values()),
                 "note": "Use another enabled buddy after quota failure",
                 "input": "Finish and verify the preserved changes."})
             self.assertEqual(self.call("get", {"runId": failed["runId"]})["workspace"]["path"], path)
@@ -166,7 +166,7 @@ class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):
         self.codex_case = "overload-activity-text"
         with self.daemon(env=self.env()):
             submitted = self.call("submit", {"macroTaskId": "standalone", "title": "Codex overload",
-                "buddy": "codex:openai:fixture-model:low", "task": "Offline model overload",
+                "buddy": "codex / openai / fixture-model / low", "task": "Offline model overload",
                 "cwd": str(self.repo), "checkout": "worktree", "access": "write",
                 "inputs": [], "writeScope": ["."], "expectedSeconds": 600})
             awaited = self.call("await", {"runId": submitted["runId"], "waitSeconds": 90})
@@ -187,7 +187,7 @@ class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):
     def test_failed_codex_reconstructs_in_dsh_with_bound_partial_output_and_message(self):
         with self.daemon(env=self.env()):
             submitted = self.call("submit", {"macroTaskId": "standalone", "title": "Cross harness",
-                "buddy": "codex:openai:fixture-model:low", "task": "Only exercise the offline quota fixture",
+                "buddy": "codex / openai / fixture-model / low", "task": "Only exercise the offline quota fixture",
                 "cwd": str(self.repo), "checkout": "worktree", "access": "write",
                 "inputs": [], "writeScope": ["."], "expectedSeconds": 600})
             awaited = self.call("await", {"runId": submitted["runId"], "waitSeconds": 90})
@@ -197,7 +197,7 @@ class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):
             self.assertEqual(awaited["result"]["providerRejection"]["code"], "quota-exceeded")
             self.assertIsNotNone(failed["currentTurn"]["tokenUsage"])
             continued = self.call("continue", {"runId": submitted["runId"], "artifactId": partial["artifactId"],
-                "buddy": ":".join({**BUDDY, "effort": "high"}.values()), "note": "Recover with an enabled different harness",
+                "buddy": " / ".join({**BUDDY, "effort": "high"}.values()), "note": "Recover with an enabled different harness",
                 "input": "Finish the retained work within the same authorized checkout."})
             self.assertEqual(self.call("get", {"runId": failed["runId"]})["workspace"]["path"], failed["workspace"]["path"])
             self.call("await", {"runId": submitted["runId"], "waitSeconds": 90})
@@ -281,7 +281,7 @@ class NativeContextFailureTests(MicroTaskWorkerTestCase):
         task = "Inspect this complete input.\n" + ("context evidence\n" * 1000) + self.prompt_tail
         with self.daemon(env=self.env()):
             code, submitted = self.cli("submit", json.dumps({
-                "buddy": "codex:openai:fixture-model:low", "macroTaskId": "standalone",
+                "buddy": "codex / openai / fixture-model / low", "macroTaskId": "standalone",
                 "title": "Native context window", "task": task,
                 "cwd": str(self.repo),
                 "checkout": "worktree", "access": "write", "inputs": [], "writeScope": ["."],

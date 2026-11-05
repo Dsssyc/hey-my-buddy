@@ -48,7 +48,7 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
         code, submission = self.cli("submit", json.dumps({
             "macroTaskId": "standalone", "title": "claude-private-worker",
             "task": "Exercise only the mock native protocol", "cwd": str(self.repo),
-            "buddy": ":".join(BUDDY.values()), "checkout": "worktree", "access": "write",
+            "buddy": " / ".join(BUDDY.values()), "checkout": "worktree", "access": "write",
             "inputs": [], "writeScope": ["tracked.txt"], "expectedSeconds": 20}), env=self.env())
         self.assertEqual(code, 0, submission)
         run_id = submission["runId"]

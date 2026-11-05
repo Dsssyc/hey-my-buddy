@@ -23,7 +23,7 @@ class NetworkErrorContinuationTests(MicroTaskWorkerTestCase):
         with self.daemon(env=self.env()):
             code, submitted = self.cli("submit", json.dumps({
                 "title": "network-recovery", "macroTaskId": "standalone",
-                "buddy": ":".join(BUDDY.values()), "task": "Exercise the offline network-error fixture",
+                "buddy": " / ".join(BUDDY.values()), "task": "Exercise the offline network-error fixture",
                 "cwd": str(self.repo), "checkout": "worktree", "access": "write",
                 "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
             }), env=self.env())

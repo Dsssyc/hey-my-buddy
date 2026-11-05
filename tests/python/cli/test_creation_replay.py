@@ -19,7 +19,7 @@ from hey_my_buddy.protocol import transport
 
 
 BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
-BUDDY_NAME = ":".join(BUDDY.values())
+BUDDY_NAME = " / ".join(BUDDY.values())
 
 
 class CreationReplayTests(BoardTestCase):
@@ -134,7 +134,7 @@ class CreationReplayTests(BoardTestCase):
                 self.assertTrue(replayed["alreadyExists"])
                 self.assertEqual(replayed["access"], "read")
                 self.assertEqual(replayed["checkout"], "worktree")
-                self.assertEqual(replayed["buddy"], BUDDY)
+                self.assertEqual(replayed["buddy"], BUDDY_NAME)
                 self.assertEqual(second[0][1], submit)
                 self.assertEqual(len(after_submit["runs"][0][1]), 64)
                 self.assertEqual(self.facts(), after_submit)
@@ -149,7 +149,7 @@ class CreationReplayTests(BoardTestCase):
                 self.assertTrue(original_choice["alreadyExists"])
                 self.assertEqual(original_choice["access"], "read")
                 self.assertEqual(original_choice["checkout"], "worktree")
-                self.assertEqual(original_choice["buddy"], BUDDY)
+                self.assertEqual(original_choice["buddy"], BUDDY_NAME)
                 self.assertEqual(self.facts(), after_submit)
                 self.assertEqual(len([line for line in self.git("worktree", "list", "--porcelain").splitlines()
                                       if line.startswith("worktree ")]), 2)

@@ -57,7 +57,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         response = self.board.call("workflow_continue", {
             "runId": view["runId"], "artifactId": view["finalArtifactId"],
             "input": "continue with the explicit route",
-            "buddy": ":".join(buddy[key] for key in ("harness", "provider", "model", "effort")),
+            "buddy": " / ".join(buddy[key] for key in ("harness", "provider", "model", "effort")),
             'note': "Route the continuation through this explicit buddy",
         })
         return {**self.board.call("workflow_get", {"runId": view["runId"]}), **response}
@@ -186,7 +186,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
             self.continue_with(submitted, IDENTITY)
         gate = rejected.exception
         self.assertEqual(gate.code, "INVALID_ARGUMENT")
-        self.assertEqual(gate.details["buddy"], "dsh:fixture:alpha:max")
+        self.assertEqual(gate.details["buddy"], "dsh / fixture / alpha / max")
         self.assertEqual(calls, [], "The operator pin admits validation without a native re-read")
         self.assertIsNone(self.overridden_event())
 

@@ -46,7 +46,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         response = board.call("workflow_submit", {
             "cwd": cwd, "macroTaskId": "standalone", "title": request_id,
             "task": "scoped real workspace task",
-            "buddy": ":".join(BUDDY.values()), "checkout": kind, "access": "write",
+            "buddy": " / ".join(BUDDY.values()), "checkout": kind, "access": "write",
             "writeScope": list(scope), "inputs": [], "expectedSeconds": 1800,
         })
         return {**self.view(board, response["runId"]), **response}
@@ -956,7 +956,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             "decision": "approve", "note": "one isolated helper", "autoContinue": True,
             "helpers": [{
                 "title": "helper-scope-1", "task": "helper task", "cwd": str(self.repo),
-                "buddy": ":".join(BUDDY.values()), "checkout": "worktree", "access": "write",
+                "buddy": " / ".join(BUDDY.values()), "checkout": "worktree", "access": "write",
                 "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
             }],
         })

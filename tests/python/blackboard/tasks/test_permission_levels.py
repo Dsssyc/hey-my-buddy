@@ -83,7 +83,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
         title = "Read input"
         submitted = board.call("workflow_submit", {
             "cwd": str(self.repo), "macroTaskId": "standalone", "title": title, "task": task,
-            "buddy": ":".join(BUDDY.values()), "checkout": "existing", "access": "read",
+            "buddy": " / ".join(BUDDY.values()), "checkout": "existing", "access": "read",
             "inputs": ["input.txt"], "expectedSeconds": 600,
         })
         claim = self.claim(board, submitted["runId"])

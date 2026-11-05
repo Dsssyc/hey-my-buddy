@@ -47,6 +47,7 @@ BASELINE_SHA = "613faa4089c02ef1d5ef9b1d0743920de6f4a7cc"
 BUDDY = {"harness": "dsh", "provider": "deepseek-official",
                  "model": "deepseek-flash", "effort": "off"}
 BUDDY_ID = ":".join(BUDDY.values())
+BUDDY_NAME = " / ".join(BUDDY.values())
 NONCE = "synthetic-nonce-1"
 SCENARIOS = ("no-write", "unrelated-meta", "unrelated-plain",
              "other-macro", "single-macro", "all-macros")
@@ -195,7 +196,7 @@ class SyntheticBoard:
                                                     "goal": "Fictional benchmark; no real work."})
             macro_task_id = created["macroTaskId"]
         params = {"task": task, "title": title, "cwd": str(cwd), "macroTaskId": macro_task_id or "standalone",
-                  "buddy": "route" if routed else BUDDY_ID, "checkout": "worktree", "access": "write",
+                  "buddy": "route" if routed else BUDDY_NAME, "checkout": "worktree", "access": "write",
                   "inputs": [], "writeScope": ["src/feature.py"], "expectedSeconds": 1800}
         response = self.call("workflow_submit", params)
         view = self.call("workflow_get", {"runId": response["runId"]})
@@ -243,7 +244,7 @@ class SyntheticBoard:
         self.call("workflow_continue", {
             "runId": parent, "requestId": request_id, "decision": "approve", "autoContinue": True,
             "helpers": [{"title": name, "task": "Fictional helper", "cwd": str(self.state / "fictional-project"),
-                         "buddy": BUDDY_ID, "checkout": "worktree", "access": "write",
+                         "buddy": BUDDY_NAME, "checkout": "worktree", "access": "write",
                          "inputs": [], "writeScope": ["src/feature.py"], "expectedSeconds": 1800}],
         })
         with self.board.store.db.read() as connection:

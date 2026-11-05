@@ -397,7 +397,7 @@ class ReclamationTests(LifecycleTestCase):
                 board = self.board(clock=clock)
                 submitted, _, _, checkout, _, yielded, _ = self.run_worktree(
                     board, request_id='parent-' + terminal, disposition='assistance')
-                decided = self.continue_run(board, {'runId': submitted['runId'], 'requestId': yielded['activeRequest']['requestId'], 'decision': 'approve', 'helpers': [{'task': 'inspect shared files', 'cwd': str(checkout), 'title': 'borrower-' + terminal, 'buddy': ":".join(BUDDY.values()), 'checkout': 'existing', 'access': 'write', 'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800}], 'autoContinue': True})
+                decided = self.continue_run(board, {'runId': submitted['runId'], 'requestId': yielded['activeRequest']['requestId'], 'decision': 'approve', 'helpers': [{'task': 'inspect shared files', 'cwd': str(checkout), 'title': 'borrower-' + terminal, 'buddy': " / ".join(BUDDY.values()), 'checkout': 'existing', 'access': 'write', 'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800}], 'autoContinue': True})
                 child_id = decided['children'][0]['taskId']
                 if terminal == 'failed':
                     child = self.claim(board, child_id, request_id='borrower-failed-claim')['claim']

@@ -109,13 +109,25 @@ class CreationRequestTests(unittest.TestCase):
             calls.append((method, dict(params)))
             return {"runId": "child", "status": "queued", "actions": ["await"]}
         packet = {"cwd": str(self.root), "title": "Child", "task": "Do the work",
-                  "buddy": "dsh:provider:model:off", "checkout": "existing", "access": "read",
+                  "buddy": "dsh / provider / model / off", "checkout": "existing", "access": "read",
                   "inputs": [], "expectedSeconds": 300}
         document = {"token": "private", "stateDir": str(self.root), "taskId": "lead-run"}
         with mock.patch.object(cli, "_call_service", side_effect=service):
             status, _ = invoke("submit", packet, document=document)
         self.assertEqual(status, 0, _)
         self.assertEqual(calls, [("submit", {**packet, "credential": "private"})])
+
+    def test_get_prints_each_buddy_identity_as_one_copyable_name(self):
+        identity = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
+        name = "dsh / deepseek-official / deepseek-flash / off"
+        response = {"runId": "run-1", "state": "executing", "buddy": identity,
+                    "microTask": {"task": "t"}, "currentTurn": {"buddy": identity}}
+        for output in ("brief", "full"):
+            with self.subTest(output=output), mock.patch.object(cli, "_call_service", return_value=response):
+                status, result = invoke("get", {"runId": "run-1", "output": output})
+            self.assertEqual(status, 0, result)
+            self.assertEqual(result["buddy"], name)
+            self.assertEqual(result["currentTurn"]["buddy"], name)
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         task = 'Private shared-object fixture'
         run = board.call('workflow_submit',{
             'cwd': cwd, 'title': request_id, 'task': task, 'macroTaskId': created['macroTaskId'],
-            'buddy': ':'.join(BUDDY.values()), 'checkout': kind, 'access': 'write',
+            'buddy': ' / '.join(BUDDY.values()), 'checkout': kind, 'access': 'write',
             'inputs': [], 'writeScope': write_scope or ['.'], 'expectedSeconds': 1800,
         })
         return {**board.call('workflow_get', {'runId': run['runId']}), **run}

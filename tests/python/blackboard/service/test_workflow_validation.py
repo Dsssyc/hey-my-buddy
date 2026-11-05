@@ -21,7 +21,7 @@ class WorkflowValidationTests(WorkflowTestCase):
 
     def packet(self):
         return {"cwd": str(self.workdir()), "macroTaskId": "standalone",
-                "title": "Validate admission", "task": "Review fixture", "buddy": ":".join(BUDDY.values()),
+                "title": "Validate admission", "task": "Review fixture", "buddy": " / ".join(BUDDY.values()),
                 "checkout": "existing", "access": "read", "inputs": [], "expectedSeconds": 600}
 
     def call(self, service, operation, params):
@@ -67,7 +67,7 @@ class WorkflowValidationTests(WorkflowTestCase):
         service = self.service(board)
         prepared = len(self.workspace.prepare_calls)
         helper = {"title": "Helper", "task": "Check fixture", "cwd": str(self.workdir("helper")),
-                  "buddy": ":".join(BUDDY.values()), "checkout": "worktree", "access": "read",
+                  "buddy": " / ".join(BUDDY.values()), "checkout": "worktree", "access": "read",
                   "inputs": [], "expectedSeconds": 600}
         result = self.call(service, "workflow_continue", {"runId": view["runId"],
                           "requestId": view["activeRequest"]["requestId"], "decision": "approve",

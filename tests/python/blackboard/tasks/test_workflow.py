@@ -64,7 +64,7 @@ class WorkflowTestCase(BoardTestCase):
         selected_buddy = extra.pop("buddy", buddy)
         if isinstance(selected_buddy, dict):
             enable_fixture_buddy(board.store, selected_buddy)
-            selected_buddy = ":".join(selected_buddy[key] for key in BUDDY)
+            selected_buddy = " / ".join(selected_buddy[key] for key in BUDDY)
         params = {"cwd": cwd, "title": title, "task": task, "buddy": selected_buddy,
                   "checkout": checkout, "access": access, "expectedSeconds": extra.pop("expectedSeconds", 1800),
                   "macroTaskId": macro_id or "standalone",
@@ -179,7 +179,7 @@ class WorkflowTestCase(BoardTestCase):
                     buddy = selected if isinstance(selected, dict) else {
                         key: helper.get(key, BUDDY[key]) for key in BUDDY}
                     enable_fixture_buddy(board.store, buddy)
-                    buddy_name = ":".join(buddy[key] for key in BUDDY)
+                    buddy_name = " / ".join(buddy[key] for key in BUDDY)
                 workspace = helper.get("workspace", {})
                 checkout = helper.get("checkout", workspace.get("kind", "existing"))
                 access = helper.get("access", workspace.get("access", "write"))
@@ -212,7 +212,7 @@ class WorkflowTestCase(BoardTestCase):
             from support import enable_fixture_buddy
             if isinstance(extra["buddy"], dict):
                 enable_fixture_buddy(board.store, extra["buddy"])
-                extra["buddy"] = ":".join(extra["buddy"][key] for key in BUDDY)
+                extra["buddy"] = " / ".join(extra["buddy"][key] for key in BUDDY)
             extra.setdefault("note", "Use the explicit fixture buddy for this continuation")
         params = {
             "runId": view["runId"],
@@ -1076,7 +1076,7 @@ class DecidePrecheckTests(WorkflowTestCase):
                 "runId": view["runId"], "requestId": view["activeRequest"]["requestId"],
                 "decision": "approve", "autoContinue": True,
                 "helpers": [{"title": "helper", "task": "work", "cwd": str(self.workdir("helper")),
-                             "buddy": ":".join(BUDDY.values()), "checkout": "worktree", "access": "read",
+                             "buddy": " / ".join(BUDDY.values()), "checkout": "worktree", "access": "read",
                              "inputs": [], "expectedSeconds": 1800, "requestId": "caller-chosen"}],
             })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
@@ -1105,7 +1105,7 @@ class DecidePrecheckTests(WorkflowTestCase):
         prepared = len(self.workspace.prepare_calls)
         validated = self.catalog_validation.call_count
         valid = {"title": "valid", "task": "valid first helper", "cwd": str(self.workdir("valid-helper")),
-                 "buddy": ":".join(BUDDY.values()), "checkout": "worktree", "access": "write",
+                 "buddy": " / ".join(BUDDY.values()), "checkout": "worktree", "access": "write",
                  "inputs": [], "writeScope": ["."], "expectedSeconds": 1800}
         for checkout in ({}, {"checkout": None}, {"checkout": "invalid"}):
             with self.subTest(checkout=checkout):
@@ -1147,7 +1147,7 @@ class DecidePrecheckTests(WorkflowTestCase):
         params = {"runId": view["runId"], "requestId": view["activeRequest"]["requestId"],
                   "decision": "approve", "autoContinue": True,
                   "helpers": [{"title": "helper", "task": "work", "cwd": str(self.workdir("h")),
-                               "buddy": ":".join(BUDDY.values()), "checkout": "worktree", "access": "write",
+                               "buddy": " / ".join(BUDDY.values()), "checkout": "worktree", "access": "write",
                                "inputs": [], "writeScope": ["."], "expectedSeconds": 1800}]}
         board.call("workflow_continue", params)
         after_first = len(self.workspace.prepare_calls)

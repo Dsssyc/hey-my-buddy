@@ -131,7 +131,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         title='ctwo-integration'
         task='model-free live transport fixture'
         submitted=self.client.call('workflow_submit',{'cwd':str(work),'macroTaskId':'standalone','title':title,'task':task,
-            'buddy':':'.join(BUDDY.values()),'checkout':'existing','access':'write','inputs':[],'writeScope':['.'],
+            'buddy':' / '.join(BUDDY.values()),'checkout':'existing','access':'write','inputs':[],'writeScope':['.'],
             'expectedSeconds':30})
         self.run_id = submitted["runId"]
 

@@ -18,7 +18,7 @@ class ExplicitSubmitTests(RealWorkspaceTestCase):
             before = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")] for table in tables}
         self.assertEqual(self.git('for-each-ref', 'refs/hey-my-buddy'), '')
         params = {"cwd": str(self.repo), "title": "disabled", "task": "do the work",
-                  "macroTaskId": "standalone", "buddy": ":".join(BUDDY.values()),
+                  "macroTaskId": "standalone", "buddy": " / ".join(BUDDY.values()),
                   "checkout": "worktree", "access": "write", "inputs": [], "writeScope": ["."],
                   "expectedSeconds": 1800}
         with patch.object(board.store.workflow, "_submission_preparation") as prepare:
@@ -51,7 +51,7 @@ class ExplicitHelperTests(WorkflowTestCase):
         with board.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=0 WHERE effort='high'")
         helpers = [{"title": f"helper-{index}", "task": "review", "cwd": str(self.workdir(f"helper-{index}")),
-                    "buddy": ":".join(buddy.values()), "checkout": "worktree", "access": "read",
+                    "buddy": " / ".join(buddy.values()), "checkout": "worktree", "access": "read",
                     "inputs": [], "expectedSeconds": 1800}
                    for index, buddy in enumerate((BUDDY, disabled))]
         before_calls = list(self.workspace.prepare_calls)

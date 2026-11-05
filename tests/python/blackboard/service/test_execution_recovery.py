@@ -490,7 +490,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 submitted = self.client().call("workflow_submit", {
                      "macroTaskId": "standalone", "title": "worker-wrap-up",
                     "task": "Complete a gated offline fixture turn", "cwd": str(repo),
-                    "buddy": "dsh:deepseek-official:deepseek-flash:max", "checkout": "existing",
+                    "buddy": "dsh / deepseek-official / deepseek-flash / max", "checkout": "existing",
                     "access": "write", "inputs": [], "writeScope": ["."], "expectedSeconds": 120})
                 run_id = submitted["runId"]
                 self.assertTrue(wait_for(worker_started.exists, timeout=60), submitted)

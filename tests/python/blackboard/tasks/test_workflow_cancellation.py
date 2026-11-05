@@ -94,7 +94,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
             "runId": child, "requestId": view["activeRequest"]["requestId"],
             "decision": "approve", "autoContinue": True, "helpers": [{
                 "title": "grandchild", "task": "dependency", "cwd": str(root),
-                "buddy": ":".join(BUDDY.values()), "checkout": kind, "access": "write",
+                "buddy": " / ".join(BUDDY.values()), "checkout": kind, "access": "write",
                 "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
             }],
         }, console_authority={"sessionId": "test-console"})

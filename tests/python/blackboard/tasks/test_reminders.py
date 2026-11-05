@@ -33,7 +33,7 @@ class ReminderFacts(BoardTestCase):
         cwd = str(self.workdir())
         submitted = self.client.workflow_submit(
             title='reminder', task='observe', cwd=cwd, macroTaskId='standalone',
-            buddy='dsh:deepseek-official:deepseek-flash:off', checkout='existing', access='read',
+            buddy='dsh / deepseek-official / deepseek-flash / off', checkout='existing', access='read',
             inputs=[], expectedSeconds=expected)
         self.task = self.client.get(runId=submitted['runId'])
         self.nonce = 'n' * 32

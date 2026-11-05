@@ -98,7 +98,7 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
         before = self.snapshot(board)
         run_id = run["runId"]
         request_id = view["activeRequest"]["requestId"]
-        buddy = ":".join(BUDDY.values())
+        buddy = " / ".join(BUDDY.values())
         created_title = "fenced fixture"
         created_task = "inspect the fixture"
         calls = (

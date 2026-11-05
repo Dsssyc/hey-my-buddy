@@ -1811,12 +1811,27 @@ class WorkflowCoordinator:
             return self.compact(connection, run_row)
 
     def _named_buddy(self, name: str) -> dict | None:
+        """Resolve the Host-facing buddy name against the catalog's four identity columns.
+
+        The name is the console's writing, 'harness / provider / model / effort'
+        with ' / ' between the four parts. A value never contains that separator,
+        so the split is unambiguous and a wrong or partial name simply matches
+        nothing.
+        """
         if name == "route":
             return None
-        with self.db.read() as connection:
-            row = connection.execute("SELECT harness,provider,model,effort FROM buddies WHERE buddy_id=?", (name,)).fetchone()
+        parts = name.split(" / ")
+        row = None
+        if len(parts) == len(schemas.BUDDY_FIELDS) and all(parts):
+            with self.db.read() as connection:
+                row = connection.execute(
+                    "SELECT harness,provider,model,effort FROM buddies"
+                    " WHERE harness=? AND provider=? AND model=? AND effort=?", parts).fetchone()
         if row is None:
-            raise BoardError("INVALID_ARGUMENT", "buddy must be route or a complete recorded buddy name", buddy=name)
+            raise BoardError("INVALID_ARGUMENT",
+                             "buddy must be 'route' or one recorded buddy written"
+                             " 'harness / provider / model / effort', as the console's Buddy page lists it",
+                             buddy=name)
         return dict(row)
 
     def _action_view(self, connection, run, *, already_exists=None, **facts):
