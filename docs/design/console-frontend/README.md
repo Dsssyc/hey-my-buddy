@@ -10,25 +10,30 @@
 
 本批是 [ADR-032 执行计划](../adr032/execution-plan.md)第 7 节与 D8 的 P6a 静态稿（2026-11-05），待开发者确认之后才实现。依据 [ADR-029](../../decisions/029-console-frontend-foundation.md)和[设计及带日期的改定](../adr029/console-frontend.md#设计)。没有改动控制台实现，没有调用模型，没有连接服务。这里只核对静态渲染，未做控制台功能验证，也不是 Host 的实现验收记录。
 
-每种画面有独立的中英文 HTML；英文文件在扩展名前加 `.en`。样式由 `base.css` 与本批的 [adr032.css](adr032.css)组成；后者只调整静态稿的排版，颜色全部引用 `base.css`，没有新增色值。主要审阅深色图，浅色图用于同时核对文字、线与浮层。顶栏、项目列表、28px 条目、灰色选中底、详情的头部／步骤带／内容、左侧标签列及折叠记号均沿用现有页面的结构。宏任务目标画成已经打开的现有浮层；Lead 概览只画本批涉及的头部与成员局部，不重画时间轴。Git 交付和验收各画一个时刻，不表示同一时刻处于两种状态。
+每种画面有独立的中英文 HTML；英文文件在扩展名前加 `.en`。样式由 `base.css` 与本批的 [adr032.css](adr032.css)组成；后者只调整静态稿的排版，颜色全部引用 `base.css`，没有新增色值。主要审阅深色图，浅色图用于同时核对文字、线与浮层。顶栏、项目列表、28px 条目、灰色选中底、详情的头部／步骤带／内容、左侧标签列及折叠记号均沿用现有页面的结构。宏任务目标沿用现有图标与浮层，主截图中收起；另附展开状态。空宏任务保留微任务名称栏与时间轴区域，五页微任务详情都放回宏任务内部，左边名称栏常驻，Lead 的成员沿用其行下方的泳道。Git 交付和验收各画一个时刻，不表示同一时刻处于两种状态。
 
 | 画面 | 中文 HTML | English HTML | 深色（中文 / English） | 浅色（中文 / English） |
 | --- | --- | --- | --- | --- |
-| 空宏任务、项目分组与 Host 归属 | [打开](adr032-macros.html) | [Open](adr032-macros.en.html) | [中文](adr032-macros-dark.png) / [English](adr032-macros.en-dark.png) | [中文](adr032-macros-light.png) / [English](adr032-macros.en-light.png) |
+| 空宏任务与项目分组 | [打开](adr032-macros.html) | [Open](adr032-macros.en.html) | [中文](adr032-macros-dark.png) / [English](adr032-macros.en-dark.png) | [中文](adr032-macros-light.png) / [English](adr032-macros.en-light.png) |
 | 文本搜索命中空宏任务 | [打开](adr032-macros-search.html) | [Open](adr032-macros-search.en.html) | [中文](adr032-macros-search-dark.png) / [English](adr032-macros-search.en-dark.png) | [中文](adr032-macros-search-light.png) / [English](adr032-macros-search.en-light.png) |
-| Git 项目的 Lead 归属（概览局部） | [打开](adr032-macros-lead.html) | [Open](adr032-macros-lead.en.html) | [中文](adr032-macros-lead-dark.png) / [English](adr032-macros-lead.en-dark.png) | [中文](adr032-macros-lead-light.png) / [English](adr032-macros-lead.en-light.png) |
 | 零成员删除确认 | [打开](adr032-delete-empty.html) | [Open](adr032-delete-empty.en.html) | [中文](adr032-delete-empty-dark.png) / [English](adr032-delete-empty.en-dark.png) | [中文](adr032-delete-empty-light.png) / [English](adr032-delete-empty.en-light.png) |
 | none / read 固定结果 | [打开](adr032-none-read.html) | [Open](adr032-none-read.en.html) | [中文](adr032-none-read-dark.png) / [English](adr032-none-read.en-dark.png) | [中文](adr032-none-read-light.png) / [English](adr032-none-read.en-light.png) |
-| none / write 固定结果与未封存事实 | [打开](adr032-none-write.html) | [Open](adr032-none-write.en.html) | [中文](adr032-none-write-dark.png) / [English](adr032-none-write.en-dark.png) | [中文](adr032-none-write-light.png) / [English](adr032-none-write.en-light.png) |
+| none / write 固定结果与文件夹写入 | [打开](adr032-none-write.html) | [Open](adr032-none-write.en.html) | [中文](adr032-none-write-dark.png) / [English](adr032-none-write.en-dark.png) | [中文](adr032-none-write-light.png) / [English](adr032-none-write.en-light.png) |
 | Git 回合交付 | [打开](adr032-git-delivery.html) | [Open](adr032-git-delivery.en.html) | [中文](adr032-git-delivery-dark.png) / [English](adr032-git-delivery.en-dark.png) | [中文](adr032-git-delivery-light.png) / [English](adr032-git-delivery.en-light.png) |
 | Worker 提交区间与干净三方核验 | [打开](adr032-git-commits.html) | [Open](adr032-git-commits.en.html) | [中文](adr032-git-commits-dark.png) / [English](adr032-git-commits.en-dark.png) | [中文](adr032-git-commits-light.png) / [English](adr032-git-commits.en-light.png) |
 | 固定补丁与有调整的核验 | [打开](adr032-git-patch.html) | [Open](adr032-git-patch.en.html) | [中文](adr032-git-patch-dark.png) / [English](adr032-git-patch.en-dark.png) | [中文](adr032-git-patch-light.png) / [English](adr032-git-patch.en-light.png) |
 
-第 1 页另有 800 × 900 的深色窄容器图：[中文](adr032-macros-narrow.png)、[English](adr032-macros.en-narrow.png)。常规截图宽 1360、高至少 1000，使用整页截图。截图都在 HTML 旁边。
+第 1 页另附目标展开图：[中文深色](adr032-macros-goal-dark.png)、[中文浅色](adr032-macros-goal-light.png)、[English dark](adr032-macros.en-goal-dark.png)、[English light](adr032-macros.en-goal-light.png)。第 1 页另有 800 × 900 的深色窄容器图：[中文](adr032-macros-narrow.png)、[English](adr032-macros.en-narrow.png)。常规截图宽 1360、高至少 1000，使用整页截图。截图都在 HTML 旁边。
+
+## 本轮按开发者反馈修改
+
+空宏任务改用现有宏任务详情的名称栏与时间轴区域，名称栏显示“没有已提交的微任务 / No submitted micro tasks”，不另画居中的空状态。目标图标和说明沿用现有浮层。移除单独的 `adr032-macros-lead` 中英文页及截图，Lead 成员留在 Lead 行下方的泳道中。宏任务头部删除整个 Host 栏；微任务详情仍按谱系显示 Host 或实际的 Lead 归属。搜索框提示改为“搜索标题、项目或 ID / Search titles, projects or IDs”。
+
+none 写入行改为“改动 / 写在文件夹里，不另存副本”，英文“Changes / in the folder itself, no copy kept”，使用普通字色。none 两页、Git 交付及两页验收均放回宏任务内，保留宏任务列表、宏任务头部、微任务名称栏及常驻时间片／步骤带，再展示内容。none 两页均为 Field notes 项目、Host 归属，结果位置改为与本页 run 和 attempt 编号一致的 `<state>/attempts/<run>/<attempt>/result-receipt.json`。文件夹与 Git 的项目记号沿用上一版。
 
 ## 画面中的事实
 
-空宏任务是 `macro-archive`，目标在打开的目标说明里，成员是 0，条目前的记号位留空，概览没有执行或验收统计。列表是 4 个宏任务：文件夹 `Field notes` 中 2 个，Git 仓库 `orchard` 中 2 个。文本搜索画面输入该空宏任务的标题，列表总数为 1，项目计数也为 1。这些都是各自固定的画面，页签和搜索框不运行查询。
+空宏任务是 `macro-archive`，目标可从现有图标打开，成员是 0，条目前的记号位留空，概览没有执行或验收统计。名称栏写“没有已提交的微任务 / No submitted micro tasks”，右边保留空的时间轴区域。列表是 4 个宏任务：文件夹 `Field notes` 中 2 个，Git 仓库 `orchard` 中 2 个。文本搜索画面输入该空宏任务的标题，列表总数为 1，项目计数也为 1。这些都是各自固定的画面，页签和搜索框不运行查询。
 
 | 筛选 | 空宏任务 | 此组示例命中数 | 画面或实现要求 |
 | --- | --- | --- | --- |
@@ -40,16 +45,16 @@
 
 后面三种筛选的排除规则列在这里供实施核对，静态页签没有筛选行为；不能据此声称查询、计数、分页或缓存已经验证。空宏任务沿创建／活动时间排序，零成员不等于已结束。删除画面展示零微任务、零产物、零会话、零检出与零引用，删除按钮仍可用；确认文案沿用现有删除的不可恢复与滚动备份说明。按钮没有删除行为。
 
-| 示例宏任务 | 项目 | 使用位置 | 谱系归属 |
-| --- | --- | --- | --- |
-| 梳理归档 / Archive survey | Field notes（folder） | `~/Projects/field-notes` | Host |
-| 目录索引 / Directory index | Field notes（folder） | `~/Projects/field-notes` | Host |
-| 校验导入 / Import checks | orchard（git） | `~/Worktrees/orchard-import` | Lead · `lead-import-01` |
-| 重试处理 / Retry handling | orchard（git） | `~/Worktrees/orchard-retry` | Host |
+| 示例宏任务 | 项目 | 使用位置 |
+| --- | --- | --- |
+| 梳理归档 / Archive survey | Field notes（folder） | `~/Projects/field-notes` |
+| 目录索引 / Directory index | Field notes（folder） | `~/Projects/field-notes` |
+| 校验导入 / Import checks | orchard（git） | `~/Worktrees/orchard-import` |
+| 重试处理 / Retry handling | orchard（git） | `~/Worktrees/orchard-retry` |
 
-两处 Git worktree 在列表里只形成一个 `orchard` 组，组名取仓库名。文件夹用轮廓文件夹，Git 用分支形的菱形记号；形状是项目种类的区分，不增加一行解释，也不占用状态色。归属来自谱系：Host 只写 Host，Lead 保留真实归属标识。没有 Host 名称、Host 编号、来源 Host、当前 Host 列表或凭证字段，也不从 harness 或线程推测它们。
+两处 Git worktree 在列表里只形成一个 `orchard` 组，组名取仓库名。文件夹用轮廓文件夹，Git 用分支形的菱形记号；形状是项目种类的区分，不增加一行解释，也不占用状态色。宏任务头部整栏去掉 Host，宏任务只能由 Host 建立。微任务归属仍来自谱系：Host 只写 Host，Lead 保留真实归属标识；Git 示例中 Lead 行与其下缩进的成员行在同一个名称栏。没有 Host 名称、Host 编号、来源 Host、当前 Host 列表或凭证字段，也不从 harness 或线程推测它们。
 
-none 两页固定展示 `artifactId`、结果位置和 SHA-256、原生权限档位 `read`／`write`、工作目录及 `checkout: none`，展开“执行”可看 `runId`、`turnId`、`attemptId` 和 `generation`。内容是固定结果的示例正文；结果中的文件名不是封存文件。write 页用“文件夹的改动”与“未封存”这一对名称和状态表达计划要求的“文件夹的改动未封存”，不用解释段落，也不出现空提交、空补丁或零改动统计。read 不画 writeScope。完整句子只出现在空状态、确认及模拟的任务书／结果／Host 说明正文里；模拟正文属于实际内容，不是界面帮助文案。
+none 两页固定展示 `artifactId`、结果位置和 SHA-256、原生权限档位 `read`／`write`、工作目录及 `checkout: none`，展开“执行”可看 `runId`、`turnId`、`attemptId` 和 `generation`。内容是固定结果的示例正文；结果中的文件名不是封存文件。write 页用普通字色的“改动 / 写在文件夹里，不另存副本”表达文件夹写入这一事实，不用橙色，也不出现空提交、空补丁或零改动统计。结果路径按 `<state>/attempts/<run>/<attempt>/result-receipt.json` 展示，对应本页执行身份里的示例 run 和 attempt。read 不画 writeScope。按本轮指定文案，write 的文件夹写入事实直接放在“改动”一行。其余完整句子只出现在空状态、确认及模拟的任务书／结果／Host 说明正文里；模拟正文属于实际内容，不是界面帮助文案。
 
 none 的验收仍按第 6 节检查任务书和确切的固定结果，只允许带理由的 notRequired 与核对 note；这两份稿展示验收前的回合交付，验收步骤的样式沿用现有详情，不引入 target、adjusted、hostPaths 或 beforeCommit 的控件。write 的目录文件本身不因结果被验收而成为封存证据。
 
@@ -59,9 +64,9 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 
 ## 颜色、提示与过渡
 
-颜色取现有词表：`--ink`／`--ink2`／`--ink3` 用于信息层次，`--paper`／`--surface`／`--sunk` 与线色用于结构，`--past` 用于历史记号，`--past-wash` 用于中性的选中底，`--hand`／`--hand-mark` 用于需要接手的事实。实心橙菱形是等 Host，空心橙菱形是等验收；write 的未封存事实用同一需要接手的语义。绿色只沿用顶栏的当前位置下沿和宏任务目标浮层的下沿，本批没有时间轴的“现在”线，也不生成 buddy 色。失败红与 diff 增删色在这些示例中没有使用，核验通过不用绿、调整不用红。Git／folder 记号一律跟随中性文字色。
+颜色取现有词表：`--ink`／`--ink2`／`--ink3` 用于信息层次，`--paper`／`--surface`／`--sunk` 与线色用于结构，`--past` 用于历史记号，`--past-wash` 用于中性的选中底，`--hand`／`--hand-mark` 用于需要接手的事实。实心橙菱形是等 Host，空心橙菱形是等验收；write 的文件夹写入事实使用普通字色。绿色只沿用顶栏的当前位置下沿和宏任务目标浮层的下沿，本批没有时间轴的“现在”线，也不新增 buddy 色；常驻时间片的模拟已结束执行用 `--past-wash`，`mock-model` 仅为编造数据，不代表模型调用。失败红与 diff 增删色在这些示例中没有使用，核验通过不用绿、调整不用红。Git／folder 记号一律跟随中性文字色。
 
-解释不常驻。目标图标按钮的“查看目标说明 / View goal description”是本批唯一需要的悬停／键盘聚焦提示，沿现有规则延迟 0.6 秒、文字居中、不接收指针；更多、关闭、返回和展开的图形不加重复提示。项目种类通过记号的可访问名称读出，不额外弹说明。文字本身和路径、摘要都不加复述它们的提示。
+解释不常驻。目标图标的“查看目标说明 / View goal description”和名称栏筛选按钮的“只看未结束的 / Unfinished only”沿用现有悬停／键盘聚焦提示，沿现有规则延迟 0.6 秒、文字居中、不接收指针；更多、关闭、返回和展开的图形不加重复提示。项目种类通过记号的可访问名称读出，不额外弹说明。文字本身和路径、摘要都不加复述它们的提示。
 
 | 位置 | 实现时的过渡 |
 | --- | --- |
@@ -75,7 +80,7 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 
 ## 中英文文案逐条核对
 
-下表集中列出本批页面的全部文字模板，连同沿用文案和编造的正文，便于逐条查看。名称、状态和数值采用短语；“干净的三方合并”“有调整”“未封存”是核验或文件事实，不增加微任务生命周期状态。“位置”在固定结果和固定补丁中复用，“SHA-256”也复用。`Host`、`Lead`、`Worker`、`read`、`write`、`none`、字段名、项目名、时间、路径、ID、摘要与数字是固定值或数据，不翻译，也不生成 Host 身份。
+下表集中列出本批页面的全部文字模板，连同沿用文案和编造的正文，便于逐条查看。名称、状态和数值采用短语；“干净的三方合并”“有调整”是核验事实，不增加微任务生命周期状态。“位置”在固定结果和固定补丁中复用，“SHA-256”也复用。`Host`、`Lead`、`Worker`、`read`、`write`、`none`、字段名、项目名、时间、路径、ID、摘要与数字是固定值或数据，不翻译，也不生成 Host 身份。
 
 | 键 | 用途 | 中文 | English |
 | --- | --- | --- | --- |
@@ -90,7 +95,7 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 | `review` | 沿用 | 等待验收 | Awaiting acceptance |
 | `accepted` | 沿用 | 已验收 | Accepted |
 | `completed` | 沿用 | 已完成 | Completed |
-| `search` | 拟新增或改写 | 搜索标题、项目、归属或 ID | Search title, project, owner or ID |
+| `search` | 拟新增或改写 | 搜索标题、项目或 ID | Search titles, projects or IDs |
 | `project` | 沿用 | 项目 | Project |
 | `owner` | 拟新增或改写 | 归属 | Owner |
 | `goal` | 沿用 | 目标 | Goal |
@@ -98,7 +103,7 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 | `microTasks` | 沿用 | 微任务 | Micro tasks |
 | `identifier` | 沿用 | 编号 | ID |
 | `elapsed` | 沿用 | 历时 | Elapsed |
-| `empty` | 沿用 | 还没有微任务。 | No micro tasks yet. |
+| `empty` | 拟新增或改写 | 没有已提交的微任务 | No submitted micro tasks |
 | `more` | 沿用 | 更多 | More |
 | `folder` | 拟新增或改写 | 文件夹项目 | Folder project |
 | `git` | 拟新增或改写 | Git 项目 | Git project |
@@ -111,7 +116,6 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 | `workspaces` | 沿用 | 检出与 Git 引用 | Checkouts and Git refs |
 | `backup` | 沿用 | 滚动备份里的副本在备份轮换之后才消失。 | Copies in rolling backups remain until backup rotation. |
 | `back` | 沿用 | 收起详情 | Close detail |
-| `delegate` | 沿用 | 委派 | Delegate |
 | `turn` | 沿用 | 回合 1 | Turn 1 |
 | `acceptance` | 沿用 | 验收 | Acceptance |
 | `overview` | 沿用 | 概述 | Overview |
@@ -124,8 +128,8 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 | `permission` | 拟新增或改写 | 权限档位 | Permission level |
 | `cwd` | 沿用 | 工作目录 | Working directory |
 | `checkout` | 拟新增或改写 | 检出 | Checkout |
-| `folderChanges` | 拟新增或改写 | 文件夹的改动 | Folder changes |
-| `unsealed` | 拟新增或改写 | 未封存 | Not sealed |
+| `folderChanges` | 拟新增或改写 | 改动 | Changes |
+| `folderStorage` | 拟新增或改写 | 写在文件夹里，不另存副本 | in the folder itself, no copy kept |
 | `content` | 沿用 | 内容 | Content |
 | `seal` | 拟新增或改写 | 封存证据 | Sealed evidence |
 | `snapshotDigest` | 拟新增或改写 | 快照摘要 | Snapshot digest |
@@ -149,6 +153,7 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 | `hostPaths` | 拟新增或改写 | Host 补充路径 | Paths added by Host |
 | `reviewNote` | 拟新增或改写 | 核对说明 | Review note |
 | `close` | 沿用 | 关闭 | Close |
+| `legend` | 沿用 | 图例 | Legend |
 | `turnCount` | 沿用 | 回合 | Turns |
 | `minutes` | 沿用 | {n} 分 | {n} min |
 | `checkoutCount` | 沿用 | {n} 个检出 | {n} checkouts |
@@ -156,6 +161,11 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 | `goalTitle` | 沿用 | 目标说明 | Goal description |
 | `revision` | 沿用 | 版本 1 | Version 1 |
 | `goalHint` | 沿用 | 查看目标说明 | View goal description |
+| `waitingHostState` | 沿用 | 等待 Host | Waiting for Host |
+| `unfinished` | 沿用 | 只看未结束的 | Unfinished only |
+| `steps` | 沿用 | 步骤 {n} / 3 | Step {n} / 3 |
+| `previous` | 沿用 | 上一步 | Previous step |
+| `next` | 沿用 | 下一步 | Next step |
 | `sample.emptyTitle` | 示例内容 | 梳理归档 | Archive survey |
 | `sample.emptyGoal` | 示例内容 | 梳理归档目录中的资料，列出下一轮需要核查的主题。 | Survey the archive and list topics to check in the next round. |
 | `sample.indexTitle` | 示例内容 | 目录索引 | Directory index |
@@ -178,4 +188,4 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 
 2026-11-05 在 macOS 上使用任务指定的本地 Playwright 依赖及其 Chromium 156.0.8078.4，只读使用依赖，页面以 `file:` 打开；没有安装依赖或联网。截图和检查脚本保留在忽略目录 `tmp/adr032-p6a/`（`generate.py`、`capture.cjs`、`verify.py`），不进提交。`render-report.json` 记录逐帧排版读数，`browser.json` 记录浏览器版本。
 
-本批共 18 份 HTML、38 张截图：中英文各 9 页的深浅主题，加第 1 页中英文窄容器。已核对静态页面的加载错误、外部请求、横向溢出和主要标签／值／标题／页签区域的文字相交；本轮均为 0。采样文字色与底色的 700 对组合最低对比度为 4.91:1，删除遮罩下的背景不纳入这个数；对话框与代表性的明暗画面另经目视检查。英文 HTML 无中文，提交和树用 40 位、摘要用 64 位的编造十六进制值，none 页面无 Git 产物区块。脚本只检查这些静态事实；未检查真实服务、查询、分页、删除、原生权限、文件封存、整合核验、键盘焦点管理或实际过渡，也没有运行模型。
+本轮共 16 份 HTML、38 张截图：中英文各 8 页的深浅主题，加第 1 页中英文窄容器和中英文目标展开的深浅主题。已核对静态页面的加载错误、外部请求、横向溢出和主要标签／值／标题／页签区域的文字相交；本轮均为 0。采样文字色与底色的 916 对组合最低对比度为 4.93:1，删除遮罩下的背景不纳入这个数；对话框与代表性的明暗画面另经目视检查。英文 HTML 无中文，提交和树用 40 位、摘要用 64 位的编造十六进制值，none 页面无 Git 产物区块。脚本只检查这些静态事实；未检查真实服务、查询、分页、删除、原生权限、文件封存、整合核验、键盘焦点管理或实际过渡，也没有运行模型。
