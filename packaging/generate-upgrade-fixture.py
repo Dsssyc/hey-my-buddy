@@ -1578,6 +1578,7 @@ def populate_schema33(args):
             ("standalone", {}),
         )
         produced = {}
+        cleanup_plans = {}
         for label, presentation in requests:
             result = call_operation(service, "workflow_submit", {
                 "requestId": "fixture-growth-33-" + label,
@@ -1590,6 +1591,26 @@ def populate_schema33(args):
                 **presentation,
             })
             produced[label] = result["runId"]
+            if label == "standalone":
+                # The schema-33 writers copy the conclusion's retired control
+                # facts into cleanup evidence. Read-only queued work can be
+                # cancelled and concluded without a native execution or seal.
+                call_operation(service, "workflow_cancel", {
+                    "runId": result["runId"], **result["control"],
+                    "commandId": "fixture-growth-33-cancel", "note": "Fixture cleanup conclusion",
+                })
+                call_operation(service, "workflow_conclude", {
+                    "runId": result["runId"], **result["control"],
+                    "note": "Fixture cleanup conclusion",
+                })
+            plan = store.workflow.cleanup_plan({"runId": result["runId"]})["plan"]
+            assert plan["state"] == "blocked" and plan["evidence"]["ownerGeneration"] == 1
+            conclusion = plan["evidence"]["hostConclusion"]
+            if label == "standalone":
+                assert conclusion["ownerGeneration"] == 1 and conclusion["runRevision"] > 0
+            else:
+                assert conclusion is None
+            cleanup_plans[label] = plan["planId"]
         with sqlite3.connect(work / "state/board.sqlite3") as connection:
             connection.row_factory = sqlite3.Row
             after = rows(connection)
@@ -1636,7 +1657,8 @@ def populate_schema33(args):
                         growth33SqlSha256=digest(sql.encode()),
                         growth33ResourcesSha256=digest(resources.encode()),
                         growth33GeneratorSha256=digest(Path(__file__).read_bytes()),
-                        growth33RunIds=produced)
+                        growth33RunIds=produced,
+                        growth33CleanupPlans=cleanup_plans)
         (fixed / "metadata.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 

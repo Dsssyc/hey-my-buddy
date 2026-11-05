@@ -502,7 +502,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                     self.assertEqual(set(json.loads(value['result_json'])), {'alreadyRemoved'})
                     value['evidence_json'] = {
                         **{key: evidence[key] for key in ('acceptance', 'attemptId', 'finalArtifactId',
-                                                          'hostConclusion', 'integrationId', 'ownerGeneration',
+                                                          'hostConclusion', 'integrationId',
                                                           'shutdown')},
                         'workspace': {
                             **{key: workspace[key] for key in ('attachedBranch', 'eligible', 'kind', 'locked',

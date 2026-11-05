@@ -545,4 +545,12 @@ def upgrade(connection):
     connection.execute('DELETE FROM sqlite_sequence')
     connection.executemany('INSERT INTO sqlite_sequence(rowid,name,seq) VALUES(?,?,?)', sequences)
     connection.execute("DELETE FROM commands WHERE kind GLOB 'workflow.*' OR kind IN ('task.retry','task.acknowledge')")
+    # Cleanup journals remain actionable after installation, including those
+    # already applied. Retire only the Host-control facts copied by the old
+    # cleanup and conclusion writers; keep their physical and stop evidence.
+    connection.execute("UPDATE workspace_cleanup_plans SET evidence_json=json_remove(evidence_json,"
+                       "'$.ownerGeneration','$.hostConclusion.ownerGeneration','$.hostConclusion.runRevision')"
+                       " WHERE json_type(evidence_json,'$.ownerGeneration') IS NOT NULL"
+                       " OR json_type(evidence_json,'$.hostConclusion.ownerGeneration') IS NOT NULL"
+                       " OR json_type(evidence_json,'$.hostConclusion.runRevision') IS NOT NULL")
     connection.execute("UPDATE meta SET value='35' WHERE key='schema_version'")

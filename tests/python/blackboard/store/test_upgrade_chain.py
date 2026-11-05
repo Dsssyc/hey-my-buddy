@@ -448,6 +448,7 @@ class UpgradeChainTests(unittest.TestCase):
             value = {key: item for key, item in row.items()
                      if key not in ('expires_at', 'command_id', 'checkout_id', 'repository_id')}
             evidence = json.loads(value['evidence_json'])
+            self.assertEqual(evidence.pop('ownerGeneration'), 1)
             workspace = evidence['workspace']
             workspace['projectId'] = workspace.pop('repositoryId')
             workspace.pop('checkoutId', None)

@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 
 from blackboard.store.upgrade_fixture import load_fixture, load_workspace_growth_stock
-from hey_my_buddy.blackboard.store import schema_34_35, upgrade
+from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33, schema_34_35, upgrade
 from hey_my_buddy.blackboard.store.upgrade import upgrade_state
 from hey_my_buddy.install.upgrade import _retire_host_files
 
@@ -20,6 +20,77 @@ class Schema34To35Tests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix='schema-35-')
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+
+    def test_cleanup_stock_retires_control_facts_and_keeps_other_evidence_in_host_and_console(self):
+        from console.test_console import Browser
+        from hey_my_buddy.cli.cli_views import render
+        from support import InProcessBoard, native_read_bytes
+
+        fixture = load_fixture(self.root / 'cleanup-state')
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            connection.row_factory = sqlite3.Row
+            with connection:
+                for step in (schema_30_31, schema_31_32, schema_32_33):
+                    step.upgrade(connection)
+        load_workspace_growth_stock(fixture, stage='schema33')
+        expected = {}
+        historical = {}
+
+        def convert_cleanup_stock(connection):
+            rows = [dict(row) for row in connection.execute('SELECT * FROM workspace_cleanup_plans')]
+            self.assertEqual({row['state'] for row in rows}, {'applied', 'blocked'})
+            conclusions = 0
+            for row in rows:
+                evidence = json.loads(row['evidence_json'])
+                self.assertEqual(evidence.pop('ownerGeneration'), 1)
+                if evidence['hostConclusion'] is not None:
+                    conclusions += 1
+                    self.assertEqual(evidence['hostConclusion'].pop('ownerGeneration'), 1)
+                    self.assertGreater(evidence['hostConclusion'].pop('runRevision'), 0)
+                expected[row['plan_id']] = row | {'evidence_json': evidence}
+            self.assertGreater(conclusions, 0)
+            for table, columns in (('events', 'seq,payload_json'), ('workflow_turns', 'turn_id,input_json'),
+                                   ('workflow_artifacts', 'artifact_id,manifest_json'),
+                                   ('attempts', 'attempt_id,result_json'),
+                                   ('attempt_received_receipts', 'attempt_id,sha256'),
+                                   ('router_requests', 'decision_id,round,snapshot_json')):
+                historical[(table, columns)] = [tuple(row) for row in connection.execute(
+                    f'SELECT {columns} FROM {table} ORDER BY rowid')]
+            schema_34_35.upgrade(connection)
+
+        files = {name: native_read_bytes(fixture['state'] / name) for name in fixture['resourceFiles']}
+        with mock.patch.dict(upgrade.STEPS, {34: convert_cleanup_stock}):
+            self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 33, 'targetSchema': 35})
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            connection.row_factory = sqlite3.Row
+            for row in connection.execute('SELECT * FROM workspace_cleanup_plans'):
+                actual = dict(row)
+                actual['evidence_json'] = json.loads(actual['evidence_json'])
+                self.assertEqual(actual, expected[row['plan_id']])
+            for (table, columns), rows in historical.items():
+                self.assertEqual([tuple(row) for row in connection.execute(
+                    f'SELECT {columns} FROM {table} ORDER BY rowid')], rows)
+        self.assertEqual({name: native_read_bytes(fixture['state'] / name) for name in files}, files)
+
+        board = InProcessBoard(fixture['state'])
+        self.addCleanup(board.close)
+        browser = Browser(board.call('console', {'action': 'open'})['url'])
+        csrf = browser.bootstrap()['csrfToken']
+        for plan in expected.values():
+            with self.subTest(state=plan['state'], planId=plan['plan_id']):
+                params = {'runId': plan['run_id'], 'includeAudit': True}
+                host = render('get', board.call('workflow_get', params), mode='full')
+                status, _headers, data = browser.command('workflow_get', params, csrf=csrf)
+                self.assertEqual(status, 200, data)
+                console = json.loads(data)['result']
+                for view in (host, console):
+                    self.assertEqual(view['cleanup']['planId'], plan['plan_id'])
+                    evidence = view['cleanup']['evidence']
+                    if 'unsealedPaths' in evidence['workspace']:
+                        self.assertEqual(evidence['workspace'].pop('unsealedPathsCount'),
+                                         len(plan['evidence_json']['workspace']['unsealedPaths']))
+                        self.assertFalse(evidence['workspace'].pop('unsealedPathsTruncated'))
+                    self.assertEqual(evidence, plan['evidence_json'])
 
     def test_floor_writer_stock_converts_only_mutable_intent_and_keeps_seals(self):
         fixture = load_fixture(self.root / 'state')
