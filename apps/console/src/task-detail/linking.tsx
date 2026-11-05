@@ -33,8 +33,14 @@ export function scrollToItem(node: Element) {
 }
 
 /** One entry of the overview: selecting it, by click or by keyboard, marks the same item in the step strip. */
-export function DetailItem({ itemKey, label, children, className = "" }: {
+export function DetailItem({ itemKey, label, children, className = "", frame = "outset" }: {
   itemKey?: string; label?: string; children: ReactNode; className?: string;
+  /**
+   * Where the frame sits: outside the entry's content on both axes (an entry hugging its
+   * text), outside only vertically (a full-width row with its own side padding), or at the
+   * entry's own edge (a row or pane whose padding already keeps the frame off the text).
+   */
+  frame?: "outset" | "outset-y" | "edge";
 }) {
   const links = useContext(DetailLinks);
   const { t } = useTranslation("taskDetail");
@@ -65,7 +71,7 @@ export function DetailItem({ itemKey, label, children, className = "" }: {
     className={`relative outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${className}`}>
     {children}
     {linked && <span data-slot="item-highlight" aria-hidden="true"
-      className={`pointer-events-none absolute inset-0 z-10 ring-1 ring-inset ring-ring transition-opacity duration-150 motion-reduce:transition-none ${highlighted ? "opacity-100" : "opacity-0"}`}/>}
+      className={`pointer-events-none absolute z-10 ring-1 ring-inset ring-ring transition-opacity duration-150 motion-reduce:transition-none ${frame === "outset" ? "-inset-x-2 -inset-y-1.5" : frame === "outset-y" ? "-inset-y-1.5 inset-x-0" : "inset-0"} ${highlighted ? "opacity-100" : "opacity-0"}`}/>}
   </div>;
 }
 

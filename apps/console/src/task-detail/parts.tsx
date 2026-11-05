@@ -52,7 +52,7 @@ export function Pane({ title, children, footer, tabs }: { title: ReactNode; chil
   const links = useContext(DetailLinks);
   const content = <ScrollArea className="min-h-0 flex-1"><div data-slot="pane-content" className="w-0 min-w-full pt-4 pb-3">{children}</div></ScrollArea>;
   return <section data-slot="detail-pane" className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-    <DetailItem itemKey={links?.stepKey || undefined} className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <DetailItem itemKey={links?.stepKey || undefined} frame="edge" className="flex min-h-0 min-w-0 flex-1 flex-col">
       {title}
       {links?.waits}
       {!tabs && <div data-slot="pane-divider" className="shrink-0 border-b border-line2" />}

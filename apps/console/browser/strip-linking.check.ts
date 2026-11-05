@@ -80,6 +80,14 @@ for (const theme of ["dark", "light"]) for (const locale of ["zh-CN", "en-US"]) 
       expect(await last.evaluate(node => node.getBoundingClientRect().top > node.closest('[data-slot=scroll-area-viewport]')!.getBoundingClientRect().bottom)).toBe(true);
       await lateMarker.click();
       await expect(last).toHaveAttribute("data-highlighted", "true");
+      // The frame keeps clear of the entry's text: it sits a little outside the entry's box.
+      const clearance = await last.evaluate(node => {
+        const frame = node.querySelector('[data-slot=item-highlight]')!;
+        const entry = node.getBoundingClientRect();
+        const box = frame.getBoundingClientRect();
+        return { left: entry.left - box.left, right: box.right - entry.right, top: entry.top - box.top, bottom: box.bottom - entry.bottom };
+      });
+      for (const gap of Object.values(clearance)) expect(gap).toBeGreaterThanOrEqual(4);
       await expect(page).toHaveURL(new RegExp(`/${run}/3$`));
       await inPane(last);
       await markInStrip(page);

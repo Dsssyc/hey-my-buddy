@@ -49,28 +49,28 @@ export function AcceptancePane({ step, ctx }: { step: Step; ctx: Context }) {
   const shown = new Set([acceptanceKey, artifact ? integrationKey : undefined, rejectedAt ? rejectionKey : undefined, conclusion ? conclusionKey : undefined]);
   const otherEvents = step.events.filter(event => links.items.has(`event:${event.seq}`) && !shown.has(`event:${event.seq}`));
   return <Pane title={
-    <DetailItem itemKey={acceptanceKey} label={t("step.acceptance")}>
+    <DetailItem itemKey={acceptanceKey} label={t("step.acceptance")} frame="edge">
     <PaneTitle title={t("step.acceptance")} state={state} tone={step.pending ? "hand" : "past"}>
       {actor && <span>{actorText(actor)}</span>}
       {settledAt && <Moment at={settledAt} itemKey={accepted ? acceptanceKey : rejectedAt ? rejectionKey : conclusionKey} label={t("step.acceptance")} />}
     </PaneTitle>
     </DetailItem>}>
-    {otherEvents.map(event => <DetailItem key={event.seq} itemKey={`event:${event.seq}`} label={eventName(event)} className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1 border-b px-6 py-3 text-xs text-ink2">
+    {otherEvents.map(event => <DetailItem key={event.seq} itemKey={`event:${event.seq}`} label={eventName(event)} frame="edge" className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1 border-b px-6 py-3 text-xs text-ink2">
       <span>{eventName(event)}</span><Moment at={event.at} itemKey={`event:${event.seq}`} label={eventName(event)}/>
       {eventDetails(event) && <span className="min-w-0 wrap-anywhere">{eventDetails(event)}</span>}
     </DetailItem>)}
     {artifact && <DeliveryEvidence artifact={artifact}/>}
-    {artifact && <DetailItem itemKey={integrationKey} label={t("acceptance.integration")}>
+    {artifact && <DetailItem itemKey={integrationKey} label={t("acceptance.integration")} frame="edge">
       <IntegrationEvidence integration={integration}/>
     </DetailItem>}
     {accepted && view.acceptanceNote && <Section name={t("delivery.reviewNote")}><Fold text={view.acceptanceNote} /></Section>}
-    {rejectedAt && <DetailItem itemKey={rejectionKey} label={t("acceptance.rejection")} className="border-b last:border-b-0"><Section name={t("acceptance.rejection")}>
+    {rejectedAt && <DetailItem itemKey={rejectionKey} label={t("acceptance.rejection")} frame="edge" className="border-b last:border-b-0"><Section name={t("acceptance.rejection")}>
       <Facts items={[
         ...(rejectedAt !== settledAt ? [[t("acceptance.recordedAt"), <Moment key="at" at={rejectedAt} itemKey={rejectionKey} label={t("acceptance.rejection")} />] as [string, ReactNode]] : []),
         [t("acceptance.note"), rejection ? <Fold key="note" text={rejection} /> : unrecorded],
       ]} />
     </Section></DetailItem>}
-    {conclusion && <DetailItem itemKey={conclusionKey} label={t("acceptance.conclusion")} className="border-b last:border-b-0"><Section name={t("acceptance.conclusion")}>
+    {conclusion && <DetailItem itemKey={conclusionKey} label={t("acceptance.conclusion")} frame="edge" className="border-b last:border-b-0"><Section name={t("acceptance.conclusion")}>
       <div className="space-y-3">
         <Facts items={[
           [t("acceptance.outcome"), `${t(`acceptance.status.${conclusion.executionStatus}`, { defaultValue: conclusion.executionStatus })} · ${t("acceptance.notCounted")}`],

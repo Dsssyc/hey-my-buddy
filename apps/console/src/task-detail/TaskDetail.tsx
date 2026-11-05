@@ -143,7 +143,7 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
   const bare = (body: ReactNode) => <DetailLinks value={{ origin, items, onItem, elements: itemElements.current,
     // An execution step is a whole turn: linking marks its parts, never the pane around them.
     stepKey: current?.span ? "" : current?.key ?? "", waits: current && steps && ctx && row ? <StepWaits step={current} steps={steps} ctx={ctx}/> : null }}>
-    <section data-slot="task-detail" tabIndex={-1} aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-background outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">{body}</section>
+    <section data-slot="task-detail" tabIndex={-1} aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-background outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [container-type:inline-size]">{body}</section>
   </DetailLinks>;
   if (!view) {
     return bare(<><header data-slot="detail-header" className="flex h-9 shrink-0 items-center border-b border-line bg-ruler pl-1.5 pr-4 sm:pr-6"><DetailBack onBack={onBack}/></header><div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">

@@ -71,8 +71,8 @@ async function expectDetailWhole(page: Page, { skipTitle = false } = {}) {
   expect(sideways, "the pane scrolls sideways").toBeLessThanOrEqual(0);
 }
 
-/** The title takes its own line on narrow screens; status stays beside refresh. */
-async function expectOneLineHead(page: Page, refresh: string, narrow: boolean) {
+/** The head keeps the title readable: the facts share its line when they fit, or follow below. */
+async function expectHead(page: Page, refresh: string) {
   const header = detail(page).locator("[data-slot=detail-header]");
   const [title, figures, status, again, mark] = await Promise.all([
     header.locator("h2").boundingBox(), header.locator("dl").boundingBox(),
@@ -82,14 +82,13 @@ async function expectOneLineHead(page: Page, refresh: string, narrow: boolean) {
   const centre = (box: { y: number; height: number }) => box.y + box.height / 2;
   expect(Math.abs(centre(status!) - centre(again!)), "the state stays beside refresh").toBeLessThan(10);
   expect(Math.abs(centre(mark!) - centre(title!)), "the back button stays beside the title").toBeLessThan(10);
-  if (narrow) {
-    expect(figures!.y, "facts follow the title").toBeGreaterThan(title!.y);
-    expect(status!.y, "state and refresh follow the facts").toBeGreaterThanOrEqual(figures!.y + figures!.height);
-  } else {
-    expect(Math.abs(centre(again!) - centre(figures!)), "wide, refresh shares the facts line").toBeLessThan(10);
-    expect(again!.x, "wide, refresh is at the right end").toBeGreaterThan(figures!.x);
-    expect(Math.abs(centre(title!) - centre(figures!)), "wide, the head is one line").toBeLessThan(10);
+  expect(figures!.y, "facts share the title's line or follow it").toBeGreaterThanOrEqual(title!.y);
+  expect(again!.y, "refresh never rises above the facts").toBeGreaterThanOrEqual(figures!.y - 10);
+  expect(again!.x, "refresh is at the right end").toBeGreaterThan(figures!.x);
+  if (figures!.y <= title!.y + 5) {
+    expect(Math.abs(centre(again!) - centre(figures!)), "refresh shares the facts line").toBeLessThan(10);
   }
+  expect(title!.width, "the title keeps a readable width").toBeGreaterThan(100);
 }
 
 /** A change of address inside the page, as a reader makes it: the page does not reload. */
@@ -256,7 +255,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
           await expect(page.locator('[data-slot=task-names]')).toBeHidden();
         }
         await expectDetailWhole(page, { skipTitle: true });
-        await expectOneLineHead(page, refresh, width <= 760);
+        await expectHead(page, refresh);
         // A step reached by the keyboard is the one shown.
         await step(page, delegate).focus();
         await page.keyboard.press("Enter");

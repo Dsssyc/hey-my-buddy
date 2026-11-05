@@ -62,18 +62,25 @@ for (const width of [1360, 1024, 800]) for (const theme of ["dark", "light"]) {
       await expect(page.locator('[data-slot=detail-pane]')).toHaveCSS("background-color", paper);
       await expect(page.locator('[data-slot=detail-step-band]')).toHaveCSS("background-color", paper);
       await expect(page.locator('[data-slot=timeline-status]')).toHaveCSS("background-color", surface);
-      // The two header bars share the ruler's ground, height and bottom line.
+      // The two header bars share the ruler's ground, and the title stays readable:
+      // one line when the facts fit beside it, the facts a line below when they do not.
       await expect(page.locator('[data-slot=timeline-row-filter]')).toHaveCSS("background-color", ruler);
       await expect(page.locator('[data-slot=detail-header]')).toHaveCSS("background-color", ruler);
       const column = await columnBar(page);
       const bar = await detailBar(page);
-      expect(Math.abs(column.height - 37)).toBeLessThanOrEqual(0.5);
-      expect(Math.abs(bar.height - column.height)).toBeLessThanOrEqual(0.5);
       expect(Math.abs(bar.top - column.top)).toBeLessThanOrEqual(1);
-      expect(Math.abs(bar.bottom - column.bottom)).toBeLessThanOrEqual(1);
-      expect(bar.border).toBe("1px");
       expect(column.border).toBe("1px");
-      if (theme === "dark" && width === 1360) {
+      expect(bar.border).toBe("1px");
+      const title = page.locator('[data-slot=detail-header] [data-slot="scrolling-title"]');
+      const titleBox = await title.boundingBox();
+      expect(titleBox!.width, "the title keeps a readable width").toBeGreaterThan(100);
+      await expect(page.locator('[data-slot=detail-status]')).toBeVisible();
+      if (width === 1360) {
+        expect(Math.abs(column.height - 37)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(bar.height - column.height)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(bar.bottom - column.bottom)).toBeLessThanOrEqual(1);
+      }
+      if (theme === "dark") {
         mkdirSync(captures, { recursive: true });
         await page.screenshot({ path: `${captures}/header-align-${width}.png` });
       }

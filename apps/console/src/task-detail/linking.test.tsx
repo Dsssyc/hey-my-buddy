@@ -61,7 +61,7 @@ describe("one focused item shared by the strip and the overview", () => {
     expect(pane().querySelectorAll("[data-highlighted=true]")).toHaveLength(0);
   });
 
-  it("frames exactly the one selected entry, above its content", async () => {
+  it("frames exactly the one selected entry, above its content and clear of its text", async () => {
     const f = open({ step: 3, timeline: withInquiry(), replies: { inquiries: { items: [inquiry()], more: false } } });
     await ready();
     await f.user.click(item("inquiry:inq-1"));
@@ -72,6 +72,9 @@ describe("one focused item shared by the strip and the overview", () => {
     expect(frame.className).toContain("pointer-events-none");
     expect(frame.className).toContain("absolute");
     expect(frame.className).toContain("z-10");
+    // An entry's frame sits outside its content; a pane's stays at its own edge.
+    expect(frame.className).toContain("-inset-x-2");
+    expect(frame.className).toContain("-inset-y-1.5");
   });
 
   it("focuses the item when its time is activated, leaving other inquiries unselected", async () => {
