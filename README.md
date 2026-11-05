@@ -9,7 +9,7 @@
 
 <p align="center">
   The coding agent you work with hands bounded tasks to other coding agents on your machine,<br>
-  and checks every sealed result before it lands.
+  and checks every result before accepting it.
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@ hey-my-buddy lets the coding agent you already work with hand parts of its work 
 
 - **Your agent stays in charge.** The coding agent you work with is the *Host buddy*: it splits the work, hands bounded parts to other agents and decides what is accepted. Any agent that can run the hey-my-buddy command can be the Host.
 - **Other agents do the parts.** A *Worker buddy* is a coding agent in the CLI of DeepSeek Harness, ZCode, Codex or Claude Code, with the models and efforts you enabled. hey-my-buddy picks one for each part, or the Host names it.
-- **Nothing lands unchecked.** Each Worker works in its own checkout of your repository, and the Host reviews the result and runs the checks before anything reaches your branch.
+- **Nothing is accepted unchecked.** In a Git repository each Worker works in its own checkout, and the Host reviews the result and runs the checks before anything reaches your branch. A Worker can also work directly in a folder you name, which suits an answer or a document; what it writes there is not sealed, so the Host checks the folder itself.
 - **Work outlives your session.** A closed terminal, a lost connection or a service restart never cancels work; pick it up again by its id.
 - **See who is doing what.** A private local console shows each piece of work as a timeline, every buddy's load and your settings.
 - **Your harnesses, as you set them up.** Workers run in your own harnesses with your settings, providers, sign-in, skills, MCP servers and hooks; hey-my-buddy changes none of them and never keeps or forwards your credentials. See [accounts and terms](docs/terms.md).
@@ -46,10 +46,10 @@ hey-my-buddy lets the coding agent you already work with hand parts of its work 
 </picture>
 
 1. **Delegate.** The Host writes a *micro task*: what to do, which files it may change and how to check it. It hands the micro task to the *blackboard*, a local service that keeps every step.
-2. **Run.** The blackboard picks a Worker: the only one that fits, or a *Router buddy*'s choice among several, unless the Host names one. The Worker works in its own checkout. The Host can ask the running turn a question; when the Worker needs a decision, it stops and asks.
-3. **Seal.** When the turn ends, the blackboard seals the checkout as it stood, so the result cannot change afterwards.
-4. **Review.** The Host checks the sealed result against the micro task and runs the checks. If it is not right, the Host sends it back to the same Worker for another turn.
-5. **Accept.** The Host integrates the result and accepts it; only accepted work lands in your repository.
+2. **Run.** The blackboard picks a Worker: the only one that fits, or a *Router buddy*'s choice among several, unless the Host names one. The Worker works in its own checkout, or directly in the folder the Host names. The Host can ask the running turn a question; when the Worker needs a decision, it stops and asks.
+3. **Seal.** When the turn ends, the blackboard seals the checkout as it stood, so the result cannot change afterwards. For work done directly in a folder it fixes the Worker's result instead; the folder itself is not sealed.
+4. **Review.** The Host checks the sealed result against the micro task and runs the checks. If it is not right, the Host sends it back for another turn, to the same Worker unless it names another.
+5. **Accept.** The Host integrates the sealed result into your repository and accepts it; only accepted work lands there. A result from work done directly in a folder is accepted without integration.
 
 Related micro tasks form a *macro task*. The whole loop, with routing, inquiry, sending back and a *Lead buddy* that delegates on the Host's behalf:
 
@@ -62,7 +62,7 @@ The details are in [workflow](docs/reference/workflow.md) and [architecture](doc
 
 ## Install
 
-It needs [uv](https://docs.astral.sh/uv/).
+It needs [uv](https://docs.astral.sh/uv/), and Git 2.40 or later for work in a Git repository.
 
 ```sh
 uvx hey-my-buddy@0.61.0 install

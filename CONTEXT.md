@@ -1,6 +1,6 @@
 # hey-my-buddy
 
-Agent buddies share delegated work through one blackboard: a Host buddy delegates a micro task and owns it, a Router buddy may choose the Worker buddy for it, Worker buddies execute its turns, and every fact they exchange is recorded on the blackboard. [ADR-013](docs/decisions/013-buddy-roles-and-blackboard-terminology.md) records why these terms were chosen. [ADR-021](docs/decisions/021-router-buddy-planes-and-routing-evidence.md) adds a buddy's identity, the Router's three planes, the routing knowledge terms and the macro task and micro task terms; its status says how much of that is implemented. [ADR-026](docs/decisions/026-delegation-authority.md) adds the Lead buddy and delegation authority. [ADR-027](docs/decisions/027-model-catalog-trust.md) adds the model catalog and its pending state.
+Agent buddies share delegated work through one blackboard: a Host buddy delegates a micro task and accepts its result, a Router buddy may choose the Worker buddy for it, Worker buddies execute its turns, and every fact they exchange is recorded on the blackboard. [ADR-013](docs/decisions/013-buddy-roles-and-blackboard-terminology.md) records why these terms were chosen. [ADR-021](docs/decisions/021-router-buddy-planes-and-routing-evidence.md) adds a buddy's identity, the Router's three planes, the routing knowledge terms and the macro task and micro task terms; its status says how much of that is implemented. [ADR-026](docs/decisions/026-delegation-authority.md) adds the Lead buddy and delegation authority. [ADR-027](docs/decisions/027-model-catalog-trust.md) adds the model catalog and its pending state.
 
 ## Language
 
@@ -44,10 +44,10 @@ The fourth part of a buddy's identity: how much reasoning the harness asks of th
 _Avoid_: 思考强度, 档位, 思考档位 (档位 names a permission level), effort level, thinking level
 
 **角色 / role**:
-The authority a buddy acts with on the blackboard, Host, Worker or Router, established by its authorized operation rather than by its harness or model. Host and Worker operations use scoped credentials; a Router has no direct blackboard credential and returns only a structured answer collected by its Worker runtime.
+The authority a buddy acts with on the blackboard, Host, Worker or Router, established by its authorized operation rather than by its harness or model. A Worker or a Lead acts with the credential of its own execution, and a call that carries none acts as Host; a Router has no direct blackboard credential and returns only a structured answer collected by its execution process.
 
 **Host buddy**:
-A buddy acting with Host authority: it owns the micro tasks it delegates or takes over, defining their authorization, deciding their boundaries and accepting their results. Short form: Host.
+A buddy acting with Host authority: it delegates micro tasks, defining their authorization, deciding their boundaries and accepting their results. The blackboard does not record which session acted as Host, so any of the user's Host sessions may act on a micro task that no Lead owns. Short form: Host.
 _Avoid_: Host agent, main agent, coordinator, orchestrator, manager
 
 **Worker buddy**:
@@ -183,11 +183,11 @@ _Avoid_: run controller, Worker runtime, Worker (for this process)
 ### Work
 
 **项目 / project**:
-The code repository that a macro task belongs to. It stays the same project when it is renamed, moved or copied; a fresh clone is a different project. Every worktree and checkout of one repository belongs to the same project; a worktree or a checkout is not a project.
-_Avoid_: 工作区, workspace (an execution workspace is a checkout, not a project)
+Where a macro task's work belongs: a Git repository, or an ordinary folder known by its path. A repository stays the same project when it is renamed, moved or copied; a fresh clone is a different project. Every worktree and checkout of one repository belongs to the same project; a worktree or a checkout is not a project. A folder that is moved or renamed becomes a new project, and a folder that later becomes a Git repository stays the same project.
+_Avoid_: 工作区, workspace (an execution workspace is a checkout, not a project); 仓库, repository (for every project: a project may be a folder)
 
 **宏任务 / macro task**:
-A user's overall piece of work: it carries a goal statement, holds one or more micro tasks and groups them for browsing. It is the unit by which the user deletes records; a micro task that belongs to no macro task is deleted on its own. It does not schedule work or grant control authority.
+A user's overall piece of work: it carries a goal statement and groups the micro tasks submitted for it for browsing; it holds none until the first is submitted. It is the unit by which the user deletes records; a micro task that belongs to no macro task is deleted on its own. It does not schedule work or grant control authority.
 _Avoid_: 工作目标, objective
 
 **目标说明 / goal**:
@@ -195,7 +195,7 @@ What a macro task is meant to achieve, how far counts as done and what is left o
 _Avoid_: 描述, description (the fixed display text it replaces)
 
 **微任务 / micro task**:
-One bounded piece of work that a Host buddy delegates, owns and accepts; it may span several Worker turns. Every micro task belongs to at most one macro task.
+One bounded piece of work that a Host buddy delegates and accepts; it may span several Worker turns. Every micro task belongs to at most one macro task.
 _Avoid_: 委派 (as a noun), delegation, governed goal
 
 **委派 / delegate**:
@@ -215,20 +215,31 @@ One Worker buddy execution ending in a result, assistance request or attention b
 A question the micro task's Host or Lead puts to its running turn through the blackboard, together with the answer correlated with it. It changes neither the turn's task nor its authority, and it is not a continuation.
 _Avoid_: 询问, 消息 (the stored record is a message; the act is an inquiry)
 
+**检出 / checkout**:
+The working copy of a project's Git repository in which a Worker executes a micro task: a worktree the blackboard creates for that micro task, or the Host's existing checkout. It isolates nothing at the operating system level.
+_Avoid_: 工作区, workspace (for the checkout itself)
+
+**不带检出的微任务 / micro task without a checkout**:
+A micro task whose Worker works directly in the folder the Host names, a Git repository or an ordinary folder, with nothing copied and nothing sealed. Each of its turns ends in a fixed result; with write access the Worker changes the folder itself, and the blackboard keeps no copy of those changes.
+_Avoid_: 无仓库的微任务 (it may run in a repository)
+
+**固定结果 / fixed result**:
+The result the Worker delivered at the end of a turn of a micro task without a checkout, kept by the blackboard with its digest. Acceptance binds it; the files it names are not part of it.
+
 **封存 / seal**:
-The fixed artifact the blackboard makes of a checkout's content when a turn ends; acceptance judges it, never the Worker's own report.
+The fixed artifact the blackboard makes of a checkout's content when a turn ends; acceptance judges it, never the Worker's own report. A micro task without a checkout has no seal; its turns end in fixed results.
 _Avoid_: 第 N 封 (say 第 N 回合的封存), 快照
 
 **预期时长 / expected duration**:
-When the Host expects a micro task or a command execution to be done: half an hour unless it says otherwise. Reaching it stops nothing; it is the moment the Host is reminded to look, and the reminder repeats each time the same span passes again.
+When the Host expects a micro task to be done, given with every micro task as the Host's judgment of its size; the Router reads it too. Reaching it stops nothing; it is the moment the Host is reminded to look, and the reminder repeats each time the same span passes again.
 _Avoid_: timeout, deadline, time limit (for delegated work)
 
 **有序收尾 / wrap-up**:
-Stopping a running micro task through the blackboard so that its Worker says what is done and what is not and delivers before it stops; a forced stop follows when the grace period ends, and the partial output is sealed either way.
+Stopping a running micro task through the blackboard so that its Worker says what is done and what is not and delivers before it stops; a forced stop follows when the grace period ends. Either way a checkout's partial output is sealed, while a micro task without a checkout keeps only the result its Worker delivered.
 _Avoid_: graceful shutdown; cancel (for the summary itself); `收尾` on its own
 
 **权限档位 / permission level**:
-How far a buddy may go in one run, in five levels from narrow to wide: 不用工具 / no tools (it only answers), 只联网 / web only (it may search the web and fetch pages and cannot touch local files), 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout) and 放开 / full access (no limit on where files are modified). The first two say which tools exist; the last three say where files may be modified and nothing about the network. A Worker buddy's level is one of the last three, chosen by the Host when it delegates and changeable between turns; a Router buddy's level follows from what it is doing. A harness carries a level out either 强制 / enforced, when its sandbox or tool limits stop what the level excludes, or 约定 / by convention, when it is only asked to stay inside and the blackboard checks afterwards what it can.
+How far a buddy may go in one run, in five levels from narrow to wide: 不用工具 / no tools (it only answers), 只联网 / web only (it may search the web and fetch pages and cannot touch local files), 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout, or the folder it works in when it has none) and 放开 / full access (no limit on where files are modified). The first two say which tools exist; the last three say where files may be modified and nothing about the network. A Worker buddy's level is one of the last three, chosen by the Host when it delegates and changeable between turns; a Router buddy's level follows from what it is doing. A harness carries a level out either 强制 / enforced, when its sandbox or tool limits stop what the level excludes, or 约定 / by convention, when it is only asked to stay inside and the blackboard checks afterwards what it can.
 _Avoid_: 权限清单, sandbox mode (a level is not a list of grants, and a sandbox mode is only how one harness carries a level out)
 
 **换档 / level change**:
@@ -248,17 +259,17 @@ A run whose native side ended in a way the run module could not read as success 
 _Avoid_: 结束未确认 (that says a process's stop was not confirmed, a different fact)
 
 **换手 / handoff**:
-A micro task passing to a different buddy between turns: the buddy that executed its earlier turns stops, and another executes the next. The micro task, its Host and the micro tasks under it stay the same.
-_Avoid_: 接管, takeover (those name a Host taking over the ownership of a micro task)
+A micro task passing to a different buddy between turns: the buddy that executed its earlier turns stops, and another executes the next. The micro task and the micro tasks under it stay the same.
+_Avoid_: 接管, takeover
 
 **验收 / acceptance**:
-The Host's evidence-backed judgment on a fixed artifact, separate from Worker completion.
+The Host's evidence-backed judgment on a seal or a fixed result, separate from Worker completion.
 
 **三方交叉验证 / three-way cross-check**:
-At acceptance the Host checks the brief with its later inputs, the buddy's report and the sealed artifact against one another, and trusts none of them alone: the brief may miss what the Host left out, the report may flatter, and the artifact may drift from the brief.
+At acceptance the Host checks the brief with its later inputs, the buddy's report and the seal or fixed result against one another, and trusts none of them alone: the brief may miss what the Host left out, the report may flatter, and the artifact may drift from the brief. When a Worker only answers, its report and its fixed result may be the same text, and only two of them remain to compare.
 
 **打回 / send back**:
-The Host's handling of a delivered micro task it does not accept: it continues the same micro task with what must change, so a Worker runs another turn in the same checkout; nothing counts as accepted until a later seal is accepted.
+The Host's handling of a delivered micro task it does not accept: it continues the same micro task with what must change, so another turn runs in the same checkout, by the same buddy unless the Host names another; nothing counts as accepted until a later seal or fixed result is accepted.
 
 ### Checks
 

@@ -81,6 +81,8 @@
 
 ## 安装与存储
 
+**删除路径按回合找仓库时，按 `attempt_id` 查事件没有索引。**（2026-11-05 ADR-032 的 P5 验收时 Host 读代码记下，未量） `blackboard/tasks/projects.py` 的 `known_repository_paths` 为每个候选回合执行 `SELECT seq FROM events WHERE attempt_id=? AND kind IN (...) ORDER BY seq DESC LIMIT 1`；`events` 上只有 `(task_id, seq)` 与 `(kind, seq DESC)` 两个索引，这一句大概走 kind 的索引往回扫。删除宏任务与回收时它按项目只算一次，日常还没有觉得慢。建议：先在导出的样本上量一次删除一个大宏任务的耗时，量出问题再改成按 `task_id` 加回合条件查，或者加索引；加索引是存储形式的变化，要随存储批次。
+
 **Windows 上看不到别的进程是否以检出为工作目录。**（2026-10-31 Windows 测试欠账第二批验收时 Opus 独立审查提出，Host 核对过） `require_idle_checkout` 在 Windows 上直接返回，回收先删文件、删到目录时才失败；用户在检出里开着终端时，里面的文件可能已被删掉。办法：先把整个检出目录改名，改名成功才算没人占用，再删改名后的目录。下一批 Windows 的改动里做。
 
 **存储计划“正在变”的树，还缺三处测试。**（2026-10-31 微任务“存储计划不因检出在变而崩”验收时，Opus 独立审查提出，Host 读代码核对过） 代码三处都安全，但没有测试钉住：计划时稳定、`apply` 重新盘点时正在变；`apply` 删除前最后一次核对时正在变；`_finish_pending` 恢复回执时原树正在变。另外 `scandir` 那一支的 `changing` 没有被单独钉住：删掉它，现有测试仍然全绿（可在桩里删掉目录后再建回来）。
@@ -187,6 +189,8 @@
 **黑板把不知道的输入模态记成只收文本。** 2026-10-17 开发者指出 DeepSeek V4.1 Flash 支持多模态，而黑板上它的能力只有 `input:text`。原因：DSH CLI 的原生目录（ACP 的模型选项）不带输入模态，`dsh/native_run.py` 的 `_catalog` 给出空列表，`blackboard/catalog/catalog.py` 归一时把空列表补成 `["text"]`；Claude Code CLI 的适配器直接写死 `["text"]`，Codex 在原生条目缺这一项时同样退成 `["text"]`。没有代码把 `input:image` 当作硬条件，影响在于 Router 看到的能力与用户写在模型备注里的说法相反。方向：harness 没说的模态记为不知道（不给 `input:` 能力），不替它说成只收文本。
 
 ## 委派与 Worker
+
+**执行层的内部规格还留着两个默认值。**（2026-11-05 写 ADR-032 文档时 Host 读代码记下） `protocol/schemas.py` 的 `normalize_spec` 只给检查套件写命令执行用（`tests/python/support.py` 的 `submit_execution`），却仍把没写的 `adapter` 当成 `dsh`、没写的 `expectedSeconds` 当成 1,800 秒：前者随即被“编程用的 harness 必须走微任务”拒绝，只把“没写”变成了另一种错误。`blackboard/routing/decision.py` 两处 `request.get("expectedSeconds", DEFAULT_EXPECTED_SECONDS)` 在 ADR-032 把 `expectedSeconds` 改为必填之后，看起来已经没有不带它的调用方，要先核对。建议：两处都改为必填，删掉 `DEFAULT_EXPECTED_SECONDS`；随下一批同一块的工作顺带做。
 
 **删掉 `hostId`。**（2026-11-04 开发者定，放进下一次契约与存储批，与 skill 和接口的精简一起做）
 - 现状：提交时的 `hostId` 由 Host 随手填，黑板不核对，控制台照原样显示。日常黑板上，同一个 Claude Code Host 的所有会话都叫 `claude-code-host`；一个 Codex Host 用自己的线程号；另一些把日期和任务名写进了名字。
