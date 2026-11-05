@@ -485,6 +485,8 @@ describe("delivery evidence", () => {
     expect(paneText).toContain("原文件夹");
     expect(paneText).not.toContain("封存证据");
     expect(paneText).not.toContain("整合来源");
+    // A turn without a checkout still names the buddy that ran it, like a Git turn.
+    expect(within(band()).getByText("codex / openai / gpt-6.1-sol / high")).toBeTruthy();
   });
 });
 

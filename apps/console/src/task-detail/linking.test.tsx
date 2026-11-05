@@ -29,17 +29,49 @@ describe("one focused item shared by the strip and the overview", () => {
     scroll.mockRestore();
   });
 
-  it("lights the marker on overview hover or focus without changing the focused item", async () => {
+  it("marks the strip only when an entry is selected, never while the pointer passes", async () => {
     const f = open({ step: 3, timeline: withInquiry(), replies: { inquiries: { items: [inquiry()], more: false } } });
     await ready();
-    const frame = stripSlice("inquiry:inq-1")!.querySelector('[data-slot=fragment-focus]')!;
     await f.user.hover(item("inquiry:inq-1"));
-    expect(getComputedStyle(frame).opacity).toBe("1");
-    await f.user.unhover(item("inquiry:inq-1"));
     item("inquiry:inq-1").focus();
-    expect(getComputedStyle(frame).opacity).toBe("1");
     expect(f.onStep).not.toHaveBeenCalled();
     expect(stripSlice("span:e1")!.getAttribute("aria-pressed")).toBe("true");
+    expect(stripSlice("inquiry:inq-1")!.getAttribute("aria-pressed")).toBe("false");
+    await f.user.click(item("inquiry:inq-1"));
+    expect(f.onStep).toHaveBeenLastCalledWith(3, "inquiry:inq-1");
+    expect(item("inquiry:inq-1").getAttribute("data-highlighted")).toBe("true");
+    expect(stripSlice("inquiry:inq-1")!.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it.each(["Enter", " "])("selects a focused entry with %s", async key => {
+    const f = open({ step: 3, timeline: withInquiry(), replies: { inquiries: { items: [inquiry()], more: false } } });
+    await ready();
+    fireEvent.keyDown(item("inquiry:inq-1"), { key });
+    expect(f.onStep).toHaveBeenLastCalledWith(3, "inquiry:inq-1");
+    expect(item("inquiry:inq-1").getAttribute("data-highlighted")).toBe("true");
+  });
+
+  it("does not frame a whole turn: its own bar selects the step without a pane highlight", async () => {
+    const f = open({ step: 3, origin: "span:e1" });
+    await ready();
+    expect(pane().querySelectorAll("[data-highlighted=true]")).toHaveLength(0);
+    fireEvent.click(stripSlice("span:e1")!);
+    expect(f.onStep).toHaveBeenLastCalledWith(3, "span:e1");
+    expect(stripSlice("span:e1")!.getAttribute("aria-pressed")).toBe("true");
+    expect(pane().querySelectorAll("[data-highlighted=true]")).toHaveLength(0);
+  });
+
+  it("frames exactly the one selected entry, above its content", async () => {
+    const f = open({ step: 3, timeline: withInquiry(), replies: { inquiries: { items: [inquiry()], more: false } } });
+    await ready();
+    await f.user.click(item("inquiry:inq-1"));
+    const highlighted = pane().querySelectorAll("[data-highlighted=true]");
+    expect(highlighted).toHaveLength(1);
+    expect(highlighted[0]!.getAttribute("data-item-key")).toBe("inquiry:inq-1");
+    const frame = highlighted[0]!.querySelector('[data-slot=item-highlight]')!;
+    expect(frame.className).toContain("pointer-events-none");
+    expect(frame.className).toContain("absolute");
+    expect(frame.className).toContain("z-10");
   });
 
   it("focuses the item when its time is activated, leaving other inquiries unselected", async () => {

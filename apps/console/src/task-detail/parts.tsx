@@ -51,7 +51,7 @@ export type ContentTabs = (content: ReactNode) => ReactNode;
 export function Pane({ title, children, footer, tabs }: { title: ReactNode; children: ReactNode; footer?: ReactNode; tabs?: ContentTabs }) {
   const links = useContext(DetailLinks);
   const content = <ScrollArea className="min-h-0 flex-1"><div data-slot="pane-content" className="w-0 min-w-full pt-4 pb-3">{children}</div></ScrollArea>;
-  return <section data-slot="detail-pane" className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
+  return <section data-slot="detail-pane" className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
     <DetailItem itemKey={links?.stepKey || undefined} className="flex min-h-0 min-w-0 flex-1 flex-col">
       {title}
       {links?.waits}

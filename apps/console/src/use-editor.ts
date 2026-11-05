@@ -17,6 +17,11 @@ import { attentionIssues, blockingIssues } from "./policy";
 import type { ConsoleView, Draft, Snapshot } from "./types";
 import { historySourceKey } from "./use-buddy-history";
 
+/** A success note shows this long, then fades; notes that need the reader stay until handled. */
+export const SUCCESS_NOTICE_MS = 4000;
+/** The fade's own length; the notice line draws its transition at the same duration. */
+export const NOTICE_FADE_MS = 200;
+
 /** Local Buddy settings draft with a single idempotent policy publication. */
 export function useEditor(
   api: ConsoleApi,
@@ -35,7 +40,8 @@ export function useEditor(
   const [auxiliaryBusy, setAuxiliaryBusy] = useState(false);
   const [error, setError] = useCopyState();
   const [blocked, setBlocked] = useCopyState();
-  const [notice, setNotice] = useCopyState();
+  const [noticeCopy, setNoticeCopy] = useCopyState();
+  const [noticeFading, setNoticeFading] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const csrf = useRef(snapshot.csrfToken);
@@ -61,6 +67,32 @@ export function useEditor(
     alive.current = true;
     return () => { alive.current = false; };
   }, []);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopNoticeTimer = () => {
+    if (noticeTimer.current === null) return;
+    clearTimeout(noticeTimer.current);
+    noticeTimer.current = null;
+  };
+  useEffect(() => stopNoticeTimer, []);
+  const setNotice = (text: string | (() => string)) => {
+    stopNoticeTimer();
+    setNoticeFading(false);
+    setNoticeCopy(text);
+  };
+  /** A success note leaves on its own; with reduced motion it goes without the fade. */
+  const setSuccessNotice = (text: string | (() => string)) => {
+    setNotice(text);
+    noticeTimer.current = setTimeout(() => {
+      noticeTimer.current = null;
+      if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { setNoticeCopy(""); return; }
+      setNoticeFading(true);
+      noticeTimer.current = setTimeout(() => {
+        noticeTimer.current = null;
+        setNoticeCopy("");
+        setNoticeFading(false);
+      }, NOTICE_FADE_MS);
+    }, SUCCESS_NOTICE_MS);
+  };
   const setDraft: Dispatch<SetStateAction<Draft | null>> = useCallback(update => {
     setDraftState(previous => {
       const next = typeof update === "function" ? update(previous) : update;
@@ -151,7 +183,7 @@ export function useEditor(
         return;
       }
       closeDraft();
-      setNotice(() => i18n.t("console:settingsSaved"));
+      setSuccessNotice(() => i18n.t("console:settingsSaved"));
     } catch (failure) {
       if (!alive.current) return;
       if (isSessionExpiredRefusal(failure)) {
@@ -221,7 +253,7 @@ export function useEditor(
     if (busy) { setBlocked(() => i18n.t("console:savingWaitForTheResult")); return; }
     if (confirming) { setBlocked(() => i18n.t("console:theSaveResultIsUnknownCheckIt")); return; }
     closeDraft();
-    setError(""); setNotice(() => i18n.t("console:draftDiscarded"));
+    setError(""); setSuccessNotice(() => i18n.t("console:draftDiscarded"));
     await refresh();
   }
 
@@ -292,7 +324,7 @@ export function useEditor(
     mode: draft !== null, editing, sessionWritable, draft, view, setDraft, baseline,
     busy, setAuxiliaryBusy, uncertain, confirming, dirty, changeCount,
     configurationDirty, blocking, attention,
-    error, notice, blocked, saveBlockedReason,
+    error, notice: noticeCopy ? { text: noticeCopy, fading: noticeFading } : null, blocked, saveBlockedReason,
     update, save, discard, reloadLatest, rebase, adoptHistory,
   };
 }

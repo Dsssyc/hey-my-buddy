@@ -277,12 +277,12 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const disconnected = !!connectionError || !!list.error;
   const lastRead = list.verifiedAtMs ?? verifiedAtMs;
   const empty = !list.loading && !list.error && totals.all === 0 && !query && filter === "all";
-  const detailPane = <aside data-slot="macro-detail" className={cn("flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-card", !listCollapsed && showNarrowList && !empty && "max-[760px]:hidden")} aria-label={t("detail")}>
+  const detailPane = <aside data-slot="macro-detail" className={cn("flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background", !listCollapsed && showNarrowList && !empty && "max-[760px]:hidden")} aria-label={t("detail")}>
     {selected
       ? <div className="flex min-h-0 flex-1 flex-col"><div className="flex min-h-0 min-w-0 flex-1 flex-col [container-type:inline-size]">{timelinePane}</div></div>
       : <>
         {listCollapsed && <div className="flex gap-3 px-4 py-3.5"><ListFold label={t("expand")} onClick={onExpandList}/><MacroListHeading count={totals.all}/></div>}
-        <div data-slot="macro-first-use" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-card px-6 pt-6 pb-26 text-center">{empty && <svg width="40" height="40" viewBox="3 3 58 58" className="fill-ink3 opacity-35" aria-hidden="true"><polygon points="12,13 22,13 22,61 12,54"/><polygon points="22,32 30,28 30,38 22,42"/><polygon points="42,3 52,10 52,51 42,51"/><polygon points="34,26 42,22 42,32 34,36"/><polygon points="30,28 34,26 34,36 30,38"/></svg>}<h2 className="text-base font-semibold">{t(empty ? "emptyTitle" : "choose")}</h2>
+        <div data-slot="macro-first-use" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-background px-6 pt-6 pb-26 text-center">{empty && <svg width="40" height="40" viewBox="3 3 58 58" className="fill-ink3 opacity-35" aria-hidden="true"><polygon points="12,13 22,13 22,61 12,54"/><polygon points="22,32 30,28 30,38 22,42"/><polygon points="42,3 52,10 52,51 42,51"/><polygon points="34,26 42,22 42,32 34,36"/><polygon points="30,28 34,26 34,36 30,38"/></svg>}<h2 className="text-base font-semibold">{t(empty ? "emptyTitle" : "choose")}</h2>
           {empty && <><p className="text-sm text-ink2">{t("emptyBody")}</p><div className="mt-4.5 flex flex-wrap justify-center gap-4.5 border-t pt-3.5 text-xs text-ink3 tabular-nums"><span>{t("harnesses", { n: formatNumber((snapshot.harnesses ?? []).filter(h => h.status === "ready").length) })}</span><span>{t("buddies", { n: formatNumber(snapshot.buddies.filter(b => b.enabled).length) })}</span><a href="#buddies" className="text-foreground underline">{t("buddy")}</a></div></>}
         </div>
       </>}

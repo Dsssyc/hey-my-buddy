@@ -7,7 +7,7 @@ const macro = "macro-11111111-1111-4111-8111-111111111111";
 const captures = fileURLToPath(new URL("../../../tmp/console-hints/detail-groups", import.meta.url));
 for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.describe(`detail groups ${theme} ${width}`, () => {
   test.use({ locale: "zh-CN", viewport: { width, height: 1000 }, reducedMotion: "reduce" });
-  test("groups the strip into a paper band and keeps identity and tabbed content on the card", async ({ page }) => {
+  test("groups the strip into a paper band beside the ruled header bar", async ({ page }) => {
     await page.addInitScript(theme => localStorage.setItem("hey-my-buddy.console.theme", theme), theme);
     await open(page, `#tasks/${macro}/preview-run-a1/7`);
     const header = page.locator('[data-slot=detail-header]');
@@ -21,7 +21,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     expect(stripBox!.y - headBox!.y - headBox!.height).toBeCloseTo(13, 0);
     expect(titleBox!.y).toBeGreaterThan(stripBox!.y + stripBox!.height);
     expect(tabsBox!.y).toBeGreaterThan(titleBox!.y + titleBox!.height);
-    for (const group of [header, strip]) await expect(group).toHaveCSS("border-bottom-width", "0px");
+    await expect(strip).toHaveCSS("border-bottom-width", "0px");
     await expect(tabs).toHaveCSS("border-bottom-width", "1px");
     await expect(ruler).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     const paper = await page.evaluate(() => {
@@ -33,8 +33,10 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     await expect(band).toHaveCSS("border-bottom-width", "1px");
     await expect(band).toHaveCSS("padding-top", "12px");
     await expect(band).toHaveCSS("padding-bottom", "12px");
+    // The workspace is the page's own ground, and the header bar carries the ruler's.
     expect(await header.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe(paper);
-    expect(await tabs.evaluate(node => getComputedStyle(node.closest('[data-slot=task-detail]')!).backgroundColor)).not.toBe(paper);
+    await expect(page.locator('[data-slot=task-detail]')).toHaveCSS("background-color", paper);
+    await expect(page.locator('[data-slot=detail-pane]')).toHaveCSS("background-color", paper);
     const bandBox = (await band.boundingBox())!, detailBox = (await page.locator('[data-slot=task-detail]').boundingBox())!;
     expect(Math.abs(bandBox.x - detailBox.x)).toBeLessThanOrEqual(1);
     expect(Math.abs(bandBox.width - detailBox.width)).toBeLessThanOrEqual(1);
@@ -50,9 +52,13 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     await mkdir(captures, { recursive: true });
     await page.mouse.move(0, 0); await page.screenshot({ path: `${captures}/overview-${theme}-${width}.png` });
     await tabs.getByRole("tab", { name: "会话", exact: true }).click();
-    const sessionHead = page.locator('[data-slot=session-view] > header > p').first();
-    await expect(sessionHead).toBeVisible();
-    expect(Math.abs((await selected.boundingBox())!.x - (await sessionHead.boundingBox())!.x)).toBeLessThanOrEqual(1);
+    // No header above the session: the transcript begins under the tab row, where
+    // the session coverage control sits at the right end.
+    const coverage = tabs.getByRole("button", { name: "会话内容", exact: true });
+    await expect(coverage).toBeVisible();
+    const viewport = page.locator('[data-slot=session-view] [data-slot=message-scroller-viewport]');
+    await expect(viewport).toBeVisible();
+    expect(await viewport.evaluate((node, list) => node.getBoundingClientRect().top - list.getBoundingClientRect().bottom, await tabs.elementHandle())).toBeLessThan(20);
     await page.screenshot({ path: `${captures}/session-${theme}-${width}.png` });
   });
 });

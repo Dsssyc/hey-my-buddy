@@ -48,7 +48,6 @@ export default {
       kinds: { messages: "消息", reasoning: "推理", "tool-input": "工具输入", "tool-output": "工具输出", plan: "计划" } },
     reasoning: "推理", plan: "计划",
     copy: "复制全文", copied: "已复制", copyFailed: "复制失败", recordingStopped: "会话记录已停止：{{reason}}",
-    state: { running: "运行中", ended: "已结束" },
     errors: { SESSION_NOT_INTEGRATED: "此 harness 尚未接入会话视图。", SESSION_NOT_RECORDED: "未记录此执行的会话。", SESSION_DELETED: "此执行的会话已删除。", SESSION_INVALID_RECORD: "会话记录已损坏，无法显示。", SESSION_UNREADABLE: "读取会话失败，请重试。" },
     planStatus: { pending: "待开始", in_progress: "进行中", completed: "已完成" }, priority: { high: "高", medium: "中", low: "低" },
     toolStatus: { unrecorded: "未记录", pending: "待开始", in_progress: "运行中", completed: "已完成", failed: "失败" },

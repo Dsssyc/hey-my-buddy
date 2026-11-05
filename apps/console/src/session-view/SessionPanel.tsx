@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowDown } from "lucide-react";
 import { ApiError } from "../api";
@@ -15,10 +16,12 @@ import type { SessionClient } from "./use-session";
 export type SessionPanelProps = {
   routingMode?: "fast" | "review" | null; taskText: string; checkoutRoot: string; client: SessionClient; taskId: string; attemptId: string; harness: string;
   active: boolean;
+  /** The right end of the turn tab row, where the session coverage control sits. */
+  tabsSide?: HTMLSpanElement | null;
 };
 
 /** One read-only attempt. Navigation and persistence are owned by the enclosing shell. */
-export default function SessionPanel({ routingMode, taskText, checkoutRoot, client, taskId, attemptId, harness, active }: SessionPanelProps) {
+export default function SessionPanel({ routingMode, taskText, checkoutRoot, client, taskId, attemptId, harness, active, tabsSide }: SessionPanelProps) {
   const { t } = useTranslation("taskDetail");
   const { data, error, earlierBusy, earlier, retry } = useSession(client, taskId, attemptId, active);
   const viewport = useRef<HTMLDivElement>(null);
@@ -80,9 +83,7 @@ export default function SessionPanel({ routingMode, taskText, checkoutRoot, clie
   const errors = ["SESSION_NOT_INTEGRATED", "SESSION_NOT_RECORDED", "SESSION_DELETED", "SESSION_INVALID_RECORD", "SESSION_UNREADABLE"] as const;
   const failure = errors.find(code => error instanceof ApiError && code === error.code) ?? "SESSION_UNREADABLE";
   return <section ref={panel} data-slot="session-view" aria-label={t("sessionView.title")} className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="shrink-0 border-b bg-card px-6 py-3">
-        <p className="flex flex-wrap items-baseline gap-x-3 text-xs text-ink2"><span className="font-mono wrap-anywhere">{harness}</span>{data && <span className={data.state === "running" ? "text-ink state-breathe" : "text-ink2"}>{t(`sessionView.state.${data.state}`)}</span>}{data && <SessionCoverage harness={harness} coverage={data.coverage}/>}</p>
-      </header>
+      {tabsSide && !error && data && createPortal(<SessionCoverage harness={harness} coverage={data.coverage}/>, tabsSide)}
       {error ? <div className="flex min-h-0 flex-1 flex-col items-start gap-4 p-6" role="alert"><p>{t(`sessionView.errors.${failure}`)}</p><Button variant="outline" onClick={retry}>{t("retry")}</Button></div>
         : !data ? <p className="p-6 text-sm text-ink2" role="status">{t("sessionView.loading")}</p>
           : <div className="relative flex min-h-0 flex-1 flex-col">

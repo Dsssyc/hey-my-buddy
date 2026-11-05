@@ -4,26 +4,22 @@ import { useTranslation } from "react-i18next";
 import type { MacroTaskTimeline } from "../macro-task-types";
 import { eventActions } from "../timeline/events";
 
-/** Keys that share one drawn mark share its CSS token; no record text enters a selector. */
+/** The keys that share one drawn mark: a span, each of its inquiries, each event cluster, and the settling mark. */
 export function linkedItems(timeline: MacroTaskTimeline, runId: string) {
-  const items = new Map<string, string>();
-  const add = (keys: string[]) => {
-    const token = String(items.size);
-    for (const key of keys) items.set(key, token);
-  };
+  const items = new Set<string>();
   for (const span of timeline.spans.filter(span => span.runId === runId)) {
-    add([`span:${span.spanId}`]);
-    for (const inquiry of span.inquiries ?? []) add([`inquiry:${inquiry.inquiryId}`]);
+    items.add(`span:${span.spanId}`);
+    for (const inquiry of span.inquiries ?? []) items.add(`inquiry:${inquiry.inquiryId}`);
   }
   const events = timeline.events.filter(event => event.runId === runId);
-  for (const action of eventActions(events)) add([action.event, ...(action.relatedEvents ?? [])].map(event => `event:${event.seq}`));
-  add([`settle:${runId}`]);
+  for (const action of eventActions(events)) for (const event of [action.event, ...(action.relatedEvents ?? [])]) items.add(`event:${event.seq}`);
+  items.add(`settle:${runId}`);
   return items;
 }
 
 type Links = {
   origin: string | null;
-  items: ReadonlyMap<string, string>;
+  items: ReadonlySet<string>;
   onItem: (key: string) => void;
   stepKey: string;
   waits: ReactNode;
@@ -31,18 +27,12 @@ type Links = {
 };
 export const DetailLinks = createContext<Links | null>(null);
 
-/** Native hover and focus-within provide the transient feedback, without a second selection state. */
-export function LinkStyles({ items }: { items: ReadonlyMap<string, string> }) {
-  return <style>{[...new Set(items.values())].map(token =>
-    `[data-slot=task-detail]:has([data-overview-item="${token}"]:is(:hover,:focus-within)):not(:has([data-overview-item="${token}"] [data-overview-item]:is(:hover,:focus-within))) [data-linked-item~="${token}"] [data-slot=fragment-focus]{opacity:1;stroke:var(--color-focus)}`
-  ).join("\n")}</style>;
-}
-
 export function scrollToItem(node: Element) {
   node.scrollIntoView({ block: "center", inline: "nearest",
     behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
 }
 
+/** One entry of the overview: selecting it, by click or by keyboard, marks the same item in the step strip. */
 export function DetailItem({ itemKey, label, children, className = "" }: {
   itemKey?: string; label?: string; children: ReactNode; className?: string;
 }) {
@@ -59,10 +49,23 @@ export function DetailItem({ itemKey, label, children, className = "" }: {
   useEffect(() => {
     if (highlighted) scrollToItem(ref.current!);
   }, [highlighted]);
-  return <div ref={ref} data-item-key={itemKey} data-overview-item={itemKey === undefined ? undefined : links?.items.get(itemKey)} data-highlighted={highlighted}
+  // The highlight frame is an overlay above the content, so no child background can cover it or break it.
+  return <div ref={ref} data-item-key={itemKey} data-highlighted={highlighted}
     tabIndex={linked ? 0 : undefined} role={linked ? "article" : undefined} aria-label={linked ? label ?? t("label") : undefined}
-    className={`outline-none transition-colors duration-150 data-[highlighted=true]:bg-selected-row data-[highlighted=true]:ring-1 data-[highlighted=true]:ring-inset data-[highlighted=true]:ring-ring focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none ${className}`}>
+    onClick={linked ? event => {
+      // Controls inside an entry keep their own behaviour.
+      if ((event.target as Element).closest("a, button")) return;
+      links!.onItem(itemKey!);
+    } : undefined}
+    onKeyDown={linked ? event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      links!.onItem(itemKey!);
+    } : undefined}
+    className={`relative outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${className}`}>
     {children}
+    {linked && <span data-slot="item-highlight" aria-hidden="true"
+      className={`pointer-events-none absolute inset-0 z-10 ring-1 ring-inset ring-ring transition-opacity duration-150 motion-reduce:transition-none ${highlighted ? "opacity-100" : "opacity-0"}`}/>}
   </div>;
 }
 

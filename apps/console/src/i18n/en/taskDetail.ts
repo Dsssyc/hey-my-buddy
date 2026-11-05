@@ -49,7 +49,6 @@ export default {
       kinds: { messages: "Messages", reasoning: "Reasoning", "tool-input": "Tool input", "tool-output": "Tool output", plan: "Plan" } },
     reasoning: "Reasoning", plan: "Plan",
     copy: "Copy full text", copied: "Copied", copyFailed: "Copy failed", recordingStopped: "Session recording stopped: {{reason}}",
-    state: { running: "Running", ended: "Ended" },
     errors: { SESSION_NOT_INTEGRATED: "Session view is not implemented for this harness.", SESSION_NOT_RECORDED: "Session was not recorded for this execution.", SESSION_DELETED: "This execution’s session was deleted.", SESSION_INVALID_RECORD: "The session record is damaged and cannot be displayed.", SESSION_UNREADABLE: "The session could not be read. Try again." },
     planStatus: { pending: "Pending", in_progress: "In progress", completed: "Completed" }, priority: { high: "High", medium: "Medium", low: "Low" },
     toolStatus: { unrecorded: "Not recorded", pending: "Pending", in_progress: "Running", completed: "Completed", failed: "Failed" },

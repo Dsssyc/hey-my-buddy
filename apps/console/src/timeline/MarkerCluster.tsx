@@ -21,7 +21,7 @@ export function MarkerCluster({ markers, x, y, hitPath, runId, taskTitle, tabKey
   onSelect: (runId: string, key: string) => void;
   markerName: (marker: TimelineMarker) => string; markerReadout: (marker: TimelineMarker) => string;
   /** The cluster is selected when it holds the selected event or inquiry. */
-  selectedKey?: string | null; highlightedKey?: string | null; itemLinks?: ReadonlyMap<string, string>;
+  selectedKey?: string | null; highlightedKey?: string | null; itemLinks?: ReadonlySet<string>;
 }) {
   const { t } = useTranslation("tasks");
   const [open, setOpen] = useState(false);
@@ -37,7 +37,7 @@ export function MarkerCluster({ markers, x, y, hitPath, runId, taskTitle, tabKey
     onOpen(runId, markerKey(marker));
   };
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger asChild><g ref={trigger} role="button" tabIndex={itemLinks || tabKey === key ? 0 : -1} data-linked-item={itemLinks ? [...new Set(markers.map(marker => itemLinks.get(markerKey(marker))))].join(" ") : undefined} data-slot="event-cluster" data-at={Date.parse(markerAt(first))} data-key={key} aria-pressed={selected}
+    <PopoverTrigger asChild><g ref={trigger} role="button" tabIndex={itemLinks || tabKey === key ? 0 : -1} data-slot="event-cluster" data-at={Date.parse(markerAt(first))} data-key={key} aria-pressed={selected}
       aria-label={`${label} · ${taskTitle}`} onPointerEnter={() => onFocusMarker(first, "hover")} onPointerLeave={() => onFocusMarker(null, "hover")} onFocus={() => onFocusMarker(first, "focus")} onBlur={() => onFocusMarker(null, "focus")}
       onClick={() => onSelect(runId, markerKey(first))}
       onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onSelect(runId, markerKey(first)); setOpen(true); } }}

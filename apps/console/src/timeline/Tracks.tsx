@@ -157,7 +157,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, ongoin
   selectedKey?: string | null;
   highlightedKey?: string | null;
   /** Detail overview links; its targets are all reachable with Tab. */
-  itemLinks?: ReadonlyMap<string, string>;
+  itemLinks?: ReadonlySet<string>;
   /** The drawn selection's scale coordinates, computed from the same facts and dimensions as the SVG. */
   selectionRef?: Ref<Interval | null>;
   /** A Lead's waits for its owned micro tasks, drawn like other waits from the recorded facts. */
@@ -308,7 +308,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, ongoin
       const tail = tails.find(entry => entry.item.span === span);
       const buddyMark = buddyMarks.get(span.spanId);
       const cross = crosses.find(entry => entry.item.span === span);
-      return <g key={span.spanId} role="button" tabIndex={itemLinks?.has(`span:${span.spanId}`) || tabKey === `span:${span.spanId}` ? 0 : -1} data-linked-item={itemLinks?.get(`span:${span.spanId}`)} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-pressed={selectedKey === `span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, buddies, row) })}
+      return <g key={span.spanId} role="button" tabIndex={itemLinks?.has(`span:${span.spanId}`) || tabKey === `span:${span.spanId}` ? 0 : -1} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-pressed={selectedKey === `span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, buddies, row) })}
       onKeyDown={event => { if ((event.key === "Enter" || event.key === " ")) { event.preventDefault(); onOpen(row.runId, `span:${span.spanId}`); } }}
       onFocus={() => onFocusSpan(span)} onBlur={() => onFocusSpan(null)} onClick={event => { if (event.detail > 1) return; onSelect(row.runId, `span:${span.spanId}`); onOpen(row.runId, `span:${span.spanId}`); }} onPointerEnter={() => onHover(span)} onPointerLeave={() => onHover(null)} className="group/fragment outline-none">
       {isHighlighted(`span:${span.spanId}`) && <rect data-slot="selected-item" x={selection.left} y={execution ? middle - 13 : middle - 3} width={selection.right - selection.left} height={execution ? 26 : 6} fill="none" className="pointer-events-none stroke-focus"/>}
@@ -342,7 +342,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, ongoin
     {acceptance && <WaitingDiamond x={acceptance.start} y={middle} kind="review"/>}
     {positioned.filter(item => item.span.kind === "host").map(item => <WaitingDiamond key={item.span.spanId} x={item.start} y={middle}/>)}
     {expected.map(entry => <IsolatedStatusMark slot="expected-mark" key={entry.item.span.spanId} d={`M${entry.x} ${middle - 16}v32`} paper={paper} stroke="stroke-hand-mark"/>)}
-    {singletonInquiries.map(marker => <g key={markerKey(marker)} role="button" tabIndex={itemLinks?.has(markerKey(marker)) || tabKey === markerKey(marker) ? 0 : -1} data-linked-item={itemLinks?.get(markerKey(marker))} data-at={Date.parse(markerAt(marker))} data-key={markerKey(marker)} aria-pressed={selectedKey === markerKey(marker)} aria-label={markerReadout(marker)}
+    {singletonInquiries.map(marker => <g key={markerKey(marker)} role="button" tabIndex={itemLinks?.has(markerKey(marker)) || tabKey === markerKey(marker) ? 0 : -1} data-at={Date.parse(markerAt(marker))} data-key={markerKey(marker)} aria-pressed={selectedKey === markerKey(marker)} aria-label={markerReadout(marker)}
       onPointerEnter={() => focusMarker(marker, "hover")} onPointerLeave={() => focusMarker(null, "hover")} onFocus={() => focusMarker(marker, "focus")} onBlur={() => focusMarker(null, "focus")}
       onClick={event => { if (event.detail > 1) return; onSelect(row.runId, markerKey(marker)); onOpen(row.runId, markerKey(marker)); }} onKeyDown={key => { if ((key.key === "Enter" || key.key === " ")) { key.preventDefault(); onOpen(row.runId, markerKey(marker)); } }} className="group/fragment outline-none">
       <path data-slot="marker-hit" d={hitPath(marker.x - 5.5, marker.x + 5.5)} fill="transparent"/>
@@ -350,7 +350,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, ongoin
       <path data-slot="inquiry-mark" d={diamond(marker.x, middle)} className="fill-card stroke-ink2" strokeWidth={1.3}/>
       <rect aria-hidden="true" data-slot="fragment-focus" x={marker.x - 8} y={middle - 10} width={16} height={20} fill="none" strokeWidth={2} className={cn("pointer-events-none stroke-ink opacity-0", !isHighlighted(markerKey(marker)) && "group-focus/fragment:opacity-100")}/>
     </g>)}
-    {singletonEvents.map(marker => { const { event, x } = marker; const highlighted = markerHasKey(marker, selectedKey) || markerHasKey(marker, highlightedKey); return <g key={event.seq} role="button" tabIndex={itemLinks?.has(markerKey(marker)) || tabKey === `event:${event.seq}` ? 0 : -1} data-linked-item={itemLinks?.get(markerKey(marker))} data-at={instant(event.at)!} data-key={`event:${event.seq}`} aria-pressed={markerHasKey(marker, selectedKey)} aria-label={markerReadout(marker)} onPointerEnter={() => focusMarker(marker, "hover")} onPointerLeave={() => focusMarker(null, "hover")} onFocus={() => focusMarker(marker, "focus")} onBlur={() => focusMarker(null, "focus")}
+    {singletonEvents.map(marker => { const { event, x } = marker; const highlighted = markerHasKey(marker, selectedKey) || markerHasKey(marker, highlightedKey); return <g key={event.seq} role="button" tabIndex={itemLinks?.has(markerKey(marker)) || tabKey === `event:${event.seq}` ? 0 : -1} data-at={instant(event.at)!} data-key={`event:${event.seq}`} aria-pressed={markerHasKey(marker, selectedKey)} aria-label={markerReadout(marker)} onPointerEnter={() => focusMarker(marker, "hover")} onPointerLeave={() => focusMarker(null, "hover")} onFocus={() => focusMarker(marker, "focus")} onBlur={() => focusMarker(null, "focus")}
       onClick={click => { if (click.detail > 1) return; onSelect(row.runId, `event:${event.seq}`); onOpen(row.runId, `event:${event.seq}`); }} onKeyDown={key => { if ((key.key === "Enter" || key.key === " ")) { key.preventDefault(); onOpen(row.runId, `event:${event.seq}`); } }} className="group/fragment outline-none">
       <path data-slot="marker-hit" d={hitPath(x - (isConclusion(event) ? 8 : 2.5), x + (isConclusion(event) ? 8 : 2.5))} fill="transparent"/>
       {highlighted && <rect data-slot="selected-item" x={x - EVENT_SELECTION_RADIUS_PX} y={middle - 10} width={EVENT_SELECTION_RADIUS_PX * 2} height={20} fill="none" className="pointer-events-none stroke-focus"/>}

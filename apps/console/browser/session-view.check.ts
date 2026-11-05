@@ -52,8 +52,20 @@ for (const language of ["en", "zh"] as const) for (const width of [1440, 390]) f
       await openSession(page, long);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       await expect(sessionTab(page, language)).toHaveAttribute("aria-selected", "true");
-      await expect(panel(page).getByText(language === "zh" ? "已结束" : "Ended", { exact: true })).toBeVisible();
-      await panel(page).getByRole("button", { name: language === "zh" ? "会话内容" : "Session content", exact: true }).click();
+      // No header above the session: its content starts right under the tab row,
+      // and the coverage control sits at that row's right end, in this tab alone.
+      const tabsList = tabs(page).locator('[data-slot="tabs-list"]');
+      const scroller = viewport(page);
+      await expect(scroller).toBeVisible();
+      const gap = await scroller.evaluate((node, list) => node.getBoundingClientRect().top - list.getBoundingClientRect().bottom, await tabsList.elementHandle());
+      expect(gap).toBeLessThan(20);
+      const coverageButton = tabs(page).getByRole("button", { name: language === "zh" ? "会话内容" : "Session content", exact: true });
+      await expect(coverageButton).toBeVisible();
+      await overviewTab(page, language).click();
+      await expect(coverageButton).toHaveCount(0);
+      await sessionTab(page, language).click();
+      await expect(coverageButton).toBeVisible();
+      await coverageButton.click();
       const coverage = page.getByRole("table", { name: language === "zh" ? "会话内容" : "Session content" });
       await expect(coverage.getByText(language === "zh" ? "不提供：未记录此执行的会话。" : "Not provided: Session was not recorded for this execution.", { exact: true })).toContainText(language === "zh" ? "不提供" : "Not provided");
       await expect(coverage.getByRole("row")).toHaveCount(5);
@@ -287,7 +299,7 @@ test.describe("session content and navigation", () => {
   test("keeps a reader away from the bottom until New content is pressed, then follows additions", async ({ page }) => {
     await page.clock.install();
     await openSession(page, session("preview-run-a3", 3));
-    await expect(panel(page).getByText("Running", { exact: true })).toBeVisible();
+    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight)).toBeGreaterThan(0);
     await viewport(page).evaluate(node => { node.scrollTop = 0; });
     await page.clock.fastForward(12_000);
     await expect(panel(page).getByRole("button", { name: "New content" })).toBeVisible();

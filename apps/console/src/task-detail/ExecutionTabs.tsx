@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import type { ReactNode } from "react";
 import { Tabs as TabsPrimitive } from "radix-ui";
 import { useTranslation } from "react-i18next";
@@ -14,15 +14,19 @@ export function ExecutionTabs({ routingMode, taskText, checkoutRoot, children, c
   active: boolean; tab: DetailTab; onTab: (tab: DetailTab) => void;
 }) {
   const { t } = useTranslation("taskDetail");
+  // The session coverage control lives at the right end of this tab row; the
+  // session panel, mounted only under its own tab, is the one that knows it.
+  const [tabsSide, setTabsSide] = useState<HTMLSpanElement | null>(null);
   return <Tabs data-slot="detail-tabs" value={tab} onValueChange={value => onTab(value as DetailTab)} className="min-h-0 min-w-0 flex-1 gap-0">
     <TabsList variant="line" aria-label={t("tabs.label")} className="h-8 w-full shrink-0 justify-start gap-6 border-0 border-b border-line2 px-6">
       <TabsTrigger value="overview" className="flex-none text-xs text-ink">{t("tabs.overview")}</TabsTrigger>
       <TabsTrigger value="session" className="flex-none text-xs text-ink">{t("sessionView.title")}</TabsTrigger>
+      <span ref={setTabsSide} data-slot="detail-tabs-side" className="ml-auto inline-flex items-center"/>
     </TabsList>
     <TabsPrimitive.Content value="overview" forceMount className="flex min-h-0 min-w-0 flex-1 flex-col outline-none data-[state=inactive]:hidden">{children}</TabsPrimitive.Content>
     <TabsPrimitive.Content value="session" className="flex min-h-0 min-w-0 flex-1 flex-col pt-4 outline-none">
       <Suspense fallback={<p className="p-6 text-sm text-ink2" role="status">{t("sessionView.loading")}</p>}><SessionPanel
-        routingMode={routingMode} taskText={taskText} checkoutRoot={checkoutRoot} client={client} taskId={taskId} attemptId={attemptId} harness={harness} active={active}/></Suspense>
+        routingMode={routingMode} taskText={taskText} checkoutRoot={checkoutRoot} client={client} taskId={taskId} attemptId={attemptId} harness={harness} active={active} tabsSide={tabsSide}/></Suspense>
     </TabsPrimitive.Content>
   </Tabs>;
 }

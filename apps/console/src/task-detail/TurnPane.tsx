@@ -79,7 +79,7 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
       {expected !== null && <span className="tabular-nums text-ink3">{t("turn.expected", { time: formatDuration(expected * 1000) })}</span>}
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>}>
-    {!none && <Band role="Worker" identity={quad(buddy) ?? <span className="font-sans text-ink3">{t("unrecorded")}</span>}
+    <Band role="Worker" identity={quad(buddy) ?? <span className="font-sans text-ink3">{t("unrecorded")}</span>}
       end={!turn?.routing ? <span className="text-ink3">{t("origin.unrecorded")}</span>
         : <span>{
           turn.routing.decisionId === null ? t("origin.host")
@@ -88,7 +88,7 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
       secondEnd={<span className="inline-flex flex-wrap items-baseline gap-x-1.5">
         {turn?.sessionId ? <CopyableIdentifier value={turn.sessionId} /> : <span>{t("session.unrecorded")}</span>}
         {turn && <span>· {turn.resumeMode === "native-session" ? t("session.resumed") : t("session.fresh")}</span>}
-      </span>} />}
+      </span>} />
     {none && <>
       <Section name={t("delivery.access")}>{turn.access}</Section>
       <Section name={t("delivery.cwd")}><code>{ctx.workflow.cwd ?? ctx.view.task.cwd}</code></Section>

@@ -91,15 +91,20 @@ for (const theme of ["dark", "light"]) for (const locale of ["zh-CN", "en-US"]) 
         await page.screenshot({ path: `${shots}/inquiry-${theme}-${width}.png` });
       }
 
+      // A passing pointer, and a plain focus, move nothing on the other surface; only a click selects.
       await first.hover();
       const firstMarker = marker(page, "inquiry:strip-inquiry-0");
-      await expect(firstMarker.locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "1");
+      await expect(firstMarker.locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "0");
       await expect(lateMarker).toHaveAttribute("aria-pressed", "true");
       await first.focus();
       await page.mouse.move(0, 0);
-      await expect(firstMarker.locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "1");
-      await first.getByRole("button").first().click();
+      await expect(firstMarker.locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "0");
+      // The selected mark carries exactly one frame, with no focus frame stacked on it.
+      await expect(lateMarker.locator('[data-slot=selected-item]')).toHaveCount(1);
+      await expect(lateMarker.locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "0");
+      await first.click();
       await expect(first).toHaveAttribute("data-highlighted", "true");
+      await expect(firstMarker).toHaveAttribute("aria-pressed", "true");
       await strip(page).locator('[data-slot=detail-strip-scroll]').evaluate(view => { view.scrollLeft = 0; });
       const minimumScroll = await strip(page).locator('[data-slot=detail-strip-scroll]').evaluate((view, key) => {
         const box = view.querySelector(`[data-key="${key}"] [data-slot=inquiry-mark]`)!.getBoundingClientRect();

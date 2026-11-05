@@ -20,7 +20,7 @@ import { useTaskDetail } from "./use-task-detail";
 import { ExecutionTabs } from "./ExecutionTabs";
 import type { SessionClient } from "../session-view/use-session";
 import type { DetailTab } from "./location";
-import { DetailLinks, linkedItems, LinkStyles, scrollToItem } from "./linking";
+import { DetailLinks, linkedItems, scrollToItem } from "./linking";
 import { StepWaits } from "./StepWaits";
 import type { ContentTabs } from "./parts";
 
@@ -83,7 +83,7 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
   const { view, workflow } = read;
   const timeline = recordedTimeline;
   const row = timeline?.rows.find(candidate => candidate.runId === runId) ?? null;
-  const items = useMemo(() => timeline ? linkedItems(timeline, runId) : new Map<string, string>(), [timeline, runId]);
+  const items = useMemo(() => timeline ? linkedItems(timeline, runId) : new Set<string>(), [timeline, runId]);
   const steps: Steps | null = useMemo(() => {
     if (view === null) return null;
     return timelineLoading ? null : buildSteps(timeline, runId, now);
@@ -141,11 +141,12 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
     onStep(index + 1, key);
   };
   const bare = (body: ReactNode) => <DetailLinks value={{ origin, items, onItem, elements: itemElements.current,
-    stepKey: current?.span?.kind === "host" ? "" : current?.key ?? "", waits: current && steps && ctx && row ? <StepWaits step={current} steps={steps} ctx={ctx}/> : null }}>
-    <section data-slot="task-detail" tabIndex={-1} aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [container-type:inline-size]"><LinkStyles items={items}/>{body}</section>
+    // An execution step is a whole turn: linking marks its parts, never the pane around them.
+    stepKey: current?.span ? "" : current?.key ?? "", waits: current && steps && ctx && row ? <StepWaits step={current} steps={steps} ctx={ctx}/> : null }}>
+    <section data-slot="task-detail" tabIndex={-1} aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-background outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">{body}</section>
   </DetailLinks>;
   if (!view) {
-    return bare(<><header data-slot="detail-header" className="shrink-0 bg-card py-2 pl-1.5 pr-4 sm:pr-6"><DetailBack onBack={onBack}/></header><div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+    return bare(<><header data-slot="detail-header" className="flex h-9 shrink-0 items-center border-b border-line bg-ruler pl-1.5 pr-4 sm:pr-6"><DetailBack onBack={onBack}/></header><div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
       {read.error
         ? <>
           <h2 className="text-base font-semibold">{t("failed")}</h2>
@@ -158,7 +159,7 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
   return bare(<>
     <Header view={view} workflow={workflow} turns={workflow ? workflow.counts.turns : null} endMs={elapsedEnd(view, workflow, now)}
       error={read.error} busy={read.busy} onRefresh={read.refresh} onBack={onBack} />
-    {steps && !steps.complete && <p className="border-b bg-card px-4 py-2 text-xs text-ink3 sm:px-6">{t("strip.truncated")}</p>}
+    {steps && !steps.complete && <p className="border-b bg-background px-4 py-2 text-xs text-ink3 sm:px-6">{t("strip.truncated")}</p>}
     {steps && current && ctx && row && <div ref={stripRef} data-slot="detail-step-band" className="shrink-0 border-y border-line bg-background py-3">
       <StepStrip row={row} timeline={timeline!} steps={steps} selected={chosen!} onStep={onStep} nowMs={now} revealRef={revealStrip}/>
     </div>}

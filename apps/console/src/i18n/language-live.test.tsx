@@ -40,9 +40,9 @@ describe("changing the language in an already loaded console", () => {
       decisions: [], tasks: { pendingCount: 0 }, capabilities: {} } as Snapshot;
     const { result } = renderHook(() => useEditor({} as ConsoleApi, snapshot, async () => snapshot, true, ""));
     await act(async () => result.current.discard());
-    expect(result.current.notice).toBe("草稿已放弃");
+    expect(result.current.notice!.text).toBe("草稿已放弃");
     act(() => setLanguageChoice("en"));
-    expect(result.current.notice).toBe("Draft discarded");
+    expect(result.current.notice!.text).toBe("Draft discarded");
     expect(result.current.draft).toBeNull();
   });
 

@@ -6,7 +6,7 @@ import { sessionContentKinds, type SessionPage } from "./types";
 export function SessionCoverage({ harness, coverage }: { harness: string; coverage: SessionPage["coverage"] }) {
   const { t } = useTranslation("taskDetail");
   return <Popover>
-    <PopoverTrigger className="ml-auto cursor-pointer text-xs text-ink2 hover:text-ink">{t("sessionView.coverage.title")}</PopoverTrigger>
+    <PopoverTrigger className="cursor-pointer text-xs text-ink2 hover:text-ink">{t("sessionView.coverage.title")}</PopoverTrigger>
     <PopoverContent align="end" className="w-[min(32rem,calc(100vw-2rem))]">
       <table data-slot="session-coverage" aria-label={t("sessionView.coverage.title")} className="w-full text-left text-xs leading-relaxed text-ink2">
         <caption className="mb-2 text-left font-mono text-ink">{harness}</caption>

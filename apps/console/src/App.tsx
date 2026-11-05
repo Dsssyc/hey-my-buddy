@@ -14,6 +14,7 @@ import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import { useConsole } from "./use-console";
 import { useEditor } from "./use-editor";
+import { NOTICE_FADE_MS } from "./use-editor";
 import type { Editor } from "./use-editor";
 import { useTheme } from "./theme";
 import { getLanguageChoice, setLanguageChoice } from "./i18n";
@@ -91,9 +92,11 @@ function SaveBar({ editor, mutationsAvailable, describedBy }: {
 }
 
 /** One line said above a page; its mark and colour tell a failure from something that waits for the user. */
-function Notice({ tone, role, children }: { tone: "fail" | "hand" | "plain"; role: "alert" | "status"; children: ReactNode }) {
-  return <div role={role} className={cn("flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b px-3 py-2 sm:px-6",
-    tone === "fail" ? "bg-fail-wash text-fail" : tone === "hand" ? "bg-hand-wash text-hand" : "bg-card text-ink2")}>
+function Notice({ tone, role, fading = false, children }: { tone: "fail" | "hand" | "plain"; role: "alert" | "status"; fading?: boolean; children: ReactNode }) {
+  return <div role={role} className={cn("flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b px-3 py-2 transition-opacity motion-reduce:transition-none sm:px-6",
+    tone === "fail" ? "bg-fail-wash text-fail" : tone === "hand" ? "bg-hand-wash text-hand" : "bg-card text-ink2",
+    fading && "opacity-0")}
+    style={fading ? { transitionDuration: `${NOTICE_FADE_MS}ms` } : undefined}>
     {tone !== "plain" && <StateMark kind={tone} />}
     {children}
   </div>;
@@ -194,7 +197,7 @@ function Connected({ api, snapshot, refresh, connectionError, verifiedAt }: {
         </Notice>}
         {draftTab && editor.blocked && <Notice tone="plain" role="status">{editor.blocked}</Notice>}
         {draftTab && editor.error && !editor.confirming && <Notice tone="fail" role="alert">{editor.error}</Notice>}
-        {draftTab && editor.notice && <Notice tone="plain" role="status">{editor.notice}</Notice>}
+        {draftTab && editor.notice && <Notice tone="plain" role="status" fading={editor.notice.fading}>{editor.notice.text}</Notice>}
       </div>
       {saveRefusal && <p id="editor-save-reason" className="sr-only">{saveRefusal}</p>}
       {/* Stable positions preserve page selections, drafts and scroll offsets.

@@ -381,7 +381,7 @@ export function TaskWork(props: TaskWorkProps) {
     {!timeline && props.loading ? <div role="status" className="flex flex-1 animate-pulse items-center justify-center motion-reduce:animate-none">{t("loading")}</div>
       : timeline && timeline.rows.length === 0 && !open ? <>
         <div data-slot="timeline-empty-stage" className="grid min-h-0 min-w-0 flex-1" style={{ gridTemplateColumns: `${nameWidth}px minmax(0,1fr)` }}>
-          <div data-slot="task-names" className="min-w-0 border-r border-line bg-card">
+          <div data-slot="task-names" className="min-w-0 border-r border-line bg-background">
             <div className="border-b border-line">{rowFilter}</div>
             <p className="p-6 text-sm text-ink2">{t("noMicroTasks")}</p>
           </div>
@@ -391,7 +391,7 @@ export function TaskWork(props: TaskWorkProps) {
       </> : <>
         {open
           ? <div data-slot="timeline-detail-stage" className="relative grid min-h-0 min-w-0 flex-1" style={{ gridTemplateColumns: narrow ? "minmax(0,1fr)" : `${nameWidth}px minmax(0,1fr)` }}>
-            <ScrollArea className={cn("min-h-0 min-w-0 bg-card", narrow && "hidden")}
+            <ScrollArea className={cn("min-h-0 min-w-0 bg-background", narrow && "hidden")}
               viewportProps={{ ref: setDetailViewport, "data-slot": "task-names", onScroll: event => { namesScrollTop.current = event.currentTarget.scrollTop; } }}>
               <div className="w-0 min-w-full">
               <div className="sticky top-0 z-30 border-b border-line">{rowFilter}</div>
@@ -400,7 +400,7 @@ export function TaskWork(props: TaskWorkProps) {
               </div>
             </ScrollArea>
             {!narrow && <NameDivider width={nameWidth} onChange={setNameWidth}/>}
-            <div className={cn("flex min-h-0 min-w-0 flex-col bg-card", !narrow && "border-l")}>
+            <div className={cn("flex min-h-0 min-w-0 flex-col bg-background", !narrow && "border-l")}>
               {openedRunId !== null && props.detail(openedRunId)}
             </div>
           </div>

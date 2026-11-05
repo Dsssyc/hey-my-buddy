@@ -132,7 +132,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
     const pressed = selected === index && (itemKey
       ? focusedKey === itemKey || step?.pending && focusedKey === null
       : focusedKey === null || focusedKey === key);
-    return <g key={key} role="button" tabIndex={itemKey || selected === index ? 0 : -1} data-key={key} data-linked-item={itemKey ? links.items.get(itemKey) : undefined} aria-pressed={pressed} aria-label={label}
+    return <g key={key} role="button" tabIndex={itemKey || selected === index ? 0 : -1} data-key={key} aria-pressed={pressed} aria-label={label}
       onClick={() => itemKey ? links.onItem(itemKey) : onStep(index + 1)}
       onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (itemKey) links.onItem(itemKey); else onStep(index + 1); } }}
       className={pressed ? "pointer-events-auto outline-none" : "pointer-events-auto outline-none focus-visible:[&_.hit]:stroke-ring focus-visible:[&_.hit]:stroke-2"}>
