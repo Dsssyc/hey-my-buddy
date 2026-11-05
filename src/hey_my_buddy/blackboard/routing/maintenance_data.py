@@ -67,6 +67,27 @@ def pending_count(connection) -> int:
     return connection.execute("SELECT COUNT(*) FROM workflow_runs r WHERE " + PENDING_WHERE).fetchone()[0]
 
 
+def _comparison_statistics(statistics, summary_kinds, comparison_kinds):
+    """Compare the summary targets' sampled rows and cells; keep every overall row."""
+    domains = {node_id for kind in summary_kinds for node_id in statistics[kind]["byDomain"]}
+    cells = {(node_id, task_type) for kind in summary_kinds
+             for node_id, types in statistics[kind]["byDomainTaskType"].items() for task_type in types}
+    comparisons = []
+    for kind in comparison_kinds:
+        facts = statistics[_kind(kind)]
+        by_type = {}
+        for node_id, types in facts["byDomainTaskType"].items():
+            selected = {task_type: fact for task_type, fact in types.items() if (node_id, task_type) in cells}
+            if selected:
+                by_type[node_id] = selected
+        comparisons.append({**kind, "statistics": {
+            "overall": facts["overall"],
+            "byDomain": {node_id: fact for node_id, fact in facts["byDomain"].items() if node_id in domains},
+            "byDomainTaskType": by_type,
+        }})
+    return comparisons
+
+
 def build_packet(connection) -> dict | None:
     """The oldest 50 tasks still needing classification or a kind's reading."""
     runs = list(connection.execute(
@@ -174,8 +195,8 @@ def build_packet(connection) -> dict | None:
         key = _kind(row)
         if key in summaries:
             summaries[key]["citations"].append(row["run_id"])
-    # Tasks still awaiting classification may land in any existing cell. Supply
-    # all sampled kinds and their cells, including kinds no longer in the catalog.
+    # Only the summary targets' existing samples select comparison rows and cells.
+    # Newly classified tasks contribute their cells on a later maintenance run.
     comparison_kinds = [dict(row) for row in connection.execute(
         "SELECT harness,model,effort FROM kind_statistics"
         " ORDER BY harness,model,effort")]
@@ -185,8 +206,7 @@ def build_packet(connection) -> dict | None:
         "classificationRunIds": classification_ids,
         "domainNodes": list(_node_rows(connection).values()),
         "taskTypes": [{"id": key, "definition": value} for key, value in TASK_TYPES.items()],
-        "comparisonStatistics": [{**kind, "statistics": statistics[_kind(kind)]}
-                                 for kind in comparison_kinds],
+        "comparisonStatistics": _comparison_statistics(statistics, kinds, comparison_kinds),
         "kinds": [{**kind, "kindId": _kind_id(kind), "unreadRunIds": sorted(unread[key]),
                    "citationRunIds": sorted(participating[key]), "summary": summaries.get(key),
                    "statistics": statistics[key]}
