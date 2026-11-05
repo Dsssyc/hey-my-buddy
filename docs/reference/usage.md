@@ -31,7 +31,7 @@ With `checkout: "none"`, the Worker works directly in `cwd`, whether it is a Git
 
 Use one macro task per user agenda, created separately with its title and goal. It can remain empty. Each micro task supplies its own intent-focused title and brief: inputs, expected output, permitted changes, non-goals, acceptance checks, plan, references and known pitfalls. The brief must say when the Worker should stop and return assistance or attention, including a cause outside its scope or a disagreement between code and the agreed plan. [Writing the brief](workflow.md#writing-the-brief) explains that boundary.
 
-Use `buddy: "route"` unless the user has named a buddy; a named buddy is its complete recorded catalog name. Routing uses enabled legal candidates and the user's settings, and returns its reasons on this micro task. The console owns model discovery and user preferences. [Decision](decision.md) owns routing; routing trouble does not authorize changing user settings.
+Use `buddy: "route"` unless the user has named a buddy; a named buddy is written `harness / provider / model / effort`, as the console's Buddy page lists it, and CLI replies write every buddy the same way. Routing uses enabled legal candidates and the user's settings, and returns its reasons on this micro task. The console owns model discovery and user preferences. [Decision](decision.md) owns routing; routing trouble does not authorize changing user settings.
 
 Supply `expectedSeconds` as an integer from 1 to 86400. It is a reminder and Router input, never a deadline and never a reason to stop the Worker. Include `fixes` only when repairing an accepted micro task, and grant `delegationAuthority` only at the user's explicit request ([Lead](#a-lead-for-a-large-macro-task)).
 
