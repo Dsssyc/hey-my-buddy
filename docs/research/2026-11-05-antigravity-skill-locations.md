@@ -18,7 +18,7 @@
   - IDE 另外仍支持旧的 `~/.gemini/antigravity/skills/`。
   - Antigravity CLI 还读 `~/.gemini/antigravity-cli/skills/` 与 `~/.gemini/skills/`。
   - 工作区的 skill 在 `<工作区根>/.agents/skills/`，App 与 CLI 还逐级往上找到仓库根；旧的 `.agent/skills` 为向后兼容仍然可用。
-- **Antigravity 文档没有说的：** 全页没有提到 `~/.agents/skills`，与开发者的观察一致（开发者的观察，Antigravity 的形态与版本没有记）。页面也没有说是否跟随符号链接或 Windows 的目录联接。
+- **Antigravity 文档没有说的：** 全页没有提到 `~/.agents/skills`，与开发者的观察一致（开发者在 Antigravity App 2.29.0，build 1013060670 上观察到的）。页面也没有说是否跟随符号链接或 Windows 的目录联接。
 - **Gemini CLI 文档自述：** 用户级的 skill 在 `~/.gemini/skills/`，`~/.agents/skills/` 是同一层级的别名，所以 Gemini CLI 不需要另放链接。页面的横幅说，2026-06-18 起，免费档与 Google One 用户的 Gemini CLI 已由 Antigravity CLI 取代。
 - **二手材料：** 第三方指南大多写 `~/.gemini/antigravity/skills/`，也有别的写法，与官方文档现在的路径不一致，说明这个位置随版本变过。
 - **我们的推断：** `~/.gemini` 由 Gemini CLI 与 Antigravity 共用，有这个目录不等于装了 Antigravity。
@@ -27,9 +27,8 @@
 
 - **取：** 链接放在官方文档现在的路径 `~/.gemini/config/skills/hey-my-buddy`，Antigravity 的三种形态都读它。旧路径与 CLI 专用的路径不放，免得同一个 skill 出现两次。
 - **不取：** 不给 Gemini CLI 放链接，它已经读 `~/.agents/skills`。
-- **待实验、待开发者定：**
-  - Antigravity 是否跟随符号链接与目录联接。给 Claude Code 的做法依赖这一点，没有确认之前不实现。
-  - 以什么为条件放链接。
+- **之后核实的：** 2026-11-05 开发者在 macOS 上手动放了 `~/.gemini/config/skills/hey-my-buddy` 这个符号链接，Antigravity App 2.29.0（build 1013060670）随即能调用这个 skill。Windows 的目录联接还没有验证。
+- **定下的条件：** `~/.gemini/antigravity` 或 `~/.gemini/antigravity-cli` 存在时才放链接（见待办里的那一条）。
 
 ## 时效
 
