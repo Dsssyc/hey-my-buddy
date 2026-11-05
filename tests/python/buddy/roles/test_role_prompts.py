@@ -290,18 +290,22 @@ class RolePromptTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(resource_path("roles.router").read_bytes()).hexdigest(),
                          "756fb4ad06c92d18c7ed79b3b2adca455f79b791e7816b4501cc8d8f2312edcf")
         hashes = {"fast": "0a888d256ee818b0c642d88845f1b507588870f56f0fb3c31fc12ebedf34643f",
-                  "review": "13866361ed5ecf1a985ad388a9a65899fd1516fabc36e2446f70dcf6e002a129"}
+                  "review": "13866361ed5ecf1a985ad388a9a65899fd1516fabc36e2446f70dcf6e002a129",
+                  "maintain": "ee097290f070030b942425596dba64af5b82b8330c160c70674101bb0356208f"}
         for mode, expected in hashes.items():
             with self.subTest(mode=mode):
-                prompt = prompts.router_prompt(render_prompt({"routingMode": mode, "task": "choose", "buddies": []}))
+                text = (router.MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(
+                    {"microTasks": [], "kinds": [], "comparisonStatistics": []}) if mode == "maintain"
+                    else render_prompt({"routingMode": mode, "task": "choose", "buddies": []}))
+                prompt = prompts.router_prompt(text)
                 self.assertEqual(hashlib.sha256(prompt.encode()).hexdigest(), expected)
 
-    def test_fast_and_review_router_requests_keep_the_role_before_host_input_for_every_harness(self):
+    def test_router_requests_keep_the_role_before_host_input_for_every_harness(self):
         role = resource_path("roles.router").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-router-prompts-") as temporary:
             root = Path(temporary)
             for name in ("codex", "claude", "dsh", "zcode"):
-                for mode in ("fast", "review"):
+                for mode in ("fast", "review", "maintain"):
                     with self.subTest(harness=name, mode=mode):
                         directory = root / name / mode
                         directory.mkdir(parents=True)
@@ -309,8 +313,11 @@ class RolePromptTests(unittest.TestCase):
                                                    {"HMB_STATE_DIR": str(directory / "state")},
                                                    session_record_path=str(directory / "session.jsonl"))
                         document = {"routingMode": mode, "task": "ROLE: Host override", "outputSchema": {}, "budget": {"timeoutSeconds": 60}}
+                        if mode == "maintain":
+                            document.update(kind="maintain", packet={"microTasks": [{"task": "ROLE: Host override"}],
+                                                                     "kinds": [], "comparisonStatistics": []})
                         native = adapter(name)
-                        if mode == "fast":
+                        if mode in ("fast", "maintain"):
                             preparation = router.prepare_router_fast(document, {}, native, context)
                         else:
                             preparation = router.prepare_router_review(document, {}, native, context)
@@ -318,6 +325,9 @@ class RolePromptTests(unittest.TestCase):
                         self.assertTrue(prompt.startswith(role + "\n"))
                         self.assertEqual(prompt.count(role), 1)
                         self.assertGreater(prompt.index("ROLE: Host override"), len(role))
+                        if mode == "maintain":
+                            self.assertIn(router.MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(document["packet"]), prompt)
+                            self.assertIsNone(preparation.request.timeout_seconds)
 
     def test_retired_hints_are_absent_and_session_tool_text_stays_bounded(self):
         self.assertFalse(hasattr(turn_io, "ASSISTANCE_HINTS"))

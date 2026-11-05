@@ -71,7 +71,7 @@ def build_packet(connection) -> dict | None:
     """The oldest 50 tasks still needing classification or a kind's reading."""
     runs = list(connection.execute(
         "SELECT r.run_id,r.title,r.state,r.created_at,r.updated_at,r.continuation_count,r.buddy_revision,"
-        " t.spec_json,t.accepted_at,r.macro_task_id,c.note AS conclusion_note,"
+        " t.spec_json,t.accepted_at,t.acceptance_note,r.macro_task_id,c.note AS conclusion_note,"
         " c.reason_code AS conclusion_reason,c.execution_status,c.created_at AS concluded_at,"
         " x.domain_node_id,x.task_type,"
         " (SELECT i.verification_json FROM workflow_integrations i"
@@ -127,6 +127,17 @@ def build_packet(connection) -> dict | None:
             "reasonCode": row["reason_code"], "summary": row["summary"],
             "createdAt": row["created_at"], "decidedAt": row["decided_at"],
         })
+    continuations = defaultdict(list)
+    for row in connection.execute(
+        "SELECT c.run_id,c.continuation_id,c.kind,c.state,w.turn_index,c.input_text,c.note,"
+        " c.created_at,c.consumed_at FROM workflow_continuations c"
+        " LEFT JOIN workflow_turns w ON w.turn_id=c.turn_id"
+        f" WHERE c.run_id IN ({placeholders}) ORDER BY c.created_at,c.continuation_id", run_ids):
+        continuations[row["run_id"]].append({
+            "continuationId": row["continuation_id"], "kind": row["kind"], "state": row["state"],
+            "turnIndex": row["turn_index"], "input": row["input_text"], "note": row["note"],
+            "createdAt": row["created_at"], "consumedAt": row["consumed_at"],
+        })
     from ..tasks.macro_tasks import project as macro_project
     projects = {identifier: macro_project(connection, identifier)
                 for identifier in {row["macro_task_id"] for row in runs if row["macro_task_id"] is not None}}
@@ -141,9 +152,11 @@ def build_packet(connection) -> dict | None:
             "classification": ({"domainNodeId": row["domain_node_id"], "taskType": row["task_type"]}
                                if row["domain_node_id"] is not None else None),
             "result": {"state": row["state"], "conclusion": row["conclusion_note"],
+                       "acceptanceNote": row["acceptance_note"],
                        "conclusionReason": row["conclusion_reason"],
                        "executionStatus": row["execution_status"],
                        "continuationRounds": row["continuation_count"],
+                       "continuations": continuations[row["run_id"]],
                        "hostBoundaries": len(boundaries[row["run_id"]]),
                        "hostBoundaryFacts": boundaries[row["run_id"]],
                        "reassigned": row["buddy_revision"] > 1,
@@ -161,12 +174,19 @@ def build_packet(connection) -> dict | None:
         key = _kind(row)
         if key in summaries:
             summaries[key]["citations"].append(row["run_id"])
-    statistics = kind_domain_statistics(connection, list(kinds.values()))
+    # Tasks still awaiting classification may land in any existing cell. Supply
+    # all sampled kinds and their cells, including kinds no longer in the catalog.
+    comparison_kinds = [dict(row) for row in connection.execute(
+        "SELECT harness,model,effort FROM kind_statistics"
+        " ORDER BY harness,model,effort")]
+    statistics = kind_domain_statistics(connection, comparison_kinds + list(kinds.values()))
     return {
         "microTasks": micro_tasks,
         "classificationRunIds": classification_ids,
         "domainNodes": list(_node_rows(connection).values()),
         "taskTypes": [{"id": key, "definition": value} for key, value in TASK_TYPES.items()],
+        "comparisonStatistics": [{**kind, "statistics": statistics[_kind(kind)]}
+                                 for kind in comparison_kinds],
         "kinds": [{**kind, "kindId": _kind_id(kind), "unreadRunIds": sorted(unread[key]),
                    "citationRunIds": sorted(participating[key]), "summary": summaries.get(key),
                    "statistics": statistics[key]}

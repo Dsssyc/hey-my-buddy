@@ -38,8 +38,18 @@ merge nodes that describe the same expertise. New nodes may name another new
 node as their parent. Keep names unique, parents acyclic, and merge into an
 active retained node. A task has exactly one domain and one of the seven task types.
 Classify exactly the classificationRunIds. A task with an existing classification
-must not be reclassified. For each supplied buddy kind, integrate its unreadRunIds
-into its current summary, using qualitative observations and structured citations.
+must not be reclassified. For each kind in kinds, rewrite its summary from the
+existing summary, its unreadRunIds and comparisonStatistics; do not append a task
+chronicle. Use exactly four sections: Strengths; Weaknesses; Recurring reasons for
+rework or stopping; Conditions for delegation. In each section, organize qualitative
+observations by domain and task type and support them with structured citations.
+Use acceptanceNote, continuation inputs and notes, outcomes and Host boundary facts
+to explain observed performance. Compare kinds on the same domain and task type
+using comparisonStatistics, which includes sampled kinds beyond those being rewritten.
+Distinguish ability evidence from infrastructure failures and work stopped for other
+reasons. State when evidence is missing; do not invent strengths or weaknesses.
+Do not list completed tasks. Who the Host chose to delegate to is a selection,
+not evidence of ability.
 The summaries object is keyed by the supplied kindId strings; each value has text
 and citations. The blackboard records every task read, including tasks not cited.
 Only cite that kind's citationRunIds or its existing summary's citations. Do not write

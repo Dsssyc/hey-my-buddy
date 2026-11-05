@@ -1,8 +1,10 @@
 """Maintenance packet and partial write behavior on a private board."""
 from copy import deepcopy
 import json
+from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
+from support import FakeClock
 from hey_my_buddy.blackboard.routing.maintenance_data import (
     answer_schema, apply_answer, build_packet, merge_domain, pending, rename_domain,
     pending_count,
@@ -83,6 +85,42 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertEqual(projects[first["runId"]], expected)
         self.assertEqual(projects[second["runId"]], expected)
         self.assertNotIn("Private goal sentinel", json.dumps(packet))
+
+    def test_packet_keeps_complete_acceptance_and_ordered_continuation_evidence(self):
+        board = self.board_
+        clock = FakeClock(board.store.now())
+        self.enterContext(patch.object(board.store, "_clock", clock))
+        self.enterContext(patch.object(board.store.workflow, "_clock", clock))
+        run = self.submit(board, request_id="reworked-evidence", task="Repair a parser",
+                          cwd=str(self.workdir("reworked-evidence")), kind="worktree")
+        self.finish_turn(board, self.claim(board, run_id=run["runId"]))
+        inputs = ["Check nested inputs.\n" + "完整输入😀" * 1200 + "\nFirst input ends here.",
+                  "Add a regression case."]
+        notes = ["Nested inputs still fail.", "完整说明😀" * 500 + "\nSecond note ends here."]
+        for input_text, note in zip(inputs, notes):
+            clock.advance(1)
+            self.continue_run(board, run, input=input_text, note=note)
+            self.finish_turn(board, self.claim(board, run_id=run["runId"]))
+        acceptance = "Nested input and regression checks pass.\n" + "验收说明😀" * 500 + "\nAcceptance ends here."
+        self.accept_run(board, board.call("workflow_get", {"runId": run["runId"]}), note=acceptance)
+
+        packet = self.packet()
+        item = next(item for item in packet["microTasks"] if item["runId"] == run["runId"])
+        result = item["result"]
+        self.assertEqual(result["acceptanceNote"], acceptance)
+        self.assertIsNone(result["conclusion"])
+        self.assertEqual(result["continuationRounds"], 2)
+        continuations = result["continuations"]
+        self.assertEqual([item["input"] for item in continuations], inputs)
+        self.assertEqual([item["note"] for item in continuations], notes)
+        self.assertLess(continuations[0]["createdAt"], continuations[1]["createdAt"])
+        self.assertEqual([item["state"] for item in continuations], ["consumed", "consumed"])
+        self.assertEqual([item["kind"] for item in continuations], ["manual", "manual"])
+        self.assertEqual([item["turnIndex"] for item in continuations], [2, 3])
+        self.assertTrue(all(item["consumedAt"] is not None for item in continuations))
+        untouched = next(item for item in packet["microTasks"] if item["runId"] == self.runs[0]["runId"])
+        self.assertIsNone(untouched["result"]["acceptanceNote"])
+        self.assertEqual(untouched["result"]["continuations"], [])
 
     def test_summary_schema_binds_kind_combinations_and_citations(self):
         packet = deepcopy(self.packet())
@@ -202,6 +240,49 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertEqual({entry["provider"]: entry["count"]
                           for entry in kind["statistics"]["infrastructureFailures"]},
                          {BUDDY["provider"]: 2, "other-provider": 3})
+
+    def test_comparison_statistics_include_sampled_kinds_outside_summary_batch(self):
+        current = tuple(BUDDY[field] for field in ("harness", "model", "effort"))
+        peer = ("codex", "retired-peer", "high")
+        with self.board_.store.db.write() as db:
+            db.executemany("INSERT INTO domain_nodes VALUES(?,?,?,?,?,?)", [
+                ("systems", "Systems", "Systems work", None, None, self.maintenance_id),
+                ("parser", "Parser", "Parser work", "systems", None, self.maintenance_id),
+                ("old-parser", "Old parser", "Same expertise", None, "parser", self.maintenance_id)])
+            db.executemany(
+                "INSERT INTO kind_statistics VALUES(?,?,?,?,?,?,?,?)",
+                [(*current, 2, 1, 1, 0, 1), (*peer, 3, 2, 1, 1, 1)])
+            db.executemany(
+                "INSERT INTO kind_cell_statistics VALUES(?,?,?,?,?,?,?,?,?,?)", [
+                    (*current, "parser", "debug", 2, 1, 1, 0, 1),
+                    (*peer, "old-parser", "debug", 2, 1, 0, 1, 1),
+                    (*peer, "parser", "review", 1, 1, 1, 0, 0)])
+            db.execute("INSERT INTO kind_cell_statistics_buckets VALUES(?,?,?,?,?,'delivery_seconds',1,0,2)",
+                       (*peer, "old-parser", "debug"))
+            db.execute("INSERT INTO micro_task_classifications VALUES(?,'parser','debug',?)",
+                       (self.runs[0]["runId"], self.maintenance_id))
+        packet = self.packet()
+        self.assertEqual(len(packet["kinds"]), 1)
+        self.assertEqual(packet["kinds"][0]["model"], BUDDY["model"])
+        comparisons = {tuple(kind[field] for field in ("harness", "model", "effort")): kind["statistics"]
+                       for kind in packet["comparisonStatistics"]}
+        self.assertEqual(set(comparisons), {current, peer})
+        self.assertEqual(comparisons[current], packet["kinds"][0]["statistics"])
+        stats = comparisons[peer]
+        self.assertEqual(stats["overall"]["samples"], 3)
+        self.assertEqual(stats["byDomain"]["systems"]["samples"], 3)
+        self.assertEqual(stats["byDomainTaskType"]["parser"]["debug"]["samples"], 2)
+        self.assertEqual(stats["byDomainTaskType"]["systems"]["review"]["successes"], 1)
+        median = stats["byDomainTaskType"]["parser"]["debug"]["medianDeliverySeconds"]
+        self.assertGreaterEqual(median, 1)
+        self.assertLess(median, 1.2)
+        self.assertNotIn("old-parser", stats["byDomain"])
+        schema = answer_schema(packet)
+        self.assertEqual(set(schema["properties"]["summaries"]["properties"]),
+                         {packet["kinds"][0]["kindId"]})
+        self.assertEqual(schema["properties"]["summaries"]["properties"][packet["kinds"][0]["kindId"]]
+                         ["properties"]["citations"]["items"]["enum"],
+                         sorted(run["runId"] for run in self.runs))
 
     def test_repeated_classification_answer_accumulates_cell_once(self):
         accepted = self.submit(self.board_, request_id="accepted-cell", task="Accepted evidence",
