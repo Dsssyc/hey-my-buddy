@@ -105,6 +105,8 @@ class ExportBoardSampleTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             relative, digest = connection.execute("SELECT record_path,record_sha256 FROM workflow_artifacts WHERE kind='result'").fetchone()
         receipt = board.directory / relative
+        original = private_dirs.attempt_root(board.directory, 'dsh', run['runId'], attempt_id) / 'result-receipt.json'
+        self.assertEqual(native_read_bytes(receipt), native_read_bytes(original))
         board.store.db.close()
         before = files(board.directory)
         output = export_sample(board.directory, self.directory / 'receipt-sample')
@@ -114,6 +116,28 @@ class ExportBoardSampleTests(WorkflowTestCase):
                 "SELECT record_path,record_sha256 FROM workflow_artifacts WHERE kind='result'").fetchone(),
                 (relative, digest))
         self.assert_source_unchanged(before, files(board.directory))
+
+    def test_none_result_survives_native_retention_and_can_be_read_and_exported(self):
+        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_native
+        board = self.source_board()
+        run, attempt_id = self.accepted(board, 'result-after-native-retention', kind='none')
+        before = board.call('workflow_get', {'runId': run['runId']})
+        result = before['artifacts'][0]
+        raw = native_read_bytes(Path(result['resultFile']['path']))
+        native = private_dirs.micro_task_root(board.directory, 'dsh', run['runId'])
+        self.assertTrue(native_exists(native))
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run['runId'],))
+        reclaim_native(board.store)
+        self.assertFalse(native_exists(native))
+        after = board.call('workflow_get', {'runId': run['runId']})
+        self.assertEqual(after['artifacts'], before['artifacts'])
+        self.assertEqual(board.call('artifact_list', {'runId': run['runId']})['artifacts'], before['artifacts'])
+        self.assertEqual(native_read_bytes(Path(result['resultFile']['path'])), raw)
+        relative = Path(result['resultFile']['path']).relative_to(board.directory)
+        board.store.db.close()
+        output = export_sample(board.directory, self.directory / 'retained-result-sample')
+        self.assertEqual(native_read_bytes(output / relative), raw)
 
     def test_result_reference_rejects_a_receipt_outside_its_attempt(self):
         board = self.source_board()
@@ -146,7 +170,9 @@ class ExportBoardSampleTests(WorkflowTestCase):
             board.store.complete_execution_cleanup(claimed['claim']['attempt']['attemptId'])
         with board.store.db.read() as connection:
             results = [row[0] for row in connection.execute("SELECT record_path FROM workflow_artifacts WHERE kind='result'")]
-        self.assertEqual({Path(path).parts[1] for path in results}, {'dsh', 'codex'})
+        self.assertEqual({Path(path).parts[:2] for path in results}, {('attempts', run['runId'])})
+        self.assertEqual({Path(path).parts[2] for path in results},
+                         {claimed['claim']['attempt']['attemptId'] for claimed in (first, second)})
         board.store.db.close()
         output = export_sample(board.directory, self.directory / 'two-harness-sample')
         for relative in results:

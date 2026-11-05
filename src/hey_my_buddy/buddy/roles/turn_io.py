@@ -7,6 +7,7 @@ from pathlib import Path
 from ...private_files import publish_bytes
 from ...errors import BoardError
 from ...protocol.usage import MAX_ASSISTANT_MESSAGE_BYTES
+from ...protocol.turn_input import NONE_TURN_INPUT_VERSION
 from ...protocol.workspace_manifest import turn_manifest
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 from ...private_dirs import context_root, ensure_private_dir
@@ -54,7 +55,7 @@ def inquiry_paths(context: ExecutionContext) -> dict:
 
 def verify_workspace(context: ExecutionContext) -> None:
     manifest = turn_manifest(Path(context.environment["HMB_STATE_DIR"]), context.turn_input)
-    if context.turn_input["version"] == 5:
+    if context.turn_input["version"] == NONE_TURN_INPUT_VERSION:
         context.effective_workspace = manifest
         return
     from ...blackboard.tasks.workflow import workspace_module
@@ -110,7 +111,7 @@ def validate_outcome(outcome: object, *, delegation_authority: bool = False) -> 
 
 def seal_workspace(context: ExecutionContext) -> tuple[dict | None, str | None]:
     manifest = context.effective_workspace
-    if context.turn_input["version"] == 5:
+    if context.turn_input["version"] == NONE_TURN_INPUT_VERSION:
         return None, None
     state_dir = context.environment["HMB_STATE_DIR"]
     try:

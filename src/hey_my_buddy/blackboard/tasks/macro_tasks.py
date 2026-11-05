@@ -251,7 +251,7 @@ def project(connection, macro_task_id: str) -> dict:
         (macro_task_id,),
     ).fetchone()
     return {"id": row["project_id"], "kind": row["project_kind"], "path": row["project_cwd"],
-            "label": micro_task.project_label(row["project_cwd"], row["repository_path"])}
+            "label": project_records.label(row["project_cwd"], row["repository_path"])}
 
 
 def _macro_task_get(connection, identifier: str, *, limit: int = 100, before: str | None = None,
@@ -317,7 +317,7 @@ def project_get(store, params: dict) -> dict:
                 raise BoardError("NOT_FOUND", "Unknown project", projectId=identifier)
             path = identity["projectPath"]
             project_view = {"id": identifier, "kind": identity["projectKind"], "path": path,
-                            "label": micro_task.project_label(path, None)}
+                            "label": project_records.label(path, None)}
         else:
             project_view = project_records.view(connection, identifier)
         base = """

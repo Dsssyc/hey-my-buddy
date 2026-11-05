@@ -11,7 +11,7 @@ from hey_my_buddy.protocol import workspace_manifest as references
 from hey_my_buddy.protocol.workspace_manifest import (
     artifact_manifest, manifest_ref, project_id, record_reference, resolve_manifest, resolve_record, turn_manifest,
 )
-from hey_my_buddy.protocol.turn_input import folder_changes_notice
+from hey_my_buddy.protocol.turn_input import NONE_TURN_INPUT_VERSION
 
 
 def _bytes(value):
@@ -25,18 +25,14 @@ class WorkspaceManifestReferences(unittest.TestCase):
             workspace = {"kind": "none", "path": str(state / "ordinary-folder"),
                          "projectId": "folder-project", "projectKind": "folder",
                          "access": "write", "integrator": {"role": "host"}}
-            self.assertEqual(turn_manifest(state, {"version": 5, "executionWorkspace": workspace}), workspace)
+            self.assertEqual(turn_manifest(state, {"version": NONE_TURN_INPUT_VERSION, "executionWorkspace": workspace}), workspace)
             self.assertEqual(project_id(workspace), "folder-project")
-            self.assertEqual(folder_changes_notice(workspace), "文件夹的改动未封存")
-            self.assertIsNone(folder_changes_notice({**workspace, "access": "read"}))
-            self.assertEqual(folder_changes_notice({**workspace, "access": "full", "accessNote": "needed"}),
-                             "文件夹的改动未封存")
             for invalid in ({**workspace, "workspaceId": "ws-fake"},
                             {**workspace, "path": "relative"},
                             {**workspace, "access": "full"},
                             {**workspace, "access": "read", "accessNote": "unused"}):
                 with self.subTest(workspace=invalid), self.assertRaises(BoardError) as caught:
-                    turn_manifest(state, {"version": 5, "executionWorkspace": invalid})
+                    turn_manifest(state, {"version": NONE_TURN_INPUT_VERSION, "executionWorkspace": invalid})
                 self.assertEqual(caught.exception.code, "TURN_INVALID")
 
     def test_current_reference_rejects_changed_file_and_archived_turn_keeps_its_body(self):

@@ -26,7 +26,7 @@ import json
 import re
 import sqlite3
 from .workspace_bindings import MANIFEST_OWNERS_CTE
-from pathlib import Path
+from . import projects
 from typing import Any, Sequence
 
 from ...errors import BoardError
@@ -272,17 +272,6 @@ def _complete_buddy(value: Any) -> dict | None:
     return buddy
 
 
-def project_label(path: str | None, repository_path: str | None) -> str | None:
-    """Name the repository, falling back to the submitted directory without Git."""
-    if repository_path:
-        repository = Path(repository_path)
-        path = str(repository.parent if repository.name == ".git" else repository)
-    if not path:
-        return None
-    name = Path(path).name
-    return name or path
-
-
 def metadata_from_row(row: sqlite3.Row) -> dict:
     """Derive one task's micro task metadata from a resolved relation row."""
     micro_task = row["micro_task_run_id"] is not None
@@ -310,7 +299,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
                      "macroTaskTitle": row["route_macro_task_title"]}
                     if row["route_run_id"] is not None else None)
     project = ({"id": identifier, "kind": row["project_kind"], "path": path,
-                "label": project_label(path, row["project_repository_path"])}
+                "label": projects.label(path, row["project_repository_path"])}
                if identifier or path else None)
     result = {
         "kind": kind,

@@ -2,6 +2,7 @@
 from pathlib import Path
 
 from ...errors import BoardError
+from ...protocol.turn_input import NONE_TURN_INPUT_VERSION
 from ...protocol.workspace_manifest import turn_manifest
 
 
@@ -13,7 +14,7 @@ def _workspace(context):
 def capture(context, outcome):
     if not outcome.shutdown_confirmed or outcome.status not in ("failed", "cancelled") or not context.turn_input:
         return
-    if context.turn_input["version"] == 5:
+    if context.turn_input["version"] == NONE_TURN_INPUT_VERSION:
         return
     payload = outcome.result
     if payload.get("modelStarted") is False:

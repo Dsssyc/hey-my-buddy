@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
 
 TABLE_DDL = {
@@ -127,8 +128,6 @@ TABLE_DDL = {
         CHECK (resume_mode IN ('initial','reconstructed-new-session','native-session')),
     previous_session_id TEXT,
     input_json          TEXT NOT NULL,
-    project_kind        TEXT NOT NULL CHECK (project_kind IN ('git','folder')),
-    checkout            TEXT NOT NULL CHECK (checkout IN ('existing','worktree','none')),
     workspace_id        TEXT,
     workspace_manifest_sha256 TEXT,
     response_kind       TEXT,
@@ -144,8 +143,11 @@ TABLE_DDL = {
     CHECK ((response_kind IS NULL) = (response_id IS NULL)),
     CHECK (response_kind IS NULL OR response_kind='continue'),
     CHECK ((access='full') = (access_note IS NOT NULL)),
-    CHECK ((checkout='none' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
-        OR (checkout IN ('existing','worktree') AND project_kind='git'
+    CHECK ((json_extract(input_json,'$.version') IS 5
+            AND json_extract(input_json,'$.executionWorkspace.kind') IS 'none'
+            AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
+        OR (json_type(input_json,'$.version') IS 'integer'
+            AND json_extract(input_json,'$.version') BETWEEN 1 AND 4
             AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL)),
     UNIQUE(run_id, turn_index)
 )""",
@@ -201,7 +203,6 @@ TABLE_DDL = {
     helper_outcomes_json TEXT NOT NULL DEFAULT '[]',
     workspace_id      TEXT,
     workspace_manifest_sha256 TEXT,
-    checkout          TEXT NOT NULL CHECK (checkout IN ('existing','worktree','none')),
     workspace_facts_role TEXT NOT NULL CHECK (workspace_facts_role IN ('pending','owner','reference','none')),
     workspace_kind    TEXT CHECK (workspace_kind IN ('existing','worktree')),
     checkout_root     TEXT,
@@ -217,10 +218,10 @@ TABLE_DDL = {
     CHECK (buddy_selection_json IS NULL OR json_valid(buddy_selection_json)),
     CHECK (access_selection_json IS NULL OR json_valid(access_selection_json)),
     CHECK (resolution_json IS NULL OR json_valid(resolution_json)),
-    CHECK ((checkout='none' AND workspace_facts_role='none' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
+    CHECK ((workspace_facts_role='none' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
             AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
             AND input_commit IS NULL AND staged_commit IS NULL)
-        OR (checkout IN ('existing','worktree') AND ((workspace_facts_role='pending' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
+        OR ((workspace_facts_role='pending' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
             AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
             AND input_commit IS NULL AND staged_commit IS NULL)
         OR (workspace_facts_role='owner' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
@@ -228,7 +229,7 @@ TABLE_DDL = {
             AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
         OR (workspace_facts_role='reference' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
             AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
-            AND input_commit IS NULL AND staged_commit IS NULL)))),
+            AND input_commit IS NULL AND staged_commit IS NULL))),
     CHECK ((kind IN ('manual','helper') AND trigger_event_json IS NULL)
         OR (kind='lead-wakeup' AND trigger_event_json IS NOT NULL
             AND json_valid(trigger_event_json) AND json_type(trigger_event_json)='object'))
@@ -300,7 +301,6 @@ TABLE_DDL = {
     run_id          TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     turn_id         TEXT,
     attempt_id      TEXT,
-    generation      INTEGER,
     kind            TEXT NOT NULL CHECK (kind IN ('input','turn-input','output','resolved-output','partial-output','abandoned-site','shared-refs','result')),
     content_form    TEXT NOT NULL CHECK (content_form IN ('sealed-inline-v1','input-reference','record-reference','result-reference')),
     manifest_json   TEXT,
@@ -341,9 +341,8 @@ TABLE_DDL = {
         OR (content_form='record-reference' AND kind IN ('output','resolved-output','partial-output','abandoned-site')
             AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)
         OR (content_form='result-reference' AND kind='result' AND turn_id IS NOT NULL AND attempt_id IS NOT NULL
-            AND generation IS NOT NULL AND generation > 0 AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)),
+            AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)),
     CHECK ((kind='result') = (content_form='result-reference')),
-    CHECK (kind='result' OR generation IS NULL),
     CHECK ((kind='input' AND workspace_facts_role='owner' AND workspace_kind IS NOT NULL
             AND checkout_root IS NOT NULL AND repository_path IS NOT NULL
             AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
@@ -437,6 +436,11 @@ def _rows(connection, table):
     return [dict(row) for row in connection.execute(f'SELECT rowid,* FROM "{table}" ORDER BY rowid')]
 
 
+def _git_project_path(repository_path):
+    path = os.path.normpath(repository_path)
+    return os.path.dirname(path) if os.path.basename(path) == '.git' else path
+
+
 def _macro_paths(stock):
     """Recover the creating Git location from retained source facts, never live Git."""
     tasks = {row['task_id']: row for row in stock['tasks']}
@@ -484,36 +488,27 @@ def _convert_mutable_intent(stock):
 
 def _project_facts(stock):
     """Freeze old Git facts from the retained database, without opening a cwd."""
-    tasks = {row['task_id']: row for row in stock['tasks']}
     macros = {row['macro_task_id']: row for row in stock['macro_tasks']}
     runs = {row['run_id']: row for row in stock['workflow_runs']}
     projects = {}
-    owners = {}
+    inputs = {}
+    for artifact in stock['workflow_artifacts']:
+        if artifact['kind'] == 'input':
+            inputs.setdefault(artifact['run_id'], []).append(artifact)
     for macro in macros.values():
         macro['project_kind'] = 'git'
         projects[macro['project_id']] = {'project_id': macro['project_id'], 'kind': 'git',
-                                         'path': macro['project_cwd']}
-    for artifact in stock['workflow_artifacts']:
-        if artifact['kind'] == 'input' and artifact['workspace_facts_role'] == 'owner':
-            owners[artifact['workspace_id'], artifact['input_manifest_sha256']] = artifact['workspace_kind']
-    for continuation in stock['workflow_continuations']:
-        if continuation['workspace_facts_role'] == 'owner':
-            owners[continuation['workspace_id'], continuation['workspace_manifest_sha256']] = continuation['workspace_kind']
+                                         'path': _git_project_path(macro['repository_path'])}
     for run in runs.values():
         run['project_kind'] = 'git'
         run['checkout'] = json.loads(run['execution_workspace_json'])['kind']
         if run['macro_task_id'] is None:
             identifier = run['standalone_project_id']
+            first = min(inputs[run['run_id']], key=lambda row: row['rowid'])
+            if first['workspace_facts_role'] != 'owner':
+                raise ValueError(f"Schema 34 → 35: first input of {run['run_id']} has no repository path")
             projects[identifier] = {'project_id': identifier, 'kind': 'git',
-                                    'path': json.loads(tasks[run['run_id']]['spec_json'])['cwd']}
-    for turn in stock['workflow_turns']:
-        turn['project_kind'] = 'git'
-        frozen = json.loads(turn['input_json'])
-        turn['checkout'] = (owners[turn['workspace_id'], turn['workspace_manifest_sha256']]
-                            if frozen['version'] == 4 else frozen['executionWorkspace']['kind'])
-    for continuation in stock['workflow_continuations']:
-        continuation['checkout'] = (owners[continuation['workspace_id'], continuation['workspace_manifest_sha256']]
-                                     if continuation['workspace_id'] is not None else runs[continuation['run_id']]['checkout'])
+                                    'path': _git_project_path(first['repository_path'])}
     stock['projects'] = list(projects.values())
 
 

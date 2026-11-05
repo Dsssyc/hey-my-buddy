@@ -10,6 +10,7 @@ from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref
 from admission import admit_board, admit_store
 
 import json
+import sqlite3
 import os
 import unittest
 from types import SimpleNamespace
@@ -300,12 +301,9 @@ class LifecycleTests(WorkflowTestCase):
                 with board.store.db.read() as connection:
                     self.assertEqual(connection.execute('SELECT input_json FROM workflow_turns WHERE turn_id=?',
                                                         (turn_id,)).fetchone()[0], raw)
-        with board.store.db.write() as connection:
+        with self.assertRaises(sqlite3.IntegrityError), board.store.db.write() as connection:
             connection.execute('UPDATE workflow_turns SET input_json=? WHERE turn_id=?',
                                (json.dumps({**original, 'version': 6}), turn_id))
-        with self.assertRaises(BoardError) as unknown:
-            board.call('workflow_get', {'runId': submitted['runId']})
-        self.assertEqual(unknown.exception.code, 'TURN_INVALID')
 
     def test_execution_record_fields_are_rejected_before_preparation(self):
         board = self.board()

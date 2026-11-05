@@ -381,6 +381,8 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.assertEqual(self.read(group="project:" + project)["groups"][0]["total"], 0)
         self.read()
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
+            self.sql("INSERT INTO projects(project_id,kind,path) VALUES(?,'git','/fictional/corrected-project')",
+                     (project,))
             self.sql("UPDATE macro_tasks SET project_id=? WHERE macro_task_id=?", (project, group))
             self.assertEqual(self.rows()[group]["project"]["id"], project)
             self.assert_recomputed(counter, [group])

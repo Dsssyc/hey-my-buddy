@@ -414,7 +414,10 @@ class DecisionCoordinator:
         if continuation:
             task_text += "\n\nContinuation:\n" + continuation["input_text"]
             task_text += "\nHelper outcomes:\n" + continuation["helper_outcomes_json"]
-        access = manifest.get("access", "write") if manifest is not None else "write"
+        access = (manifest["access"] if manifest is not None else
+                  json.loads(connection.execute(
+                      "SELECT execution_workspace_json FROM workflow_runs WHERE run_id=?", (run_id,)
+                  ).fetchone()[0])["access"])
         required_capabilities = list(spec.get("requiredCapabilities", []))
         if f"permission:{access}" not in required_capabilities:
             required_capabilities.append(f"permission:{access}")

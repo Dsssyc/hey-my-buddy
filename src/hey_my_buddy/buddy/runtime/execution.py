@@ -34,6 +34,7 @@ from ...protocol.client import BoardClient
 from ...protocol import activity as activity_module
 from ...protocol import execution as execution_protocol
 from ...protocol.workspace_manifest import record_reference
+from ...protocol.turn_input import NONE_TURN_INPUT_VERSION
 from ...protocol.contracts import ExecutionLive
 from ...protocol.run_identity import RunIdentity
 from ...protocol.reasons import reason as make_reason
@@ -193,7 +194,7 @@ def validate_claim_turn(claim: dict) -> None:
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn identity")
     turn_input = turn.get("input")
     if (not isinstance(turn_input, dict) or type(turn_input.get("version")) is not int
-            or turn_input["version"] not in (4, 5)):
+            or turn_input["version"] not in (4, NONE_TURN_INPUT_VERSION)):
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn input")
     workspace = turn_input.get("executionWorkspace")
     if turn_input["version"] == 4:
@@ -779,12 +780,6 @@ class Execution:
         from .partial_outputs import enrich
         if enrich(context, outcome) and termination_reason == TERMINATION_COMPLETED:
             termination_reason = TERMINATION_WORKSPACE_ERROR
-        if context.turn_input is not None:
-            from ...protocol.turn_input import folder_changes_notice
-            notice = folder_changes_notice(context.effective_workspace or context.turn_input["executionWorkspace"])
-            if notice is not None:
-                outcome.result["unsealedChanges"] = True
-                outcome.result["folderChangesNotice"] = notice
         if termination_reason in (TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED, TERMINATION_FORCED_STOP,
                                   TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP):
             outcome.status = "cancelled"

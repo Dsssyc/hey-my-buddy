@@ -17,7 +17,7 @@ from ... import private_dirs
 from ...errors import BoardError
 from ...protocol import schemas
 from ...protocol.reasons import reason
-from . import micro_task, storage, worker_sessions
+from . import micro_task, projects, storage, worker_sessions
 from .workspace_bindings import MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE
 from .macro_task_deletion_progress import collect_skipped
 from ..service.harness_health import read_health
@@ -416,6 +416,13 @@ def _delete_session_group(store, target):
 
 def _delete_rows(store, connection, scope, deletion):
     r,t,a,d,u = scope.runs,scope.tasks,scope.attempts,scope.decisions,scope.turns
+    project_ids = {row['standalone_project_id'] for row in scope.run_rows
+                   if row['standalone_project_id'] is not None}
+    project_ids.update(json.loads(row['execution_workspace_json'])['projectId']
+                       for row in scope.run_rows if row['checkout'] == 'none')
+    if deletion['target_kind'] == 'macro-task':
+        project_ids.add(connection.execute('SELECT project_id FROM macro_tasks WHERE macro_task_id=?',
+                                           (deletion['target_id'],)).fetchone()['project_id'])
     bindings = {'runId':r, 'targetRunId':r,
                 'requestId':{x['request_id'] for x in _rows(connection,'workflow_requests','run_id',r)},
                 'continuationId':{x['continuation_id'] for x in _rows(connection,'workflow_continuations','run_id',r)},
@@ -486,6 +493,7 @@ def _delete_rows(store, connection, scope, deletion):
     remove('tasks',('task_id',t))
     if deletion['target_kind'] == 'macro-task':
         connection.execute('DELETE FROM macro_tasks WHERE macro_task_id=?',(deletion['target_id'],))
+    projects.prune_if_unreferenced(connection, project_ids)
     connection.execute('DELETE FROM macro_task_deletions WHERE deletion_id=?',(deletion['deletion_id'],))
     return store._head_of(connection)
 

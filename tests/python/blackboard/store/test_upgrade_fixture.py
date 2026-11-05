@@ -812,7 +812,10 @@ class UpgradeFixtureTests(unittest.TestCase):
                               ('workflow_turns', 'input_json')):
             with self.subTest(table=table):
                 original = [tuple(row) for row in connection.execute(f'SELECT rowid,{column} FROM {table}')]
-                connection.execute(f"UPDATE {table} SET {column}='changed'")
+                if table == 'workflow_turns':
+                    connection.execute("UPDATE workflow_turns SET input_json=json_set(input_json,'$.auditProbe','changed')")
+                else:
+                    connection.execute(f"UPDATE {table} SET {column}='changed'")
                 connection.commit()
                 with self.assertRaises(BoardError) as caught:
                     upgrade.verify_started(fixture['state'], target, health, before)

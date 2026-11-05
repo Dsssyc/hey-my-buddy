@@ -33,9 +33,23 @@ def _directory(cwd: str) -> Path:
     return directory
 
 
+def repository_root(repository_path: str) -> str:
+    """The main source repository represented by a common Git directory."""
+    repository = Path(repository_path)
+    return str(repository.parent if repository.name == ".git" else repository)
+
+
+def label(path: str | None, repository_path: str | None) -> str | None:
+    """Name a Git repository or the submitted folder."""
+    source = repository_root(repository_path) if repository_path else path
+    if not source:
+        return None
+    return Path(source).name or source
+
+
 def _source(directory: Path, module):
     repository = module.repository_at(directory, allow_parent=True)
-    return (repository, module.project_root(directory) if repository is not None else None)
+    return (repository, repository_root(repository) if repository is not None else None)
 
 
 def _identity(directory: Path, repository, root, module, folder_project_id):
@@ -46,13 +60,6 @@ def _identity(directory: Path, repository, root, module, folder_project_id):
     identifier = module.ensure_project_id(repository, preferred=folder_project_id)
     return {"projectId": identifier, "projectKind": "git", "cwd": path, "projectPath": root,
             "repositoryPath": repository}
-
-
-def identify(cwd: str, *, module=workspace, folder_project_id: str | None = None) -> dict:
-    """Resolve a source project before deriving a creation key."""
-    directory = _directory(cwd)
-    repository, root = _source(directory, module)
-    return _identity(directory, repository, root, module, folder_project_id)
 
 
 def identify_for_board(store, cwd: str, *, module=workspace) -> dict:
@@ -103,6 +110,17 @@ def record(connection, identity: dict) -> None:
     )
 
 
+def prune_if_unreferenced(connection, project_ids) -> None:
+    """Discard projects whose last macro and standalone roots were removed."""
+    for identifier in project_ids:
+        connection.execute(
+            "DELETE FROM projects WHERE project_id=?"
+            " AND NOT EXISTS (SELECT 1 FROM macro_tasks WHERE project_id=?)"
+            " AND NOT EXISTS (SELECT 1 FROM workflow_runs WHERE standalone_project_id=?)",
+            (identifier, identifier, identifier),
+        )
+
+
 def require_capture_identity(identity: dict, manifest: dict | None) -> None:
     """Fence a captured Git input against the project that determined its key."""
     if manifest is not None and project_id(manifest) != identity['projectId']:
@@ -116,4 +134,4 @@ def view(connection, project_id: str) -> dict:
         raise BoardError("NOT_FOUND", "Unknown project", projectId=project_id)
     path = row["path"]
     return {"id": project_id, "kind": row["kind"], "path": path,
-            "label": Path(path).name or path}
+            "label": label(path, None)}

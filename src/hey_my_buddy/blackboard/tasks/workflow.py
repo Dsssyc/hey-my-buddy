@@ -37,7 +37,7 @@ from ...protocol import schemas
 from ...protocol.input_failure import INPUT_REJECTED, input_failure_view
 from ...protocol.reasons import reason as make_reason, reason_from_json
 from ...protocol.stop import WRAP_UP_INITIATORS
-from ...protocol.turn_input import turn_buddy
+from ...protocol.turn_input import NONE_TURN_INPUT_VERSION, turn_buddy
 from ...protocol.workspace_manifest import (project_id, manifest_ref, resolve_manifest, turn_manifest,
                                           artifact_manifest, record_reference, resolve_record, cumulative_patch_error,
                                           sealed_worker_commit)
@@ -223,7 +223,7 @@ def repository_candidates(db, manifest: dict) -> tuple[str, ...]:
 def _turn_input_context(input_json: str) -> dict:
     """The frozen context object of one supported turn input."""
     document = json.loads(input_json)
-    if type(document["version"]) is not int or document["version"] not in (1, 2, 3, 4, 5):
+    if type(document["version"]) is not int or document["version"] not in (1, 2, 3, 4, NONE_TURN_INPUT_VERSION):
         raise BoardError("TURN_INVALID", "The frozen turn input version is not supported")
     return document["context"]
 
@@ -301,10 +301,15 @@ class WorkflowCoordinator:
                 return effective_manifest(self.board.directory, reader, row)
         return effective_manifest(self.board.directory, connection, row)
 
-    def _artifact_document(self, row):
+    def _artifact_document(self, row, *, connection=None):
         if row['content_form'] == 'result-reference':
             from ...protocol.turn_result import result_document
-            return result_document(self.board.directory, row)
+            if connection is None:
+                with self.db.read() as reader:
+                    return self._artifact_document(row, connection=reader)
+            generation = connection.execute('SELECT generation FROM attempts WHERE attempt_id=?',
+                                            (row['attempt_id'],)).fetchone()[0]
+            return result_document(self.board.directory, row, generation=generation)
         return artifact_manifest(self.board.directory, row)
 
     @staticmethod
@@ -337,10 +342,11 @@ class WorkflowCoordinator:
         adapter = row["execution_adapter"]
         frozen_buddy = context.get("buddy")
         buddy = frozen_buddy if adapter in schemas.CODING_HARNESSES else None
+        run = self._run_row(connection, row['run_id'])
         view = {
             "turnId": row["turn_id"],
-            "checkout": row['checkout'],
-            "projectKind": row['project_kind'],
+            "checkout": run['checkout'],
+            "projectKind": run['project_kind'],
             "turnIndex": row["turn_index"],
             "expectedSeconds": row["expected_seconds"],
             "access": row["access"],
@@ -368,7 +374,7 @@ class WorkflowCoordinator:
             "sharedStash": _frozen_turn_shared_stash(context, compact=compact),
             "tokenUsage": (payload.get("result") or {}).get("tokenUsage") if payload else None,
         }
-        if row['checkout'] == 'none':
+        if json.loads(row['input_json'])['version'] == NONE_TURN_INPUT_VERSION:
             view.update(self._none_notice(row['access']))
         from ..evaluation.native_observations import provider_rejection_view
         failure = provider_rejection_view(result)
@@ -575,14 +581,14 @@ class WorkflowCoordinator:
             "createdAt": row["created_at"],
         }
         if row['kind'] == 'result':
-            # The report remains in its original execution receipt; this is its index.
+            # The retained receipt has the execution's original bytes and digest.
             if connection is None:
                 with self.db.read() as reader:
                     return self._artifact_view(row, connection=reader)
             turn = connection.execute('SELECT access FROM workflow_turns WHERE turn_id=?',
                                       (row['turn_id'],)).fetchone()
-            self._artifact_document(row)
-            view.update(runId=row['run_id'], generation=row['generation'],
+            receipt = self._artifact_document(row, connection=connection)
+            view.update(runId=row['run_id'], generation=receipt['generation'],
                         resultFile={'path': str(self.board.directory / row['record_path']), 'sha256': row['record_sha256']})
             view.update(self._none_notice(turn['access']))
             return view
@@ -631,7 +637,7 @@ class WorkflowCoordinator:
                 return self._workspace_view(run_row, connection=reader)
         manifest = self._run_manifest(connection, run_row)
         if run_row['checkout'] == 'none':
-            return {**manifest, **self._none_notice(manifest['access'])}
+            return {**manifest, **self._run_none_notice(connection, run_row)}
         if run_row["state"] not in ("accepted", "concluded"):
             has_file_reference = True
         else:
@@ -664,9 +670,18 @@ class WorkflowCoordinator:
 
     @staticmethod
     def _none_notice(access):
-        from ...protocol.turn_input import FOLDER_CHANGES_NOTICE
-        return ({'unsealedChanges': True, 'folderChangesNotice': FOLDER_CHANGES_NOTICE}
-                if access in ('write', 'full') else {})
+        return {'unsealedChanges': True} if access in ('write', 'full') else {}
+
+    def _run_none_notice(self, connection, run_row):
+        if run_row['checkout'] != 'none':
+            return {}
+        access = json.loads(run_row['execution_workspace_json'])['access']
+        if access in ('write', 'full'):
+            return self._none_notice(access)
+        changed = connection.execute(
+            "SELECT 1 FROM workflow_turns WHERE run_id=? AND access IN ('write','full') LIMIT 1",
+            (run_row['run_id'],)).fetchone()
+        return {'unsealedChanges': True} if changed is not None else {}
 
     def _current_scope(self, connection, run_row) -> dict:
         """The current authorization scope version of one run.
@@ -940,8 +955,7 @@ class WorkflowCoordinator:
                     actions=self._actions(connection, run_row))
         view['project']['kind'] = run_row['project_kind']
         view['checkout'] = run_row['checkout']
-        if run_row['checkout'] == 'none':
-            view.update(self._none_notice(view['access']))
+        view.update(self._run_none_notice(connection, run_row))
         if (current_scope() or {}).get("kind") != AGENT_KIND:
             view.update(title=run_row["title"], goal=macro_tasks.current_goal(connection, run_row["macro_task_id"]))
         return view
@@ -1473,7 +1487,7 @@ class WorkflowCoordinator:
             micro_task = {key: value for key, value in micro_task.items() if key not in schemas.BUDDY_FIELDS}
         response = self.board.decisions.route_workflow(
             connection, run_id=run_id, sequence=sequence, spec=micro_task,
-            manifest=self._run_manifest(connection, run),
+            manifest=None if run['checkout'] == 'none' else self._run_manifest(connection, run),
             overloaded_model_services=self._overloaded_model_services(connection, run_id),
         )
         decision_id = response["decisionId"]
@@ -1712,13 +1726,11 @@ class WorkflowCoordinator:
         if buddy is not None:
             spec.update(buddy)
         intent = {"kind": normalized["checkout"], "access": normalized["access"], "cwd": normalized["cwd"],
-                  "includeUntracked": normalized.get("inputs", []),
-                  "writeScope": normalized.get("writeScope", []),
                   "integrator": {"role": "lead", "id": lead["runId"]} if lead else {"role": "host"}}
         if normalized["checkout"] == "none":
-            intent.pop("includeUntracked")
-            intent.pop("writeScope")
             intent['projectId'] = identity['projectId']
+        else:
+            intent.update(includeUntracked=normalized.get('inputs', []), writeScope=normalized.get('writeScope', []))
         if "accessNote" in normalized:
             intent["accessNote"] = normalized["accessNote"]
         self._require_permission(buddy, normalized["access"])
@@ -2092,14 +2104,12 @@ class WorkflowCoordinator:
         spec["cwd"] = identity["cwd"]
         if packet["checkout"] != "none" and identity["projectKind"] != "git":
             raise BoardError("WORKSPACE_UNSUPPORTED", "A Git checkout requires a Git project", field="checkout")
-        intent = {"kind": packet["checkout"], "access": packet["access"], "cwd": packet["cwd"],
-                  "includeUntracked": packet.get("inputs", []),
-                  "writeScope": packet.get("writeScope", []), "integrator": integrator}
-        intent["cwd"] = identity["cwd"]
+        intent = {"kind": packet["checkout"], "access": packet["access"], "cwd": identity["cwd"],
+                  "integrator": integrator}
         if packet["checkout"] == "none":
-            intent.pop("includeUntracked")
-            intent.pop("writeScope")
             intent['projectId'] = identity['projectId']
+        else:
+            intent.update(includeUntracked=packet.get('inputs', []), writeScope=packet.get('writeScope', []))
         if "accessNote" in packet:
             intent["accessNote"] = packet["accessNote"]
         return {"requestId": "helper-" + sha256_text(canonical_json([request_id, index])), "spec": spec,
@@ -2168,10 +2178,10 @@ class WorkflowCoordinator:
                     continuation_id = str(uuid.uuid4())
                     input_text = params.get("note") or "The Host answered the boundary; continue with the recorded decision and helper outcomes"
                     connection.execute(
-                        "INSERT INTO workflow_continuations(checkout,workspace_facts_role,continuation_id,run_id,kind,request_id,"
+                        "INSERT INTO workflow_continuations(workspace_facts_role,continuation_id,run_id,kind,request_id,"
                         "input_text,note,helper_policy,helper_outcomes_json,state,created_at)"
-                        "VALUES(?,?,?,?, 'helper',?,?,?,?,'[]','recorded',?)",
-                        (source["checkout"],"none" if source["checkout"]=="none" else "pending",continuation_id,source_id,leaf["request_id"],input_text,params.get("note"),
+                        "VALUES(?,?,?, 'helper',?,?,?,?,'[]','recorded',?)",
+                        ("none" if source["checkout"]=="none" else "pending",continuation_id,source_id,leaf["request_id"],input_text,params.get("note"),
                          "keep" if self._unfinished_helpers(connection, source_id) else None,now),
                     )
                 self._sync_boundary(connection, source_id, now, default_state="waiting-helpers" if children else "awaiting-host")
@@ -2711,11 +2721,11 @@ class WorkflowCoordinator:
         connection.execute(
             "INSERT INTO workflow_continuations(continuation_id,run_id,controlling_run_id,kind,request_id,artifact_id,response_turn_id,"
             "input_text,note,helper_policy,helper_outcomes_json,buddy_selection_json,access_selection_json,resolution_json,"
-            "checkout,workspace_facts_role,state,created_at) VALUES(?,?,?,'manual',?,?,?,?,?,?,?,?,?,?,?,?,'queued',?)",
+            "workspace_facts_role,state,created_at) VALUES(?,?,?,'manual',?,?,?,?,?,?,?,?,?,?,?,'queued',?)",
             (identifier,run_id,owner["run_id"],params.get("requestId"),params.get("artifactId"),params.get("turnId"),params["input"],params.get("note"),policy,
              canonical_json(self._helper_outcomes(connection,run_id)),canonical_json(params["buddy"]) if "buddy" in params else None,
              canonical_json(selection) if selection else None,
-             canonical_json({k:params[k] for k in ("resolution","observedFingerprint","paths") if k in params}) if "resolution" in params else None,target["checkout"],"none" if target["checkout"]=="none" else "pending",now))
+             canonical_json({k:params[k] for k in ("resolution","observedFingerprint","paths") if k in params}) if "resolution" in params else None,"none" if target["checkout"]=="none" else "pending",now))
         task=connection.execute("SELECT * FROM tasks WHERE task_id=?",(run_id,)).fetchone()
         self._requeue(connection,task,target,actor=actor,now=now,continuation_id=identifier)
         if target["state"]=="delivered":
@@ -2728,6 +2738,8 @@ class WorkflowCoordinator:
         elif reroute:
             connection.execute("UPDATE workflow_runs SET buddy_json=NULL,current_routing_id=NULL,validated_buddy_revision=NULL WHERE run_id=?",(run_id,))
             connection.execute("UPDATE tasks SET adapter='unresolved',queue_reason='awaiting-workspace-preparation' WHERE task_id=?",(run_id,))
+            if target['checkout'] == 'none':
+                self._start_routing(connection, run_id, now)
         self.board._append_event(connection,"workflow.continued",task_id=run_id,payload={"continuationId":identifier,"actor":actor,"controllingRunId":owner["run_id"]})
         return self._action_view(connection,self._run_row(connection,owner["run_id"]),continuationId=identifier,alreadyResponded=False,
                                  **{k:params[k] for k in ("requestId","artifactId","turnId","targetRunId") if k in params})
@@ -4781,8 +4793,7 @@ class WorkflowCoordinator:
             "actions": self._actions(connection,run_row),
             "hostConclusion": host_conclusions.view(host_conclusions.current(connection, run_row)),
         }
-        if run_row['checkout'] == 'none':
-            extension.update(self._none_notice(json.loads(run_row['execution_workspace_json'])['access']))
+        extension.update(self._run_none_notice(connection, run_row))
         if (current_scope() or {}).get("kind") != AGENT_KIND:
             extension.update(title=run_row["title"], macroTaskId=run_row["macro_task_id"])
         if run_row["active_request_id"]:
@@ -5202,7 +5213,7 @@ class WorkflowCoordinator:
         # The versioned turn-input document keeps its frozen field names; the
         # resolved execution manifest is already service-owned.
         turn_input = {
-            "version": 5 if run_row["checkout"] == "none" else TURN_INPUT_VERSION,
+            "version": NONE_TURN_INPUT_VERSION if run_row["checkout"] == "none" else TURN_INPUT_VERSION,
             "taskId": task["task_id"],
             "attemptId": attempt_id,
             "generation": generation,
@@ -5215,8 +5226,8 @@ class WorkflowCoordinator:
         input_json = canonical_json(turn_input)
         connection.execute(
             "INSERT INTO workflow_turns(turn_id, run_id, attempt_id, generation, turn_index, resume_mode,"
-            " previous_session_id, input_json, workspace_id, workspace_manifest_sha256, access, access_note, expected_seconds,project_kind,checkout, state, created_at, updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?)",
+            " previous_session_id, input_json, workspace_id, workspace_manifest_sha256, access, access_note, expected_seconds, state, created_at, updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?)",
             (
                 turn_id,
                 run_row["run_id"],
@@ -5231,8 +5242,6 @@ class WorkflowCoordinator:
                 execution_workspace["access"],
                 json.loads(run_row["execution_workspace_json"]).get("accessNote"),
                 json.loads(task["spec_json"])["expectedSeconds"],
-                run_row["project_kind"],
-                run_row["checkout"],
                 now,
                 now,
             ),
@@ -5406,7 +5415,7 @@ class WorkflowCoordinator:
         def snapshot(connection, continuation_id):
             row = connection.execute(
                 "SELECT * FROM workflow_continuations WHERE continuation_id=? AND state='queued'"
-                " AND workspace_id IS NULL AND checkout!='none'", (continuation_id,),
+                " AND workspace_facts_role='pending'", (continuation_id,),
             ).fetchone()
             if row is None:
                 return None
@@ -5636,8 +5645,8 @@ class WorkflowCoordinator:
         text = ("An owned micro task reached a boundary. Review the changes in ownedMicroTasks since the previous frozen input; "
                 "use the launcher with this turn's credential file to list owned tasks and get their current evidence.")
         connection.execute(
-            "INSERT INTO workflow_continuations(checkout,workspace_facts_role, continuation_id, run_id, kind, trigger_event_json, input_text, note, state, created_at) VALUES(?,?,?,?,'lead-wakeup',?,?,?,'recorded',?)",
-            (lead["checkout"],"none" if lead["checkout"]=="none" else "pending",continuation_id,lead["run_id"],canonical_json(trigger),text,None,now,),
+            "INSERT INTO workflow_continuations(workspace_facts_role, continuation_id, run_id, kind, trigger_event_json, input_text, note, state, created_at) VALUES(?,?,?,'lead-wakeup',?,?,?,'recorded',?)",
+            ("none" if lead["checkout"]=="none" else "pending",continuation_id,lead["run_id"],canonical_json(trigger),text,None,now,),
         )
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (lead["run_id"],)).fetchone()
         try:
@@ -5808,9 +5817,17 @@ class WorkflowCoordinator:
                 return None
             from .interruption import attempt_private_adapter
             from ...protocol.execution import RECEIPT
+            from ...protocol.turn_result import result_path
+            from ... import private_files
             directory = private_dirs.attempt_root(self.board.directory, attempt_private_adapter(attempt),
                                                   attempt['task_id'], attempt_id)
-            return {'path': str((directory / RECEIPT).relative_to(self.board.directory)), 'sha256': received['sha256']}
+            raw = private_files.read_bytes(directory / RECEIPT)
+            if hashlib.sha256(raw).hexdigest() != received['sha256']:
+                raise BoardError('RECEIPT_MISMATCH', 'Execution receipt digest does not match')
+            retained = result_path(self.board.directory, run_row['run_id'], attempt_id)
+            private_dirs.ensure_private_dir(retained.parent)
+            private_files.publish_bytes(retained, raw, immutable=True)
+            return {'path': str(retained.relative_to(self.board.directory)), 'sha256': received['sha256']}
         if "workspaceManifest" in result:
             raise BoardError("INVALID_ARGUMENT", "Current execution reports do not carry workspaceManifest")
         effective = turn_manifest(self.board.directory, json.loads(turn_row["input_json"])) if turn_row is not None else None
@@ -6490,9 +6507,9 @@ class WorkflowCoordinator:
                 return previous['artifact_id']
             identifier = 'result-' + str(uuid.uuid4())
             connection.execute(
-                "INSERT INTO workflow_artifacts(artifact_id,run_id,turn_id,attempt_id,generation,kind,content_form,record_path,record_sha256,created_at)"
-                " VALUES(?,?,?,?,?,'result','result-reference',?,?,?)",
-                (identifier, run_row['run_id'], turn_id, attempt['attempt_id'], attempt['generation'],
+                "INSERT INTO workflow_artifacts(artifact_id,run_id,turn_id,attempt_id,kind,content_form,record_path,record_sha256,created_at)"
+                " VALUES(?,?,?,?,'result','result-reference',?,?,?)",
+                (identifier, run_row['run_id'], turn_id, attempt['attempt_id'],
                  output_record['path'], output_record['sha256'], now))
             return identifier
         result = self.result_payload(payload)

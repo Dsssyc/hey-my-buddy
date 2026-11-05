@@ -120,7 +120,7 @@ def retained_manifests(state_dir, connection, run_id):
         document = artifact_manifest(state_dir, row)
         manifests[(row["workspace_id"], row["input_manifest_sha256"])] = document
     for row in connection.execute(
-            "SELECT * FROM workflow_turns WHERE run_id=? AND checkout!='none' ORDER BY turn_index", (run_id,)):
+            "SELECT * FROM workflow_turns WHERE run_id=? AND workspace_id IS NOT NULL ORDER BY turn_index", (run_id,)):
         pair = row["workspace_id"], row["workspace_manifest_sha256"]
         if pair not in manifests:
             manifests[pair] = turn_manifest(state_dir, json.loads(row["input_json"]))

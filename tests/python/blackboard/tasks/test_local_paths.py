@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 from hey_my_buddy import paths
 from hey_my_buddy.blackboard.store import store
-from hey_my_buddy.blackboard.tasks import micro_task, workflow, workspace
+from hey_my_buddy.blackboard.tasks import projects, workflow, workspace
 from hey_my_buddy.errors import BoardError
 
 
@@ -54,9 +54,9 @@ class LocalPathTests(unittest.TestCase):
             (PureWindowsPath, "D:\\work\\project\\.git\\", "D:\\work\\submitted\\"),
             (PurePosixPath, "/work/project/.git/", "/work/submitted/"),
         ):
-            with self.subTest(platform=flavor.__name__), patch.object(micro_task, "Path", flavor):
-                self.assertEqual(micro_task.project_label(submitted, repository), "project")
-                self.assertEqual(micro_task.project_label(submitted, None), "submitted")
+            with self.subTest(platform=flavor.__name__), patch.object(projects, "Path", flavor):
+                self.assertEqual(projects.label(submitted, repository), "project")
+                self.assertEqual(projects.label(submitted, None), "submitted")
 
     def test_acceptance_validates_target_before_reading_the_board(self):
         board = Mock()

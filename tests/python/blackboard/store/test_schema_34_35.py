@@ -7,8 +7,10 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 
 from blackboard.store.upgrade_fixture import load_fixture, load_workspace_growth_stock
+from hey_my_buddy.blackboard.store import schema_34_35, upgrade
 from hey_my_buddy.blackboard.store.upgrade import upgrade_state
 from hey_my_buddy.install.upgrade import _retire_host_files
 
@@ -63,22 +65,61 @@ class Schema34To35Tests(unittest.TestCase):
             self.assertTrue(any(row[1] == 'host' and row[2] is not None
                                 for row in connection.execute('SELECT rowid,actor_role,actor_id FROM events')))
 
-        self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 30, 'targetSchema': 35})
+        def audit_schema_34_stock(connection):
+            counts = {
+                'macro input owner': "SELECT COUNT(*) FROM workflow_runs r JOIN workflow_artifacts a"
+                    " ON a.run_id=r.run_id WHERE r.macro_task_id IS NOT NULL AND a.kind='input'"
+                    " AND a.workspace_facts_role='owner' AND a.repository_path IS NOT NULL",
+                'standalone input owner': "SELECT COUNT(*) FROM workflow_runs r JOIN workflow_artifacts a"
+                    " ON a.run_id=r.run_id WHERE r.macro_task_id IS NULL AND a.kind='input'"
+                    " AND a.workspace_facts_role='owner' AND a.repository_path IS NOT NULL",
+                'mutable capability': "SELECT COUNT(*) FROM tasks WHERE"
+                    " json_array_length(json_extract(spec_json,'$.requiredCapabilities'))>0",
+                'mutable exclusive resource': "SELECT COUNT(*) FROM tasks WHERE"
+                    " json_array_length(json_extract(spec_json,'$.exclusiveResources'))>0",
+                'host integrator identity': "SELECT COUNT(*) FROM workflow_runs WHERE"
+                    " json_extract(execution_workspace_json,'$.integrator.role')='host'"
+                    " AND json_extract(execution_workspace_json,'$.integrator.id') IS NOT NULL",
+                'released exclusive claim': "SELECT COUNT(*) FROM resource_claims WHERE kind='exclusive' AND state='released'",
+                'manual empty helper outcomes': "SELECT COUNT(*) FROM workflow_continuations WHERE"
+                    " kind='manual' AND helper_outcomes_json='[]'",
+                'helper without children': "SELECT COUNT(*) FROM workflow_continuations c WHERE kind='helper'"
+                    " AND NOT EXISTS(SELECT 1 FROM workflow_children h WHERE h.parent_run_id=c.run_id)",
+                'retired command': "SELECT COUNT(*) FROM commands WHERE kind GLOB 'workflow.*'"
+                    " OR kind IN ('task.retry','task.acknowledge')",
+            }
+            for label, query in counts.items():
+                self.assertGreater(connection.execute(query).fetchone()[0], 0, label)
+            schema_34_35.upgrade(connection)
+
+        with mock.patch.dict(upgrade.STEPS, {34: audit_schema_34_stock}):
+            self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 30, 'targetSchema': 35})
         with sqlite3.connect(path) as connection:
             connection.row_factory = sqlite3.Row
             self.assertEqual({row['project_id'] for row in connection.execute('SELECT * FROM projects')}, expected_projects)
             self.assertEqual({row['kind'] for row in connection.execute('SELECT * FROM projects')}, {'git'})
-            for table in ('macro_tasks', 'workflow_runs', 'workflow_turns'):
+            for table in ('macro_tasks', 'workflow_runs'):
                 self.assertEqual({row[0] for row in connection.execute(f'SELECT project_kind FROM {table}')}, {'git'})
-            for table in ('workflow_runs', 'workflow_turns', 'workflow_continuations'):
+            for table in ('workflow_runs',):
                 self.assertTrue({row[0] for row in connection.execute(f'SELECT checkout FROM {table}')}
                                 <= {'existing', 'worktree'})
+            for table, removed in (('workflow_turns', {'project_kind', 'checkout'}),
+                                   ('workflow_continuations', {'checkout'}),
+                                   ('workflow_artifacts', {'generation'})):
+                self.assertTrue(removed.isdisjoint({row['name'] for row in connection.execute(
+                    f'PRAGMA table_info({table})')}), table)
             self.assertNotIn('role', {row['name'] for row in connection.execute('PRAGMA table_info(workflow_children)')})
             self.assertEqual({row[0]: {key:value for key,value in json.loads(row[1]).items() if key in ('base','targetRef')}
                               for row in connection.execute('SELECT run_id,execution_workspace_json FROM workflow_runs')},bases)
             for continuation_id in empty_manual:
                 self.assertIsNone(connection.execute('SELECT helper_policy FROM workflow_continuations WHERE continuation_id=?',
                                                       (continuation_id,)).fetchone()[0])
+            helper_without_children = connection.execute(
+                "SELECT helper_policy FROM workflow_continuations c WHERE kind='helper'"
+                " AND NOT EXISTS(SELECT 1 FROM workflow_children h WHERE h.parent_run_id=c.run_id)"
+            ).fetchall()
+            self.assertTrue(helper_without_children)
+            self.assertTrue(all(row[0] is None for row in helper_without_children))
             for table, rows in frozen.items():
                 key, column = {'workflow_turns': ('turn_id', 'input_json'),
                                'workflow_artifacts': ('artifact_id', 'manifest_json'),
@@ -110,6 +151,22 @@ class Schema34To35Tests(unittest.TestCase):
                                            " ORDER BY r.created_at,r.rowid LIMIT 1", (macro['macro_task_id'],)).fetchone()
                 self.assertEqual(macro['project_cwd'], first[0])
                 self.assertTrue(macro['repository_path'])
+                self.assertEqual(connection.execute('SELECT path FROM projects WHERE project_id=?',
+                                                    (macro['project_id'],)).fetchone()[0],
+                                 str(Path(macro['repository_path']).parent))
+            for run in connection.execute('SELECT * FROM workflow_runs WHERE macro_task_id IS NULL'):
+                first_input = connection.execute("SELECT repository_path FROM workflow_artifacts"
+                                                 " WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
+                                                 (run['run_id'],)).fetchone()[0]
+                self.assertEqual(connection.execute('SELECT path FROM projects WHERE project_id=?',
+                                                    (run['standalone_project_id'],)).fetchone()[0],
+                                 str(Path(first_input).parent))
+            standalone_id = json.loads((Path(__file__).resolve().parents[3] / 'fixtures/upgrade-floor/metadata.json')
+                                       .read_text())['growth30StandaloneRunId']
+            project_path, submitted_cwd = connection.execute(
+                'SELECT p.path,t.cwd FROM workflow_runs r JOIN projects p ON p.project_id=r.standalone_project_id'
+                ' JOIN tasks t ON t.task_id=r.run_id WHERE r.run_id=?', (standalone_id,)).fetchone()
+            self.assertNotEqual(project_path, submitted_cwd)
             self.assertEqual(list(connection.execute('PRAGMA foreign_key_check')), [])
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute("UPDATE resource_claims SET kind='exclusive'")
@@ -125,6 +182,18 @@ class Schema34To35Tests(unittest.TestCase):
                 with self.subTest(table=table), self.assertRaises(sqlite3.IntegrityError):
                     connection.execute(f'UPDATE {table} SET response_kind=? WHERE {key}=?', ('continue', identity))
                 connection.rollback()
+            git_turn = connection.execute('SELECT turn_id FROM workflow_turns LIMIT 1').fetchone()[0]
+            connection.execute("UPDATE workflow_turns SET input_json=json_set(input_json,'$.version',4)"
+                               " WHERE turn_id=?", (git_turn,))
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute('UPDATE workflow_turns SET workspace_id=NULL,workspace_manifest_sha256=NULL'
+                                   ' WHERE turn_id=?', (git_turn,))
+            connection.rollback()
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute('UPDATE workflow_turns SET input_json=?,workspace_id=NULL,'
+                                   'workspace_manifest_sha256=NULL WHERE turn_id=?',
+                                   ('{"version":5,"executionWorkspace":{}}', git_turn))
+            connection.rollback()
             request = connection.execute('SELECT request_id FROM workflow_requests LIMIT 1').fetchone()[0]
             changed = connection.execute("UPDATE workflow_requests SET response_kind='decision',response_id='recorded'"
                                          " WHERE request_id=? AND response_kind IS NULL", (request,))

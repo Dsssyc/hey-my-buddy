@@ -1408,6 +1408,56 @@ def populate(args):
                     report(claimed, nonce, status='failed', result={
                         'status': 'failed', 'processState': {'shutdownConfirmed': True},
                     })
+            # The released standalone writer freezes the repository path in
+            # its first input. Use a nested cwd so the later project-path
+            # conversion cannot accidentally reuse the submitted cwd.
+            standalone = call('workflow_submit', {
+                'requestId': 'fixture-growth-floor-standalone', 'hostId': 'fixture-host',
+                'submissionToken': 'fixture-growth-floor-standalone-token',
+                'task': 'Inspect the repository from a nested checkout directory',
+                'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                'cwd': str(reader_cwd),
+                'executionWorkspace': {'kind': 'existing', 'access': 'read'},
+            })
+            standalone_claim = admit(nonce, standalone['runId'])
+            report(standalone_claim, nonce, status='failed', result={
+                'status': 'failed', 'processState': {'shutdownConfirmed': True},
+            })
+            # Declining assistance with autoContinue writes a helper
+            # continuation even though no child was admitted.
+            declined = call('workflow_submit', {
+                'requestId': 'fixture-growth-floor-declined', 'hostId': 'fixture-host',
+                'submissionToken': 'fixture-growth-floor-declined-token',
+                'task': 'Ask for assistance and continue after a decline',
+                'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                'cwd': str(work / 'workspaces/cancelled'),
+                'executionWorkspace': {'kind': 'existing', 'access': 'read'},
+                'macroTask': {'title': 'Released declined-assistance stock'},
+            })
+            declined_claim = admit(nonce, declined['runId'])
+            declined_manifest = declined_claim['turn']['input']['executionWorkspace']
+            declined_seal = workspace.seal(work / 'state', declined_manifest, declined['runId'],
+                                           declined_claim['attempt']['attemptId'])
+            declined_record = completed_record(declined_claim, 'growth-floor-declined')
+            declined_record['outcome'] = {
+                'disposition': 'assistance', 'summary': 'Request optional assistance',
+                'remaining': [], 'decisions': [], 'artifacts': [],
+                'request': {'summary': 'Optional fixture assistance', 'attempted': 'Inspected the input',
+                            'neededWork': ['One review'], 'expectedArtifacts': ['One review'],
+                            'acceptance': 'Record the Host decision'},
+            }
+            report(declined_claim, nonce, status='ok', result={
+                'status': 'ok', 'turn': declined_record, 'workspaceSeal': declined_seal,
+                'processState': {'shutdownConfirmed': True},
+            })
+            declined_view = call('workflow_get', {'runId': declined['runId']})
+            assert declined_view['state'] == 'awaiting-host' and declined_view['activeRequest']
+            call('workflow_decide', {
+                'runId': declined['runId'], 'requestId': declined_view['activeRequest']['requestId'],
+                'commandId': 'fixture-growth-floor-decline', 'expectedRevision': declined_view['revision'],
+                'decision': 'decline', 'autoContinue': True, 'note': 'Continue without a helper',
+                **declined['control'],
+            })
             # Retired command receipts must come from the released floor's own
             # writers. This plain task has no workflow governance and no process
             # is launched; its result uses the same synthetic receipt path above.
@@ -1468,6 +1518,8 @@ def populate(args):
                                   growth30ResourcesSha256=digest(resources.encode()),
                                   growth30GeneratorSha256=digest(Path(__file__).read_bytes()),
                                   growth30RunId=pending['runId'],
+                                  growth30StandaloneRunId=standalone['runId'],
+                                  growth30DeclinedRunId=declined['runId'],
                                   growth30AbandonedRunId=abandoned['runId'],
                                   growth30StashRunIds=stash_ids)
             (fixed / 'metadata.json').write_text(

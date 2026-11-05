@@ -1196,9 +1196,10 @@ class BoardStore:
             view["resultMeta"] = {key: value for key, value in payload.items() if key != "result"}
             view["attemptId"] = attempt["attempt_id"]
             view["resultDelivered"] = view["result"] is not None
-            turn = connection.execute('SELECT checkout,access FROM workflow_turns WHERE attempt_id=?',
+            turn = connection.execute('SELECT input_json,access FROM workflow_turns WHERE attempt_id=?',
                                       (attempt['attempt_id'],)).fetchone()
-            if turn is not None and turn['checkout'] == 'none':
+            from ...protocol.turn_input import NONE_TURN_INPUT_VERSION
+            if turn is not None and json.loads(turn['input_json'])['version'] == NONE_TURN_INPUT_VERSION:
                 view.update(self.workflow._none_notice(turn['access']))
         return view
 

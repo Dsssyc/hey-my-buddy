@@ -18,8 +18,11 @@ class MacroTaskGroupPagingTests(unittest.TestCase):
                                                 recipe=recipe, seed=614) as fixture:
                 with fixture.board.store.db.write() as connection:
                     for index, macro_id in enumerate(fixture.macros):
+                        project_id = "standalone" if index == 0 else f"fictional-project-{index}"
+                        connection.execute("INSERT OR IGNORE INTO projects(project_id,kind,path) VALUES(?,'git',?)",
+                                           (project_id, f"/fictional/project-{index}"))
                         connection.execute("UPDATE macro_tasks SET project_id=? WHERE macro_task_id=?",
-                                           ("standalone" if index == 0 else f"fictional-project-{index}", macro_id))
+                                           (project_id, macro_id))
                         connection.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.cwd',?) WHERE task_id=("
                                            "SELECT run_id FROM workflow_runs WHERE macro_task_id=? ORDER BY created_at,rowid LIMIT 1)",
                                            (f"/fictional/project-{index}", macro_id))

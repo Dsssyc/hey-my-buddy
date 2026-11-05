@@ -1,7 +1,6 @@
 """None turns bind original receipts and never acquire or reclaim a checkout."""
 import hashlib
 import json
-import sqlite3
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -11,7 +10,7 @@ from blackboard.tasks.test_workflow_worker import MicroTaskWorkerTestCase
 from hey_my_buddy.blackboard.tasks import workflow, workspace, projects, macro_task_deletion
 from hey_my_buddy.cli.blocking import await_run
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.protocol.turn_input import FOLDER_CHANGES_NOTICE
+from hey_my_buddy.protocol.turn_input import NONE_TURN_INPUT_VERSION
 from support import enable_fixture_buddy, wait_for
 
 
@@ -51,7 +50,7 @@ class NoneWorkflowTests(WorkflowTestCase):
              mock.patch.object(workspace, 'shared_stash_inventory', side_effect=AssertionError('none has no Git stash')):
             claim = self.claim(board, run_id=run['runId'])
             frozen = claim['claim']['turn']['input']
-            self.assertEqual(frozen['version'], 5)
+            self.assertEqual(frozen['version'], NONE_TURN_INPUT_VERSION)
             self.assertEqual(frozen['executionWorkspace']['path'], str(folder))
             self.assertEqual(frozen['executionWorkspace']['projectKind'], 'folder')
             self.assertNotIn('workspaceId', frozen['executionWorkspace'])
@@ -78,8 +77,6 @@ class NoneWorkflowTests(WorkflowTestCase):
             row = db.execute('SELECT * FROM workflow_artifacts').fetchone()
             for column in ('workspace_id', 'manifest_json', 'output_commit', 'output_workspace_id', 'input_manifest_sha256'):
                 self.assertIsNone(row[column])
-            with self.assertRaises(sqlite3.IntegrityError):
-                db.execute('UPDATE workflow_artifacts SET generation=NULL')
         self.assertEqual(board.call('artifact_list', {'runId': run['runId']})['artifacts'], [artifact])
         accepted = board.call('workflow_accept', {'runId': run['runId'], 'artifactId': artifact['artifactId'],
                               'note': 'Checked task against the fixed answer', 'notRequired': 'This is an answer'})
@@ -97,17 +94,18 @@ class NoneWorkflowTests(WorkflowTestCase):
                 source = folder / 'edited.txt'
                 source.write_text('unsealed source\n')
                 run = self.submit_none(board, cwd=folder, access=access, title='answer-' + access)
+                self.assertTrue(self.view(board, run)['unsealedChanges'])
                 self.finish_none(board, run)
                 view = self.view(board, run)
                 self.assertEqual(view['project']['kind'], 'git')
                 for item in (view, view['workspace'], view['currentTurn'], view['artifacts'][0]):
-                    self.assertEqual(item['folderChangesNotice'], FOLDER_CHANGES_NOTICE)
                     self.assertTrue(item['unsealedChanges'])
+                    self.assertNotIn('folderChangesNotice', item)
                 def service(operation, params, directory):
                     response = board.call(operation, params)
                     return response['task'] if operation == 'task_get' else response
                 waited = await_run({'runId': run['runId'], 'waitSeconds': 1}, board.directory, service=service)
-                self.assertEqual(waited['folderChangesNotice'], FOLDER_CHANGES_NOTICE)
+                self.assertTrue(waited['unsealedChanges'])
                 artifact = view['finalArtifactId']
                 with self.assertRaises(BoardError) as error:
                     board.call('workflow_accept', {'runId': run['runId'], 'artifactId': artifact, 'note': 'invalid target',
@@ -133,7 +131,15 @@ class NoneWorkflowTests(WorkflowTestCase):
         self.assertEqual(view['state'], 'delivered')
         self.assertNotEqual(view['finalArtifactId'], old)
         self.assertNotIn('unsealedChanges', view['currentTurn'])
-        self.assertEqual(view['turns'][1]['folderChangesNotice'], FOLDER_CHANGES_NOTICE)
+        self.assertTrue(view['turns'][1]['unsealedChanges'])
+        for item in (view, view['workspace']):
+            self.assertTrue(item['unsealedChanges'])
+        self.assertTrue(board.call('task_get', {'runId': run['runId']})['task']['workflow']['unsealedChanges'])
+        def service(operation, params, directory):
+            response = board.call(operation, params)
+            return response['task'] if operation == 'task_get' else response
+        waited = await_run({'runId': run['runId'], 'waitSeconds': 1}, board.directory, service=service)
+        self.assertTrue(waited['unsealedChanges'])
         self.assertEqual(len(view['artifacts']), 2)
         with self.assertRaises(BoardError) as error:
             board.call('workflow_accept', {'runId': run['runId'], 'artifactId': old,
@@ -242,6 +248,16 @@ class NoneWorkflowTests(WorkflowTestCase):
         self.assertEqual(frozen['path'], str(helper_cwd))
         self.assertNotEqual(frozen['projectId'], identity)
         self.finish_turn(board, claim, seal=False)
+        child_view = board.call('workflow_get', {'runId': child})
+        board.call('workflow_conclude', {'runId': parent['runId'], 'targetRunId': child,
+                                        'artifactId': child_view['finalArtifactId'],
+                                        'note': 'The helper answer has been read'})
+        board.call('workflow_cancel', {'runId': parent['runId']})
+        board.call('workflow_conclude', {'runId': parent['runId'], 'note': 'Review complete'})
+        self.assertEqual(macro_task_deletion.delete(board.store, macro, 2)['state'], 'deleted')
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM projects').fetchone()[0], 0)
+        self.assertTrue(helper_cwd.is_dir())
 
     def test_standalone_lead_targets_distinct_projects_and_replays_after_git_conversion(self):
         board = self.board()
@@ -309,18 +325,19 @@ class NoneWorkerTurnTests(MicroTaskWorkerTestCase):
             view = wait_for(delivered, timeout=60)
             self.assertEqual(view['workspace']['path'], str(folder))
             self.assertEqual(view['project']['kind'], 'folder')
-            self.assertEqual(view['folderChangesNotice'], FOLDER_CHANGES_NOTICE)
+            self.assertTrue(view['unsealedChanges'])
             artifact = view['artifacts'][0]
             self.assertEqual(artifact['artifactId'], view['finalArtifactId'])
             receipt = json.loads(Path(artifact['resultFile']['path']).read_bytes())
-            self.assertEqual(receipt['report']['result']['folderChangesNotice'], FOLDER_CHANGES_NOTICE)
+            self.assertNotIn('unsealedChanges', receipt['report']['result'])
+            self.assertNotIn('folderChangesNotice', receipt['report']['result'])
             self.assertNotIn('workspaceSeal', receipt['report']['result'])
             # The fake native agent wrote into its actual cwd; no private checkout exists.
             self.assertTrue(any(path.name != '.git' for path in folder.iterdir()))
             self.assertFalse((self.directory / 'workspaces').exists())
             code, waited = self.cli('await', json.dumps({'runId': submitted['runId'], 'waitSeconds': 1}), env=self.env())
             self.assertEqual(code, 0, waited)
-            self.assertEqual(waited['folderChangesNotice'], FOLDER_CHANGES_NOTICE)
+            self.assertTrue(waited['unsealedChanges'])
             code, accepted = self.cli('accept', json.dumps({'runId': submitted['runId'],
                 'artifactId': artifact['artifactId'], 'note': 'Checked the fixed fixture response',
                 'notRequired': 'The answer is the delivered result'}), env=self.env())

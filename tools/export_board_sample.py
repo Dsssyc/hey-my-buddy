@@ -241,9 +241,8 @@ def _referenced_files(records: dict, source: Path, output: Path) -> list[tuple[P
                 cumulative = relative.parent / ('cumulative-' + original + '.patch')
                 files[cumulative] = (source / cumulative, output / cumulative, None)
         elif artifact['content_form'] == 'result-reference':
-            attempt = attempts[artifact['attempt_id']]
-            expected = private_dirs.attempt_root(source, attempt['adapter'], attempt['task_id'],
-                                                 attempt['attempt_id']) / 'result-receipt.json'
+            from hey_my_buddy.protocol.turn_result import result_path
+            expected = result_path(source, artifact['run_id'], artifact['attempt_id'])
             relative = Path(artifact['record_path'])
             if (relative.is_absolute() or '..' in relative.parts
                     or relative.as_posix() != expected.relative_to(source).as_posix()):

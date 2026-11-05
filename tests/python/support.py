@@ -384,8 +384,9 @@ def publish_result_receipt(state_dir: Path, params: dict) -> dict:
         db.row_factory = sqlite3.Row
         row = db.execute("SELECT task_id, adapter, model_harness, created_at FROM attempts WHERE attempt_id = ?",
                          (attempt_id,)).fetchone()
-        turn = db.execute("SELECT input_json,checkout FROM workflow_turns WHERE attempt_id=?", (attempt_id,)).fetchone()
-        if turn is not None and turn['checkout'] != 'none':
+        turn = db.execute("SELECT input_json FROM workflow_turns WHERE attempt_id=?", (attempt_id,)).fetchone()
+        from hey_my_buddy.protocol.turn_input import NONE_TURN_INPUT_VERSION
+        if turn is not None and json.loads(turn['input_json'])['version'] != NONE_TURN_INPUT_VERSION:
             from hey_my_buddy.blackboard.tasks.workspace_bindings import MANIFEST_OWNERS_CTE
             original = db.execute(
                 f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE}) SELECT o.input_commit FROM workflow_artifacts a"

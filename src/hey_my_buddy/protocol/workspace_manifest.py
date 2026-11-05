@@ -121,8 +121,8 @@ def turn_manifest(state_dir: Path, turn_input: dict) -> dict:
         raise BoardError("TURN_INVALID", "Unsupported turn input version")
     if version == 4:
         return resolve_manifest(state_dir, turn_input["executionWorkspace"])
-    if version == 5:
-        from .turn_input import none_execution_workspace
+    from .turn_input import NONE_TURN_INPUT_VERSION, none_execution_workspace
+    if version == NONE_TURN_INPUT_VERSION:
         return none_execution_workspace(turn_input.get("executionWorkspace"))
     if version in (1, 2, 3):
         return turn_input["executionWorkspace"]

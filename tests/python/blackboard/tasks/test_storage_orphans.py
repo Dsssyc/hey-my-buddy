@@ -233,11 +233,11 @@ class StorageOrphanTests(WorkflowTestCase):
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workflow_continuations
                 (continuation_id,run_id,kind,input_text,
-                 workspace_id,workspace_manifest_sha256,checkout,workspace_facts_role,
+                 workspace_id,workspace_manifest_sha256,workspace_facts_role,
                  workspace_kind,checkout_root,repository_path,input_commit,staged_commit,state,created_at)
-                VALUES (?,?,'manual','input',?,?,?,'owner',?,?,?,?,?,'invalidated',?)''',
+                VALUES (?,?,'manual','input',?,?,'owner',?,?,?,?,?,'invalidated',?)''',
                 ('retained-continuation', parent['runId'], manifest['workspaceId'], manifest['manifestSha256'],
-                 manifest['kind'], manifest['kind'], manifest['checkoutRoot'], manifest['snapshot']['repositoryPath'],
+                 manifest['kind'], manifest['checkoutRoot'], manifest['snapshot']['repositoryPath'],
                  manifest['inputCommit'], manifest['snapshot']['stagedCommit'], '2026-01-01T00:00:00Z'))
         self.assert_retained(checkout, planned)
 

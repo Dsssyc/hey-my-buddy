@@ -47,9 +47,6 @@ class MockWorkspace:
     def repository_at(self, cwd: str, *, allow_parent=False):
         return self._repository_root(cwd)
 
-    def project_root(self, cwd: str):
-        return self._repository_root(str(cwd))
-
     def ensure_project_id(self, repository, *, preferred=None):
         return f"repo:{self._repository_root(str(repository))}"
 

@@ -5,7 +5,7 @@ import os
 from ..errors import BoardError
 
 
-FOLDER_CHANGES_NOTICE = "文件夹的改动未封存"
+NONE_TURN_INPUT_VERSION = 5
 
 
 def none_execution_workspace(value: object) -> dict:
@@ -32,10 +32,6 @@ def none_execution_workspace(value: object) -> dict:
     if value["access"] != "full" and "accessNote" in value:
         raise BoardError("TURN_INVALID", "The none turn cannot carry accessNote")
     return value
-
-
-def folder_changes_notice(workspace: dict) -> str | None:
-    return FOLDER_CHANGES_NOTICE if workspace.get("kind") == "none" and workspace.get("access") in ("write", "full") else None
 
 
 def turn_buddy(input_json: str | None) -> dict | None:

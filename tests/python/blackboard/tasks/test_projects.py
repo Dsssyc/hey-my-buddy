@@ -2,62 +2,81 @@
 from __future__ import annotations
 
 import subprocess
-import tempfile
-import unittest
 from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.blackboard.tasks import projects, workspace
 from hey_my_buddy.blackboard.tasks import macro_task_deletion
 from support import BoardTestCase, macro_summaries
+from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
-class ProjectIdentityTests(unittest.TestCase):
-    def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.directory = Path(temporary.name)
-
+class ProjectIdentityTests(BoardTestCase):
     def git(self, cwd: Path, *args):
         subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
 
+    def create(self, board, cwd: Path, title: str) -> dict:
+        created = board.call("workflow_create", {"cwd": str(cwd), "title": title, "goal": title})
+        return board.call("workflow_get", {"macroTaskId": created["macroTaskId"]})
+
     def test_folder_identity_survives_git_init_and_git_move(self):
-        original = self.directory / "papers"
-        original.mkdir()
-        folder = projects.identify(str(original))
-        self.assertEqual(folder["projectKind"], "folder")
-        self.assertEqual(folder["projectId"], projects.folder_id(str(original.resolve())))
+        original = self.workdir("papers")
+        board = self.board()
+        folder = self.create(board, original, "Folder")["project"]
+        self.assertEqual(folder["kind"], "folder")
+        self.assertEqual(folder["id"], projects.folder_id(str(original.resolve())))
 
         self.git(original, "init", "-q")
-        converted = projects.identify(str(original), folder_project_id=folder["projectId"])
-        self.assertEqual(converted["projectKind"], "git")
-        self.assertEqual(converted["projectId"], folder["projectId"])
-        self.assertEqual(workspace.read_project_id(converted["repositoryPath"]), folder["projectId"])
+        converted = self.create(board, original, "Git")["project"]
+        self.assertEqual(converted["kind"], "git")
+        self.assertEqual(converted["id"], folder["id"])
+        self.assertEqual(workspace.read_project_id(workspace.repository_at(original, allow_parent=True)), folder["id"])
 
         moved = self.directory / "renamed"
         original.rename(moved)
-        self.assertEqual(projects.identify(str(moved))["projectId"], folder["projectId"])
+        self.assertEqual(self.create(board, moved, "Moved")["project"]["id"], folder["id"])
 
     def test_unmarked_folder_move_is_a_new_project_and_existing_git_marker_wins(self):
-        original = self.directory / "notes"
-        original.mkdir()
-        before = projects.identify(str(original))
+        original = self.workdir("notes")
+        board = self.board()
+        before = self.create(board, original, "Before")["project"]
         moved = self.directory / "notes-renamed"
         original.rename(moved)
-        self.assertNotEqual(projects.identify(str(moved))["projectId"], before["projectId"])
+        self.assertNotEqual(self.create(board, moved, "Moved")["project"]["id"], before["id"])
 
         self.git(moved, "init", "-q")
         repository = workspace.repository_at(moved, allow_parent=True)
         marked = workspace.ensure_project_id(repository, preferred="a" * 64)
         self.assertEqual(marked, "a" * 64)
-        self.assertEqual(projects.identify(str(moved))["projectId"], marked)
+        self.assertEqual(self.create(board, moved, "Marked")["project"]["id"], marked)
 
     def test_new_git_repository_does_not_reuse_an_unrecorded_folder_id(self):
-        folder = self.directory / "new-repository"
-        folder.mkdir()
-        former_folder_id = projects.identify(str(folder))["projectId"]
+        folder = self.workdir("new-repository")
+        former_folder_id = projects.folder_id(str(folder.resolve()))
         self.git(folder, "init", "-q")
-        self.assertNotEqual(projects.identify(str(folder))["projectId"], former_folder_id)
+        self.assertNotEqual(self.create(self.board(), folder, "New")["project"]["id"], former_folder_id)
+
+    def test_git_project_path_is_main_repository_across_worktrees(self):
+        main = self.workdir("main-project")
+        self.git(main, "init", "-q")
+        (main / "source.txt").write_text("source\n", encoding="utf-8")
+        self.git(main, "add", "source.txt")
+        self.git(main, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                 "commit", "-qm", "Initial")
+        linked = self.directory / "linked-worktree"
+        self.git(main, "worktree", "add", "-qb", "linked", str(linked))
+        board = self.board()
+        first = self.create(board, main, "Main")["project"]
+        second = self.create(board, linked, "Linked")["project"]
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(first["label"], main.name)
+        self.assertEqual(second["label"], main.name)
+        by_cwd = board.call("workflow_get", {"cwd": str(linked)})["project"]
+        self.assertEqual(by_cwd["path"], str(main.resolve()))
+        self.assertEqual(by_cwd["label"], main.name)
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT path FROM projects WHERE project_id=?",
+                                        (first["id"],)).fetchone()["path"], str(main.resolve()))
 
 
 class FolderMacroTaskTests(BoardTestCase):
@@ -141,3 +160,45 @@ class FolderMacroTaskTests(BoardTestCase):
         deleted = macro_task_deletion.delete(board.store, identifier, 0)
         self.assertEqual(deleted["state"], "deleted")
         self.assertEqual(source.read_text(encoding="utf-8"), "preserve this source\n")
+        with board.store.db.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM projects WHERE project_id=?",
+                                         (macro["project"]["id"],)).fetchone())
+
+
+class ProjectDeletionTests(WorkflowTestCase):
+    def test_non_last_and_last_grouped_project_rows(self):
+        folder = self.workdir("grouped-project")
+        board = self.board()
+        first = board.call("workflow_create", {"cwd": str(folder), "title": "First", "goal": "First"})
+        second = board.call("workflow_create", {"cwd": str(folder), "title": "Second", "goal": "Second"})
+        identifier = board.call("workflow_get", {"macroTaskId": first["macroTaskId"]})["project"]["id"]
+        self.assertEqual(board.call("workflow_get", {"macroTaskId": second["macroTaskId"]})["project"]["id"],
+                         identifier)
+        macro_task_deletion.delete(board.store, first["macroTaskId"], 0)
+        with board.store.db.read() as db:
+            self.assertIsNotNone(db.execute("SELECT 1 FROM projects WHERE project_id=?",
+                                            (identifier,)).fetchone())
+        macro_task_deletion.delete(board.store, second["macroTaskId"], 0)
+        with board.store.db.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM projects WHERE project_id=?",
+                                         (identifier,)).fetchone())
+
+    def test_standalone_and_grouped_references_prune_after_last_delete(self):
+        folder = self.workdir("mixed-project")
+        board = self.board()
+        macro = board.call("workflow_create", {"cwd": str(folder), "title": "Group", "goal": "Group"})
+        run = self.submit(board, request_id="standalone-project", cwd=str(folder))
+        identifier = board.call("workflow_get", {"macroTaskId": macro["macroTaskId"]})["project"]["id"]
+        self.assertEqual(run["project"]["id"], identifier)
+        board.call("workflow_cancel", {"runId": run["runId"]})
+        board.call("workflow_conclude", {"runId": run["runId"], "note": "Settled fixture"})
+        macro_task_deletion.delete(board.store, macro["macroTaskId"], 0)
+        with board.store.db.read() as db:
+            self.assertIsNotNone(db.execute("SELECT 1 FROM projects WHERE project_id=?",
+                                            (identifier,)).fetchone())
+        with mock.patch.object(macro_task_deletion, "_delete_workspaces", return_value=[]):
+            deleted = macro_task_deletion.delete(board.store, "run:" + run["runId"], 1)
+        self.assertEqual(deleted["state"], "deleted", deleted)
+        with board.store.db.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM projects WHERE project_id=?",
+                                         (identifier,)).fetchone())

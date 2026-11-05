@@ -278,11 +278,6 @@ def ensure_project_id(repository, *, preferred=None):
     return project
 
 
-def project_root(cwd):
-    """Canonical source checkout root without requiring a committed HEAD."""
-    return str(Path(_line(cwd, "rev-parse", "--show-toplevel")).resolve(strict=True))
-
-
 def locate_repository(manifest, *, cwd=None, candidates=(), repair=True, removal_started=False):
     """Locate this allocation, reconnecting only its own private checkout link."""
     common = repository_at(manifest["checkoutRoot"])
