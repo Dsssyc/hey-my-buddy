@@ -15,7 +15,7 @@ You need [uv](https://docs.astral.sh/uv/) and a working local DSH, ZCode, Codex 
 HMB="$HOME/.agents/skills/hey-my-buddy/scripts/hey-my-buddy"
 ```
 
-The shared skill lives in `~/.agents/skills/hey-my-buddy`, with a Claude Code link at `~/.claude/skills/hey-my-buddy`. Installation prepares a stable runtime separately from the source and skill. Editing a checkout does not change an installed service. Follow [installation](operations.md#installation) for distribution, upgrade and verification.
+The shared skill lives in `~/.agents/skills/hey-my-buddy`; Claude Code and Antigravity, which do not read that directory, get a link in their own skill directory when they are installed. Installation prepares a stable runtime separately from the source and skill. Editing a checkout does not change an installed service. Follow [installation](operations.md#installation) for distribution, upgrade and verification.
 
 ### 2. Choose the execution workspace
 

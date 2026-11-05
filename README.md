@@ -63,13 +63,13 @@ It needs [uv](https://docs.astral.sh/uv/), and Git 2.40 or later for work in a G
 uvx hey-my-buddy@0.61.1 install
 ```
 
-This installs one agent skill at `~/.agents/skills/hey-my-buddy`, which carries its own launcher, and a private service under `~/.local/share/hey-my-buddy` (`%LOCALAPPDATA%\hey-my-buddy` on Windows). It also links the skill at `~/.claude/skills/hey-my-buddy`, where Claude Code looks for skills. It never changes your `PATH`, shell or agent settings.
+This installs one agent skill at `~/.agents/skills/hey-my-buddy`, which carries its own launcher, and a private service under `~/.local/share/hey-my-buddy` (`%LOCALAPPDATA%\hey-my-buddy` on Windows). Where Claude Code or Antigravity is installed, it also links the skill where that harness looks for skills: `~/.claude/skills/hey-my-buddy` and `~/.gemini/config/skills/hey-my-buddy`. It never changes your `PATH`, shell or agent settings.
 
 To install from a checkout of this repository instead, build the wheel and install it:
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.61.0-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.61.1-py3-none-any.whl" hey-my-buddy install
 ```
 
 <details>
@@ -81,7 +81,7 @@ Install hey-my-buddy on this machine for me.
 1. Use the version I name, or the wheel I give you.
 2. Run the install outside your sandbox through your own permission mechanism, without sudo.
 3. Before it writes anything, list every path it will create or replace.
-4. Report the skill version and place, the Claude Code link, the service action and whether a backup was taken.
+4. Report the skill version and place, the harness links, the service action and whether a backup was taken.
 5. Verify with ~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy health.
 6. On LAUNCH_ACCESS_DENIED, allow that exact launcher command and retry. On UPGRADE_NOT_IDLE, report the listed work and wait; never cancel work to force an upgrade.
 ```

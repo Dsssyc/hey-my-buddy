@@ -8,6 +8,8 @@
 
 2026-10-27 补注：这一分发方式已经实施。skill 与命令后来改名为 `hey-my-buddy`（[ADR-021](021-router-buddy-planes-and-routing-evidence.md) 的 L14），安装方式由 [ADR-017](017-local-installation-and-harness-discovery.md) 扩展；0.54.1 已发到 PyPI（[记录](../acceptance/installs/0.54.1.md)）。
 
+2026-11-05 应用：第 3 条推广为一条规则，不为某个 harness 单列。凡是不读 `~/.agents/skills` 的 harness，装了它（它自己的目录在）时，安装在它读用户级 skill 的目录里放一个指向正本的链接；没装就不放，也不建目录。现在有两个：Claude Code 在 `~/.claude` 存在时链到 `~/.claude/skills/hey-my-buddy`；Antigravity 在 `~/.gemini/antigravity` 或 `~/.gemini/antigravity-cli` 存在时链到 `~/.gemini/config/skills/hey-my-buddy`，开发者在 macOS 上的 Antigravity App 2.29.0 里看到它经符号链接读到这个 skill（[调研记录](../research/2026-11-05-antigravity-skill-locations.md)）。Windows 上用目录联接，不需要开发者模式；Antigravity 在 Windows 上没有验证。安装与 `paths` 按 harness 报告每个链接，安装的恢复日志按 harness 记下哪些链接是这次建的。随 0.61.1 实施。
+
 ## 背景
 
 目前 Host 只能通过 Codex 插件拿到 `$buddy` skill 和 `bin/buddy` 启动器，Claude Code 没有对应入口。`SKILL.md` 链接仓库里的 `docs/reference/...`，并从插件根目录解析启动器，离开插件就无法使用。真正的服务、运行时、状态和备份一直在 `~/.local/share/hey-my-buddy`，与插件无关。

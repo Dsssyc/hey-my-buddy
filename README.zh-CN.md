@@ -63,13 +63,13 @@ hey-my-buddy 让你正在用的编码 agent 把一部分工作交给本机的其
 uvx hey-my-buddy@0.61.1 install
 ```
 
-它把一个共享的 agent skill 装到 `~/.agents/skills/hey-my-buddy`，自带启动器；私有的服务装在 `~/.local/share/hey-my-buddy` 之下（Windows 上是 `%LOCALAPPDATA%\hey-my-buddy`）。它还在 `~/.claude/skills/hey-my-buddy` 放一个指向这个 skill 的链接，Claude Code 从那里找 skill。安装不改你的 `PATH`、shell 与 agent 设置。
+它把一个共享的 agent skill 装到 `~/.agents/skills/hey-my-buddy`，自带启动器；私有的服务装在 `~/.local/share/hey-my-buddy` 之下（Windows 上是 `%LOCALAPPDATA%\hey-my-buddy`）。装了 Claude Code 或 Antigravity 时，它还在它们找 skill 的地方放一个指向这个 skill 的链接：`~/.claude/skills/hey-my-buddy` 与 `~/.gemini/config/skills/hey-my-buddy`。安装不改你的 `PATH`、shell 与 agent 设置。
 
 也可以从这个仓库的检出构建 wheel 再安装：
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.61.0-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.61.1-py3-none-any.whl" hey-my-buddy install
 ```
 
 <details>
@@ -81,7 +81,7 @@ uvx --from "$PWD/dist/hey_my_buddy-0.61.0-py3-none-any.whl" hey-my-buddy install
 1. 用我指定的版本，或者我给的 wheel。
 2. 在你的沙盒之外、经你自己的权限机制运行安装，不用 sudo。
 3. 写入任何东西之前，列出它将创建或替换的每一个路径。
-4. 报告 skill 的版本与位置、Claude Code 的链接、服务的动作，以及有没有做备份。
+4. 报告 skill 的版本与位置、各 harness 的链接、服务的动作，以及有没有做备份。
 5. 用 ~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy health 核对。
 6. 遇到 LAUNCH_ACCESS_DENIED，只放行这一条启动器命令再试；遇到 UPGRADE_NOT_IDLE，报告列出的工作并等待，绝不为了强行升级去取消工作。
 ```
