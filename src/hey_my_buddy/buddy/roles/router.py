@@ -45,7 +45,8 @@ rework or stopping; Conditions for delegation. In each section, organize qualita
 observations by domain and task type and support them with structured citations.
 Use acceptanceNote, continuation inputs and notes, outcomes and Host boundary facts
 to explain observed performance. Compare kinds on the same domain and task type
-using comparisonStatistics, which includes sampled kinds beyond those being rewritten.
+using statistics in kinds for those being rewritten and in comparisonStatistics
+for other sampled kinds; consider both sources together.
 Distinguish ability evidence from infrastructure failures and work stopped for other
 reasons. State when evidence is missing; do not invent strengths or weaknesses.
 Do not list completed tasks. Who the Host chose to delegate to is a selection,

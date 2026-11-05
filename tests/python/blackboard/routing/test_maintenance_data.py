@@ -12,7 +12,6 @@ from hey_my_buddy.blackboard.routing.maintenance_data import (
 from hey_my_buddy.protocol.structured_schema import schema_errors
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
-from hey_my_buddy.blackboard.routing.evidence import kind_domain_statistics
 from hey_my_buddy.protocol.task_types import TASK_TYPES
 
 
@@ -235,6 +234,7 @@ class MaintenanceDataTests(WorkflowTestCase):
                  ((BUDDY["provider"], 2), ("other-provider", 3))])
         packet = self.packet()
         self.assertEqual(len(packet["kinds"]), 1)
+        self.assertEqual(packet["comparisonStatistics"], [])
         kind = packet["kinds"][0]
         self.assertEqual({field: kind[field] for field in ("harness", "model", "effort")},
                          {field: BUDDY[field] for field in ("harness", "model", "effort")})
@@ -272,9 +272,11 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertEqual(packet["kinds"][0]["model"], BUDDY["model"])
         comparisons = {tuple(kind[field] for field in ("harness", "model", "effort")): kind["statistics"]
                        for kind in packet["comparisonStatistics"]}
-        self.assertEqual(set(comparisons), {current, peer, unrelated})
-        self.assertEqual(comparisons[current], {key: value for key, value in packet["kinds"][0]["statistics"].items()
-                                               if key != "infrastructureFailures"})
+        targets = {tuple(kind[field] for field in ("harness", "model", "effort")) for kind in packet["kinds"]}
+        self.assertEqual(targets, {current})
+        self.assertTrue(targets.isdisjoint(comparisons))
+        self.assertEqual(set(comparisons), {peer, unrelated})
+        self.assertEqual(packet["kinds"][0]["statistics"]["byDomainTaskType"]["parser"]["debug"]["samples"], 2)
         stats = comparisons[peer]
         self.assertEqual(stats["overall"]["samples"], 3)
         self.assertEqual(stats["byDomain"]["systems"]["samples"], 3)
@@ -331,6 +333,11 @@ class MaintenanceDataTests(WorkflowTestCase):
                 ("codex", "peer", "high", "writing", "review")])
         packet = self.packet()
         self.assertEqual(len(packet["kinds"]), 2)
+        targets = {tuple(kind[field] for field in ("harness", "model", "effort")) for kind in packet["kinds"]}
+        comparisons = {tuple(kind[field] for field in ("harness", "model", "effort"))
+                       for kind in packet["comparisonStatistics"]}
+        self.assertTrue(targets.isdisjoint(comparisons))
+        self.assertEqual(comparisons, {("codex", "peer", "high")})
         peer = next(item["statistics"] for item in packet["comparisonStatistics"] if item["model"] == "peer")
         self.assertEqual(set(peer["byDomain"]), {"parser", "writing"})
         self.assertEqual(set(peer["byDomainTaskType"]["parser"]), {"debug"})
@@ -356,16 +363,24 @@ class MaintenanceDataTests(WorkflowTestCase):
                 db.executemany("INSERT INTO kind_cell_statistics VALUES(?,?,?,?,?,1,1,1,0,0)",
                                [(*key, domain, task_type) for domain, task_type in cells])
             packet = build_packet(db)
-            all_kinds = [dict(row) for row in db.execute(
-                "SELECT harness,model,effort FROM kind_statistics ORDER BY harness,model,effort")]
-            statistics = kind_domain_statistics(db, all_kinds)
-        old_packet = {**packet, "comparisonStatistics": [
-            {**kind, "statistics": statistics[tuple(kind.values())]} for kind in all_kinds]}
+        # The previous projection repeated every sampled target's full domain
+        # facts (all its cells selected themselves), without infrastructure facts.
+        repeated = [{**{field: kind[field] for field in ("harness", "model", "effort")},
+                     "statistics": {field: kind["statistics"][field]
+                                    for field in ("overall", "byDomain", "byDomainTaskType")}}
+                    for kind in packet["kinds"] if kind["statistics"]["overall"]["samples"]]
+        old_packet = {**packet, "comparisonStatistics": sorted(
+            packet["comparisonStatistics"] + repeated,
+            key=lambda kind: tuple(kind[field] for field in ("harness", "model", "effort")))}
         return old_packet, packet
 
-    def test_comparison_packet_size_depends_on_relevant_cells(self):
+    def test_comparison_packet_keeps_relevant_peer_cells_without_repeated_targets(self):
         old, new = self.comparison_size_packets()
-        self.assertEqual(len(new["comparisonStatistics"]), 15)
+        self.assertEqual(len(old["comparisonStatistics"]), 15)
+        self.assertEqual(len(new["comparisonStatistics"]), 14)
+        targets = {tuple(kind[field] for field in ("harness", "model", "effort")) for kind in new["kinds"]}
+        self.assertTrue(targets.isdisjoint(tuple(kind[field] for field in ("harness", "model", "effort"))
+                                          for kind in new["comparisonStatistics"]))
         for kind in new["comparisonStatistics"]:
             self.assertEqual(set(kind["statistics"]["byDomain"]), {"parser"})
             self.assertEqual(set(kind["statistics"]["byDomainTaskType"]), {"parser"})

@@ -68,13 +68,16 @@ def pending_count(connection) -> int:
 
 
 def _comparison_statistics(statistics, summary_kinds, comparison_kinds):
-    """Compare the summary targets' sampled rows and cells; keep every overall row."""
+    """Other kinds' overall rows and samples in the summary targets' rows and cells."""
     domains = {node_id for kind in summary_kinds for node_id in statistics[kind]["byDomain"]}
     cells = {(node_id, task_type) for kind in summary_kinds
              for node_id, types in statistics[kind]["byDomainTaskType"].items() for task_type in types}
     comparisons = []
     for kind in comparison_kinds:
-        facts = statistics[_kind(kind)]
+        key = _kind(kind)
+        if key in summary_kinds:
+            continue
+        facts = statistics[key]
         by_type = {}
         for node_id, types in facts["byDomainTaskType"].items():
             selected = {task_type: fact for task_type, fact in types.items() if (node_id, task_type) in cells}
