@@ -377,25 +377,26 @@ class UpgradeTests(BoardTestCase):
         for directory in (skill, staged, previous):
             directory.mkdir(parents=True)
             (directory / 'keep').write_bytes(b'retained')
-        for key, value in (('claudeLink', str(self.directory / 'claude/hey-my-buddy')),
-                           ('claudeLinkWasMissing', True), ('createdClaudeLink', 'retired-link')):
-            with self.subTest(key=key):
-                journal = {'contractChanged': False, 'skillTarget': str(skill),
-                           'skillStage': str(staged), 'skillPrevious': str(previous), key: value}
-                upgrade.write_journal(state / 'upgrade.json', journal)
-                before = {str(path.relative_to(self.directory)): path.read_bytes() if path.is_file() else None
-                          for path in self.directory.rglob('*')}
-                with mock.patch.object(upgrade, 'probe') as probe, \
-                     mock.patch.object(upgrade, 'start') as start, \
-                     mock.patch.object(upgrade, 'detach') as detach, \
-                     mock.patch.object(upgrade, 'command') as command:
-                    with self.assertRaises(BoardError) as caught:
-                        upgrade.recover(state, self.directory / 'runtimes')
-                self.assertEqual(caught.exception.code, 'UPGRADE_RECOVERY_REQUIRED')
-                for operation in (probe, start, detach, command):
-                    operation.assert_not_called()
-                self.assertEqual(before, {str(path.relative_to(self.directory)): path.read_bytes() if path.is_file() else None
-                                          for path in self.directory.rglob('*')})
+        link = self.directory / 'claude/hey-my-buddy'
+        journal = {'contractChanged': False, 'skillTarget': str(skill), 'skillHadPrevious': True,
+                   'skillStage': str(staged), 'skillPrevious': str(previous),
+                   'claudeLink': str(link), 'claudeLinkWasMissing': True, 'createdClaudeLink': str(link)}
+        upgrade.write_journal(state / 'upgrade.json', journal)
+        before = {str(path.relative_to(self.directory)): path.read_bytes() if path.is_file() else None
+                  for path in self.directory.rglob('*')}
+        with mock.patch.object(skill_install, 'agent_skills_home', return_value=skill.parent), \
+             mock.patch.object(upgrade, 'probe') as probe, \
+             mock.patch.object(upgrade, 'start') as start, \
+             mock.patch.object(upgrade, 'detach') as detach, \
+             mock.patch.object(upgrade, 'command') as command:
+            with self.assertRaises(BoardError) as caught:
+                upgrade.recover(state, self.directory / 'runtimes')
+        self.assertEqual(caught.exception.code, 'UPGRADE_RECOVERY_REQUIRED')
+        self.assertEqual(caught.exception.message, 'Journal skill paths do not match this installation')
+        for operation in (probe, start, detach, command):
+            operation.assert_not_called()
+        self.assertEqual(before, {str(path.relative_to(self.directory)): path.read_bytes() if path.is_file() else None
+                                  for path in self.directory.rglob('*')})
 
     def test_recovery_rejects_unrelated_skill_paths_before_deleting(self):
         unrelated = self.directory / 'unrelated'

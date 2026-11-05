@@ -357,8 +357,6 @@ def _failure_reason(error: Exception) -> dict:
 
 
 def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
-    if any(key in journal for key in ('claudeLink', 'claudeLinkWasMissing', 'createdClaudeLink')):
-        raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal uses the retired Claude-only link form')
     if not journal.get('skillTarget'):
         return None
     from .skill_install import agent_skills_home, harness_link_locations, _is_link, SKILL
