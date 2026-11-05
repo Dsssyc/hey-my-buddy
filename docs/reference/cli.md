@@ -65,12 +65,13 @@ Use `fixes` only for repair of an accepted micro task. Explicitly authorized `de
 
 `await` observes one `runId` for a bounded window, returning a boundary, delivery, reminder or window end. It starts no task and does not stop work when the window ends. [Host waiting](host.md) owns supervision; the [envelope](#await-envelope) lists the response facts.
 
-`get` selects exactly one of `runId`, `macroTaskId` and project `cwd`. A macro task view includes its goal and members, including an empty collection; a project view includes macro tasks and standalone micro tasks. Collections accept pagination, while `includeAudit` and `routingHistory` apply only to a run. Each collection's cursor continues that collection; a run's routing history has its own numeric cursor.
+`get` selects exactly one of `runId`, `macroTaskId`, project `cwd` and `buddies`. A macro task view includes its goal and members, including an empty collection; a project view includes macro tasks and standalone micro tasks. `{"buddies":true}` lists every enabled buddy by its complete name, the form `submit` and `continue` take, with `available` and, when it cannot take work now, the recorded `coolingUntil` of its provider or the catalog's `unavailableReason`. Collections accept pagination, while `includeAudit` and `routingHistory` apply only to a run. Each collection's cursor continues that collection; a run's routing history has its own numeric cursor.
 
 ```sh
 "$HMB" await '{"runId":"<runId>","waitSeconds":3600}'
 "$HMB" get '{"macroTaskId":"<macroTaskId>","limit":20}'
 "$HMB" get '{"cwd":"/abs/project"}'
+"$HMB" get '{"buddies":true}'
 "$HMB" get '{"runId":"<runId>","routingHistory":{"limit":20}}'
 ```
 
