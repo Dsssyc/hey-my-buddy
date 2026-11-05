@@ -5,13 +5,17 @@ Run from the repository root:
     uv run --frozen python tools/export_board_sample.py OUTPUT [--source STATE]
 
 Only console history, its fixed session records, and inquiry journals belonging
-to selected attempts are exported. The destination retains the source schema
-and is published only after the candidate passes the stop checks.
+to selected attempts are exported. Each selected micro task's applied cleanup
+plans travel with it, so the private service reading the sample never plans a
+reclamation inside the source state; a run whose checkout the source has not
+reclaimed is left out rather than pointing maintenance at a live checkout. The
+destination retains the source schema and is published only after the candidate
+passes the stop checks.
 """
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
+from contextlib import closing, contextmanager
 import hashlib
 import json
 import os
@@ -28,13 +32,38 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, initialize_defaults
-from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA
+from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA, upgrade_state
 from hey_my_buddy.blackboard.routing.statistics import backfill
 from hey_my_buddy.blackboard.tasks.macro_tasks import RUN_GROUPS_SQL
+from hey_my_buddy.blackboard.tasks.reclamation import workspace_candidates
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.workspace_manifest import resolve_manifest, resolve_record, cumulative_patch_error
 from hey_my_buddy.state_root import get_state_dir
 
 MAX_TASKS = 100
+
+
+class _CandidateStore:
+    """The one store surface the maintenance candidate query reads."""
+
+    def __init__(self, connection):
+        self._connection = connection
+
+    @property
+    def db(self):
+        return self
+
+    @contextmanager
+    def read(self):
+        yield self._connection
+
+
+def _reclamation_candidates(connection, run_ids) -> set[str]:
+    """Name the runs the service's own query would still reclaim.
+
+    ``run_ids`` is None for every run of the board, as the staged check reads it.
+    """
+    return set(workspace_candidates(_CandidateStore(connection), task_ids=run_ids))
 
 
 def _rows(connection, table: str, column: str, values) -> list[dict]:
@@ -88,7 +117,8 @@ def _rebind_workspace_owners(connection, records: dict) -> None:
                       input_commit=original[0][3], staged_commit=original[0][4])
 
 
-def _select(connection, source_schema: int) -> tuple[dict[str, list[dict]], list[tuple[str, str, str]]]:
+def _select(connection, source_schema: int,
+            excluded: set[str]) -> tuple[dict[str, list[dict]], list[tuple[str, str, str]]]:
     # The most recently accepted micro tasks are selected; the reversed list
     # writes them into the destination oldest first.
     selected = [row[0] for row in connection.execute(
@@ -96,6 +126,14 @@ def _select(connection, source_schema: int) -> tuple[dict[str, list[dict]], list
         "WHERE r.state='accepted' AND t.accepted_at IS NOT NULL "
         "ORDER BY t.accepted_at DESC, r.run_id DESC LIMIT ?", (MAX_TASKS,))]
     selected.reverse()
+    selected = [run_id for run_id in selected if run_id not in excluded]
+    if source_schema >= 34:
+        # The workspace facts this query reads exist in this form from schema 34.
+        # A run whose checkout the source has not reclaimed cannot ride along:
+        # the sample would show the private service a live source checkout that
+        # only its own applied plan could ever exclude.
+        excluded = excluded | _reclamation_candidates(connection, selected)
+        selected = [run_id for run_id in selected if run_id not in excluded]
     runs = {row["run_id"]: row for row in _rows(connection, "workflow_runs", "run_id", selected)}
     records = {"workflow_runs": [runs[run_id] for run_id in selected]}
     routes = _rows(connection, "workflow_routes", "run_id", selected)
@@ -119,6 +157,12 @@ def _select(connection, source_schema: int) -> tuple[dict[str, list[dict]], list
                   'workflow_workspace_conflicts', 'workflow_integrations', 'workflow_artifacts',
                   'workflow_suggestions', 'workflow_host_conclusions'):
         records[table] = _rows(connection, table, 'run_id', selected)
+    # Applied plans are the source's own "this checkout is reclaimed" fact; without
+    # them the private service plans a reclamation of the source state's path. The
+    # other states prove nothing of the kind and die in the upgrade chain anyway.
+    records['workspace_cleanup_plans'] = [row for row in
+                                          _rows(connection, 'workspace_cleanup_plans', 'run_id', selected)
+                                          if row['state'] == 'applied']
     if source_schema >= 34:
         _rebind_workspace_owners(connection, records)
     # Relationships survive only when both micro tasks were selected. A selected
@@ -292,6 +336,31 @@ def _validate(connection) -> None:
         raise ValueError('Sample failed SQLite integrity_check')
 
 
+def _staged_candidates(stage: Path, source_schema: int) -> set[str]:
+    """Reclamation candidates of the staged sample as the service will see it.
+
+    A sample below the current schema is judged through the same upgrade the
+    install runs when the private service opens it, so the check never depends
+    on workspace facts the source schema cannot state yet.
+    """
+    if source_schema == SCHEMA_VERSION:
+        with closing(sqlite3.connect(stage / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            return _reclamation_candidates(connection, None)
+    with tempfile.TemporaryDirectory(prefix='.board-sample-upgrade-') as temporary:
+        upgraded = Path(temporary) / 'state'
+        private_dirs.ensure_private_dir(upgraded)
+        shutil.copyfile(stage / DB_FILE, upgraded / DB_FILE)
+        os.chmod(upgraded / DB_FILE, 0o600)
+        try:
+            upgrade_state(upgraded)
+        except BoardError as error:
+            raise ValueError(f'The staged sample cannot upgrade: {error.message}') from error
+        with closing(sqlite3.connect(upgraded / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            return _reclamation_candidates(connection, None)
+
+
 def export_sample(source: Path, output: Path) -> Path:
     source = Path(source).expanduser().absolute()
     output = Path(output).expanduser().absolute()
@@ -303,60 +372,69 @@ def export_sample(source: Path, output: Path) -> Path:
         raise ValueError('Source and output must be separate directory trees')
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
         raise ValueError(f'Refusing nonempty output: {output}')
-    # One short SQLite snapshot covers all selected rows and session identities.
-    # Close it before building the destination or copying immutable finished sessions.
-    # No product store is opened against the source; no write/WAL pragma is issued.
-    with closing(sqlite3.connect((source / DB_FILE).as_uri() + '?mode=ro', uri=True)) as reader:
-        reader.row_factory = sqlite3.Row
-        reader.execute('BEGIN')
-        version, definitions = _source_schema(reader)
-        records, sessions = _select(reader, int(version))
-        referenced_files = _referenced_files(records, source, output) if int(version) >= 34 else []
-    with tempfile.TemporaryDirectory(prefix='.board-sample-', dir=output.parent) as temporary:
-        stage = Path(temporary) / 'state'
-        private_dirs.ensure_private_dir(stage)
-        with closing(sqlite3.connect(stage / DB_FILE)) as writer:
-            writer.row_factory = sqlite3.Row
-            writer.execute('PRAGMA foreign_keys=ON')
-            writer.execute('BEGIN')
-            try:
-                writer.execute('PRAGMA defer_foreign_keys=ON')
-                _create_schema(writer, version, definitions)
-                for table, rows in records.items():
-                    for row in rows:
-                        columns = ','.join(f'"{key}"' for key in row)
-                        writer.execute(f'INSERT INTO "{table}" ({columns}) VALUES '
-                                       f'({",".join("?" for _ in row)})', tuple(row.values()))
-                if int(version) >= 31:
-                    # Cumulative statistics were introduced in schema 31.
-                    # This is a new private board containing only the selected
-                    # history. Its cumulative facts describe that same history;
-                    # no source-wide statistics or maintenance records escape.
-                    backfill(writer)
-                # The surviving lineage determines each destination session's
-                # group; source group identity still locates the original file.
-                target_groups = _session_groups(records, {
-                    row['run_id']: row['group_id'] for row in writer.execute(RUN_GROUPS_SQL)})
-                for task, attempt, group in sessions:
-                    origin = private_dirs.session_record_path(source, group, attempt)
-                    target = private_dirs.session_record_path(stage, target_groups[task], attempt)
-                    _copy_optional_regular(origin, target)
-                for attempt in records['attempts']:
-                    origin = _journal_path(source, attempt['task_id'], attempt['attempt_id'])
-                    target = _journal_path(stage, attempt['task_id'], attempt['attempt_id'])
-                    _copy_optional_regular(origin, target)
-                for origin, target, digest in referenced_files:
-                    _copy_required_regular(origin, stage / target.relative_to(output), digest)
-                _validate(writer)
-                writer.commit()
-            except BaseException:
-                writer.rollback()
-                raise
-        os.chmod(stage / DB_FILE, 0o600)
-        if output.exists():
-            output.rmdir()  # Only an empty destination can be replaced.
-        stage.rename(output)
-    return output
+    excluded: set[str] = set()
+    while True:
+        # One short SQLite snapshot covers all selected rows and session identities.
+        # Close it before building the destination or copying immutable finished sessions.
+        # No product store is opened against the source; no write/WAL pragma is issued.
+        with closing(sqlite3.connect((source / DB_FILE).as_uri() + '?mode=ro', uri=True)) as reader:
+            reader.row_factory = sqlite3.Row
+            reader.execute('BEGIN')
+            version, definitions = _source_schema(reader)
+            records, sessions = _select(reader, int(version), excluded)
+            referenced_files = _referenced_files(records, source, output) if int(version) >= 34 else []
+        with tempfile.TemporaryDirectory(prefix='.board-sample-', dir=output.parent) as temporary:
+            stage = Path(temporary) / 'state'
+            private_dirs.ensure_private_dir(stage)
+            with closing(sqlite3.connect(stage / DB_FILE)) as writer:
+                writer.row_factory = sqlite3.Row
+                writer.execute('PRAGMA foreign_keys=ON')
+                writer.execute('BEGIN')
+                try:
+                    writer.execute('PRAGMA defer_foreign_keys=ON')
+                    _create_schema(writer, version, definitions)
+                    for table, rows in records.items():
+                        for row in rows:
+                            columns = ','.join(f'"{key}"' for key in row)
+                            writer.execute(f'INSERT INTO "{table}" ({columns}) VALUES '
+                                           f'({",".join("?" for _ in row)})', tuple(row.values()))
+                    if int(version) >= 31:
+                        # Cumulative statistics were introduced in schema 31.
+                        # This is a new private board containing only the selected
+                        # history. Its cumulative facts describe that same history;
+                        # no source-wide statistics or maintenance records escape.
+                        backfill(writer)
+                    # The surviving lineage determines each destination session's
+                    # group; source group identity still locates the original file.
+                    target_groups = _session_groups(records, {
+                        row['run_id']: row['group_id'] for row in writer.execute(RUN_GROUPS_SQL)})
+                    for task, attempt, group in sessions:
+                        origin = private_dirs.session_record_path(source, group, attempt)
+                        target = private_dirs.session_record_path(stage, target_groups[task], attempt)
+                        _copy_optional_regular(origin, target)
+                    for attempt in records['attempts']:
+                        origin = _journal_path(source, attempt['task_id'], attempt['attempt_id'])
+                        target = _journal_path(stage, attempt['task_id'], attempt['attempt_id'])
+                        _copy_optional_regular(origin, target)
+                    for origin, target, digest in referenced_files:
+                        _copy_required_regular(origin, stage / target.relative_to(output), digest)
+                    _validate(writer)
+                    writer.commit()
+                except BaseException:
+                    writer.rollback()
+                    raise
+            remaining = _staged_candidates(stage, int(version))
+            if remaining:
+                # A source below schema 34 cannot name its candidates while it is
+                # read; the staged sample can, and the run is left out of the next
+                # attempt instead of being published with a live source checkout.
+                excluded |= remaining
+                continue
+            os.chmod(stage / DB_FILE, 0o600)
+            if output.exists():
+                output.rmdir()  # Only an empty destination can be replaced.
+            stage.rename(output)
+        return output
 
 
 def main(argv: list[str] | None = None) -> int:

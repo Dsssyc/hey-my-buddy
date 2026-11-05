@@ -7,6 +7,7 @@ import runpy
 import sqlite3
 import subprocess
 import sys
+import time
 import zlib
 from unittest.mock import patch
 
@@ -315,7 +316,9 @@ class ExportBoardSampleTests(WorkflowTestCase):
             with self.subTest(assignment=assignment):
                 board = InProcessBoard(self.directory / ('source-' + str(len(self._stack))))
                 self._stack.append(board)
-                run, attempt = self.accepted(board, 'accepted-' + str(len(self._stack)), kind='worktree')
+                # An existing checkout keeps the run selected; a worktree run
+                # without an applied plan is left out before validation runs.
+                run, attempt = self.accepted(board, 'accepted-' + str(len(self._stack)))
                 with board.store.db.write() as connection:
                     connection.execute('UPDATE attempts SET execution_state=\'finished\',shutdown_confirmed=1,cleanup_pending=0')
                     connection.execute(f'UPDATE attempts SET {assignment} WHERE attempt_id=?', (attempt,))
@@ -333,7 +336,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         # below are the only stop evidence the sample must show.
         board = InProcessBoard(self.directory / 'source')
         self._stack.append(board)
-        run, attempt = self.accepted(board, 'accepted', kind='worktree')
+        run, attempt = self.accepted(board, 'accepted')
         with board.store.db.write() as connection:
             connection.execute('UPDATE attempts SET execution_state=\'finished\',shutdown_confirmed=1,cleanup_pending=0')
             connection.execute("UPDATE attempts SET ownership='uncertain' WHERE attempt_id=?", (attempt,))
@@ -345,6 +348,36 @@ class ExportBoardSampleTests(WorkflowTestCase):
             self.assertEqual(connection.execute(
                 'SELECT ownership,execution_state,shutdown_confirmed,cleanup_pending FROM attempts').fetchone(),
                 ('uncertain', 'finished', 1, 0))
+
+    def test_sample_carries_applied_plans_and_leaves_unreclaimed_checkouts_out(self):
+        board = self.source_board()
+        reclaimed, reclaimed_attempt = self.accepted(board, 'reclaimed-worktree', kind='worktree')
+        retained, _retained_attempt = self.accepted(board, 'retained-worktree', kind='worktree')
+        plain, plain_attempt = self.accepted(board, 'plain-existing')
+        with board.store.db.write() as connection:
+            # The double cannot apply a plan; the source fact "this checkout is
+            # reclaimed" is exactly what the sample has to carry.
+            connection.execute(
+                "UPDATE workspace_cleanup_plans SET state='applied',applied_at='2026-01-01T00:00:00.000Z'"
+                " WHERE run_id=?", (reclaimed['runId'],))
+        with board.store.db.read() as connection:
+            self.assertEqual({row['run_id']: row['state'] for row in
+                              connection.execute('SELECT run_id,state FROM workspace_cleanup_plans')},
+                             {reclaimed['runId']: 'applied', retained['runId']: 'blocked'})
+            applied_source = dict(connection.execute(
+                'SELECT * FROM workspace_cleanup_plans WHERE state=\'applied\'').fetchone())
+        board.store.db.close()
+        output = export_sample(board.directory, self.directory / 'sample')
+        with closing(sqlite3.connect(output / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            self.assertEqual({row[0] for row in connection.execute('SELECT run_id FROM workflow_runs')},
+                             {reclaimed['runId'], plain['runId']})
+            self.assertEqual({row[0] for row in connection.execute('SELECT attempt_id FROM attempts')},
+                             {reclaimed_attempt, plain_attempt})
+            self.assertEqual({row['plan_id']: dict(row) for row in
+                              connection.execute('SELECT * FROM workspace_cleanup_plans')},
+                             {applied_source['plan_id']: applied_source})
+            self.assertFalse((output / 'attempts' / retained['runId']).exists())
 
     def test_empty_sample_empty_output_and_nonempty_output_refusal(self):
         board = self.source_board()
@@ -524,9 +557,15 @@ class ExportBoardSampleTests(WorkflowTestCase):
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM agent_credentials').fetchone()[0], 0)
             self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
             # The floor's seals remain inline after the frozen 33 → 34 step;
-            # export and the later upgrade must preserve those exact bytes.
+            # export and the later upgrade must preserve those exact bytes. A run
+            # whose checkout the source never reclaimed stays out of the sample,
+            # so only the seals of the selected runs are compared.
+            selected_seals = {artifact_id: source_seals[artifact_id] for artifact_id, in
+                              connection.execute('SELECT artifact_id FROM workflow_artifacts')}
+            self.assertTrue(selected_seals)
+            self.assertLess(set(selected_seals), set(source_seals))
             self.assertEqual(dict(connection.execute('SELECT artifact_id,manifest_json FROM workflow_artifacts')),
-                             source_seals)
+                             selected_seals)
             self.assertEqual({row[0] for row in connection.execute('SELECT content_form FROM workflow_artifacts')},
                              {'sealed-inline-v1'})
         self.assert_source_unchanged(before, files(source))
@@ -535,7 +574,94 @@ class ExportBoardSampleTests(WorkflowTestCase):
             columns = {row[1] for row in connection.execute('PRAGMA table_info(workflow_runs)')}
             self.assertTrue(columns.isdisjoint({'control_verifier', 'submission_verifier'}))
             self.assertEqual(dict(connection.execute('SELECT artifact_id,manifest_json FROM workflow_artifacts')),
-                             source_seals)
+                             selected_seals)
+        self.assert_source_unchanged(before, files(source))
+
+    def _schema34_source(self, name):
+        """The check suite's synthetic schema 34 source: floor stock plus the chain."""
+        from hey_my_buddy.blackboard.store.upgrade import STEPS
+        source = load_fixture(self.directory / name)['state']
+        with closing(sqlite3.connect(source / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            with connection:
+                for version in range(UPGRADE_FLOOR_SCHEMA, 34):
+                    STEPS[version](connection)
+                connection.execute("UPDATE attempts SET execution_state='finished',shutdown_confirmed=1,cleanup_pending=0")
+                connection.execute("UPDATE tasks SET state='completed',active_attempt_id=NULL")
+        return source
+
+    def test_schema34_sample_carries_the_source_reclaimed_facts(self):
+        source = self._schema34_source('source34-facts')
+        with closing(sqlite3.connect(source / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            reclaimed = {row['run_id'] for row in connection.execute(
+                "SELECT p.run_id FROM workspace_cleanup_plans p"
+                " JOIN workflow_runs r ON r.run_id=p.run_id JOIN tasks t ON t.task_id=r.run_id"
+                " WHERE p.state='applied' AND r.state='accepted' AND t.accepted_at IS NOT NULL")}
+            # The chain deleted this run's unstarted plan; its checkout is still
+            # on disk in the source, so the sample must not carry the run at all.
+            unreclaimed = {row['run_id'] for row in connection.execute(
+                "SELECT r.run_id FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
+                " JOIN workflow_artifacts a ON a.run_id=r.run_id AND a.kind='input'"
+                " AND a.workspace_facts_role='owner'"
+                " WHERE r.state='accepted' AND t.accepted_at IS NOT NULL AND a.workspace_kind='worktree'"
+                " AND r.run_id NOT IN (SELECT run_id FROM workspace_cleanup_plans WHERE state='applied')")}
+            self.assertTrue(reclaimed)
+            self.assertTrue(unreclaimed)
+            applied = {row['plan_id']: dict(row) for row in connection.execute(
+                "SELECT * FROM workspace_cleanup_plans WHERE state='applied'")}
+        before = files(source)
+        sample = export_sample(source, self.directory / 'sample34-facts')
+        with closing(sqlite3.connect(sample / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            selected = {row[0] for row in connection.execute('SELECT run_id FROM workflow_runs')}
+            self.assertTrue(reclaimed <= selected)
+            self.assertTrue(unreclaimed.isdisjoint(selected))
+            self.assertEqual({row['plan_id']: dict(row) for row in
+                              connection.execute('SELECT * FROM workspace_cleanup_plans')},
+                             {plan_id: row for plan_id, row in applied.items() if row['run_id'] in selected})
+        self.assert_source_unchanged(before, files(source))
+        self.assertEqual(upgrade_state(sample), {'sourceSchema': 34, 'targetSchema': SCHEMA_VERSION})
+        with closing(sqlite3.connect(sample / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            self.assertEqual(export_sample.__globals__['_reclamation_candidates'](connection, None), set())
+        self.assert_source_unchanged(before, files(source))
+
+    def test_private_service_opens_a_schema34_sample_without_planning_source_reclamations(self):
+        source = self._schema34_source('source34-service')
+        before = files(source)
+        sample = export_sample(source, self.directory / 'sample34-service')
+        self.assertEqual(upgrade_state(sample), {'sourceSchema': 34, 'targetSchema': SCHEMA_VERSION})
+        with closing(sqlite3.connect(sample / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            exported_plans = {row['plan_id']: dict(row) for row in
+                              connection.execute('SELECT * FROM workspace_cleanup_plans')}
+            self.assertTrue(exported_plans)
+            self.assertEqual(export_sample.__globals__['_reclamation_candidates'](connection, None), set())
+        # The real private service opens the upgraded sample. Its maintenance
+        # pass must plan nothing inside the source state and record no issue;
+        # the poll gives the daemon's first pass time to run to completion.
+        original_directory = self.directory
+        self.directory = sample
+        try:
+            catalog = write_catalog_fixture(sample)
+            with self.daemon(env={'HMB_MODEL_CATALOG_FILE': str(catalog)}):
+                deadline = time.monotonic() + 4
+                while True:
+                    with closing(sqlite3.connect(sample / DB_FILE)) as connection:
+                        connection.row_factory = sqlite3.Row
+                        plans = {row['plan_id']: dict(row) for row in
+                                 connection.execute('SELECT * FROM workspace_cleanup_plans')}
+                        issues = [dict(row) for row in connection.execute('SELECT * FROM service_issues')]
+                    self.assertEqual(issues, [])
+                    self.assertEqual(plans, exported_plans)
+                    self.assertTrue(all(row['state'] == 'applied' and row['path'].startswith(str(source))
+                                        for row in plans.values()))
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.25)
+        finally:
+            self.directory = original_directory
         self.assert_source_unchanged(before, files(source))
 
     def test_source_service_can_commit_during_snapshot_and_destination_creation(self):
@@ -588,9 +714,9 @@ class ExportBoardSampleTests(WorkflowTestCase):
                         wait_commit(1)
                     return rows
 
-                def capture_reader(reader, source_schema):
+                def capture_reader(reader, source_schema, excluded):
                     readers.append(reader)
-                    return original_select(reader, source_schema)
+                    return original_select(reader, source_schema, excluded)
 
                 def create_destination(connection, version, definitions):
                     self.assertEqual(len(readers), 1)
