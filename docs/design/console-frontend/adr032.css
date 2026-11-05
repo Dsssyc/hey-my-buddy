@@ -24,3 +24,6 @@ code{font:12px/1.7 ui-monospace,"SF Mono",Menlo,monospace;overflow-wrap:anywhere
 /* Project folders follow the existing FolderOpen / Folder state; kind is a header label. */
 .project-group>summary{min-height:32px}.project-group>summary .project-open{display:none}.project-group[open]>summary>.project-open{display:block;transform:none}.project-group[open]>summary>.project-closed{display:none}.changes-value{position:relative;display:inline-block;color:var(--ink)}.changes-value:focus-visible{outline:2px solid var(--ink2);outline-offset:2px}.changes-value:hover>.static-tip,.changes-value:focus-visible>.static-tip{opacity:1;visibility:visible;transition:opacity 120ms 600ms,visibility 0s 600ms}
 @media(prefers-reduced-motion:reduce){.changes-value:hover>.static-tip,.changes-value:focus-visible>.static-tip{transition:visibility 0s 600ms!important}}
+
+/* A comparison sheet, separate from console pages; existing pages keep option A. */
+.project-kind-comparison{width:min(1040px,100%);margin:0 auto;padding:40px 32px}.comparison-option+.comparison-option{margin-top:40px}.comparison-option>h2{font-size:14px;margin-bottom:12px;color:var(--ink2)}.comparison-headers{border-top:1px solid var(--line);border-left:1px solid var(--line);border-right:1px solid var(--line)}.kind-comparison-value .kind-mark{width:12px;height:12px;stroke-width:1.5;color:var(--ink)}
