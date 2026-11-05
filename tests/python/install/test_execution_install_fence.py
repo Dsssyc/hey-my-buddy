@@ -192,7 +192,7 @@ class ExecutionInstallFenceTests(BoardTestCase):
         with self.installation(candidate_runtime, overrides={"HMB_DSH_CLI": str(script)}):
             self.start(baseline)
             created = self.client().call("workflow_submit", {
-                "creationKey": "b" * 64, "macroTaskId": "standalone", "title": "fenced-activity",
+                 "macroTaskId": "standalone", "title": "fenced-activity",
                 "task": "Complete a gated offline fixture turn", "cwd": str(repo),
                 "buddy": "dsh:deepseek-official:deepseek-flash:max", "checkout": "existing",
                 "access": "write", "inputs": [], "writeScope": ["."], "expectedSeconds": 120})

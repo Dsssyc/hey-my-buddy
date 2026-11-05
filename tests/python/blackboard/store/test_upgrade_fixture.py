@@ -696,16 +696,11 @@ class UpgradeFixtureTests(unittest.TestCase):
         # The floor pins alpha, which would select it without calling a Router.
         with board.store.db.write() as db:
             db.execute("DELETE FROM evaluation_preferences WHERE mode='pin'")
-        from hey_my_buddy.cli.main import _creation_key
         submission = {'macroTaskId': 'standalone', 'title': 'Budget after upgrade',
                       'task': 'Compare current routing budget views', 'buddy': 'route',
                       'cwd': str(fixture['fixtureRoot'] / 'repository'), 'checkout': 'worktree',
                       'access': 'write', 'writeScope': ['.'], 'inputs': [], 'expectedSeconds': 1800}
-        project = board.call('workflow_get', {'cwd': submission['cwd']})['project']['id']
-        new = board.call('workflow_submit', {**submission,
-                                            'creationKey': _creation_key(['adr032-submit-v1',
-                                                                         'project:' + project,
-                                                                         submission['title'], submission['task']])})
+        new = board.call('workflow_submit', {**submission})
         new = board.call('workflow_get', {'runId': new['runId'], 'routingHistory': {}})
         expected = {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64}
         for view in (old, new):

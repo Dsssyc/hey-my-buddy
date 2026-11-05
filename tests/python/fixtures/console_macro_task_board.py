@@ -186,24 +186,17 @@ class SyntheticBoard:
         return self.board.call(operation, params)
 
     def _submit(self, name, *, macro_task=None, macro_task_id=None, routed=False):
-        from hey_my_buddy.cli.main import _creation_key
 
         cwd = self.state / "fictional-project" / name
         cwd.mkdir(parents=True, exist_ok=True)
         title, task = f"Synthetic {name}", f"Fictional work {name}"
         if macro_task is not None:
-            project_id = self.workspace.ensure_project_id(self.workspace.repository_at(str(cwd), allow_parent=True))
             created = self.call("workflow_create", {"cwd": str(cwd), "title": macro_task,
-                                                    "goal": "Fictional benchmark; no real work.",
-                                                    "creationKey": _creation_key(
-                                                        ["adr032-create-v1", project_id, macro_task])})
+                                                    "goal": "Fictional benchmark; no real work."})
             macro_task_id = created["macroTaskId"]
-        owner = ("macro:" + macro_task_id if macro_task_id else "project:" +
-                 self.workspace.ensure_project_id(self.workspace.repository_at(str(cwd), allow_parent=True)))
         params = {"task": task, "title": title, "cwd": str(cwd), "macroTaskId": macro_task_id or "standalone",
                   "buddy": "route" if routed else BUDDY_ID, "checkout": "worktree", "access": "write",
-                  "inputs": [], "writeScope": ["src/feature.py"], "expectedSeconds": 1800,
-                  "creationKey": _creation_key(["adr032-submit-v1", owner, title, task])}
+                  "inputs": [], "writeScope": ["src/feature.py"], "expectedSeconds": 1800}
         response = self.call("workflow_submit", params)
         view = self.call("workflow_get", {"runId": response["runId"]})
         if routed:

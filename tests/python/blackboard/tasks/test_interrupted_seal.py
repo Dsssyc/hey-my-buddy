@@ -11,7 +11,6 @@ from unittest.mock import patch
 from support import BoardTestCase
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import interruption, workflow, workspace
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol import process_identity as processes
@@ -31,13 +30,11 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         board = self.board()
         title = f"interrupted-seal-{access}"
         task = "recover stopped workspace"
-        project_id = workspace.ensure_project_id(workspace.repository_at(str(self.repo), allow_parent=True))
         submitted = board.call("workflow_submit", {
             "cwd": str(self.repo), "macroTaskId": "standalone", "title": title, "task": task,
             "buddy": ":".join(BUDDY.values()), "checkout": "existing", "access": access,
             "inputs": [], "expectedSeconds": 1800,
             **({"writeScope": scope or ["."]} if access != "read" else {}),
-            "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, title, task]),
         })
         claim = admit_board(board, {'workerId': 'orphan-worker', 'claimRequestId': 'claim-orphan', 'nonce': 'n' * 16, 'runId': submitted['runId']})["claim"]
         attempt_id = claim["attempt"]["attemptId"]

@@ -17,7 +17,6 @@ from blackboard.evaluation.test_evaluation import EvaluationTestCase as Evaluati
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION, Corruption
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.store.store import BoardStore
-from hey_my_buddy.cli.main import _creation_key
 
 MODEL_SERVICE_A = ("dsh", "deepseek-official", "deepseek-flash")
 MODEL_SERVICE_B = ("dsh", "deepseek-official", "deepseek-v4-pro")
@@ -39,8 +38,6 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
     def submit_micro_task(self, board, request_id: str, model_service=MODEL_SERVICE_A, *, effort: str = "off") -> str:
         enable_fixture_buddy(board.store, dict(zip(("harness", "provider", "model", "effort"), (*model_service, effort))))
         cwd = str(self.workdir(request_id))
-        project_id = self.model_workspace.ensure_project_id(
-            self.model_workspace.repository_at(cwd, allow_parent=True))
         title = request_id
         task = "concurrency fixture"
         submitted = board.call(
@@ -48,7 +45,6 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
             {
                 "cwd": cwd, "title": title, "task": task,
                 "macroTaskId": "standalone",
-                "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, title, task]),
                 "buddy": ":".join((*model_service, effort)),
                 "checkout": "existing", "access": "write", "inputs": [], "writeScope": ["."],
                 "expectedSeconds": 1800,

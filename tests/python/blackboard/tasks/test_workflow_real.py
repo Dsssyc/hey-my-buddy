@@ -122,17 +122,12 @@ class RealWorkspaceTestCase(BoardTestCase):
         return workspace.prepare(self.directory, request_id, self._intent(request_id, **options))
 
     def submit(self, board, *, request_id="req-1", kind="existing", cwd=None, access="write"):
-        from hey_my_buddy.cli.main import _creation_key
 
         cwd = str(cwd or self.repo)
-        project_id = workspace.ensure_project_id(workspace.repository_at(cwd, allow_parent=True))
         params = {
             "cwd": cwd, "macroTaskId": "standalone", "title": request_id,
             "task": "real workspace task", "buddy": ":".join(BUDDY.values()),
             "checkout": kind, "access": access, "expectedSeconds": 1800,
-            "creationKey": _creation_key([
-                "adr032-submit-v1", "project:" + project_id, request_id, "real workspace task",
-            ]),
         }
         if kind != "none":
             params["inputs"] = []

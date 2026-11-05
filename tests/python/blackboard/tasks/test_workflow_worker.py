@@ -24,8 +24,6 @@ from private_acl import assert_private_path
 from fake_executable import make_fake_executable
 from hey_my_buddy.cli.checks import prepare_test_home
 from hey_my_buddy.blackboard.store.store import BoardStore
-from hey_my_buddy.blackboard.tasks import workspace
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.protocol.client import BoardClient
 from console.test_console import Browser
 
@@ -105,9 +103,7 @@ class MicroTaskWorkerTestCase(BoardTestCase):
 
     def submit_direct(self, board, *, title="fixture-run", task="run the mock turn", checkout="existing",
                       access="write", delegation_authority=False):
-        project_id = workspace.ensure_project_id(workspace.repository_at(self.repo, allow_parent=True))
         params = {"cwd": str(self.repo), "title": title, "task": task, "macroTaskId": "standalone",
-                  "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, title, task]),
                   "buddy": ":".join(BUDDY.values()), "checkout": checkout, "access": access,
                   "inputs": [], "expectedSeconds": 1800}
         if access in ("write", "full"):
@@ -478,16 +474,19 @@ class SubmissionPreparationRaceTests(MicroTaskWorkerTestCase):
         self.assertEqual(errors, [])
         return tokens
 
-    def test_cli_creation_key_is_deterministic_across_threads(self):
-        from hey_my_buddy.cli import main as cli
-        from unittest import mock
+    def test_service_submission_replays_across_threads(self):
         params = {"cwd": str(self.repo), "title": "req-race", "task": "same work",
-                  "macroTaskId": "standalone"}
-        with mock.patch.object(cli, "_call_service", return_value={"project": {"id": "stable-project"}}):
-            keys = self._race(lambda: cli._host_creation_key("submit", params, state_dir=self.directory))
-            expected = cli._host_creation_key("submit", params, state_dir=self.directory)
-        self.assertEqual(len(set(keys)), 1, keys)
-        self.assertEqual(keys[0], expected)
+                  "macroTaskId": "standalone", "buddy": ":".join(BUDDY.values()),
+                  "checkout": "none", "access": "read", "expectedSeconds": 1800}
+        with self.daemon(env=self.env()):
+            BoardClient(self.directory, autostart=False).workflow_create(
+                cwd=str(self.repo), title='Concurrent submission', goal='Establish the project identity')
+            responses = self._race(
+                lambda: BoardClient(self.directory, autostart=False).workflow_submit(**params))
+            run_ids = {response["runId"] for response in responses}
+            self.assertEqual(len(run_ids), 1, responses)
+            self.assertEqual(sum(not response["alreadyExists"] for response in responses), 1)
+            self.assertEqual(len(BoardClient(self.directory, autostart=False).list_tasks()["runs"]), 1)
 
 
 

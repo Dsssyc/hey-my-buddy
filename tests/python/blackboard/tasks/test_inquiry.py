@@ -22,8 +22,6 @@ from support import FIXTURE_CATALOG, BoardTestCase, enable_fixture_buddy
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
-from hey_my_buddy.blackboard.tasks.workspace import ensure_project_id
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.blackboard.tasks.inquiry import (
     observe,
 )
@@ -249,7 +247,6 @@ class TestInquiry(BoardTestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
         enable_fixture_buddy(client._board.store, {"harness": harness, "provider": provider, "model": model, "effort": effort})
         title, task_text = request_id, "do"
-        project = ensure_project_id(cwd)
         submitted = client.workflow_submit(
             macroTaskId="standalone", title=title, task=task_text, cwd=str(cwd),
             buddy=f"{harness}:{provider}:{model}:{effort}", checkout="existing",
@@ -257,7 +254,6 @@ class TestInquiry(BoardTestCase):
             **({"accessNote": "Lead inquiry identity fixture", "writeScope": ["."],
                 "delegationAuthority": True} if delegation_authority else {}),
             expectedSeconds=1800, inputs=[],
-            creationKey=_creation_key(["adr032-submit-v1", "project:" + project, title, task_text]),
         )
         return client.get(runId=submitted["runId"])
 
@@ -1133,12 +1129,10 @@ class ZcodeLiveChannelTests(BoardTestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
         enable_fixture_buddy(client._board.store, {"harness": harness, "provider": "fixture-zcode", "model": "fixture-glm", "effort": "low"})
         title, task_text = request_id, "do"
-        project = ensure_project_id(cwd)
         submitted = client.workflow_submit(
             macroTaskId="standalone", title=title, task=task_text, cwd=str(cwd),
             buddy=f"{harness}:fixture-zcode:fixture-glm:low", checkout="existing", access="read",
             expectedSeconds=1800, inputs=[],
-            creationKey=_creation_key(["adr032-submit-v1", "project:" + project, title, task_text]),
         )
         return client.get(runId=submitted["runId"])
 

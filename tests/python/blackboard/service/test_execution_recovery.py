@@ -488,7 +488,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         try:
             with self.daemon(env=environment) as daemon:
                 submitted = self.client().call("workflow_submit", {
-                    "creationKey": "a" * 64, "macroTaskId": "standalone", "title": "worker-wrap-up",
+                     "macroTaskId": "standalone", "title": "worker-wrap-up",
                     "task": "Complete a gated offline fixture turn", "cwd": str(repo),
                     "buddy": "dsh:deepseek-official:deepseek-flash:max", "checkout": "existing",
                     "access": "write", "inputs": [], "writeScope": ["."], "expectedSeconds": 120})

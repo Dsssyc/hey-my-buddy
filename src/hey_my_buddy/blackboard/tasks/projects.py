@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 
 from ...errors import BoardError
+from ...json_codec import canonical_json
+from ...protocol.workspace_manifest import project_id
 from . import workspace
 
 
@@ -13,6 +15,11 @@ def folder_id(path: str) -> str:
     """The stable identity of a folder at its canonical absolute path."""
     return hashlib.sha256(("hey-my-buddy:folder-project:v1\0" + os.path.normcase(path))
                           .encode("utf-8")).hexdigest()
+
+
+def creation_key(parts: list[str]) -> str:
+    """Hash the typed, versioned creation namespace resolved by the service."""
+    return hashlib.sha256(canonical_json(parts).encode('utf-8')).hexdigest()
 
 
 def _directory(cwd: str) -> Path:
@@ -60,8 +67,31 @@ def identify_for_board(store, cwd: str, *, module=workspace) -> dict:
             "SELECT project_id FROM projects WHERE project_id=? AND kind='folder' AND path=?",
             (candidate, root),
         ).fetchone()
-    return _identity(directory, repository, root, module,
-                     row["project_id"] if row is not None else None)
+    identity = _identity(directory, repository, root, module,
+                         row["project_id"] if row is not None else None)
+    if row is not None and identity['projectId'] == row['project_id']:
+        with store.db.write() as connection:
+            record(connection, identity)
+    return identity
+
+
+def find_for_board(store, cwd: str, *, module=workspace) -> dict | None:
+    """Find an existing project without creating a marker or changing the board."""
+    directory = _directory(cwd)
+    repository, root = _source(directory, module)
+    if repository is not None:
+        identifier = module.read_project_id(repository)
+        if identifier is not None:
+            return {'projectId': identifier, 'projectKind': 'git', 'cwd': str(directory),
+                    'projectPath': root, 'repositoryPath': repository}
+    path = root if repository is not None else str(directory)
+    with store.db.read() as connection:
+        row = connection.execute("SELECT project_id FROM projects WHERE project_id=? AND kind='folder' AND path=?",
+                                 (folder_id(path), path)).fetchone()
+    if row is None:
+        return None
+    return {'projectId': row['project_id'], 'projectKind': 'folder', 'cwd': str(directory),
+            'projectPath': path, 'repositoryPath': None}
 
 
 def record(connection, identity: dict) -> None:
@@ -71,6 +101,13 @@ def record(connection, identity: dict) -> None:
         "ON CONFLICT(project_id) DO UPDATE SET kind=excluded.kind,path=excluded.path",
         (identity["projectId"], identity["projectKind"], identity["projectPath"]),
     )
+
+
+def require_capture_identity(identity: dict, manifest: dict | None) -> None:
+    """Fence a captured Git input against the project that determined its key."""
+    if manifest is not None and project_id(manifest) != identity['projectId']:
+        raise BoardError('WORKSPACE_CHANGED', 'The source project changed while capturing the input',
+                         expectedProjectId=identity['projectId'], capturedProjectId=project_id(manifest))
 
 
 def view(connection, project_id: str) -> dict:

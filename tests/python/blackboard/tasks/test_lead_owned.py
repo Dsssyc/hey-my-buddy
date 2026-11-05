@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from hey_my_buddy.blackboard.tasks import workflow
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.workspace_manifest import turn_manifest
 from support import enable_fixture_buddy
@@ -56,9 +55,7 @@ class LeadOwnedTests(WorkflowTestCase):
         checkout = extra.pop("checkout", extra.pop("kind", "worktree"))
         access = extra.pop("access", "write")
         buddy = extra.pop("buddy", ":".join(BUDDY.values()))
-        namespace = "macro:" + lead["macroTaskId"] if lead.get("macroTaskId") else "project:" + lead["project"]["id"]
-        packet = {"creationKey": _creation_key(["adr032-submit-v1", namespace, title, task]),
-                  "credential": credential, "cwd": cwd, "title": title, "task": task,
+        packet = {"credential": credential, "cwd": cwd, "title": title, "task": task,
                   "buddy": buddy, "checkout": checkout, "access": access, "expectedSeconds": 600,
                   "inputs": [], **extra}
         if access in ("write", "full"):
@@ -141,7 +138,7 @@ class LeadOwnedTests(WorkflowTestCase):
             self.assertEqual(caught.exception.code, "UNAUTHORIZED")
         self.assertEqual(board.call("workflow_get", {"runId": ordinary["runId"]})["state"], "executing")
 
-    def test_lead_creation_key_cannot_replay_host_work_or_leave_a_partial_link(self):
+    def test_lead_submission_cannot_replay_host_work_or_leave_a_partial_link(self):
         board = self.board()
         lead, claim = self.lead(board, create_macro={"title": "Grouped work", "goal": "Grouped work"})
         host = self.submit(board, request_id="owned", title="owned", task="Do owned work",

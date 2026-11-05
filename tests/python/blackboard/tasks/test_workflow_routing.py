@@ -163,7 +163,7 @@ class TestWorkflowRouting(WorkflowTestCase):
                     "title": field, "task": "bounded work", "buddy": "route",
                     "checkout": "existing", "access": "write", "inputs": [],
                     "writeScope": ["."], "expectedSeconds": 1800,
-                    "creationKey": "test-" + field, field: value,
+                     field: value,
                 })
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 

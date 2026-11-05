@@ -7,7 +7,6 @@ from blackboard.tasks import workspace_lifecycle_case as lifecycle_fixtures
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from blackboard.tasks.test_workflow_real import RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import workspace as git_workspace
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 from hey_my_buddy.protocol.requests import parse_request
@@ -80,11 +79,9 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
         (self.repo / "input.txt").write_text("Explicit input\n", encoding="utf-8", newline="\n")
         board = self.board()
         enable_fixture_buddy(board.store, BUDDY)
-        project = git_workspace.ensure_project_id(git_workspace.repository_at(str(self.repo), allow_parent=True))
         task = "Read the explicit input"
         title = "Read input"
         submitted = board.call("workflow_submit", {
-            "creationKey": _creation_key(["adr032-submit-v1", "project:" + project, title, task]),
             "cwd": str(self.repo), "macroTaskId": "standalone", "title": title, "task": task,
             "buddy": ":".join(BUDDY.values()), "checkout": "existing", "access": "read",
             "inputs": ["input.txt"], "expectedSeconds": 600,

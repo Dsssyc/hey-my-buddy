@@ -70,9 +70,9 @@ class RequestTests(unittest.TestCase):
         packet.update(changes)
         return packet
 
-    def assert_invalid(self, method: str, packet: dict, field: str):
+    def assert_invalid(self, method: str, packet: dict, field: str, *, audience="host"):
         with self.assertRaises(BoardError) as raised:
-            parse_request(method, packet)
+            parse_request(method, packet, audience=audience)
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         self.assertIn(field, str(raised.exception))
 
@@ -105,19 +105,22 @@ class RequestTests(unittest.TestCase):
         self.assert_invalid("accept", {"runId": "run-1", "artifactId": "art-1", "note": "checked",
                                       "notRequired": "no files", "target": {"path": self.cwd, "ref": "main"}}, "target")
 
-    def test_service_variant_requires_derived_key_and_dumps_exact_fields(self):
+    def test_service_and_lead_requests_refuse_public_creation_key(self):
         packet = self.packet()
-        with self.assertRaises(BoardError):
-            parse_request("workflow_submit", packet, audience="service")
-        model = parse_request("workflow_submit", {**packet, "creationKey": "a" * 64}, audience="service")
-        self.assertEqual(dump_request(model)["creationKey"], "a" * 64)
+        model = parse_request("workflow_submit", packet, audience="service")
+        self.assertEqual(dump_request(model), packet)
         self.assertNotIn("writeScope", dump_request(model))
+        self.assert_invalid("workflow_submit", {**packet, "creationKey": "a" * 64}, "creationKey",
+                            audience="service")
+        create = {"cwd": self.cwd, "title": "X", "goal": "Do X"}
+        self.assertEqual(dump_request(parse_request("workflow_create", create, audience="service")), create)
+        self.assert_invalid("workflow_create", {**create, "creationKey": "a" * 64}, "creationKey",
+                            audience="service")
         lead = {key: value for key, value in packet.items() if key != "macroTaskId"}
         lead["buddy"] = "dsh:provider:model:off"
-        with self.assertRaises(BoardError):
-            parse_request("workflow_submit", lead, audience="lead")
-        self.assertEqual(dump_request(parse_request("workflow_submit", {**lead, "creationKey": "b" * 64},
-                                                    audience="lead"))["creationKey"], "b" * 64)
+        self.assertEqual(dump_request(parse_request("workflow_submit", lead, audience="lead")), lead)
+        self.assert_invalid("workflow_submit", {**lead, "creationKey": "b" * 64}, "creationKey",
+                            audience="lead")
 
     def test_get_selector_and_inquiry_identity(self):
         self.assert_invalid("get", {"runId": "run-1", "cwd": self.cwd}, "exactly one")
@@ -139,32 +142,6 @@ class RequestTests(unittest.TestCase):
         self.assertIn("browser", str(raised.exception))
         self.assertEqual(dump_request(parse_request("harness-set", {"harness": "codex", "path": None},
                                                     audience="operations")), {"harness": "codex", "path": None})
-
-
-class LeadCreationKeyTests(unittest.TestCase):
-    def test_standalone_lead_submitting_elsewhere_uses_the_submitted_project(self):
-        packet = {"cwd":"/submitted/project","title":"Child","task":"Inspect another project"}
-        document = {"taskId":"lead-run"}
-        with mock.patch.object(cli,"_call_service",return_value={"macroTaskId":None,"project":{"id":"lead-project"}}), \
-             mock.patch.object(cli,"_project_id",return_value="submitted-project") as project:
-            key = cli._lead_creation_key(packet,document=document,credential="lead-token",state_dir=None)
-        self.assertEqual(key,cli._creation_key(["adr032-submit-v1","project:submitted-project","Child","Inspect another project"]))
-        project.assert_called_once_with(packet["cwd"],None)
-
-    def test_standalone_lead_keeps_different_target_projects_in_distinct_namespaces(self):
-        packet = {'title': 'Review', 'task': 'Inspect the evidence'}
-        with mock.patch.object(cli, '_call_service', return_value={'macroTaskId': None, 'project': {'id': 'lead-project'}}), \
-             mock.patch.object(cli, '_project_id', side_effect=lambda cwd, state: cwd):
-            keys = [cli._lead_creation_key({**packet, 'cwd': cwd}, document={'taskId': 'lead-run'},
-                    credential='lead-token', state_dir=None) for cwd in ('/target/project-a', '/target/project-b')]
-        self.assertNotEqual(keys[0], keys[1])
-
-    def test_grouped_lead_uses_its_macro_namespace(self):
-        packet = {"cwd":"/submitted/project","title":"Child","task":"Inspect another project"}
-        with mock.patch.object(cli,"_call_service",return_value={"macroTaskId":"macro-1"}), \
-             mock.patch.object(cli,"_project_id",side_effect=AssertionError("macro binding is authoritative")):
-            key = cli._lead_creation_key(packet,document={"taskId":"lead-run"},credential="lead-token",state_dir=None)
-        self.assertEqual(key,cli._creation_key(["adr032-submit-v1","macro:macro-1","Child","Inspect another project"]))
 
 
 if __name__ == "__main__":

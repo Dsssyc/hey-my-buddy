@@ -126,8 +126,12 @@ class HarnessServiceTests(BoardTestCase):
         buddy={'harness':'codex','provider':'openai','model':'fixture','effort':'high'}
         enable_fixture_buddy(self.board,buddy)
         base={'title':'discovery-submit','macroTaskId':'standalone','task':'fixture','cwd':str(self.directory),
-              'buddy':'route','checkout':'existing','access':'read','inputs':[],'expectedSeconds':60,'creationKey':'0'*64}
-        with patch.object(self.board.workflow,'submit_normalized',return_value={'admitted':True}), patch.object(self.service.harnesses,'refresh') as refresh:
+              'buddy':'route','checkout':'existing','access':'read','inputs':[],'expectedSeconds':60}
+        def submit(_normalized, *, prepare_buddy):
+            prepare_buddy()
+            return {'admitted': True}
+
+        with patch.object(self.board.workflow,'submit_normalized',side_effect=submit), patch.object(self.service.harnesses,'refresh') as refresh:
             self.assertTrue(self.call('workflow_submit',**base)['admitted'])
             refresh.assert_not_called()
             self.assertTrue(self.call('workflow_submit',**{**base,'buddy':':'.join(buddy.values())})['admitted'])

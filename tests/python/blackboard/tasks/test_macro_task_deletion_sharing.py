@@ -14,7 +14,6 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy import private_dirs
 from hey_my_buddy.buddy.harnesses import registry as harness_registry
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.cli.main import _creation_key
 from support import native_exists, native_is_dir, native_is_file, native_read_bytes, native_unlink, native_write_bytes
 
 
@@ -34,13 +33,10 @@ class DeletionSharingTests(RealWorkspaceTestCase):
 
     def submit_group(self,board,request_id,*,kind='existing',cwd=None,write_scope=None):
         cwd = str(cwd or self.repo)
-        project_id = workspace.ensure_project_id(workspace.repository_at(cwd, allow_parent=True))
-        created = board.call('workflow_create', {'cwd': cwd, 'title': request_id, 'goal': request_id,
-            'creationKey': _creation_key(['adr032-create-v1', project_id, request_id])})
+        created = board.call('workflow_create', {'cwd': cwd, 'title': request_id, 'goal': request_id})
         task = 'Private shared-object fixture'
         run = board.call('workflow_submit',{
             'cwd': cwd, 'title': request_id, 'task': task, 'macroTaskId': created['macroTaskId'],
-            'creationKey': _creation_key(['adr032-submit-v1', 'macro:' + created['macroTaskId'], request_id, task]),
             'buddy': ':'.join(BUDDY.values()), 'checkout': kind, 'access': 'write',
             'inputs': [], 'writeScope': write_scope or ['.'], 'expectedSeconds': 1800,
         })

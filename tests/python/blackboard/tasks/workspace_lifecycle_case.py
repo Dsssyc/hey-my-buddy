@@ -80,12 +80,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         return None
 
     def submit_run(self, board, params):
-        from hey_my_buddy.cli.main import _creation_key
-        project_id=workspace_module.ensure_project_id(workspace_module.repository_at(params["cwd"],allow_parent=True))
         params={"macroTaskId":"standalone", "buddy":":".join(BUDDY.values()), "inputs":[], "expectedSeconds":1800, **params}
-        namespace = ("project:" + project_id if params["macroTaskId"] == "standalone"
-                     else "macro:" + params["macroTaskId"])
-        params["creationKey"]=_creation_key(["adr032-submit-v1",namespace,params["title"],params["task"]])
         reply=board.call("workflow_submit",params)
         return {**self.view(board,reply["runId"]),**reply}
 

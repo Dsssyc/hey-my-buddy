@@ -46,7 +46,7 @@ class ReminderBoardTests(BoardTestCase):
         enable_fixture_buddy(self.board_instance.store, DSH_BUDDY)
         with patch.object(workflow, "_workspace_module", MockWorkspace(self.directory)):
             submitted = self.client.workflow_submit(
-                creationKey="a" * 64, macroTaskId="standalone", title="reminder-native",
+                 macroTaskId="standalone", title="reminder-native",
                 task="Observe native activity", cwd=str(self.workdir()),
                 buddy=":".join(DSH_BUDDY.values()), checkout="existing", access="read",
                 inputs=[], expectedSeconds=expected_seconds,

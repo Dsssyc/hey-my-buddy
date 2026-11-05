@@ -2,7 +2,6 @@
 from unittest import mock
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.errors import BoardError
@@ -110,7 +109,6 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
             ("workflow_cancel", {"runId": run_id, "note": "stop this fixture"}),
             ("inquiry_observe", {"runId": run_id}),
             ("workflow_submit", {"cwd": str(self.workdir()), "macroTaskId": "standalone",
-                                  "creationKey": _creation_key(["adr032-submit-v1", "project:fenced", created_title, created_task]),
                                   "title": created_title, "task": created_task, "buddy": buddy,
                                   "checkout": "existing", "access": "write", "inputs": [],
                                   "writeScope": ["."], "expectedSeconds": 600}),

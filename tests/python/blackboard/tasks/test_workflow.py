@@ -20,7 +20,6 @@ from protocol.fixtures import native_turn
 from support import BoardTestCase, enable_fixture_buddy
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 
 NONCE = "n" * 16
@@ -55,10 +54,7 @@ class WorkflowTestCase(BoardTestCase):
         macro = extra.pop("create_macro", None)
         macro_id = extra.pop("macroTaskId", None)
         if macro is not None:
-            macro_title = macro.get("title")
-            project_id = self.workspace.ensure_project_id(self.workspace.repository_at(cwd, allow_parent=True))
-            creation_key = _creation_key(["adr032-create-v1", project_id, macro_title])
-            created = board.call("workflow_create", {"cwd": cwd, **macro, "creationKey": creation_key})
+            created = board.call("workflow_create", {"cwd": cwd, **macro})
             macro_id = created["macroTaskId"]
         workspace = extra.pop("workspace", None) or {}
         checkout = extra.pop("kind", workspace.get("kind", "existing"))
@@ -68,12 +64,9 @@ class WorkflowTestCase(BoardTestCase):
         if isinstance(selected_buddy, dict):
             enable_fixture_buddy(board.store, selected_buddy)
             selected_buddy = ":".join(selected_buddy[key] for key in BUDDY)
-        submission_owner = ("macro:" + macro_id if macro_id else "project:" +
-                            self.workspace.ensure_project_id(self.workspace.repository_at(cwd, allow_parent=True)))
         params = {"cwd": cwd, "title": title, "task": task, "buddy": selected_buddy,
                   "checkout": checkout, "access": access, "expectedSeconds": extra.pop("expectedSeconds", 1800),
                   "macroTaskId": macro_id or "standalone",
-                  "creationKey": _creation_key(["adr032-submit-v1", submission_owner, title, task]),
                   **extra}
         if checkout != "none":
             params.setdefault("inputs", workspace.get("includeUntracked", []))
@@ -818,8 +811,7 @@ class LifecycleTests(WorkflowTestCase):
         for operation, params in (
             ("workflow_submit", {"cwd": str(self.workdir("evil")), "macroTaskId": "standalone",
                                  "title": "forged", "task": "x", "buddy": "route", "checkout": "existing",
-                                 "access": "read", "inputs": [], "expectedSeconds": 60,
-                                 "creationKey": "f" * 64}),
+                                 "access": "read", "inputs": [], "expectedSeconds": 60}),
             ("execution_progress", {}),
         ):
             with self.assertRaises(BoardError) as raised:
@@ -881,7 +873,7 @@ class WorkspaceTests(WorkflowTestCase):
                         "macroTaskId": "standalone", "title": f"missing-workspace-{index}",
                         "task": "must choose a checkout", "buddy": "route", "access": "write",
                         "inputs": [], "writeScope": ["."], "expectedSeconds": 600,
-                        "creationKey": "a" * 64, **checkout,
+                        **checkout,
                     })
                 self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
                 self.assertIn("checkout", raised.exception.message)
@@ -996,6 +988,18 @@ class WorkspaceTests(WorkflowTestCase):
 
 
 class IdempotencyTests(WorkflowTestCase):
+    def test_capture_cannot_switch_the_project_that_determined_its_key(self):
+        board = self.board()
+        root = str(self.workdir())
+        with patch.object(self.workspace, '_checkout_identity', return_value={
+                'projectId': 'replacement-project', 'checkoutRoot': root}):
+            with self.assertRaises(BoardError) as rejected:
+                self.submit(board, kind='worktree')
+        self.assertEqual(rejected.exception.code, 'WORKSPACE_CHANGED')
+        with board.store.db.read() as connection:
+            for table in ('tasks', 'workflow_runs', 'workspace_reservations', 'workflow_artifacts'):
+                self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0)
+
     def test_creation_key_replay_uses_the_first_authorization(self):
         board = self.board()
         first = self.submit(board, kind="worktree", access="read")
@@ -1330,7 +1334,7 @@ class NestedSpecTests(WorkflowTestCase):
             board.call("workflow_submit", {"cwd": str(self.workdir("missing-duration")),
                                            "macroTaskId": "standalone", "title": "missing duration",
                                            "task": "duration required", "buddy": "route", "checkout": "existing",
-                                           "access": "read", "inputs": [], "creationKey": "e" * 64})
+                                           "access": "read", "inputs": []})
         self.assertEqual(missing.exception.code, "INVALID_ARGUMENT")
         self.assertIn("expectedSeconds", missing.exception.message)
         for value in (0, -1, True, None, 1.5):
@@ -1347,8 +1351,7 @@ class NestedSpecTests(WorkflowTestCase):
         board = self.board()
         params = {"cwd": str(self.workdir("nested")), "macroTaskId": "standalone",
                   "title": "flat title", "task": "flat task", "buddy": "route", "checkout": "worktree",
-                  "access": "write", "inputs": [], "writeScope": ["."], "expectedSeconds": 600,
-                  "creationKey": "f" * 64}
+                  "access": "write", "inputs": [], "writeScope": ["."], "expectedSeconds": 600}
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_submit", {**params, "spec": {"task": "different task"}})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")

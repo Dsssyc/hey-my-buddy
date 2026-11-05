@@ -231,7 +231,6 @@ class BoundaryReadingTests(RouterDispatchTestCase):
                 "cwd": str(self.workdir()), "macroTaskId": "standalone", "title": "routed task",
                 "task": "do the thing", "buddy": "route", "checkout": "existing", "access": "write",
                 "inputs": [], "writeScope": ["."], "expectedSeconds": 60,
-                "creationKey": "c" * 64,
             })
             routed = self.board_.call("workflow_get", {"runId": submitted["runId"]})["routing"]
             first = self.claim("linked", task_id=routed["taskId"])["claim"]

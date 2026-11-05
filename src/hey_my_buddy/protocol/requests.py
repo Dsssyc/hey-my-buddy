@@ -1,8 +1,7 @@
 """Pydantic requests for the supported CLI and its matching service operations.
 
-The Host models describe caller input.  The service variants add only facts the
-CLI derives mechanically, such as ``creationKey``.  The service authenticates
-and removes transport credentials before parsing one of these requests.
+The models describe caller input. The service authenticates and removes
+transport credentials before parsing a request, then derives creation identity.
 """
 from __future__ import annotations
 
@@ -127,10 +126,6 @@ class CreateRequest(Request):
     goal: Text = Field(description="Nonempty goal, at most 1 MiB UTF-8")
 
 
-class CreateWireRequest(CreateRequest):
-    creationKey: Digest = Field(description="CLI-derived versioned key from projectId and title")
-
-
 class AmendRequest(Request):
     """Append a macro task goal revision, or return the current identical goal."""
     macroTaskId: RunId
@@ -191,11 +186,7 @@ class SubmitRequest(_Submission):
         return self
 
 
-class SubmitWireRequest(SubmitRequest):
-    creationKey: Digest = Field(description="CLI-derived versioned key from macroTaskId or projectId, title and task")
-
-
-class LeadSubmitInputRequest(_Submission):
+class LeadSubmitRequest(_Submission):
     """Lead-owned submission; macro task and owner come from the credential."""
 
     @model_validator(mode="after")
@@ -203,10 +194,6 @@ class LeadSubmitInputRequest(_Submission):
         if self.buddy == "route":
             raise ValueError("Lead submission requires a complete named buddy")
         return self
-
-
-class LeadSubmitRequest(LeadSubmitInputRequest):
-    creationKey: Digest = Field(description="CLI-derived versioned key from the Lead's macro task or project, title and task")
 
 
 class AwaitRequest(Request):
@@ -502,7 +489,7 @@ OPERATIONS_REQUESTS: dict[str, type[Request]] = {
     "restart": ServiceControlRequest, "stop": ServiceControlRequest,
 }
 ROLE_REQUESTS: dict[str, type[Request]] = {
-    "submit": LeadSubmitInputRequest, "get": RoleGetRequest, "await": AwaitRequest,
+    "submit": LeadSubmitRequest, "get": RoleGetRequest, "await": AwaitRequest,
     "inquire": InquireRequest, "continue": ContinueRequest, "accept": AcceptRequest,
     "conclude": ConcludeRequest, "cancel": CancelRequest,
     "suggest": SuggestRequest, "list": LeadListRequest,
@@ -547,7 +534,7 @@ OPERATION_TO_METHOD = {
 }
 
 
-def request_model(name: str, *, audience: Literal["host", "operations", "role", "service", "lead", "lead_cli", "local"] = "host") -> type[Request]:
+def request_model(name: str, *, audience: Literal["host", "operations", "role", "service", "lead", "local"] = "host") -> type[Request]:
     """Select the one request model for a CLI audience or named operation."""
     if audience == "local" and name == "output":
         return OutputRequest
@@ -558,10 +545,6 @@ def request_model(name: str, *, audience: Literal["host", "operations", "role", 
     if audience == "service":
         if method == "console":
             return ConsoleWireRequest
-        if method == "create":
-            return CreateWireRequest
-        if method == "submit":
-            return SubmitWireRequest
         if normalized_name == "service_control":
             return ServiceControlWireRequest
         return HOST_REQUESTS.get(method) or OPERATIONS_REQUESTS.get(method) or ROLE_REQUESTS[method]
@@ -569,13 +552,11 @@ def request_model(name: str, *, audience: Literal["host", "operations", "role", 
         if method == "submit":
             return LeadSubmitRequest
         return ROLE_REQUESTS[method]
-    if audience == "lead_cli":
-        return ROLE_REQUESTS[method]
     registry = {"host": HOST_REQUESTS, "operations": OPERATIONS_REQUESTS, "role": ROLE_REQUESTS}[audience]
     return registry[method]
 
 
-def parse_request(name: str, payload: dict, *, audience: Literal["host", "operations", "role", "service", "lead", "lead_cli", "local"] = "host") -> Request:
+def parse_request(name: str, payload: dict, *, audience: Literal["host", "operations", "role", "service", "lead", "local"] = "host") -> Request:
     """Validate one JSON request and report field paths in a board error."""
     model = request_model(name, audience=audience)
     try:

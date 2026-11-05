@@ -35,7 +35,7 @@ class CurrentSubmissionInputTests(unittest.TestCase):
         return {"cwd": root, "macroTaskId": "standalone", "title": "Inspect checkout",
                 "task": "Inspect this checkout", "buddy": "route", "checkout": "existing",
                 "access": "write", "inputs": [], "writeScope": ["."],
-                "expectedSeconds": 1800, "creationKey": "a" * 64}
+                "expectedSeconds": 1800}
 
     def helper_params(self, root):
         return {"title": "Check dependency", "task": "Check a dependency", "cwd": root,
@@ -225,7 +225,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
                 "cwd": str(self.workdir("rejected-workspace")), "macroTaskId": "standalone",
                 "title": "rejected-workspace", "task": "Inspect routing", "buddy": "route",
                 "checkout": "existing", "access": "write", "inputs": [], "writeScope": ["."],
-                "expectedSeconds": 1800, "creationKey": "b" * 64,
+                "expectedSeconds": 1800,
                 "executionWorkspace": {"kind": "existing", "access": "write"},
             })
         self.assertEqual(wrapped.exception.details["field"], "executionWorkspace")

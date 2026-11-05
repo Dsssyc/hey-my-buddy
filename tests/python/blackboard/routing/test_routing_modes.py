@@ -175,7 +175,7 @@ class RoutingModesTests(BoardTestCase):
     def test_mode_and_fallback_are_retired_submission_input(self):
         valid = {"cwd": "/tmp/fixture", "macroTaskId": "standalone", "title": "test",
                  "task": "x", "buddy": "route", "checkout": "existing", "access": "read",
-                 "inputs": [], "expectedSeconds": 60, "creationKey": "a" * 64}
+                 "inputs": [], "expectedSeconds": 60}
         for payload in ({"routingMode": "quick"}, {"routingMode": "fast"}, {"routingMode": None},
                         {"allowRoutingFallback": "false"}, {"allowRoutingFallback": True}):
             with self.subTest(payload=payload), self.assertRaises(BoardError) as raised:

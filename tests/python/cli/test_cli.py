@@ -1,11 +1,10 @@
-"""ADR-032 CLI surface and deterministic creation identities."""
+"""ADR-032 CLI surface and public creation requests."""
 from __future__ import annotations
 
 import contextlib
 import io
 import json
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -50,63 +49,45 @@ class SurfaceTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "FORBIDDEN")
 
 
-class CreationKeyTests(unittest.TestCase):
+class CreationRequestTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
-        (self.root / "subdir").mkdir()
         state = self.root / "private-state"
         state.mkdir()
         state_patch = mock.patch.object(cli, "get_state_dir", return_value=state)
         state_patch.start()
         self.addCleanup(state_patch.stop)
 
-    def test_create_replay_and_worktree_subdirectory_use_one_project_key(self):
+    def test_create_sends_one_validated_public_request(self):
         calls = []
         def service(method, params, state_dir):
-            if method == "get":
-                return {"project": {"id": "project-id"}, "items": []}
             calls.append((method, dict(params)))
             return {"macroTaskId": "mt-1", "status": "open", "actions": ["amend", "submit", "get"]}
         with mock.patch.object(cli, "_call_service", side_effect=service):
-            first = invoke("create", {"cwd": str(self.root), "title": "Analysis", "goal": "Compare outputs"})
-            replay = invoke("create", {"cwd": str(self.root / "subdir"), "title": "  Analysis  ", "goal": "Different goal is not an amendment"})
-            changed = invoke("create", {"cwd": str(self.root), "title": "Analysis 2", "goal": "Compare outputs"})
-        self.assertEqual(first[0], replay[0], 0)
-        self.assertEqual(calls[0][1]["creationKey"], calls[1][1]["creationKey"])
-        self.assertEqual(calls[1][1]["title"], "Analysis")
-        self.assertNotEqual(calls[0][1]["creationKey"], calls[2][1]["creationKey"])
-        self.assertNotIn("creationKey", {"cwd": str(self.root), "title": "Analysis", "goal": "Compare outputs"})
-        self.assertEqual(first[1]["actions"], ["amend", "submit", "get"])
+            status, result = invoke("create", {"cwd": str(self.root), "title": "  Analysis  ", "goal": "Compare outputs"})
+        self.assertEqual(status, 0, result)
+        self.assertEqual(calls, [("create", {"cwd": str(self.root), "title": "Analysis", "goal": "Compare outputs"})])
+        self.assertEqual(result["actions"], ["amend", "submit", "get"])
 
-    def test_standalone_submit_key_binds_project_title_and_task(self):
-        calls = []
-        def service(method, params, state_dir):
-            if method == "get":
-                return {"project": {"id": "project-id"}, "items": []}
-            calls.append(dict(params))
-            return {"runId": "run-1", "status": "queued", "actions": ["await", "inquire", "cancel"]}
-        packet = {"cwd": str(self.root), "macroTaskId": "standalone", "title": "Review",
-                  "task": "  Read the changes  ", "buddy": "route", "checkout": "existing", "access": "read",
-                  "inputs": [], "expectedSeconds": 600}
-        with mock.patch.object(cli, "_call_service", side_effect=service):
-            self.assertEqual(invoke("submit", packet)[0], 0)
-            self.assertEqual(invoke("submit", {**packet, "cwd": str(self.root / "subdir")})[0], 0)
-            self.assertEqual(invoke("submit", {**packet, "task": "Read new changes"})[0], 0)
-        self.assertEqual(calls[0]["creationKey"], calls[1]["creationKey"])
-        self.assertNotEqual(calls[0]["creationKey"], calls[2]["creationKey"])
-        self.assertEqual(calls[0]["task"], "  Read the changes  ")
-        self.assertNotIn("requestId", calls[0])
-        self.assertNotIn("submissionToken", calls[0])
-
-    def test_grouped_lead_key_reads_its_macro_binding(self):
+    def test_standalone_submit_sends_one_validated_public_request(self):
         calls = []
         def service(method, params, state_dir):
             calls.append((method, dict(params)))
-            if method == "workflow_get":
-                return {"runId": "lead-run", "macroTaskId": "mt-9", "project": {"id": "a" * 64}}
+            return {"runId": "run-1", "status": "queued", "actions": ["await", "inquire", "cancel"]}
+        packet = {"cwd": str(self.root), "macroTaskId": "standalone", "title": "  Review  ",
+                  "task": "  Read the changes  ", "buddy": "route", "checkout": "existing", "access": "read",
+                  "inputs": [], "expectedSeconds": 600}
+        with mock.patch.object(cli, "_call_service", side_effect=service):
+            status, result = invoke("submit", packet)
+        self.assertEqual(status, 0, result)
+        self.assertEqual(calls, [("submit", {**packet, "title": "Review"})])
+
+    def test_lead_submit_sends_one_validated_scoped_request(self):
+        calls = []
+        def service(method, params, state_dir):
+            calls.append((method, dict(params)))
             return {"runId": "child", "status": "queued", "actions": ["await"]}
         packet = {"cwd": str(self.root), "title": "Child", "task": "Do the work",
                   "buddy": "dsh:provider:model:off", "checkout": "existing", "access": "read",
@@ -115,13 +96,7 @@ class CreationKeyTests(unittest.TestCase):
         with mock.patch.object(cli, "_call_service", side_effect=service):
             status, _ = invoke("submit", packet, document=document)
         self.assertEqual(status, 0, _)
-        self.assertEqual(calls[0][0], "workflow_get")
-        self.assertEqual(calls[0][1], {"runId": "lead-run", "credential": "private"})
-        self.assertEqual(calls[1][0], "submit")
-        self.assertEqual(calls[1][1]["credential"], "private")
-        self.assertNotIn("macroTaskId", calls[1][1])
-        self.assertEqual(calls[1][1]["creationKey"], cli._creation_key(
-            ["adr032-submit-v1", "macro:mt-9", "Child", "Do the work"]))
+        self.assertEqual(calls, [("submit", {**packet, "credential": "private"})])
 
 
 if __name__ == "__main__":

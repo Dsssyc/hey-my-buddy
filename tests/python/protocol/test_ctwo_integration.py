@@ -128,14 +128,11 @@ class CTwoIntegrationTests(unittest.TestCase):
                  "commit", "--allow-empty", "-qm", "private integration input"))):
             process = self.spawn(["git", *arguments], f"git-{number}", cwd=work)
             self.assertEqual(process.wait(timeout=5), 0)
-        from hey_my_buddy.cli.main import _creation_key
-        from hey_my_buddy.blackboard.tasks import workspace
-        project_id=workspace.ensure_project_id(workspace.repository_at(str(work),allow_parent=True))
         title='ctwo-integration'
         task='model-free live transport fixture'
         submitted=self.client.call('workflow_submit',{'cwd':str(work),'macroTaskId':'standalone','title':title,'task':task,
             'buddy':':'.join(BUDDY.values()),'checkout':'existing','access':'write','inputs':[],'writeScope':['.'],
-            'expectedSeconds':30,'creationKey':_creation_key(['adr032-submit-v1','project:'+project_id,title,task])})
+            'expectedSeconds':30})
         self.run_id = submitted["runId"]
 
     def attach_execution(self):

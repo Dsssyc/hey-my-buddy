@@ -4,13 +4,11 @@ from unittest.mock import patch
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from blackboard.tasks.test_workflow_real import RealWorkspaceTestCase
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.cli.main import _creation_key
-from hey_my_buddy.blackboard.tasks import workspace
 from support import enable_fixture_buddy
 
 
 class ExplicitSubmitTests(RealWorkspaceTestCase):
-    def test_disabled_submit_creates_no_workspace_or_durable_records(self):
+    def test_disabled_submit_resolves_project_without_admitting_work(self):
         board = self.board()
         with board.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=0")
@@ -18,14 +16,11 @@ class ExplicitSubmitTests(RealWorkspaceTestCase):
                   "workflow_requests", "workspace_reservations", "events", "commands")
         with board.store.db.read() as db:
             before = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")] for table in tables}
-        project_id = workspace.ensure_project_id(workspace.repository_at(self.repo, allow_parent=True))
-        refs = self.git("for-each-ref", "refs/hey-my-buddy")
+        self.assertEqual(self.git('for-each-ref', 'refs/hey-my-buddy'), '')
         params = {"cwd": str(self.repo), "title": "disabled", "task": "do the work",
                   "macroTaskId": "standalone", "buddy": ":".join(BUDDY.values()),
                   "checkout": "worktree", "access": "write", "inputs": [], "writeScope": ["."],
-                  "expectedSeconds": 1800,
-                  "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id,
-                                                "disabled", "do the work"])}
+                  "expectedSeconds": 1800}
         with patch.object(board.store.workflow, "_submission_preparation") as prepare:
             with self.assertRaises(BoardError) as rejected:
                 board.call("workflow_submit", params)
@@ -33,7 +28,8 @@ class ExplicitSubmitTests(RealWorkspaceTestCase):
         self.assertEqual(rejected.exception.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(rejected.exception.details["reason"], {"code": "not-enabled", "params": {}})
         self.assertIs(rejected.exception.details["enabled"], False)
-        self.assertEqual(self.git("for-each-ref", "refs/hey-my-buddy"), refs)
+        self.assertEqual(self.git('for-each-ref', '--format=%(refname)', 'refs/hey-my-buddy').splitlines(),
+                         ['refs/hey-my-buddy/project'])
         self.assertFalse((board.directory / "workspaces").exists())
         with board.store.db.read() as db:
             after = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")] for table in tables}

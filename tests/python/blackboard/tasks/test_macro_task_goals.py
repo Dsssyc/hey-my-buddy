@@ -131,11 +131,11 @@ class MacroTaskGoalTests(WorkflowTestCase):
             {"title": "A group", "goal": None},
         ):
             with self.subTest(presentation=presentation), self.assertRaises(BoardError) as caught:
-                board.call("workflow_create", {"cwd": cwd, "creationKey": "a" * 64, **presentation})
+                board.call("workflow_create", {"cwd": cwd, **presentation})
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as description:
-            board.call("workflow_create", {"cwd": cwd, "creationKey": "a" * 64,
-                                           "title": "A group", "goal": "Aim", "description": "old field"})
+            board.call("workflow_create", {"cwd": cwd, "title": "A group", "goal": "Aim",
+                                           "description": "old field"})
         self.assertEqual(description.exception.code, "INVALID_ARGUMENT")
         self.assertIn("description", description.exception.message)
         self.assertEqual(board.store.count_tasks(), 0)

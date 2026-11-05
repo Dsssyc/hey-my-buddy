@@ -4,7 +4,6 @@ from __future__ import annotations
 import re
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 from support import enable_fixture_buddy
 
@@ -13,9 +12,7 @@ class HostWorkflowTests(WorkflowTestCase):
     def test_empty_macro_creation_replay_and_goal_history(self):
         board = self.board()
         cwd = str(self.workdir())
-        project = self.workspace.ensure_project_id(self.workspace.repository_at(cwd, allow_parent=True))
-        key = _creation_key(["adr032-create-v1", project, "Review plan"])
-        packet = {"cwd": cwd, "title": "Review plan", "goal": "First goal", "creationKey": key}
+        packet = {"cwd": cwd, "title": "Review plan", "goal": "First goal"}
         first = board.call("workflow_create", packet)
         self.assertEqual(first["actions"], ["amend", "submit", "get"])
         self.assertEqual(board.store.count_tasks(), 0)

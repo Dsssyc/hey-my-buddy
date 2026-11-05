@@ -22,7 +22,6 @@ from blackboard.tasks.test_workflow_real import BUDDY, GIT_ENV, RealWorkspaceTes
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 
@@ -44,14 +43,11 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
 
     def micro_task_submit(self, board, *, request_id="scope-run", scope=("src",), kind="existing", cwd=None):
         cwd = str(cwd or self.repo)
-        project_id = workspace_module.ensure_project_id(workspace_module.repository_at(cwd, allow_parent=True))
         response = board.call("workflow_submit", {
             "cwd": cwd, "macroTaskId": "standalone", "title": request_id,
             "task": "scoped real workspace task",
             "buddy": ":".join(BUDDY.values()), "checkout": kind, "access": "write",
             "writeScope": list(scope), "inputs": [], "expectedSeconds": 1800,
-            "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id,
-                                          request_id, "scoped real workspace task"]),
         })
         return {**self.view(board, response["runId"]), **response}
 

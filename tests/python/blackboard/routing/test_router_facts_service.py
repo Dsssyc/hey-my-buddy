@@ -39,8 +39,7 @@ class RouterFactsServiceTests(BoardTestCase):
             client = BoardClient(self.directory, autostart=False)
             submitted = client.workflow_submit(cwd=str(work), title="Private route",
                 task="Read frozen routing facts", macroTaskId="standalone", buddy="route",
-                checkout="existing", access="read", inputs=[], expectedSeconds=1800,
-                creationKey="a" * 64)
+                checkout="existing", access="read", inputs=[], expectedSeconds=1800)
             routed = client.workflow_get(run_id=submitted["runId"])
             request_id = routed["routing"]["decisionId"]
 

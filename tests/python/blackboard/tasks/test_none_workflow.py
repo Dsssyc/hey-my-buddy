@@ -8,9 +8,8 @@ from unittest import mock
 
 from blackboard.tasks.test_workflow import WorkflowTestCase, BUDDY
 from blackboard.tasks.test_workflow_worker import MicroTaskWorkerTestCase
-from hey_my_buddy.blackboard.tasks import workflow, workspace, macro_task_deletion
+from hey_my_buddy.blackboard.tasks import workflow, workspace, projects, macro_task_deletion
 from hey_my_buddy.cli.blocking import await_run
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.turn_input import FOLDER_CHANGES_NOTICE
 from support import enable_fixture_buddy, wait_for
@@ -22,14 +21,17 @@ class NoneWorkflowTests(WorkflowTestCase):
         # Keep model-free native provenance, but identify real folders and Git.
         workflow._workspace_module = workspace
 
-    def submit_none(self, board, *, cwd=None, access='read', title='answer', macro=None):
+    def submit_none(self, board, *, cwd=None, access='read', title='answer', macro=None, lead=None, delegation=False):
         cwd = str(cwd or self.workdir())
-        identity = board.call('workflow_get', {'cwd': cwd})['project']['id']
         enable_fixture_buddy(board.store, BUDDY)
         packet = {'cwd': cwd, 'title': title, 'task': title, 'macroTaskId': macro or 'standalone',
                   'buddy': ':'.join(BUDDY.values()), 'checkout': 'none', 'access': access,
-                  'expectedSeconds': 30, 'creationKey': _creation_key([
-                      'adr032-submit-v1', 'macro:' + macro if macro else 'project:' + identity, title, title])}
+                  'expectedSeconds': 30}
+        if lead is not None:
+            packet.pop('macroTaskId')
+            packet['credential'] = lead
+        if delegation:
+            packet['delegationAuthority'] = True
         if access == 'full':
             packet['accessNote'] = 'The fixture authorizes full native access'
         return board.call('workflow_submit', packet)
@@ -158,9 +160,7 @@ class NoneWorkflowTests(WorkflowTestCase):
         folder = self.workdir()
         source = folder / 'keep.txt'
         source.write_text('user source\n')
-        identity = board.call('workflow_get', {'cwd': str(folder)})['project']['id']
-        macro = board.call('workflow_create', {'cwd': str(folder), 'title': 'Review', 'goal': 'Inspect',
-                          'creationKey': _creation_key(['adr032-create-v1', identity, 'Review'])})['macroTaskId']
+        macro = board.call('workflow_create', {'cwd': str(folder), 'title': 'Review', 'goal': 'Inspect'})['macroTaskId']
         run = self.submit_none(board, cwd=folder, access='write', macro=macro)
         self.finish_none(board, run)
         fixed = Path(self.view(board, run)['artifacts'][0]['resultFile']['path'])
@@ -225,13 +225,12 @@ class NoneWorkflowTests(WorkflowTestCase):
     def test_macro_none_helper_freezes_its_own_execution_project(self):
         board = self.board()
         folder = self.workdir('parent-folder')
+        macro = board.call('workflow_create', {'cwd': str(folder), 'title': 'Project A', 'goal': 'Review'})['macroTaskId']
         identity = board.call('workflow_get', {'cwd': str(folder)})['project']['id']
-        macro = board.call('workflow_create', {'cwd': str(folder), 'title': 'Project A', 'goal': 'Review',
-                          'creationKey': _creation_key(['adr032-create-v1', identity, 'Project A'])})['macroTaskId']
         parent = self.submit_none(board, cwd=folder, macro=macro)
         self.finish_none(board, parent, disposition='assistance')
         helper_cwd = self.workdir('helper-folder')
-        expected = board.call('workflow_get', {'cwd': str(helper_cwd)})['project']['id']
+        expected = projects.folder_id(str(helper_cwd))
         view = self.view(board, parent)
         approved = self.decide(board, view, view['activeRequest']['requestId'], helpers=[{
             'cwd': str(helper_cwd), 'task': 'Check from a separate project',
@@ -243,6 +242,54 @@ class NoneWorkflowTests(WorkflowTestCase):
         self.assertEqual(frozen['path'], str(helper_cwd))
         self.assertNotEqual(frozen['projectId'], identity)
         self.finish_turn(board, claim, seal=False)
+
+    def test_standalone_lead_targets_distinct_projects_and_replays_after_git_conversion(self):
+        board = self.board()
+        parent = self.submit_none(board, cwd=self.workdir('lead-project'), access='full', delegation=True)
+        claim = self.claim(board, run_id=parent['runId'])['claim']
+        credential = claim['agentCredential']
+        first_cwd, second_cwd = self.workdir('target-a'), self.workdir('target-b')
+        first = self.submit_none(board, cwd=first_cwd, title='Check evidence', lead=credential)
+        second = self.submit_none(board, cwd=second_cwd, title='Check evidence', lead=credential)
+        self.assertNotEqual(first['runId'], second['runId'])
+        self.assertEqual(self.view(board, first)['project']['id'], projects.folder_id(str(first_cwd)))
+        self.assertEqual(self.view(board, second)['project']['id'], projects.folder_id(str(second_cwd)))
+        with self.assertRaises(BoardError) as denied:
+            board.call('workflow_get', {'cwd': str(first_cwd), 'credential': credential})
+        self.assertEqual(denied.exception.code, 'FORBIDDEN')
+        subprocess.run(['git', '-C', str(first_cwd), 'init', '-q'], check=True, capture_output=True)
+        self.assertEqual(board.call('workflow_get', {'cwd': str(first_cwd)})['project']['kind'], 'folder')
+        self.assertIsNone(workspace.read_project_id(workspace.repository_at(first_cwd, allow_parent=True)))
+        with mock.patch.object(board.service, '_touch_harnesses', side_effect=AssertionError('replay must skip discovery')), \
+             mock.patch.object(board.store.workflow, '_validated_buddy', side_effect=AssertionError('replay must skip selection')):
+            replay = self.submit_none(board, cwd=first_cwd, title='Check evidence', lead=credential)
+        self.assertEqual(replay['runId'], first['runId'])
+        self.assertTrue(replay['alreadyExists'])
+        self.assertEqual(board.call('workflow_get', {'cwd': str(first_cwd)})['project']['kind'], 'git')
+        self.assertEqual(workspace.read_project_id(workspace.repository_at(first_cwd, allow_parent=True)),
+                         projects.folder_id(str(first_cwd)))
+        newer = self.submit_none(board, cwd=first_cwd, title='Another review', lead=credential)
+        self.assertEqual(self.view(board, newer)['project']['kind'], 'git')
+        self.assertEqual(self.view(board, first)['project']['kind'], 'folder')
+        with board.store.db.read() as db:
+            keys = [row[0] for row in db.execute('SELECT creation_key FROM workflow_runs WHERE run_id IN (?,?)',
+                                                (first['runId'], second['runId']))]
+        self.assertEqual(len(set(keys)), 2)
+
+    def test_grouped_lead_uses_its_macro_task_for_the_service_key(self):
+        board = self.board()
+        root = self.workdir('grouped-project')
+        subprocess.run(['git', '-C', str(root), 'init', '-q'], check=True, capture_output=True)
+        nested = root / 'nested'
+        nested.mkdir()
+        macro = board.call('workflow_create', {'cwd': str(root), 'title': 'Grouped review', 'goal': 'Review'})['macroTaskId']
+        parent = self.submit_none(board, cwd=root, access='full', macro=macro, delegation=True)
+        credential = self.claim(board, run_id=parent['runId'])['claim']['agentCredential']
+        child = self.submit_none(board, cwd=root, title='Child review', lead=credential)
+        replay = self.submit_none(board, cwd=nested, title='Child review', lead=credential)
+        self.assertEqual(replay['runId'], child['runId'])
+        self.assertTrue(replay['alreadyExists'])
+        self.assertEqual(self.view(board, child)['macroTaskId'], macro)
 
 class NoneWorkerTurnTests(MicroTaskWorkerTestCase):
     def test_offline_native_worker_runs_at_folder_cwd_publishes_receipt_and_accepts(self):

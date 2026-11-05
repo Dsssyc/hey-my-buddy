@@ -640,8 +640,8 @@ class BoardService(_BaseResource):
     def workflow_submit(self, request_json: str) -> str:
         def handler(params):
             normalized=self.store.workflow.normalize_submission(params)
-            self._touch_harnesses(normalized,explicit=True)
-            return self.store.workflow.submit_normalized(params,normalized)
+            return self.store.workflow.submit_normalized(normalized,
+                prepare_buddy=lambda: self._touch_harnesses(normalized,explicit=True))
         return self._guard("workflow.submit", request_json, handler)
 
     def workflow_get(self, request_json: str) -> str:

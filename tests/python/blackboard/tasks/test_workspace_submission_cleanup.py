@@ -10,8 +10,7 @@ from unittest.mock import patch
 
 from blackboard.tasks import test_workflow as workflow_tests
 from blackboard.tasks import test_workflow_preparation as preparation_tests
-from hey_my_buddy.cli.main import _creation_key
-from hey_my_buddy.blackboard.tasks import allocation_revocations, storage, workflow as workflow_module, workspace
+from hey_my_buddy.blackboard.tasks import allocation_revocations, projects, storage, workflow as workflow_module, workspace
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 from support import enable_fixture_buddy
@@ -59,25 +58,24 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.workspace = workspace
         workflow_module._workspace_module = workspace
         self.repo = self.repository('source')
+        self._submission_project_id = workspace.ensure_project_id(
+            workspace.repository_at(str(self.repo), allow_parent=True))
         self._submission_request_ids = {}
 
     def creation_request_id(self, request='rejected', *, macro_task_id='standalone'):
-        project_id = workspace.ensure_project_id(workspace.repository_at(str(self.repo), allow_parent=True))
-        owner = 'project:' + project_id if macro_task_id == 'standalone' else 'macro:' + macro_task_id
-        return 'creation-' + _creation_key(['adr032-submit-v1', owner, request, 'do the thing'])
+        owner = 'project:' + self._submission_project_id if macro_task_id == 'standalone' else 'macro:' + macro_task_id
+        return 'creation-' + projects.creation_key(['adr032-submit-v1', owner, request, 'do the thing'])
 
     def rejected(self, board, request='rejected', **options):
         enable_fixture_buddy(board.store, workflow_tests.BUDDY)
         choice = options.pop('workspace', {'kind': 'worktree', 'access': 'write'})
         macro_task_id = options.pop('macroTaskId', 'standalone')
-        request_id = self.creation_request_id(request, macro_task_id=macro_task_id)
-        self._submission_request_ids[request] = request_id
+        self._submission_request_ids[request] = self.creation_request_id(request, macro_task_id=macro_task_id)
         return board.store.workflow.submit({
             'cwd': str(self.repo), 'macroTaskId': macro_task_id, 'title': request,
             'task': 'do the thing', 'buddy': ':'.join(workflow_tests.BUDDY.values()),
             'checkout': choice['kind'], 'access': choice.get('access', 'write'),
-            'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800,
-            'creationKey': request_id.removeprefix('creation-'), **options,
+            'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800, **options,
         })
 
     def allocation(self, request='rejected'):

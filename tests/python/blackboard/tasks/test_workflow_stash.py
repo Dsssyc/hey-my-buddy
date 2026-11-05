@@ -23,7 +23,6 @@ from support import BoardTestCase, enable_fixture_buddy
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.cli.main import _creation_key
 
 NONCE = "n" * 16
 BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
@@ -64,13 +63,11 @@ class WorkflowStashTestCase(BoardTestCase):
     def submit_and_claim(self, board, *, request_id="req-1"):
         enable_fixture_buddy(board.store, BUDDY)
         cwd = str(self.workdir())
-        project_id = self.workspace.ensure_project_id(self.workspace.repository_at(cwd, allow_parent=True))
         title = request_id
         task = "stash facts task"
         submitted = board.call("workflow_submit", {
             "cwd": cwd, "title": title, "task": task,
             "macroTaskId": "standalone",
-            "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, title, task]),
             "buddy": ":".join(BUDDY.values()), "checkout": "existing", "access": "write",
             "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
         })
@@ -151,12 +148,10 @@ class StartFactFreezingTests(WorkflowStashTestCase):
         self.workspace.stash_inventories[repository] = observed([entry("a" * 40, "queued-time entry")])
         enable_fixture_buddy(board.store, BUDDY)
         cwd = str(self.workdir())
-        project_id = self.workspace.ensure_project_id(self.workspace.repository_at(cwd, allow_parent=True))
         title = "req-1"
         task = "queued change task"
         submitted = board.call("workflow_submit", {
             "cwd": cwd, "title": title, "task": task, "macroTaskId": "standalone",
-            "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, title, task]),
             "buddy": ":".join(BUDDY.values()), "checkout": "existing", "access": "write",
             "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
         })

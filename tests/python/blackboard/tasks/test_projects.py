@@ -5,10 +5,10 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from hey_my_buddy.blackboard.tasks import projects, workspace
 from hey_my_buddy.blackboard.tasks import macro_task_deletion
-from hey_my_buddy.cli.main import _creation_key
 from support import BoardTestCase, macro_summaries
 
 
@@ -61,24 +61,56 @@ class ProjectIdentityTests(unittest.TestCase):
 
 
 class FolderMacroTaskTests(BoardTestCase):
+    def test_get_unknown_folder_or_unmarked_git_is_read_only(self):
+        folder = self.workdir('unknown-project')
+        board = self.board()
+        expected = {'project': None, 'items': [], 'nextCursor': None}
+        with mock.patch.object(workspace, 'ensure_project_id', side_effect=AssertionError('get must not write a marker')):
+            self.assertEqual(board.call('workflow_get', {'cwd': str(folder)}), expected)
+            subprocess.run(['git', '-C', str(folder), 'init', '-q'], check=True, capture_output=True)
+            self.assertEqual(board.call('workflow_get', {'cwd': str(folder)}), expected)
+        self.assertIsNone(workspace.read_project_id(workspace.repository_at(folder, allow_parent=True)))
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM projects').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM macro_tasks').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM events').fetchone()[0], 0)
+
+    def test_get_reads_existing_marker_without_registering_project(self):
+        folder = self.workdir('marked-project')
+        subprocess.run(['git', '-C', str(folder), 'init', '-q'], check=True, capture_output=True)
+        repository = workspace.repository_at(folder, allow_parent=True)
+        identifier = workspace.ensure_project_id(repository)
+        board = self.board()
+        with mock.patch.object(workspace, 'ensure_project_id', side_effect=AssertionError('get must not rewrite a marker')):
+            read = board.call('workflow_get', {'cwd': str(folder)})
+        self.assertEqual(read['project']['id'], identifier)
+        self.assertEqual(read['items'], [])
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM projects').fetchone()[0], 0)
+
     def test_git_conversion_updates_project_but_keeps_old_macro_kind(self):
         folder = self.workdir("drafts")
         board = self.board()
 
         def create(title: str):
             request = {"cwd": str(folder), "title": title, "goal": title}
-            project_id = board.call("workflow_get", {"cwd": str(folder)})["project"]["id"]
-            return board.call("workflow_create", {**request,
-                               "creationKey": _creation_key(["adr032-create-v1", project_id, title])})["macroTaskId"]
+            return board.call("workflow_create", request)["macroTaskId"]
 
         before = create("Before Git")
         folder_project = board.call("workflow_get", {"macroTaskId": before})["project"]
         self.assertEqual(folder_project["kind"], "folder")
 
         subprocess.run(["git", "-C", str(folder), "init", "-q"], check=True, capture_output=True)
+        with board.store.db.read() as db:
+            project_rows_before = [tuple(row) for row in db.execute('SELECT * FROM projects')]
+            event_head = db.execute('SELECT MAX(seq) FROM events').fetchone()[0]
         converted = board.call('workflow_get', {'cwd': str(folder)})['project']
-        self.assertEqual(converted['kind'], 'git')
+        self.assertEqual(converted['kind'], 'folder')
         self.assertEqual(converted['id'], folder_project['id'])
+        self.assertIsNone(workspace.read_project_id(workspace.repository_at(folder, allow_parent=True)))
+        with board.store.db.read() as db:
+            self.assertEqual([tuple(row) for row in db.execute('SELECT * FROM projects')], project_rows_before)
+            self.assertEqual(db.execute('SELECT MAX(seq) FROM events').fetchone()[0], event_head)
         after = create("After Git")
         self.assertEqual(board.call("workflow_get", {"macroTaskId": before})["project"]["kind"], "folder")
         self.assertEqual(board.call("workflow_get", {"macroTaskId": after})["project"]["kind"], "git")
@@ -92,9 +124,7 @@ class FolderMacroTaskTests(BoardTestCase):
         source.write_text("preserve this source\n", encoding="utf-8")
         board = self.board()
         request = {"cwd": str(folder), "title": "Revise paper", "goal": "Review evidence"}
-        project_id = board.call("workflow_get", {"cwd": str(folder)})["project"]["id"]
-        created = board.call("workflow_create", {**request,
-                         "creationKey": _creation_key(["adr032-create-v1", project_id, request["title"]])})
+        created = board.call("workflow_create", request)
         identifier = created["macroTaskId"]
 
         macro = board.call("workflow_get", {"macroTaskId": identifier})

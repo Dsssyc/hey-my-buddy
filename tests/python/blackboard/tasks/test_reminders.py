@@ -5,7 +5,6 @@ from support import BoardTestCase, FakeClock, enable_fixture_buddy
 import uuid
 from unittest.mock import patch
 from hey_my_buddy.blackboard.tasks import reminders
-from hey_my_buddy.cli.main import _creation_key
 
 
 class ReminderFacts(BoardTestCase):
@@ -32,10 +31,8 @@ class ReminderFacts(BoardTestCase):
         workspace = MockWorkspace(self.directory)
         self.enterContext(patch.object(workflow, '_workspace_module', workspace))
         cwd = str(self.workdir())
-        project_id = workspace.ensure_project_id(workspace.repository_at(cwd, allow_parent=True))
         submitted = self.client.workflow_submit(
             title='reminder', task='observe', cwd=cwd, macroTaskId='standalone',
-            creationKey=_creation_key(['adr032-submit-v1', 'project:' + project_id, 'reminder', 'observe']),
             buddy='dsh:deepseek-official:deepseek-flash:off', checkout='existing', access='read',
             inputs=[], expectedSeconds=expected)
         self.task = self.client.get(runId=submitted['runId'])

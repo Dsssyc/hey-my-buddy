@@ -7,7 +7,6 @@ from blackboard.tasks import test_workflow as workflow_fixtures, test_workspace 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import macro_task_deletion as deletion, macro_tasks, worker_sessions, workflow, workspace
 from hey_my_buddy.paths import native_path
-from hey_my_buddy.cli.main import _creation_key
 
 
 class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
@@ -136,10 +135,8 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
 
     def test_empty_retained_scope_is_zero(self):
         board = self.board()
-        project_id = workspace.ensure_project_id(workspace.repository_at(self.repo, allow_parent=True))
         created = board.call('workflow_create', {
             'cwd': str(self.repo), 'title': 'Empty scope', 'goal': 'Empty scope',
-            'creationKey': _creation_key(['adr032-create-v1', project_id, 'Empty scope']),
         })
         before = self.dump(board)
         self.assertEqual(deletion.preview(board.store, created['macroTaskId'])['scope'], {

@@ -577,8 +577,7 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(board.call('ping', {})['status'], 'ok')
         with self.assertRaises(BoardError) as caught:
             board.call('workflow_create', {'cwd': str(self.directory), 'title': 'Blocked by install',
-                                           'goal': 'Do not admit a new macro during cutover',
-                                           'creationKey': 'a' * 64})
+                                           'goal': 'Do not admit a new macro during cutover'})
         self.assertEqual(caught.exception.code,'UPGRADE_IN_PROGRESS')
         self.assertEqual(board.store.count_tasks(),0)
 

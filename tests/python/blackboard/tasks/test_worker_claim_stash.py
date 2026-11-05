@@ -20,7 +20,6 @@ from support import BoardTestCase, enable_fixture_buddy
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.cli.main import _creation_key
 
 NONCE = "n" * 16
 BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
@@ -53,12 +52,10 @@ class ClaimStashTestCase(BoardTestCase):
         selected = {**BUDDY, **{key: extra[key] for key in BUDDY if key in extra}}
         enable_fixture_buddy(board.store, selected)
         cwd = str(cwd)
-        project_id = self.workspace.ensure_project_id(self.workspace.repository_at(cwd, allow_parent=True))
         title = request_id
         task = 'claim stash task'
         response = board.call("workflow_submit", {
             "cwd": cwd, "title": title, "task": task, "macroTaskId": "standalone",
-            "creationKey": _creation_key(['adr032-submit-v1', 'project:' + project_id, title, task]),
             "buddy": ':'.join(selected.values()), "checkout": "existing", "access": "write",
             "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
         })

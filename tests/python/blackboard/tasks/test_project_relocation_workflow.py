@@ -8,8 +8,6 @@ from unittest.mock import patch
 from blackboard.tasks.test_workflow_real import BUDDY
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.cli.main import _creation_key
-from hey_my_buddy.blackboard.tasks import workspace as workspace_module
 
 
 class ProjectRelocationWorkflowTests(LifecycleTestCase):
@@ -17,11 +15,8 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
                   macro_task_id="standalone", macro_title=None):
         cwd = str(cwd or self.repo)
         if macro_title is not None:
-            project_id = workspace_module.ensure_project_id(
-                workspace_module.repository_at(cwd, allow_parent=True))
             created = board.call("workflow_create", {
                 "cwd": cwd, "title": macro_title, "goal": macro_title,
-                "creationKey": _creation_key(["adr032-create-v1", project_id, macro_title]),
             })
             macro_task_id = created["macroTaskId"]
         params = {"cwd": cwd, "title": title, "task": task, "macroTaskId": macro_task_id,
@@ -181,12 +176,13 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         submitted, _claim, manifest, checkout, _seal, delivered, artifact = self.run_worktree(
             board, request_id="relocate-accept-source")
         moved = self._move_repository()
+        before = git(moved, 'rev-parse', 'HEAD').strip()
         git(moved, "apply", "--index", "--binary", artifact["diffPath"])
         git(moved, "commit", "-qm", "integrate managed output")
         with patch.object(board.store.workflow, "_reclaim_checkout",
                           return_value={"removed": False, "reasons": ["fixture-retained"]}):
             accepted = self.accept(board, delivered, artifact,
-                                   target={"path": moved, "ref": "HEAD"})
+                                   target={"path": moved, "ref": "HEAD", 'before': before})
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["integrations"][0]["target"]["projectId"], manifest["projectId"])
         self.assertTrue(checkout.exists())
@@ -205,10 +201,11 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         self.finish_turn(board, claimed, seal)
         delivered = self.view(board, submitted["runId"])
         artifact = next(row for row in delivered["artifacts"] if row["kind"] == "output")
+        before = git(self.repo, 'rev-parse', 'HEAD').strip()
         git(self.repo, "add", "tracked.txt")
         git(self.repo, "commit", "-qm", "integrate existing output")
         moved = self._move_repository()
-        accepted = self.accept(board, delivered, artifact, target={"path": moved, "ref": "HEAD"})
+        accepted = self.accept(board, delivered, artifact, target={"path": moved, "ref": "HEAD", 'before': before})
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["integrations"][0]["target"]["path"], str(moved))
         self.assertEqual(accepted["integrations"][0]["target"]["projectId"], manifest["projectId"])

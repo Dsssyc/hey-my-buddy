@@ -822,14 +822,11 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertIsNone(row['rootLeadRunId'])
 
         claim = self.claim(board, run_id=lead['runId'])['claim']
-        from hey_my_buddy.cli.main import _creation_key
         owned_title, owned_task = 'Owned work', 'Do owned work'
         owned = board.call('workflow_submit', {
             'title': owned_title, 'task': owned_task, 'cwd': lead['task']['cwd'],
             'buddy': ':'.join(BUDDY.values()), 'checkout': 'worktree', 'access': 'write',
             'inputs': [], 'writeScope': ['.'], 'expectedSeconds': 1800,
-            'creationKey': _creation_key(['adr032-submit-v1', 'macro:' + lead['macroTaskId'],
-                                          owned_title, owned_task]),
             'credential': claim['agentCredential'],
         })
         timeline = board.call('macro_task_timeline', {'macroTaskId': lead['macroTaskId']})

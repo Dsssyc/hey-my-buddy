@@ -14,7 +14,6 @@ from blackboard.tasks.test_workflow_real import BUDDY, GIT_ENV, RealWorkspaceTes
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
 from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 
 
@@ -39,13 +38,11 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
 
     def _lead(self, board, request_id: str, repo: Path, worker: str, *, buddy=BUDDY, kind="existing") -> dict:
         task = "Review and direct the child task"
-        project_id = workspace.ensure_project_id(workspace.repository_at(str(repo), allow_parent=True))
         submitted = board.call("workflow_submit", {
             "cwd": str(repo), "macroTaskId": "standalone", "title": request_id, "task": task,
             "buddy": ":".join(buddy.values()), "checkout": kind, "access": "full",
             "accessNote": "Lead review", "writeScope": ["."], "inputs": [],
             "expectedSeconds": 1800, "delegationAuthority": True,
-            "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, request_id, task]),
         })
         claimed = admit_board(board, {'workerId': worker, 'claimRequestId': f'claim-{request_id}', 'nonce': worker[0] * 16, 'runId': submitted['runId']})["claim"]
         self.assertIsNotNone(claimed)
@@ -54,12 +51,10 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
 
     def _child(self, board, lead: dict, request_id: str, *, scope=("src",)) -> dict:
         task = "Change the isolated checkout"
-        project_id = workspace.ensure_project_id(workspace.repository_at(str(self.repo), allow_parent=True))
         submitted = board.call("workflow_submit", {
             "credential": lead["credential"], "cwd": str(self.repo), "title": request_id,
             "task": task, "buddy": ":".join(BUDDY.values()), "checkout": "worktree",
             "access": "write", "writeScope": list(scope), "inputs": [], "expectedSeconds": 1800,
-            "creationKey": _creation_key(["adr032-submit-v1", "project:" + project_id, request_id, task]),
         })
         self.assertNotIn("control", submitted)
         with board.store.db.read() as connection:

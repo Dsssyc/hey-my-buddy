@@ -1614,6 +1614,7 @@ class WorkflowCoordinator:
         run_id = task_row["task_id"]
         if lead is not None:
             self._active_credential(connection, lead)
+        projects.require_capture_identity(projectFacts, manifest)
         projects.record(connection, projectFacts)
         identifier = projectFacts["projectId"]
         macro_tasks.attach_macro_task(connection, macroTaskId, project_id=identifier)
@@ -1675,13 +1676,20 @@ class WorkflowCoordinator:
         return dump_request(model)
 
     def submit(self, params: dict) -> dict:
-        return self.submit_normalized(params, self.normalize_submission(params))
+        return self.submit_normalized(self.normalize_submission(params))
 
-    def submit_normalized(self, params: dict, normalized: dict) -> dict:
+    def submit_normalized(self, normalized: dict, *, prepare_buddy=None) -> dict:
         """Admit a new key once, or return the original authorization and execution choice."""
         scope = current_scope() or {}
         lead = scope if scope.get("kind") == AGENT_KIND else None
-        key = normalized["creationKey"]
+        with self.db.read() as connection:
+            if lead:
+                self._active_credential(connection, lead)
+            macro_task_id = self._run_row(connection, lead["runId"])["macro_task_id"] if lead else normalized["macroTaskId"]
+        identity = projects.identify_for_board(self.board, normalized['cwd'], module=workspace_module())
+        namespace = ('project:' + identity['projectId'] if macro_task_id in (None, 'standalone')
+                     else 'macro:' + macro_task_id)
+        key = projects.creation_key(['adr032-submit-v1', namespace, normalized['title'], normalized['task']])
         with self.db.read() as connection:
             if lead:
                 self._active_credential(connection, lead)
@@ -1694,8 +1702,8 @@ class WorkflowCoordinator:
                     raise BoardError("FORBIDDEN", "The creation key belongs to another Lead's micro task")
                 reject_deleting_run(connection, existing["run_id"])
                 return self._action_view(connection, existing, already_exists=True)
-            macro_task_id = self._run_row(connection, lead["runId"])["macro_task_id"] if lead else normalized["macroTaskId"]
-        identity = projects.identify_for_board(self.board, normalized["cwd"], module=workspace_module())
+        if prepare_buddy is not None:
+            prepare_buddy()
         if normalized["checkout"] != "none" and identity["projectKind"] != "git":
             raise BoardError("WORKSPACE_UNSUPPORTED", "A Git checkout requires a Git project", field="checkout")
         normalized["cwd"] = identity["cwd"]
@@ -1876,18 +1884,15 @@ class WorkflowCoordinator:
     def create(self, params: dict) -> dict:
         from ...protocol.requests import parse_request, dump_request
         request = dump_request(parse_request("create", params, audience="service"))
+        identity = projects.identify_for_board(self.board, request['cwd'], module=workspace_module())
+        key = projects.creation_key(['adr032-create-v1', identity['projectId'], request['title']])
         # A replay does not inspect a changed goal or prepare execution input.
         with self.db.read() as connection:
-            row = connection.execute("SELECT macro_task_id FROM macro_tasks WHERE creation_key=?", (request["creationKey"],)).fetchone()
+            row = connection.execute("SELECT macro_task_id FROM macro_tasks WHERE creation_key=?", (key,)).fetchone()
         if row is not None:
             result = macro_tasks.macro_task_get(self.board, {"macroTaskId": row[0]})
             return {key: result[key] for key in ("macroTaskId", "state", "actions") if key in result} | {"alreadyExists": True}
-        try:
-            if not Path(request["cwd"]).is_dir():
-                raise BoardError("WORKSPACE_UNAVAILABLE", "cwd is not an accessible directory", cwd=request["cwd"])
-        except OSError as error:
-            raise BoardError("WORKSPACE_UNAVAILABLE", "The project directory is unavailable", cwd=request["cwd"], reason=str(error)) from error
-        request.update(projects.identify_for_board(self.board, request["cwd"], module=workspace_module()))
+        request.update(identity, creationKey=key)
         result = macro_tasks.create_macro_task(self.board, request)
         return {key: result[key] for key in ("macroTaskId", "state", "actions", "alreadyExists") if key in result}
 
@@ -1903,14 +1908,9 @@ class WorkflowCoordinator:
         if "macroTaskId" in request:
             return macro_tasks.macro_task_get(self.board, request)
         if "cwd" in request:
-            identity = projects.identify_for_board(self.board, request["cwd"], module=workspace_module())
-            # Resolving the first Git marker also records that current project
-            # transition; earlier macro/run/turn kinds remain their frozen facts.
-            if identity['projectKind'] == 'git':
-                with self.db.write() as connection:
-                    if connection.execute("SELECT 1 FROM projects WHERE project_id=? AND kind='folder'",
-                                          (identity['projectId'],)).fetchone() is not None:
-                        projects.record(connection, identity)
+            identity = projects.find_for_board(self.board, request['cwd'], module=workspace_module())
+            if identity is None:
+                return {'project': None, 'items': [], 'nextCursor': None}
             return macro_tasks.project_get(self.board, {**request, "projectId": identity["projectId"], 'projectFacts': identity})
         run_id = request["runId"]
         with self.db.read() as connection:
@@ -2414,6 +2414,7 @@ class WorkflowCoordinator:
         self, connection, *, helper_task_id, item, run_row, manifest, now, actor
     ) -> None:
         spec = item["spec"]
+        projects.require_capture_identity(item['projectFacts'], manifest)
         fingerprint = schemas.spec_fingerprint(spec)
         effective_cwd = manifest["path"] if manifest else item["executionWorkspace"]["cwd"]
         blocker = self.board._admission_blocker(connection, {**spec, "cwd": effective_cwd})

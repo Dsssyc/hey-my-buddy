@@ -245,17 +245,15 @@ class CoreContractTests(WorkflowTestCase):
         self.assertEqual(board.call("workflow_get",{"runId":child_id})["state"],"cancelled")
         self.assertNotEqual(board.call("workflow_get",{"runId":root["runId"]})["state"],"cancelled")
 
-    def test_same_creation_key_returns_original_choices_without_preparation(self):
+    def test_same_submission_replays_original_choices_without_preparation(self):
         board = self.board()
-        first = self.submit(board, access="read")
-        with board.store.db.read() as connection:
-            key = connection.execute("SELECT creation_key FROM workflow_runs WHERE run_id=?", (first["runId"],)).fetchone()[0]
+        first = self.submit(board, request_id="replay", task="do the thing", access="read")
         prepared = len(self.workspace.prepare_calls)
         replay = board.call("workflow_submit", {
-            "cwd": first["microTask"]["cwd"], "title": "different ignored title", "task": "different ignored task",
+            "cwd": first["microTask"]["cwd"], "title": "replay", "task": "do the thing",
             "macroTaskId": "standalone", "buddy": "nonexistent:provider:model:effort", "checkout": "worktree",
             "access": "full", "accessNote": "A different selection must not change the first admission",
-            "writeScope": ["."], "inputs": [], "expectedSeconds": 60, "creationKey": key,
+            "writeScope": ["."], "inputs": [], "expectedSeconds": 60,
         })
         self.assertEqual(replay["runId"], first["runId"])
         self.assertTrue(replay["alreadyExists"])

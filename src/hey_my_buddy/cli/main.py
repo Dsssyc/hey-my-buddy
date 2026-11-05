@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 
 from ..errors import BoardError
 from ..install.launcher import agent_credential_document, credential_state_dir, take_agent_credential_document
-from ..json_codec import canonical_json, decode_strict_json
+from ..json_codec import decode_strict_json
 from ..protocol import transport
 from ..protocol.requests import (HOST_REQUESTS, OPERATIONS_REQUESTS, ROLE_REQUESTS,
                                  dump_request, parse_output, parse_request)
@@ -88,38 +87,6 @@ def _help_command(arguments: list[str]) -> int:
         _usage_error("INVALID_ARGUMENT", error.message, **error.details)
 
 
-def _project_id(cwd: str, state_dir) -> str:
-    """Use the service's project resolution before deriving a Host creation key."""
-    return _call_service("get", {"cwd": cwd}, state_dir)["project"]["id"]
-
-
-def _creation_key(parts: list[str]) -> str:
-    return hashlib.sha256(canonical_json(parts).encode("utf-8")).hexdigest()
-
-
-def _host_creation_key(method: str, params: dict, *, state_dir=None) -> str:
-    if method == "create":
-        if state_dir is None:
-            raise ValueError("state_dir is required to resolve a project creation key")
-        project_id = _project_id(params["cwd"], state_dir)
-        return _creation_key(["adr032-create-v1", project_id, params["title"]])
-    if params["macroTaskId"] == "standalone":
-        if state_dir is None:
-            raise ValueError("state_dir is required to resolve a project creation key")
-        namespace = "project:" + _project_id(params["cwd"], state_dir)
-    else:
-        namespace = "macro:" + params["macroTaskId"]
-    return _creation_key(["adr032-submit-v1", namespace, params["title"], params["task"]])
-
-
-def _lead_creation_key(params: dict, *, document: dict, credential: str, state_dir) -> str:
-    """Read only this Lead's own binding before deriving the delegated create key."""
-    own = _call_service("workflow_get", {"runId": document["taskId"], "credential": credential}, state_dir)
-    macro_task_id = own.get("macroTaskId")
-    namespace = "macro:" + macro_task_id if macro_task_id else "project:" + own["project"]["id"]
-    return _creation_key(["adr032-submit-v1", namespace, params["title"], params["task"]])
-
-
 def _audience(method: str, credential: str | None) -> str:
     if credential is None:
         if method in ROLE_ONLY:
@@ -131,7 +98,7 @@ def _audience(method: str, credential: str | None) -> str:
         return "operations"
     if method not in ROLE_REQUESTS:
         raise BoardError("FORBIDDEN", f"An execution credential cannot call {method}")
-    return "lead_cli" if method == "submit" else "role"
+    return "role"
 
 
 def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DOCUMENT) -> int:
@@ -162,10 +129,6 @@ def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DO
             params, mode = parse_output(params)
             parsed = parse_request(args.method, params, audience=audience)
             wire = dump_request(parsed)
-            if args.method in ("create", "submit"):
-                wire["creationKey"] = (_lead_creation_key(wire, document=credential_document,
-                    credential=credential, state_dir=state_dir) if credential is not None
-                    else _host_creation_key(args.method, wire, state_dir=state_dir))
             if args.method == "install":
                 from ..install.skill_install import install
                 result = install(wire)

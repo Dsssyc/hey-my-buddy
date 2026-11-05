@@ -7,28 +7,22 @@ from blackboard.tasks.test_workflow_real import BUDDY
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase
 from hey_my_buddy.blackboard.tasks import macro_task_deletion as deletion
 from hey_my_buddy.blackboard.tasks import workspace
-from hey_my_buddy.cli.main import _creation_key
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 
 
 class DeletionAdmissionTests(LifecycleTestCase):
     def submit_case(self, board, *, title, task, cwd, checkout, write_scope, macro_task_id="standalone"):
-        project_id = workspace.ensure_project_id(workspace.repository_at(str(self.repo), allow_parent=True))
-        namespace = "macro:" + macro_task_id if macro_task_id != "standalone" else "project:" + project_id
         return board.call("workflow_submit", {
             "cwd": str(cwd), "macroTaskId": macro_task_id, "title": title, "task": task,
             "buddy": ":".join(BUDDY.values()), "checkout": checkout, "access": "write",
             "writeScope": list(write_scope), "inputs": [], "expectedSeconds": 1800,
-            "creationKey": _creation_key(["adr032-submit-v1", namespace, title, task]),
         })
 
     def test_new_micro_task_cannot_borrow_checkout_after_owner_deletion_is_marked(self):
         board = self.board()
-        project_id = workspace.ensure_project_id(workspace.repository_at(str(self.repo), allow_parent=True))
         created = board.call("workflow_create", {
             "cwd": str(self.repo), "title": "Deleting owner", "goal": "Deleting owner",
-            "creationKey": _creation_key(["adr032-create-v1", project_id, "Deleting owner"]),
         })
         owner = self.submit_case(board, title="deleting-managed-owner", task="Own the managed checkout",
                                  cwd=self.repo, checkout="worktree", write_scope=(".",),

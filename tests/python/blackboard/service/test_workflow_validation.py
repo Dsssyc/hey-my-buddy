@@ -20,7 +20,7 @@ class WorkflowValidationTests(WorkflowTestCase):
         return service
 
     def packet(self):
-        return {"creationKey": "a" * 64, "cwd": str(self.workdir()), "macroTaskId": "standalone",
+        return {"cwd": str(self.workdir()), "macroTaskId": "standalone",
                 "title": "Validate admission", "task": "Review fixture", "buddy": ":".join(BUDDY.values()),
                 "checkout": "existing", "access": "read", "inputs": [], "expectedSeconds": 600}
 
@@ -39,7 +39,7 @@ class WorkflowValidationTests(WorkflowTestCase):
         board = self.board()
         service = self.service(board)
         packet = self.packet()
-        invalid = ({"hostId": "old-host"}, {"requestId": "old-request"},
+        invalid = ({"creationKey": "a" * 64}, {"hostId": "old-host"}, {"requestId": "old-request"},
                    {"executionWorkspace": {"kind": "existing"}}, {"buddyLocked": True},
                    {"access": None}, {"inputs": None}, {"expectedSeconds": 0})
         for change in invalid:
@@ -48,10 +48,10 @@ class WorkflowValidationTests(WorkflowTestCase):
                 self.assertEqual(result["error"]["code"], "INVALID_ARGUMENT")
         self.assert_no_effect(board, service)
 
-    def test_create_requires_cli_derived_key_and_rejects_old_host_ownership(self):
+    def test_create_rejects_caller_key_and_old_host_ownership(self):
         board = self.board()
         service = self.service(board)
-        for change in ({}, {"creationKey": "bad"}, {"creationKey": "b" * 64, "hostId": "old-host"}):
+        for change in ({"creationKey": "bad"}, {"creationKey": "b" * 64}, {"hostId": "old-host"}):
             with self.subTest(change=change):
                 result = self.call(service, "workflow_create", {"cwd": str(self.workdir()),
                                                                    "title": "Parent", "goal": "Do the work", **change})

@@ -6,18 +6,15 @@ from support import enable_fixture_buddy
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.requests import parse_request
 from hey_my_buddy.protocol.workspace_manifest import turn_manifest
-from hey_my_buddy.cli.main import _creation_key
 
 
 class LeadGrantTests(WorkflowTestCase):
     def params(self, **extra):
         cwd = str(self.workdir())
-        namespace = "project:" + self.workspace.ensure_project_id(self.workspace.repository_at(cwd, allow_parent=True))
         return {"title": "Lead", "task": "Integrate the work", "cwd": cwd,
                 "buddy": ":".join(BUDDY.values()), "macroTaskId": "standalone", "checkout": "existing",
                 "inputs": [], "access": "full", "accessNote": "Lead checks", "writeScope": ["."],
-                "expectedSeconds": 1800, "delegationAuthority": True,
-                "creationKey": _creation_key(["adr032-submit-v1", namespace, "Lead", "Integrate the work"]), **extra}
+                "expectedSeconds": 1800, "delegationAuthority": True, **extra}
 
     def grant(self, board, **extra):
         enable_fixture_buddy(board.store, BUDDY)
@@ -55,8 +52,7 @@ class LeadGrantTests(WorkflowTestCase):
 
     def test_helpers_cannot_carry_grants_even_when_false(self):
         packet = self.params()
-        for key in ("macroTaskId", "creationKey"):
-            del packet[key]
+        del packet["macroTaskId"]
         for value in (True, False):
             packet["delegationAuthority"] = value
             with self.subTest(value=value), self.assertRaises(BoardError) as caught:
