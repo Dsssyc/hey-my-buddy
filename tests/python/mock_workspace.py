@@ -281,7 +281,6 @@ class MockWorkspace:
                        "projectId": f"repo:{target}", "ref": ref},
             "beforeCommit": before_commit, "afterCommit": ref, "beforeTree": None, "afterTree": None,
             "sourceCommit": artifact.get("commit"), "sourceTree": artifact.get("tree"),
-            "artifactAncestor": False,
             "mergeBaseCommit": original_input["inputCommit"], "expectedTree": artifact.get("tree"), "conflictingPaths": [],
             "matchingPaths": changed if carried else [],
             "differingPaths": [] if carried else [{"path": item} for item in changed],

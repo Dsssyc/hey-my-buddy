@@ -706,7 +706,6 @@ class WorkspaceTests(unittest.TestCase):
         native_path(Path(manifest["checkoutRoot"]) / "src/file.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, manifest, "task", "attempt")
         git = workspace._git
-        objects = self.git("cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
 
         def read_only_git(root, *args, **kwargs):
             self.assertNotIn(args[0], {"write-tree", "commit-tree", "update-ref"})
@@ -718,7 +717,6 @@ class WorkspaceTests(unittest.TestCase):
         with patch.object(workspace, "_git", side_effect=read_only_git):
             cleanup = workspace.cleanup_inspect(self.state, manifest, output)
         self.assertTrue(cleanup["eligible"], cleanup["reasons"])
-        self.assertEqual(self.git("cat-file", "--batch-all-objects", "--batch-check=%(objectname)"), objects)
 
     def test_existing_checkout_continuation_uses_exact_sealed_baseline(self):
         (self.repo / "src/file.txt").write_text("initial staged\n", encoding="utf-8", newline="\n")

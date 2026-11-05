@@ -148,6 +148,8 @@ class DeletionWorkspaceTests(unittest.TestCase):
         manifest = self.prepare()
         worker = workspace.seal(self.state, manifest, 'task-1', 'attempt-1')
         host = workspace.host_seal(self.state, manifest, 'task-1', 'attempt-1')
+        self.assertEqual(worker['commitKind'], 'evidence')
+        self.assertEqual(worker['commit'], manifest['inputCommit'])
         self.assertEqual(worker['snapshotSha256'], host['snapshotSha256'])
         # Artifact publication deduplicates these equal snapshots. Only the
         # Worker's record remains in SQLite, while both physical seals exist.

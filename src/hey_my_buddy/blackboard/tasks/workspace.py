@@ -1494,7 +1494,7 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
     return entries, changed, sorted(excluded_changes), sorted(adopted)
 
 
-def _finish_output(repository, output, directory, *, manifest):
+def _finish_output(repository, output, directory, *, manifest, fresh=False):
     _validate_output_record(manifest, output)
     expected_ref = f"refs/hey-my-buddy/workspaces/{output['workspaceId']}/outputs/{directory.name}"
     if output["ref"] != expected_ref or output["diffPath"] != str(directory / "output.patch"):
@@ -1505,7 +1505,8 @@ def _finish_output(repository, output, directory, *, manifest):
         patch_data = _diff(repository, output["inputCommit"], output["commit"])
     if _sha(patch_data) != output["diffSha256"]:
         raise BoardError("WORKSPACE_CONFLICT", "The immutable output diff changed", path=str(patch_path))
-    _verify_output_git(repository, output, patch_data)
+    if not fresh:
+        _verify_output_git(repository, output)
     _write_once(patch_path, patch_data)
     _pin(repository, output["ref"], output["commit"])
     _write_once(directory / "output.json", _json(output))
@@ -1582,7 +1583,8 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
             tree = _tree(root, entries, state_dir=state_dir)
             changed = sorted(_tree_changes(root, manifest["inputTree"], tree))
             head = observation["head"]
-            worker_commit = (kind is None and _line(repository, "rev-parse", head + "^{tree}") == tree
+            worker_commit = (kind is None and head != manifest["inputCommit"]
+                             and _line(repository, "rev-parse", head + "^{tree}") == tree
                              and _is_ancestor(repository, manifest["inputCommit"], head))
             commit = (head if worker_commit else manifest["inputCommit"] if tree == manifest["inputTree"]
                       else _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " output " + directory.name))
@@ -1615,7 +1617,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
             _pin(repository, f"refs/hey-my-buddy/workspaces/{workspace_id}/retained/output-{directory.name}", commit)
             _write_once(directory / "pending.json", _json(output))
             _write_once(directory / "output.patch", patch_data)
-            return _finish_output(repository, output, directory, manifest=manifest)
+            return _finish_output(repository, output, directory, manifest=manifest, fresh=True)
 
 
 def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> dict:
@@ -1905,9 +1907,9 @@ def _snapshot_record(manifest, observation, tree, entries, changed, excluded_cha
 
 
 def _finish_record(repository, record, directory, *, ref_name, ref_kind, record_name, patch_name, bindings):
-    expected_tree = _line(repository, "rev-parse", record["commit"] + "^{tree}")
+    _verify_output_git(repository, record)
     expected_ref = f"refs/hey-my-buddy/workspaces/{record['workspaceId']}/{ref_kind}/{ref_name}"
-    if (expected_tree != record["tree"] or _sha(_json(record["snapshot"])) != record["snapshotSha256"]
+    if (_sha(_json(record["snapshot"])) != record["snapshotSha256"]
             or any(record.get(key) != record["snapshot"].get(key) for key in bindings)
             or record["ref"] != expected_ref or record["diffPath"] != str(directory / patch_name)):
         raise BoardError("WORKSPACE_CONFLICT", "The resolved workspace record is inconsistent")
@@ -1917,7 +1919,6 @@ def _finish_record(repository, record, directory, *, ref_name, ref_kind, record_
         patch_data = _diff(repository, record["inputCommit"], record["commit"])
     if _sha(patch_data) != record["diffSha256"]:
         raise BoardError("WORKSPACE_CONFLICT", "The immutable resolved diff changed", path=str(patch_path))
-    _verify_output_git(repository, record, patch_data)
     _write_once(patch_path, patch_data)
     _pin(repository, record["ref"], record["commit"])
     _write_once(directory / record_name, _json(record))
@@ -2210,34 +2211,12 @@ def _validate_output_record(final_input, artifact):
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output record is inconsistent")
 
 
-def _verify_output_git(repository, artifact, patch):
+def _verify_output_git(repository, artifact):
     """Recovery and acceptance use the same proof for each frozen snapshot form."""
     commit = artifact["commit"]
-    if (_line(repository, "rev-parse", commit + "^{tree}") != artifact["tree"]
-            or patch is None or _sha(patch) != artifact["diffSha256"]):
-        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The sealed Git objects or patch changed")
+    if _line(repository, "rev-parse", commit + "^{tree}") != artifact["tree"]:
+        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The sealed output tree changed")
     snapshot = artifact["snapshot"]
-    if snapshot.get("version", 1) == 2:
-        # Prove the frozen bytes against trees. Re-rendering a diff would make
-        # recovery depend on later changes to diff settings or attributes.
-        path = Path(artifact["diffPath"])
-        output_id = _sha(_json([artifact["taskId"], artifact["attemptId"]]))
-        if artifact.get("kind") == "host-output":
-            output_id += "-host"
-        relative = Path("workspaces") / artifact["workspaceId"] / "outputs" / output_id / "output.patch"
-        if len(path.parents) < 5 or path.parts[-5:] != relative.parts:
-            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The sealed patch is outside its fixed output binding")
-        with _index(repository, state_dir=path.parents[4]) as environment:
-            _git(repository, "read-tree", artifact["inputCommit"], env=environment)
-            if patch:
-                try:
-                    _git(repository, "apply", "--cached", "--binary", "--whitespace=nowarn", data=patch, env=environment)
-                except BoardError as error:
-                    if error.code != "WORKSPACE_GIT_ERROR" or error.details.get("returncode") != 1:
-                        raise
-                    raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The sealed patch does not apply to its input") from error
-            if _git(repository, "diff-index", "--cached", "--raw", "-z", "--no-renames", artifact["tree"], "--", env=environment):
-                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The sealed patch does not describe its input and output")
     if snapshot.get("version", 1) == 2 and artifact["commitKind"] == "worker":
         if commit != snapshot["headCommit"] or not _is_ancestor(repository, artifact["inputCommit"], commit):
             raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The Worker commit does not cover its sealed input and tree")
@@ -2269,7 +2248,9 @@ def _artifact_binding(original_input, final_input, artifact, *, repository=None)
         check_tree(manifest["inputCommit"], manifest["inputTree"])
         check_tree(snapshot["stagedCommit"], snapshot["stagedTree"])
     patch = _read(Path(artifact["diffPath"]))
-    _verify_output_git(repository, artifact, patch)
+    if patch is None or _sha(patch) != artifact["diffSha256"]:
+        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The sealed output patch changed")
+    _verify_output_git(repository, artifact)
     return repository, _tree_changes(repository, original_input["inputTree"], artifact["tree"])
 
 
@@ -2322,7 +2303,6 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
         environment = {"GIT_ALTERNATE_OBJECT_DIRECTORIES": json.dumps(
             str(Path(identity["repositoryPath"]) / "objects"), ensure_ascii=False)}
         source = artifact["commit"]
-        artifact_ancestor = _is_ancestor(source_repository, source, after, env=environment)
         before = _commit(root, before_commit) if before_commit else None
         if before is None:
             parents = _line(source_repository, "rev-list", "--parents", "-n", "1", after, env=environment).split()[1:]
@@ -2388,7 +2368,6 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
                        "projectId": identity["projectId"], "ref": ref},
             "beforeCommit": before, "beforeTree": before_tree, "afterCommit": after, "afterTree": after_tree,
             "sourceCommit": source, "sourceTree": artifact.get("tree"),
-            "artifactAncestor": artifact_ancestor,
             "mergeBaseCommit": baseline, "expectedTree": expected_tree, "conflictingPaths": conflicts,
             "matchingPaths": matching,
             "differingPaths": differing,

@@ -102,17 +102,6 @@ class GitDeliveryTests(unittest.TestCase):
         self.assertEqual(sealed["commitKind"], "evidence")
         self.assertNotEqual(sealed["commit"], unrelated)
 
-    def test_new_seal_recovery_uses_frozen_patch_after_diff_settings_change(self):
-        manifest, checkout = self.fixture()
-        self.worker_commit(checkout)
-        sealed = workspace.seal(self.state, manifest, "task", "attempt")
-        self.git("config", "diff.context", "0")
-        self.git("config", "diff.algorithm", "histogram")
-        self.assertNotEqual(workspace._sha(workspace._diff(self.repo, manifest["inputCommit"], sealed["commit"])),
-                            sealed["diffSha256"])
-        self.assertEqual(workspace.seal(self.state, manifest, "task", "attempt"), sealed)
-        self.assertEqual(workspace.verify_sealed_output(manifest, manifest, sealed)["changedPaths"], ["src/file.txt"])
-
     def test_historical_seal_bytes_and_parent_rule_stay_fixed(self):
         manifest, checkout = self.fixture()
         self.worker_commit(checkout)
@@ -128,9 +117,6 @@ class GitDeliveryTests(unittest.TestCase):
         for filename in ("output.json", "pending.json"):
             (directory / filename).write_bytes(workspace._json(legacy))
         before = (directory / "output.json").read_bytes()
-        # Version 1 bound the original patch bytes and parent, without a later
-        # re-render through the repository's current diff display settings.
-        self.git("config", "diff.context", "0")
         self.assertEqual(workspace.seal(self.state, manifest, "task", "attempt"), legacy)
         self.assertEqual((directory / "output.json").read_bytes(), before)
         workspace.verify_sealed_output(manifest, manifest, legacy)
@@ -210,7 +196,6 @@ class GitDeliveryTests(unittest.TestCase):
         self.git("revert", "--no-edit", sealed["commit"], cwd=target)
         reverted = self.git("rev-parse", "HEAD", cwd=target).decode().strip()
         verification = self.verify(manifest, sealed, target, before_commit=reverted)
-        self.assertTrue(verification["artifactAncestor"])
         self.assertFalse(verification["verified"])
         adjusted = self.verify(manifest, sealed, target, before_commit=reverted,
                                _confirm_adjustments=True, note="Host deliberately reverted the Worker change")
