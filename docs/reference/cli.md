@@ -103,10 +103,11 @@ With continuation input, `buddy` selects routing or a complete named buddy; a ch
 "$HMB" accept '{"runId":"<runId>","artifactId":"<artifactId>","note":"Checked the answer against the brief.","notRequired":"Answer-only work; no repository integration."}'
 ```
 
-`conclude` ends stopped failed, cancelled or delivered work that will not be accepted. Name the fixed `artifactId` when one is being ended; otherwise `runId` and a note suffice. `cancel` locates the micro task only by `runId` with an optional note and records ordered stop intent. `targetRunId` on applicable lifecycle calls addresses an authorized helper through its controlling run; it cannot reach a Lead-owned micro task from an ordinary Host. Neither operation bypasses real stop evidence. Cleanup blocked after acceptance or conclusion is retried by the service.
+`conclude` ends stopped failed, cancelled or delivered work that will not be accepted, with `runId` and a note. Delivered work requires its current delivered `artifactId`. Failed or cancelled work may omit the artifact id, or supply an unanswered fixed result from its current turn; supplying it binds the conclusion to that exact result. `cancel` locates the micro task only by `runId` with an optional note and records ordered stop intent. `targetRunId` on applicable lifecycle calls addresses an authorized helper through its controlling run; it cannot reach a Lead-owned micro task from an ordinary Host. Neither operation bypasses real stop evidence. Cleanup blocked after acceptance or conclusion is retried by the service.
 
 ```sh
-"$HMB" conclude '{"runId":"<runId>","artifactId":"<artifactId>","note":"Reviewed the stopped output; no further work will be accepted."}'
+"$HMB" conclude '{"runId":"<runId>","artifactId":"<artifactId>","note":"Reviewed the delivered output; no further work will be accepted."}'
+"$HMB" conclude '{"runId":"<runId>","note":"End the failed or cancelled micro task without binding a fixed result."}'
 "$HMB" cancel '{"runId":"<runId>","note":"The user asked to stop this work."}'
 ```
 

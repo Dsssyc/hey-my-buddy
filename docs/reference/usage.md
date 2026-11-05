@@ -81,7 +81,7 @@ Acceptance requires the real target path and ref with its commit before integrat
 "$HMB" conclude '{"runId":"<runId>","artifactId":"<artifactId>","note":"Reviewed the stopped result; this work will not be accepted or continued."}'
 ```
 
-Use `conclude` for stopped failed, cancelled or delivered work that will not continue. Include the fixed result's `artifactId` when one is being ended; otherwise use `runId` and a note. Stop evidence, unresolved sites and live descendants still constrain conclusion. Acceptance and conclusion release reservations; the service retries blocked managed-checkout cleanup automatically. An ordinary existing checkout and a directory used without a checkout are never removed by that cleanup.
+Use `conclude` for stopped failed, cancelled or delivered work that will not continue, with `runId` and a note. Delivered work requires its current delivered `artifactId`. Failed or cancelled work may omit that field, or name an unanswered fixed result from its current turn; supplying it binds the conclusion to that exact result. Stop evidence, unresolved sites and live descendants still constrain conclusion. Acceptance and conclusion release reservations; the service retries blocked managed-checkout cleanup automatically. An ordinary existing checkout and a directory used without a checkout are never removed by that cleanup.
 
 ## Execution records
 
