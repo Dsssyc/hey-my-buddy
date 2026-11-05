@@ -76,11 +76,11 @@
   "fixture": {
     "path": "tests/fixtures/upgrade-floor",
     "sha256": {
-      "board.sql": "df3d8aaecbf7ccaf292c95ddc8e5a023cd265e7e99529e97d7a78f90276bfc03",
+      "board.sql": "6e10bba3a3ece8edddfc7a9cfe32cfdec4affc8b4b68dd54e06349718f1a3d2c",
       "catalog.json": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
-      "metadata.json": "094521e8d364be7cdc14a4413ab9938256bed617ef2328d4197c16025319cc65",
-      "operations.json": "d2d9c55200224c7b82ecaa1c40e0ae8937e5b1fa87ba354d737581423782b4e3",
-      "workspace-resources.json": "c69f99db6495a4fc14eb2b85cec8a47e4d2bb053203324b1f64130d197c095d7"
+      "metadata.json": "b4b8705a1033ec4d8f498b5f841c11ae3638adc2e13e6a7d752c2f1510674a01",
+      "operations.json": "101167bdee7ed0ffa6b8c06fe35539681f33f2daa8f8a4f7d7d78a7a3b26ae77",
+      "workspace-resources.json": "426157a2f787392fa9511fbf8e42d1ce794e0d9b8a588121a754c50e08cebacc"
     },
     "sourceCommit": "4de1dd9478980e924a4a86b2c50aaca33e33b79d"
   },
