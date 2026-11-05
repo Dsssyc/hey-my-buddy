@@ -190,6 +190,31 @@ def repository_candidates(db, manifest: dict) -> tuple[str, ...]:
         return projects.known_repository_paths(connection, project_id(manifest))
 
 
+def named_buddy(connection, name: str) -> dict | None:
+    """Resolve the Host-facing buddy name against the catalog's four identity columns.
+
+    The name is the console's writing, 'harness / provider / model / effort'
+    with ' / ' between the four parts. A value never contains that separator,
+    so the split is unambiguous and a wrong or partial name simply matches
+    nothing. This is the one parsing every reader of a named buddy shares;
+    an unrecognized name is refused exactly as submit refuses it.
+    """
+    if name == "route":
+        return None
+    parts = name.split(" / ")
+    row = None
+    if len(parts) == len(schemas.BUDDY_FIELDS) and all(parts):
+        row = connection.execute(
+            "SELECT harness,provider,model,effort FROM buddies"
+            " WHERE harness=? AND provider=? AND model=? AND effort=?", parts).fetchone()
+    if row is None:
+        raise BoardError("INVALID_ARGUMENT",
+                         "buddy must be 'route' or one recorded buddy written"
+                         " 'harness / provider / model / effort', as the console's Buddy page lists it",
+                         buddy=name)
+    return dict(row)
+
+
 def _turn_input_context(input_json: str) -> dict:
     """The frozen context object of one supported turn input."""
     document = json.loads(input_json)
@@ -1811,28 +1836,8 @@ class WorkflowCoordinator:
             return self.compact(connection, run_row)
 
     def _named_buddy(self, name: str) -> dict | None:
-        """Resolve the Host-facing buddy name against the catalog's four identity columns.
-
-        The name is the console's writing, 'harness / provider / model / effort'
-        with ' / ' between the four parts. A value never contains that separator,
-        so the split is unambiguous and a wrong or partial name simply matches
-        nothing.
-        """
-        if name == "route":
-            return None
-        parts = name.split(" / ")
-        row = None
-        if len(parts) == len(schemas.BUDDY_FIELDS) and all(parts):
-            with self.db.read() as connection:
-                row = connection.execute(
-                    "SELECT harness,provider,model,effort FROM buddies"
-                    " WHERE harness=? AND provider=? AND model=? AND effort=?", parts).fetchone()
-        if row is None:
-            raise BoardError("INVALID_ARGUMENT",
-                             "buddy must be 'route' or one recorded buddy written"
-                             " 'harness / provider / model / effort', as the console's Buddy page lists it",
-                             buddy=name)
-        return dict(row)
+        with self.db.read() as connection:
+            return named_buddy(connection, name)
 
     def _action_view(self, connection, run, *, already_exists=None, **facts):
         actions = self._actions(connection, run)

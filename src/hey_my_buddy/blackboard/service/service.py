@@ -584,8 +584,8 @@ class BoardService(_BaseResource):
         if isinstance(params.get('helpers'), list):
             selections.extend(helper.get('buddy') for helper in params['helpers'] if isinstance(helper, dict))
         with self.store.db.read() as connection:
-            names = {row['harness'] for choice in selections if isinstance(choice,str) and choice!='route'
-                     for row in connection.execute('SELECT harness FROM buddies WHERE buddy_id=?',(choice,))}
+            names = {workflow_module.named_buddy(connection, choice)['harness']
+                     for choice in selections if isinstance(choice, str) and choice != 'route'}
         for name in sorted(names):
             if explicit and name in HARNESS_NAMES and self.harnesses.get(name)['status'] != 'ready':
                 self.harnesses.refresh(name, force=True)
