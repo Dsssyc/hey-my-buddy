@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
 import { buddyColorsFor } from "../timeline/buddyColors";
 import { NowLine } from "../timeline/NowLine";
-import { Axis, Track } from "../timeline/Tracks";
+import { Axis, Track, TIMELINE_AXIS_PX, TIMELINE_TRACK_PX as STRIP_PX } from "../timeline/Tracks";
 import { fragmentHitPath, WaitingDiamond, TIMELINE_OUTSET_PX as SLACK } from "../timeline/trackMarks";
 import { timelineScaleInput } from "../timeline/scale";
 import { useTimelineZoom } from "../timeline/useTimelineZoom";
@@ -22,7 +22,6 @@ import { modelEffort } from "./names";
 import type { Interval } from "../timeline/labels";
 import { DetailLinks } from "./linking";
 
-const STRIP_PX = 44;
 const STEP_SELECTION_RADIUS_PX = 8;
 
 /** Where a step's slice sits, from recorded facts only; a step with no instant of its own anchors on the wait that leads to it. */
@@ -149,7 +148,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
     if (event.key === "+" || event.key === "=") { event.preventDefault(); zoom(1); }
     else if (event.key === "-") { event.preventDefault(); zoom(-1); }
     else if (event.key === "0") { event.preventDefault(); zoom(0); }
-  }} className="relative flex flex-none select-none">
+  }} className="relative flex flex-none select-none" style={{ height: TIMELINE_AXIS_PX + STRIP_PX }}>
     <div data-slot="step-navigation" className="flex shrink-0 flex-col items-center justify-between border-r border-line px-3 py-2">
       <span data-slot="step-counter" className="whitespace-nowrap text-xs font-medium tabular-nums text-ink">{t("strip.position", { current: selected + 1, total: steps.steps.length })}</span>
       <div className="flex gap-1.5">

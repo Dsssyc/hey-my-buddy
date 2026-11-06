@@ -27,6 +27,9 @@ import type { OwnedWait } from "./lanes";
 const EVENT_SELECTION_RADIUS_PX = 10;
 const INQUIRY_SELECTION_RADIUS_PX = 9;
 
+export const TIMELINE_AXIS_PX = 36;
+export const TIMELINE_TRACK_PX = 52;
+
 function spanSelection(start: number, end: number): Interval {
   const left = Math.max(-6, start - 2);
   return { left, right: left + Math.max(5, end - start + 4) };
@@ -131,7 +134,7 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds, co
     // A clock stays with its tick, even if no room is left for its text.
     if (label && Math.abs((label.left + label.right) / 2 - x) <= measure(text) / 2 + 4) { labels.push({ ...label, y: 16, className: "fill-ink2" }); occupied.push(label); }
   }
-  return <svg ref={axisRef} data-slot="timeline-axis" viewBox={`${-INSET_PX} 0 ${width + INSET_PX * 2} 36`} width={width + INSET_PX * 2} height="36" className="block max-w-none select-none overflow-hidden text-xs" aria-hidden="true">
+  return <svg ref={axisRef} data-slot="timeline-axis" viewBox={`${-INSET_PX} 0 ${width + INSET_PX * 2} ${TIMELINE_AXIS_PX}`} width={width + INSET_PX * 2} height={TIMELINE_AXIS_PX} className="block max-w-none select-none overflow-hidden text-xs" aria-hidden="true">
     {ruler}<line data-slot="axis-baseline" x1={0} x2={width} y1={30} y2={30} className="stroke-ink3"/>
     {scale.breaks.map((gap, index) => { const center = (gap.startX + gap.endX) / 2; return <g key={gap.startMs}>
       <path data-slot="axis-break-mark" d={`M${center - 7} 34l6-8m0 8l6-8`} className="stroke-line"/>
@@ -150,7 +153,7 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds, co
 type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
 const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
 
-const TrackView = memo(function Track({ row, spans, events, scale, nowMs, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = 52, surface = "background", selectionRef, itemLinks }: {
+const TrackView = memo(function Track({ row, spans, events, scale, nowMs, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = TIMELINE_TRACK_PX, surface = "background", selectionRef, itemLinks }: {
   row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number;
   buddies?: readonly FriendlyBuddy[] | null; selected: boolean; tabKey?: string | null; boundary?: HTMLElement | null;
   /** Only this fragment is outlined; the selected row has its own neutral wash. */
