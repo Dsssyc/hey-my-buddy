@@ -19,6 +19,7 @@ def _statistics_fact(stats):
     bins = stats["buckets"]
     return {"samples": samples, "successes": stats["successes"], "failures": stats["failures"],
             "firstPasses": stats["first_passes"], "reworkRounds": stats["rework_rounds"],
+            "defects": stats["defects"],
             "firstPassRate": stats["first_passes"] / samples if samples else None,
             "failureRate": stats["failures"] / samples if samples else None,
             "medianDeliverySeconds": approximate_median(bins["delivery_seconds"]),

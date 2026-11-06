@@ -18,7 +18,7 @@ from hey_my_buddy.json_codec import canonical_json
 def candidate():
     def statistics(samples, first_passes, failures, median):
         return {"samples": samples, "successes": samples - failures, "firstPasses": first_passes,
-                "failures": failures, "reworkRounds": 0,
+                "failures": failures, "reworkRounds": 0, "defects": min(1, samples - failures),
                 "firstPassRate": first_passes / samples if samples else None,
                 "failureRate": failures / samples if samples else None,
                 "medianDeliverySeconds": median}
@@ -57,7 +57,10 @@ class RouterPromptTests(unittest.TestCase):
                     buddy["load"]["wait"]["atLeast"] = at_least
                     document = {"routingMode": mode, "buddies": [buddy]}
                     before = canonical_json(document)
-                    rendered = json.loads(router.render_prompt(document).split("\n\n")[1])["buddies"][0]
+                    prompt = router.render_prompt(document)
+                    self.assertIn("deliveries that were delivered and accepted,\nthen later named for correction by another micro task through its fixes field.",
+                                  prompt)
+                    rendered = json.loads(prompt.split("\n\n")[1])["buddies"][0]
                     stats = rendered["statistics"]
                     levels = ((stats["overall"], buddy["statistics"]["overall"], 420),
                               (stats["byDomain"]["domain"], buddy["statistics"]["byDomain"]["domain"], 360),
@@ -77,7 +80,7 @@ class RouterPromptTests(unittest.TestCase):
     def test_empty_samples_keep_rates_and_intervals_null_and_no_cells_are_invented(self):
         buddy = candidate()
         buddy["statistics"] = {"overall": {"samples": 0, "firstPasses": 0, "failures": 0,
-                                           "firstPassRate": None, "failureRate": None,
+                                           "firstPassRate": None, "failureRate": None, "defects": 0,
                                            "medianDeliverySeconds": None},
                                "byDomain": {}, "byDomainTaskType": {}}
         prompt = router.render_prompt({"buddies": [buddy]})
@@ -100,7 +103,7 @@ class RouterPromptTests(unittest.TestCase):
                                            {"HMB_STATE_DIR": str(root / "state")})
                 prepare = calls.prepare_router_fast if mode == "fast" else calls.prepare_router_review
                 preparation = prepare(document, {}, SimpleNamespace(name="dsh"), context)
-                for key in ("firstPassRateInterval", "failureRateInterval", "resultTime"):
+                for key in ("firstPassRateInterval", "failureRateInterval", "resultTime", "defects"):
                     self.assertIn('"' + key + '":', preparation.request.prompt)
                 self.assertEqual(document, before)
 
@@ -124,7 +127,7 @@ class RouterPromptTests(unittest.TestCase):
             audit = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(audit["prompt"], preparation.request.prompt)
             self.assertFalse(audit["captureEvidence"])
-            for key in ("firstPassRateInterval", "failureRateInterval", "resultTime"):
+            for key in ("firstPassRateInterval", "failureRateInterval", "resultTime", "defects"):
                 self.assertIn('"' + key + '":', audit["prompt"])
             self.assertEqual(canonical_json(document), before)
 

@@ -533,12 +533,33 @@ class ExportBoardSampleTests(WorkflowTestCase):
         with closing(sqlite3.connect(sample / DB_FILE)) as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '31')
             self.assertGreater(connection.execute('SELECT SUM(samples) FROM kind_statistics').fetchone()[0], 0)
-            statistics = list(connection.execute('SELECT * FROM kind_statistics ORDER BY harness,model,effort'))
+            statistics = [tuple(row) + (0,) for row in connection.execute(
+                'SELECT * FROM kind_statistics ORDER BY harness,model,effort')]
         self.assertEqual(upgrade_state(sample), {'sourceSchema': 31, 'targetSchema': SCHEMA_VERSION})
         with closing(sqlite3.connect(sample / DB_FILE)) as connection:
             self.assertEqual(list(connection.execute('SELECT * FROM kind_statistics ORDER BY harness,model,effort')),
                              statistics)
         self.assert_only_upgrade_project_marker_changed(before, files(fixture['state']), fixture, project_id)
+
+    def test_current_schema_sample_recounts_retained_fix_relations(self):
+        board = self.source_board()
+        root = self.workdir('sample-fix-project')
+        (root / '.git').mkdir()
+        target = self.accepted(board, 'sample-fix-target', task='Accepted delivery later fixed',
+                               cwd=str(root), kind='existing', access='read',
+                               create_macro={'title': 'Sample fixes', 'goal': 'Sample fixes'})[0]
+        correction = self.accepted(board, 'sample-fix-correction', task='Correction to accepted delivery',
+                                   cwd=str(root), kind='existing', access='read',
+                                   macroTaskId=target['macroTaskId'], fixes=target['runId'])[0]
+        with board.store.db.read() as connection:
+            self.assertEqual([tuple(row) for row in connection.execute(
+                'SELECT run_id,fixed_run_id FROM workflow_fixes')], [(correction['runId'], target['runId'])])
+
+        sample = export_sample(board.directory, self.directory / 'sample-fix-relations')
+        with closing(sqlite3.connect(sample / DB_FILE)) as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_fixes').fetchone()[0], 1)
+            self.assertEqual(connection.execute(
+                'SELECT samples,successes,defects FROM kind_statistics').fetchone(), (2, 2, 1))
 
     def test_schema34_sample_keeps_its_structure_seals_and_can_upgrade(self):
         from hey_my_buddy.blackboard.store.upgrade import STEPS

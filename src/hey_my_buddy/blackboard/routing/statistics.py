@@ -20,7 +20,8 @@ IDENTITY = ("harness", "provider", "model", "effort")
 KIND = ("harness", "model", "effort")
 USAGE_FIELDS = ("inputTokens", "cachedInputTokens", "outputTokens")
 METRICS = ("delivery_seconds", "input_tokens", "cached_input_tokens", "output_tokens")
-COUNTS = ("samples", "successes", "first_passes", "rework_rounds", "failures")
+COUNTS = ("samples", "successes", "first_passes", "rework_rounds", "failures", "defects")
+SAMPLE_COUNTS = COUNTS[:-1]
 ENDED_STATES = "('returned','failed','rejected','interrupted')"
 BUCKET_RATIO = 1.2
 
@@ -154,11 +155,12 @@ def _add_sample(connection, kind, sample, cell):
     table = "kind_statistics" if cell is None else "kind_cell_statistics"
     fields = KIND if cell is None else (*KIND, "domain_node_id", "task_type")
     values = kind if cell is None else (*kind, *cell)
-    counts = (1, int(sample["success"]), int(sample["first_pass"]), sample["rework"], int(not sample["success"]))
+    counts = (1, int(sample["success"]), int(sample["first_pass"]), sample["rework"],
+              int(not sample["success"]))
     connection.execute(
-        f"INSERT INTO {table}({','.join((*fields, *COUNTS))}) VALUES({','.join('?' for _ in (*values, *counts))})"
+        f"INSERT INTO {table}({','.join((*fields, *SAMPLE_COUNTS))}) VALUES({','.join('?' for _ in (*values, *counts))})"
         f" ON CONFLICT({','.join(fields)}) DO UPDATE SET " +
-        ",".join(f"{field}={field}+excluded.{field}" for field in COUNTS), (*values, *counts))
+        ",".join(f"{field}={field}+excluded.{field}" for field in SAMPLE_COUNTS), (*values, *counts))
     bins = Counter((METRICS[0], bucket(value)) for value in sample["durations"])
     if sample["usage"] is not None:
         bins.update((metric, bucket(value)) for metric, value in zip(METRICS[1:], sample["usage"]))
@@ -169,6 +171,40 @@ def _add_sample(connection, kind, sample, cell):
         [(*values, metric, sign, exponent, count) for (metric, (sign, exponent)), count in bins.items()])
 
 
+def _add_defect(connection, kind, cell):
+    """One defect joins the sample row it describes; it never creates a row."""
+    table = "kind_statistics" if cell is None else "kind_cell_statistics"
+    fields = KIND if cell is None else (*KIND, "domain_node_id", "task_type")
+    values = kind if cell is None else (*kind, *cell)
+    updated = connection.execute(
+        f"UPDATE {table} SET defects=defects+1 WHERE " + " AND ".join(f"{field}=?" for field in fields), values)
+    if updated.rowcount != 1:
+        raise ValueError(f"defect without its accepted sample row: {values}")
+
+
+def defect_kinds(connection, run_id):
+    """The kinds whose sample holds this run's accepted delivery; one at most."""
+    return [kind for kind, sample in samples_for_run(connection, run_id).items() if sample["success"]]
+
+
+def accumulate_defect(connection, fixed_run_id):
+    """One defect on the fixed micro task's delivery, overall now, its cell as classified.
+
+    The caller guarantees this is the first fix naming the micro task; the cell
+    of a not-yet-classified delivery is added by ``accumulate_cell`` when
+    maintenance classifies the run.
+    """
+    classification = connection.execute(
+        "SELECT domain_node_id,task_type FROM micro_task_classifications WHERE run_id=?",
+        (fixed_run_id,)).fetchone()
+    kinds = defect_kinds(connection, fixed_run_id)
+    for kind in kinds:
+        _add_defect(connection, kind, None)
+        if classification is not None:
+            _add_defect(connection, kind, (classification["domain_node_id"], classification["task_type"]))
+    return kinds
+
+
 def accumulate_overall(connection, run_id):
     for kind, sample in samples_for_run(connection, run_id).items():
         _add_sample(connection, kind, sample, None)
@@ -177,6 +213,9 @@ def accumulate_overall(connection, run_id):
 def accumulate_cell(connection, run_id, node_id, task_type):
     for kind, sample in samples_for_run(connection, run_id).items():
         _add_sample(connection, kind, sample, (node_id, task_type))
+        if sample["success"] and connection.execute(
+                "SELECT 1 FROM workflow_fixes WHERE fixed_run_id=? LIMIT 1", (run_id,)).fetchone():
+            _add_defect(connection, kind, (node_id, task_type))
 
 
 def accumulate_infrastructure(connection, buddy, receipt, finished_at, *, new_round=True):
@@ -205,3 +244,8 @@ def backfill(connection):
     for turn in ended_turns(connection):
         receipt = json.loads(turn["result_json"]) if turn["result_json"] is not None else None
         accumulate_infrastructure(connection, turn["buddy"], receipt, turn["finished_at"])
+    if "defects" in {row[1] for row in connection.execute("PRAGMA table_info(kind_statistics)")}:
+        # Exported samples start with empty aggregate tables. Count only their
+        # retained fix relationships; pre-36 boards defer this to their upgrade.
+        for row in connection.execute("SELECT DISTINCT fixed_run_id FROM workflow_fixes").fetchall():
+            accumulate_defect(connection, row["fixed_run_id"])

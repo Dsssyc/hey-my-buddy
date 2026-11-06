@@ -42,7 +42,7 @@ from ...protocol.workspace_manifest import (project_id, manifest_ref, resolve_ma
                                           artifact_manifest, record_reference, resolve_record, cumulative_patch_error,
                                           sealed_worker_commit)
 from .workspace_bindings import (MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE, effective_manifest, workspace_facts, retained_manifests, owned_manifest, output_references, repository_reference)
-from ..routing.statistics import accumulate_infrastructure, accumulate_overall
+from ..routing.statistics import accumulate_defect, accumulate_infrastructure, accumulate_overall
 from . import macro_tasks, projects, fixes as task_fixes
 from . import host_conclusions
 from .path_views import MAX_OUTPUT_PATH_VIEW, _bounded_path_fields
@@ -1631,6 +1631,7 @@ class WorkflowCoordinator:
         projects.record(connection, projectFacts)
         identifier = projectFacts["projectId"]
         macro_tasks.attach_macro_task(connection, macroTaskId, project_id=identifier)
+        first_fix = False
         if fixes is not None:
             fixed = self._run_row(connection, fixes)
             actor = {"role": "lead", "id": lead["runId"]} if lead else {"role": "host"}
@@ -1642,6 +1643,8 @@ class WorkflowCoordinator:
                              if macroTaskId is not None else fixed["standalone_project_id"])
             if fixed_project != identifier:
                 raise BoardError("INVALID_ARGUMENT", "fixes must be in the same project")
+            first_fix = connection.execute(
+                "SELECT 1 FROM workflow_fixes WHERE fixed_run_id=? LIMIT 1", (fixes,)).fetchone() is None
         connection.execute(
             "INSERT INTO workflow_runs(run_id,creation_key,execution_workspace_json,workspace_id,workspace_manifest_sha256,"
             "macro_task_id,standalone_project_id,title,project_kind,checkout,state,delegation_authority,created_at,updated_at) "
@@ -1656,6 +1659,8 @@ class WorkflowCoordinator:
                                      payload={"leadRunId": lead["runId"], "leadTurnId": lead["turnId"]})
         if fixes is not None:
             connection.execute("INSERT INTO workflow_fixes(run_id,fixed_run_id,created_at) VALUES(?,?,?)", (run_id, fixes, now))
+            if first_fix:
+                accumulate_defect(connection, fixes)
             self.board._append_event(connection, "workflow.fix_submitted", task_id=run_id, payload={"fixes": fixes})
         actor = {"role": "lead", "id": lead["runId"]} if lead else {"role": "host"}
         if delegationAuthority:

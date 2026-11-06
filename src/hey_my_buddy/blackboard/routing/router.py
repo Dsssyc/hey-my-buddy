@@ -53,6 +53,8 @@ Compare the relevant byDomainTaskType cell, its byDomain rollup and overall
 statistics. Domain rollups include descendants. Only sampled nodes and cells are
 listed; a missing cell is no data, never negative evidence. Use all three levels
 with their sample sizes as evidence strength, without a minimum-sample gate.
+The defects count is the number of deliveries that were delivered and accepted,
+then later named for correction by another micro task through its fixes field.
 Read each candidate's kind summary as qualitative observations alongside the
 program's numbers; the summary contains no numeric statistics. Evidence of kind summary may cite
 a buddyId with an optional explanatory excerpt.
@@ -96,6 +98,8 @@ Compare the relevant byDomainTaskType cell, its byDomain rollup and overall
 statistics. Domain rollups include descendants. Only sampled nodes and cells are
 listed; a missing cell is no data, never negative evidence. Use all three levels
 with their sample sizes as evidence strength, without a minimum-sample gate.
+The defects count is the number of deliveries that were delivered and accepted,
+then later named for correction by another micro task through its fixes field.
 Read each candidate's kind summary as qualitative observations alongside the
 program's numbers; the summary contains no numeric statistics. Evidence of kind summary may cite
 a buddyId with an optional explanatory excerpt.

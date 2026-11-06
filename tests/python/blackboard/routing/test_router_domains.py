@@ -32,9 +32,11 @@ class RouterDomainTests(WorkflowTestCase):
                            (node_id, name, name + " expertise", parent, merged))
             db.execute("INSERT INTO kind_summaries VALUES('dsh','deepseek-flash','off',?, 'domains')",
                        ("Handles transport defects carefully; asks for clear ownership boundaries.",))
-            db.execute("INSERT INTO kind_statistics VALUES('dsh','deepseek-flash','off',3,2,1,1,1)")
-            db.execute("INSERT INTO kind_cell_statistics VALUES('dsh','deepseek-flash','off',"
-                       "'old-ipc','debug',2,1,1,0,1)")
+            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
+                       "rework_rounds,failures,defects) VALUES('dsh','deepseek-flash','off',3,2,1,1,1,1)")
+            db.execute("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,samples,"
+                       "successes,first_passes,rework_rounds,failures,defects)"
+                       " VALUES('dsh','deepseek-flash','off','old-ipc','debug',2,1,1,0,1,1)")
 
     def request(self, request_id="domain-route"):
         return self.board_.store.decisions.request_select({"requestId": request_id, "task": "Fix transport ownership"})

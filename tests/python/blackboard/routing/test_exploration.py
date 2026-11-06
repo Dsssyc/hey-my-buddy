@@ -77,11 +77,13 @@ class ExplorationRoutingTests(WorkflowTestCase):
                 db.execute("INSERT INTO domain_nodes VALUES(?,?,?,?,NULL,'domains')",
                            (node_id, name, name + " expertise", parent))
             for buddy, node_id, task_type, samples in cells:
-                db.execute("INSERT INTO kind_cell_statistics VALUES(?,?,?,?,?,?,?,?,?,?)",
+                db.execute("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,"
+                           "samples,successes,first_passes,rework_rounds,failures) VALUES(?,?,?,?,?,?,?,?,?,?)",
                            (buddy["harness"], buddy["model"], buddy["effort"],
                             node_id, task_type, samples, samples, samples, 0, 0))
             for buddy, samples in overall:
-                db.execute("INSERT INTO kind_statistics VALUES(?,?,?,?,?,?,?,?)",
+                db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
+                           "rework_rounds,failures) VALUES(?,?,?,?,?,?,?,?)",
                            (buddy["harness"], buddy["model"], buddy["effort"],
                             samples, samples, samples, 0, 0))
 

@@ -1,10 +1,11 @@
-"""Schema 36 records the exploration fact on routes and Router settings."""
+"""Schema 36 records route exploration and accepted-delivery defect facts."""
 from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from collections import Counter
 
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33, schema_33_34, schema_34_35
@@ -26,12 +27,16 @@ class Schema35To36Tests(unittest.TestCase):
             connection.row_factory = sqlite3.Row
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_routes').fetchone()[0], 1)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM router_settings').fetchone()[0], 1)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_fixes').fetchone()[0], 2)
             # The floor's own writers cannot state either new form: the stock
             # carries routes and settings that predate exploration.
             self.assertNotIn('exploration',
                              {row['name'] for row in connection.execute('PRAGMA table_info(workflow_routes)')})
             self.assertNotIn('exploration_every',
                              {row['name'] for row in connection.execute('PRAGMA table_info(router_settings)')})
+            self.assertNotIn('defects',
+                             {row['name'] for row in connection.execute('PRAGMA table_info(kind_statistics)')})
+            expected = self.base_writer_defect_counts(connection)
         self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 30, 'targetSchema': SCHEMA_VERSION})
         from hey_my_buddy.blackboard.store.db import Database
         fresh = Database(self.root / 'fresh')
@@ -46,6 +51,24 @@ class Schema35To36Tests(unittest.TestCase):
             self.assertEqual([row[0] for row in upgraded.execute('SELECT exploration FROM workflow_routes')],
                              ['pre-exploration'])
             self.assertEqual(upgraded.execute('SELECT exploration_every FROM router_settings').fetchone()[0], 5)
+            actual = {tuple(row[:3]): row[3] for row in upgraded.execute(
+                'SELECT harness,model,effort,defects FROM kind_statistics WHERE defects > 0')}
+            self.assertEqual(actual, dict(expected))
+
+    @staticmethod
+    def base_writer_defect_counts(connection):
+        """Use the frozen floor statistics writer to identify successful target samples."""
+        from hey_my_buddy.blackboard.store.schema_30_31 import samples_for_run
+        expected = Counter()
+        fixed_runs = {row[0] for row in connection.execute(
+            'SELECT DISTINCT fixed_run_id FROM workflow_fixes')}
+        for run_id in fixed_runs:
+            samples = samples_for_run(connection, run_id)
+            successful = [(kind, sample) for kind, sample in samples.items() if sample['success']]
+            if len(successful) != 1:
+                raise AssertionError(f'Expected one successful base-writer sample for {run_id}: {successful}')
+            expected[successful[0][0]] += 1
+        return expected
 
     def test_step_converts_only_its_own_forms_from_a_schema_35_board(self):
         fixture = load_fixture(self.root / 'state')
@@ -55,6 +78,7 @@ class Schema35To36Tests(unittest.TestCase):
             with connection:
                 for step in (schema_30_31, schema_31_32, schema_32_33, schema_33_34, schema_34_35):
                     step.upgrade(connection)
+            expected = self.base_writer_defect_counts(connection)
             routes = [tuple(row) for row in connection.execute(
                 'SELECT rowid,decision_id,run_id,state,created_at FROM workflow_routes ORDER BY rowid')]
             settings = tuple(connection.execute(
@@ -72,6 +96,9 @@ class Schema35To36Tests(unittest.TestCase):
                              ['pre-exploration'])
             self.assertEqual(connection.execute(
                 "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '36')
+            actual = {tuple(row[:3]): row[3] for row in connection.execute(
+                'SELECT harness,model,effort,defects FROM kind_statistics WHERE defects > 0')}
+            self.assertEqual(actual, dict(expected))
 
     def test_the_new_forms_have_database_fences(self):
         fixture = load_fixture(self.root / 'state')

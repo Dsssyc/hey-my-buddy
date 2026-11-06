@@ -156,8 +156,22 @@ class UpgradeStatisticsTests(unittest.TestCase):
             upgrade_state(fixture["state"])
             with closing(sqlite3.connect(fixture["state"] / "board.sqlite3")) as connection:
                 connection.row_factory = sqlite3.Row
-                actual = evidence.domain_statistics(connection, _buddies(connection))
-        self._assert_facts(actual, oracle["buddies"])
+                buddies = _buddies(connection)
+                actual = evidence.domain_statistics(connection, buddies)
+                expected = oracle["buddies"]
+                expected_by_kind = {
+                    tuple(row[field] for field in ("harness", "model", "effort")): expected[row["buddy_id"]]
+                    for row in buddies
+                }
+                for row in connection.execute("SELECT DISTINCT fixed_run_id FROM workflow_fixes"):
+                    samples = schema_30_31.samples_for_run(connection, row["fixed_run_id"])
+                    for kind, sample in samples.items():
+                        if sample["success"]:
+                            facts = expected_by_kind[kind]["overall"]
+                            facts["defects"] = facts.get("defects", 0) + 1
+                for facts in expected.values():
+                    facts["overall"].setdefault("defects", 0)
+        self._assert_facts(actual, expected)
 
     def _assert_facts(self, actual, expected, path=()):
         if isinstance(expected, dict):

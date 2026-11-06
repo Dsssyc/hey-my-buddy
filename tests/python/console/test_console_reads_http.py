@@ -154,7 +154,9 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
             db.execute("INSERT INTO kind_summary_evidence VALUES('dsh','deepseek-flash','off',?,1)", (run["runId"],))
             db.execute("UPDATE kind_statistics SET samples=2,successes=1,first_passes=1,"
                        "rework_rounds=0,failures=1 WHERE harness='dsh' AND model='deepseek-flash' AND effort='off'")
-            db.execute("INSERT INTO kind_cell_statistics VALUES('dsh','deepseek-flash','off','software','debug',1,1,1,0,0)")
+            db.execute("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,samples,"
+                       "successes,first_passes,rework_rounds,failures)"
+                       " VALUES('dsh','deepseek-flash','off','software','debug',1,1,1,0,0)")
         browser = self.open(board)
         snapshot = browser.bootstrap()
         self.assertEqual(snapshot["maintenance"]["pendingCount"], 1)

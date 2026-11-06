@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from blackboard.tasks import test_lead_owned as lead_owned
-from blackboard.tasks.test_workflow import WorkflowTestCase
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
+from hey_my_buddy.blackboard.routing.maintenance_data import apply_answer, build_packet
 from hey_my_buddy.errors import BoardError
 
 
@@ -44,6 +45,44 @@ class MicroTaskFixTests(WorkflowTestCase):
             self.submit(board, **params)
         self.assertEqual(raised.exception.code, code)
         self.assertEqual(self.counts(board), before)
+
+    def classify(self, board, target):
+        maintenance_task = board.submit_execution(
+            requestId="maintenance-for-" + target["runId"], task="Classify accepted delivery",
+            adapter="command", argv=["true"], cwd=str(self.workdir("maintenance-for-" + target["runId"])),
+        )["task"]["runId"]
+        now = board.store.now()
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO maintenance_runs VALUES(?, 'manual','fixture',?,'completed',NULL,NULL,?,?)",
+                       ("maintenance-" + target["runId"], maintenance_task, now, now))
+            packet = build_packet(db)
+            answer = {
+                "newNodes": [{"id": "fixed-deliveries", "name": "Fixed deliveries",
+                              "definition": "Accepted deliveries later named for correction", "parentId": None}],
+                "merges": [],
+                "classifications": [{"runId": run_id, "domainNodeId": "fixed-deliveries", "taskType": "debug"}
+                                    for run_id in packet["classificationRunIds"]],
+                "summaries": {kind["kindId"]: {"text": "Observed accepted delivery",
+                                                   "citations": kind["citationRunIds"]}
+                              for kind in packet["kinds"]},
+            }
+            result = apply_answer(db, packet=packet, answer=answer,
+                                  maintenance_run_id="maintenance-" + target["runId"])
+        self.assertEqual(result["errors"], [])
+
+    def statistics(self, board, *, domain=None):
+        key = tuple(BUDDY[field] for field in ("harness", "model", "effort"))
+        with board.store.db.read() as db:
+            overall = db.execute(
+                "SELECT samples,successes,defects FROM kind_statistics"
+                " WHERE harness=? AND model=? AND effort=?", key).fetchone()
+            cell = None
+            if domain is not None:
+                cell = db.execute(
+                    "SELECT samples,successes,defects FROM kind_cell_statistics"
+                    " WHERE harness=? AND model=? AND effort=? AND domain_node_id=? AND task_type='debug'",
+                    (*key, domain)).fetchone()
+            return tuple(overall) if overall is not None else None, tuple(cell) if cell is not None else None
 
     def test_accepted_fix_is_readable_in_get_task_and_timeline(self):
         board = self.board()
@@ -99,6 +138,31 @@ class MicroTaskFixTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_fixes WHERE run_id=?",
                                                 (first["runId"],)).fetchone()[0], 1)
+
+    def test_classified_delivery_counts_one_overall_and_cell_defect_for_all_later_fixes(self):
+        board = self.board()
+        original = self.accepted_host_run(board, "classified-original",
+                                          create_macro={"title": "Classified corrections", "goal": "Classified corrections"})
+        self.classify(board, original)
+        first = self.submit(board, request_id="classified-fix-one", task="Correct the accepted delivery",
+                            cwd=str(self.project_workdir("classified-fix-one")), fixes=original["runId"])
+        self.assertEqual(self.statistics(board, domain="fixed-deliveries"), ((1, 1, 1), (1, 1, 1)))
+        self.submit(board, request_id="classified-fix-two", task="Correct the accepted delivery again",
+                    cwd=str(self.project_workdir("classified-fix-two")), fixes=original["runId"])
+        self.assertEqual(self.statistics(board, domain="fixed-deliveries"), ((1, 1, 1), (1, 1, 1)))
+        self.assertEqual(board.call("workflow_get", {"runId": first["runId"]})["fixes"], original["runId"])
+
+    def test_unclassified_delivery_gets_its_cell_defect_when_maintenance_classifies_it(self):
+        board = self.board()
+        original = self.accepted_host_run(board, "unclassified-original",
+                                          create_macro={"title": "Deferred corrections", "goal": "Deferred corrections"})
+        self.submit(board, request_id="unclassified-fix-one", task="Correct the accepted delivery",
+                    cwd=str(self.project_workdir("unclassified-fix-one")), fixes=original["runId"])
+        self.submit(board, request_id="unclassified-fix-two", task="Correct the accepted delivery again",
+                    cwd=str(self.project_workdir("unclassified-fix-two")), fixes=original["runId"])
+        self.assertEqual(self.statistics(board), ((1, 1, 1), None))
+        self.classify(board, original)
+        self.assertEqual(self.statistics(board, domain="fixed-deliveries"), ((1, 1, 1), (1, 1, 1)))
 
     def test_lead_may_fix_own_accepted_task_but_foreign_lead_is_denied(self):
         board = self.board(max_concurrent=4)

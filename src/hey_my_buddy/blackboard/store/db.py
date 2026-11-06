@@ -1199,6 +1199,7 @@ CREATE TABLE IF NOT EXISTS kind_statistics (
     first_passes INTEGER NOT NULL CHECK (typeof(first_passes)='integer' AND first_passes >= 0 AND first_passes <= successes),
     rework_rounds INTEGER NOT NULL CHECK (typeof(rework_rounds)='integer' AND rework_rounds >= 0),
     failures INTEGER NOT NULL CHECK (typeof(failures)='integer' AND failures >= 0),
+    defects INTEGER NOT NULL DEFAULT 0 CHECK (typeof(defects)='integer' AND defects >= 0 AND defects <= successes),
     PRIMARY KEY (harness, model, effort),
     CHECK (successes + failures = samples)
 );
@@ -1213,6 +1214,7 @@ CREATE TABLE IF NOT EXISTS kind_cell_statistics (
     first_passes INTEGER NOT NULL CHECK (typeof(first_passes)='integer' AND first_passes >= 0 AND first_passes <= successes),
     rework_rounds INTEGER NOT NULL CHECK (typeof(rework_rounds)='integer' AND rework_rounds >= 0),
     failures INTEGER NOT NULL CHECK (typeof(failures)='integer' AND failures >= 0),
+    defects INTEGER NOT NULL DEFAULT 0 CHECK (typeof(defects)='integer' AND defects >= 0 AND defects <= successes),
     PRIMARY KEY (harness, model, effort, domain_node_id, task_type),
     CHECK (successes + failures = samples)
 );

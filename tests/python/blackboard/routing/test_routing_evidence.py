@@ -135,6 +135,7 @@ class RoutingEvidenceTests(WorkflowTestCase):
     def test_no_data_is_explicit_and_provider_changes_share_only_kind_statistics(self):
         empty = self.facts()[0]
         self.assertEqual(empty["statistics"]["overall"]["samples"], 0)
+        self.assertEqual(empty["statistics"]["overall"]["defects"], 0)
         self.assertIsNone(empty["statistics"]["overall"]["failureRate"])
         self.assertIsNone(empty["statistics"]["overall"]["medianDeliverySeconds"])
         self.assertEqual(empty["statistics"]["overall"]["usage"], NO_USAGE)
@@ -148,10 +149,26 @@ class RoutingEvidenceTests(WorkflowTestCase):
         duration = same["statistics"]["overall"].pop("medianDeliverySeconds")
         self.assertEqual(same["statistics"]["overall"], {"samples": 1, "successes": 1, "failures": 0,
                          "firstPasses": 1, "reworkRounds": 0, "firstPassRate": 1,
-                         "failureRate": 0, "usage": NO_USAGE})
+                         "failureRate": 0, "defects": 0, "usage": NO_USAGE})
         self.assert_bucket_close(duration, 12)
         self.assertEqual(other_effort["statistics"]["overall"]["samples"], 0)
         self.assertEqual(other_harness["statistics"]["overall"]["samples"], 0)
+
+    def test_router_statistics_include_defects_at_all_three_levels(self):
+        run, _ = self.end_turn(self.new_run())
+        self.accept_run(self.board_, run)
+        self.classify([(run, "root", "debug")], [("root", None, None)])
+        key = tuple(BUDDY[field] for field in ("harness", "model", "effort"))
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE kind_statistics SET defects=1 WHERE harness=? AND model=? AND effort=?", key)
+            db.execute("UPDATE kind_cell_statistics SET defects=1 WHERE harness=? AND model=? AND effort=?"
+                       " AND domain_node_id='root' AND task_type='debug'", key)
+        candidate = self.facts()[0]["statistics"]
+        domain = self.domain_facts()[0]
+        for stats in (candidate["overall"], candidate["byDomain"]["root"],
+                      candidate["byDomainTaskType"]["root"]["debug"], domain["overall"],
+                      domain["byDomain"]["root"], domain["byDomainTaskType"]["root"]["debug"]):
+            self.assertEqual(stats["defects"], 1)
 
     def test_domain_statistics_roll_up_descendants_and_follow_merge_target(self):
         child, _ = self.end_turn(self.new_run(), seconds=10, usage=self.usage(10, 2, 3))

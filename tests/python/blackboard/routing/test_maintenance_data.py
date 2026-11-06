@@ -224,7 +224,7 @@ class MaintenanceDataTests(WorkflowTestCase):
     def test_packet_reads_kind_counts_and_real_provider_failure_columns(self):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,"
-                       "first_passes,rework_rounds,failures) VALUES(?,?,?,2,1,1,0,1)",
+                       "first_passes,rework_rounds,failures,defects) VALUES(?,?,?,2,1,1,0,1,1)",
                        (BUDDY["harness"], BUDDY["model"], BUDDY["effort"]))
             db.executemany(
                 "INSERT INTO buddy_infrastructure_failures(harness,provider,model,effort,count,last_at)"
@@ -239,7 +239,8 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertEqual({field: kind[field] for field in ("harness", "model", "effort")},
                          {field: BUDDY[field] for field in ("harness", "model", "effort")})
         self.assertEqual((kind["statistics"]["overall"]["samples"],
-                          kind["statistics"]["overall"]["failures"]), (2, 1))
+                          kind["statistics"]["overall"]["failures"],
+                          kind["statistics"]["overall"]["defects"]), (2, 1, 1))
         self.assertEqual({entry["provider"]: entry["count"]
                           for entry in kind["statistics"]["infrastructureFailures"]},
                          {BUDDY["provider"]: 2, "other-provider": 3})
@@ -255,10 +256,12 @@ class MaintenanceDataTests(WorkflowTestCase):
                 ("old-parser", "Old parser", "Same expertise", None, "parser", self.maintenance_id),
                 ("writing", "Writing", "Writing work", None, None, self.maintenance_id)])
             db.executemany(
-                "INSERT INTO kind_statistics VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,rework_rounds,failures)"
+                " VALUES(?,?,?,?,?,?,?,?)",
                 [(*current, 2, 1, 1, 0, 1), (*peer, 3, 2, 1, 1, 1), (*unrelated, 1, 1, 1, 0, 0)])
             db.executemany(
-                "INSERT INTO kind_cell_statistics VALUES(?,?,?,?,?,?,?,?,?,?)", [
+                "INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,samples,successes,"
+                "first_passes,rework_rounds,failures) VALUES(?,?,?,?,?,?,?,?,?,?)", [
                     (*current, "parser", "debug", 2, 1, 1, 0, 1),
                     (*peer, "old-parser", "debug", 2, 1, 0, 1, 1),
                     (*peer, "parser", "review", 1, 1, 1, 0, 0),
@@ -302,8 +305,11 @@ class MaintenanceDataTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO domain_nodes VALUES('parser','Parser','Parser work',NULL,NULL,?)",
                        (self.maintenance_id,))
-            db.execute("INSERT INTO kind_statistics VALUES('codex','peer','high',1,1,1,0,0)")
-            db.execute("INSERT INTO kind_cell_statistics VALUES('codex','peer','high','parser','debug',1,1,1,0,0)")
+            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
+                       "rework_rounds,failures) VALUES('codex','peer','high',1,1,1,0,0)")
+            db.execute("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,samples,"
+                       "successes,first_passes,rework_rounds,failures)"
+                       " VALUES('codex','peer','high','parser','debug',1,1,1,0,0)")
         packet = self.packet()
         self.assertTrue(all(item["classification"] is None for item in packet["microTasks"]))
         self.assertEqual(len(packet["comparisonStatistics"]), 1)
@@ -322,10 +328,13 @@ class MaintenanceDataTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             db.executemany("INSERT INTO domain_nodes VALUES(?,?,?,NULL,NULL,?)", [
                 (domain, domain, domain + " work", self.maintenance_id) for domain in ("parser", "writing")])
-            db.execute("INSERT INTO kind_statistics VALUES(?,?,?,1,1,1,0,0)",
+            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
+                       "rework_rounds,failures) VALUES(?,?,?,1,1,1,0,0)",
                        tuple(BUDDY[key] for key in ("harness", "model", "effort")))
-            db.execute("INSERT INTO kind_statistics VALUES('codex','peer','high',3,3,3,0,0)")
-            db.executemany("INSERT INTO kind_cell_statistics VALUES(?,?,?,?,?,1,1,1,0,0)", [
+            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
+                       "rework_rounds,failures) VALUES('codex','peer','high',3,3,3,0,0)")
+            db.executemany("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,"
+                           "samples,successes,first_passes,rework_rounds,failures) VALUES(?,?,?,?,?,1,1,1,0,0)", [
                 (*tuple(BUDDY[key] for key in ("harness", "model", "effort")), "parser", "debug"),
                 (*tuple(second_buddy[key] for key in ("harness", "model", "effort")), "writing", "write"),
                 ("codex", "peer", "high", "parser", "debug"),
@@ -352,15 +361,19 @@ class MaintenanceDataTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             db.executemany("INSERT INTO domain_nodes VALUES(?,?,?,NULL,NULL,?)", [
                 (domain, domain, domain + " work", self.maintenance_id) for domain in ["parser", *domains]])
-            db.execute("INSERT INTO kind_statistics VALUES(?,?,?,1,1,1,0,0)", tuple(current.values()))
-            db.execute("INSERT INTO kind_cell_statistics VALUES(?,?,?,'parser','debug',1,1,1,0,0)",
+            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
+                       "rework_rounds,failures) VALUES(?,?,?,1,1,1,0,0)", tuple(current.values()))
+            db.execute("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,samples,"
+                       "successes,first_passes,rework_rounds,failures) VALUES(?,?,?,'parser','debug',1,1,1,0,0)",
                        tuple(current.values()))
             for peer in peers:
                 key = tuple(peer.values())
                 cells = [("parser", "debug")] + [(domain, task_type) for domain in domains for task_type in TASK_TYPES]
-                db.execute("INSERT INTO kind_statistics VALUES(?,?,?,?,?,?,0,0)",
+                db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
+                           "rework_rounds,failures) VALUES(?,?,?,?,?,?,0,0)",
                            (*key, len(cells), len(cells), len(cells)))
-                db.executemany("INSERT INTO kind_cell_statistics VALUES(?,?,?,?,?,1,1,1,0,0)",
+                db.executemany("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,"
+                               "samples,successes,first_passes,rework_rounds,failures) VALUES(?,?,?,?,?,1,1,1,0,0)",
                                [(*key, domain, task_type) for domain, task_type in cells])
             packet = build_packet(db)
         # The previous projection repeated every sampled target's full domain

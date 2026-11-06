@@ -1040,6 +1040,44 @@ def populate(args):
                 else:
                     assert turn_row["state"] == "failed"
                     assert stored_result["result"]["partialWorkspaceSeal"] == seal
+        # The floor writer records fixes only after the accepted standalone
+        # delivery exists. Two correction submissions deliberately name the
+        # same accepted target so the next schema can prove it counts that
+        # target once while every workflow_fixes row still comes from submit.
+        fix_stock = {}
+        fix_target = call("workflow_submit", {"requestId": "fixture-fix-target",
+            "hostId": "fixture-host", "submissionToken": "fixture-submission-token-fix-target",
+            "task": "fixture accepted delivery named for correction", "harness": "codex",
+            "provider": "openai", "model": "fixture-alpha", "effort": "high",
+            "cwd": str(work / "workspaces" / "accepted"),
+            "executionWorkspace": {"kind": "existing", "access": "read"}})
+        fix_stock["target"] = fix_target["runId"]
+        fix_claim = admit(nonce, fix_target["runId"])
+        fix_manifest = fix_claim["turn"]["input"]["executionWorkspace"]
+        fix_seal = workspace.seal(work / "state", fix_manifest, fix_target["runId"],
+                                  fix_claim["attempt"]["attemptId"])
+        report(fix_claim, nonce, status="ok", result={"status": "ok",
+            "turn": completed_record(fix_claim, "fix-target"), "workspaceSeal": fix_seal,
+            "processState": {"shutdownConfirmed": True}, "fixture": True})
+        fix_view = call("workflow_get", {"runId": fix_target["runId"]})
+        assert fix_view["state"] == "delivered", fix_view
+        call("workflow_accept", {"runId": fix_target["runId"], "artifactId": fix_view["finalArtifactId"],
+            "note": "fixture accepted target for fix stock",
+            "notRequired": "Read-only fixture has no separate target", "keepCheckout": True,
+            **fix_target["control"]})
+        for label in ("first", "second"):
+            correction = call("workflow_submit", {"requestId": "fixture-fix-" + label,
+                "hostId": "fixture-host", "submissionToken": "fixture-submission-token-fix-" + label,
+                "task": "fixture correction " + label, "harness": "codex", "provider": "openai",
+                "model": "fixture-alpha", "effort": "high",
+                "cwd": str(work / "workspaces" / "accepted"),
+                "executionWorkspace": {"kind": "existing", "access": "read"},
+                "fixes": fix_target["runId"]})
+            fix_stock[label] = correction["runId"]
+            call("workflow_cancel", {"runId": correction["runId"],
+                "commandId": "cancel-fixture-fix-" + label,
+                "note": "Keep the base-writer correction relationship without pending execution",
+                **correction["control"]})
         hashing.close()
         # Base operations created these rows. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -1080,7 +1118,8 @@ def populate(args):
             "sourceFiles": {str(p.relative_to(source)): digest(p.read_bytes()) for p in
                             [*sorted((source / "src/hey_my_buddy").rglob("*.py")), source / "pyproject.toml",
                              source / "uv.lock", source / "packaging/runtime-assets.json"]},
-            "stableIds": ids, "stockIds": stock_ids, "taskOnlyStock": task_only_stock,
+            "stableIds": ids, "stockIds": stock_ids, "fixStock": fix_stock,
+            "taskOnlyStock": task_only_stock,
             "edgeStock": edge_stock,
             "inquiryStock": inquiry_stock,
             "tableRowCounts": row_counts,
@@ -1859,11 +1898,16 @@ def verify(output, restored):
         assert states == {**{metadata["stableIds"][key]: value for key, value in
                             (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))},
                           **{metadata["stockIds"][key]: "accepted" for key in ("adopted", "verified", "helper", "lead")},
+                          metadata["fixStock"]["target"]: "accepted",
+                          **{metadata["fixStock"][key]: "cancelled" for key in ("first", "second")},
                           metadata["stockIds"]["helperParent"]: "concluded",
                           metadata["stockIds"]["leadOwned"]: "concluded",
                           **{metadata["stockIds"][key]: "cancelled" for key in ("scopeParent", "scopeHelper")},
                           **{metadata["edgeStock"][key]["runId"]: "failed" for key in
                              ("partial-failed", "partial-interrupted", "rejected-turn", "rejected-seal")}}
+        fixes = connection.execute("SELECT run_id,fixed_run_id FROM workflow_fixes ORDER BY rowid").fetchall()
+        assert [row[0] for row in fixes] == [metadata["fixStock"]["first"], metadata["fixStock"]["second"]]
+        assert {row[1] for row in fixes} == {metadata["fixStock"]["target"]}
         schema = [list(row) for row in connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]
         assert digest(json_text(schema).encode("utf-8")) == metadata["schemaSha256"]
         assert FIXTURE_ROOT_TOKEN in (output / "board.sql").read_text(encoding="utf-8")

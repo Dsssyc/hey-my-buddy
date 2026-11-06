@@ -8,14 +8,14 @@
         "lastAt": "2026-01-01T00:02:00.000Z"
       },
       "overall": {
-        "failureRate": 0.16666666666666666,
+        "failureRate": 0.14285714285714285,
         "failures": 1,
-        "firstPassRate": 0.6666666666666666,
-        "firstPasses": 4,
+        "firstPassRate": 0.7142857142857143,
+        "firstPasses": 5,
         "medianDeliverySeconds": 0.0,
         "reworkRounds": 0,
-        "samples": 6,
-        "successes": 5,
+        "samples": 7,
+        "successes": 6,
         "usage": {
           "medianCachedInputTokens": null,
           "medianInputTokens": null,
@@ -76,11 +76,11 @@
   "fixture": {
     "path": "tests/fixtures/upgrade-floor",
     "sha256": {
-      "board.sql": "6e10bba3a3ece8edddfc7a9cfe32cfdec4affc8b4b68dd54e06349718f1a3d2c",
+      "board.sql": "5a47ea433035f6d034090d7657dec5aabd2a3c4955ffa30cc136800624ad4274",
       "catalog.json": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
-      "metadata.json": "b4b8705a1033ec4d8f498b5f841c11ae3638adc2e13e6a7d752c2f1510674a01",
-      "operations.json": "101167bdee7ed0ffa6b8c06fe35539681f33f2daa8f8a4f7d7d78a7a3b26ae77",
-      "workspace-resources.json": "426157a2f787392fa9511fbf8e42d1ce794e0d9b8a588121a754c50e08cebacc"
+      "metadata.json": "2b8265137d308a08e5a331211522b4ad68190307b1cd920a2cd6eab57957001e",
+      "operations.json": "678cc3358999a30a4080e87b7929888847ae9765d8687246e15d90ffc6202fd9",
+      "workspace-resources.json": "f3aaa02c4130f53f308429b3e5901a1bb4540754b8ee8d22741492aad6341b3f"
     },
     "sourceCommit": "4de1dd9478980e924a4a86b2c50aaca33e33b79d"
   },

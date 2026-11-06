@@ -162,7 +162,8 @@ class UpgradeChainTests(unittest.TestCase):
 
     def test_all_dropped_facts_have_floor_stock_and_equal_the_frozen_spec(self):
         rows = list(self.db.execute('SELECT * FROM tasks'))
-        self.assertEqual(len(rows), 23)
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
+        self.assertEqual(len(rows), metadata['tableRowCounts']['tasks'])
         self.assertEqual(sum(row['adapter'] == 'decision' for row in rows), 7)
         for row in rows:
             spec = json.loads(row['spec_json'])

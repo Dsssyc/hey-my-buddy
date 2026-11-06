@@ -330,6 +330,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                           (('delivered', 'concluded'), ('accepted', 'accepted'),
                            ('failed', 'concluded'), ('cancelled', 'cancelled'))},
                           **{fixture['stockIds'][key]: 'accepted' for key in ('adopted', 'verified', 'helper', 'lead')},
+                          fixture['fixStock']['target']: 'accepted',
+                          **{fixture['fixStock'][key]: 'cancelled' for key in ('first', 'second')},
                           fixture['stockIds']['helperParent']: 'concluded',
                           fixture['stockIds']['leadOwned']: 'concluded',
                           **{fixture['stockIds'][key]: 'cancelled' for key in ('scopeParent', 'scopeHelper')},
@@ -973,6 +975,10 @@ class UpgradeFixtureTests(unittest.TestCase):
                          {0, 1})
         self.assertEqual({tuple(row) for row in connection.execute('SELECT mode,note FROM evaluation_preferences')},
                          {('pin', 'fixture pinned buddy'), ('exclude', 'fixture exclusion')})
+        fixes = connection.execute('SELECT run_id,fixed_run_id FROM workflow_fixes ORDER BY rowid').fetchall()
+        self.assertEqual([row[0] for row in fixes],
+                         [fixture['fixStock']['first'], fixture['fixStock']['second']])
+        self.assertEqual({row[1] for row in fixes}, {fixture['fixStock']['target']})
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE kind='quota.redetect'").fetchone()[0], 2)
         for row in connection.execute('SELECT activity_json FROM attempt_activity'):
             self.assertEqual(json.loads(row[0])['eventSeq'], 3)
@@ -1038,7 +1044,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         references = [entry['params']['receipt'] for entry in fixture['operations']
                       if entry['operation'] == 'execution_result']
-        self.assertEqual(len(references), 20)
+        self.assertEqual(len(references), 20 + int('target' in fixture['fixStock']))
         for reference in references:
             receipt = read_execution_receipt(Path(reference['path']).parent, sha256=reference['sha256'], form='archived-report-v1')
             self.assertIsNotNone(receipt)
@@ -1046,7 +1052,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                                          (receipt['attemptId'],)).fetchone()
             self.assertEqual(tuple(attempt), (receipt['taskId'], receipt['generation']))
         sessions = list(native_path(fixture['state'] / 'sessions').rglob('*.jsonl'))
-        self.assertEqual(len(sessions), 14)
+        self.assertEqual(len(sessions), 14 + int('target' in fixture['fixStock']))
         for path in sessions:
             lines = path.read_text(encoding="utf-8").splitlines()
             format = SessionFormat.model_validate_json(lines[0])
@@ -1057,7 +1063,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             "SELECT run_id FROM workflow_artifacts WHERE kind='turn-input'")},
             {fixture['stableIds']['delivered'], fixture['stableIds']['accepted'], fixture['stockIds']['verified'],
              fixture['stockIds']['lead'], fixture['stockIds']['helperParent'], fixture['stockIds']['helper'],
-             fixture['stockIds']['scopeParent'],
+             fixture['stockIds']['scopeParent'], fixture['fixStock']['target'],
              fixture['edgeStock']['partial-failed']['runId']})
         outputs = [json.loads(row[0]) for row in connection.execute(
             "SELECT manifest_json FROM workflow_artifacts WHERE kind='output'")]
