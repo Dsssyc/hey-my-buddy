@@ -1,8 +1,10 @@
-"""Schema 35 → 36: exploration facts and accepted-delivery defect counts.
+"""Schema 35 → 36: exploration facts, Router settings, accepted-delivery defect counts and issue deliveries.
 
 This step owns its DDL and conversion. Existing routes predate exploration, so
 they record ``pre-exploration``; existing settings take the default quota
 interval of 5. Nothing else a route or the settings row holds is rewritten.
+Issue deliveries start empty; occurrence identities reference the existing issue
+events without rewriting the issue tables or their evidence.
 """
 from __future__ import annotations
 
@@ -60,7 +62,19 @@ INDEX_DDL = (
     # counted routes after it; both steps read this covering index (its
     # implicit rowid tail included) instead of scanning the routing history.
     """CREATE INDEX workflow_routes_exploration_idx ON workflow_routes(exploration)""",
+    """CREATE INDEX events_issue_occurrences_idx
+    ON events(kind, attempt_id, json_extract(payload_json, '$.stage'), seq)
+    WHERE kind='execution.issue' OR kind='service.issue'""",
 )
+
+ISSUE_DELIVERIES_DDL = """CREATE TABLE issue_deliveries (
+    task_id         TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    issue_kind      TEXT NOT NULL CHECK (issue_kind IN ('execution','service')),
+    occurrence_seq  INTEGER NOT NULL REFERENCES events(seq) ON DELETE RESTRICT,
+    wait_id         TEXT NOT NULL UNIQUE,
+    delivered_at    TEXT NOT NULL,
+    PRIMARY KEY (task_id, issue_kind, occurrence_seq)
+)"""
 
 
 def _rows(connection, table):
@@ -126,4 +140,5 @@ def upgrade(connection):
     for ddl in INDEX_DDL:
         connection.execute(ddl)
     _accumulate_defects(connection)
+    connection.execute(ISSUE_DELIVERIES_DDL)
     connection.execute("UPDATE meta SET value='36' WHERE key='schema_version'")

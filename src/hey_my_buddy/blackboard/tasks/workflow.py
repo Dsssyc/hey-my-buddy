@@ -105,7 +105,7 @@ AGENT_RUN_BOUND_OPERATIONS = frozenset(
 #: Additional Host operations for a granted run's execution credential only.
 LEAD_OPERATIONS = frozenset({
     "workflow_submit", "workflow_continue", "workflow_cancel",
-    "workflow_accept", "workflow_conclude", "task_list",
+    "workflow_accept", "workflow_conclude", "task_list", "task_wait",
 })
 LEAD_OWNED_OPERATIONS = LEAD_OPERATIONS - {"workflow_submit"} | (
     AGENT_RUN_BOUND_OPERATIONS - {"workflow_suggest"}
@@ -137,19 +137,6 @@ MAX_ROUTING_HISTORY_LIMIT = 100
 
 IN_PROGRESS_STATES = ("executing", "waiting-helpers", "waiting-owned")
 RUN_STATES = ("executing", "awaiting-host", "waiting-helpers", "waiting-owned", "delivered", "accepted", "concluded", "cancelled", "failed")
-
-# These events follow the corresponding workflow mutation in the same transaction.
-OWNED_WAKE_EVENTS = frozenset({
-    "workflow.turn_returned", "workflow.turn_rejected", "workflow.turn_failed",
-    "workflow.boundary_updated", "workflow.routing_needs_host", "workflow.scope_conflict",
-    "workflow.cancelled", "workflow.helper_cancelled", "workflow.lead_task_cancelled", "workflow.workspace_preparation_failed",
-    "workflow.late_turn", "workflow.owned_stop_reported",
-})
-OWNED_WAKE_FILTER_SQL = (
-    "(e.kind!='workflow.boundary_updated' OR json_extract(e.payload_json,'$.state')='awaiting-host')"
-    " AND (e.kind NOT IN ('workflow.cancelled','workflow.helper_cancelled','workflow.lead_task_cancelled')"
-    " OR COALESCE(e.actor_role,'') != 'lead' OR COALESCE(e.actor_id,'') != l.lead_run_id)"
-)
 
 #: Request-scoped authority resolved by the service for one operation call.
 _SCOPE = threading.local()
@@ -5653,18 +5640,28 @@ class WorkflowCoordinator:
         return token
 
     def owned_event(self, connection, *, task_id: str | None, kind: str, seq: int, now: str) -> None:
-        """Wake a parked Lead from a committed owned-work boundary, never a running turn."""
+        """Ring a parked Lead's doorbell when its owned await has a new message."""
         if task_id is not None and kind in {"task.completed", "task.cancelled", "task.failed", "task.reconciliation-needed", "attempt.released"}:
             self._owned_descendant_reported(connection, task_id, seq)
-        if kind not in OWNED_WAKE_EVENTS or task_id is None:
+        if task_id is None and kind != 'service.issue':
             return
-        lead = connection.execute(
-            "SELECT r.* FROM workflow_lead_tasks l JOIN workflow_runs r ON r.run_id=l.lead_run_id"
-            " JOIN events e ON e.seq=? WHERE l.owned_run_id=? AND r.state='waiting-owned' AND "
-            + OWNED_WAKE_FILTER_SQL, (seq, task_id),
-        ).fetchone()
-        if lead is not None:
-            self._wake_lead(connection, lead, seq, now)
+        from . import messages
+        leads = connection.execute(
+            "SELECT r.*,l.owned_run_id FROM workflow_lead_tasks l JOIN workflow_runs r ON r.run_id=l.lead_run_id"
+            " JOIN events e ON e.seq=? WHERE r.state='waiting-owned'"
+            " AND (? IS NULL OR l.owned_run_id=?)"
+            " AND (COALESCE(e.actor_role,'')!='lead' OR COALESCE(e.actor_id,'')!=l.lead_run_id)",
+            (seq, task_id, task_id),
+        ).fetchall()
+        for lead in leads:
+            # A service issue may concern several owned tasks of the same Lead.
+            if self._run_row(connection, lead['run_id'])['state'] != 'waiting-owned':
+                continue
+            turn = connection.execute('SELECT * FROM workflow_turns WHERE turn_id=?', (lead['current_turn_id'],)).fetchone()
+            context = _turn_input_context(turn['input_json'])
+            task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (lead['owned_run_id'],)).fetchone()
+            if messages.ready(self.board, connection, task, after=context['ownedFactsCursor']):
+                self._wake_lead(connection, lead, seq, now, owned_run_id=task['task_id'])
 
     def _owned_descendant_reported(self, connection, task_id: str, seq: int) -> None:
         """Expose a stopped owned micro task's descendant result, including uncertainty."""
@@ -5686,13 +5683,13 @@ class WorkflowCoordinator:
                          "stopConfirmed": summary["selfConfirmed"] and summary["descendantsConfirmed"]},
             )
 
-    def _wake_lead(self, connection, lead, seq: int, now: str) -> None:
+    def _wake_lead(self, connection, lead, seq: int, now: str, *, owned_run_id: str) -> None:
         event = connection.execute("SELECT * FROM events WHERE seq=?", (seq,)).fetchone()
-        owned = self._run_row(connection, event["task_id"])
+        owned = self._run_row(connection, owned_run_id)
         trigger = {"seq": seq, "kind": event["kind"], "runId": owned["run_id"], "state": owned["state"]}
         continuation_id = str(uuid.uuid4())
-        text = ("An owned micro task reached a boundary. Review the changes in ownedMicroTasks since the previous frozen input; "
-                "use the launcher with this turn's credential file to list owned tasks and get their current evidence.")
+        text = (f"Owned micro task {owned_run_id} has a new message. "
+                "Use await with this turn's credential file to read it.")
         connection.execute(
             "INSERT INTO workflow_continuations(workspace_facts_role, continuation_id, run_id, kind, trigger_event_json, input_text, note, state, created_at) VALUES(?,?,?,'lead-wakeup',?,?,?,'recorded',?)",
             ("none" if lead["checkout"]=="none" else "pending",continuation_id,lead["run_id"],canonical_json(trigger),text,None,now,),
@@ -5711,15 +5708,20 @@ class WorkflowCoordinator:
                                  payload={"continuationId": continuation_id, "kind": "lead-wakeup", "trigger": trigger})
 
     def _owned_since_input(self, connection, run_id: str, turn_row):
-        cursor = _turn_input_context(turn_row["input_json"])["ownedFactsCursor"]
-        kinds = tuple(sorted(OWNED_WAKE_EVENTS))
-        slots = ",".join("?" for _ in kinds)
-        return connection.execute(
-            "SELECT e.seq FROM events e JOIN workflow_lead_tasks l ON l.owned_run_id=e.task_id"
-            f" WHERE l.lead_run_id=? AND e.seq>? AND e.kind IN ({slots})"
-            " AND " + OWNED_WAKE_FILTER_SQL +
-            " ORDER BY e.seq LIMIT 1", (run_id, cursor, *kinds),
-        ).fetchone()
+        from . import messages
+        context = _turn_input_context(turn_row['input_json'])
+        rows = connection.execute(
+            "SELECT l.owned_run_id AS run_id,MAX(e.seq) AS seq FROM workflow_lead_tasks l"
+            " JOIN events e ON e.task_id=l.owned_run_id OR e.kind='service.issue'"
+            " WHERE l.lead_run_id=? AND e.seq>?"
+            " AND (COALESCE(e.actor_role,'')!='lead' OR COALESCE(e.actor_id,'')!=l.lead_run_id)"
+            " GROUP BY l.owned_run_id ORDER BY seq", (run_id, context['ownedFactsCursor']),
+        ).fetchall()
+        for row in rows:
+            task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (row['run_id'],)).fetchone()
+            if messages.ready(self.board, connection, task, after=context['ownedFactsCursor']):
+                return row
+        return None
 
     def _owned_turn_context(self, connection, run_id: str, previous) -> dict:
         cursor = self.board._head_of(connection)
@@ -6205,7 +6207,8 @@ class WorkflowCoordinator:
                                          payload={"turnId": turn_row["turn_id"], "disposition": disposition, "state": "waiting-owned"})
                 changed = self._owned_since_input(connection, run_row["run_id"], turn_row)
                 if changed is not None:
-                    self._wake_lead(connection, self._run_row(connection, run_row["run_id"]), changed["seq"], now)
+                    self._wake_lead(connection, self._run_row(connection, run_row["run_id"]), changed["seq"], now,
+                                    owned_run_id=changed['run_id'])
                 return {"accepted": True, "disposition": disposition,
                         "state": self._run_row(connection, run_row["run_id"])["state"],
                         "sharedStash": self._shared_refs_summary(shared_refs)}

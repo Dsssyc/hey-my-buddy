@@ -4,12 +4,25 @@ from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref
 from hey_my_buddy.paths import native_path
 
 import json
+import time
 
 from blackboard.tasks.test_workflow_worker import BUDDY, MicroTaskWorkerTestCase
 from hey_my_buddy.protocol.client import BoardClient
 
 
 class NetworkErrorContinuationTests(MicroTaskWorkerTestCase):
+    def await_turn(self, run_id, seconds):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            remaining = max(1, int(deadline - time.monotonic()))
+            code, reply = self.cli('await', json.dumps({'runId': run_id, 'waitSeconds': remaining}),
+                                   env=self.env(), timeout=remaining + 20)
+            self.assertEqual(code, 0, reply)
+            if reply['outcome'] != 'issue':
+                return reply
+            self.assertTrue(reply['executionIssues'] or reply['serviceIssues'], reply)
+        self.fail('The private fixture did not finish within its observation window')
+
     def setUp(self):
         super().setUp()
         from hey_my_buddy.blackboard.store.store import BoardStore
@@ -28,8 +41,7 @@ class NetworkErrorContinuationTests(MicroTaskWorkerTestCase):
                 "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
             }), env=self.env())
             self.assertEqual(code, 0, submitted)
-            self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 25}),
-                     env=self.env(), timeout=45)
+            self.await_turn(submitted['runId'], 25)
             code, failed = self.cli("get", json.dumps({"runId": submitted["runId"], "output": "full"}), env=self.env())
             self.assertEqual(code, 0, failed)
             self.assertEqual(failed["state"], "failed")
@@ -45,8 +57,7 @@ class NetworkErrorContinuationTests(MicroTaskWorkerTestCase):
                 "input": "Finish and verify the saved edit after the connection recovers.",
             }), env=self.env())
             self.assertEqual(code, 0, continued)
-            self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}),
-                     env=self.env(), timeout=110)
+            self.await_turn(submitted['runId'], 90)
             code, delivered = self.cli("get", json.dumps({"runId": submitted["runId"],
                                                            "includeAudit": True, "output": "full"}), env=self.env())
             self.assertEqual(code, 0, delivered)

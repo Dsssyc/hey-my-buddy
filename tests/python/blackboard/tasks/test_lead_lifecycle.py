@@ -366,7 +366,10 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.assertEqual(self.current(board, lead)["state"], "executing")
         wakeups = self.wakeups(board, lead)
         self.assertEqual(len(wakeups), 1)
-        self.assertEqual(json.loads(wakeups[0]["trigger_event_json"])["kind"], "workflow.late_turn")
+        trigger = json.loads(wakeups[0]['trigger_event_json'])
+        self.assertEqual(trigger['runId'], child['runId'])
+        self.assertEqual(trigger['state'], 'cancelled')
+        self.assertTrue(self.current(board, child)['task']['shutdownConfirmed'])
 
     def test_manual_continuation_helper_policy_does_not_cancel_lead_owned_work(self):
         board = self.board()

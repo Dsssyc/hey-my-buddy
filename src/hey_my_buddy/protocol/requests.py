@@ -201,7 +201,7 @@ class LeadSubmitRequest(_Submission):
 
 
 class AwaitRequest(Request):
-    """Observe one existing micro task until a boundary, delivery, reminder or window end."""
+    """Observe one existing micro task until a boundary, delivery, reminder, new issue or window end."""
     runId: RunId
     waitSeconds: Annotated[int, Field(strict=True, ge=1, le=86400)] = 86400
 

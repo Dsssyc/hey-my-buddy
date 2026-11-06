@@ -293,6 +293,9 @@ CREATE TABLE IF NOT EXISTS events (
     CHECK (actor_role IS NULL OR actor_role IN ('host','lead','console','service','workflow','bridge'))
 );
 CREATE INDEX IF NOT EXISTS events_task_idx ON events(task_id, seq);
+CREATE INDEX IF NOT EXISTS events_issue_occurrences_idx
+    ON events(kind, attempt_id, json_extract(payload_json, '$.stage'), seq)
+    WHERE kind='execution.issue' OR kind='service.issue';
 CREATE INDEX IF NOT EXISTS events_decision_status_idx ON events(kind, seq DESC)
     WHERE kind IN ('decision.completed','decision.failed','decision.needs_host','decision.cancelled');
 
@@ -1305,6 +1308,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_expected_idx
     ON attempt_reminders(attempt_id, expected_multiple) WHERE kind = 'expected-duration';
 CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_silence_idx
     ON attempt_reminders(attempt_id, silence_started_at) WHERE kind = 'native-silence';
+
+CREATE TABLE IF NOT EXISTS issue_deliveries (
+    task_id         TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    issue_kind      TEXT NOT NULL CHECK (issue_kind IN ('execution','service')),
+    occurrence_seq  INTEGER NOT NULL REFERENCES events(seq) ON DELETE RESTRICT,
+    wait_id         TEXT NOT NULL UNIQUE,
+    delivered_at    TEXT NOT NULL,
+    PRIMARY KEY (task_id, issue_kind, occurrence_seq)
+);
 """
 SCHEMA = "\n".join((CORE_SCHEMA, ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, CORE_SCHEMA_TAIL,
                     EVENTS_ROUTER_CLAIMED_INDEX_DDL, MESSAGES_DDL, ALLOCATION_REVOCATIONS_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,

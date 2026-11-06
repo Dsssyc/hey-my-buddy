@@ -28,7 +28,18 @@ def _list(audience: str) -> str:
     return "\n".join(lines)
 
 
-def _field_shape(field: dict) -> str:
+def _field_shape(field: dict, *, nullable: bool) -> str:
+    field = dict(field)
+    if not nullable:
+        if 'anyOf' in field:
+            alternatives = [item for item in field['anyOf'] if item.get('type') != 'null']
+            if len(alternatives) == 1:
+                field.pop('anyOf')
+                field.update(alternatives[0])
+            else:
+                field['anyOf'] = alternatives
+        if field.get('default') is None:
+            field.pop('default', None)
     facts = {key: field[key] for key in ("type", "anyOf", "enum", "const", "minimum", "maximum",
                                          "minLength", "maxLength", "minItems", "maxItems", "pattern", "default")
              if key in field}
@@ -51,18 +62,19 @@ def _detail(name: str, audience: str) -> str:
         lines.append("  (none)")
     for field_name, field in schema.get("properties", {}).items():
         necessity = "required" if field_name in required else "optional"
-        lines.append(f"  {field_name} ({necessity}): {_field_shape(field)}")
+        lines.append(f"  {field_name} ({necessity}): {_field_shape(field, nullable=field_name in model.nullable_fields)}")
         if field.get("description"):
             lines.append(f"    {field['description']}")
     for definition_name, definition in schema.get("$defs", {}).items():
         lines.append(f"Nested {definition_name} fields:")
         nested_required = set(definition.get("required", []))
+        nested_model = getattr(requests, definition_name, None)
+        nullable_fields = nested_model.nullable_fields if isinstance(nested_model, type) and issubclass(nested_model, requests.Request) else frozenset()
         for field_name, field in definition.get("properties", {}).items():
             necessity = "required" if field_name in nested_required else "optional"
-            lines.append(f"  {field_name} ({necessity}): {_field_shape(field)}")
+            lines.append(f"  {field_name} ({necessity}): {_field_shape(field, nullable=field_name in nullable_fields)}")
             if field.get("description"):
                 lines.append(f"    {field['description']}")
-        nested_model = getattr(requests, definition_name, None)
         if isinstance(nested_model, type) and issubclass(nested_model, requests.Request):
             lines.extend(f"  {rule}" for rule in nested_model.rules)
     if model.rules:

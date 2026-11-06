@@ -529,7 +529,7 @@ class InProcessBoard:
         return self.console.start()
 
     def call(self, operation: str, params: dict) -> dict:
-        service = self.wait_service if operation.startswith("events_wait") or operation == "wait_capacity" else self.service
+        service = self.wait_service if operation in ('events_wait', 'task_wait', 'wait_capacity') else self.service
         if operation == "execution_result" and "receipt" not in params:
             params = publish_result_receipt(self.directory, params)
             call_operation(service, operation, params)

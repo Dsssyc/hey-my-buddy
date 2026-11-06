@@ -858,12 +858,16 @@ class DecisionCoordinator:
     def _record_publication_issue(self, connection, attempt, failure, now: str) -> None:
         code = failure.code
         message = failure.message
+        previous = connection.execute(
+            "SELECT 1 FROM execution_issues WHERE attempt_id=? AND stage='decision-publication'",
+            (attempt['attempt_id'],),
+        ).fetchone()
         connection.execute(
             "INSERT INTO execution_issues(attempt_id,stage,code,message,observed_at) VALUES(?,?,?,?,?)"
             " ON CONFLICT(attempt_id,stage) DO UPDATE SET code=excluded.code,message=excluded.message,"
             " observed_at=excluded.observed_at",
             (attempt["attempt_id"], "decision-publication", code, message[:4000], now))
-        self.board._append_event(connection, "execution.issue", task_id=attempt["task_id"],
+        self.board._append_event(connection, "execution.issue" if previous is None else "execution.issue_updated", task_id=attempt["task_id"],
                                  attempt_id=attempt["attempt_id"],
                                  payload={"stage": "decision-publication", "code": code, "message": message[:4000]})
 

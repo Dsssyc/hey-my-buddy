@@ -446,6 +446,7 @@ def _delete_rows(store, connection, scope, deletion):
             clauses.append(clause);args.extend(params)
         connection.execute(f'DELETE FROM {table} WHERE ' + ' OR '.join(clauses),args)
     # Facts refer to events and attempts; preserve their dependency order.
+    remove('issue_deliveries',('task_id',t))
     outcome_events = {x['event_seq'] for x in connection.execute(
         'SELECT event_seq FROM router_outcomes WHERE task_id IN (SELECT value FROM json_each(?))'
         ' OR attempt_id IN (SELECT value FROM json_each(?)) OR request_id IN (SELECT value FROM json_each(?))',

@@ -23,6 +23,18 @@ def help_text(*args: str) -> str:
 
 
 class HelpTests(unittest.TestCase):
+    def test_help_distinguishes_omission_from_explicit_null_in_nested_fields_too(self):
+        for args in (('get',), ('submit',), ('continue',), ('accept',)):
+            with self.subTest(args=args):
+                detail = help_text(*args)
+                self.assertNotIn('"type":"null"', detail)
+                self.assertNotIn('"default":null', detail)
+        detail = help_text('operations', 'harness-set')
+        path = next(line for line in detail.splitlines() if line.startswith('  path '))
+        self.assertIn('"type":"null"', path)
+        self.assertIn('path (required)', path)
+        self.assertIn('includeAudit (optional)', help_text('get'))
+
     def test_host_help_lists_only_the_delegation_loop(self):
         general = help_text()
         for name in ("create", "amend", "submit", "await", "get", "inquire", "continue", "accept", "conclude", "cancel", "console"):

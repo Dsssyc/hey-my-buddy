@@ -141,7 +141,7 @@ def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DO
                     request = {**parameters, **({"credential": credential} if credential is not None else {})}
                     return _call_service(operation, request, directory)
                 try:
-                    result = await_run(parsed, state_dir=state_dir, service=wait_service, scoped=credential is not None)
+                    result = await_run(parsed, state_dir=state_dir, service=wait_service)
                 except WaitAbandoned as abandoned:
                     result = {"error": {"code": "WAIT_ABANDONED", "message": str(abandoned)},
                               "runId": abandoned.run_id, "actions": ["get", "await"]}

@@ -6,7 +6,7 @@ from unittest.mock import patch
 from admission import admit_execution
 from support import BoardTestCase, FakeClock, publish_result_receipt
 from blackboard.store.test_interruption_recovery import IDENTITY
-from hey_my_buddy.blackboard.tasks import interruption, reminders
+from hey_my_buddy.blackboard.tasks import interruption, reminders, messages
 from hey_my_buddy.blackboard.service.execution_scheduler import (
     ExecutionScheduler, _ExecutionObservation, _RecoveredExecution,
 )
@@ -203,7 +203,7 @@ class ReceivedReceiptTests(BoardTestCase):
         self.clock.advance(100)
         with patch.object(board.store.db, "write", side_effect=AssertionError("new reminder during finalization")):
             self.assertIsNone(reminders.collect(board.store))
-        self.assertIsNone(reminders.consume(board.store, {"runId": self.run_id, "reminderWaitId": "wait"}))
+        self.assertNotIn('reminder', messages.consume(board.store, {"runId": self.run_id, "reminderWaitId": "wait"}))
         self.assertFalse(board.client().get(runId=self.run_id)["selectedAttempt"]["reminders"]["overdue"])
 
     def test_stop_source_preserves_unknown_and_allows_immediate_wrap_up_escalation(self):

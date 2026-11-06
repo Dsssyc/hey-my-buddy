@@ -237,6 +237,15 @@ class BoardStore:
         at = self.now()
         event_payload = dict(payload or {})
         actor = event_payload.pop("actor", None)
+        if task_id is not None and connection.execute(
+            'SELECT 1 FROM workflow_lead_tasks WHERE owned_run_id=?', (task_id,),
+        ).fetchone() is not None:
+            from ...protocol.awaiting import message_key, message_kind
+            task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (task_id,)).fetchone()
+            view = self._decorate(connection, task)
+            message = message_kind(view)
+            if message is not None:
+                event_payload['awaitMessage'] = {'kind': message, 'key': message_key(view)}
         cursor = connection.execute(
             "INSERT INTO events(task_id, attempt_id, revision, kind, payload_json, actor_role, actor_id, created_at) VALUES(?,?,?,?,?,?,?,?)",
             (task_id, attempt_id, revision, kind, canonical_json(event_payload),
@@ -288,6 +297,7 @@ class BoardStore:
 
     def task_wait(self, params: dict) -> dict:
         schemas.reject_unknown(params, {"runId", "afterRevision", "timeoutMs", "consumeReminders", "reminderWaitId"}, "task.wait")
+        schemas.required_string(params, 'runId', max_length=128)
         consume_reminders = schemas.optional_bool(params, "consumeReminders", False)
         if consume_reminders:
             schemas.required_string(params, "reminderWaitId", max_length=128)
@@ -300,18 +310,18 @@ class BoardStore:
         ):
             raise BoardError("INVALID_ARGUMENT", "afterRevision must be a nonnegative integer")
         deadline = self._monotonic() + timeout_ms / 1000.0
+        from ...protocol.awaiting import message_kind
+        from ..tasks import messages
         while True:
             head = self.head()
             if consume_reminders:
-                from ..tasks.reminders import consume
-                reminder = consume(self, params)
-                if reminder is not None:
-                    view = self.task_get({"runId": params.get("runId")})["task"]
-                    return {**view, "reminder": reminder}
-            view = self.task_get({"runId": params.get("runId")})["task"]
+                message = messages.consume(self, params)
+                if message:
+                    return {**self._wait_view(params['runId'], message=message), **message}
+            view = self._wait_view(params['runId'])
             # Re-check after subscribing so a change between read and subscribe is
             # never lost; the recheck happens inside events_wait.
-            if view["resultAvailable"] or timeout_ms == 0 or (
+            if message_kind(view) is not None or timeout_ms == 0 or (
                 after_revision is not None and view["revision"] > after_revision
             ):
                 return view
@@ -322,10 +332,30 @@ class BoardStore:
                 {
                     "after": head,
                     "timeoutMs": int(max(1, remaining * 1000)),
-                    "runId": view["runId"],
                     "limit": 1,
                 }
             )
+
+    def _wait_view(self, task_id: str, *, message: dict | None = None) -> dict:
+        with self.db.read() as connection:
+            task = self._task_row(connection, {'runId': task_id})
+            view = self._decorate(connection, task)
+            selected = view.get('selectedAttempt')
+            view['executionIssues'] = ([{**issue, 'attemptId': selected['attemptId']} for issue in selected['issues']]
+                                       if selected is not None else [])
+            view['serviceIssues'] = [
+                {'stage': row['stage'], 'code': row['code'], 'message': row['message'], 'observedAt': row['observed_at']}
+                for row in connection.execute('SELECT * FROM service_issues ORDER BY stage')]
+            if message and 'issue' in message:
+                issue = message['issue']
+                key = 'executionIssues' if issue['kind'] == 'execution' else 'serviceIssues'
+                detail = issue['detail']
+                # The occurrence's event remains the receipt's evidence after
+                # resolution, including a lost reply retried during a recurrence.
+                view[key] = [detail, *(item for item in view[key] if
+                                      (item['stage'], item.get('attemptId')) !=
+                                      (detail['stage'], detail.get('attemptId')))]
+            return view
 
     def events_wait(self, params: dict, *, stop: threading.Event | None = None) -> dict:
         """Bounded event wait with a check/subscribe/recheck sequence.
@@ -2423,7 +2453,8 @@ class BoardStore:
                 connection.execute("INSERT INTO service_issues VALUES(?,?,?,?) ON CONFLICT(stage)"
                     " DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at",
                     (stage, code, message, now))
-            self._append_event(connection, "execution.issue" if attempt_id is not None else "service.issue",
+            kind = 'execution.issue' if attempt_id is not None else 'service.issue'
+            self._append_event(connection, kind if previous is None else kind + '_updated',
                 task_id=task_id, attempt_id=attempt_id, payload={"stage": stage, "code": code, "message": message})
             head = self._head_of(connection)
         self._notify(head)

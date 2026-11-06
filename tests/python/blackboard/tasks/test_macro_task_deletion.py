@@ -25,6 +25,21 @@ PHYSICAL_STAGES = (
 
 
 class MacroTaskDeletionTests(WorkflowTestCase):
+    def test_issue_delivery_receipts_follow_the_deleted_macro_task(self):
+        board = self.board()
+        run = self.closed(board, 'issue-receipt', macro_task='Issue receipts')
+        other = self.closed(board, 'retained-receipt', macro_task='Retained receipts', project='other')
+        board.store.record_service_issue('scheduler', RuntimeError('private failure'))
+        for index, item in enumerate((run, other)):
+            board.call('task_wait', {'runId': item['runId'], 'timeoutMs': 0, 'consumeReminders': True,
+                                     'reminderWaitId': f'wait-{index}'})
+        with self.without_physical_io()[0]:
+            macro_task_deletion.delete(board.store, run['macroTaskId'], 1)
+        with board.store.db.read() as connection:
+            rows = connection.execute('SELECT task_id FROM issue_deliveries').fetchall()
+            self.assertEqual([row[0] for row in rows], [other['runId']])
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+
     def closed(self, board, request_id, *, macro_task=None, macro_task_id=None, project="project"):
         extra = {"create_macro": {"title": macro_task, 'goal': macro_task}} if macro_task else {}
         if macro_task_id:

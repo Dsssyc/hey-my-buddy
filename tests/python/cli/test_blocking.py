@@ -52,7 +52,7 @@ class AwaitTests(unittest.TestCase):
         self.assertNotIn("nextCommands", answer)
         self.assertNotIn("resultCommand", answer)
 
-    def test_descendant_shutdown_waits_on_event_then_rechecks_parent(self):
+    def test_descendant_shutdown_uses_the_message_wait_without_a_revision_change(self):
         calls = []
         unconfirmed = {"runId": "run-1", "state": "completed", "workflowState": "delivered",
                        "resultAvailable": True, "revision": 3, "actions": ["await", "inquire", "cancel", "get"],
@@ -61,15 +61,12 @@ class AwaitTests(unittest.TestCase):
         confirmed = {**unconfirmed, "workflowShutdown": {"selfConfirmed": True,
                         "descendantsConfirmed": True, "unconfirmedRunIds": []},
                      "artifactId": "artifact-1", "actions": ["accept", "continue", "conclude", "get"]}
-        count = 0
         def service(method, params, directory):
-            nonlocal count
             calls.append((method, dict(params)))
             if method == "task_get":
-                count += 1
-                return unconfirmed if count == 1 else confirmed
-            if method == "events_read":
-                return {"head": 9}
+                return unconfirmed
+            if method == 'task_wait':
+                return confirmed
             if method == "workflow_get":
                 return {"state": "delivered", "actions": ["accept", "continue", "conclude", "get"],
                         "finalArtifactId": "artifact-1", "activeRequest": None}
@@ -77,13 +74,13 @@ class AwaitTests(unittest.TestCase):
                 return {"result": {"status": "completed"}}
             self.fail(f"unexpected call {method}")
         answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)
-        self.assertEqual([name for name, _ in calls], ["task_get", "events_read", "task_get", "workflow_get", "task_result"])
-        self.assertEqual(calls[1][1]["runId"], "child-1")
+        self.assertEqual([name for name, _ in calls], ["task_get", "task_wait", "workflow_get", "task_result"])
+        self.assertEqual(calls[1][1]["runId"], "run-1")
         self.assertEqual(answer["artifactId"], "artifact-1")
         self.assertTrue(answer["shutdownConfirmed"])
         self.assertEqual(answer["actions"], ["accept", "continue", "conclude", "get"])
 
-    def test_scoped_descendant_wait_uses_own_event_cursor_and_real_event_wait(self):
+    def test_scoped_descendant_wait_observes_only_the_owned_task(self):
         unconfirmed = {"runId": "run-1", "state": "completed", "workflowState": "delivered",
                        "resultAvailable": True, "revision": 3, "actions": ["await", "get"],
                        "workflowShutdown": {"selfConfirmed": True, "descendantsConfirmed": False,
@@ -91,18 +88,13 @@ class AwaitTests(unittest.TestCase):
         confirmed = {**unconfirmed, "actions": ["accept", "continue", "conclude", "get"],
                      "workflowShutdown": {"selfConfirmed": True, "descendantsConfirmed": True,
                                           "unconfirmedRunIds": []}}
-        reads = 0
         calls = []
         def service(method, params, directory):
-            nonlocal reads
             calls.append((method, dict(params)))
             if method == "task_get":
-                reads += 1
-                return confirmed if reads == 3 else unconfirmed
-            if method == "events_read":
-                return {"head": 7}
-            if method == "events_wait":
-                return {"head": 8}
+                return unconfirmed
+            if method == 'task_wait':
+                return confirmed
             if method == "workflow_get":
                 return {"state": "delivered", "actions": confirmed["actions"],
                         "activeRequest": None, "finalArtifactId": "art-1"}
@@ -110,11 +102,10 @@ class AwaitTests(unittest.TestCase):
                 return {"result": {"status": "completed"}}
             self.fail(f"unexpected call {method}")
         answer = await_run({"runId": "run-1"}, self.state_dir, service=service,
-                           clock=self.clock, scoped=True)
+                           clock=self.clock)
         self.assertEqual([name for name, _ in calls],
-                         ["task_get", "events_read", "task_get", "events_wait", "task_get", "workflow_get", "task_result"])
+                         ["task_get", "task_wait", "workflow_get", "task_result"])
         self.assertEqual(calls[1][1]["runId"], "run-1")
-        self.assertEqual(calls[3][1]["runId"], "run-1")
         self.assertEqual(answer["artifactId"], "art-1")
         self.assertTrue(answer["shutdownConfirmed"])
 

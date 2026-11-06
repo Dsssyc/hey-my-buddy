@@ -9,10 +9,10 @@ from typing import Any, Callable
 
 from ..protocol.requests import AwaitRequest, parse_request
 from ..protocol.transport import ServiceError, _call_service
+from ..protocol.awaiting import message_kind, shutdown_confirmed as _shutdown_confirmed
 
 WAIT_SLICE_MS = 30000
 UPGRADE_HANDOVER_POLL_SECONDS = 0.2
-TERMINAL_STATUSES = frozenset({"completed", "concluded", "failed", "cancelled", "reconciliation-needed"})
 
 
 class WaitAbandoned(RuntimeError):
@@ -21,12 +21,6 @@ class WaitAbandoned(RuntimeError):
     def __init__(self, run_id: str):
         super().__init__("The blocking wait was abandoned; the durable run was not cancelled")
         self.run_id = run_id
-
-
-def _shutdown_confirmed(run: dict) -> bool:
-    evidence = run.get("workflowShutdown")
-    return (evidence.get("selfConfirmed") is True and evidence.get("descendantsConfirmed") is True
-            if isinstance(evidence, dict) else run.get("shutdownConfirmed") is True)
 
 
 def _actions(run: dict) -> list[str]:
@@ -109,8 +103,6 @@ def await_run(
     stop: threading.Event | None = None,
     clock: Callable[[], float] = time.monotonic,
     service: Callable[..., dict] = _call_service,
-    *,
-    scoped: bool = False,
 ) -> dict:
     """Wait for one admitted run, preserving the existing wakeup conditions."""
     request = params if isinstance(params, AwaitRequest) else parse_request("await", params)
@@ -122,10 +114,19 @@ def await_run(
     deadline = started + wait_seconds
     reminder_wait_id = uuid.uuid4().hex
     try:
+        # An already visible workflow boundary must not bypass the one-time
+        # delivery of a new issue. This also keeps Lead's doorbell and its next
+        # await consistent when the issue arrives after an owned delivery.
+        if message_kind(run) is not None and not run.get('reminder') and not run.get('issue'):
+            run = service('task_wait', {'runId': run_id, 'timeoutMs': 0, 'consumeReminders': True,
+                                        'reminderWaitId': reminder_wait_id}, state_dir)
         while True:
             if stop is not None and stop.is_set():
                 raise WaitAbandoned(run_id)
             reminder = run.get("reminder")
+            kind = message_kind(run)
+            if kind == 'issue':
+                return _view(run, outcome='issue', started=started, wait_seconds=wait_seconds, clock=clock)
             if isinstance(reminder, dict):
                 return _view(run, outcome=reminder["kind"], started=started,
                              wait_seconds=wait_seconds, clock=clock, reminder=reminder)
@@ -150,35 +151,17 @@ def await_run(
                                      error={"code": error.code, "message": str(error)})
                 return _view(run, outcome="waiting-host", started=started,
                              wait_seconds=wait_seconds, clock=clock, result=result)
-            if workflow_state is None:
-                if run.get("resultAvailable") or run.get("state") in TERMINAL_STATUSES:
-                    break
-            elif workflow_state in ("delivered", "accepted", "concluded", "cancelled", "failed"):
-                evidence = run.get("workflowShutdown")
-                if not isinstance(evidence, dict) or _shutdown_confirmed(run):
-                    break
+            if kind is not None:
+                break
             remaining = deadline - clock()
             if remaining <= 0:
                 return _view(run, outcome="wait-timeout", started=started,
                              wait_seconds=wait_seconds, clock=clock)
             timeout_ms = max(1, int(min(WAIT_SLICE_MS, remaining * 1000)))
             try:
-                shutdown = run.get("workflowShutdown")
-                if (isinstance(shutdown, dict) and shutdown.get("unconfirmedRunIds")
-                        and (scoped or run.get("attemptState") not in
-                             ("starting", "executing", "finalizing", "uncertain"))):
-                    # A descendant's stop can leave the parent's revision unchanged.
-                    target = run_id if scoped else shutdown["unconfirmedRunIds"][0]
-                    head = service("events_read", {"runId": target, "limit": 1}, state_dir)["head"]
-                    run = service("task_get", {"runId": run_id}, state_dir)
-                    current = run.get("workflowShutdown")
-                    if isinstance(current, dict) and not _shutdown_confirmed(run):
-                        service("events_wait", {"runId": target, "after": head, "timeoutMs": timeout_ms}, state_dir)
-                        run = service("task_get", {"runId": run_id}, state_dir)
-                else:
-                    run = service("task_wait", {"runId": run_id, "afterRevision": run.get("revision"),
-                                                "timeoutMs": timeout_ms, "consumeReminders": True,
-                                                "reminderWaitId": reminder_wait_id}, state_dir)
+                run = service("task_wait", {"runId": run_id, "afterRevision": run.get("revision"),
+                                            "timeoutMs": timeout_ms, "consumeReminders": True,
+                                            "reminderWaitId": reminder_wait_id}, state_dir)
             except ServiceError as error:
                 if (state_dir / "upgrade.json").exists():
                     time.sleep(min(UPGRADE_HANDOVER_POLL_SECONDS, max(deadline - clock(), 0.0)))
