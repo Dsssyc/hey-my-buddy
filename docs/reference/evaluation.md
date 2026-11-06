@@ -122,4 +122,4 @@ Buddy reads include bounded native `billing` and `providerCooling`; neither is u
 
 ## Public model facts snapshots (ADR-021 L8)
 
-Until 0.49.0 a refresh stored a dated snapshot of each newly enabled model service's public facts from models.dev (`model_facts`). Nothing read the snapshots, so the schema pruning of 2026-10-20 removed the table and the refresh; enabling a model makes no network request. The routing plane brings price facts back when it reads them ([ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md) L8).
+Until 0.49.0 a refresh stored a dated snapshot of each newly enabled model service's public facts from models.dev (`model_facts`). Nothing read the snapshots, so the schema pruning of 2026-10-20 removed the table and the refresh; enabling a model makes no network request. Routing reads no prices: the Router weighs a candidate's cost from its billing kind and usage statistics and from the notes the user writes on its preference and its model ([ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md) decisions 6 and 7).

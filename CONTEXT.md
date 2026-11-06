@@ -97,7 +97,7 @@ _Avoid_: 用户, user (for the developer)
 ### Routing knowledge
 
 **模型画像 / model profile**:
-The public picture of a model: its positioning and its commonly reported strengths and weaknesses, each with a source, together with published facts such as price and context length. It belongs to the model, is shared by every buddy that uses the model and does not depend on the user's work.
+The public picture of a model: its positioning and its commonly reported strengths and weaknesses, each with a source, together with published facts such as context length and release date. It belongs to the model, is shared by every buddy that uses the model and does not depend on the user's work.
 _Avoid_: model card, evaluation (for public information)
 
 **评价 / evaluation**:
