@@ -1,7 +1,7 @@
 """The JSON Schema subset shared by role correction and service validation."""
 from __future__ import annotations
 
-_TYPES = {"object": dict, "array": list, "string": str, "null": type(None)}
+_TYPES = {"object": dict, "array": list, "string": str, "null": type(None), "boolean": bool}
 
 
 def schema_errors(value, schema: dict) -> list[str]:
@@ -20,7 +20,8 @@ def schema_errors(value, schema: dict) -> list[str]:
     kinds = schema.get("type")
     if kinds is not None:
         kinds = [kinds] if isinstance(kinds, str) else list(kinds)
-        if not any(isinstance(value, _TYPES[kind]) and not (kind != "null" and isinstance(value, bool)) for kind in kinds):
+        if not any(isinstance(value, _TYPES[kind]) and (kind == "boolean" or not isinstance(value, bool))
+                   for kind in kinds):
             return ["type"]
     if "enum" in schema and value not in schema["enum"]:
         errors.append("enum")

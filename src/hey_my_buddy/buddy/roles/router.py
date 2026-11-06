@@ -245,7 +245,8 @@ class DecisionAdapter(Adapter):
             try:
                 result["decision"] = router.validate_answer(native_result.get("rawAnswer"),
                                                            [item["buddyId"] for item in document["buddies"]], document["routingMode"],
-                                                           domain_node_ids=[node["nodeId"] for node in document["domainNodes"]])
+                                                           domain_node_ids=[node["nodeId"] for node in document["domainNodes"]],
+                                                           exploration=(document.get("exploration") or {}).get("quota") is True)
             except BoardError as failure:
                 code = failure.code
         if code:

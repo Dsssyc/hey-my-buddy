@@ -196,6 +196,7 @@
   "router-disabled": [],
   "router-dispatch-unverified": [],
   "router-evidence-out-of-bounds": [],
+  "router-exploration-out-of-bounds": ["bound"],
   "router-harness-unavailable": [
     "cause"
   ],

@@ -1099,8 +1099,8 @@ class RoutingSpanTests(WorkflowTestCase):
                                            snapshot={'facts': {}, 'baseInput': {'task': 'current task'},
                                                      'inspections': []}, now='2026-01-02T00:00:00Z')
             for decision_id in ('recorded-decision', 'current-decision'):
-                db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,created_at)"
-                           " VALUES(? ,?,'resolved','2026-01-02T00:00:00Z')", (decision_id, task_id))
+                db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,exploration,created_at)"
+                           " VALUES(? ,?,'resolved','counted','2026-01-02T00:00:00Z')", (decision_id, task_id))
         self.assertEqual(self.spans(board, task_id)[0], before)
 
     def test_the_span_carries_the_recorded_routing_token_usage(self):

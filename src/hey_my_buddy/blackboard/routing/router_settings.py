@@ -7,16 +7,18 @@ from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
 
 FIELDS = frozenset({"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget",
-                    "maintenanceBuddyId", "maintenanceIntervalSeconds"})
+                    "maintenanceBuddyId", "maintenanceIntervalSeconds", "explorationEvery"})
 MODES = ("fast", "review")
 PRESETS = ("brief", "standard", "deep")
 RETRY_INTERVAL_MIN_SECONDS = 1
 RETRY_INTERVAL_MAX_SECONDS = 2147483647
+EXPLORATION_EVERY_MIN = 2
 
 
 DEFAULT_ROUTER_SETTINGS = {"routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
                            "defaultRoutingMode": "fast", "routingBudget": "standard",
-                           "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600}
+                           "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600,
+                           "explorationEvery": 5}
 
 
 def _object(value: object, fields: frozenset[str], label: str) -> Mapping:
@@ -88,4 +90,12 @@ def validate_router_settings_patch(value: object) -> dict:
         if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:
             raise BoardError("INVALID_ARGUMENT", "maintenanceIntervalSeconds must be a positive integer")
         result["maintenanceIntervalSeconds"] = seconds
+    if "explorationEvery" in entry:
+        every = entry["explorationEvery"]
+        if every is not None and (isinstance(every, bool) or not isinstance(every, int)
+                                  or every < EXPLORATION_EVERY_MIN):
+            raise BoardError("INVALID_ARGUMENT",
+                             f"explorationEvery must be null (exploration off) or an integer"
+                             f" of at least {EXPLORATION_EVERY_MIN}")
+        result["explorationEvery"] = every
     return result

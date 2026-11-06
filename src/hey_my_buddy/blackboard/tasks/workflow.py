@@ -1475,7 +1475,7 @@ class WorkflowCoordinator:
             view["routingBoundary"] = boundary
         return view
 
-    def _start_routing(self, connection, run_id: str, now: str) -> None:
+    def _start_routing(self, connection, run_id: str, now: str, *, exploration_eligible: bool) -> None:
         run = self._run_row(connection, run_id)
         sequence = connection.execute("SELECT COUNT(*) FROM workflow_routes WHERE run_id=?", (run_id,)).fetchone()[0] + 1
         micro_task, _ = self._micro_task(connection, run_id)
@@ -1485,10 +1485,13 @@ class WorkflowCoordinator:
             connection, run_id=run_id, sequence=sequence, spec=micro_task,
             manifest=None if run['checkout'] == 'none' else self._run_manifest(connection, run),
             overloaded_model_services=self._overloaded_model_services(connection, run_id),
+            exploration_eligible=exploration_eligible,
         )
         decision_id = response["decisionId"]
+        from ..routing.router_sequence import request_snapshot
+        exploration = request_snapshot(connection, decision_id)["facts"]["exploration"]["disposition"]
         connection.execute(
-            "INSERT INTO workflow_routes(decision_id, run_id, state, created_at) VALUES(?,?,'pending',?)", (decision_id,run_id,now,),
+            "INSERT INTO workflow_routes(decision_id, run_id, state, exploration, created_at) VALUES(?,?,'pending',?,?)", (decision_id,run_id,exploration,now,),
         )
         connection.execute(
             "UPDATE workflow_runs SET current_routing_id=?, buddy_json=NULL,"
@@ -1670,7 +1673,7 @@ class WorkflowCoordinator:
                           access="read" if executionWorkspace["access"] == "read" else "write",now=now)
             self._pin_artifact(connection,run_id=run_id,kind="input",manifest=manifest,attempt_id=None,turn_id=None,now=now)
         if buddy is None:
-            self._start_routing(connection, run_id, now)
+            self._start_routing(connection, run_id, now, exploration_eligible=True)
         else:
             connection.execute('UPDATE workflow_runs SET buddy_json=?, buddy_revision=1, validated_buddy_revision=1 WHERE run_id=?',
                                (canonical_json(buddy), run_id))
@@ -1990,9 +1993,9 @@ class WorkflowCoordinator:
             ).fetchone()["count"]
         )
         query = (
-            "SELECT r.rowid AS route_rowid, r.decision_id, r.state,"
+            "SELECT r.rowid AS route_rowid, r.decision_id, r.state, r.exploration,"
             " r.created_at, d.status AS decision_status, d.reason_code, d.reason_params_json, d.note,"
-            " q.task_id AS decision_task_id, q.selected_json, q.requested_json,"
+            " q.task_id AS decision_task_id, q.selected_json, q.requested_json, q.output_json,"
             " j.domain_node_id, j.task_type, n.name AS domain_node_name"
             " FROM workflow_routes r"
             " JOIN evaluation_decisions d ON d.decision_id=r.decision_id"
@@ -2013,6 +2016,11 @@ class WorkflowCoordinator:
         for row in rows:
             requested = json.loads(row["requested_json"])
             routing_request = {**requested, **request_snapshot(connection, row["decision_id"])["facts"]}
+            # The quota fact of this routing, frozen on its route row, with the
+            # preferred buddy of the published answer when one exists.
+            output = json.loads(row["output_json"]) if row["output_json"] else None
+            answer = (output.get("decision") if isinstance(output, dict) and output.get("status") == "ok"
+                      and "code" not in output else None)
             entries.append(
                 {
                     "decisionId": row["decision_id"],
@@ -2031,6 +2039,11 @@ class WorkflowCoordinator:
                     "note": row["note"],
                     "createdAt": row["created_at"],
                     "current": bool(current_id) and row["decision_id"] == current_id,
+                    "exploration": {
+                        "quota": row["exploration"] in ("quota-kept", "quota-reselected"),
+                        "reselected": row["exploration"] == "quota-reselected",
+                        "preferredBuddyId": (answer or {}).get("preferredBuddyId") if isinstance(answer, dict) else None,
+                    },
                     **({"domainNodeId": row["domain_node_id"], "domainNodeName": row["domain_node_name"],
                         "taskType": row["task_type"]} if row["task_type"] is not None else {}),
                     **routing_facts(routing_request, actor=dispatch(connection, row["decision_task_id"]) if row["decision_task_id"] else None),
@@ -2424,7 +2437,7 @@ class WorkflowCoordinator:
                 (helper_task_id,run_row["run_id"],request_row["request_id"],now,now),
             )
             if item["buddy"] is None:
-                self._start_routing(connection, helper_task_id, now)
+                self._start_routing(connection, helper_task_id, now, exploration_eligible=True)
             else:
                 connection.execute('UPDATE workflow_runs SET buddy_json=?, buddy_revision=1, validated_buddy_revision=1 WHERE run_id=?',
                                    (canonical_json(item["buddy"]), helper_task_id))
@@ -2761,7 +2774,9 @@ class WorkflowCoordinator:
             connection.execute("UPDATE workflow_runs SET buddy_json=NULL,current_routing_id=NULL,validated_buddy_revision=NULL WHERE run_id=?",(run_id,))
             connection.execute("UPDATE tasks SET adapter='unresolved',queue_reason='awaiting-workspace-preparation' WHERE task_id=?",(run_id,))
             if target['checkout'] == 'none':
-                self._start_routing(connection, run_id, now)
+                # A manual continuation's reroute routes continued work, not a
+                # fresh micro task, so it never carries an exploration quota.
+                self._start_routing(connection, run_id, now, exploration_eligible=False)
         self.board._append_event(connection,"workflow.continued",task_id=run_id,payload={"continuationId":identifier,"actor":actor,"controllingRunId":owner["run_id"]})
         return self._action_view(connection,self._run_row(connection,owner["run_id"]),continuationId=identifier,alreadyResponded=False,
                                  **{k:params[k] for k in ("requestId","artifactId","turnId","targetRunId") if k in params})
@@ -5606,7 +5621,9 @@ class WorkflowCoordinator:
                 self.board._append_event(connection, kind, task_id=row["run_id"], revision=None, payload=event)
                 if problem is None:
                     if row["buddy_selection_json"] is not None and json.loads(row["buddy_selection_json"]) == "route":
-                        self._start_routing(connection, row["run_id"], now)
+                        # A prepared continuation that routes continues existing
+                        # work; it is not an exploration-eligible micro task.
+                        self._start_routing(connection, row["run_id"], now, exploration_eligible=False)
                 head = self.board._head_of(connection)
             self.board._notify(head)
 
@@ -6097,7 +6114,9 @@ class WorkflowCoordinator:
                 connection.execute(
                     'UPDATE workflow_runs SET updated_at=? WHERE run_id=?', (now, run_row["run_id"]))
                 previous_decision_id = run_row["current_routing_id"]
-                self._start_routing(connection, run_row["run_id"], now)
+                # This reroute recovers a failed provider round of the same
+                # micro task; it never carries an exploration quota.
+                self._start_routing(connection, run_row["run_id"], now, exploration_eligible=False)
                 refreshed = self._run_row(connection, run_row["run_id"])
                 facts = {"turnId": turn_row["turn_id"], "reason": self.result_payload(payload)["providerRejection"]["code"],
                          "previousDecisionId": previous_decision_id, "decisionId": refreshed["current_routing_id"],

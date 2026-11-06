@@ -13,7 +13,8 @@ class RouterSettingsTests(unittest.TestCase):
     def test_settings_defaults(self):
         self.assertEqual(DEFAULT_ROUTER_SETTINGS, {"routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
                                                   "defaultRoutingMode": "fast", "routingBudget": "standard",
-                                                  "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600})
+                                                  "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600,
+                                                  "explorationEvery": 5})
 
     def test_patch_preserves_omissions_and_explicit_clear(self):
         self.assertEqual(validate_router_settings_patch({"routingBudget": "brief"}), {"routingBudget": "brief"})
@@ -44,6 +45,19 @@ class RouterSettingsTests(unittest.TestCase):
             with self.subTest(seconds=seconds):
                 self.assertEqual(validate_router_settings_patch({"routerRetryIntervalSeconds": seconds}),
                                  {"routerRetryIntervalSeconds": seconds})
+
+    def test_patch_validates_the_exploration_interval(self):
+        # Null is the recorded form of exploration off; the minimum interval is 2.
+        self.assertEqual(validate_router_settings_patch({"explorationEvery": None}),
+                         {"explorationEvery": None})
+        self.assertEqual(validate_router_settings_patch({"explorationEvery": 2}),
+                         {"explorationEvery": 2})
+        self.assertEqual(validate_router_settings_patch({"explorationEvery": 1000}),
+                         {"explorationEvery": 1000})
+        for value in (1, 0, -2, True, 5.0, "5"):
+            with self.subTest(value=value), self.assertRaises(BoardError) as failure:
+                validate_router_settings_patch({"explorationEvery": value})
+            self.assertEqual(failure.exception.code, "INVALID_ARGUMENT")
 
     def test_patch_accepts_large_lists_without_item_limits(self):
         many = [f"provider:model-{index}:off" for index in range(200)]

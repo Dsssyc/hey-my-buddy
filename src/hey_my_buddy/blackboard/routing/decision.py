@@ -167,6 +167,32 @@ class DecisionCoordinator:
                     connection, required_capabilities=required_capabilities, constraints=constraints),
                 "coolingBuddies": cooling_buddies, "overloadedModelServices": overloaded_model_services or []}
 
+    def _exploration_facts(self, connection: sqlite3.Connection, request: dict, candidates: list[sqlite3.Row]) -> dict | None:
+        """One workflow routing's frozen exploration fact, with no stored counter.
+
+        Eligible routings are micro tasks handed to Router selection; a
+        continuation, a recovery reroute and a program or no-candidate
+        selection are ``ineligible``. The quota is derived from the recorded
+        routes: the ``counted`` routes since the last quota-carrying one, and
+        the Nth eligible routing carries the quota. ``every`` freezes the
+        setting as admitted; ``quota-kept`` is the admission value of a
+        quota-carrying routing, finalized to ``quota-reselected`` when a valid
+        answer reselects.
+        """
+        if not request.get("workflowRouting"):
+            return None
+        every = connection.execute("SELECT exploration_every FROM router_settings WHERE id=1").fetchone()[0]
+        if len(candidates) < 2 or request.get("explorationEligible") is not True:
+            return {"disposition": "ineligible", "every": every}
+        if every is not None:
+            counted = connection.execute(
+                "SELECT COUNT(*) FROM workflow_routes WHERE exploration='counted' AND rowid > COALESCE("
+                "(SELECT MAX(rowid) FROM workflow_routes"
+                " WHERE exploration IN ('quota-kept','quota-reselected')), 0)").fetchone()[0]
+            if counted + 1 >= every:
+                return {"disposition": "quota-kept", "every": every}
+        return {"disposition": "counted", "every": every}
+
     # -- bounded model input -------------------------------------------------
     def _buddy_input(self, row: sqlite3.Row) -> dict:
         entry = {
@@ -284,6 +310,7 @@ class DecisionCoordinator:
                 required_capabilities=request.get("requiredCapabilities", []),
                 constraints=request.get("constraints"), cooling_buddies=cooling_buddies,
                 overloaded_model_services=request.get("routingBasis", {}).get("overloadedModelServices"))
+            exploration = self._exploration_facts(connection, request, candidates)
             status = "queued"
             # This admission path creates selections. Maintenance admits its
             # single internal task through the maintenance coordinator.
@@ -292,6 +319,8 @@ class DecisionCoordinator:
             sole_candidate: sqlite3.Row | None = None
             resolution = None
             facts = {"routerBuddyId": None, "routingMode": None, "budget": None, "routerCalled": False}
+            if exploration is not None:
+                facts["exploration"] = exploration
             expected_seconds = request.get("expectedSeconds", schemas.DEFAULT_EXPECTED_SECONDS)
             snapshot: dict = {"facts": facts, "baseInput": {"task": task_text,
                                                               "expectedSeconds": expected_seconds}, "inspections": []}
@@ -323,6 +352,11 @@ class DecisionCoordinator:
                     now=now, expected_seconds=expected_seconds, project=request.get("project"),
                     hard_constraints=request.get("constraints") or {})
                 base_input.update(facts)
+                if exploration is not None:
+                    facts["exploration"] = exploration
+                quota = exploration is not None and exploration["disposition"] == "quota-kept"
+                if quota:
+                    base_input["exploration"] = {"quota": True}
                 base_input["routingBasis"] = request["routingBasis"]
                 base_input["constraints"] = request.get("constraints", {})
                 base_input["requiredCapabilities"] = request.get("requiredCapabilities", [])
@@ -332,7 +366,8 @@ class DecisionCoordinator:
                 if facts["routingMode"] is not None:
                     base_input["outputSchema"] = router.answer_schema(
                         [item["buddyId"] for item in base_input["buddies"]], facts["routingMode"],
-                        domain_node_ids=[node["nodeId"] for node in base_input["domainNodes"]])
+                        domain_node_ids=[node["nodeId"] for node in base_input["domainNodes"]],
+                        exploration=quota)
                 snapshot = {"facts": facts, "baseInput": base_input,
                             "inspections": [dict(entry) for entry in resolution.inspections]}
                 if facts["routingMode"] is None or resolution.buddy is None:
@@ -401,12 +436,16 @@ class DecisionCoordinator:
             self.board._notify(head)
         return self._request_response(connection=None if owns_transaction else connection, row=row, duplicate=False)
 
-    def route_workflow(self, connection, *, run_id: str, sequence: int, spec: dict, manifest: dict | None = None, overloaded_model_services: list[dict] | None = None) -> dict:
+    def route_workflow(self, connection, *, run_id: str, sequence: int, spec: dict, manifest: dict | None = None,
+                       overloaded_model_services: list[dict] | None = None, exploration_eligible: bool = True) -> dict:
         """Admit a fixed-selector task with the Micro task in its existing transaction.
 
         The selector itself is always the configured decision buddy. Only the
         bounded business candidate set is filtered; no recursive workflow submit
         and no provider/model call occurs during admission.
+        ``exploration_eligible`` records whether this routing hands a fresh
+        micro task to Router selection, as opposed to a continuation, a
+        reassignment or a failure recovery.
         """
         task_text = spec["task"]
         continuation = connection.execute("SELECT input_text,helper_outcomes_json FROM workflow_continuations"
@@ -435,6 +474,7 @@ class DecisionCoordinator:
             "requiredCapabilities": required_capabilities,
             "constraints": schemas.buddy_constraints(spec),
             "workflowRouting": True,
+            "explorationEligible": exploration_eligible,
             "routingBasis": {"overloadedModelServices": overloaded_model_services or []},
         }
         return self._create(request_id, request, connection=connection, request_form=request_form)
@@ -884,6 +924,12 @@ class DecisionCoordinator:
             connection.execute(
                 "INSERT INTO routing_judgments(decision_id,domain_node_id,task_type) VALUES(?,?,?)",
                 (row["decision_id"], judgment["domainNodeId"], judgment["taskType"]))
+            if judgment.get("reselected") is True:
+                # A quota-carrying routing that reselected records it once, in
+                # the same transaction as its published answer.
+                connection.execute(
+                    "UPDATE workflow_routes SET exploration='quota-reselected'"
+                    " WHERE decision_id=? AND exploration='quota-kept'", (row["decision_id"],))
             record("answered")
             self._finish(connection, row, status="completed" if outcome == "answered" else "needs-host", now=now,
                          reason=make_reason("router-abstained") if outcome == "abstained" else None,
@@ -916,13 +962,23 @@ class DecisionCoordinator:
             connection, candidates=candidates, required_capabilities=request.get("requiredCapabilities", []),
             constraints=request.get("constraints"), cooling_buddies=cooling_buddies,
             overloaded_model_services=request.get("routingBasis", {}).get("overloadedModelServices"))
+        # The route's frozen exploration fact survives the retry: the quota a
+        # routing carried at admission stays with that routing, and the retry's
+        # answer keeps the quota's two required fields.
+        route = connection.execute("SELECT exploration FROM workflow_routes WHERE decision_id=?",
+                                   (row["decision_id"],)).fetchone()
+        exploration = None
+        if route is not None:
+            previous = router_sequence.request_snapshot(connection, row["decision_id"])["facts"].get("exploration")
+            exploration = {"disposition": route["exploration"], "every": (previous or {}).get("every")}
         self._append_event(connection, "decision.selection_rerouted", row["decision_id"], {})
         if len(candidates) <= 1:
             next_round = connection.execute("SELECT MAX(round)+1 FROM router_requests WHERE decision_id=?",
                                             (row["decision_id"],)).fetchone()[0]
             router_sequence.freeze_request(connection, row["decision_id"],
                                            snapshot={"facts": {"routerBuddyId": None, "routingMode": None,
-                                                               "budget": None, "routerCalled": False},
+                                                               "budget": None, "routerCalled": False,
+                                                               **({"exploration": exploration} if exploration is not None else {})},
                                                      "baseInput": {"task": request["task"]}, "inspections": []},
                                            now=now, round=next_round)
             connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
@@ -949,6 +1005,8 @@ class DecisionCoordinator:
             router_budget_seconds = (60 if resolution.facts["routingMode"] == "fast"
                                      else resolution.facts["budget"]["timeoutSeconds"])
             resolution.facts["budget"] = {**resolution.facts["budget"], "timeoutSeconds": router_budget_seconds}
+        if exploration is not None:
+            resolution.facts["exploration"] = exploration
         document = self._select_input(
             connection, request_id=row["request_id"], task_text=request["task"],
             candidates=candidates, now=now,
@@ -957,6 +1015,13 @@ class DecisionCoordinator:
         document.update({**resolution.facts,
                          "routingBasis": request["routingBasis"], "constraints": request.get("constraints", {}),
                          "requiredCapabilities": request.get("requiredCapabilities", [])})
+        quota = exploration is not None and exploration["disposition"] in ("quota-kept", "quota-reselected")
+        if quota:
+            document["exploration"] = {"quota": True}
+        else:
+            # The snapshot facts keep the internal disposition; the model input
+            # states an exploration fact only when it carries the quota.
+            document.pop("exploration", None)
         if resolution.facts["routingMode"] != "fast":
             manifest = request.get("executionWorkspace")
             document["executionWorkspace"] = (
@@ -965,7 +1030,8 @@ class DecisionCoordinator:
         if resolution.facts["routingMode"] is not None:
             document["outputSchema"] = router.answer_schema(
                 [item["buddyId"] for item in document["buddies"]], resolution.facts["routingMode"],
-                domain_node_ids=[node["nodeId"] for node in document["domainNodes"]])
+                domain_node_ids=[node["nodeId"] for node in document["domainNodes"]],
+                exploration=quota)
         next_round = connection.execute("SELECT COALESCE(MAX(round),0)+1 FROM router_requests WHERE decision_id=?",
                                         (row["decision_id"],)).fetchone()[0]
         router_sequence.freeze_request(connection, row["decision_id"],
@@ -1016,6 +1082,30 @@ class DecisionCoordinator:
         if judged is None:
             return None
         return {"code": judged}
+
+    @staticmethod
+    def _exploration_problem(document: dict, decision: dict) -> dict | None:
+        """The quota's program fact: a reselection is sample-minimal in its cell.
+
+        Sample counts come from the frozen input's own statistics, never a live
+        table: each legal candidate carries its kind's cells, and a candidate
+        whose input has no cell for the judgment's domain and task type has no
+        samples there. The reselected buddy's kind must hold the minimum.
+        """
+        if not decision["reselected"]:
+            return None
+        node_id, task_type = decision["domainNodeId"], decision["taskType"]
+        cell_samples = {}
+        for candidate in document["buddies"]:
+            kind = (candidate["harness"], candidate["model"], candidate["effort"])
+            cell = ((candidate.get("statistics") or {}).get("byDomainTaskType") or {}).get(node_id) or {}
+            entry = cell.get(task_type) or {}
+            cell_samples.setdefault(kind, entry.get("samples", 0))
+        chosen = next(item for item in document["buddies"] if item["buddyId"] == decision["buddyId"])
+        kind = (chosen["harness"], chosen["model"], chosen["effort"])
+        if cell_samples[kind] != min(cell_samples.values()):
+            return {"code": "router-exploration-out-of-bounds", "params": {"bound": "not-sample-minimal"}}
+        return None
 
     def _publish_select(self, connection: sqlite3.Connection, row: sqlite3.Row, *, dispatch: dict, output: dict, now: str) -> dict:
         """Check program facts without settling the request or judging the choice."""
@@ -1069,11 +1159,17 @@ class DecisionCoordinator:
         if problem is not None:
             return refuse(problem["code"])
         buddies = document.get("buddies") or []
+        quota = (document.get("exploration") or {}).get("quota") is True
         try:
             decision = router.validate_answer(output.get("decision"), [item["buddyId"] for item in buddies], document["routingMode"],
-                                              domain_node_ids=[node["nodeId"] for node in document["domainNodes"]])
+                                              domain_node_ids=[node["nodeId"] for node in document["domainNodes"]],
+                                              exploration=quota)
         except BoardError as failure:
             return refuse(failure.code, **failure.details)
+        if quota:
+            problem = self._exploration_problem(document, decision)
+            if problem is not None:
+                return refuse(problem["code"], **problem["params"])
         note, buddy_id = decision["note"], decision["buddyId"]
         if buddy_id is None:
             return {**checked, "answer_valid": True, "abstained": True, "note": note,

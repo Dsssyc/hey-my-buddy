@@ -256,8 +256,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        " VALUES(?,?,?,?,?)", (decision_id, "route-history", "hash", "route-latest", now))
             db.execute("INSERT INTO router_requests(decision_id,round,snapshot_json,frozen_at) VALUES(?,1,?,?)",
                        (decision_id, json.dumps({"baseInput": {"task": "Router private text"}}), now))
-            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,created_at)"
-                       " VALUES(?,?,?,?)", (decision_id, owner["runId"], "resolved", now))
+            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,exploration,created_at)"
+                       " VALUES(?,?,?,?,?)", (decision_id, owner["runId"], "resolved", "counted", now))
             for index, task_id in enumerate(("route-earlier", "route-latest")):
                 row = {**original, "task_id": task_id, "request_id": f"route-request-{index}",
                        "adapter": "decision", "spec_json": json.dumps({"adapter": "decision", "routerBudgetSeconds": 60}),
@@ -453,8 +453,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             router_sequence.reserve_dispatch(db, decision_id='tree-decision', task_id=router_id, router_index=0,
                                              buddy={'buddyId': 'fixture', 'harness': 'dsh', 'provider': 'fixture',
                                                     'model': 'router', 'effort': 'max'}, now=now)
-            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,created_at)"
-                       " VALUES('tree-decision',?,'resolved',?)", (lead_owned['runId'], now))
+            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,exploration,created_at)"
+                       " VALUES('tree-decision',?,'resolved','counted',?)", (lead_owned['runId'], now))
         target = "run:" + root["runId"]
         from hey_my_buddy.private_dirs import session_record_path
         with board.store.db.read() as db:
@@ -649,8 +649,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        "updated_at) VALUES(?,?,?,?)", ("pending-decision", "pending-route", "hash", now))
             from hey_my_buddy.blackboard.routing import router_sequence
             router_sequence.freeze_request(db, "pending-decision", snapshot={"baseInput": {"task": "private"}}, now=now)
-            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,created_at)"
-                       " VALUES(?,?,?,?)", ("pending-decision", run["runId"], "pending", now))
+            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,exploration,created_at)"
+                       " VALUES(?,?,?,?,?)", ("pending-decision", run["runId"], "pending", "counted", now))
         self.assertIn("macro-task-deletion.routing", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_routes SET state='resolved' WHERE decision_id='pending-decision'")
@@ -808,9 +808,9 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        ("owned-decision", "owned-decision-request", "hash", now))
             from hey_my_buddy.blackboard.routing import router_sequence
             router_sequence.freeze_request(db, "owned-decision", snapshot={"baseInput": {"task": "private"}}, now=now)
-            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,created_at)"
-                       " VALUES(?,?,?,?)",
-                       ("owned-decision", run["runId"], "resolved", now))
+            db.execute("INSERT INTO workflow_routes(decision_id,run_id,state,exploration,created_at)"
+                       " VALUES(?,?,?,?,?)",
+                       ("owned-decision", run["runId"], "resolved", "counted", now))
             db.execute("INSERT INTO provider_cooling(harness,provider,consecutive_rejections,"
                        "cooling_until,last_rejected_at) VALUES(?,?,?,?,?)",
                        ("codex", "fixture", 2, now, now))

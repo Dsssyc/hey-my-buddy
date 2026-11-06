@@ -55,6 +55,7 @@ def install(testcase, *, path=None, **options):
 def _answer(document, options, mode):
     buddies = document["buddies"]
     chosen = options.get("buddy_id") or buddies[0]["buddyId"]
+    preferred = chosen
     evidence = []
     if options.get("evidence") == "foreign":
         evidence = [{"kind": "annotation", "ref": "model-note-not-supplied"}]
@@ -64,6 +65,10 @@ def _answer(document, options, mode):
     if mode == "out_of_candidate":
         chosen = "dsh:not-a-candidate:model:off"
     answer = {"domainNodeId": None, "taskType": "change", "buddyId": chosen, "note": f"mock select chose {chosen}", "evidence": evidence}
+    if (document.get("exploration") or {}).get("quota") is True:
+        # A quota-carrying routing answers with its preferred buddy kept.
+        answer["preferredBuddyId"] = preferred
+        answer["reselected"] = False
     if mode == "answer_error":
         return "{not json", None, "invalid"
     if mode == "answer_extra":
@@ -91,7 +96,9 @@ def start(harness, context, request, fixture, options):
 
     assert context.turn is None and context.agent_credential is None
     assert context.cwd == request.cwd
-    assert set(request.output_schema["properties"]) == {"buddyId", "domainNodeId", "taskType", "note", "evidence"}
+    assert set(request.output_schema["properties"]) in (
+        {"buddyId", "domainNodeId", "taskType", "note", "evidence"},
+        {"buddyId", "domainNodeId", "taskType", "note", "evidence", "preferredBuddyId", "reselected"})
     assert request.budget == context.decision_input["budget"]
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)

@@ -409,8 +409,8 @@ class WorkflowWiringTests(RouterDispatchTestCase):
         """The Micro task's owning transaction inserts its pending route link."""
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO workflow_routes(decision_id,run_id,state,created_at)"
-                " VALUES(?,?,'pending',?)",
+                "INSERT INTO workflow_routes(decision_id,run_id,state,exploration,created_at)"
+                " VALUES(?,?,'pending','counted',?)",
                 (decision_id, run_id, T0))
             db.execute("UPDATE workflow_runs SET current_routing_id=? WHERE run_id=?", (decision_id, run_id))
 
