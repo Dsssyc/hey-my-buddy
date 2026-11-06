@@ -56,7 +56,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
     { key: "ended", mark: "idle", value: shown.counts.ended - shown.counts.accepted - shown.counts.failed },
   ];
 
-  return <header data-slot="macro-overview-header" className="relative flex shrink-0 flex-col gap-2.5 border-b bg-card px-4 py-3 sm:px-8 @min-[761px]:grid @min-[761px]:grid-cols-[minmax(0,1fr)_auto] @min-[761px]:items-start @min-[761px]:gap-x-6 @min-[761px]:gap-y-1.5 @min-[761px]:pt-4.5 @min-[761px]:pb-4">
+  return <header data-slot="macro-overview-header" className="relative flex shrink-0 flex-col gap-2.5 border-b bg-card px-3 py-3 @min-[761px]:grid @min-[761px]:grid-cols-[minmax(0,1fr)_auto] @min-[761px]:items-start @min-[761px]:gap-x-6 @min-[761px]:gap-y-1.5 @min-[761px]:pt-4.5 @min-[761px]:pb-4">
     <div className="min-w-0 flex-1 @min-[761px]:contents">
       <Button type="button" variant="ghost" size="sm" onClick={onBackToList} className="mb-1 -ml-2 hidden @max-[761px]:inline-flex">
         {t("back")}

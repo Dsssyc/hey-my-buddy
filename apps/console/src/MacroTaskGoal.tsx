@@ -44,7 +44,7 @@ export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
     function measure() {
       const anchor = button.getBoundingClientRect(), bounds = header.getBoundingClientRect();
       const width = card.getBoundingClientRect().width;
-      const inset = bounds.width < 480 ? 12 : 24;
+      const inset = parseFloat(getComputedStyle(header).paddingLeft);
       const top = anchor.bottom + 4;
       // Keep the trigger over the sheet even when a long title pushes it right.
       const left = Math.max(inset, anchor.right - bounds.left - width);

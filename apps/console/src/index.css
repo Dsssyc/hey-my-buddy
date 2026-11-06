@@ -167,9 +167,9 @@
   transition: --goal-progress 200ms ease-out;
   position: absolute;
   z-index: 45;
-  left: 24px;
+  left: 12px;
   width: max-content;
-  max-width: calc(100% - 48px);
+  max-width: calc(100% - 24px);
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -220,7 +220,6 @@
   .goal-scroll[data-history="true"] { grid-template-columns: minmax(0, 1fr) 110px; }
   .goal-history { padding-left: 12px; padding-right: 12px; }
 }
-@container (width < 480px) { .goal-card { left: 12px; max-width: calc(100% - 24px); } }
 @media (prefers-reduced-motion: reduce) {
   .goal-card[data-state] { animation: none; transition: none; }
   .goal-version { transition: none; }

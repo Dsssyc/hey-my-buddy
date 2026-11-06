@@ -8,6 +8,26 @@ const goals = [
   { body: "最初的完整目标。", revision: 1, createdAt: "2026-10-31T19:41:00Z" },
 ];
 
+for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test(`header aligns with micro-task label ${theme} ${width}`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await page.addInitScript(theme => {
+    localStorage.setItem("hey-my-buddy.console.theme", theme);
+    localStorage.setItem("hey-my-buddy.language", "zh");
+  }, theme);
+  await open(page, `#tasks/${macro}`);
+  const header = page.locator('[data-slot="macro-overview-header"]');
+  const label = page.locator('[data-slot="timeline-row-filter"]').getByText("微任务", { exact: true });
+  await expect(label).toBeVisible();
+  const left = (await label.boundingBox())!.x;
+  for (const content of [header.locator("h2"), header.locator('[data-slot="macro-overview-facts"] dt').first()]) {
+    await expect(content).toBeVisible();
+    expect(Math.abs((await content.boundingBox())!.x - left)).toBeLessThanOrEqual(1);
+  }
+  const bounds = (await header.boundingBox())!;
+  const controls = (await header.locator(":scope > div").last().boundingBox())!;
+  expect(Math.abs(bounds.x + bounds.width - controls.x - controls.width - (left - bounds.x)), "header controls share the text inset").toBeLessThanOrEqual(1);
+});
+
 // A zero-height inline box sits on the actual text baseline, independent of font metrics.
 async function identifierGeometry(identifier: Locator) {
   return identifier.evaluate(button => {
@@ -61,6 +81,8 @@ for (const font of [null, '"Courier New", monospace']) for (const width of [1440
   for (const y of id.neighbours) expect(Math.abs(y - id.valueBaseline)).toBeLessThanOrEqual(1);
   expect(Math.abs(id.iconOffset)).toBeLessThanOrEqual(1);
   const measurements = { id, cards: [] as unknown[] };
+  const bounds = (await header.boundingBox())!;
+  const padding = await header.evaluate(element => ({ left: parseFloat(getComputedStyle(element).paddingLeft), right: parseFloat(getComputedStyle(element).paddingRight) }));
   for (const withHistory of [true, false]) {
     history = withHistory;
     await header.locator('[data-slot="macro-goal-trigger"]').click();
@@ -86,10 +108,14 @@ for (const font of [null, '"Courier New", monospace']) for (const width of [1440
     expect(size.proseWidth).toBeLessThanOrEqual(38 * 14.5);
     if (width === 1440) expect(size.proseWidth).toBe(38 * 14.5);
     expect(size.fontSize).toBe("14.5px"); expect(size.lineHeight).toBe("26.825px");
-    const bounds = (await header.boundingBox())!;
-    expect(size.left).toBeGreaterThanOrEqual(bounds.x);
-    expect(size.right).toBeLessThanOrEqual(bounds.x + bounds.width);
+    expect(size.left).toBeGreaterThanOrEqual(bounds.x + padding.left);
+    expect(size.right).toBeLessThanOrEqual(bounds.x + bounds.width - padding.right);
+    const trigger = (await header.locator('[data-slot="macro-goal-trigger"]').boundingBox())!;
+    expect(Math.abs((await card.boundingBox())!.y - trigger.y - trigger.height - 4)).toBeLessThanOrEqual(1);
+    expect(await header.boundingBox(), "opening a goal does not move the header").toEqual(bounds);
     await page.keyboard.press("Escape");
+    await expect(card).toBeHidden();
+    expect(await header.boundingBox(), "closing a goal does not move the header").toEqual(bounds);
   }
   await writeFile(testInfo.outputPath("measurements.json"), JSON.stringify(measurements, null, 2));
 });

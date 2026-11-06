@@ -31,7 +31,12 @@ async function expectNowRuler(scope: Locator, stack: Locator) {
     const line = node as HTMLElement;
     const bounds = line.getBoundingClientRect();
     const x = bounds.left + .5;
-    const viewport = line.closest('[data-radix-scroll-area-viewport]')!.getBoundingClientRect();
+    const viewportElement = line.closest('[data-radix-scroll-area-viewport]')!;
+    const viewport = viewportElement.getBoundingClientRect();
+    // The overlay scrollbar intentionally paints over the ruler. Only sample
+    // rows in the content area above it, independent of header wrapping.
+    const scrollbar = viewportElement.parentElement!.querySelector('[data-slot=scroll-area-scrollbar][data-orientation=horizontal]');
+    const contentBottom = scrollbar ? Math.min(viewport.bottom, scrollbar.getBoundingClientRect().top) : viewport.bottom;
     const tracks = [...line.parentElement!.querySelectorAll('[data-slot=timeline-track], [data-slot=timeline-row], [data-slot=timeline-lane-lead]')];
     const bars = [...line.parentElement!.querySelectorAll('[data-slot=execution-bar]')];
     const ys = [bounds.top + .5, bounds.bottom - .5,
@@ -39,7 +44,7 @@ async function expectNowRuler(scope: Locator, stack: Locator) {
       ...bars.flatMap(bar => {
         const box = bar.getBoundingClientRect();
         return x >= box.left && x <= box.right ? [box.top + box.height / 2] : [];
-      })].filter(y => y >= Math.max(0, viewport.top) && y < Math.min(innerHeight, viewport.bottom));
+      })].filter(y => y >= Math.max(0, viewport.top) && y < Math.min(innerHeight, contentBottom));
     const saved = line.style.pointerEvents;
     line.style.pointerEvents = "auto";
     try { return ys.map(y => ({ y, above: document.elementFromPoint(x, y) === line })); }
