@@ -97,7 +97,7 @@ _Avoid_: 用户, user (for the developer)
 ### Routing knowledge
 
 **模型画像 / model profile**:
-The public picture of a model: its positioning and its commonly reported strengths and weaknesses, each with a source, together with published facts such as context length and release date. It belongs to the model, is shared by every buddy that uses the model and does not depend on the user's work.
+The public picture of a model: its positioning and its commonly reported strengths and weaknesses, each with a source. It belongs to the model, is shared by every buddy that uses the model and does not depend on the user's work.
 _Avoid_: model card, evaluation (for public information)
 
 **评价 / evaluation**:
@@ -131,6 +131,9 @@ The connector through which an execution reaches the blackboard: a harness in on
 
 **模型 / model**:
 One concrete language model, whoever provides it. Providers, communities and users may call the same model by different names.
+
+**模型的对应关系 / model correspondence**:
+The blackboard's record of which model each model service's name stands for. Equal names under different providers are one model; a different name is a model of its own until a correspondence joins it to another, suggested by the profile plane or set by the user. A change, including marking that a name now stands for a newer model, holds from the moment it is made.
 
 **模型服务 / model service**:
 One provider's service of one model. The blackboard knows a provider only by the name a harness gives it, so it identifies a model service by harness, provider and model, for example `dsh / deepseek-official / deepseek-flash`; a buddy is a model service used through that harness at one reasoning effort.
