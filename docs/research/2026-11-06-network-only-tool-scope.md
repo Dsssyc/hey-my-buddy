@@ -62,6 +62,15 @@
 | DSH CLI 0.2.1-rc.2（ACP） | 能：`--patch` 禁 tool-web 之外的工具行；tool-web 行内可再单独关 search 或 fetch | 强制（行禁用即不装） | 搜索：DeepSeek 的服务器（默认后端）；抓取：本机 HTTP，此版只许公共目的地（回环、私网、file:// 都取不到） | 会话内无工具集回报；`--dump-config` 无模型核对组合态（含禁用行） | MCP 逐服务器是补丁行、默认全关、无一键全禁；skills 禁行或 `includeDefaultRoots: false`；同一 `--patch` 机制 |
 | ZCode CLI 0.17.1（app-server；源码为主干） | 内建工具能：`toolAllowlist: ["WebSearch", "WebFetch"]`；MCP 工具是否受管不知道 | 内建：注册层强制；MCP：不知道 | 搜索：提供方服务器（provider_native web_search，US-only）；抓取：本机（拒绝 file://、localhost、无点主机名与非公共 IP） | settings 回显 mode 与 permission.mode；无工具集或 allowlist 的回报 | `mcpServers: []` 整体替换用户与项目的 MCP（插件服务器仍并入）；skills、hooks、插件无逐会话关法 |
 
+## 原生核实（2026-11-06 至 11-07）
+
+Host 在开发者的机器上用 `tests/probes/` 里的探针各跑了真实回合（开发者提前批准了这批付费调用），每次一个回合：工作目录是空的临时目录，工作目录外放一份带随机内容的文件；让模型依次试读这份文件、执行一条命令、调用一个 MCP 工具、联网搜索、抓取一个公开网页，有代码执行工具时也要在里面试。报告留在整合检出被忽略的 `tmp/step4/web/probes/reports/` 下。下面的结果更正上表里标为“未实测”或“不知道”的格子。
+
+- **Claude Code CLI 2.1.312**：会话开头报出的工具只有 WebSearch、WebFetch 与产品自己的结构化输出工具，MCP 服务器为空；读文件、命令、MCP 都做不到，搜索与抓取都成功。
+- **DSH CLI 0.2.1-rc.2**：模型能看到的工具只有 working_directory、web_search、web_fetch；读文件、命令、MCP 都做不到，搜索成功。抓取被 DSH 自己拒绝，原因是目的地“解析到非公网地址”：这台机器的 DNS 对公网主机都返回 198.18.x.x（代理软件的假 IP 模式），而 DSH 只许抓公网地址。这是环境与 DSH 规则的组合，不是限制失效。
+- **Codex CLI 0.164.0**：经 thread/start 的 `config` 下发的点号键不认 TOML 引号，`mcp_servers."名字".enabled=false` 会造出一个名字带引号、没有连接方式的新服务器，Codex 因此拒绝整份配置；改成嵌套对象下发，就与已有定义合并。插件用 `features.plugins=false` 在加载处关掉，因为 config/read 列不全插件带来的 MCP 服务器。工具经“代码模式”提供：模型写一段 JavaScript 调用列出的工具；按 0.164.0 的公开源码，这个运行环境没有 fs、process、require 与 fetch，任何 import 都被拒，实测里 `require('fs')`、`import('node:fs')`、`child_process` 都失败，所以可以留着。图片生成能按路径读本机图片，在这一档用 `features.image_generation=false` 关掉。改完之后五项都通过。
+- **ZCode CLI 0.17.1**：`toolAllowlist: ["WebSearch", "WebFetch"]` 加 `mcpServers: []`，模型仍拿到并调用了用户配置里的 MCP 工具 `mcp__web_reader__webReader`。公开文档与源码里找不到在不改用户配置的前提下、按会话排除用户、项目、插件与宿主 MCP 工具的参数，所以 ZCode 不声明这一档。以后的版本若能用原生回合证明 MCP 与应用工具都进不来，再重开。
+
 ## 取了什么，没取什么
 
 这份只是调研，不替开发者选画像面的 harness，也没有改动任何代码；结论留给 [ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 12 至 14 条与 [ADR-023](../decisions/023-harness-integration-principles.md) 的后续讨论。空着的格子就是逐次授权的原生核实要补的，每项一次付费回合即可定：
