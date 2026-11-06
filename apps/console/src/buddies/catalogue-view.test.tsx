@@ -398,3 +398,64 @@ describe("keyboard catalogue handles", () => {
     expect(f.command).not.toHaveBeenCalled();
   });
 });
+
+describe("model-keyed kind evaluations", () => {
+  const statistics = {
+    overall: { samples: 4, successes: 3, failures: 1, firstPasses: 2, reworkRounds: 1,
+      firstPassRate: 0.5, failureRate: 0.25, medianDeliverySeconds: null,
+      usage: { samples: 0, medianInputTokens: null, medianCachedInputTokens: null, medianOutputTokens: null } },
+    byDomain: {}, byDomainTaskType: {}, infrastructureFailures: [],
+  };
+
+  it("uses each provider's current correspondence and matches harness and effort", async () => {
+    const partner = { ...sol, provider: "partner" };
+    const state = snapshot({ buddies: [buddy(sol, "medium", { enabled: true }), buddy(partner, "medium", { enabled: true })] });
+    state.modelCorrespondences = state.modelCorrespondences.map(entry => ({ ...entry,
+      modelId: entry.provider === "openai" ? "current-generation" : "partner-generation" }));
+    state.models = state.modelCorrespondences.map(entry => ({ modelId: entry.modelId,
+      displayName: entry.modelId, names: [entry], profile: null, latestProfileRun: null }));
+    // Recorded names include the same service in an old generation; only its
+    // current correspondence decides which kind the catalogue displays.
+    state.kindEvaluations = [
+      { harness: "codex", modelId: sol.model, effort: "medium", modelDisplayName: "Old generation",
+        modelNames: [sol], statistics, summary: { text: "Old evaluation", citations: [] } },
+      { harness: "claude", modelId: "current-generation", effort: "medium", modelDisplayName: "Other harness",
+        modelNames: [sol], statistics, summary: { text: "Wrong harness", citations: [] } },
+      { harness: "codex", modelId: "current-generation", effort: "high", modelDisplayName: "Other effort",
+        modelNames: [sol], statistics, summary: { text: "Wrong effort", citations: [] } },
+      { harness: "codex", modelId: "current-generation", effort: "medium", modelDisplayName: "Current model",
+        modelNames: [{ ...sol, model: "upstream-alias" }], statistics, summary: { text: "Current evaluation", citations: [] } },
+      { harness: "codex", modelId: "partner-generation", effort: "medium", modelDisplayName: "Partner model",
+        modelNames: [partner], statistics, summary: { text: "Partner evaluation", citations: [] } },
+    ];
+    const user = userEvent.setup();
+    open(fixture(state));
+    await listed(2, 2);
+    await selectModel(user, SOL, "Codex");
+    await user.click(within(pane()).getByRole("button", { name: /评价与领域经验/ }));
+    expect(within(pane()).getByText("Current evaluation")).toBeTruthy();
+    expect(within(pane()).getByText("Current model")).toBeTruthy();
+    for (const text of ["Old evaluation", "Wrong harness", "Wrong effort", "Partner evaluation"]) {
+      expect(within(pane()).queryByText(text)).toBeNull();
+    }
+    await selectModel(user, "codex / partner / gpt-6-sol", "Codex");
+    await user.click(within(pane()).getByRole("button", { name: /评价与领域经验/ }));
+    expect(within(pane()).getByText("Partner evaluation")).toBeTruthy();
+    expect(within(pane()).queryByText("Current evaluation")).toBeNull();
+  });
+
+  it("shows no evaluation when a service has no current correspondence", async () => {
+    const state = snapshot({ buddies: [buddy(sol, "medium", { enabled: true })] });
+    state.modelCorrespondences = [];
+    state.kindEvaluations = [{ harness: "codex", modelId: sol.model, effort: "medium",
+      modelDisplayName: "Previously mapped model", modelNames: [sol], statistics,
+      summary: { text: "Previous evaluation", citations: [] } }];
+    const user = userEvent.setup();
+    open(fixture(state));
+    await listed(1, 1);
+    await selectModel(user, SOL, "Codex");
+    await user.click(within(pane()).getByRole("button", { name: /评价与领域经验/ }));
+    expect(within(pane()).getByText("还没有这个同型 buddy 的评价数据。")).toBeTruthy();
+    expect(within(pane()).queryByText("Previous evaluation")).toBeNull();
+  });
+});

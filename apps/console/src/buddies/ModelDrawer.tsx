@@ -194,7 +194,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
     </div>
     {modelId && <ModelProfile key={modelId} modelId={modelId} snapshot={recorded} data={data} editor={editor} api={api} refresh={refresh} mutationsAvailable={!!mutationsAvailable} />}
     <KindEvaluation key={selected.buddy.buddyId}
-      evaluation={data.kindEvaluations?.find(item => item.harness === selected.buddy.harness && item.model === selected.buddy.model && item.effort === selected.buddy.effort)}
+      evaluation={data.kindEvaluations?.find(item => item.harness === selected.buddy.harness && item.modelId === modelId && item.effort === selected.buddy.effort)}
       domains={data.domainNodes ?? []} onOpenTask={onOpenTask} />
   </section>;
 }

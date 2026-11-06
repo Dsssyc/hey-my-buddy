@@ -66,6 +66,35 @@ class LeadStopPreviewTests(unittest.TestCase):
             preview.command_result('normal', 'profile_start', {'modelId': 'missing'})
         self.assertEqual(missing.exception.code, 'NOT_FOUND')
 
+    def test_kind_evaluations_come_from_the_service_projection_of_synthetic_rows(self):
+        from unittest.mock import patch
+        from hey_my_buddy.console.reads import _kind_evaluations
+
+        with patch('hey_my_buddy.console.reads._kind_evaluations', wraps=_kind_evaluations) as read:
+            snapshot = preview.console_snapshot('normal', True)
+        read.assert_called_once()
+        rows = snapshot['kindEvaluations']
+        flash = next(row for row in rows if (row['harness'], row['modelId'], row['effort'])
+                     == ('dsh', preview.MODEL_IDS['deepseek-flash'], 'max'))
+        self.assertNotIn('model', flash)
+        self.assertEqual(flash['modelDisplayName'], 'deepseek-flash')
+        self.assertEqual({name['provider'] for name in flash['modelNames']},
+                         {'deepseek-official', 'deepseek-partner'})
+        self.assertEqual(flash['statistics']['overall']['samples'], 4)
+        self.assertEqual(flash['statistics']['byDomain']['preview-domain-ui']['samples'], 4)
+        self.assertEqual(flash['statistics']['byDomainTaskType']['preview-domain-routing']['verify']['samples'], 1)
+        self.assertEqual(flash['summary']['citations'], [{'runId': 'preview-run-a1',
+                         'title': '合成预览任务 A1', 'macroTaskId': preview.MACRO_A}])
+        self.assertEqual(flash['statistics']['infrastructureFailures'][0]['provider'], 'deepseek-official')
+        codex = next(row for row in rows if (row['harness'], row['modelId'], row['effort'])
+                     == ('codex', preview.MODEL_IDS['gpt-5-codex'], 'high'))
+        self.assertEqual(set(codex['statistics']['byDomain']),
+                         {'preview-domain-ui', 'preview-domain-console', 'preview-domain-tokens'})
+        # Kinds without samples still use the service's empty-statistics projection.
+        empty = next(row for row in rows if row['modelId'] == preview.MODEL_IDS['gpt-5-mini'])
+        self.assertEqual(empty['statistics']['overall']['samples'], 0)
+        self.assertIsNone(empty['summary'])
+
     def test_unconcluded_failures_and_cancellations_wait_for_host(self):
         page = preview.macro_task_page({'filter': 'host'})
         summary = next(item for group in page['groups'] for item in group['macroTasks']

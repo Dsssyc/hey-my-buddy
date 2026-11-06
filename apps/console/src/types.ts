@@ -405,7 +405,8 @@ export const evaluationStatisticsSchema = z.object({
   usage: z.object({ samples: safeCount, medianInputTokens: z.number().nonnegative().nullable(), medianCachedInputTokens: z.number().nonnegative().nullable(), medianOutputTokens: z.number().nonnegative().nullable() }),
 });
 export type EvaluationStatistics = z.infer<typeof evaluationStatisticsSchema>;
-export const kindEvaluationSchema = z.object({ harness: nonblankString, model: nonblankString, effort: nonblankString,
+export const kindEvaluationSchema = z.object({ harness: nonblankString, modelId: nonblankString,
+  modelDisplayName: nonblankString, modelNames: z.array(modelServiceSchema), effort: nonblankString,
   summary: z.object({ text: z.string(), citations: z.array(z.object({ runId: nonblankString, title: z.string().nullable(), macroTaskId: z.string().nullable() })) }).nullable(),
   statistics: z.object({ overall: evaluationStatisticsSchema, byDomain: z.record(z.string(), evaluationStatisticsSchema),
     byDomainTaskType: z.record(z.string(), z.partialRecord(z.enum(TASK_TYPES), evaluationStatisticsSchema)),

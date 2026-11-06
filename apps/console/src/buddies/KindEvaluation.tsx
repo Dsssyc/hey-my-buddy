@@ -100,6 +100,7 @@ export function KindEvaluation({ evaluation, domains, onOpenTask }: {
       {evaluation && <span className="ml-auto font-normal text-ink3 tabular-nums">{formatNumber(evaluation.statistics.overall.samples)}</span>}
     </button>
     {open && <div className="mt-3 space-y-4">
+      {evaluation && <p className="text-xs text-ink2">{evaluation.modelDisplayName}</p>}
       {!evaluation ? <p className="text-xs text-ink3">{t("evaluation.noEvidence")}</p> : <>
         <div className="grid min-w-0 gap-5 min-[900px]:grid-cols-2">
         <section aria-label={t("evaluation.summary")} className="min-w-0">

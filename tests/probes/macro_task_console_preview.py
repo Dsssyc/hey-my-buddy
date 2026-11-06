@@ -94,6 +94,7 @@ import json
 import re
 import signal
 import socket
+import sqlite3
 import sys
 import threading
 import urllib.error
@@ -2738,44 +2739,94 @@ def router_records(buddies: list[dict]) -> list[dict]:
     ]
 
 
-def evaluation_statistics(samples: int, successes: int, first_passes: int,
-                          rework_rounds: int, failures: int) -> dict:
-    """Invented cumulative facts for exercising the domain matrix."""
-    return {"samples": samples, "successes": successes, "failures": failures,
-            "firstPasses": first_passes, "reworkRounds": rework_rounds,
-            "firstPassRate": first_passes / samples if samples else None,
-            "failureRate": failures / samples if samples else None,
-            "medianDeliverySeconds": 540 if samples else None,
-            "usage": {"samples": samples, "medianInputTokens": 2400 if samples else None,
-                      "medianCachedInputTokens": 600 if samples else None,
-                      "medianOutputTokens": 360 if samples else None}}
+def kind_evaluation_views(domains: list[dict]) -> list[dict]:
+    """Read invented evidence through the service's current SQLite projection.
 
+    This in-memory board uses the product schema and statistics writer. Only the
+    input facts are synthetic; no evaluation response shape is maintained here.
+    """
+    from hey_my_buddy.blackboard.store.db import SCHEMA
+    from hey_my_buddy.blackboard.routing.statistics import _add_sample
+    from hey_my_buddy.console.reads import _kind_evaluations
 
-def kind_evaluation_views() -> list[dict]:
-    overall = evaluation_statistics(4, 3, 2, 1, 1)
-    change = evaluation_statistics(3, 2, 1, 1, 1)
-    routing = evaluation_statistics(1, 1, 1, 0, 0)
-    sparse = evaluation_statistics(1, 1, 1, 0, 0)
-    return [{"harness": "dsh", "model": "deepseek-flash", "effort": "max",
-             "summary": {"text": "合成样例：界面改造有过一次返工，路由验证一次通过。",
-                         "citations": [{"runId": "preview-run-a1", "title": "合成预览任务 A1",
-                                        "macroTaskId": MACRO_A}]},
-             "statistics": {"overall": overall,
-                            "byDomain": {"preview-domain-ui": overall, "preview-domain-routing": routing},
-                            "byDomainTaskType": {"preview-domain-ui": {"change": change, "verify": routing},
-                                                 "preview-domain-routing": {"verify": routing}},
-                            "infrastructureFailures": [{"provider": "deepseek-official", "count": 1,
-                                                        "lastAt": instant(8, 36)}]}},
-            # One kind with evidence on a single deep node: the matrix lists that
-            # node and its ancestors, not the other branches of the domain tree.
-            {"harness": "codex", "model": "gpt-5-codex", "effort": "high",
-             "summary": {"text": "合成样例：只有样式与排版这个节点有样本。", "citations": []},
-             "statistics": {"overall": sparse, "byDomain": {"preview-domain-tokens": sparse},
-                            "byDomainTaskType": {"preview-domain-tokens": {"debug": sparse}},
-                            "infrastructureFailures": []}}]
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.executescript(SCHEMA)
+        facts = model_views()
+        connection.executemany("INSERT INTO models(model_id,display_name) VALUES(?,?)",
+                               [(row["modelId"], row["displayName"]) for row in facts["models"]])
+        connection.executemany(
+            "INSERT INTO model_correspondences VALUES(?,?,?,?,?,?,?,?,?)",
+            [(row["correspondenceId"], row["harness"], row["provider"], row["model"], row["modelId"],
+              row["createdAt"], row["source"], row["evidenceUrl"], row["evidenceDate"])
+             for row in facts["modelCorrespondences"]])
+        connection.executemany(
+            "INSERT INTO buddies(buddy_id,label,harness,provider,model,effort) VALUES(?,?,?,?,?,?)",
+            [(row["buddyId"], row["label"], row["harness"], row["provider"], row["model"], row["effort"])
+             for row in buddy_views()])
+        now = instant(8, 0)
+        project = PROJECTS["alpha"]
+        connection.execute("INSERT INTO projects VALUES(?,?,?)", (project["id"], "git", project["path"]))
+        connection.execute(
+            "INSERT INTO macro_tasks(macro_task_id,title,project_id,project_kind,project_cwd,created_at,activity_at)"
+            " VALUES(?,?,?,'git',?,?,?)", (MACRO_A, "合成预览", project["id"], project["path"], now, now))
+        for task_id in ("preview-run-a1", "preview-run-maintenance-1"):
+            connection.execute(
+                "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,"
+                "adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,?,'synthetic',1,'command',?,'completed',1,?,?)",
+                (task_id, task_id, json.dumps({"expectedSeconds": 60}), project["path"], now, now))
+        connection.execute(
+            "INSERT INTO workflow_runs(run_id,macro_task_id,project_kind,checkout,title,execution_workspace_json,"
+            "state,created_at,updated_at) VALUES('preview-run-a1',?,'git','none','合成预览任务 A1','{}','accepted',?,?)",
+            (MACRO_A, now, now))
+        maintenance_id = "preview-maintenance-1"
+        connection.execute(
+            "INSERT INTO maintenance_runs VALUES(?,'manual',?,'preview-run-maintenance-1','completed',NULL,NULL,?,?)",
+            (maintenance_id, ROUTER_BUDDY_ID, now, now))
+        connection.executemany("INSERT INTO domain_nodes VALUES(?,?,?,?,?,?)",
+                               [(row["nodeId"], row["name"], row["definition"], row["parentId"],
+                                 row["mergedIntoId"], maintenance_id) for row in domains])
+        flash = ("dsh", MODEL_IDS["deepseek-flash"], "max")
+        codex = ("codex", MODEL_IDS["gpt-5-codex"], "high")
+        for kind, text in ((flash, "合成样例：界面改造有过一次返工，路由验证一次通过。"),
+                           (codex, "合成样例：只有样式与排版这个节点有样本。")):
+            connection.execute("INSERT INTO kind_summaries VALUES(?,?,?,?,?)", (*kind, text, maintenance_id))
+        connection.execute("INSERT INTO kind_summary_evidence VALUES(?,?,?,'preview-run-a1',1)", flash)
+        # Three UI changes, one routing verification and one deep-node debug.
+        for kind, cell, outcomes in (
+            (flash, ("preview-domain-ui", "change"), ((True, True, 0), (True, False, 1), (False, False, 0))),
+            (flash, ("preview-domain-routing", "verify"), ((True, True, 0),)),
+            (codex, ("preview-domain-tokens", "debug"), ((True, True, 0),)),
+        ):
+            for success, first_pass, rework in outcomes:
+                sample = {"success": success, "first_pass": first_pass, "rework": rework,
+                          "durations": [540], "usage": (2400, 600, 360)}
+                _add_sample(connection, kind, sample, None)
+                _add_sample(connection, kind, sample, cell)
+        connection.execute("INSERT INTO buddy_infrastructure_failures VALUES('dsh','deepseek-official',"
+                           "'deepseek-flash','max',1,?)", (instant(8, 36),))
+        return _kind_evaluations(connection)
+    finally:
+        connection.close()
 
 
 def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | None = None) -> dict:
+    domains = [
+        {"nodeId": "preview-domain-ui", "name": "界面工程", "definition": "构建和调整用户界面。",
+         "parentId": None, "mergedIntoId": None},
+        {"nodeId": "preview-domain-routing", "name": "路由判断", "definition": "核对选择依据和路由结果。",
+         "parentId": "preview-domain-ui", "mergedIntoId": None},
+        {"nodeId": "preview-domain-console", "name": "控制台", "definition": "读取并呈现黑板事实。",
+         "parentId": "preview-domain-ui", "mergedIntoId": None},
+        {"nodeId": "preview-domain-tokens", "name": "样式与排版", "definition": "控制台的颜色、间距与字号。",
+         "parentId": "preview-domain-console", "mergedIntoId": None},
+        {"nodeId": "preview-domain-docs", "name": "文档与技能", "definition": "说明、决定与共享技能。",
+         "parentId": None, "mergedIntoId": None},
+        {"nodeId": "preview-domain-skill", "name": "共享技能", "definition": "交给 agent 的使用说明。",
+         "parentId": "preview-domain-docs", "mergedIntoId": None},
+    ]
     buddies = buddy_views()
     if scenario == "readme":
         for buddy in buddies:
@@ -2824,21 +2875,8 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
             "usage": {"attempts": [{"attemptId": "preview-maintenance-attempt-0", "elapsedMs": 120000,
                                     "toolCalls": 0, "tokenUsage": None}]},
         }]},
-        "domainNodes": [
-            {"nodeId": "preview-domain-ui", "name": "界面工程", "definition": "构建和调整用户界面。",
-             "parentId": None, "mergedIntoId": None},
-            {"nodeId": "preview-domain-routing", "name": "路由判断", "definition": "核对选择依据和路由结果。",
-             "parentId": "preview-domain-ui", "mergedIntoId": None},
-            {"nodeId": "preview-domain-console", "name": "控制台", "definition": "读取并呈现黑板事实。",
-             "parentId": "preview-domain-ui", "mergedIntoId": None},
-            {"nodeId": "preview-domain-tokens", "name": "样式与排版", "definition": "控制台的颜色、间距与字号。",
-             "parentId": "preview-domain-console", "mergedIntoId": None},
-            {"nodeId": "preview-domain-docs", "name": "文档与技能", "definition": "说明、决定与共享技能。",
-             "parentId": None, "mergedIntoId": None},
-            {"nodeId": "preview-domain-skill", "name": "共享技能", "definition": "交给 agent 的使用说明。",
-             "parentId": "preview-domain-docs", "mergedIntoId": None},
-        ],
-        "kindEvaluations": kind_evaluation_views(),
+        "domainNodes": domains,
+        "kindEvaluations": kind_evaluation_views(domains),
         "routingHealth": {"windowSize": 20, "sampleCount": 6, "failureCount": 1,
                           "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1,
                           "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,

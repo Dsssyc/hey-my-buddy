@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
 import { open, test, expectNoSidewaysScroll, expectTextUncut } from "./preview";
 
-const matrixCaptures = fileURLToPath(new URL("../../../tmp/maintenance-polish", import.meta.url));
+const matrixCaptures = fileURLToPath(new URL("../../../tmp/step4-console-fix/browser", import.meta.url));
 
 for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
   test.describe(`maintenance and evaluation ${theme} ${width}px`, () => {
@@ -71,7 +71,9 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
       await expect(matrix.getByRole("rowheader", { name: /控制台/ })).toBeVisible();
       await expect(matrix.getByRole("rowheader", { name: /样式与排版/ })).toBeVisible();
       await expect(matrix.getByRole("rowheader", { name: /路由判断|文档与技能|共享技能/ })).toHaveCount(0);
-      await expect(matrix.getByLabel("无样本")).toHaveCount(20);
+      // The service rolls the leaf's debug sample into both ancestors.
+      await expect(matrix.getByLabel("无样本")).toHaveCount(18);
+      await expect(matrix.getByRole("cell").filter({ hasText: "1 · 100%" })).toHaveCount(3);
       await expectNoSidewaysScroll(page);
       await mkdir(matrixCaptures, { recursive: true });
       await matrix.screenshot({ path: join(matrixCaptures, `domain-matrix-${theme}-${width}.png`) });

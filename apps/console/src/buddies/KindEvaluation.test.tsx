@@ -14,7 +14,8 @@ const domainCell: EvaluationStatistics = {
   ...statistics, samples: 2, successes: 2, failures: 0, firstPasses: 1, reworkRounds: 1,
 };
 const evaluation: KindEvaluationData = {
-  harness: "codex", model: "gpt-6-sol", effort: "high",
+  harness: "codex", modelId: "sol-id", modelDisplayName: "GPT Sol",
+  modelNames: [{ harness: "codex", provider: "openai", model: "gpt-6-sol" }], effort: "high",
   summary: { text: "善于边界明确的调试。", citations: [
     { runId: "micro-1", title: "修复解析错误", macroTaskId: "macro-1" },
     { runId: "root-2", title: null, macroTaskId: null },
@@ -49,6 +50,7 @@ describe("buddy-kind evaluation", () => {
     show({ evaluation, domains, onOpenTask: openTask });
     await user.click(screen.getByRole("button", { name: /评价与领域经验/ }));
     expect(screen.getByText("善于边界明确的调试。")).toBeTruthy();
+    expect(screen.getByText("GPT Sol")).toBeTruthy();
     const link = screen.getByRole("link", { name: "修复解析错误" });
     expect(link.getAttribute("href")).toBe("#tasks/macro-1/micro-1");
     await user.click(link);
