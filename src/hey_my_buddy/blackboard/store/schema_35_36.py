@@ -26,6 +26,10 @@ TABLE_DDL = {
 
 INDEX_DDL = (
     """CREATE INDEX workflow_routes_run_idx ON workflow_routes(run_id)""",
+    # The exploration counter seeks the last quota-carrying route and the
+    # counted routes after it; both steps read this covering index (its
+    # implicit rowid tail included) instead of scanning the routing history.
+    """CREATE INDEX workflow_routes_exploration_idx ON workflow_routes(exploration)""",
 )
 
 

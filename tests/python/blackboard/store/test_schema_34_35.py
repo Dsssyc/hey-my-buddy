@@ -11,6 +11,7 @@ from unittest import mock
 
 from blackboard.store.upgrade_fixture import load_fixture, load_workspace_growth_stock
 from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33, schema_34_35, upgrade
+from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.upgrade import upgrade_state
 from hey_my_buddy.install.upgrade import _retire_host_files
 
@@ -60,7 +61,7 @@ class Schema34To35Tests(unittest.TestCase):
 
         files = {name: native_read_bytes(fixture['state'] / name) for name in fixture['resourceFiles']}
         with mock.patch.dict(upgrade.STEPS, {34: convert_cleanup_stock}):
-            self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 33, 'targetSchema': 36})
+            self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 33, 'targetSchema': SCHEMA_VERSION})
         with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
             connection.row_factory = sqlite3.Row
             for row in connection.execute('SELECT * FROM workspace_cleanup_plans'):
@@ -164,7 +165,7 @@ class Schema34To35Tests(unittest.TestCase):
             schema_34_35.upgrade(connection)
 
         with mock.patch.dict(upgrade.STEPS, {34: audit_schema_34_stock}):
-            self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 30, 'targetSchema': 36})
+            self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 30, 'targetSchema': SCHEMA_VERSION})
         with sqlite3.connect(path) as connection:
             connection.row_factory = sqlite3.Row
             self.assertEqual({row['project_id'] for row in connection.execute('SELECT * FROM projects')}, expected_projects)

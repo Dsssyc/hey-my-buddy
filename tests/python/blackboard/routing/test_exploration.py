@@ -85,7 +85,9 @@ class ExplorationRoutingTests(WorkflowTestCase):
             snapshots.append(snapshot)
         self.assertEqual(dispositions, ["counted", "quota-kept", "counted", "quota-kept"])
         for snapshot in snapshots:
-            self.assertEqual(snapshot["facts"]["exploration"]["every"], 2)
+            # The route row is the one record of the disposition; the frozen
+            # snapshot keeps only what the Router itself saw.
+            self.assertNotIn("exploration", snapshot["facts"])
         quota_free, quota_input = snapshots[0]["baseInput"], snapshots[1]["baseInput"]
         self.assertNotIn("exploration", quota_free)
         self.assertEqual(quota_input["exploration"], {"quota": True})
@@ -110,7 +112,7 @@ class ExplorationRoutingTests(WorkflowTestCase):
             route, snapshot = self.route_state(board, self.routed(board, f"o{index}"))
             dispositions.append(route["exploration"])
             self.assertNotIn("exploration", snapshot["baseInput"])
-            self.assertEqual(snapshot["facts"]["exploration"]["every"], None)
+            self.assertNotIn("exploration", snapshot["facts"])
         self.assertEqual(dispositions, ["counted"] * 3)
 
     def test_recovery_program_and_no_candidate_routings_never_count(self):
@@ -120,7 +122,7 @@ class ExplorationRoutingTests(WorkflowTestCase):
         no_candidates = self.routed(board, "blocked")
         route, snapshot = self.route_state(board, no_candidates)
         self.assertEqual(route["exploration"], "ineligible")
-        self.assertEqual(snapshot["facts"]["exploration"]["disposition"], "ineligible")
+        self.assertNotIn("exploration", snapshot["facts"])
         # A manual continuation's reroute routes continued work, not a fresh
         # micro task, so it stays ineligible even with candidates available.
         self.seed(board)
@@ -143,6 +145,7 @@ class ExplorationRoutingTests(WorkflowTestCase):
         route, snapshot = self.route_state(board, self.routed(board, "sole"))
         self.assertEqual(route["exploration"], "ineligible")
         self.assertEqual(snapshot["facts"]["routerCalled"], False)
+        self.assertNotIn("exploration", snapshot["facts"])
 
     # -- answer shape and publication ----------------------------------------
     def test_a_reselection_to_the_least_sampled_kind_publishes_and_is_recorded(self):

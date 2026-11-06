@@ -617,6 +617,7 @@ CREATE TABLE IF NOT EXISTS workflow_routes (
 """,
     """
 CREATE INDEX IF NOT EXISTS workflow_routes_run_idx ON workflow_routes(run_id);
+CREATE INDEX IF NOT EXISTS workflow_routes_exploration_idx ON workflow_routes(exploration);
 """,
     # One row per actual execution turn. The turn input is written to disk by the
     # adapter; this row pins the service-owned identity, the bounded context and the

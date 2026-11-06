@@ -61,6 +61,17 @@ ANSWER_VALIDATION_CODES = frozenset({
 #: the helper is still shutting its detached child down.
 TIMEOUT_GRACE_SECONDS = 10
 
+#: The exploration counter, derived from the recorded routes and served by the
+#: ``workflow_routes(exploration)`` index: the greatest route row carrying a
+#: quota, then the ``counted`` routes after it. Every step is an index seek on
+#: that covering index, never a scan of the whole routing history.
+COUNTED_SINCE_LAST_QUOTA_SQL = """
+SELECT COUNT(*) FROM workflow_routes
+ WHERE exploration='counted' AND rowid > max(
+   COALESCE((SELECT max(rowid) FROM workflow_routes WHERE exploration='quota-kept'), 0),
+   COALESCE((SELECT max(rowid) FROM workflow_routes WHERE exploration='quota-reselected'), 0))
+"""
+
 def decision_spec(spec: dict) -> dict | None:
     """The decision descriptor of a task specification, when this is a decision task."""
     return spec.get("decision")
@@ -167,31 +178,28 @@ class DecisionCoordinator:
                     connection, required_capabilities=required_capabilities, constraints=constraints),
                 "coolingBuddies": cooling_buddies, "overloadedModelServices": overloaded_model_services or []}
 
-    def _exploration_facts(self, connection: sqlite3.Connection, request: dict, candidates: list[sqlite3.Row]) -> dict | None:
-        """One workflow routing's frozen exploration fact, with no stored counter.
+    def _exploration_disposition(self, connection: sqlite3.Connection, request: dict, candidates: list[sqlite3.Row]) -> str | None:
+        """One workflow routing's exploration value, with no stored counter.
 
         Eligible routings are micro tasks handed to Router selection; a
         continuation, a recovery reroute and a program or no-candidate
         selection are ``ineligible``. The quota is derived from the recorded
         routes: the ``counted`` routes since the last quota-carrying one, and
-        the Nth eligible routing carries the quota. ``every`` freezes the
-        setting as admitted; ``quota-kept`` is the admission value of a
-        quota-carrying routing, finalized to ``quota-reselected`` when a valid
-        answer reselects.
+        the Nth eligible routing carries the quota. ``quota-kept`` is the
+        admission value of a quota-carrying routing, finalized to
+        ``quota-reselected`` when a valid answer reselects. The value lives
+        only on the route row; non-workflow requests have none.
         """
         if not request.get("workflowRouting"):
             return None
         every = connection.execute("SELECT exploration_every FROM router_settings WHERE id=1").fetchone()[0]
         if len(candidates) < 2 or request.get("explorationEligible") is not True:
-            return {"disposition": "ineligible", "every": every}
+            return "ineligible"
         if every is not None:
-            counted = connection.execute(
-                "SELECT COUNT(*) FROM workflow_routes WHERE exploration='counted' AND rowid > COALESCE("
-                "(SELECT MAX(rowid) FROM workflow_routes"
-                " WHERE exploration IN ('quota-kept','quota-reselected')), 0)").fetchone()[0]
+            counted = connection.execute(COUNTED_SINCE_LAST_QUOTA_SQL).fetchone()[0]
             if counted + 1 >= every:
-                return {"disposition": "quota-kept", "every": every}
-        return {"disposition": "counted", "every": every}
+                return "quota-kept"
+        return "counted"
 
     # -- bounded model input -------------------------------------------------
     def _buddy_input(self, row: sqlite3.Row) -> dict:
@@ -310,7 +318,7 @@ class DecisionCoordinator:
                 required_capabilities=request.get("requiredCapabilities", []),
                 constraints=request.get("constraints"), cooling_buddies=cooling_buddies,
                 overloaded_model_services=request.get("routingBasis", {}).get("overloadedModelServices"))
-            exploration = self._exploration_facts(connection, request, candidates)
+            exploration = self._exploration_disposition(connection, request, candidates)
             status = "queued"
             # This admission path creates selections. Maintenance admits its
             # single internal task through the maintenance coordinator.
@@ -319,8 +327,6 @@ class DecisionCoordinator:
             sole_candidate: sqlite3.Row | None = None
             resolution = None
             facts = {"routerBuddyId": None, "routingMode": None, "budget": None, "routerCalled": False}
-            if exploration is not None:
-                facts["exploration"] = exploration
             expected_seconds = request.get("expectedSeconds", schemas.DEFAULT_EXPECTED_SECONDS)
             snapshot: dict = {"facts": facts, "baseInput": {"task": task_text,
                                                               "expectedSeconds": expected_seconds}, "inspections": []}
@@ -352,9 +358,7 @@ class DecisionCoordinator:
                     now=now, expected_seconds=expected_seconds, project=request.get("project"),
                     hard_constraints=request.get("constraints") or {})
                 base_input.update(facts)
-                if exploration is not None:
-                    facts["exploration"] = exploration
-                quota = exploration is not None and exploration["disposition"] == "quota-kept"
+                quota = exploration == "quota-kept"
                 if quota:
                     base_input["exploration"] = {"quota": True}
                 base_input["routingBasis"] = request["routingBasis"]
@@ -434,7 +438,13 @@ class DecisionCoordinator:
             head = self.board._head_of(connection)
         if owns_transaction:
             self.board._notify(head)
-        return self._request_response(connection=None if owns_transaction else connection, row=row, duplicate=False)
+        response = self._request_response(connection=None if owns_transaction else connection, row=row, duplicate=False)
+        if request.get("workflowRouting"):
+            # The routing's exploration value travels back through this call
+            # chain to the caller that writes the route row; the frozen
+            # snapshot keeps only what the Router itself saw.
+            response["exploration"] = exploration
+        return response
 
     def route_workflow(self, connection, *, run_id: str, sequence: int, spec: dict, manifest: dict | None = None,
                        overloaded_model_services: list[dict] | None = None, exploration_eligible: bool = True) -> dict:
@@ -962,23 +972,19 @@ class DecisionCoordinator:
             connection, candidates=candidates, required_capabilities=request.get("requiredCapabilities", []),
             constraints=request.get("constraints"), cooling_buddies=cooling_buddies,
             overloaded_model_services=request.get("routingBasis", {}).get("overloadedModelServices"))
-        # The route's frozen exploration fact survives the retry: the quota a
-        # routing carried at admission stays with that routing, and the retry's
-        # answer keeps the quota's two required fields.
+        # The route row is the one record of this routing's exploration value:
+        # a retry reads it there, and the quota it carried at admission stays
+        # with the routing, keeping the quota's two required answer fields.
         route = connection.execute("SELECT exploration FROM workflow_routes WHERE decision_id=?",
                                    (row["decision_id"],)).fetchone()
-        exploration = None
-        if route is not None:
-            previous = router_sequence.request_snapshot(connection, row["decision_id"])["facts"].get("exploration")
-            exploration = {"disposition": route["exploration"], "every": (previous or {}).get("every")}
+        quota = route is not None and route["exploration"] in ("quota-kept", "quota-reselected")
         self._append_event(connection, "decision.selection_rerouted", row["decision_id"], {})
         if len(candidates) <= 1:
             next_round = connection.execute("SELECT MAX(round)+1 FROM router_requests WHERE decision_id=?",
                                             (row["decision_id"],)).fetchone()[0]
             router_sequence.freeze_request(connection, row["decision_id"],
                                            snapshot={"facts": {"routerBuddyId": None, "routingMode": None,
-                                                               "budget": None, "routerCalled": False,
-                                                               **({"exploration": exploration} if exploration is not None else {})},
+                                                               "budget": None, "routerCalled": False},
                                                      "baseInput": {"task": request["task"]}, "inspections": []},
                                            now=now, round=next_round)
             connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
@@ -1005,8 +1011,6 @@ class DecisionCoordinator:
             router_budget_seconds = (60 if resolution.facts["routingMode"] == "fast"
                                      else resolution.facts["budget"]["timeoutSeconds"])
             resolution.facts["budget"] = {**resolution.facts["budget"], "timeoutSeconds": router_budget_seconds}
-        if exploration is not None:
-            resolution.facts["exploration"] = exploration
         document = self._select_input(
             connection, request_id=row["request_id"], task_text=request["task"],
             candidates=candidates, now=now,
@@ -1015,13 +1019,8 @@ class DecisionCoordinator:
         document.update({**resolution.facts,
                          "routingBasis": request["routingBasis"], "constraints": request.get("constraints", {}),
                          "requiredCapabilities": request.get("requiredCapabilities", [])})
-        quota = exploration is not None and exploration["disposition"] in ("quota-kept", "quota-reselected")
         if quota:
             document["exploration"] = {"quota": True}
-        else:
-            # The snapshot facts keep the internal disposition; the model input
-            # states an exploration fact only when it carries the quota.
-            document.pop("exploration", None)
         if resolution.facts["routingMode"] != "fast":
             manifest = request.get("executionWorkspace")
             document["executionWorkspace"] = (

@@ -13,7 +13,7 @@ from unittest import mock
 
 from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, load_delivered_stock, load_workspace_growth_stock, load_legacy_stock
 from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33, schema_33_34, upgrade
-from hey_my_buddy.blackboard.store.db import Database
+from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.tasks.workspace_bindings import output_references
 from support import native_exists, native_read_bytes, native_remove_tree, native_unlink, native_write_text
 
@@ -70,8 +70,8 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
     def test_floor_chain_and_direct_33_match_a_new_current_board(self):
         floor, floor_db = self.restored('floor', schema33=False)
         direct, direct_db = self.restored('direct')
-        self.assertEqual(upgrade.upgrade_state(floor['state']), {'sourceSchema': 30, 'targetSchema': 36})
-        self.assertEqual(upgrade.upgrade_state(direct['state']), {'sourceSchema': 33, 'targetSchema': 36})
+        self.assertEqual(upgrade.upgrade_state(floor['state']), {'sourceSchema': 30, 'targetSchema': SCHEMA_VERSION})
+        self.assertEqual(upgrade.upgrade_state(direct['state']), {'sourceSchema': 33, 'targetSchema': SCHEMA_VERSION})
         self.assertEqual(self.schema(floor_db), self.schema(direct_db))
         self.assert_new_structure(direct_db)
 

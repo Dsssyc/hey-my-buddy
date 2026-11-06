@@ -1488,10 +1488,10 @@ class WorkflowCoordinator:
             exploration_eligible=exploration_eligible,
         )
         decision_id = response["decisionId"]
-        from ..routing.router_sequence import request_snapshot
-        exploration = request_snapshot(connection, decision_id)["facts"]["exploration"]["disposition"]
+        # The admission call chain hands the routing's exploration value back
+        # here; the route row is the one place it is stored.
         connection.execute(
-            "INSERT INTO workflow_routes(decision_id, run_id, state, exploration, created_at) VALUES(?,?,'pending',?,?)", (decision_id,run_id,exploration,now,),
+            "INSERT INTO workflow_routes(decision_id, run_id, state, exploration, created_at) VALUES(?,?,'pending',?,?)", (decision_id,run_id,response["exploration"],now,),
         )
         connection.execute(
             "UPDATE workflow_runs SET current_routing_id=?, buddy_json=NULL,"
