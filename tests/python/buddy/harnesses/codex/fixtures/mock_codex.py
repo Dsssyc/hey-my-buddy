@@ -103,7 +103,7 @@ def main():
         print("codex-cli fixture")
         return
     case = os.environ.get("HMB_CODEX_FIXTURE_CASE", "ok")
-    native_config = {"mcp_servers": {"user-tool": {}},
+    native_config = {"mcp_servers": {"user-tool": {"command": "fixture-mcp"}},
                      "features": {"apps": True}, "web_search": "enabled", "approval_policy": "on-request"}
     if case == "custom-provider":
         native_config["model_provider"] = "fixture-provider"

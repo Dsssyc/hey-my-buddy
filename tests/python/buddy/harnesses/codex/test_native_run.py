@@ -82,11 +82,12 @@ def observed_activity(endpoint):
 
 
 class RejectionPhaseTests(unittest.TestCase):
-    def test_web_overrides_use_native_config_and_quote_server_ids(self):
+    def test_web_overrides_use_nested_objects_with_literal_server_ids(self):
         connection = mock.Mock()
         connection.call.return_value = {"config": {
-            "mcp_servers": {"local.files": {}, "disabled": {"enabled": False}},
-            "plugins": {"my.plugin": {"mcp_servers": {"user.data": {}}}},
+            "mcp_servers": {'local."files"': {"command": "fixture-mcp", "env": {"TOKEN": "private-value"}},
+                            "disabled": {"enabled": False}},
+            "plugins": {'my."plugin"': {"mcp_servers": {'user."data"': {}}}},
         }}
         request = mock.Mock(permission="web", cwd="/private/checkout")
         overrides = native_run._web_config(connection, request)
@@ -94,9 +95,12 @@ class RejectionPhaseTests(unittest.TestCase):
         self.assertEqual(overrides, {
             "web_search": "live", "features.shell_tool": False, "features.view_image": False,
             "agents.enabled": False, "features.multi_agent": False, "features.multi_agent_v2": False,
-            "features.apps": False, 'mcp_servers."local.files".enabled': False,
-            'plugins."my.plugin".mcp_servers."user.data".enabled': False,
+            "features.apps": False, "features.plugins": False,
+            "mcp_servers": {'local."files"': {"enabled": False}},
         })
+        self.assertNotIn("private-value", json.dumps(overrides))
+        self.assertEqual(connection.call.return_value["config"]["mcp_servers"]['local."files"']["env"],
+                         {"TOKEN": "private-value"})
 
     def test_web_overrides_leave_disabled_transportless_mcp_entries_untouched(self):
         connection = mock.Mock()
@@ -106,14 +110,20 @@ class RejectionPhaseTests(unittest.TestCase):
                 "disabled": {"enabled": False}, "active": {"enabled": True}}}},
         }}
         overrides = native_run._web_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
-        self.assertNotIn('mcp_servers."computer-use".enabled', overrides)
-        self.assertNotIn('plugins."my.plugin".mcp_servers."disabled".enabled', overrides)
-        self.assertIs(overrides['mcp_servers."active".enabled'], False)
-        self.assertIs(overrides['plugins."my.plugin".mcp_servers."active".enabled'], False)
+        self.assertEqual(overrides["mcp_servers"], {"active": {"enabled": False}})
+        self.assertIs(overrides["features.plugins"], False)
+        self.assertNotIn("plugins", overrides)
+
+    def test_web_disables_plugins_even_without_explicit_mcp_policy_entries(self):
+        for plugins in ({}, {"installed": {"enabled": True}}):
+            connection = mock.Mock()
+            connection.call.return_value = {"config": {"mcp_servers": {}, "plugins": plugins}}
+            overrides = native_run._web_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
+            self.assertIs(overrides["features.plugins"], False)
+            self.assertNotIn("plugins", overrides)
 
     def test_web_unreadable_config_stops_before_thread_admission(self):
-        for configured in (None, [], {"mcp_servers": []}, {"mcp_servers": {"bad": None}},
-                           {"plugins": []}, {"plugins": {"p": None}}):
+        for configured in (None, [], {"mcp_servers": []}, {"mcp_servers": {"bad": None}}):
             connection = mock.Mock()
             connection.call.return_value = {"config": configured}
             with self.subTest(configured=configured), self.assertRaises(CodexProtocolError):
@@ -930,6 +940,8 @@ class WorkerSeamTests(CodexSeamCase):
                 self.assertFalse(config["features.view_image"])
                 self.assertFalse(config["agents.enabled"])
                 self.assertFalse(config["features.apps"])
+                self.assertFalse(config["features.plugins"])
+                self.assertEqual(config["mcp_servers"], {"user-tool": {"enabled": False}})
                 self.assertEqual(result.effective_policy.tools.requested.value["config"], config)
                 self.assertEqual(thread["turnRequests"], [{"cwd": str(self.cwd),
                     "sandboxPolicy": {"type": "readOnly", "networkAccess": True}, "approvalPolicy": "never"}])

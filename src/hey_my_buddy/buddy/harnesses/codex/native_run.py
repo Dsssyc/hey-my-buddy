@@ -677,8 +677,10 @@ def _web_config(connection: Connection, request: RunRequest) -> dict:
     """Restrict this thread through native overrides, never user config files.
 
     config/read reports the merged server names, including disabled servers.
-    TOML-quoted path components keep dots in a server or plugin id literal.
-    See the Codex CLI 0.164.0 research note, facts 1, 4 and 5.
+    Nested objects keep server ids literal: Codex CLI 0.164.0's
+    override path parser splits dots without interpreting TOML quotes.
+    Plugins are disabled at their native load gate because config/read does
+    not enumerate every MCP server that a plugin manifest can contribute.
     """
     if request.permission != "web":
         return {}
@@ -688,25 +690,22 @@ def _web_config(connection: Connection, request: RunRequest) -> dict:
     overrides = {"web_search": "live", "features.shell_tool": False,
                  "features.view_image": False, "agents.enabled": False,
                  "features.multi_agent": False, "features.multi_agent_v2": False,
-                 "features.apps": False}
+                 "features.apps": False, "features.plugins": False}
 
-    def disable_servers(servers, prefix):
+    def disable_servers(servers):
         if not isinstance(servers, dict):
             raise CodexProtocolError("invalid-config-readback", "Codex reported an invalid MCP server table")
+        disabled = {}
         for name, server in servers.items():
             if not isinstance(server, dict):
                 raise CodexProtocolError("invalid-config-readback", "Codex reported an invalid MCP server configuration")
             if server.get("enabled") is not False:
-                overrides[f"{prefix}.{json.dumps(name, ensure_ascii=False)}.enabled"] = False
+                disabled[name] = {"enabled": False}
+        return disabled
 
-    disable_servers(configured.get("mcp_servers", {}), "mcp_servers")
-    plugins = configured.get("plugins", {})
-    if not isinstance(plugins, dict):
-        raise CodexProtocolError("invalid-config-readback", "Codex reported an invalid plugin table")
-    for name, plugin in plugins.items():
-        if not isinstance(plugin, dict):
-            raise CodexProtocolError("invalid-config-readback", "Codex reported an invalid plugin configuration")
-        disable_servers(plugin.get("mcp_servers", {}), f"plugins.{json.dumps(name, ensure_ascii=False)}.mcp_servers")
+    disabled = disable_servers(configured.get("mcp_servers", {}))
+    if disabled:
+        overrides["mcp_servers"] = disabled
     return overrides
 
 
