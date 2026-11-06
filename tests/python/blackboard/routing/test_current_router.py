@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
@@ -39,6 +40,7 @@ class CurrentRouterTestCase(BoardTestCase):
                        " VALUES(?,?,?,?,?,?,?,?,?)",
                        (buddy_id, buddy_id, harness, provider, model or buddy_id, "max",
                         available, enabled, canonical_json([])))
+            ensure_model_service(db, harness, provider, model or buddy_id, self.board_.store.now())
 
     def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
         """Patch the shared version-3 settings the way a publication would."""
@@ -323,6 +325,7 @@ class FrozenContinuationTests(CurrentRouterTestCase):
         facts = self.prepare()
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET model='replaced' WHERE buddy_id=?", (B,))
+            ensure_model_service(db, "dsh", "fixture", "replaced", self.board_.store.now())
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, frozen=facts, after_index=0, now=T0)
         self.assertIsNone(resolution.problem)

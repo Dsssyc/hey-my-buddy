@@ -537,7 +537,9 @@ class ExportBoardSampleTests(WorkflowTestCase):
                 'SELECT * FROM kind_statistics ORDER BY harness,model,effort')]
         self.assertEqual(upgrade_state(sample), {'sourceSchema': 31, 'targetSchema': SCHEMA_VERSION})
         with closing(sqlite3.connect(sample / DB_FILE)) as connection:
-            self.assertEqual(list(connection.execute('SELECT * FROM kind_statistics ORDER BY harness,model,effort')),
+            self.assertEqual(list(connection.execute('SELECT s.harness,m.display_name,s.effort,s.samples,s.successes,'
+                                               's.first_passes,s.rework_rounds,s.failures,s.defects FROM kind_statistics s '
+                                               'JOIN models m ON m.model_id=s.model_id ORDER BY s.harness,m.display_name,s.effort')),
                              statistics)
         self.assert_only_upgrade_project_marker_changed(before, files(fixture['state']), fixture, project_id)
 

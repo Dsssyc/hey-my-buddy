@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 
@@ -42,11 +43,13 @@ class RouterDispatchTestCase(BoardTestCase):
     # -- fixtures ------------------------------------------------------------
     def add_buddy(self, buddy_id, *, model=None, available=1, enabled=1):
         with self.board_.store.db.write() as db:
+            model = model or buddy_id
             db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,?,?,?)",
-                       (buddy_id, buddy_id, "dsh", "fixture", model or buddy_id, "max", available, enabled,
+                       (buddy_id, buddy_id, "dsh", "fixture", model, "max", available, enabled,
                         canonical_json([])))
+            ensure_model_service(db, "dsh", "fixture", model, self.board_.store.now())
 
     def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
         with self.board_.store.db.write() as db:
@@ -251,6 +254,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         frozen = self.dispatch_of(result["runId"])
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET model='replaced' WHERE buddy_id=?", (A,))
+            ensure_model_service(db, "dsh", "fixture", "replaced", self.board_.store.now())
         claimed = self.claim("identity-edited")
         self.assertIsNotNone(claimed["claim"])
         self.assertEqual(claimed["claim"]["decisionInput"], frozen["document"])
@@ -523,6 +527,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
     def test_next_actor_keeps_the_original_task_and_input(self):
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET model=? WHERE buddy_id=?", ("b" * 40, B))
+            ensure_model_service(db, "dsh", "fixture", "b" * 40, self.board_.store.now())
         first = self.request()
         original = self.dispatch_of(first["runId"])
         with self.board_.store.db.write() as db:

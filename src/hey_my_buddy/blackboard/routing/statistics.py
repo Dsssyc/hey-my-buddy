@@ -17,7 +17,7 @@ NEITHER = frozenset({"service-stop", "console-stop", "transport-error",
                      "workspace-error", "unknown-stop", "interrupted"})
 PROVIDER_REJECTIONS = frozenset({"overloaded", "quota-exceeded", "rate-limited"})
 IDENTITY = ("harness", "provider", "model", "effort")
-KIND = ("harness", "model", "effort")
+KIND = ("harness", "model_id", "effort")
 USAGE_FIELDS = ("inputTokens", "cachedInputTokens", "outputTokens")
 METRICS = ("delivery_seconds", "input_tokens", "cached_input_tokens", "output_tokens")
 COUNTS = ("samples", "successes", "first_passes", "rework_rounds", "failures", "defects")
@@ -49,14 +49,15 @@ def ended_turns(connection, run_id=None):
     where, parameters = ("", ()) if run_id is None else (" AND w.run_id=?", (run_id,))
     for row in connection.execute(
         "SELECT w.run_id,w.turn_index,w.state,w.input_json,a.result_json,"
-        " a.attempt_id,a.started_at,a.finished_at FROM workflow_turns w"
+        " a.attempt_id,a.model_id,a.started_at,a.finished_at FROM workflow_turns w"
         " JOIN attempts a ON a.attempt_id=w.attempt_id"
         " WHERE w.state IN " + ENDED_STATES + where + " ORDER BY w.run_id,w.turn_index", parameters
     ):
         receipt = json.loads(row["result_json"]) if row["result_json"] is not None else None
         result = (receipt["result"] or {}) if receipt is not None else {}
         turn = result.get("turn") or {}
-        yield {**dict(row), "buddy": turn_buddy(row["input_json"]),
+        buddy = turn_buddy(row["input_json"])
+        yield {**dict(row), "buddy": {**buddy, "model_id": row["model_id"]},
                "category": round_classification(receipt), "usage": result.get("tokenUsage"),
                "delivered": row["state"] == "returned" and turn["outcome"]["disposition"] == "completed"}
 
@@ -244,8 +245,5 @@ def backfill(connection):
     for turn in ended_turns(connection):
         receipt = json.loads(turn["result_json"]) if turn["result_json"] is not None else None
         accumulate_infrastructure(connection, turn["buddy"], receipt, turn["finished_at"])
-    if "defects" in {row[1] for row in connection.execute("PRAGMA table_info(kind_statistics)")}:
-        # Exported samples start with empty aggregate tables. Count only their
-        # retained fix relationships; pre-36 boards defer this to their upgrade.
-        for row in connection.execute("SELECT DISTINCT fixed_run_id FROM workflow_fixes").fetchall():
-            accumulate_defect(connection, row["fixed_run_id"])
+    for row in connection.execute("SELECT DISTINCT fixed_run_id FROM workflow_fixes").fetchall():
+        accumulate_defect(connection, row["fixed_run_id"])

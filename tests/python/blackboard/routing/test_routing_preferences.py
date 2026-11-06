@@ -23,6 +23,7 @@ from hey_my_buddy.install.runtime import resource_path
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_decision import DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY, SECOND_BUDDY_ID, THIRD_BUDDY, THIRD_BUDDY_ID
 from blackboard.evaluation.test_evaluation import model_service_key
+from hey_my_buddy.blackboard.evaluation.models import current_model
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 
 NONCE = "n" * 16
@@ -186,9 +187,12 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
     @staticmethod
     def annotations(board):
         catalog = board.call("model_catalog_refresh", {"requestId": "annotations-catalog"})
+        with board.store.db.read() as db:
+            model_id = current_model(db, CATALOG_BUDDY["harness"], CATALOG_BUDDY["provider"],
+                                     CATALOG_BUDDY["model"])
         board.console_call("user_policy_publish", {
             "commandId": "annotations-publish",
-            "modelServiceNoteChanges": [{**model_service_key(CATALOG_BUDDY), "text": "Human preference for this workflow"}],
+            "modelNoteChanges": [{"modelId": model_id, "text": "Human preference for this workflow"}],
         })
 
     def routed(self, board, *, request_id, **extra):
@@ -258,8 +262,11 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         self.assertNotIn("routingPreferences", document)
         self.assertNotIn("taskPreference", document["policyFacts"])
         note = document["annotations"][0]
-        self.assertEqual({key: note[key] for key in ("harness", "provider", "model", "text")},
-                         {**model_service_key(CATALOG_BUDDY), "text": "Human preference for this workflow"})
+        with board.store.db.read() as db:
+            model_id = current_model(db, CATALOG_BUDDY["harness"], CATALOG_BUDDY["provider"],
+                                     CATALOG_BUDDY["model"])
+        self.assertEqual({key: note[key] for key in ("modelId", "text")},
+                         {"modelId": model_id, "text": "Human preference for this workflow"})
         board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim'], state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["source"], "model-selection")

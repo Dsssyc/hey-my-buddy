@@ -13,6 +13,7 @@ import unittest
 
 from support import BoardTestCase, FakeClock
 
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 
@@ -38,6 +39,7 @@ class RouterListHealthTestCase(BoardTestCase):
                        " VALUES(?,?,?,?,?,?,?,?,?)",
                        (buddy_id, buddy_id, harness, provider, buddy_id, "max", available, enabled,
                         canonical_json([])))
+            ensure_model_service(db, harness, provider, buddy_id, self.board_.store.now())
 
     def set_settings(self, *, ids, interval=600, mode="fast"):
         with self.db.write() as db:

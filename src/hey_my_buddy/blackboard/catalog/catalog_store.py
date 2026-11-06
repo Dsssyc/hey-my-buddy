@@ -233,6 +233,8 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                     raise BoardError('CATALOG_INVALID', 'A native buddy ID collided with a different execution identity', buddyId=p['buddyId'])
                 unavailable = p['unavailableReason']
                 db.execute('INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_code,unavailable_params_json,unavailable_content) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,?) ON CONFLICT(buddy_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_code=excluded.unavailable_code,unavailable_params_json=excluded.unavailable_params_json,unavailable_content=excluded.unavailable_content', (p['buddyId'], p['label'], p['harness'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], unavailable['code'] if unavailable else None, canonical_json(unavailable['params']) if unavailable else None, p['unavailableContent']))
+                from ..evaluation.models import ensure_model_service
+                ensure_model_service(db, p['harness'], p['provider'], p['model'], now)
             # ADR-027 rules 2 and 6: reappearance inside a trusted reading
             # recovers the model service, clears its first absence and says so once.
             for model_service in model_services:

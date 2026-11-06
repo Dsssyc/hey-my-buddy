@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
@@ -249,6 +250,8 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.add_buddy("dsh:fixture:delta:max", model="delta")
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET provider='workers' WHERE model IN ('charlie','delta')")
+            for model in ("charlie", "delta"):
+                ensure_model_service(db, "dsh", "workers", model, self.board_.store.now())
             record_rejection(db, "dsh", "fixture", {"code": "quota-exceeded",
                 "nativeCode": "fixture-denied", "source": "synthetic/router",
                 "observedAt": T0, "resetsAt": "2026-01-01T00:20:00.000Z",
@@ -265,6 +268,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         from hey_my_buddy.blackboard.routing.quota_routing import record_rejection
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET provider='other-router' WHERE buddy_id=?", (B,))
+            ensure_model_service(db, "dsh", "other-router", "bravo", self.board_.store.now())
         request = self.request()
         with self.board_.store.db.write() as db:
             record_rejection(db, "dsh", "fixture", {"code": "quota-exceeded",
@@ -360,14 +364,17 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     def test_later_buddies_and_preferences_cannot_replace_frozen_facts(self):
         self.set_settings(ids=[])
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO model_service_notes VALUES('dsh','fixture','alpha','private note',?)", (T0,))
+            from hey_my_buddy.blackboard.evaluation.models import current_model
+            model_id = current_model(db, 'dsh', 'fixture', 'alpha')
+            db.execute("INSERT INTO model_notes VALUES(?,'private note',?)", (model_id, T0))
             db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','private preference')", (B,))
         request = self.request()
         frozen = self.boundary(request["decisionId"])
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET model='later-model'")
+            ensure_model_service(db, "dsh", "fixture", "later-model", self.board_.store.now())
             db.execute("UPDATE evaluation_preferences SET note='later preference'")
-            db.execute("DELETE FROM model_service_notes")
+            db.execute("DELETE FROM model_notes")
         current = self.boundary(request["decisionId"])
         self.assertEqual(current["facts"], frozen["facts"])
         self.assertEqual([{key: value for key, value in item.items() if key != "problem"}
@@ -527,6 +534,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                            "available,enabled,capabilities_json) "
                            "VALUES(?,?,'dsh','fixture',?,'max',1,1,?)",
                            (buddy_id, buddy_id, model, canonical_json([])))
+                ensure_model_service(db, "dsh", "fixture", model, self.board_.store.now())
             router._write_settings(db, {**router.configuration(db), "routerBuddyIds": []})
 
     def routed(self, request_id="micro-task-1", *, access="write", kind="existing"):
@@ -654,6 +662,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         original = view["routing"]["routingBoundary"]
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET model='changed-model' WHERE buddy_id=?", (B,))
+            ensure_model_service(db, "dsh", "fixture", "changed-model", self.board_.store.now())
         latest = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
         self.assertEqual(latest["facts"], original["facts"])
         chosen = next(item for item in latest["candidates"] if item["buddyId"] == B)
@@ -838,6 +847,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                     db.execute("SAVEPOINT candidate_gate")
                     if statement:
                         db.execute(statement, values)
+                    if bound == "identity-changed":
+                        ensure_model_service(db, 'dsh', 'fixture', 'changed', self.board_.store.now())
                     if bound == "quota-exhausted":
                         record_rejection(db, "dsh", "fixture", {"code": "quota-exceeded",
                             "nativeCode": "fixture-denied", "source": "synthetic/candidate",

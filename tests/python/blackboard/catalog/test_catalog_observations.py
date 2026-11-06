@@ -299,7 +299,8 @@ class CatalogObservationTests(BoardTestCase):
         buddy_id = 'dsh:fixture:alpha:max'
         with self.e.db.write() as db:
             db.execute('UPDATE buddies SET enabled=1 WHERE buddy_id=?', (buddy_id,))
-            db.execute("INSERT INTO model_service_notes VALUES('dsh','fixture','alpha','human text','now')")
+            from hey_my_buddy.blackboard.evaluation.models import current_model
+            db.execute("INSERT INTO model_notes VALUES(?,'human text','now')", (current_model(db, 'dsh', 'fixture', 'alpha'),))
             db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','my reason')", (buddy_id,))
         # A first confirmed absence is pending, not a retirement: the buddy
         # keeps its metadata, its routability and the user's intent (ADR-027).
@@ -321,9 +322,9 @@ class CatalogObservationTests(BoardTestCase):
         self.assertEqual(current['buddies'][0]['catalogStatus'], 'available')
         self.assertNotIn('pendingSince', current['buddies'][0])
         self.assertTrue(current['buddies'][0]['enabled'])
-        self.assertEqual(current['modelServiceNotes'][0]['text'], 'human text')
-        self.assertEqual({key: current['modelServiceNotes'][0][key] for key in ('harness', 'provider', 'model')},
-                         {'harness': 'dsh', 'provider': 'fixture', 'model': 'alpha'})
+        self.assertEqual(current['modelNotes'][0]['text'], 'human text')
+        with self.e.db.read() as db:
+            self.assertEqual(current['modelNotes'][0]['modelId'], current_model(db, 'dsh', 'fixture', 'alpha'))
         with self.e.db.read() as db:
             self.assertIsNotNone(catalog_store.current(db).lookup('dsh', 'fixture', 'alpha'))
 

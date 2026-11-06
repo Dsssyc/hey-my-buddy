@@ -7,6 +7,7 @@ import os
 from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.errors import BoardError
@@ -88,6 +89,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         frozen = self.decision(board, request['decisionId'])
         with board.store.db.write() as connection:
             connection.execute('UPDATE buddies SET model=? WHERE buddy_id=?', ('deepseek-v4-pro', BUDDY_ID))
+            ensure_model_service(connection, 'dsh', 'deepseek-official', 'deepseek-v4-pro', board.store.now())
         claimed = self.claim_route(board, request)['claim']
         self.assertIsNotNone(claimed)
         self.assertEqual(claimed['decisionInput'], frozen['input'])

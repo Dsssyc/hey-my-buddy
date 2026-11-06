@@ -11,6 +11,7 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 from support import BoardTestCase, FakeClock
 
 from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.buddy.roles.run_observers import MaintenanceCorrection
@@ -72,6 +73,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
             db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,1,1,?)",
                        (BUDDY_ID, "Maintenance", "dsh", "fixture", "maintenance", "off", canonical_json([])))
+            ensure_model_service(db, "dsh", "fixture", "maintenance", self.board_.store.now())
 
     def configure(self, *, buddy_id=BUDDY_ID, interval=3600, preset="standard"):
         with self.board_.store.db.write() as db:
@@ -740,7 +742,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertTrue(all(turn["failureCategory"] == "ability" for turn in packet["microTasks"][0]["result"]["turns"]))
         answer = self.valid_answer(packet)
         answer["summaries"].pop(next(kind["kindId"] for kind in packet["kinds"]
-                                     if kind["model"] == "maintenance-other"))
+                                     if kind["modelDisplayName"] == "maintenance-other"))
         self.assertTrue(self.submit_answer(claim, 0, answer)["errors"])
         self.settle_success(claim)
         self.assertEqual(self.board_.console_call("maintenance_pending", {}),
@@ -756,7 +758,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(packet["classificationRunIds"], [])
         self.assertEqual(len(packet["kinds"]), 1)
         self.assertEqual(packet["kinds"][0]["unreadRunIds"], [self.evidence_id])
-        self.assertEqual(packet["kinds"][0]["model"], "maintenance-other")
+        self.assertEqual(packet["kinds"][0]["modelDisplayName"], "maintenance-other")
         correction = self.valid_answer(packet)
         correction["newNodes"] = []
         self.assertEqual(self.submit_answer(next_claim, 0, correction)["errors"], [])

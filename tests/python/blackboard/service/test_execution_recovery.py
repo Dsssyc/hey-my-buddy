@@ -18,6 +18,7 @@ from support import BoardTestCase, wait_for
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase
 from blackboard.tasks.test_workflow import WorkflowTestCase
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler, _RecoveredExecution
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.store import BoardStore
@@ -360,6 +361,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                                "available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,1,1,?)",
                                (buddy_id, buddy_id, "dsh", "deepseek-official", model, "max",
                                 canonical_json([])))
+                    ensure_model_service(db, "dsh", "deepseek-official", model, store.now())
                 settings = {**router.configuration(db), "routerBuddyIds": [first],
                             "defaultRoutingMode": "fast"}
                 router._write_settings(db, settings)

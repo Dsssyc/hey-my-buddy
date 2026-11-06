@@ -5,6 +5,7 @@ import re
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.errors import BoardError
 from support import FakeClock, enable_fixture_buddy
 
@@ -115,6 +116,8 @@ class HostWorkflowTests(WorkflowTestCase):
             connection.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,enabled,available)"
                                " VALUES(?,?,?,?,?,?,1,1)",
                                (buddy_id, "Sanitized fixture", *identity.values()))
+            ensure_model_service(connection, identity["harness"], identity["provider"],
+                                 identity["model"], board.store.now())
         submitted = self.submit(board, buddy=" / ".join(identity.values()), request_id="quad-name")
         self.assertEqual(submitted["buddy"], identity)
         for name in (buddy_id, ":".join(identity.values()), "dsh / deepseek-official / absent-model / off"):

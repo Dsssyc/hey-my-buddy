@@ -1,22 +1,22 @@
 {
   "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All stored rows come from base writers without SQL seeds or historical-form patches. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
   "catalogSha256": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
-  "cleanupStockBaseSha256": "e9eb533375f732720af376b06089dedbf5427442d380a26e7d4f2d972796ff38",
+  "cleanupStockBaseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
   "cleanupStockGenerationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir> --cleanup-stock-for tests/fixtures/upgrade-floor",
-  "cleanupStockGeneratorSha256": "2f4bdad5b6d35f2742267e46af1c09b780cd6559460595bf5ed019bc5cda175d",
-  "cleanupStockSha256": "78f48237081bc73491dee3fcaa67418b97179ba19b6558b2583f51ec1fc967a2",
+  "cleanupStockGeneratorSha256": "e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9",
+  "cleanupStockSha256": "e0f0bd76bc4e30beec14c59ef87dd601c5d7a3ca488afd11542832f359f74b81",
   "deliveredStockArtifactId": "00000000-0000-0000-0000-0000000001ab",
-  "deliveredStockBaseSha256": "e9eb533375f732720af376b06089dedbf5427442d380a26e7d4f2d972796ff38",
+  "deliveredStockBaseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
   "deliveredStockControl": {
     "controlToken": "303e3f9d5e6cd4c6e195ce24ed1ae6df42a8a4b68b685da0ae87f9804b7171b7",
     "hostId": "fixture-host",
     "ownerGeneration": 1
   },
   "deliveredStockGenerationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir> --delivered-stock-for tests/fixtures/upgrade-floor",
-  "deliveredStockGeneratorSha256": "2f4bdad5b6d35f2742267e46af1c09b780cd6559460595bf5ed019bc5cda175d",
-  "deliveredStockResourcesSha256": "eb2d2332af880791ba687f2bb0569c19d8d8c1af9c9c82d0ad48b10b5e14e912",
+  "deliveredStockGeneratorSha256": "e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9",
+  "deliveredStockResourcesSha256": "04367ec317574e622e1d8b5a252a01714e0fe5f29297ef05063f8347c9e842a8",
   "deliveredStockRunId": "00000000-0000-0000-0000-00000000019d",
-  "deliveredStockSqlSha256": "f037949db3399e70c66a31cda0fd6557c9a154a2ecf4998562601bb12ec0bb7a",
+  "deliveredStockSqlSha256": "9a503d5cebad1ed80b0991f3de6a8f91fad4150288a0f0a9270d16c5be9cb243",
   "dependencyMode": "base-frozen-uv-environment",
   "dependencyVersions": {
     "c-two": "0.9.0",
@@ -54,32 +54,32 @@
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
   "generationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir tests/fixtures/upgrade-floor",
-  "generatorSha256": "2f4bdad5b6d35f2742267e46af1c09b780cd6559460595bf5ed019bc5cda175d",
+  "generatorSha256": "e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9",
   "growth30AbandonedRunId": "00000000-0000-0000-0000-0000000001c3",
-  "growth30BaseSha256": "e9eb533375f732720af376b06089dedbf5427442d380a26e7d4f2d972796ff38",
+  "growth30BaseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
   "growth30DeclinedRunId": "00000000-0000-0000-0000-0000000001fa",
-  "growth30GeneratorSha256": "2f4bdad5b6d35f2742267e46af1c09b780cd6559460595bf5ed019bc5cda175d",
-  "growth30ResourcesSha256": "3a41eb7f49b4e7fc124b2e7c3a471fe696b3cf7966c6ba0a437f7a1491632701",
+  "growth30GeneratorSha256": "e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9",
+  "growth30ResourcesSha256": "60e05dfd06dd06230163cc33c10291f27fd6fbb3a425056123504c354a2a543b",
   "growth30RunId": "00000000-0000-0000-0000-0000000001af",
-  "growth30SqlSha256": "e17337ac5b160a414a5282e1e8e1ef4011691d9bdd9664e583c956d2b38cc0b1",
+  "growth30SqlSha256": "d4f0efb3a0d6330f0ef4ce3e6a6fbfc1e2e360d10903650ffdfdc7a706e90233",
   "growth30StandaloneRunId": "00000000-0000-0000-0000-0000000001ef",
   "growth30StashRunIds": {
     "observed": "00000000-0000-0000-0000-0000000001d7",
     "unknown": "00000000-0000-0000-0000-0000000001e3"
   },
   "growth30WriterCommit": "4de1dd9478980e924a4a86b2c50aaca33e33b79d",
-  "growth33BaseSha256": "e9eb533375f732720af376b06089dedbf5427442d380a26e7d4f2d972796ff38",
+  "growth33BaseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
   "growth33CleanupPlans": {
     "macro": "cln-00000000000000000000000000002717",
     "standalone": "cln-0000000000000000000000000000271f"
   },
-  "growth33GeneratorSha256": "2f4bdad5b6d35f2742267e46af1c09b780cd6559460595bf5ed019bc5cda175d",
-  "growth33ResourcesSha256": "4a5394b1d9906c9d2a1ef105ed9ab2b24909991b3940271da35cb13270341a53",
+  "growth33GeneratorSha256": "e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9",
+  "growth33ResourcesSha256": "34bc22c32b5034fac745818e8d8c9207745c6f4cf13189bf71cc8232f7fddf52",
   "growth33RunIds": {
     "macro": "00000000-0000-0000-0000-000000002713",
     "standalone": "00000000-0000-0000-0000-00000000271b"
   },
-  "growth33SqlSha256": "054f300985187e1da979600702ce65d2b86c19e791244440b5aa3b4e8d57658a",
+  "growth33SqlSha256": "b1ff8facb235d09eb5acbcd6ffd83a9340d4e4942fe7c41e85091041b393e670",
   "growth33WriterCommit": "e3459d8a3b03c06d2af192382a788e051ced9a64",
   "inquiryStock": {
     "dbDeliveredNoEntry": {
@@ -166,19 +166,19 @@
     }
   },
   "issueStock": {
-    "baseGeneratorSha256": "2f4bdad5b6d35f2742267e46af1c09b780cd6559460595bf5ed019bc5cda175d",
-    "baseSha256": "e9eb533375f732720af376b06089dedbf5427442d380a26e7d4f2d972796ff38",
+    "baseGeneratorSha256": "e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9",
+    "baseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
     "derivation": "Floor issue writers record, update, clear, reopen and update each kind at one timestamp; a connection issue and report are copied from the floor-written execution issue, followed by a shutdown confirmation without deleting the copied row; event identities are shifted by 9000000 to avoid the independent supplements.",
     "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --issue-stock-for tests/fixtures/upgrade-floor --work-dir tmp/<new-issue-stock-dir>",
-    "generatorSha256": "c07b8784f1a7e41da0d22838c6b9872fde782016eec5be4d402e20df69bae6b5",
+    "generatorSha256": "e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9",
     "schemaVersion": 30,
     "sha256": "040dafe41ecc242de001a9dd094a42a8150da44888f7762ba1a69812474d6651",
     "writerCommit": "4de1dd9478980e924a4a86b2c50aaca33e33b79d"
   },
   "legacyStock": {
-    "baseSha256": "e9eb533375f732720af376b06089dedbf5427442d380a26e7d4f2d972796ff38",
+    "baseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
     "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/w3/<new-private-dir> --output-dir tmp/w3/<new-output-dir> --legacy-stock-for tests/fixtures/upgrade-floor",
-    "generatorSha256": "2f4bdad5b6d35f2742267e46af1c09b780cd6559460595bf5ed019bc5cda175d",
+    "generatorSha256": "e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9",
     "history": {
       "manifest1To2": "e87ac40ef5475e7fb0768a2b5b47ccd5095292f8",
       "manifest2To3": "8810d564b9b652c02d75b8fa75a50ab1349def51",
@@ -189,20 +189,20 @@
       "1": {
         "derivedFiles": 10,
         "derivedHashes": 12,
-        "resourcesSha256": "cdc4f76d898cb297d65ef02f6532205d8d1a70c384102fb4ee22159566081b5c",
-        "sqlSha256": "b2b02ba18960ab81123b735bae6534b8fd72d0150e45a412753c6c07341eb74a",
+        "resourcesSha256": "7482956323378219f48ac0566b71452f99ef4a3ab5108b6e4dbfd3c71cea2778",
+        "sqlSha256": "7b98d2e65e1c3a14b2bb1e32107af14ec2f64ffd10e7e14d22659ab3264c92be",
         "updatedRows": 19
       },
       "2": {
         "derivedFiles": 10,
         "derivedHashes": 12,
-        "resourcesSha256": "599a76cb70075b9326d5bad256777ea1396bd9454d6801dba81652472e000c56",
-        "sqlSha256": "46c717e744e3139fd146549717c43860748bebcbe3437205daae05129681b286",
+        "resourcesSha256": "a847339b56b2a71b17cb30ee9213c6567364f9192bd3f1e7d3ad1f62dcf42bf7",
+        "sqlSha256": "959211d85814ea305e333aa39381d9783d9680fd599b2310475dc323d6984958",
         "updatedRows": 19
       }
     },
-    "sourceOperationsSha256": "a71a6d48f4638ad74339adbccdee0edc7b8b1ab78dcff21cb535db4db63aaa36",
-    "sourceResourcesSha256": "70734694cf49956ae6e48aea529a77f1bc511415a773a2e778967655b8b11565",
+    "sourceOperationsSha256": "8fb1e41457dce5993046708390286eb1d28b1805d7cd72fccba53fb989fe5c6c",
+    "sourceResourcesSha256": "5896ae5911e5168a1d065c93196f1512f5dc390780d61cd6cb85ccef01d5e42d",
     "sourceRunId": "00000000-0000-0000-0000-0000000000be"
   },
   "loadedSourceModules": [
@@ -356,16 +356,37 @@
     "src/hey_my_buddy/text.py",
     "src/hey_my_buddy/timestamps.py"
   ],
-  "operationsSha256": "a71a6d48f4638ad74339adbccdee0edc7b8b1ab78dcff21cb535db4db63aaa36",
+  "modelStock": {
+    "baseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
+    "floorStockSha256": "7b9e25a381ee4f5ba12715694e0b50fb0e382e0f982b4f081baf12be8729691d",
+    "floorWriterCommit": "4de1dd9478980e924a4a86b2c50aaca33e33b79d",
+    "floorWriterRecordSha256": "2fe16126740b824c4df9e185a6f154c141801ee91fca9bde2f928b99ba148880",
+    "floorWriterSources": {
+      "src/hey_my_buddy/blackboard/catalog/catalog_store.py": "92268408c4f50b1203a7a21993229add0296a39e818f3f86decb602286273bc9",
+      "src/hey_my_buddy/blackboard/evaluation/user_policy.py": "9ee6d6c4b223e763a8b3afda919ddd9408f0fe388ee962304c6661fdaac22bcb"
+    },
+    "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/<new-private-dir> --model-stock-for tests/fixtures/upgrade-floor",
+    "generatorSha256": "e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9",
+    "maintenanceStockSha256": "03142953694e189eab7b9965546f822d76a1368f86df031d1df8889aa0ca4b50",
+    "maintenanceWriterRecordSha256": "7cafad9c3631e16e995571de79e33680b8415dc2ffe2a84f8d9606d8614f2559",
+    "schema31StockSha256": "1ed9b8d8c612fc87bcaeecf0defbdf1f1ed5f9f93f6620cdd245e3a04d4e4655",
+    "sha256": "b1cbd366eaf1b2a69b872804c6c80ca4c7b168bf755130467b010189484708c6",
+    "statisticsWriterPath": "src/hey_my_buddy/blackboard/routing/statistics.py",
+    "statisticsWriterSha256": "fd5c6e1093b0989dbd682f85a8ba6ed439f6d9abccf42bbbfca5e8e8071e606f",
+    "writerCommit": "de833698f8a59e6ff0cba6b01c4a98ee8bd20594",
+    "writerPath": "src/hey_my_buddy/blackboard/routing/maintenance_data.py",
+    "writerSha256": "66421d8d2f79295d57cd05ffd6c21fb7824f7b9e430d30bc8f0a5750f0317b4a"
+  },
+  "operationsSha256": "8fb1e41457dce5993046708390286eb1d28b1805d7cd72fccba53fb989fe5c6c",
   "pythonInterpreter": "__hmb_fixture_root_6e21f754c8724c12a88250e88a0dd503__/base/.venv/bin/python",
   "pythonVersion": "3.12.12",
-  "reservationStockBaseSha256": "e9eb533375f732720af376b06089dedbf5427442d380a26e7d4f2d972796ff38",
+  "reservationStockBaseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
   "reservationStockConcludedAt": "2026-01-04T00:01:00.000Z",
   "reservationStockGenerationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir> --reservation-stock-for tests/fixtures/upgrade-floor",
-  "reservationStockGeneratorSha256": "2f4bdad5b6d35f2742267e46af1c09b780cd6559460595bf5ed019bc5cda175d",
+  "reservationStockGeneratorSha256": "e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9",
   "reservationStockRunId": "00000000-0000-0000-0000-000000000189",
-  "reservationStockSha256": "c01dbbba7c030b60cc3071269aa28eaac4f156681d460c903214f82eca0c8470",
-  "resourcesSha256": "70734694cf49956ae6e48aea529a77f1bc511415a773a2e778967655b8b11565",
+  "reservationStockSha256": "83714edeae1161608b64fdcc66cda22c22249d36765f8a6055a2046a63217a36",
+  "resourcesSha256": "5896ae5911e5168a1d065c93196f1512f5dc390780d61cd6cb85ccef01d5e42d",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 30; baseline only after return",
   "routerBuddyIds": [
     "codex:openai:fixture-alpha:high",
@@ -572,7 +593,7 @@
   },
   "sourceTree": "2900d210fffac13dbf9641e7e5eaaca73df01826",
   "sourceVersion": "0.54.1",
-  "sqlSha256": "e9eb533375f732720af376b06089dedbf5427442d380a26e7d4f2d972796ff38",
+  "sqlSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
   "stableIds": {
     "accepted": "00000000-0000-0000-0000-000000000044",
     "cancelled": "00000000-0000-0000-0000-000000000072",

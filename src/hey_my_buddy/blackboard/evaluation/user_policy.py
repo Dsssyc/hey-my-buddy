@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from ...protocol import schemas
 from ...errors import BoardError
+from . import models
 
-PATCH_FIELDS = frozenset({'buddySettings', 'preferenceChanges', 'modelServiceNoteChanges',
+PATCH_FIELDS = frozenset({'buddySettings', 'preferenceChanges', 'modelNoteChanges', 'modelMappingChanges',
                           'configuration', 'modelServiceConcurrency'})
 MODEL_SERVICE_FIELDS = ('harness', 'provider', 'model')
 
@@ -45,32 +46,14 @@ def require_console() -> None:
         raise BoardError('FORBIDDEN', 'User policy requires the authenticated console')
 
 
-def _model_service_changes(params: dict, field: str, fields: set[str]) -> list[dict]:
-    """Validate a model-service-keyed patch: one entry per ``(harness, provider, model)``."""
-    values = params.get(field, [])
-    if not isinstance(values, list):
-        raise BoardError('INVALID_ARGUMENT', f'{field} must be a list')
-    seen: set[tuple[str, str, str]] = set()
-    for value in values:
-        if not isinstance(value, dict):
-            raise BoardError('INVALID_ARGUMENT', f'{field} entries must be objects')
-        schemas.reject_unknown(value, fields, field)
-        model_service = tuple(schemas.required_string(value, name, max_length=256) for name in MODEL_SERVICE_FIELDS)
-        if model_service in seen:
-            raise BoardError('INVALID_ARGUMENT', f'{field} repeats a model service')
-        seen.add(model_service)
-    return values
-
-
-def _model_service(entry: dict) -> tuple[str, str, str]:
-    return tuple(entry[name] for name in MODEL_SERVICE_FIELDS)
-
-
 def policy_view(connection, buddy_ids: list[str]) -> dict:
     """User-owned buddy preferences and model annotations for the console."""
     return {
         'preferences': preferences(connection, buddy_ids),
-        'modelServiceNotes': model_service_notes(connection, buddy_ids),
+        'modelNotes': model_notes(connection),
+        'models': [models.model_view(connection, row[0]) for row in connection.execute(
+            'SELECT model_id FROM models ORDER BY display_name,model_id')],
+        'modelMappings': models.mapping_view(connection, buddy_ids),
     }
 
 
@@ -81,14 +64,13 @@ def preferences(connection, buddy_ids: list[str]) -> list[dict]:
                                           ' ORDER BY buddy_id', buddy_ids)]
 
 
-def model_service_notes(connection, buddy_ids: list[str]) -> list[dict]:
-    marks = ','.join('?' for _ in buddy_ids) or 'NULL'
-    return [{'harness': row['harness'], 'provider': row['provider'], 'model': row['model'], 'text': row['text'],
-             'updatedAt': row['updated_at']}
+def model_notes(connection, buddy_ids: list[str] | None = None) -> list[dict]:
+    model_ids = ([value['modelId'] for value in models.catalog_view(connection, buddy_ids)]
+                 if buddy_ids is not None else [row[0] for row in connection.execute('SELECT model_id FROM models')])
+    marks = ','.join('?' for _ in model_ids) or 'NULL'
+    return [{'modelId': row['model_id'], 'text': row['text'], 'updatedAt': row['updated_at']}
             for row in connection.execute(
-                'SELECT * FROM model_service_notes f WHERE EXISTS(SELECT 1 FROM buddies p'
-                ' WHERE p.harness=f.harness AND p.provider=f.provider AND p.model=f.model'
-                f' AND p.buddy_id IN ({marks})) ORDER BY f.harness, f.provider, f.model', buddy_ids)]
+                f'SELECT * FROM model_notes WHERE model_id IN ({marks}) ORDER BY model_id', model_ids)]
 
 
 def _changes(params: dict, field: str, fields: set[str]) -> list[dict]:
@@ -115,7 +97,10 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         raise BoardError('INVALID_ARGUMENT', 'A user publication must contain a field patch')
     settings = _changes(params, 'buddySettings', {'buddyId', 'enabled'})
     preferences = _changes(params, 'preferenceChanges', {'buddyId', 'mode', 'note'})
-    annotations = _model_service_changes(params, 'modelServiceNoteChanges', {*MODEL_SERVICE_FIELDS, 'text'})
+    annotations = params.get('modelNoteChanges', [])
+    if not isinstance(annotations, list):
+        raise BoardError('INVALID_ARGUMENT', 'modelNoteChanges must be a list')
+    mapping_count = models.apply_user_changes(connection, params.get('modelMappingChanges', []), now)
     model_limits = _model_service_concurrency_changes(params)
     buddies = {}
     for entry in settings + preferences:
@@ -134,11 +119,6 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             raise BoardError('BUDDY_UNAVAILABLE', 'This buddy is not currently available', buddyId=entry['buddyId'])
         buddy['enabled'] = int(entry['enabled'])
         connection.execute('UPDATE buddies SET enabled=? WHERE buddy_id=?', (buddy['enabled'], entry['buddyId']))
-    for entry in annotations:
-        model_service = _model_service(entry)
-        if connection.execute('SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? LIMIT 1',
-                              model_service).fetchone() is None:
-            raise BoardError('NOT_FOUND', 'Unknown model service')
     for entry in preferences:
         if 'mode' not in entry or entry['mode'] not in (None, 'pin', 'prefer', 'exclude'):
             raise BoardError('INVALID_ARGUMENT', 'mode must be pin, prefer, exclude or null')
@@ -152,14 +132,24 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             connection.execute('DELETE FROM evaluation_preferences WHERE buddy_id=?', (buddy_id,))
         else:
             connection.execute('INSERT INTO evaluation_preferences(buddy_id,mode,note) VALUES(?,?,?) ON CONFLICT(buddy_id) DO UPDATE SET mode=excluded.mode,note=excluded.note', (buddy_id, mode, note))
+    seen_models = set()
     for entry in annotations:
+        if not isinstance(entry, dict):
+            raise BoardError('INVALID_ARGUMENT', 'modelNoteChanges entries must be objects')
+        schemas.reject_unknown(entry, {'modelId', 'text'}, 'modelNoteChanges')
+        model_id = schemas.required_string(entry, 'modelId', max_length=128, pattern=schemas.IDENTIFIER_PATTERN)
+        if model_id in seen_models:
+            raise BoardError('INVALID_ARGUMENT', 'modelNoteChanges repeats a modelId')
+        seen_models.add(model_id)
+        if connection.execute('SELECT 1 FROM models WHERE model_id=?', (model_id,)).fetchone() is None:
+            raise BoardError('NOT_FOUND', 'Unknown modelId')
         text = entry.get('text')
         if not isinstance(text, str) or len(text) > 4000:
             raise BoardError('INVALID_ARGUMENT', 'text must be a string of at most 4000 characters')
         if not text:
-            connection.execute('DELETE FROM model_service_notes WHERE harness=? AND provider=? AND model=?', _model_service(entry))
+            connection.execute('DELETE FROM model_notes WHERE model_id=?', (model_id,))
         else:
-            connection.execute('INSERT INTO model_service_notes(harness,provider,model,text,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(harness,provider,model) DO UPDATE SET text=excluded.text,updated_at=excluded.updated_at', (*_model_service(entry), text, now))
+            connection.execute('INSERT INTO model_notes(model_id,text,updated_at) VALUES(?,?,?) ON CONFLICT(model_id) DO UPDATE SET text=excluded.text,updated_at=excluded.updated_at', (model_id, text, now))
     for entry in model_limits:
         if connection.execute(
             'SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? LIMIT 1',
@@ -209,7 +199,8 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     counts = {
         'buddySettings': len(settings),
         'preferenceChanges': len(preferences),
-        'modelServiceNoteChanges': len(annotations),
+        'modelNoteChanges': len(annotations),
+        'modelMappingChanges': mapping_count,
         'modelServiceConcurrency': len(model_limits),
         'provided': sorted(provided),
     }

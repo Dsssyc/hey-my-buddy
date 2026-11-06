@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from support import BoardTestCase
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
@@ -55,6 +56,7 @@ class PermissionCandidateTests(BoardTestCase):
                 (codex_id, codex_id, 'codex', 'fixture', 'full', 'high',
                  canonical_json([])),
             )
+            ensure_model_service(connection, 'codex', 'fixture', 'full', board.store.now())
             connection.execute("UPDATE harness_health SET status='ready' WHERE harness='codex'")
             connection.execute(
                 'INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,'
@@ -63,6 +65,7 @@ class PermissionCandidateTests(BoardTestCase):
                 (zcode_id, zcode_id, 'zcode', 'fixture', 'full', 'high',
                  canonical_json([])),
             )
+            ensure_model_service(connection, 'zcode', 'fixture', 'full', board.store.now())
             connection.execute("UPDATE harness_health SET status='ready' WHERE harness='zcode'")
         with board.store.db.read() as connection:
             write, _ = DecisionCoordinator._scan_candidates(connection, ['permission:write'], coding_only=True)

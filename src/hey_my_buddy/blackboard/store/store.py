@@ -1594,11 +1594,12 @@ class BoardStore:
                 generation = chosen_generation
                 attempt_id = chosen_attempt_id
                 now = self.now()
+                from ..evaluation.models import current_model
                 connection.execute(
                     "INSERT INTO attempts(attempt_id, task_id, generation, nonce_verifier,"
-                    " execution_state, ownership, adapter, model_harness, model_provider, model_model,"
+                    " execution_state, ownership, adapter, model_harness, model_provider, model_model, model_id,"
                     " started_at, created_at, updated_at, revision)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     (
                         attempt_id,
                         chosen["task_id"],
@@ -1611,6 +1612,7 @@ class BoardStore:
                         # never updated afterwards, so historical and shutdown-uncertain
                         # attempts cannot change which model service slot they occupy.
                         *(chosen_model_service if chosen_model_service is not None else (None, None, None)),
+                        current_model(connection, *chosen_model_service) if chosen_model_service is not None else None,
                         now,
                         now,
                         now,

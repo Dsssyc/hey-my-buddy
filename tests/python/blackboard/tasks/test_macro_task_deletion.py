@@ -834,13 +834,15 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        (other["runId"], now, now))
             db.execute("INSERT INTO domain_nodes(node_id,name,definition,maintenance_run_id)"
                        " VALUES('domain','Domain','Retained expertise','maintenance')")
-            db.execute("INSERT INTO kind_summaries(harness,model,effort,text,maintenance_run_id)"
-                       " VALUES('codex','fixture','high','Retained observations','maintenance')")
+            from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
+            model_id = ensure_model_service(db, 'codex', 'fixture', 'fixture', now)
+            db.execute("INSERT INTO kind_summaries(harness,model_id,effort,text,maintenance_run_id)"
+                       " VALUES('codex',?,'high','Retained observations','maintenance')", (model_id,))
             for task, cited in ((run, 1), (other, 1), (uncited, 0)):
                 db.execute("INSERT INTO micro_task_classifications VALUES(?, 'domain','review','maintenance')",
                            (task["runId"],))
-                db.execute("INSERT INTO kind_summary_evidence VALUES('codex','fixture','high',?,?)",
-                           (task["runId"], cited))
+                db.execute("INSERT INTO kind_summary_evidence VALUES('codex',?,'high',?,?)",
+                           (model_id, task["runId"], cited))
             db.execute("INSERT INTO routing_judgments VALUES('owned-decision','domain','review')")
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at)"
                        " VALUES('retained-decision','completed',?)", (now,))

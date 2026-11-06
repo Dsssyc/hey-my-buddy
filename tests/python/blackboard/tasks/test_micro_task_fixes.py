@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from blackboard.tasks import test_lead_owned as lead_owned
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
+from hey_my_buddy.blackboard.evaluation.models import current_model
 from hey_my_buddy.blackboard.routing.maintenance_data import apply_answer, build_packet
 from hey_my_buddy.errors import BoardError
 
@@ -71,16 +72,17 @@ class MicroTaskFixTests(WorkflowTestCase):
         self.assertEqual(result["errors"], [])
 
     def statistics(self, board, *, domain=None):
-        key = tuple(BUDDY[field] for field in ("harness", "model", "effort"))
         with board.store.db.read() as db:
+            key = (BUDDY["harness"], current_model(db, BUDDY["harness"], BUDDY["provider"], BUDDY["model"]),
+                   BUDDY["effort"])
             overall = db.execute(
                 "SELECT samples,successes,defects FROM kind_statistics"
-                " WHERE harness=? AND model=? AND effort=?", key).fetchone()
+                " WHERE harness=? AND model_id=? AND effort=?", key).fetchone()
             cell = None
             if domain is not None:
                 cell = db.execute(
                     "SELECT samples,successes,defects FROM kind_cell_statistics"
-                    " WHERE harness=? AND model=? AND effort=? AND domain_node_id=? AND task_type='debug'",
+                    " WHERE harness=? AND model_id=? AND effort=? AND domain_node_id=? AND task_type='debug'",
                     (*key, domain)).fetchone()
             return tuple(overall) if overall is not None else None, tuple(cell) if cell is not None else None
 

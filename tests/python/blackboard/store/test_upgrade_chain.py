@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from blackboard.store.upgrade_fixture import FIXTURE, FIXTURE_ROOT_TOKEN, load_fixture, complete_fixture_cleanup
+from blackboard.store.upgrade_fixture import FIXTURE, FIXTURE_ROOT_TOKEN, load_fixture, load_schema36_model_stock, complete_fixture_cleanup
 from hey_my_buddy.blackboard.store import schema_30_31, schema_32_33, schema_34_35, schema_35_36, upgrade
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.install.upgrade import preflight
@@ -287,6 +287,53 @@ class UpgradeChainTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM workspace_reservations w JOIN workflow_runs r"
                                         " ON r.run_id=w.holder_task_id WHERE w.state='held'"
                                         " AND r.state IN ('accepted','concluded')").fetchone()[0], 0)
+        self.assert_current_structure()
+
+    def test_schema36_model_stock_preserves_every_rekeyed_form(self):
+        self.schema31()
+        with self.db:
+            for version in range(31, 36):
+                upgrade.STEPS[version](self.db)
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '36')
+        load_schema36_model_stock(self.db)
+        tables = ('kind_statistics', 'kind_cell_statistics', 'kind_statistics_buckets',
+                  'kind_cell_statistics_buckets', 'kind_summaries', 'kind_summary_evidence')
+        before = {table: [dict(row) for row in self.db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+                  for table in tables}
+        self.assertTrue(all(before.values()))
+        notes = [dict(row) for row in self.db.execute('SELECT * FROM model_service_notes ORDER BY model,harness,provider')]
+        self.assertEqual([(row['model'], row['provider']) for row in notes],
+                         [('fixture-alpha', 'mirror'), ('fixture-alpha', 'openai'),
+                          ('fixture-beta', 'alternate'), ('fixture-beta', 'openai')])
+        attempts = [dict(row) for row in self.db.execute(
+            'SELECT attempt_id,model_harness,model_provider,model_model FROM attempts ORDER BY rowid')]
+        buddies = [dict(row) for row in self.db.execute(
+            'SELECT buddy_id,harness,provider,model FROM buddies ORDER BY rowid')]
+        self.assertTrue(any(row['model_model'] == 'fixture-alpha' for row in attempts))
+        self.assertEqual(sum(row['model'] == 'fixture-alpha' for row in buddies), 2)
+        self.assertEqual(sum(row['model'] == 'fixture-beta' for row in buddies), 2)
+        upgrade.upgrade_state(self.state)
+        display = {row['model_id']: row['display_name'] for row in self.db.execute(
+            'SELECT model_id,display_name FROM models')}
+        for table in tables:
+            after = [dict(row) for row in self.db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+            normalized = [{**{key: value for key, value in row.items() if key != 'model_id'},
+                           'model': display[row['model_id']]} for row in after]
+            self.assertEqual(normalized, before[table], table)
+        for old in attempts:
+            row = self.db.execute('SELECT model_id FROM attempts WHERE attempt_id=?', (old['attempt_id'],)).fetchone()
+            self.assertEqual(display[row['model_id']] if row['model_id'] else None, old['model_model'])
+        mappings = {(row['harness'], row['provider'], row['model']): display[row['model_id']]
+                    for row in self.db.execute('SELECT harness,provider,model,model_id FROM model_mappings')}
+        for old in buddies:
+            self.assertEqual(mappings[old['harness'], old['provider'], old['model']], old['model'])
+        saved_notes = {display[row['model_id']]: row['text'] for row in self.db.execute(
+            'SELECT model_id,text FROM model_notes')}
+        self.assertEqual(saved_notes['fixture-alpha'], notes[0]['text'])
+        self.assertIn('提供方 openai 的备注。', saved_notes['fixture-beta'])
+        self.assertIn('提供方 alternate 的备注。', saved_notes['fixture-beta'])
+        self.assertIn('openai', saved_notes['fixture-beta'])
+        self.assertIn('alternate', saved_notes['fixture-beta'])
         self.assert_current_structure()
 
     def test_terminal_reservation_stock_releases_at_the_original_host_decision_time(self):

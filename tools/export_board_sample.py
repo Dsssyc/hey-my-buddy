@@ -142,6 +142,15 @@ def _select(connection, source_schema: int,
         records[table] = _rows(connection, table, 'decision_id', decisions)
     for table in ('tasks', 'attempts', 'messages', 'artifacts', 'events', 'router_outcomes'):
         records[table] = _rows(connection, table, 'task_id', task_ids)
+    if source_schema >= 37:
+        model_ids = {row['model_id'] for row in records['attempts'] if row['model_id'] is not None}
+        services = {(row['model_harness'], row['model_provider'], row['model_model'])
+                    for row in records['attempts'] if row['model_id'] is not None}
+        records['model_mappings'] = [dict(row) for row in connection.execute(
+            'SELECT * FROM model_mappings ORDER BY rowid')
+            if (row['harness'], row['provider'], row['model']) in services]
+        model_ids.update(row['model_id'] for row in records['model_mappings'])
+        records['models'] = _rows(connection, 'models', 'model_id', model_ids)
     attempts = {row['attempt_id'] for row in records['attempts']}
     for table in ('attempt_process_identities', 'attempt_interruptions', 'attempt_shutdown_evidence',
                   'execution_issues', 'attempt_activity', 'attempt_reminders', 'router_claims'):
@@ -196,9 +205,9 @@ def _source_schema(connection) -> tuple[str, list[tuple[str, str]]]:
     if version is None or version[0] not in {str(v) for v in range(UPGRADE_FLOOR_SCHEMA, SCHEMA_VERSION + 1)}:
         raise ValueError(f"Source must use schema {UPGRADE_FLOOR_SCHEMA} through {SCHEMA_VERSION}")
     definitions = [(row['type'], row['sql']) for row in connection.execute(
-        "SELECT type,sql FROM sqlite_master WHERE type IN ('table','index') "
+        "SELECT type,sql FROM sqlite_master WHERE type IN ('table','index','trigger') "
         "AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%' "
-        "ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, rowid")]
+        "ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, rowid")]
     return version[0], definitions
 
 
@@ -396,7 +405,14 @@ def export_sample(source: Path, output: Path) -> Path:
                         # This is a new private board containing only the selected
                         # history. Its cumulative facts describe that same history;
                         # no source-wide statistics or maintenance records escape.
-                        backfill(writer)
+                        if int(version) >= 37:
+                            backfill(writer)
+                        else:
+                            from hey_my_buddy.blackboard.store.schema_30_31 import backfill as name_backfill
+                            name_backfill(writer)
+                            if int(version) >= 36:
+                                from hey_my_buddy.blackboard.store.schema_35_36 import _accumulate_defects
+                                _accumulate_defects(writer)
                     # The surviving lineage determines each destination session's
                     # group; source group identity still locates the original file.
                     target_groups = _session_groups(records, {

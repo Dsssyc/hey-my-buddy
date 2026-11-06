@@ -8,6 +8,7 @@ from blackboard.routing.test_decision import (DecisionTestCase, CATALOG_BUDDY, S
                                          THIRD_BUDDY, THIRD_BUDDY_ID, BUDDY_ID, SECOND_BUDDY_ID)
 from blackboard.tasks.test_workflow import NONCE, WorkflowTestCase
 from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.errors import BoardError
 
 
@@ -77,14 +78,14 @@ class ExplorationRoutingTests(WorkflowTestCase):
                 db.execute("INSERT INTO domain_nodes VALUES(?,?,?,?,NULL,'domains')",
                            (node_id, name, name + " expertise", parent))
             for buddy, node_id, task_type, samples in cells:
-                db.execute("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,"
+                db.execute("INSERT INTO kind_cell_statistics(harness,model_id,effort,domain_node_id,task_type,"
                            "samples,successes,first_passes,rework_rounds,failures) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                           (buddy["harness"], buddy["model"], buddy["effort"],
+                           (buddy["harness"], ensure_model_service(db, buddy["harness"], buddy["provider"], buddy["model"], now), buddy["effort"],
                             node_id, task_type, samples, samples, samples, 0, 0))
             for buddy, samples in overall:
-                db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
+                db.execute("INSERT INTO kind_statistics(harness,model_id,effort,samples,successes,first_passes,"
                            "rework_rounds,failures) VALUES(?,?,?,?,?,?,?,?)",
-                           (buddy["harness"], buddy["model"], buddy["effort"],
+                           (buddy["harness"], ensure_model_service(db, buddy["harness"], buddy["provider"], buddy["model"], now), buddy["effort"],
                             samples, samples, samples, 0, 0))
 
     # -- counting and giving -------------------------------------------------

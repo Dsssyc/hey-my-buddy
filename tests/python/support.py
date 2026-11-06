@@ -782,3 +782,5 @@ def enable_fixture_buddy(store, buddy):
     with store.db.write() as db:
         db.execute("INSERT OR IGNORE INTO buddies(buddy_id,label,harness,provider,model,effort,enabled,available) VALUES(?,?,?,?,?,?,1,1) ON CONFLICT(buddy_id) DO UPDATE SET enabled=1,available=1",
                    (":".join(buddy[key] for key in keys), "Private enabled fixture", *(buddy[key] for key in keys)))
+        from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
+        ensure_model_service(db, buddy['harness'], buddy['provider'], buddy['model'], store.now())

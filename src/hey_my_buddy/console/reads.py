@@ -56,22 +56,32 @@ def _maintenance_view(connection) -> dict:
 
 
 def _kind_evaluations(connection) -> list[dict]:
+    from ..blackboard.evaluation.models import CURRENT_MAPPINGS, model_view
     kinds = [dict(row) for row in connection.execute(
-        "SELECT DISTINCT harness,model,effort FROM buddies ORDER BY harness,model,effort")]
+        'SELECT b.harness,m.model_id,b.effort FROM buddies b JOIN (' + CURRENT_MAPPINGS + ') m'
+        ' ON m.harness=b.harness AND m.provider=b.provider AND m.model=b.model'
+        ' UNION SELECT harness,model_id,effort FROM kind_statistics'
+        ' UNION SELECT harness,model_id,effort FROM kind_summaries ORDER BY harness,model_id,effort')]
     statistics = kind_domain_statistics(connection, kinds)
-    summaries = {(row["harness"], row["model"], row["effort"]):
-                 {"text": row["text"], "citations": []}
-                 for row in connection.execute("SELECT harness,model,effort,text FROM kind_summaries")}
+    summaries = {(row['harness'], row['model_id'], row['effort']):
+                 {'text': row['text'], 'citations': []}
+                 for row in connection.execute('SELECT harness,model_id,effort,text FROM kind_summaries')}
     for row in connection.execute(
-        "SELECT e.harness,e.model,e.effort,e.run_id,r.title,r.macro_task_id"
-        " FROM kind_summary_evidence e JOIN workflow_runs r ON r.run_id=e.run_id"
-        " WHERE e.cited=1 ORDER BY e.harness,e.model,e.effort,e.run_id"):
-        summaries[row["harness"], row["model"], row["effort"]]["citations"].append({
-            "runId": row["run_id"], "title": row["title"], "macroTaskId": row["macro_task_id"],
+        'SELECT e.harness,e.model_id,e.effort,e.run_id,r.title,r.macro_task_id'
+        ' FROM kind_summary_evidence e JOIN workflow_runs r ON r.run_id=e.run_id'
+        ' WHERE e.cited=1 ORDER BY e.harness,e.model_id,e.effort,e.run_id'):
+        summaries[row['harness'], row['model_id'], row['effort']]['citations'].append({
+            'runId': row['run_id'], 'title': row['title'], 'macroTaskId': row['macro_task_id'],
         })
-    return [{**kind, "summary": summaries.get((kind["harness"], kind["model"], kind["effort"])),
-             "statistics": statistics[kind["harness"], kind["model"], kind["effort"]]}
-            for kind in kinds]
+    result = []
+    for kind in kinds:
+        model = model_view(connection, kind['model_id'])
+        key = (kind['harness'], kind['model_id'], kind['effort'])
+        result.append({'harness': kind['harness'], 'effort': kind['effort'],
+                       'modelId': model['modelId'], 'modelDisplayName': model['displayName'],
+                       'modelNames': model['names'], 'summary': summaries.get(key),
+                       'statistics': statistics[key]})
+    return result
 
 
 def console_snapshot_projection(service, *, clock=_time.time) -> tuple[dict, float]:

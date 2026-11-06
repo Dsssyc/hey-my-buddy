@@ -5,6 +5,7 @@ from collections import Counter, defaultdict
 import heapq
 
 from ...protocol.billing import for_provider
+from ..evaluation.models import current_model, model_view
 from .statistics import (
     COUNTS, IDENTITY, KIND, METRICS, approximate_median, key as _key, time as _time,
 )
@@ -34,7 +35,7 @@ def _stored_statistics(connection, table, kinds, *, cells=False):
     if not kinds:
         return statistics
     fields = (*KIND, "domain_node_id", "task_type") if cells else KIND
-    where = " WHERE (harness,model,effort) IN (" + ",".join("(?,?,?)" for _ in kinds) + ")"
+    where = " WHERE (harness,model_id,effort) IN (" + ",".join("(?,?,?)" for _ in kinds) + ")"
     values = tuple(value for kind in kinds for value in kind)
     for row in connection.execute("SELECT * FROM " + table + where, values):
         stats = statistics[_key(row, fields)]
@@ -75,18 +76,27 @@ def _add_statistics(target, source):
         target["buckets"][metric].update(source["buckets"][metric])
 
 
+def _kind(connection, buddy):
+    # Candidates are sqlite3.Row objects; frozen evidence may be an ordinary dict.
+    model_id = (buddy["model_id"] if "model_id" in buddy.keys() else
+                buddy["modelId"] if "modelId" in buddy.keys() else None)
+    if model_id is None:
+        model_id = current_model(connection, buddy["harness"], buddy["provider"], buddy["model"])
+    return buddy["harness"], model_id, buddy["effort"]
+
+
 def kind_domain_statistics(connection, buddy_kinds) -> dict:
     """Three levels per real kind; infrastructure stays split by provider.
 
     The enclosing kind plus each provider identifies a full buddy. Maintenance
     has no selected provider and must not invent one to read these facts.
     """
-    kinds = {_key(buddy, KIND) for buddy in buddy_kinds}
+    kinds = {_kind(connection, buddy) for buddy in buddy_kinds}
     overall = _stored_statistics(connection, "kind_statistics", kinds)
     cells = _stored_statistics(connection, "kind_cell_statistics", kinds, cells=True)
     infrastructure = defaultdict(list)
     for row in connection.execute("SELECT * FROM buddy_infrastructure_failures ORDER BY harness,model,effort,provider"):
-        kind = _key(row, KIND)
+        kind = (row["harness"], current_model(connection, row["harness"], row["provider"], row["model"]), row["effort"])
         if kind in kinds:
             infrastructure[kind].append({"provider": row["provider"], "count": row["count"], "lastAt": row["last_at"]})
     nodes = {row["node_id"]: row for row in connection.execute(
@@ -113,7 +123,7 @@ def domain_statistics(connection, buddies) -> dict:
     """Project each kind's facts onto the requested full buddy identities."""
     kinds = kind_domain_statistics(connection, buddies)
     infrastructure = _infrastructure(connection, buddies)
-    return {buddy["buddy_id"]: {**kinds[_key(buddy, KIND)],
+    return {buddy["buddy_id"]: {**kinds[_kind(connection, buddy)],
                               "infrastructureFailures": infrastructure[_key(buddy, IDENTITY)]}
             for buddy in buddies}
 
@@ -170,7 +180,7 @@ def candidate_facts(store, connection, buddies, *, now: str) -> dict:
     """The aggregate packet frozen for a Router, with explicit no-data rates."""
     statistics = domain_statistics(connection, buddies)
     summaries = {_key(row, KIND): row["text"] for row in connection.execute(
-        "SELECT harness,model,effort,text FROM kind_summaries")}
+        "SELECT harness,model_id,effort,text FROM kind_summaries")}
     loads = _loads(store, connection, {_key(buddy, ("harness", "provider", "model")) for buddy in buddies}, now=now)
     return {
         buddy["buddy_id"]: {
@@ -179,6 +189,9 @@ def candidate_facts(store, connection, buddies, *, now: str) -> dict:
             "statistics": {key: value for key, value in statistics[buddy["buddy_id"]].items()
                            if key != "infrastructureFailures"},
             "infrastructureFailures": statistics[buddy["buddy_id"]]["infrastructureFailures"],
-            "summary": summaries.get(_key(buddy, KIND)),
+            "summary": summaries.get(_kind(connection, buddy)),
+            "modelId": _kind(connection, buddy)[1],
+            "modelDisplayName": model_view(connection, _kind(connection, buddy)[1])["displayName"],
+            "modelNames": model_view(connection, _kind(connection, buddy)[1])["names"],
         } for buddy in buddies
     }

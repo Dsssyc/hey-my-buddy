@@ -40,12 +40,12 @@ def _fixture_digest(name):
         # provenance; reconstruct only the original metadata scope here.
         metadata = json.loads(raw)
         metadata = {key: value for key, value in metadata.items()
-                    if not key.startswith(("cleanupStock", "reservationStock", "deliveredStock", "growth30", "growth33", "legacyStock", "issueStock"))}
+                    if not key.startswith(("cleanupStock", "reservationStock", "deliveredStock", "growth30", "growth33", "legacyStock", "issueStock", "modelStock"))}
         raw = (json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
-def _write_oracle():
+def _write_oracle(work_dir: Path):
     """One-time capture from the exact pre-change reader, without copying it here."""
     source = subprocess.run(
         ["git", "show", f"{SOURCE_COMMIT}:{SOURCE_PATH}"],
@@ -54,23 +54,25 @@ def _write_oracle():
     namespace = {"__name__": "hey_my_buddy.blackboard.routing._upgrade_statistics_oracle",
                  "__package__": "hey_my_buddy.blackboard.routing"}
     exec(compile(source, f"{SOURCE_COMMIT}:{SOURCE_PATH}", "exec"), namespace)
-    with tempfile.TemporaryDirectory(prefix="upgrade-statistics-oracle-") as scratch:
-        fixture = load_fixture(Path(scratch) / "state")
-        with closing(sqlite3.connect(fixture["state"] / "board.sqlite3")) as connection:
-            connection.row_factory = sqlite3.Row
-            overall, infrastructure, by_domain, by_cell = namespace["_statistics"](connection)
-            if by_domain or by_cell:
-                raise AssertionError("Schema-30 fixture unexpectedly has domain statistics")
-            facts = {}
-            for buddy in _buddies(connection):
-                kind = namespace["_key"](buddy, namespace["KIND"])
-                identity = namespace["_key"](buddy, namespace["IDENTITY"])
-                facts[buddy["buddy_id"]] = {
-                    "overall": namespace["_statistics_fact"](overall[kind]),
-                    "byDomain": {},
-                    "byDomainTaskType": {},
-                    "infrastructureFailures": infrastructure[identity],
-                }
+    if not work_dir.resolve().is_relative_to(Path(__file__).resolve().parents[4] / "tmp"):
+        raise ValueError("Oracle work-dir must be under the checkout's tmp/")
+    work_dir.mkdir(parents=True, exist_ok=False)
+    fixture = load_fixture(work_dir / "state")
+    with closing(sqlite3.connect(fixture["state"] / "board.sqlite3")) as connection:
+        connection.row_factory = sqlite3.Row
+        overall, infrastructure, by_domain, by_cell = namespace["_statistics"](connection)
+        if by_domain or by_cell:
+            raise AssertionError("Schema-30 fixture unexpectedly has domain statistics")
+        facts = {}
+        for buddy in _buddies(connection):
+            kind = namespace["_key"](buddy, namespace["KIND"])
+            identity = namespace["_key"](buddy, namespace["IDENTITY"])
+            facts[buddy["buddy_id"]] = {
+                "overall": namespace["_statistics_fact"](overall[kind]),
+                "byDomain": {},
+                "byDomainTaskType": {},
+                "infrastructureFailures": infrastructure[identity],
+            }
     fixture_hashes = {
         name: _fixture_digest(name)
         for name in ("board.sql", "catalog.json", "metadata.json",
@@ -89,21 +91,14 @@ def _write_oracle():
             "sourceCommit": fixture["sourceCommit"],
             "sha256": fixture_hashes,
         },
-        "preparationCommands": [
-            "mkdir -p tmp/upgrade-statistics-oracle",
-            "UV_PROJECT_ENVIRONMENT=tmp/upgrade-statistics-oracle/venv "
-            "UV_CACHE_DIR=tmp/upgrade-statistics-oracle/uv-cache "
-            "TMPDIR=tmp/upgrade-statistics-oracle "
-            "uv sync --frozen --no-install-project",
-        ],
+        "preparationCommands": [],
         "generationCommand": (
             "env -u HMB_STATE_DIR -u HMB_RUNTIME_ROOT -u HMB_RUNTIME "
             "-u HMB_RUNTIME_IDENTITY -u HMB_AGENT_CREDENTIAL_FILE "
             "-u HMB_AGENT_CREDENTIAL_FD -u VIRTUAL_ENV "
-            "-u UV_PROJECT_ENVIRONMENT TMPDIR=tmp/upgrade-statistics-oracle "
-            "PYTHONPATH=src:tests/python "
-            "tmp/upgrade-statistics-oracle/venv/bin/python "
-            "tests/python/blackboard/store/test_upgrade_statistics.py --write-oracle"
+            "-u UV_PROJECT_ENVIRONMENT PYTHONPATH=src:tests/python "
+            "uv run --frozen python tests/python/blackboard/store/test_upgrade_statistics.py "
+            "--write-oracle --work-dir tmp/<new-private-dir>"
         ),
         "buddies": facts,
     }
@@ -189,7 +184,7 @@ class UpgradeStatisticsTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--write-oracle"]:
-        _write_oracle()
+    if len(sys.argv) == 4 and sys.argv[1:3] == ["--write-oracle", "--work-dir"]:
+        _write_oracle(Path(sys.argv[3]))
     else:
         unittest.main()

@@ -9,6 +9,7 @@ from copy import deepcopy
 import unittest
 
 from support import BoardTestCase
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import canonical_json
@@ -33,6 +34,7 @@ class RouterListConfigurationTests(BoardTestCase):
                            " VALUES(?,?,?,?,?,?,1,1,?)",
                            (buddy_id, buddy_id, "dsh", "fixture", buddy_id, "max",
                             canonical_json([])))
+                ensure_model_service(db, "dsh", "fixture", buddy_id, self.board_.store.now())
 
     def stored(self):
         with self.board_.store.db.read() as db:
@@ -136,17 +138,20 @@ class RouterListConfigurationTests(BoardTestCase):
                        " VALUES(?,?,?,?,?,?,?,1,?)",
                        ("disabled", "disabled", "dsh", "fixture", "disabled", "max", 1,
                         canonical_json([])))
+            ensure_model_service(db, "dsh", "fixture", "disabled", self.board_.store.now())
             db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id='disabled'")
             db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,0,1,?)",
                        ("offline", "offline", "dsh", "fixture", "offline", "max",
                         canonical_json([])))
+            ensure_model_service(db, "dsh", "fixture", "offline", self.board_.store.now())
             db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,1,1,?)",
                        ("reviewonly", "reviewonly", "zcode", "fixture", "reviewonly", "max",
                         canonical_json([])))
+            ensure_model_service(db, "zcode", "fixture", "reviewonly", self.board_.store.now())
         self.publish({"routerBuddyIds": [A, "disabled", "offline", "reviewonly"], "defaultRoutingMode": "review"})
         self.assertEqual(console_snapshot_projection(self.board_.service)[0]["configuration"]["routerBuddyIds"],
                          [A, "disabled", "offline", "reviewonly"])
@@ -158,6 +163,7 @@ class RouterListConfigurationTests(BoardTestCase):
                        " VALUES(?,?,?,?,?,?,0,1,?)",
                        ("offline", "offline", "dsh", "fixture", "offline", "max",
                         canonical_json([])))
+            ensure_model_service(db, "dsh", "fixture", "offline", self.board_.store.now())
         self.publish({"routerBuddyIds": ["offline"]})
         self.publish({"routerRetryIntervalSeconds": 1, "routingBudget": "brief", "defaultRoutingMode": "review"})
         configuration = console_snapshot_projection(self.board_.service)[0]["configuration"]

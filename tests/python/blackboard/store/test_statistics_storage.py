@@ -127,13 +127,16 @@ class StatisticsStorageTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             for field, value in (("samples", 0), ("samples", 2), ("samples", 1.5),
                                  ("successes", -1), ("first_passes", 2), ("first_passes", -1),
-                                 ("rework_rounds", -1), ("failures", 1), ("model", None)):
+                                 ("rework_rounds", -1), ("failures", 1), ("model_id", None)):
                 with self.subTest(field=field, value=value), self.assertRaises(sqlite3.IntegrityError):
                     db.execute(f"UPDATE kind_statistics SET {field}=?", (value,))
-            values = (*statistics.key(BUDDY, statistics.KIND), "input_tokens", 1, 0, 1)
+            model_id = db.execute("SELECT model_id FROM model_mappings WHERE harness=? AND provider=? AND model=?"
+                                  " ORDER BY rowid DESC LIMIT 1",
+                                  tuple(BUDDY[field] for field in ("harness", "provider", "model"))).fetchone()[0]
+            values = (BUDDY["harness"], model_id, BUDDY["effort"], "input_tokens", 1, 0, 1)
             db.execute("INSERT INTO kind_statistics_buckets VALUES(?,?,?,?,?,?,?)", values)
             for field, value in (("count", 0), ("count", 1.5), ("sign", 2), ("sign", -1),
-                                 ("bucket", 0.5), ("metric", "unknown"), ("model", "unbound")):
+                                 ("bucket", 0.5), ("metric", "unknown"), ("model_id", "unbound")):
                 with self.subTest(field=field, value=value), self.assertRaises(sqlite3.IntegrityError):
                     db.execute(f"UPDATE kind_statistics_buckets SET {field}=? WHERE metric='input_tokens'", (value,))
 

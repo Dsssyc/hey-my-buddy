@@ -52,7 +52,8 @@ class Schema35To36Tests(unittest.TestCase):
                              ['pre-exploration'])
             self.assertEqual(upgraded.execute('SELECT exploration_every FROM router_settings').fetchone()[0], 5)
             actual = {tuple(row[:3]): row[3] for row in upgraded.execute(
-                'SELECT harness,model,effort,defects FROM kind_statistics WHERE defects > 0')}
+                'SELECT k.harness,m.display_name,k.effort,k.defects FROM kind_statistics k'
+                ' JOIN models m ON m.model_id=k.model_id WHERE k.defects > 0')}
             self.assertEqual(actual, dict(expected))
 
     @staticmethod

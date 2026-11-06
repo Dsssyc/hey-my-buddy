@@ -6,13 +6,14 @@ from pathlib import Path
 import sqlite3
 
 from ...errors import BoardError
-from . import schema_30_31, schema_31_32, schema_32_33, schema_33_34, schema_34_35, schema_35_36
+from . import schema_30_31, schema_31_32, schema_32_33, schema_33_34, schema_34_35, schema_35_36, schema_36_37
 from .db import SCHEMA_VERSION
 
 UPGRADE_FLOOR_SCHEMA = 30
 UPGRADE_FLOOR_RELEASE = "0.54.1"
 STEPS = {30: schema_30_31.upgrade, 31: schema_31_32.upgrade, 32: schema_32_33.upgrade,
-         33: schema_33_34.upgrade, 34: schema_34_35.upgrade, 35: schema_35_36.upgrade}
+         33: schema_33_34.upgrade, 34: schema_34_35.upgrade, 35: schema_35_36.upgrade,
+         36: schema_36_37.upgrade}
 
 
 def supported_schema(value: str | None) -> int:

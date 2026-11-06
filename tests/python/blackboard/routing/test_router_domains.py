@@ -6,6 +6,7 @@ from blackboard.routing.test_decision import DecisionTestCase, BUDDY_ID, SECOND_
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.tasks.test_workflow import WorkflowTestCase, NONCE
 from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.blackboard.evaluation.models import current_model, ensure_model_service
 from hey_my_buddy.protocol.task_types import TASK_TYPES
 
 
@@ -23,6 +24,7 @@ class RouterDomainTests(WorkflowTestCase):
             argv=["true"], cwd=str(self.workdir("maintenance")))["task"]["runId"]
         with self.board_.store.db.write() as db:
             now = self.board_.store.now()
+            model_id = current_model(db, 'dsh', 'deepseek-official', 'deepseek-flash')
             db.execute("INSERT INTO maintenance_runs VALUES('domains','manual',?,?,"
                        "'completed',NULL,NULL,?,?)", (BUDDY_ID, task, now, now))
             for node_id, name, parent, merged in (
@@ -30,13 +32,13 @@ class RouterDomainTests(WorkflowTestCase):
                     ("writing", "Writing", None, None), ("old-ipc", "Old IPC", "systems", "ipc")):
                 db.execute("INSERT INTO domain_nodes VALUES(?,?,?,?,?,'domains')",
                            (node_id, name, name + " expertise", parent, merged))
-            db.execute("INSERT INTO kind_summaries VALUES('dsh','deepseek-flash','off',?, 'domains')",
-                       ("Handles transport defects carefully; asks for clear ownership boundaries.",))
-            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
-                       "rework_rounds,failures,defects) VALUES('dsh','deepseek-flash','off',3,2,1,1,1,1)")
-            db.execute("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,samples,"
+            db.execute("INSERT INTO kind_summaries VALUES('dsh',?,'off',?, 'domains')",
+                       (model_id, "Handles transport defects carefully; asks for clear ownership boundaries."))
+            db.execute("INSERT INTO kind_statistics(harness,model_id,effort,samples,successes,first_passes,"
+                       "rework_rounds,failures,defects) VALUES('dsh',?,'off',3,2,1,1,1,1)", (model_id,))
+            db.execute("INSERT INTO kind_cell_statistics(harness,model_id,effort,domain_node_id,task_type,samples,"
                        "successes,first_passes,rework_rounds,failures,defects)"
-                       " VALUES('dsh','deepseek-flash','off','old-ipc','debug',2,1,1,0,1,1)")
+                       " VALUES('dsh',?,'off','old-ipc','debug',2,1,1,0,1,1)", (model_id,))
 
     def request(self, request_id="domain-route"):
         return self.board_.store.decisions.request_select({"requestId": request_id, "task": "Fix transport ownership"})
@@ -109,6 +111,8 @@ class RouterDomainTests(WorkflowTestCase):
         rows = [{"buddy_id": "first", **kind, "provider": "deepseek-official"},
                 {"buddy_id": "other-provider", **kind, "provider": "other"},
                 {"buddy_id": "other-effort", **kind, "provider": "other", "effort": "high"}]
+        with self.board_.store.db.write() as db:
+            ensure_model_service(db, "dsh", "other", "deepseek-flash", self.board_.store.now())
         with self.board_.store.db.read() as db:
             facts = candidate_facts(self.board_.store, db, rows, now=self.board_.store.now())
         self.assertEqual(facts["first"]["statistics"], facts["other-provider"]["statistics"])

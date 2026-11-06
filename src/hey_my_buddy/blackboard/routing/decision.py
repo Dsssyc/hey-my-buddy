@@ -265,8 +265,8 @@ class DecisionCoordinator:
                                 "          parent_id) AS parent_id"
                                 " FROM domain_nodes WHERE merged_into_id IS NULL ORDER BY node_id")],
             "taskTypes": [{"id": key, "definition": value} for key, value in TASK_TYPES.items()],
-            # User notes are kept per model service; the model service key is on every buddy.
-            "annotations": user_policy.model_service_notes(connection, buddy_ids),
+            # Notes follow the model identity supplied on every candidate.
+            "annotations": user_policy.model_notes(connection, buddy_ids),
         }
 
     def _select_input(self, connection: sqlite3.Connection, *, request_id: str, task_text: str, candidates: list[sqlite3.Row], now: str, expected_seconds: int, project: dict | None, hard_constraints: dict | None = None) -> dict:
@@ -1094,7 +1094,7 @@ class DecisionCoordinator:
     def _exploration_problem(document: dict, decision: dict) -> dict | None:
         """The quota's program fact: a reselection is less sampled than the preferred kind.
 
-        Candidates are compared as kinds (harness, model, effort) at the level
+        Candidates are compared as kinds (harness, modelId, effort) at the level
         the frozen input states: the first-level domain ancestor of the answer's
         judged node — traced through the input's own parent links — or the
         overall statistics when the judgment is unclassified. Sample counts
@@ -1114,11 +1114,11 @@ class DecisionCoordinator:
                 return ((candidate.get("statistics") or {}).get("byDomain") or {}).get(level, {}).get("samples", 0)
         samples = {}
         for candidate in document["buddies"]:
-            samples.setdefault((candidate["harness"], candidate["model"], candidate["effort"]), level_samples(candidate))
+            samples.setdefault((candidate["harness"], candidate["modelId"], candidate["effort"]), level_samples(candidate))
         chosen = next(item for item in document["buddies"] if item["buddyId"] == decision["buddyId"])
         preferred = next(item for item in document["buddies"] if item["buddyId"] == decision["preferredBuddyId"])
-        chosen_kind = (chosen["harness"], chosen["model"], chosen["effort"])
-        preferred_kind = (preferred["harness"], preferred["model"], preferred["effort"])
+        chosen_kind = (chosen["harness"], chosen["modelId"], chosen["effort"])
+        preferred_kind = (preferred["harness"], preferred["modelId"], preferred["effort"])
         if not samples[chosen_kind] < samples[preferred_kind]:
             return {"code": "router-exploration-out-of-bounds", "params": {"bound": "not-less-sampled"}}
         return None

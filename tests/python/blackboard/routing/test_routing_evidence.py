@@ -10,6 +10,7 @@ from hey_my_buddy.blackboard.routing.evidence import (
     candidate_facts, domain_statistics,
 )
 from hey_my_buddy.blackboard.routing.statistics import NEITHER, accumulate_cell, round_classification
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.protocol.stop import TERMINATION_REASONS
 from hey_my_buddy.protocol.usage import normalize_token_usage
 
@@ -99,6 +100,9 @@ class RoutingEvidenceTests(WorkflowTestCase):
 
     def facts(self, *buddies):
         rows = [{"buddy_id": str(index), **buddy} for index, buddy in enumerate(buddies or (BUDDY,))]
+        with self.board_.store.db.write() as db:
+            for buddy in rows:
+                ensure_model_service(db, buddy["harness"], buddy["provider"], buddy["model"], self.clock())
         with self.board_.store.db.read() as db:
             changes = db.total_changes
             value = candidate_facts(self.board_.store, db, rows, now=self.clock())
@@ -107,6 +111,9 @@ class RoutingEvidenceTests(WorkflowTestCase):
 
     def domain_facts(self, *buddies):
         rows = [{"buddy_id": str(index), **buddy} for index, buddy in enumerate(buddies or (BUDDY,))]
+        with self.board_.store.db.write() as db:
+            for buddy in rows:
+                ensure_model_service(db, buddy["harness"], buddy["provider"], buddy["model"], self.clock())
         with self.board_.store.db.read() as db:
             changes = db.total_changes
             value = domain_statistics(db, rows)
@@ -158,10 +165,12 @@ class RoutingEvidenceTests(WorkflowTestCase):
         run, _ = self.end_turn(self.new_run())
         self.accept_run(self.board_, run)
         self.classify([(run, "root", "debug")], [("root", None, None)])
-        key = tuple(BUDDY[field] for field in ("harness", "model", "effort"))
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE kind_statistics SET defects=1 WHERE harness=? AND model=? AND effort=?", key)
-            db.execute("UPDATE kind_cell_statistics SET defects=1 WHERE harness=? AND model=? AND effort=?"
+            from hey_my_buddy.blackboard.evaluation.models import current_model
+            key = (BUDDY["harness"], current_model(db, BUDDY["harness"], BUDDY["provider"], BUDDY["model"]),
+                   BUDDY["effort"])
+            db.execute("UPDATE kind_statistics SET defects=1 WHERE harness=? AND model_id=? AND effort=?", key)
+            db.execute("UPDATE kind_cell_statistics SET defects=1 WHERE harness=? AND model_id=? AND effort=?"
                        " AND domain_node_id='root' AND task_type='debug'", key)
         candidate = self.facts()[0]["statistics"]
         domain = self.domain_facts()[0]

@@ -2,6 +2,7 @@
 import sqlite3
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 
 
 class DomainSchemaTests(WorkflowTestCase):
@@ -82,15 +83,16 @@ class DomainSchemaTests(WorkflowTestCase):
 
     def test_summary_evidence_records_read_and_cited_state_with_natural_keys(self):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO kind_summaries VALUES('codex','fixture','high','Observed expertise','maintenance')")
+            model_id = ensure_model_service(db, 'codex', 'fixture', 'fixture', self.now)
+            db.execute("INSERT INTO kind_summaries VALUES('codex',?,'high','Observed expertise','maintenance')", (model_id,))
             with self.assertRaises(sqlite3.IntegrityError):
-                db.execute("INSERT INTO kind_summaries VALUES('codex','fixture','high','Duplicate','maintenance')")
-            db.execute("INSERT INTO kind_summary_evidence VALUES('codex','fixture','high',?,0)", (self.run["runId"],))
+                db.execute("INSERT INTO kind_summaries VALUES('codex',?,'high','Duplicate','maintenance')", (model_id,))
+            db.execute("INSERT INTO kind_summary_evidence VALUES('codex',?,'high',?,0)", (model_id, self.run["runId"]))
             self.assertEqual(db.execute("SELECT cited FROM kind_summary_evidence").fetchone()[0], 0)
             db.execute("UPDATE kind_summary_evidence SET cited=1")
             self.assertEqual(db.execute("SELECT cited FROM kind_summary_evidence").fetchone()[0], 1)
             with self.assertRaises(sqlite3.IntegrityError):
-                db.execute("INSERT INTO kind_summary_evidence VALUES('codex','fixture','high',?,0)", (self.run["runId"],))
+                db.execute("INSERT INTO kind_summary_evidence VALUES('codex',?,'high',?,0)", (model_id, self.run["runId"]))
             for column, value in (("effort", "missing"), ("run_id", "missing"),
                                   ("cited", None), ("cited", -1), ("cited", 2)):
                 with self.subTest(column=column), self.assertRaises(sqlite3.IntegrityError):

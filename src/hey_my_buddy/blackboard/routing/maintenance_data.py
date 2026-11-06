@@ -9,6 +9,7 @@ from ...protocol.task_types import TASK_TYPES
 from ...errors import BoardError
 from ...protocol.turn_input import turn_buddy
 from .evidence import kind_domain_statistics
+from ..evaluation.models import model_view
 from .statistics import NEITHER, PROVIDER_REJECTIONS, accumulate_cell, round_classification
 
 
@@ -37,7 +38,7 @@ PENDING_WHERE = """r.state IN ('accepted','concluded') AND (
         AND NOT EXISTS (
             SELECT 1 FROM kind_summary_evidence e WHERE e.run_id=r.run_id
             AND e.harness=json_extract(w.input_json,'$.context.buddy.harness')
-            AND e.model=json_extract(w.input_json,'$.context.buddy.model')
+            AND e.model_id=a.model_id
             AND e.effort=json_extract(w.input_json,'$.context.buddy.effort')
         )
     )
@@ -45,11 +46,18 @@ PENDING_WHERE = """r.state IN ('accepted','concluded') AND (
 
 
 def _kind(value):
-    return (value["harness"], value["model"], value["effort"])
+    return (value["harness"], value["model_id"] if "model_id" in value.keys() else value["modelId"],
+            value["effort"])
 
 
 def _kind_id(value):
     return json.dumps(_kind(value), ensure_ascii=False, separators=(",", ":"))
+
+
+def _kind_payload(connection, harness, model_id, effort):
+    view = model_view(connection, model_id)
+    return {"harness": harness, "modelId": model_id, "effort": effort,
+            "modelDisplayName": view["displayName"], "modelNames": view["names"]}
 
 
 def _node_rows(connection):
@@ -116,14 +124,15 @@ def build_packet(connection) -> dict | None:
     unread = defaultdict(set)
     participating = defaultdict(set)
     read = {(_kind(row), row["run_id"]) for row in connection.execute(
-        f"SELECT harness,model,effort,run_id FROM kind_summary_evidence WHERE run_id IN ({placeholders})", run_ids)}
+        f"SELECT harness,model_id,effort,run_id FROM kind_summary_evidence WHERE run_id IN ({placeholders})", run_ids)}
     for row in connection.execute(
         "SELECT w.run_id,w.turn_index,w.state,w.input_json,a.started_at,a.finished_at,"
-        " a.result_json FROM workflow_turns w"
+        " a.result_json,a.model_id FROM workflow_turns w"
         " LEFT JOIN attempts a ON a.attempt_id=w.attempt_id"
         f" WHERE w.run_id IN ({placeholders}) ORDER BY w.run_id,w.turn_index", run_ids):
         buddy = turn_buddy(row["input_json"])
-        kind = {key: buddy[key] for key in ("harness", "model", "effort")} if buddy is not None else None
+        kind = (_kind_payload(connection, buddy["harness"], row["model_id"], buddy["effort"])
+                if buddy is not None and row["model_id"] is not None else None)
         receipt = json.loads(row["result_json"]) if row["result_json"] else None
         category = round_classification(receipt) if row["state"] in _ENDED_TURNS else None
         if kind is not None and category == "ability":
@@ -190,19 +199,20 @@ def build_packet(connection) -> dict | None:
                        "turns": turns[row["run_id"]]},
         })
     summaries = {}
-    for row in connection.execute("SELECT harness,model,effort,text FROM kind_summaries"):
+    for row in connection.execute("SELECT harness,model_id,effort,text FROM kind_summaries"):
         key = _kind(row)
         if key in kinds:
             summaries[key] = {"text": row["text"], "citations": []}
-    for row in connection.execute("SELECT harness,model,effort,run_id FROM kind_summary_evidence WHERE cited=1"):
+    for row in connection.execute("SELECT harness,model_id,effort,run_id FROM kind_summary_evidence WHERE cited=1"):
         key = _kind(row)
         if key in summaries:
             summaries[key]["citations"].append(row["run_id"])
     # Only the summary targets' existing samples select comparison rows and cells.
     # Newly classified tasks contribute their cells on a later maintenance run.
-    comparison_kinds = [dict(row) for row in connection.execute(
-        "SELECT harness,model,effort FROM kind_statistics"
-        " ORDER BY harness,model,effort")]
+    comparison_kinds = [_kind_payload(connection, row["harness"], row["model_id"], row["effort"])
+                        for row in connection.execute(
+        "SELECT harness,model_id,effort FROM kind_statistics"
+        " ORDER BY harness,model_id,effort")]
     statistics = kind_domain_statistics(connection, comparison_kinds + list(kinds.values()))
     return {
         "microTasks": micro_tasks,
@@ -409,7 +419,7 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
                     if set(kind["unreadRunIds"]) & surviving}
     kinds_by_id = {kind["kindId"]: _kind(kind) for kind in packet["kinds"]}
     read = {(_kind(row), row["run_id"]) for row in connection.execute(
-        f"SELECT harness,model,effort,run_id FROM kind_summary_evidence WHERE run_id IN ({placeholders})", tuple(packet_run_ids))}
+        f"SELECT harness,model_id,effort,run_id FROM kind_summary_evidence WHERE run_id IN ({placeholders})", tuple(packet_run_ids))}
     missing_reads = {key: {run_id for run_id in kind["unreadRunIds"]
                           if run_id in surviving and (key, run_id) not in read}
                      for key, kind in packet_kinds.items()}
@@ -522,13 +532,13 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
                 errors.append(f"summaries[{key}]: cited micro task was deleted; rewrite summary")
                 continue
         connection.execute(
-            "INSERT INTO kind_summaries(harness,model,effort,text,maintenance_run_id) VALUES(?,?,?,?,?)"
-            " ON CONFLICT(harness,model,effort) DO UPDATE SET text=excluded.text,"
+            "INSERT INTO kind_summaries(harness,model_id,effort,text,maintenance_run_id) VALUES(?,?,?,?,?)"
+            " ON CONFLICT(harness,model_id,effort) DO UPDATE SET text=excluded.text,"
             " maintenance_run_id=excluded.maintenance_run_id", (*key, item["text"], maintenance_run_id))
-        connection.execute("UPDATE kind_summary_evidence SET cited=0 WHERE harness=? AND model=? AND effort=?", key)
+        connection.execute("UPDATE kind_summary_evidence SET cited=0 WHERE harness=? AND model_id=? AND effort=?", key)
         connection.executemany(
-            "INSERT INTO kind_summary_evidence(harness,model,effort,run_id,cited) VALUES(?,?,?,?,?)"
-            " ON CONFLICT(harness,model,effort,run_id) DO UPDATE SET cited=excluded.cited",
+            "INSERT INTO kind_summary_evidence(harness,model_id,effort,run_id,cited) VALUES(?,?,?,?,?)"
+            " ON CONFLICT(harness,model_id,effort,run_id) DO UPDATE SET cited=excluded.cited",
             [(*key, run_id, int(run_id in cited)) for run_id in missing_reads[key] | set(cited)])
         counts["summaries"] += 1
     return {"errors": errors, "written": counts}

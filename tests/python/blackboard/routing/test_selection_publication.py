@@ -50,6 +50,8 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         if kind == "quota":
             with self.board_.store.db.write() as db:
                 db.execute("UPDATE buddies SET provider='fixture-b' WHERE buddy_id=?", (B,))
+                from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
+                ensure_model_service(db, "dsh", "fixture-b", "bravo", self.board_.store.now())
         request, first = self.start(three=True, micro_task=True, required_capabilities=("fixture:required",) if kind == "capability" else ())
         old_dispatch = self.dispatch_of(first["task"]["taskId"])
         with self.board_.store.db.read() as db:

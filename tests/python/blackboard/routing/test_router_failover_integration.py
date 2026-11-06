@@ -13,6 +13,7 @@ from dataclasses import replace
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence, decision
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.buddy.runtime.command import CommandAdapter
 from hey_my_buddy.buddy.runtime.execution import Execution
 from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
@@ -455,6 +456,7 @@ class FailoverTests(RouterDispatchTestCase):
     def test_next_dispatch_has_no_whole_input_ceiling(self):
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET model=? WHERE buddy_id=?", ("b" * 80, B))
+            ensure_model_service(db, "dsh", "fixture", "b" * 80, self.board_.store.now())
         request, first = self.start(three=True)
         result = self.report(first, self.failure(first))
         self.assertEqual(result["decision"]["status"], "queued")
@@ -767,7 +769,13 @@ def install_unfenced_edit_case(name, mutate):
 for name, kwargs in (("list", {"ids": [B, A]}), ("mode", {"mode": "review"}),
                      ("preset", {"budget": "brief"}), ("interval", {"interval": 30})):
     install_unfenced_edit_case(name, lambda self, request, claim, output, kwargs=kwargs: self.set_settings(**kwargs))
-install_unfenced_edit_case("identity", execute_change("UPDATE buddies SET model='replacement' WHERE buddy_id=?", (A,)))
+def replace_model_identity(self, request, claim, output):
+    with self.board_.store.db.write() as db:
+        db.execute("UPDATE buddies SET model='replacement' WHERE buddy_id=?", (A,))
+        ensure_model_service(db, 'dsh', 'fixture', 'replacement', self.board_.store.now())
+
+
+install_unfenced_edit_case("identity", replace_model_identity)
 
 
 install_change_case("route", execute_change("UPDATE workflow_routes SET state='fenced'"), micro_task=True)

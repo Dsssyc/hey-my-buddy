@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 36
+SCHEMA_VERSION = 37
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 AGENT_TOKEN_VERSION = 1
@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     model_harness       TEXT,
     model_provider      TEXT,
     model_model         TEXT,
+    model_id            TEXT REFERENCES models(model_id) ON DELETE RESTRICT,
     result_json         TEXT,
     result_form         TEXT CHECK (result_form IN ('archived-report-v1','current-report-v2')),
     shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,
@@ -207,6 +208,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempts_effective_unique ON attempts(task_id)
 CREATE INDEX IF NOT EXISTS attempts_active_idx ON attempts(execution_state);
 CREATE INDEX IF NOT EXISTS attempts_model_service_idx
     ON attempts(model_harness, model_provider, model_model) WHERE model_model IS NOT NULL;
+"""
+
+MODEL_IDENTITY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS models (
+    model_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS model_mappings (
+    mapping_id TEXT PRIMARY KEY,
+    harness TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
+    created_at TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('same-name','profile','user')),
+    evidence_json TEXT
+);
+CREATE INDEX IF NOT EXISTS model_mappings_service_idx
+    ON model_mappings(harness, provider, model);
+CREATE TRIGGER IF NOT EXISTS model_mappings_no_update BEFORE UPDATE ON model_mappings
+BEGIN SELECT RAISE(ABORT, 'model mappings are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS model_mappings_no_delete BEFORE DELETE ON model_mappings
+BEGIN SELECT RAISE(ABORT, 'model mappings are append-only'); END;
 """
 
 #: One row per recorded execution root. POSIX roots carry their boot session and
@@ -401,13 +425,10 @@ CREATE TABLE IF NOT EXISTS catalog_current (
 );
 """,
     """
-CREATE TABLE IF NOT EXISTS model_service_notes (
-    harness    TEXT NOT NULL,
-    provider   TEXT NOT NULL,
-    model      TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS model_notes (
+    model_id   TEXT PRIMARY KEY REFERENCES models(model_id) ON DELETE RESTRICT,
     text       TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (harness, provider, model)
+    updated_at TEXT NOT NULL
 );
 """,
     """
@@ -1172,20 +1193,20 @@ CREATE TABLE IF NOT EXISTS micro_task_classifications (
 
 CREATE TABLE IF NOT EXISTS kind_summaries (
     harness            TEXT NOT NULL,
-    model              TEXT NOT NULL,
+    model_id           TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
     effort             TEXT NOT NULL,
     text               TEXT NOT NULL,
     maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(maintenance_run_id) ON DELETE RESTRICT,
-    PRIMARY KEY (harness, model, effort)
+    PRIMARY KEY (harness, model_id, effort)
 );
 CREATE TABLE IF NOT EXISTS kind_summary_evidence (
     harness TEXT NOT NULL,
-    model   TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
     effort  TEXT NOT NULL,
     run_id  TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     cited   INTEGER NOT NULL CHECK (cited IN (0, 1)),
-    PRIMARY KEY (harness, model, effort, run_id),
-    FOREIGN KEY (harness, model, effort) REFERENCES kind_summaries(harness, model, effort) ON DELETE RESTRICT
+    PRIMARY KEY (harness, model_id, effort, run_id),
+    FOREIGN KEY (harness, model_id, effort) REFERENCES kind_summaries(harness, model_id, effort) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS kind_summary_evidence_run_idx ON kind_summary_evidence(run_id);
 
@@ -1198,7 +1219,7 @@ CREATE TABLE IF NOT EXISTS routing_judgments (
 STATISTICS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS kind_statistics (
     harness TEXT NOT NULL,
-    model TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
     effort TEXT NOT NULL,
     samples INTEGER NOT NULL CHECK (typeof(samples)='integer' AND samples > 0),
     successes INTEGER NOT NULL CHECK (typeof(successes)='integer' AND successes >= 0),
@@ -1206,12 +1227,12 @@ CREATE TABLE IF NOT EXISTS kind_statistics (
     rework_rounds INTEGER NOT NULL CHECK (typeof(rework_rounds)='integer' AND rework_rounds >= 0),
     failures INTEGER NOT NULL CHECK (typeof(failures)='integer' AND failures >= 0),
     defects INTEGER NOT NULL DEFAULT 0 CHECK (typeof(defects)='integer' AND defects >= 0 AND defects <= successes),
-    PRIMARY KEY (harness, model, effort),
+    PRIMARY KEY (harness, model_id, effort),
     CHECK (successes + failures = samples)
 );
 CREATE TABLE IF NOT EXISTS kind_cell_statistics (
     harness TEXT NOT NULL,
-    model TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
     effort TEXT NOT NULL,
     domain_node_id TEXT NOT NULL REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
     task_type TEXT NOT NULL CHECK (task_type IN ('create','change','debug','verify','review','research','write')),
@@ -1221,12 +1242,12 @@ CREATE TABLE IF NOT EXISTS kind_cell_statistics (
     rework_rounds INTEGER NOT NULL CHECK (typeof(rework_rounds)='integer' AND rework_rounds >= 0),
     failures INTEGER NOT NULL CHECK (typeof(failures)='integer' AND failures >= 0),
     defects INTEGER NOT NULL DEFAULT 0 CHECK (typeof(defects)='integer' AND defects >= 0 AND defects <= successes),
-    PRIMARY KEY (harness, model, effort, domain_node_id, task_type),
+    PRIMARY KEY (harness, model_id, effort, domain_node_id, task_type),
     CHECK (successes + failures = samples)
 );
 CREATE TABLE IF NOT EXISTS kind_statistics_buckets (
     harness TEXT NOT NULL,
-    model TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
     effort TEXT NOT NULL,
     metric TEXT NOT NULL CHECK (metric IN ('delivery_seconds','input_tokens','cached_input_tokens','output_tokens')),
     sign INTEGER NOT NULL CHECK (typeof(sign)='integer' AND sign IN (-1,0,1)),
@@ -1234,12 +1255,12 @@ CREATE TABLE IF NOT EXISTS kind_statistics_buckets (
     count INTEGER NOT NULL CHECK (typeof(count)='integer' AND count > 0),
     CHECK (sign != 0 OR bucket = 0),
     CHECK (sign != -1 OR metric = 'delivery_seconds'),
-    PRIMARY KEY (harness, model, effort, metric, sign, bucket),
-    FOREIGN KEY (harness, model, effort) REFERENCES kind_statistics(harness, model, effort) ON DELETE RESTRICT
+    PRIMARY KEY (harness, model_id, effort, metric, sign, bucket),
+    FOREIGN KEY (harness, model_id, effort) REFERENCES kind_statistics(harness, model_id, effort) ON DELETE RESTRICT
 );
 CREATE TABLE IF NOT EXISTS kind_cell_statistics_buckets (
     harness TEXT NOT NULL,
-    model TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
     effort TEXT NOT NULL,
     domain_node_id TEXT NOT NULL,
     task_type TEXT NOT NULL,
@@ -1249,9 +1270,9 @@ CREATE TABLE IF NOT EXISTS kind_cell_statistics_buckets (
     count INTEGER NOT NULL CHECK (typeof(count)='integer' AND count > 0),
     CHECK (sign != 0 OR bucket = 0),
     CHECK (sign != -1 OR metric = 'delivery_seconds'),
-    PRIMARY KEY (harness, model, effort, domain_node_id, task_type, metric, sign, bucket),
-    FOREIGN KEY (harness, model, effort, domain_node_id, task_type)
-        REFERENCES kind_cell_statistics(harness, model, effort, domain_node_id, task_type) ON DELETE RESTRICT
+    PRIMARY KEY (harness, model_id, effort, domain_node_id, task_type, metric, sign, bucket),
+    FOREIGN KEY (harness, model_id, effort, domain_node_id, task_type)
+        REFERENCES kind_cell_statistics(harness, model_id, effort, domain_node_id, task_type) ON DELETE RESTRICT
 );
 CREATE TABLE IF NOT EXISTS buddy_infrastructure_failures (
     harness TEXT NOT NULL,
@@ -1321,7 +1342,7 @@ CREATE TABLE IF NOT EXISTS issue_deliveries (
     PRIMARY KEY (task_id, occurrence_seq)
 );
 """
-SCHEMA = "\n".join((CORE_SCHEMA, ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, CORE_SCHEMA_TAIL,
+SCHEMA = "\n".join((MODEL_IDENTITY_SCHEMA, CORE_SCHEMA, ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, CORE_SCHEMA_TAIL,
                     EVENTS_ROUTER_CLAIMED_INDEX_DDL, MESSAGES_DDL, ALLOCATION_REVOCATIONS_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
                     HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA, DOMAIN_EVALUATION_SCHEMA, STATISTICS_SCHEMA,
                     CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA, FIX_SCHEMA))

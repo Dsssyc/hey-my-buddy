@@ -226,6 +226,23 @@ def load_issue_stock(fixture: dict) -> None:
         connection.executescript(stock.decode('utf-8'))
 
 
+def load_schema36_model_stock(connection: sqlite3.Connection) -> None:
+    """Derive retained model-key forms on a private schema-36 floor upgrade.
+
+    The generated SQL includes the historical schema-36 writer's cell rows.
+    """
+    metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
+    stock = (FIXTURE / 'schema-36-model-stock.sql').read_bytes()
+    provenance = metadata['modelStock']
+    if (_sha(stock) != provenance['sha256']
+            or _sha((FIXTURE / 'board.sql').read_bytes()) != provenance['baseSha256']
+            or _sha((FIXTURE / 'schema-31-stock.sql').read_bytes()) != provenance['schema31StockSha256']):
+        raise ValueError('Schema-36 model stock digest changed')
+    if connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] != '36':
+        raise ValueError('Model stock requires the private schema-36 board')
+    connection.executescript(stock.decode('utf-8'))
+
+
 def load_delivered_stock(fixture: dict) -> None:
     """Add the floor writer's delivered v3 run and its bound physical evidence."""
     metadata = json.loads((FIXTURE / "metadata.json").read_text(encoding="utf-8"))

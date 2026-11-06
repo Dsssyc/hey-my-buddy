@@ -33,6 +33,9 @@ FLOOR_SCHEMA = 30
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
 SCHEMA33_WRITER_COMMIT = "e3459d8a3b03c06d2af192382a788e051ced9a64"
+SCHEMA36_STATISTICS_COMMIT = "de833698f8a59e6ff0cba6b01c4a98ee8bd20594"
+SCHEMA36_STATISTICS_PATH = "src/hey_my_buddy/blackboard/routing/statistics.py"
+SCHEMA36_MAINTENANCE_PATH = "src/hey_my_buddy/blackboard/routing/maintenance_data.py"
 AT = "2026-01-01T00:00:00.000Z"
 PROFILES = ["codex:openai:fixture-alpha:high", "codex:openai:fixture-beta:high"]
 THIRD_CANDIDATE = "codex:openai:fixture-gamma:high"
@@ -2177,9 +2180,214 @@ def issue_stock_main():
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 
 
+def populate_model_floor(args):
+    """Run the released catalog and policy writers on a restored private floor."""
+    from copy import deepcopy
+    from hey_my_buddy.blackboard.catalog import catalog_store
+    from hey_my_buddy.blackboard.evaluation import user_policy
+    from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
+    from hey_my_buddy.blackboard.store.store import BoardStore
+
+    work, fixed = args.work_dir.resolve(), args.model_stock_for.resolve()
+    board = BoardStore(work / "state", clock=lambda: AT)
+    evaluation = EvaluationStore(board, clock=lambda: AT)
+    with board.db.read() as connection:
+        previous = {row[0] for row in connection.execute("SELECT buddy_id FROM buddies")}
+        catalog = json.loads(connection.execute(
+            "SELECT payload_json FROM evaluation_catalog ORDER BY rowid LIMIT 1").fetchone()[0])
+        floor_note = connection.execute(
+            "SELECT text FROM model_service_notes WHERE harness='codex' AND provider='openai' "
+            "AND model='fixture-alpha'").fetchone()[0]
+    original = next(provider for provider in catalog["providers"] if provider["provider"] == "openai")
+    for provider_name, model_name in (("mirror", "fixture-alpha"),
+                                      ("alternate", "fixture-beta")):
+        provider = deepcopy(original)
+        provider["provider"] = provider["displayName"] = provider_name
+        provider["models"] = [model for model in provider["models"] if model["id"] == model_name]
+        catalog["providers"].append(provider)
+    observation = catalog_store.begin(evaluation, "schema36-model-floor")
+    recorded = catalog_store.record(evaluation, catalog, observation["observationId"])
+    assert recorded["appliedHarnesses"] == ["codex"], recorded
+    changes = [
+        {"harness": "codex", "provider": "mirror", "model": "fixture-alpha", "text": floor_note},
+        {"harness": "codex", "provider": "openai", "model": "fixture-beta",
+         "text": "提供方 openai 的备注。"},
+        {"harness": "codex", "provider": "alternate", "model": "fixture-beta",
+         "text": "提供方 alternate 的备注。"},
+    ]
+    with board.db.write() as connection:
+        user_policy.publish(evaluation, connection, now=AT,
+                            params={"modelServiceNoteChanges": changes})
+    with board.db.read() as connection:
+        rows = {
+            "evaluation_catalog": [dict(connection.execute(
+                "SELECT * FROM evaluation_catalog WHERE discovery_id=?",
+                (recorded["discoveryId"],)).fetchone())],
+            "buddies": [dict(row) for row in connection.execute("SELECT * FROM buddies ORDER BY rowid")
+                        if row["buddy_id"] not in previous],
+            "model_service_notes": [dict(row) for row in connection.execute(
+                "SELECT * FROM model_service_notes ORDER BY rowid")
+                if (row["provider"], row["model"]) in
+                   {("mirror", "fixture-alpha"), ("openai", "fixture-beta"),
+                    ("alternate", "fixture-beta")}],
+        }
+    assert len(rows["evaluation_catalog"]) == 1 and len(rows["buddies"]) == 2 \
+        and len(rows["model_service_notes"]) == 3, rows
+    (work / "model-floor-writer.json").write_text(
+        json.dumps({"catalog": catalog, "noteChanges": changes, "rows": rows},
+                   ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+
+def populate_model_maintenance(args):
+    """Run the pinned schema-36 maintenance writer on the upgraded private board."""
+    from hey_my_buddy.blackboard.routing import maintenance_data
+
+    work = args.work_dir.resolve()
+    with sqlite3.connect(work / "state/board.sqlite3") as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        packet = maintenance_data.build_packet(connection)
+        target = "00000000-0000-0000-0000-000000000044"
+        kind = next(item for item in packet["kinds"] if item["harness"] == "codex"
+                    and item["model"] == "fixture-alpha" and item["effort"] == "high"
+                    and target in item["unreadRunIds"])
+        packet["microTasks"] = [item for item in packet["microTasks"] if item["runId"] == target]
+        packet["classificationRunIds"] = [target]
+        kind["unreadRunIds"] = [target]
+        kind["citationRunIds"] = [target]
+        packet["kinds"] = [kind]
+        answer = {"newNodes": [{"id": "schema36-model-domain", "name": "Fixture model domain",
+                                "definition": "Classification for the accepted floor run", "parentId": None}],
+                  "merges": [],
+                  "classifications": [{"runId": target, "domainNodeId": "schema36-model-domain",
+                                       "taskType": "change"}],
+                  "summaries": {kind["kindId"]: {"text": "Fixture summary for the accepted floor kind.",
+                                                 "citations": [target]}}}
+        tables = ("domain_nodes", "micro_task_classifications", "kind_summaries",
+                  "kind_summary_evidence", "kind_cell_statistics",
+                  "kind_cell_statistics_buckets")
+        before = {table: {row[0] for row in connection.execute(f'SELECT rowid FROM "{table}"')}
+                  for table in tables}
+        result = maintenance_data.apply_answer(connection, packet=packet, answer=answer,
+                                               maintenance_run_id="maint-schema31-stock")
+        assert not result["errors"] and all(result["written"][key] == 1 for key in
+            ("nodes", "classifications", "summaries")), result
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        rows = {table: [{key: value for key, value in dict(row).items() if key != "_source_rowid"}
+                        for row in connection.execute(
+                            f'SELECT rowid AS _source_rowid,* FROM "{table}" ORDER BY rowid')
+                        if row["_source_rowid"] not in before[table]]
+                for table in tables}
+        assert all(rows.values()), {table: len(items) for table, items in rows.items()}
+    (work / "model-maintenance-writer.json").write_text(
+        json.dumps({"packet": packet, "answer": answer, "result": result, "rows": rows},
+                   ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+
+def derive_schema36_model_stock(args):
+    """Regenerate name-keyed stock through the floor and schema-36 writers."""
+    from hey_my_buddy.blackboard.store import (
+        schema_30_31, schema_31_32, schema_32_33, schema_33_34,
+        schema_34_35, schema_35_36,
+    )
+
+    fixed = args.model_stock_for.resolve()
+    metadata_path = fixed / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    base = (fixed / "board.sql").read_bytes()
+    if digest(base) != metadata["sqlSha256"]:
+        raise ValueError("Fixed floor SQL digest changed")
+    import runpy
+    root = Path(__file__).resolve().parents[1]
+    loader = runpy.run_path(str(root / "tests/python/blackboard/store/upgrade_fixture.py"))
+    scratch = args.work_dir.resolve()
+    if not scratch.is_relative_to(root / "tmp"):
+        raise ValueError("work-dir must be a new directory inside this checkout's ignored tmp/")
+    scratch.mkdir(parents=True, exist_ok=False)
+    (scratch / "scratch").mkdir()
+    (scratch / "home").mkdir(mode=0o700)
+    fixture = loader["load_fixture"](scratch / "state")
+    env = private_environment(scratch)
+    env.update(HOME=str(scratch / "home"), CODEX_HOME=str(scratch / "home/codex"),
+               CLAUDE_CONFIG_DIR=str(scratch / "home/claude"),
+               XDG_CONFIG_HOME=str(scratch / "home/config"),
+               XDG_DATA_HOME=str(scratch / "home/data"),
+               XDG_CACHE_HOME=str(scratch / "home/cache"))
+
+    def archived_source(commit, label):
+        source = scratch / label
+        source.mkdir()
+        archive = scratch / f"{label}.tar"
+        with archive.open("wb") as stream:
+            run(["git", "archive", commit], cwd=root, stdout=stream)
+        with tarfile.open(archive) as stream:
+            stream.extractall(source, filter="data")
+        run(["uv", "sync", "--frozen", "--no-install-project", "--link-mode", "copy",
+             "--project", str(source)], cwd=root, env=env)
+        return source
+
+    floor_source = archived_source(FLOOR_COMMIT, "floor-source")
+    floor_env = dict(env, PYTHONPATH=str(floor_source / "src"))
+    run(["uv", "run", "--no-sync", "--project", str(floor_source), "python",
+         str(Path(__file__).resolve()), "--populate-model-floor", "--work-dir", str(scratch),
+         "--model-stock-for", str(fixed)], cwd=root, env=floor_env)
+    floor_record = json.loads((scratch / "model-floor-writer.json").read_text(encoding="utf-8"))
+    with sqlite3.connect(fixture["state"] / "board.sqlite3") as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=OFF")
+        for step in (schema_30_31, schema_31_32, schema_32_33,
+                     schema_33_34, schema_34_35, schema_35_36):
+            step.upgrade(connection)
+            if step is schema_30_31:
+                connection.executescript((fixed / "schema-31-stock.sql").read_text(encoding="utf-8"))
+        if connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] != "36":
+            raise ValueError("Model stock requires schema 36")
+        if connection.execute("PRAGMA foreign_key_check").fetchall():
+            raise ValueError("Private schema-36 board has broken foreign keys")
+    maintenance_source = archived_source(SCHEMA36_STATISTICS_COMMIT, "schema36-source")
+    maintenance_env = dict(env, PYTHONPATH=str(maintenance_source / "src"))
+    run(["uv", "run", "--no-sync", "--project", str(maintenance_source), "python",
+         str(Path(__file__).resolve()), "--populate-model-maintenance", "--work-dir", str(scratch),
+         "--model-stock-for", str(fixed)], cwd=root, env=maintenance_env)
+    maintenance_record = json.loads((scratch / "model-maintenance-writer.json").read_text(encoding="utf-8"))
+    with sqlite3.connect(":memory:") as connection:
+        floor_sql = insert_stock(connection, floor_record["rows"])
+        maintenance_sql = insert_stock(connection, maintenance_record["rows"])
+    stock = ("-- Schema-30 buddy and note rows from the released catalog and policy writers.\n"
+             + floor_sql + "-- Schema-36 domain, classification, summary and cell rows from the pinned maintenance writer.\n"
+             + maintenance_sql)
+    target = fixed / "schema-36-model-stock.sql"
+    target.write_text(stock, encoding="utf-8")
+    floor_sources = (
+        "src/hey_my_buddy/blackboard/catalog/catalog_store.py",
+        "src/hey_my_buddy/blackboard/evaluation/user_policy.py",
+    )
+    metadata["modelStock"] = {
+        "baseSha256": digest(base),
+        "schema31StockSha256": digest((fixed / "schema-31-stock.sql").read_bytes()),
+        "generatorSha256": digest(Path(__file__).read_bytes()),
+        "floorWriterCommit": FLOOR_COMMIT,
+        "floorWriterSources": {name: digest((floor_source / name).read_bytes()) for name in floor_sources},
+        "floorWriterRecordSha256": digest((scratch / "model-floor-writer.json").read_bytes()),
+        "floorStockSha256": digest(floor_sql.encode("utf-8")),
+        "writerCommit": SCHEMA36_STATISTICS_COMMIT,
+        "writerPath": SCHEMA36_MAINTENANCE_PATH,
+        "writerSha256": digest((maintenance_source / SCHEMA36_MAINTENANCE_PATH).read_bytes()),
+        "statisticsWriterPath": SCHEMA36_STATISTICS_PATH,
+        "statisticsWriterSha256": digest((maintenance_source / SCHEMA36_STATISTICS_PATH).read_bytes()),
+        "maintenanceWriterRecordSha256": digest((scratch / "model-maintenance-writer.json").read_bytes()),
+        "maintenanceStockSha256": digest(maintenance_sql.encode("utf-8")),
+        "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/<new-private-dir> --model-stock-for tests/fixtures/upgrade-floor",
+        "sha256": digest(stock.encode("utf-8")),
+    }
+    metadata.pop("modelStockSha256", None)
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                             encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--work-dir", type=Path, required=True)
+    parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--output-dir", type=Path, help="Full generated stock destination; supplement mode defaults to a work-dir sibling")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--python", type=Path, help="Use an already prepared read-only dependency interpreter")
@@ -2188,17 +2396,28 @@ def main():
     parser.add_argument("--delivered-stock-for", type=Path, help="Derive a delivered v3 run and its physical resources from the floor writers")
     parser.add_argument("--workspace-growth-stock-for", type=Path, help="Generate schema-33 workspace reference stock on an upgraded private floor")
     parser.add_argument("--legacy-stock-for", type=Path, help="Derive retained v1/v2 profiles from the fixed floor; never rewrite the base")
+    parser.add_argument("--model-stock-for", type=Path, help="Generate schema-36 model stock through historical catalog, policy and maintenance writers")
+    parser.add_argument("--populate-model-floor", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--populate-model-maintenance", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--populate-schema33", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--populate", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--verify", action="store_true", help="Only restore and validate; no old-source imports")
     args = parser.parse_args()
+    if args.work_dir is None:
+        parser.error("--work-dir is required for this mode")
     if args.output_dir is None:
         args.output_dir = (args.work_dir.with_name(args.work_dir.name + "-generated")
                            if (args.cleanup_stock_for or args.reservation_stock_for or args.delivered_stock_for or args.workspace_growth_stock_for or args.legacy_stock_for) and not args.verify else Path("tests/fixtures/upgrade-floor"))
     if any(fixed and args.output_dir.resolve() == fixed.resolve()
            for fixed in (args.cleanup_stock_for, args.reservation_stock_for, args.delivered_stock_for, args.workspace_growth_stock_for, args.legacy_stock_for)):
         parser.error("supplements require a separate output-dir to preserve the fixed floor payloads")
-    if args.legacy_stock_for:
+    if args.populate_model_floor:
+        populate_model_floor(args)
+    elif args.populate_model_maintenance:
+        populate_model_maintenance(args)
+    elif args.model_stock_for:
+        derive_schema36_model_stock(args)
+    elif args.legacy_stock_for:
         derive_legacy_stock(args)
     elif args.verify:
         args.work_dir.mkdir(parents=True, exist_ok=False)

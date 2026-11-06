@@ -73,8 +73,10 @@ class MaintenancePendingPerformanceTests(WorkflowTestCase):
             adapter="command", argv=["true"], cwd=str(self.workdir("maintenance")),
         )["task"]["runId"]
         maintenance_id = "pending-benchmark-maintenance"
-        kind = (BUDDY["harness"], BUDDY["model"], BUDDY["effort"])
         with board.store.db.write() as connection:
+            from hey_my_buddy.blackboard.evaluation.models import current_model
+            kind = (BUDDY["harness"], current_model(connection, BUDDY["harness"], BUDDY["provider"], BUDDY["model"]),
+                    BUDDY["effort"])
             now = board.store.now()
             connection.execute(
                 "INSERT INTO maintenance_runs VALUES(?, 'manual','fixture',?, 'completed',NULL,NULL,?,?)",

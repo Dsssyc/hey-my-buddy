@@ -13,9 +13,19 @@ from hey_my_buddy.protocol.structured_schema import schema_errors
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol.task_types import TASK_TYPES
+from hey_my_buddy.blackboard.evaluation.models import current_model, ensure_model_service
+
+
+def packet_key(kind):
+    return tuple(kind[field] for field in ("harness", "modelId", "effort"))
 
 
 class MaintenanceDataTests(WorkflowTestCase):
+    def model_key(self, db, buddy):
+        return (buddy["harness"], ensure_model_service(
+            db, buddy["harness"], buddy.get("provider", "fixture"), buddy["model"], self.board_.store.now()),
+                buddy["effort"])
+
     def setUp(self):
         super().setUp()
         self.board_ = self.board()
@@ -129,8 +139,8 @@ class MaintenanceDataTests(WorkflowTestCase):
         first, second = (run["runId"] for run in self.runs)
         original = packet["kinds"][0]
         other = deepcopy(original)
-        other["model"] = "other-model"
-        other["kindId"] = json.dumps([other[key] for key in ("harness", "model", "effort")],
+        other["modelId"] = "other-model-id"
+        other["kindId"] = json.dumps(packet_key(other),
                                       separators=(",", ":"))
         original["citationRunIds"] = [first]
         original["unreadRunIds"] = [first]
@@ -145,7 +155,7 @@ class MaintenanceDataTests(WorkflowTestCase):
         answer["summaries"][original["kindId"]]["citations"] = [second]
         self.assertIn("enum", schema_errors(answer, schema))
         answer["summaries"][original["kindId"]]["citations"] = [first]
-        answer["summaries"][json.dumps([original["harness"], other["model"], "invalid-effort"])] = {
+        answer["summaries"][json.dumps([original["harness"], other["modelId"], "invalid-effort"])] = {
             "text": "Invalid combination", "citations": []}
         self.assertIn("additionalProperties", schema_errors(answer, schema))
         packet["kinds"] = []
@@ -159,7 +169,7 @@ class MaintenanceDataTests(WorkflowTestCase):
                             cwd=str(self.workdir("older-evidence")), kind="existing")
         self.finish_turn(self.board_, self.claim(self.board_, run_id=prior["runId"]))
         self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": prior["runId"]}))
-        key = tuple(kind[field] for field in ("harness", "model", "effort"))
+        key = packet_key(kind)
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO domain_nodes VALUES('older','Older','Previous expertise',NULL,NULL,?)", (self.maintenance_id,))
             db.execute("INSERT INTO micro_task_classifications VALUES(?,'older','review',?)", (prior["runId"], self.maintenance_id))
@@ -223,9 +233,10 @@ class MaintenanceDataTests(WorkflowTestCase):
 
     def test_packet_reads_kind_counts_and_real_provider_failure_columns(self):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,"
+            ensure_model_service(db, BUDDY["harness"], "other-provider", BUDDY["model"], self.board_.store.now())
+            db.execute("INSERT INTO kind_statistics(harness,model_id,effort,samples,successes,"
                        "first_passes,rework_rounds,failures,defects) VALUES(?,?,?,2,1,1,0,1,1)",
-                       (BUDDY["harness"], BUDDY["model"], BUDDY["effort"]))
+                       self.model_key(db, BUDDY))
             db.executemany(
                 "INSERT INTO buddy_infrastructure_failures(harness,provider,model,effort,count,last_at)"
                 " VALUES(?,?,?,?,?,?)",
@@ -236,8 +247,10 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertEqual(len(packet["kinds"]), 1)
         self.assertEqual(packet["comparisonStatistics"], [])
         kind = packet["kinds"][0]
-        self.assertEqual({field: kind[field] for field in ("harness", "model", "effort")},
-                         {field: BUDDY[field] for field in ("harness", "model", "effort")})
+        with self.board_.store.db.read() as db:
+            self.assertEqual(packet_key(kind),
+                             (BUDDY["harness"], current_model(db, BUDDY["harness"], BUDDY["provider"], BUDDY["model"]), BUDDY["effort"]))
+        self.assertEqual(kind["modelDisplayName"], BUDDY["model"])
         self.assertEqual((kind["statistics"]["overall"]["samples"],
                           kind["statistics"]["overall"]["failures"],
                           kind["statistics"]["overall"]["defects"]), (2, 1, 1))
@@ -246,21 +259,21 @@ class MaintenanceDataTests(WorkflowTestCase):
                          {BUDDY["provider"]: 2, "other-provider": 3})
 
     def test_comparison_statistics_include_sampled_kinds_outside_summary_batch(self):
-        current = tuple(BUDDY[field] for field in ("harness", "model", "effort"))
-        peer = ("codex", "retired-peer", "high")
-        unrelated = ("claude", "unrelated-peer", "low")
         with self.board_.store.db.write() as db:
+            current = self.model_key(db, BUDDY)
+            peer = self.model_key(db, {"harness": "codex", "model": "retired-peer", "effort": "high"})
+            unrelated = self.model_key(db, {"harness": "claude", "model": "unrelated-peer", "effort": "low"})
             db.executemany("INSERT INTO domain_nodes VALUES(?,?,?,?,?,?)", [
                 ("systems", "Systems", "Systems work", None, None, self.maintenance_id),
                 ("parser", "Parser", "Parser work", "systems", None, self.maintenance_id),
                 ("old-parser", "Old parser", "Same expertise", None, "parser", self.maintenance_id),
                 ("writing", "Writing", "Writing work", None, None, self.maintenance_id)])
             db.executemany(
-                "INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,rework_rounds,failures)"
+                "INSERT INTO kind_statistics(harness,model_id,effort,samples,successes,first_passes,rework_rounds,failures)"
                 " VALUES(?,?,?,?,?,?,?,?)",
                 [(*current, 2, 1, 1, 0, 1), (*peer, 3, 2, 1, 1, 1), (*unrelated, 1, 1, 1, 0, 0)])
             db.executemany(
-                "INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,samples,successes,"
+                "INSERT INTO kind_cell_statistics(harness,model_id,effort,domain_node_id,task_type,samples,successes,"
                 "first_passes,rework_rounds,failures) VALUES(?,?,?,?,?,?,?,?,?,?)", [
                     (*current, "parser", "debug", 2, 1, 1, 0, 1),
                     (*peer, "old-parser", "debug", 2, 1, 0, 1, 1),
@@ -272,10 +285,10 @@ class MaintenanceDataTests(WorkflowTestCase):
                        (self.runs[0]["runId"], self.maintenance_id))
         packet = self.packet()
         self.assertEqual(len(packet["kinds"]), 1)
-        self.assertEqual(packet["kinds"][0]["model"], BUDDY["model"])
-        comparisons = {tuple(kind[field] for field in ("harness", "model", "effort")): kind["statistics"]
+        self.assertEqual(packet["kinds"][0]["modelDisplayName"], BUDDY["model"])
+        comparisons = {packet_key(kind): kind["statistics"]
                        for kind in packet["comparisonStatistics"]}
-        targets = {tuple(kind[field] for field in ("harness", "model", "effort")) for kind in packet["kinds"]}
+        targets = {packet_key(kind) for kind in packet["kinds"]}
         self.assertEqual(targets, {current})
         self.assertTrue(targets.isdisjoint(comparisons))
         self.assertEqual(set(comparisons), {peer, unrelated})
@@ -303,13 +316,14 @@ class MaintenanceDataTests(WorkflowTestCase):
 
     def test_unclassified_tasks_do_not_select_peer_cells_without_target_samples(self):
         with self.board_.store.db.write() as db:
+            peer = self.model_key(db, {"harness": "codex", "model": "peer", "effort": "high"})
             db.execute("INSERT INTO domain_nodes VALUES('parser','Parser','Parser work',NULL,NULL,?)",
                        (self.maintenance_id,))
-            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
-                       "rework_rounds,failures) VALUES('codex','peer','high',1,1,1,0,0)")
-            db.execute("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,samples,"
+            db.execute("INSERT INTO kind_statistics(harness,model_id,effort,samples,successes,first_passes,"
+                       "rework_rounds,failures) VALUES(?,?,?,1,1,1,0,0)", peer)
+            db.execute("INSERT INTO kind_cell_statistics(harness,model_id,effort,domain_node_id,task_type,samples,"
                        "successes,first_passes,rework_rounds,failures)"
-                       " VALUES('codex','peer','high','parser','debug',1,1,1,0,0)")
+                       " VALUES(?,?,?,'parser','debug',1,1,1,0,0)", peer)
         packet = self.packet()
         self.assertTrue(all(item["classification"] is None for item in packet["microTasks"]))
         self.assertEqual(len(packet["comparisonStatistics"]), 1)
@@ -326,73 +340,76 @@ class MaintenanceDataTests(WorkflowTestCase):
         view = self.board_.call("workflow_get", {"runId": second["runId"]})
         self.accept_run(self.board_, view)
         with self.board_.store.db.write() as db:
+            current = self.model_key(db, BUDDY)
+            second_key = self.model_key(db, second_buddy)
+            peer_key = self.model_key(db, {"harness": "codex", "model": "peer", "effort": "high"})
             db.executemany("INSERT INTO domain_nodes VALUES(?,?,?,NULL,NULL,?)", [
                 (domain, domain, domain + " work", self.maintenance_id) for domain in ("parser", "writing")])
-            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
+            db.execute("INSERT INTO kind_statistics(harness,model_id,effort,samples,successes,first_passes,"
                        "rework_rounds,failures) VALUES(?,?,?,1,1,1,0,0)",
-                       tuple(BUDDY[key] for key in ("harness", "model", "effort")))
-            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
-                       "rework_rounds,failures) VALUES('codex','peer','high',3,3,3,0,0)")
-            db.executemany("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,"
+                       current)
+            db.execute("INSERT INTO kind_statistics(harness,model_id,effort,samples,successes,first_passes,"
+                       "rework_rounds,failures) VALUES(?,?,?,3,3,3,0,0)", peer_key)
+            db.executemany("INSERT INTO kind_cell_statistics(harness,model_id,effort,domain_node_id,task_type,"
                            "samples,successes,first_passes,rework_rounds,failures) VALUES(?,?,?,?,?,1,1,1,0,0)", [
-                (*tuple(BUDDY[key] for key in ("harness", "model", "effort")), "parser", "debug"),
-                (*tuple(second_buddy[key] for key in ("harness", "model", "effort")), "writing", "write"),
-                ("codex", "peer", "high", "parser", "debug"),
-                ("codex", "peer", "high", "writing", "write"),
-                ("codex", "peer", "high", "writing", "review")])
+                (*current, "parser", "debug"),
+                (*second_key, "writing", "write"),
+                (*peer_key, "parser", "debug"),
+                (*peer_key, "writing", "write"),
+                (*peer_key, "writing", "review")])
         packet = self.packet()
         self.assertEqual(len(packet["kinds"]), 2)
-        targets = {tuple(kind[field] for field in ("harness", "model", "effort")) for kind in packet["kinds"]}
-        comparisons = {tuple(kind[field] for field in ("harness", "model", "effort"))
+        targets = {packet_key(kind) for kind in packet["kinds"]}
+        comparisons = {packet_key(kind)
                        for kind in packet["comparisonStatistics"]}
         self.assertTrue(targets.isdisjoint(comparisons))
-        self.assertEqual(comparisons, {("codex", "peer", "high")})
-        peer = next(item["statistics"] for item in packet["comparisonStatistics"] if item["model"] == "peer")
+        self.assertEqual(comparisons, {peer_key})
+        peer = next(item["statistics"] for item in packet["comparisonStatistics"] if item["modelId"] == peer_key[1])
         self.assertEqual(set(peer["byDomain"]), {"parser", "writing"})
         self.assertEqual(set(peer["byDomainTaskType"]["parser"]), {"debug"})
         self.assertEqual(set(peer["byDomainTaskType"]["writing"]), {"write"})
 
     def comparison_size_packets(self):
         """One relevant cell and a larger unrelated history, all on the private board."""
-        current = {key: BUDDY[key] for key in ("harness", "model", "effort")}
         peers = [{"harness": "codex", "model": f"fixture-peer-{index:02}", "effort": "high"}
                  for index in range(14)]
         domains = [f"unrelated-{index:02}" for index in range(20)]
         with self.board_.store.db.write() as db:
+            current = self.model_key(db, BUDDY)
             db.executemany("INSERT INTO domain_nodes VALUES(?,?,?,NULL,NULL,?)", [
                 (domain, domain, domain + " work", self.maintenance_id) for domain in ["parser", *domains]])
-            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
-                       "rework_rounds,failures) VALUES(?,?,?,1,1,1,0,0)", tuple(current.values()))
-            db.execute("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,samples,"
+            db.execute("INSERT INTO kind_statistics(harness,model_id,effort,samples,successes,first_passes,"
+                       "rework_rounds,failures) VALUES(?,?,?,1,1,1,0,0)", current)
+            db.execute("INSERT INTO kind_cell_statistics(harness,model_id,effort,domain_node_id,task_type,samples,"
                        "successes,first_passes,rework_rounds,failures) VALUES(?,?,?,'parser','debug',1,1,1,0,0)",
-                       tuple(current.values()))
+                       current)
             for peer in peers:
-                key = tuple(peer.values())
+                key = self.model_key(db, peer)
                 cells = [("parser", "debug")] + [(domain, task_type) for domain in domains for task_type in TASK_TYPES]
-                db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,first_passes,"
+                db.execute("INSERT INTO kind_statistics(harness,model_id,effort,samples,successes,first_passes,"
                            "rework_rounds,failures) VALUES(?,?,?,?,?,?,0,0)",
                            (*key, len(cells), len(cells), len(cells)))
-                db.executemany("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,"
+                db.executemany("INSERT INTO kind_cell_statistics(harness,model_id,effort,domain_node_id,task_type,"
                                "samples,successes,first_passes,rework_rounds,failures) VALUES(?,?,?,?,?,1,1,1,0,0)",
                                [(*key, domain, task_type) for domain, task_type in cells])
             packet = build_packet(db)
         # The previous projection repeated every sampled target's full domain
         # facts (all its cells selected themselves), without infrastructure facts.
-        repeated = [{**{field: kind[field] for field in ("harness", "model", "effort")},
+        repeated = [{**{field: kind[field] for field in ("harness", "modelId", "effort")},
                      "statistics": {field: kind["statistics"][field]
                                     for field in ("overall", "byDomain", "byDomainTaskType")}}
                     for kind in packet["kinds"] if kind["statistics"]["overall"]["samples"]]
         old_packet = {**packet, "comparisonStatistics": sorted(
             packet["comparisonStatistics"] + repeated,
-            key=lambda kind: tuple(kind[field] for field in ("harness", "model", "effort")))}
+            key=packet_key)}
         return old_packet, packet
 
     def test_comparison_packet_keeps_relevant_peer_cells_without_repeated_targets(self):
         old, new = self.comparison_size_packets()
         self.assertEqual(len(old["comparisonStatistics"]), 15)
         self.assertEqual(len(new["comparisonStatistics"]), 14)
-        targets = {tuple(kind[field] for field in ("harness", "model", "effort")) for kind in new["kinds"]}
-        self.assertTrue(targets.isdisjoint(tuple(kind[field] for field in ("harness", "model", "effort"))
+        targets = {packet_key(kind) for kind in new["kinds"]}
+        self.assertTrue(targets.isdisjoint(packet_key(kind)
                                           for kind in new["comparisonStatistics"]))
         for kind in new["comparisonStatistics"]:
             self.assertEqual(set(kind["statistics"]["byDomain"]), {"parser"})

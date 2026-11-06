@@ -503,6 +503,14 @@ class UpgradeFixtureTests(unittest.TestCase):
                              [tuple(row) for row in baseline.execute(query)])
         after = upgrade.idle_snapshot(state)
         for name, original in old_rows.items():
+            if name == 'model_service_notes':
+                source = [dict(zip(old_columns[name], row)) for row in original]
+                expected = sorted((row['model'], row['text'], row['updated_at']) for row in source)
+                actual_notes = sorted(tuple(row) for row in connection.execute(
+                    'SELECT m.display_name,n.text,n.updated_at FROM model_notes n '
+                    'JOIN models m ON m.model_id=n.model_id'))
+                self.assertEqual(actual_notes, expected)
+                continue
             actual = [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid')]
             if name == 'meta':
                 self.assertEqual([(row[1], row[2]) for row in actual if row[1] != 'schema_version'],
@@ -1236,20 +1244,46 @@ class UpgradeFixtureTests(unittest.TestCase):
         for row in upgraded.execute('SELECT * FROM workspace_cleanup_plans'):
             self.assertNotIn('expiresAt', WorkflowCoordinator._plan_view(row))
 
-    def test_stock_provenance_keeps_the_base_and_pins_the_current_issue_generator(self):
+    def test_stock_provenance_pins_each_generated_supplement(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         root = Path(__file__).resolve().parents[4]
-        self.assertEqual(metadata['issueStock']['generatorSha256'],
-                         _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
+        current_generator = _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes())
+        self.assertEqual(metadata['generatorSha256'], current_generator)
         self.assertEqual(metadata['issueStock']['writerCommit'], metadata['sourceCommit'])
-        generator_sha256 = metadata['issueStock']['baseGeneratorSha256']
-        for field in ('generatorSha256', 'cleanupStockGeneratorSha256', 'reservationStockGeneratorSha256',
+        self.assertEqual(metadata['issueStock']['generatorSha256'], current_generator)
+        self.assertEqual(metadata['issueStock']['baseGeneratorSha256'], metadata['generatorSha256'])
+        self.assertEqual(metadata['issueStock']['baseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(metadata['issueStock']['sha256'], _sha((FIXTURE / 'schema-30-issue-stock.sql').read_bytes()))
+        for field in ('cleanupStockGeneratorSha256', 'reservationStockGeneratorSha256',
                       'deliveredStockGeneratorSha256', 'growth30GeneratorSha256', 'growth33GeneratorSha256'):
             with self.subTest(field=field):
-                self.assertEqual(metadata[field], generator_sha256)
-        self.assertEqual(metadata['legacyStock']['generatorSha256'], generator_sha256)
+                self.assertEqual(metadata[field], current_generator)
+        self.assertEqual(metadata['legacyStock']['generatorSha256'], current_generator)
+        self.assertEqual(metadata['modelStock']['generatorSha256'], current_generator)
+        self.assertEqual(metadata['modelStock']['baseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(metadata['modelStock']['schema31StockSha256'],
+                         _sha((FIXTURE / 'schema-31-stock.sql').read_bytes()))
+        self.assertEqual(metadata['modelStock']['sha256'],
+                         _sha((FIXTURE / 'schema-36-model-stock.sql').read_bytes()))
+        self.assertEqual(metadata['modelStock']['writerCommit'],
+                         'de833698f8a59e6ff0cba6b01c4a98ee8bd20594')
+        self.assertEqual(metadata['modelStock']['floorWriterCommit'], metadata['sourceCommit'])
+        self.assertEqual(metadata['modelStock']['floorWriterSources'], {
+            'src/hey_my_buddy/blackboard/catalog/catalog_store.py':
+                '92268408c4f50b1203a7a21993229add0296a39e818f3f86decb602286273bc9',
+            'src/hey_my_buddy/blackboard/evaluation/user_policy.py':
+                '9ee6d6c4b223e763a8b3afda919ddd9408f0fe388ee962304c6661fdaac22bcb',
+        })
+        self.assertEqual(metadata['modelStock']['writerPath'],
+                         'src/hey_my_buddy/blackboard/routing/maintenance_data.py')
+        self.assertEqual(metadata['modelStock']['writerSha256'],
+                         '66421d8d2f79295d57cd05ffd6c21fb7824f7b9e430d30bc8f0a5750f0317b4a')
+        self.assertEqual(metadata['modelStock']['statisticsWriterPath'],
+                         'src/hey_my_buddy/blackboard/routing/statistics.py')
+        self.assertEqual(metadata['modelStock']['statisticsWriterSha256'],
+                         'fd5c6e1093b0989dbd682f85a8ba6ed439f6d9abccf42bbbfca5e8e8071e606f')
         self.assertNotIn('baseGeneratorSha256', metadata)
-        self.assertEqual(metadata['cleanupStockGeneratorSha256'], metadata['generatorSha256'])
+        self.assertEqual(metadata['cleanupStockGeneratorSha256'], current_generator)
         self.assertEqual(metadata['cleanupStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
         self.assertEqual(metadata['cleanupStockSha256'], _sha((FIXTURE / 'schema-31-cleanup-stock.sql').read_bytes()))
         self.assertIn('--cleanup-stock-for', metadata['cleanupStockGenerationCommand'])
@@ -1257,7 +1291,8 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_reservation_stock_records_its_floor_writer_and_generator(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         root = Path(__file__).resolve().parents[4]
-        self.assertEqual(metadata['reservationStockGeneratorSha256'], metadata['generatorSha256'])
+        self.assertEqual(metadata['reservationStockGeneratorSha256'],
+                         _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
         self.assertEqual(metadata['reservationStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
         self.assertEqual(metadata['reservationStockSha256'], _sha((FIXTURE / 'schema-30-reservation-stock.sql').read_bytes()))
         self.assertIn('--reservation-stock-for', metadata['reservationStockGenerationCommand'])
@@ -1265,7 +1300,8 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_delivered_stock_records_its_floor_writer_and_physical_resources(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         root = Path(__file__).resolve().parents[4]
-        self.assertEqual(metadata['deliveredStockGeneratorSha256'], metadata['generatorSha256'])
+        self.assertEqual(metadata['deliveredStockGeneratorSha256'],
+                         _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
         self.assertEqual(metadata['deliveredStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
         self.assertEqual(metadata['deliveredStockSqlSha256'],
                          _sha((FIXTURE / 'schema-30-delivered-stock.sql').read_bytes()))

@@ -150,13 +150,15 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
             db.execute("INSERT INTO maintenance_runs VALUES('maintenance-read','manual',?,?,'completed',NULL,NULL,?,?)",
                        ("dsh:deepseek-official:deepseek-flash:off", task_id, now, now))
             db.execute("INSERT INTO domain_nodes VALUES('software','Software','Software tasks',NULL,NULL,'maintenance-read')")
-            db.execute("INSERT INTO kind_summaries VALUES('dsh','deepseek-flash','off','Careful parser repairs','maintenance-read')")
-            db.execute("INSERT INTO kind_summary_evidence VALUES('dsh','deepseek-flash','off',?,1)", (run["runId"],))
+            from hey_my_buddy.blackboard.evaluation.models import current_model
+            model_id = current_model(db, 'dsh', 'deepseek-official', 'deepseek-flash')
+            db.execute("INSERT INTO kind_summaries VALUES('dsh',?,'off','Careful parser repairs','maintenance-read')", (model_id,))
+            db.execute("INSERT INTO kind_summary_evidence VALUES('dsh',?,'off',?,1)", (model_id, run["runId"]))
             db.execute("UPDATE kind_statistics SET samples=2,successes=1,first_passes=1,"
-                       "rework_rounds=0,failures=1 WHERE harness='dsh' AND model='deepseek-flash' AND effort='off'")
-            db.execute("INSERT INTO kind_cell_statistics(harness,model,effort,domain_node_id,task_type,samples,"
+                       "rework_rounds=0,failures=1 WHERE harness='dsh' AND model_id=? AND effort='off'", (model_id,))
+            db.execute("INSERT INTO kind_cell_statistics(harness,model_id,effort,domain_node_id,task_type,samples,"
                        "successes,first_passes,rework_rounds,failures)"
-                       " VALUES('dsh','deepseek-flash','off','software','debug',1,1,1,0,0)")
+                       " VALUES('dsh',?,'off','software','debug',1,1,1,0,0)", (model_id,))
         browser = self.open(board)
         snapshot = browser.bootstrap()
         self.assertEqual(snapshot["maintenance"]["pendingCount"], 1)
@@ -171,8 +173,8 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
             "parentId": None, "mergedIntoId": None,
         }])
         evaluation = next(item for item in snapshot["kindEvaluations"]
-                          if (item["harness"], item["model"], item["effort"])
-                          == ("dsh", "deepseek-flash", "off"))
+                          if (item["harness"], item["modelId"], item["effort"])
+                          == ("dsh", model_id, "off"))
         self.assertEqual(evaluation["summary"], {
             "text": "Careful parser repairs",
             "citations": [{"runId": run["runId"], "title": run["title"], "macroTaskId": None}],
