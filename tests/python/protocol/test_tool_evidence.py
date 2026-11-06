@@ -32,7 +32,7 @@ CLASSIFICATION = {
         "shell": "execute", "code-mode": "execute", "exec": "execute", "commandExecution": "execute",
         "exec_command": "execute", "shell_command": "execute", "write_stdin": "execute",
         "local_shell_call": "execute",
-        "fileChange": "edit", "web_search_call": "fetch",
+        "fileChange": "edit", "web_search_call": "fetch", "webSearch": "fetch",
     },
     "zcode": {
         "Read": "read", "Glob": "search", "Grep": "search", "Bash": "execute",
@@ -391,6 +391,60 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         for category in ("read", "search", "execute", "fetch"):
             with self.subTest(category=category):
                 self.assertIsNone(tool_evidence.judge_tool_evidence(collect(settled_events(category)), "read", state_dir=STATE_DIR))
+
+    def test_codex_web_allows_code_mode_dispatch_and_native_web_search(self):
+        binding = {**BINDING, "harness": "codex"}
+        events = (settled_events("execute", call_id="dispatcher", tool="exec")
+                  + settled_events("fetch", call_id="search", tool="webSearch"))
+        package = collect(events, binding=binding)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR))
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "none", state_dir=STATE_DIR),
+                         tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_codex_web_judges_sealed_web_search_facts_without_rewriting_them(self):
+        binding = {**BINDING, "harness": "codex"}
+        package = collect(settled_events("execute", call_id="dispatcher", tool="exec")
+                          + settled_events("other", call_id="old-search", tool="webSearch"), binding=binding)
+        before = call_rows(package)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR))
+        self.assertEqual(call_rows(package), before)
+
+    def test_codex_web_rejects_nested_file_shell_mcp_and_unknown_calls(self):
+        binding = {**BINDING, "harness": "codex"}
+        dispatch = settled_events("execute", call_id="dispatcher", tool="exec")
+        for name, category in (("commandExecution", "execute"), ("shell", "execute"),
+                               ("exec_command", "execute"), ("fileChange", "edit"),
+                               ("mcpToolCall", "other"), ("unknown", "other")):
+            with self.subTest(name=name):
+                package = collect(dispatch + settled_events(category, call_id="nested", tool=name), binding=binding)
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR),
+                                 tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_codex_web_rejects_explicit_read_and_other_harness_dispatch(self):
+        codex = {**BINDING, "harness": "codex"}
+        read = collect(settled_events("read", tool="Read"), binding=codex)
+        self.assertEqual(tool_evidence.judge_tool_evidence(read, "web", state_dir=STATE_DIR),
+                         tool_evidence.TOOLS_FORBIDDEN)
+        other = collect(settled_events("execute", tool="exec"), binding=BINDING)
+        self.assertEqual(tool_evidence.judge_tool_evidence(other, "web", state_dir=STATE_DIR),
+                         tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_codex_web_needs_complete_consistent_named_calls(self):
+        binding = {**BINDING, "harness": "codex"}
+        dispatch = settled_events("execute", call_id="dispatcher", tool="exec")
+        cases = (
+            (dispatch[:1], tool_evidence.TOOL_EVIDENCE_UNVERIFIED),
+            (dispatch + settled_events("other", call_id="dispatcher", tool="webSearch"),
+             tool_evidence.TOOL_EVIDENCE_UNVERIFIED),
+            (dispatch + settled_events("execute", call_id="dispatcher", tool="commandExecution"),
+             tool_evidence.TOOLS_FORBIDDEN),
+        )
+        for events, expected in cases:
+            with self.subTest(events=events):
+                package = collect(events, binding=binding)
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR), expected)
 
     def test_every_other_category_is_forbidden_at_read_level(self):
         for category in ("edit", "delete", "move", "switch_mode", "think", "other"):

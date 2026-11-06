@@ -75,7 +75,7 @@ NATIVE_TOOL_CATEGORIES: dict[str, dict[str, str]] = {
         "exec_command": "execute", "shell_command": "execute", "write_stdin": "execute",
         "local_shell_call": "execute",
         "fileChange": "edit",
-        "web_search_call": "fetch",
+        "web_search_call": "fetch", "webSearch": "fetch",
     },
     "zcode": {
         "Read": "read",
@@ -458,6 +458,20 @@ def _consistent_call_facts(harness: str, facts: set) -> bool:
                for name, category in facts)
 
 
+def _allowed_codex_web_call(call: dict) -> bool:
+    """Recognize code-mode dispatch and web searches in already sealed evidence.
+
+    Codex CLI 0.164's ``exec`` runs a restricted JavaScript dispatcher. Its
+    nested tool calls have their own native events and must pass this judge
+    separately. Older sealed ``webSearch`` facts retain their ``other`` category;
+    new events normalize to ``fetch``.
+    """
+    return ((call["categories"] == ["execute"]
+             and call["facts"] == [{"toolName": "exec", "category": "execute"}])
+            or (call["categories"] == ["other"]
+                and call["facts"] == [{"toolName": "webSearch", "category": "other"}]))
+
+
 def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> str | None:
     """The one publication matrix over digest-bound per-call facts.
 
@@ -473,6 +487,7 @@ def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> s
         if not evidence["nativeIdentity"]:
             return TOOL_EVIDENCE_UNVERIFIED
         allowed = PERMISSION_TOOL_CATEGORIES[permission]
+        harness = evidence["binding"]["harness"]
         incomplete = not evidence["streamComplete"]
         forbidden = False
         malformed = False
@@ -487,7 +502,9 @@ def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> s
             malformed |= call["malformed"]
             phases = set(call["phases"])
             categories = set(call["categories"])
-            if permission == "none" or call["consistent"] and not categories <= allowed:
+            codex_web_call = (harness == "codex" and permission in ("web", "read")
+                              and _allowed_codex_web_call(call))
+            if permission == "none" or call["consistent"] and not (categories <= allowed or codex_web_call):
                 forbidden = True
             root = bool(call["nativeIdentity"]) and call["nativeIdentity"] in evidence["nativeIdentity"]
             if call["belongsToRoot"] != root:

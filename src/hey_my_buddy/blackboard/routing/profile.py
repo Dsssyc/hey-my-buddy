@@ -6,6 +6,7 @@ import threading
 import uuid
 
 from ...errors import BoardError
+from ...json_codec import decode_strict_json
 from ...protocol import profile as files, schemas
 from ..store.db import canonical_json
 from . import profile_data, router
@@ -111,9 +112,7 @@ class Profile:
             spec = json.loads(connection.execute('SELECT spec_json FROM tasks WHERE task_id=?', (attempt['task_id'],)).fetchone()[0])
             document = spec['decision']['document']
             packet = files.read(self.store.directory, run['profile_run_id'], document['input'])['packet']
-            answer, errors = profile_data.validate_answer(packet, material['answer'])
-            if not errors:
-                profile_data.apply_answer(connection, model_id=run['model_id'], run_id=run['profile_run_id'], answer=answer, now=self.store.now())
+            _answer, errors = profile_data.validate_answer(packet, material['answer'])
             feedback = {"accepted": not errors, "errors": errors}
             reference = files.publish(self.store.directory, run['profile_run_id'], feedback,
                 before_write=retain_reference)
@@ -146,14 +145,6 @@ class Profile:
         run = self._run(connection, task_id)
         if run['state'] != 'running':
             return None
-        event = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='profile.answer_checked' ORDER BY seq DESC LIMIT 1", (task_id,)).fetchone()
-        if code in (None, 'profile-answer-invalid', 'router-no-answer'):
-            if event is None:
-                code = 'router-no-answer'
-            else:
-                feedback = files.read(self.store.directory, run['profile_run_id'], json.loads(event[0])['feedback'])
-                if not feedback['accepted']:
-                    code, params = 'profile-answer-invalid', {"errors": feedback['errors']}
         usage = self._usage(connection, task_id)
         state = 'failed' if code else 'completed'
         connection.execute('UPDATE profile_runs SET state=?,reason_code=?,reason_params_json=?,finished_at=?,usage_json=? WHERE task_id=?',
@@ -180,10 +171,31 @@ class Profile:
             code = code or 'router-no-answer'
         if not shutdown_confirmed or attempt['shutdown_confirmed'] != 1:
             code = 'router-stop-unconfirmed'
+        params = {}
+        checked = None
+        if code in (None, 'profile-answer-invalid', 'router-no-answer'):
+            event = connection.execute(
+                "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='profile.answer_checked' ORDER BY seq DESC LIMIT 1",
+                (task['task_id'], attempt['attempt_id'])).fetchone()
+            if event is None:
+                code = 'router-no-answer'
+            else:
+                checked = json.loads(event[0])
+                feedback = files.read(self.store.directory, run['profile_run_id'], checked['feedback'])
+                if not feedback['accepted']:
+                    code, params = 'profile-answer-invalid', {"errors": feedback['errors']}
         if code is None:
             document = json.loads(task['spec_json'])['decision']['document']
             problem = self.store.decisions._tool_evidence_problem(
                 {"decision_task_id": task['task_id'], "decision_attempt_id": attempt['attempt_id'], "decision_generation": attempt['generation']}, document, output)
             if problem:
                 code = problem['code']
-        return self.finish(connection, task_id=task['task_id'], now=now, code=code)
+        if code is None:
+            # The accepted round is immutable input. Publish only after the
+            # service has judged the complete attempt's tool and shutdown facts.
+            material = files.read(self.store.directory, run['profile_run_id'], checked['answer'])
+            answer = material['answer']
+            if isinstance(answer, str):
+                answer = decode_strict_json(answer)
+            profile_data.apply_answer(connection, model_id=run['model_id'], run_id=run['profile_run_id'], answer=answer, now=now)
+        return self.finish(connection, task_id=task['task_id'], now=now, code=code, params=params)

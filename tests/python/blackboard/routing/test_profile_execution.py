@@ -69,10 +69,11 @@ class ProfileExecutionTests(BoardTestCase):
             "sourceUrl": "https://example.org/model", "sourceDate": "2026-01-01", "sourceKind": "vendor"}],
             "correspondences": correspondences or []}
 
-    def settle(self, claim):
-        result = {**claim_tool_receipt(claim, state_dir=self.board_.directory), "status": "ok",
+    def settle(self, claim, *, tool_calls=0, tool_name=None, stream_complete=True):
+        result = {**claim_tool_receipt(claim, tool_calls, state_dir=self.board_.directory,
+                                       tool_name=tool_name, stream_complete=stream_complete), "status": "ok",
                   "operation": "profile", "requested": claim["decisionInput"]["buddy"],
-                  "usage": {"elapsedMs": 120, "toolCalls": 0},
+                  "usage": {"elapsedMs": 120, "toolCalls": tool_calls},
                   "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}}}
         attempt = claim["attempt"]
         self.board_.call("execution_result", {"attemptId": attempt["attemptId"],
@@ -119,6 +120,7 @@ class ProfileExecutionTests(BoardTestCase):
         self.assertIn(CANDIDATE_SERVICE, [{key: item[key] for key in CANDIDATE_SERVICE}
                                           for item in self.packet(claim)["candidates"]])
         self.assertTrue(self.answer(claim, 0, self.valid_answer())[1]["accepted"])
+        self.assertIsNone(self.model_view()['profile'])
         self.settle(claim)
         view = self.model_view()
         self.assertEqual(view["profile"]["positioning"], "Strong general model")
@@ -132,6 +134,7 @@ class ProfileExecutionTests(BoardTestCase):
         revised = self.valid_answer(positioning="Revised positioning")
         revised["claims"][0]["claim"] = "Different sourced claim"
         self.assertTrue(self.answer(next_claim, 0, revised)[1]["accepted"])
+        self.assertEqual(self.model_view()['profile'], view['profile'])
         self.settle(next_claim)
         replaced = self.model_view()
         self.assertEqual(replaced["profile"]["positioning"], "Revised positioning")
@@ -217,10 +220,12 @@ class ProfileExecutionTests(BoardTestCase):
                     ((CANDIDATE_SERVICE, "same"), (another, "successor"))]
         self.assertTrue(self.answer(claim, 0, self.valid_answer(correspondences=correspondences))[1]["accepted"])
         with self.board_.store.db.read() as db:
+            self.assertEqual(current_model(db, *CANDIDATE_SERVICE.values()), original)
+        self.settle(claim)
+        with self.board_.store.db.read() as db:
             self.assertEqual(current_model(db, *CANDIDATE_SERVICE.values()), self.model_id)
             successor = current_model(db, *another.values())
             self.assertNotIn(successor, (self.model_id, original))
-        self.settle(claim)
         snapshot = console_snapshot_projection(self.board_.service)[0]
         correspondence = next(item for item in snapshot["modelCorrespondences"] if item["model"] == "candidate")
         self.assertEqual(correspondence['modelId'], self.model_id)
@@ -318,3 +323,43 @@ class ProfileExecutionTests(BoardTestCase):
         self.assertEqual(latest['state'], 'failed')
         self.assertEqual(latest['reason']['code'], 'router-stop-unconfirmed')
         self.assertEqual(latest['usage']['attempts'][0]['elapsedMs'], 120)
+
+    def test_service_rejects_tools_without_publishing_first_profile(self):
+        self.configure()
+        claim = self.claim(self.start())
+        self.assertTrue(self.answer(claim, 0, self.valid_answer())[1]['accepted'])
+        self.assertIsNone(self.model_view()['profile'])
+        self.settle(claim, tool_calls=1, tool_name='bash')
+        view = self.model_view()
+        self.assertIsNone(view['profile'])
+        self.assertEqual(view['latestProfileRun']['state'], 'failed')
+        self.assertEqual(view['latestProfileRun']['reason']['code'], 'router-tools-forbidden')
+
+    def test_service_keeps_profile_and_correspondences_on_rejected_tool_evidence(self):
+        self.configure()
+        original_claim = self.claim(self.start())
+        self.answer(original_claim, 0, self.valid_answer(positioning='Original checked profile'))
+        self.settle(original_claim)
+        original_profile = self.model_view()['profile']
+        with self.board_.store.db.read() as db:
+            original_counts = [db.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                               for table in ('models', 'model_correspondences')]
+        for tool_name, complete, expected in (('read', True, 'router-tools-forbidden'),
+                                               ('bash', True, 'router-tools-forbidden'),
+                                               (None, False, 'router-tool-evidence-unverified')):
+            with self.subTest(tool=tool_name, stream_complete=complete):
+                claim = self.claim(self.start())
+                suggestions = [{**CANDIDATE_SERVICE, 'relation': 'successor',
+                                'sourceUrl': 'https://example.org/new-model', 'sourceDate': '2026-01-01'}]
+                self.assertTrue(self.answer(claim, 0, self.valid_answer(
+                    positioning='Do not publish', correspondences=suggestions))[1]['accepted'])
+                self.assertEqual(self.model_view()['profile'], original_profile)
+                self.settle(claim, tool_calls=int(tool_name is not None), tool_name=tool_name, stream_complete=complete)
+                view = self.model_view()
+                self.assertEqual(view['profile'], original_profile)
+                self.assertEqual(view['latestProfileRun']['state'], 'failed')
+                self.assertEqual(view['latestProfileRun']['reason']['code'], expected)
+                with self.board_.store.db.read() as db:
+                    self.assertEqual(current_model(db, *CANDIDATE_SERVICE.values()), self.candidate_id)
+                    self.assertEqual([db.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                                      for table in ('models', 'model_correspondences')], original_counts)
