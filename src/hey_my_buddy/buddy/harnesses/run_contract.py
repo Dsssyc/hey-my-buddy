@@ -238,6 +238,13 @@ class RunRequest(InternalModel):
     session_services: JsonTuple(SessionService, max_items=MAX_SESSION_SERVICES) = ()
     capture_evidence: bool = False
 
+    @model_validator(mode="after")
+    def _web_starts_a_new_native_session(self) -> "RunRequest":
+        if self.permission == "web" and self.continuation is not None \
+                and self.continuation.mode == "native-session":
+            raise fail("web permission requires a new native session", field="continuation")
+        return self
+
 class NativeIdentity(InternalModel):
     """One native-provided root identity; no field is ever fabricated.
 

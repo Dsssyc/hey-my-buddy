@@ -748,8 +748,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
                                          "an interrupted Codex turn requires its exact previous attempt checkpoint")
             response = connection.call("thread/resume", {"threadId": previous, "cwd": request.cwd,
                                                          "model": requested["model"], "modelProvider": requested["provider"],
-                                                         "approvalPolicy": "never", "sandbox": sandbox,
-                                                         **permission_config})
+                                                         "approvalPolicy": "never", "sandbox": sandbox})
             state.binding_path = _binding_path(prep.native_root, previous)
         except CodexProtocolError as error:
             if error.code != "native-rpc-error":

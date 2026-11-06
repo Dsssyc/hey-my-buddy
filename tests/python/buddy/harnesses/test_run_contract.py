@@ -203,6 +203,26 @@ class CodecRoundtripTests(unittest.TestCase):
                 self.assertEqual(rejected.exception.code, "UNSUPPORTED_CAPABILITY")
                 self.assertEqual(rejected.exception.details["requiredCapability"], "permission:web")
 
+    def test_web_rejects_native_resume_for_every_harness_at_the_request_boundary(self):
+        from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
+        request = full_request(Path(tempfile.gettempdir()).resolve())
+        continuation = rc.RunContinuation(mode="native-session", previous_session_id="previous")
+        for harness in PERMISSION_LEVELS:
+            with self.subTest(harness=harness):
+                with self.assertRaises(BoardError):
+                    edited(request, harness=harness, permission="web", continuation=continuation)
+                with self.assertRaises(BoardError):
+                    rc.RunRequest.from_payload(request.to_payload() | {
+                        "harness": harness, "permission": "web", "continuation": continuation.to_payload()})
+
+    def test_web_allows_fresh_sessions_with_reconstructed_context(self):
+        request = edited(full_request(Path(tempfile.gettempdir()).resolve()), permission="web")
+        self.assertIsNone(rc.RunRequest.from_payload(request.to_payload()).continuation)
+        reconstructed = edited(request, continuation=rc.RunContinuation(
+            mode="reconstructed-new-session", previous_session_id="previous"))
+        self.assertEqual(rc.RunRequest.from_payload(reconstructed.to_payload()).continuation.mode,
+                         "reconstructed-new-session")
+
     def test_codex_full_worker_selects_the_worker_carrier(self):
         from hey_my_buddy.buddy.harnesses.codex import native_run as codex
         from hey_my_buddy.buddy.harnesses.registry import require_permission

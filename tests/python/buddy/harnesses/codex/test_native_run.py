@@ -898,7 +898,7 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
-    def test_web_native_threads_and_resumes_keep_the_restricted_config(self):
+    def test_web_native_threads_keep_the_restricted_config(self):
         self.set_case("ok")
         for turn_id in (None, "turn-check"):
             with self.subTest(carrier="worker" if turn_id else "final-message"):
@@ -920,15 +920,6 @@ class WorkerSeamTests(CodexSeamCase):
                 self.assertEqual(result.effective_policy.tools.requested.value["config"], config)
                 self.assertEqual(thread["turnRequests"], [{"cwd": str(self.cwd),
                     "sandboxPolicy": {"type": "readOnly", "networkAccess": True}, "approvalPolicy": "never"}])
-                if turn_id:
-                    resumed = self.request(permission="web", output_schema=OUTCOME_SCHEMA, prompt="Continue",
-                        turn_id=turn_id, input_sha256="b" * 64, native=Path(request.private_state.native_root).name,
-                        continuation=RunContinuation(mode="native-session", previous_session_id=result.native_identity.session_id))
-                    continued = run(resumed, observer=lambda _facts: FEEDBACK_CONTINUE,
-                                    services=self.worker_services(), cancelled=lambda: False)
-                    self.assertEqual(continued.end.status, "ok", continued.end.message)
-                    trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
-                    self.assertEqual(trace["threads"][continued.native_identity.session_id]["resumeRequests"][-1]["config"], config)
 
     def test_complete_worker_prompt_over_two_mib_reaches_the_native_peer(self):
         # The prompt's two real byte budgets carry it past 2 MiB: the task text
