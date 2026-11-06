@@ -459,17 +459,14 @@ def _consistent_call_facts(harness: str, facts: set) -> bool:
 
 
 def _allowed_codex_web_call(call: dict) -> bool:
-    """Recognize code-mode dispatch and web searches in already sealed evidence.
+    """Recognize Codex CLI 0.164.0's restricted JavaScript dispatcher.
 
-    Codex CLI 0.164's ``exec`` runs a restricted JavaScript dispatcher. Its
-    nested tool calls have their own native events and must pass this judge
-    separately. Older sealed ``webSearch`` facts retain their ``other`` category;
-    new events normalize to ``fetch``.
+    Nested tool calls have their own native events and must pass this judge
+    separately. Web searches use the single normalized fetch category.
     """
-    return ((call["categories"] == ["execute"]
-             and call["facts"] == [{"toolName": "exec", "category": "execute"}])
-            or (call["categories"] == ["other"]
-                and call["facts"] == [{"toolName": "webSearch", "category": "other"}]))
+    return (call["categories"] == ["execute"]
+            and call["facts"] == [{"toolName": "exec", "category": "execute"}])
+
 
 
 def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> str | None:
@@ -502,7 +499,7 @@ def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> s
             malformed |= call["malformed"]
             phases = set(call["phases"])
             categories = set(call["categories"])
-            codex_web_call = (harness == "codex" and permission in ("web", "read")
+            codex_web_call = (harness == "codex" and permission == "web"
                               and _allowed_codex_web_call(call))
             if permission == "none" or call["consistent"] and not (categories <= allowed or codex_web_call):
                 forbidden = True

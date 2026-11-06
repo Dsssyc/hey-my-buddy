@@ -402,21 +402,21 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "none", state_dir=STATE_DIR),
                          tool_evidence.TOOLS_FORBIDDEN)
 
-    def test_codex_web_judges_sealed_web_search_facts_without_rewriting_them(self):
+    def test_codex_native_web_search_normalizes_before_judgment(self):
         binding = {**BINDING, "harness": "codex"}
-        package = collect(settled_events("execute", call_id="dispatcher", tool="exec")
-                          + settled_events("other", call_id="old-search", tool="webSearch"), binding=binding)
-        before = call_rows(package)
+        events = [tool_evidence.normalize_tool_event("codex", native_fact("webSearch", phase=phase))
+                  for phase in ("start", "end")]
+        package = collect(events, binding=binding)
+        self.assertEqual(call_rows(package)[0]["categories"], ["fetch"])
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR))
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR))
-        self.assertEqual(call_rows(package), before)
 
     def test_codex_web_rejects_nested_file_shell_mcp_and_unknown_calls(self):
         binding = {**BINDING, "harness": "codex"}
         dispatch = settled_events("execute", call_id="dispatcher", tool="exec")
         for name, category in (("commandExecution", "execute"), ("shell", "execute"),
                                ("exec_command", "execute"), ("fileChange", "edit"),
-                               ("mcpToolCall", "other"), ("unknown", "other")):
+                               ("mcpToolCall", "other"), ("webSearch", "other"), ("unknown", "other")):
             with self.subTest(name=name):
                 package = collect(dispatch + settled_events(category, call_id="nested", tool=name), binding=binding)
                 self.assertEqual(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR),
@@ -436,7 +436,7 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         dispatch = settled_events("execute", call_id="dispatcher", tool="exec")
         cases = (
             (dispatch[:1], tool_evidence.TOOL_EVIDENCE_UNVERIFIED),
-            (dispatch + settled_events("other", call_id="dispatcher", tool="webSearch"),
+            (dispatch + settled_events("fetch", call_id="dispatcher", tool="webSearch"),
              tool_evidence.TOOL_EVIDENCE_UNVERIFIED),
             (dispatch + settled_events("execute", call_id="dispatcher", tool="commandExecution"),
              tool_evidence.TOOLS_FORBIDDEN),
