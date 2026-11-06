@@ -5,8 +5,8 @@ import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApar
 
 const MODEL = "codex / openai / gpt-5-codex";
 const languages = [
-  { locale: "zh-CN", copy: zhCommon.concurrencyNotice, limit: "并发上限", note: "备注" },
-  { locale: "en-US", copy: enCommon.concurrencyNotice, limit: "Concurrency limit", note: "Note" },
+  { locale: "zh-CN", copy: zhCommon.concurrencyNotice, limit: "并发上限", note: "模型备注" },
+  { locale: "en-US", copy: enCommon.concurrencyNotice, limit: "Concurrency limit", note: "Model note" },
 ];
 
 for (const { locale, copy, limit, note } of languages) for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
@@ -25,7 +25,9 @@ for (const { locale, copy, limit, note } of languages) for (const width of [1280
       const body = notice.getByText(copy.body, { exact: true });
       const input = drawer.getByRole("spinbutton", { name: limit });
       const occupancy = drawer.locator('[id$="-occupancy"]');
-      const noteInput = drawer.getByRole("textbox", { name: note, exact: true });
+      const noteInput = drawer.locator("[data-slot=model-profile]").getByRole("textbox", { name: note, exact: true });
+      // A valid edit already shows the model's save-before-building line. Invalidity alone must not move the controls or note.
+      await input.fill("3");
       await notice.scrollIntoViewIfNeeded();
       await expect(heading).toBeVisible();
       await expect(body).toBeVisible();

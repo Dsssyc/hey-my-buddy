@@ -53,9 +53,9 @@ function Correspondence({ entry, data, editor }: { entry: ModelCorrespondence; d
         {data.models.map(model => <option key={model.modelId} value={model.modelId}>{model.displayName}{data.models.some(other => other.modelId !== model.modelId && other.displayName === model.displayName) ? ` · ${model.modelId}` : ""}</option>)}
       </select> : <Input aria-label={t("modelProfile.newNameFor", { name: identity })} value={generation} maxLength={256} disabled={locked}
         className="col-span-2 h-8 min-w-0 w-full max-w-full bg-card sm:w-auto sm:flex-1 sm:max-w-72" onChange={event => setGeneration(event.target.value)} />}
-      <Button variant="outline" size="sm" className="h-auto min-h-8 min-w-0 whitespace-normal py-1.5" disabled={locked || mode === "generation" && !generation.trim()}
+      <Button variant="outline" size="sm" className="col-span-2 h-8 min-w-0 sm:col-span-1" disabled={locked || mode === "generation" && !generation.trim()}
         onClick={() => stage(mode === "map" ? { ...service, action: "map", modelId: target } : { ...service, action: "generation", displayName: generation.trim() })}>{t("modelProfile.apply")}</Button>
-      <Button variant="outline" size="sm" className="h-auto min-h-8 min-w-0 whitespace-normal py-1.5" disabled={locked || !entry.canUndo} onClick={() => stage({ ...service, action: "undo" })}>{t("modelProfile.undo")}</Button>
+      <Button variant="outline" size="sm" className="col-span-2 h-8 min-w-0 sm:col-span-1" disabled={locked || !entry.canUndo} onClick={() => stage({ ...service, action: "undo" })}>{t("modelProfile.undo")}</Button>
     </div>
     {pending && <p role="status" className="flex flex-wrap items-center gap-2 text-ink2"><UnsavedMark label={t("unsaved")} />
       {pending.action === "undo" ? t("modelProfile.pendingUndo") : pending.action === "generation" ? t("modelProfile.pendingGeneration", { name: pending.displayName })

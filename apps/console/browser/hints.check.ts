@@ -70,7 +70,7 @@ test.describe("necessary hover hints and visible consequences", () => {
     await expect(maintenance).toBeVisible();
     await expect(maintenance).toContainText("维护");
     await consequenceLine(maintenance);
-    expect((await maintenance.boundingBox())!.y).toBeGreaterThan((await page.getByRole("button", { name: "选择 buddy", exact: true }).boundingBox())!.y);
+    expect((await maintenance.boundingBox())!.y).toBeGreaterThan((await page.locator("[data-slot=maintenance-plane]").getByRole("button", { name: "选择 buddy", exact: true }).boundingBox())!.y);
     await capture(page, "maintenance");
     const domainArrow = page.locator('[data-slot="domain-tree"] button[aria-expanded]').first();
     await quiet(page, [maintenance, domainArrow, page.getByRole("group", { name: "记录", exact: true }).getByText("失败", { exact: true })]);
@@ -85,7 +85,8 @@ test.describe("necessary hover hints and visible consequences", () => {
     await page.getByRole("radio", { name: "审阅", exact: true }).click();
     await page.getByRole("button", { name: "保存", exact: true }).click();
     for (const target of [page.getByRole("radio", { name: "快速", exact: true }),
-      page.getByRole("radio", { name: "标准", exact: true }), page.getByRole("spinbutton", { name: "重试间隔秒数" })]) {
+      page.getByRole("group", { name: "审阅预算", exact: true }).getByRole("radio", { name: "标准", exact: true }),
+      page.getByRole("group", { name: "画像预算", exact: true }).getByRole("radio", { name: "标准", exact: true }), page.getByRole("spinbutton", { name: "重试间隔秒数" })]) {
       await target.hover();
       await expect(page.getByRole("tooltip")).toHaveText("浏览器授权已失效，重新授权后可以修改");
       await page.mouse.move(0, 0);

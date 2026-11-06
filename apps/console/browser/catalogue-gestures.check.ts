@@ -163,7 +163,7 @@ for (const { locale, account, settings, fold } of languages) {
       expect(seconds(turn.duration)[0]).toBe(0.2);
     });
 
-    test("keeps the drawer's note level with the buddy panel and every control at least 28px tall", async ({ page }) => {
+    test("keeps the shared model note below the buddy panel and every control at least 28px tall", async ({ page }) => {
       await open(page, "#buddies/catalog");
       for (const summary of await page.locator("[data-slot=account-summary]").all()) await summary.click();
       await page.getByRole("button", { name: CODEX, exact: true }).click();
@@ -171,11 +171,17 @@ for (const { locale, account, settings, fold } of languages) {
       await expect(drawer).toBeVisible();
       // The sections above are still opening: measure when everything has stopped moving.
       await settle(page);
-      // The bottom edge of the note and the bottom edge of the buddy panel are one line.
-      const [note, panel] = [await box(drawer.getByRole("textbox", { name: /^(备注|Note)$/ })), await box(drawer.locator("[data-slot=buddy-panel]"))];
-      expect(Math.abs(note.y + note.height - (panel.y + panel.height))).toBeLessThanOrEqual(2);
+      // The shared model note follows the service/buddy settings and spans its own model section.
+      const profile = drawer.locator("[data-slot=model-profile]");
+      const [note, panel, model] = await Promise.all([
+        box(profile.getByRole("textbox", { name: /^(模型备注|Model note)$/ })),
+        box(drawer.locator("[data-slot=buddy-panel]")), box(profile),
+      ]);
+      expect(note.y).toBeGreaterThanOrEqual(panel.y + panel.height);
+      expect(Math.abs(note.x - model.x)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(note.x + note.width - (model.x + model.width))).toBeLessThanOrEqual(0.5);
       // Controls are 32px, the small ones 28px; nothing a pointer must hit is smaller. A checkbox is a mark inside its label.
-      const buttons = page.getByRole("main").locator("button:not([role=checkbox]), [role=switch], [role=radio], input:not([type=checkbox])");
+      const buttons = page.getByRole("main").locator("button:not([role=checkbox]), [role=switch], [role=radio], input:not([type=checkbox]), select");
       for (const control of await buttons.all()) {
         if (!(await control.isVisible())) continue;
         const target = await box(control);
