@@ -95,11 +95,11 @@ Hosts delegate through micro tasks. Execution records are internal attempt infra
 "$HMB" inquire '{"runId":"<runId>","inquiryId":"<inquiryId>"}'
 ```
 
-Observation and inquiry do not continue or cancel a turn. The service derives the question's identity; the same question on the same run returns its first inquiry and answer. Change the wording to ask again. A queued or unavailable native channel is reported as such; a question's delivery is not proof of an answer. Use the reply's inquiry id to retrieve it. The durable wait remains the normal supervision path.
+Observation and inquiry do not continue or cancel a turn. The service derives the question's identity; the same question on the same run returns its first inquiry and answer. Change the wording to ask again. A queued or unavailable native channel is reported as such; a question's delivery is not proof of an answer. Use the reply's inquiry id to retrieve it. A question reaches only a turn that is running: asked of a micro task whose turn has ended, for example a Lead waiting for the micro tasks it owns, it is recorded as unavailable and is not kept for a later turn. To tell such a Lead something, `continue` its current result with the message as input; that starts a Lead turn. The durable wait remains the normal supervision path.
 
 ## When the wait ends before the task
 
-`wait-timeout` and `unavailable` end only that wait. Expected-duration and native-silence replies are reminders to inspect and wait again, not failure or shutdown evidence. Execution and service issues are readable facts; this batch adds no return-on-new-issue wakeup. Reconnect to the same `runId` and follow [host.md](host.md).
+`wait-timeout` and `unavailable` end only that wait. Expected-duration and native-silence replies are reminders to inspect and wait again, not failure or shutdown evidence. A new execution or service issue ends the wait once with `issue`; tell the user when it needs them and wait again. Reconnect to the same `runId` and follow [host.md](host.md).
 
 ## Cancellation and stopping
 
