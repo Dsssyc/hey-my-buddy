@@ -690,7 +690,8 @@ def _web_config(connection: Connection, request: RunRequest) -> dict:
     overrides = {"web_search": "live", "features.shell_tool": False,
                  "features.view_image": False, "agents.enabled": False,
                  "features.multi_agent": False, "features.multi_agent_v2": False,
-                 "features.apps": False, "features.plugins": False}
+                 "features.apps": False, "features.plugins": False,
+                 "features.image_generation": False}
 
     def disable_servers(servers):
         if not isinstance(servers, dict):

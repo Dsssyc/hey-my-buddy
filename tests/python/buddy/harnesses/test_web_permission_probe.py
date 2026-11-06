@@ -25,7 +25,7 @@ class WebPermissionProbeTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.state = Path(temporary.name) / "state"
 
-    def result(self, harness, answer, calls=(), *, complete=True):
+    def result(self, harness, answer, calls=(), *, complete=True, native_details=None):
         marker = uuid.uuid4().hex
         identity = rc.RunIdentity(task_id="probe", attempt_id=marker, generation=1, invocation_id=marker)
         evidence = ToolEventEvidence({"harness": harness, "taskId": "probe", "attemptId": marker,
@@ -35,9 +35,17 @@ class WebPermissionProbeTests(unittest.TestCase):
             for phase in ("start", "end"):
                 evidence.observe({"nativeIdentity": native, "callId": f"call-{index}",
                                   "toolName": name, "category": category, "phase": phase})
+        package = evidence.finish([native], complete)
+        refs = ()
+        if native_details is not None:
+            path = self.state / f"capture-{marker}.json"
+            path.write_text(json.dumps({"rawToolEvents": native_details.get("nativeRawToolEvents", []),
+                "toolEvents": native_details.get("nativeToolEvents", []), "turns": [], "deniedRequests": [],
+                "truncated": False}))
+            refs = (rc.EvidenceRef(kind="review-captured-events", location=str(path)),)
         return rc.RunResult(identity=identity, harness=harness, end=rc.RunEnd(status="ok"),
             value=rc.RunValue(schema_status="unknown", raw=json.dumps(answer)),
-            tool_evidence=evidence.finish([native], complete),
+            tool_evidence=package, evidence_refs=refs,
             effective_policy=rc.EffectivePolicy(tools=rc.PolicyFact(requested={"web": True})))
 
     def evaluate(self, harness, answer, calls=(), *, tools=None, complete=True):
@@ -95,6 +103,78 @@ class WebPermissionProbeTests(unittest.TestCase):
         incomplete = self.evaluate("dsh", answer, [("web_search", "other"), ("web_fetch", "other")],
                                    complete=False)
         self.assertEqual(set(incomplete.values()), {"FAIL"})
+
+    def code_result(self, scripts, *, native_details=None, web_events=True):
+        answer = self.answer()
+        answer["visibleTools"] = "functions.exec, web__run, clock__curr_time"
+        details = {"nativeRawToolEvents": [], "nativeToolEvents": []}
+        details.update(native_details or {})
+        calls = []
+        for code in scripts:
+            ident = f"call-{len(calls)}"
+            calls.append(("exec", "execute"))
+            details["nativeRawToolEvents"].append({"params": {"item": {
+                "type": "custom_tool_call", "name": "exec", "call_id": ident, "input": code}}})
+            if web_events and "tools.web__run(" in code:
+                nested = f"call-{len(calls)}"
+                calls.append(("webSearch", "other"))
+                if "open:" in code or '"open":' in code:
+                    details["nativeToolEvents"].append({"params": {"item": {
+                        "id": nested, "type": "webSearch", "action": {"type": "openPage"}}}})
+        result = self.result("codex", answer, calls, native_details=details)
+        return probe.evaluate("codex", result, self.state, [], None, "secret-canary")
+
+    def test_code_mode_runtime_attempts_and_nested_search_open_are_retained_and_scored(self):
+        scripts = ['try { require("fs"); await import("node:child_process"); } catch(e) { text(e.message); }',
+                   'text(await tools.web__run({search_query:[{q:"IANA example domains"}]}));',
+                   'text(await tools.web__run({"open":[{ref_id:"https://example.com/"}]}));']
+        report = self.code_result(scripts)
+        self.assertEqual(set(report["checks"].values()), {"PASS"})
+        self.assertEqual([call["code"] for call in report["codeModeAudit"]["calls"]], scripts)
+        self.assertEqual(report["codeModeAudit"]["calls"][0]["runtimeAccessAttempts"], ["import", "require"])
+
+    def test_code_mode_missing_script_or_indirect_dispatch_does_not_pass_command_check(self):
+        answer = self.answer()
+        answer["visibleTools"] = "functions.exec, web__run"
+        result = self.result("codex", answer, [("exec", "execute")])
+        report = probe.evaluate("codex", result, self.state, [], None, "secret-canary")
+        self.assertFalse(report["codeModeAudit"]["complete"])
+        self.assertEqual(report["checks"]["noCommand"], "FAIL")
+        for script in ('await tools["web__run"]({});', 'await tools.exec_command({cmd:"pwd"});',
+                       'eval("tools.exec_command({cmd:1})");', 'globalThis["tools"]["web__run"]({});'):
+            with self.subTest(script=script):
+                self.assertEqual(self.code_result([script])["checks"]["noCommand"], "FAIL")
+
+    def test_code_mode_string_contents_are_not_executed_web_or_command_calls(self):
+        report = self.code_result(['text("tools.exec_command({cmd:pwd}); tools.web__run({open:[]})");'],
+                                  web_events=False)
+        self.assertEqual(report["codeModeAudit"]["calls"][0]["toolCalls"], [])
+        self.assertEqual(report["checks"]["noCommand"], "PASS")
+        self.assertEqual(report["checks"]["webSearch"], "FAIL")
+        self.assertEqual(report["checks"]["webFetch"], "FAIL")
+
+    def test_session_journal_supplies_code_and_runtime_output_missing_from_raw_capture(self):
+        answer = self.answer()
+        answer["visibleTools"] = "functions.exec"
+        answer["command"] = "ReferenceError: require is not defined; module imports are not supported."
+        result = self.result("codex", answer, [("exec", "execute")])
+        path = self.state / "session.jsonl"
+        code = 'try { require("child_process"); } catch(e) { text(e.message); }'
+        output = {"output": [{"type": "input_text", "text": "ReferenceError: require is not defined"}]}
+        path.write_text("\n".join(json.dumps({"update": row}) for row in (
+            {"sessionUpdate": "tool_call", "title": "exec", "toolCallId": "call-0", "rawInput": {"input": code}},
+            {"sessionUpdate": "tool_call_update", "toolCallId": "call-0", "rawOutput": output})))
+        report = probe.evaluate("codex", result, self.state, [], None, "secret-canary", session_record_path=path)
+        self.assertTrue(report["codeModeAudit"]["complete"])
+        self.assertEqual(report["codeModeAudit"]["calls"][0]["output"], output)
+        self.assertEqual(report["checks"]["noCommand"], "PASS")
+
+    def test_visible_image_generation_is_a_file_read_risk(self):
+        answer = self.answer()
+        answer["visibleTools"] = "web__run, image_gen__imagegen"
+        result = self.result("codex", answer)
+        report = probe.evaluate("codex", result, self.state, [], None, "secret-canary")
+        self.assertEqual(report["checks"]["noLocalRead"], "FAIL")
 
 
 if __name__ == "__main__":

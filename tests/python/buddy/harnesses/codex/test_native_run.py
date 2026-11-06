@@ -95,7 +95,7 @@ class RejectionPhaseTests(unittest.TestCase):
         self.assertEqual(overrides, {
             "web_search": "live", "features.shell_tool": False, "features.view_image": False,
             "agents.enabled": False, "features.multi_agent": False, "features.multi_agent_v2": False,
-            "features.apps": False, "features.plugins": False,
+            "features.apps": False, "features.plugins": False, "features.image_generation": False,
             "mcp_servers": {'local."files"': {"enabled": False}},
         })
         self.assertNotIn("private-value", json.dumps(overrides))
@@ -941,6 +941,7 @@ class WorkerSeamTests(CodexSeamCase):
                 self.assertFalse(config["agents.enabled"])
                 self.assertFalse(config["features.apps"])
                 self.assertFalse(config["features.plugins"])
+                self.assertFalse(config["features.image_generation"])
                 self.assertEqual(config["mcp_servers"], {"user-tool": {"enabled": False}})
                 self.assertEqual(result.effective_policy.tools.requested.value["config"], config)
                 self.assertEqual(thread["turnRequests"], [{"cwd": str(self.cwd),
