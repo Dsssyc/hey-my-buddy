@@ -10,7 +10,7 @@
 
 对照的起点是产品现有的落法（本仓库源码，2026-11-06 读）：`src/hey_my_buddy/protocol/capabilities.py` 的 `PERMISSION_LEVELS`，Codex 适配器的 `_permission_sandbox` 与 none 一档的 fast 模式，DSH 适配器的 `NONE_SCOPE_DISABLED_ROWS`，ZCode 适配器会话创建参数里的 `toolAllowlist`，Claude 适配器的 `permission_sandbox_settings` 与 `--tools` 列表。四家外部来源只读公开材料，全部 2026-11-06 读：
 
-- Codex：公开源码在已装版本对应的 rust-v0.164.0 标签上。读了 app-server 协议定义（thread/start 的参数与应答）、回合工具的装配处、功能旗标表、`-c` 覆盖的解析与合并、联网工具的规格与装配条件，读到能回答五个问题为止；没有通读整个仓库。官方文档站重定向到不带版本的页面，除注明外未用作依据。
+- Codex：公开源码在已装版本对应的 rust-v0.164.0 标签上。读了 app-server 协议定义（thread/start 的参数与应答、config/read 的应答构造、MCP 状态方法）、回合工具的装配处、功能键表、`[agents]` 与 `[tools]` 的配置结构、MCP 服务器条目的键、`-c` 覆盖的解析与合并、联网工具的规格与装配条件、apply_patch 的执行与拒绝路径，读到能回答五个问题为止；没有通读整个仓库。厂商的 Configuration Reference 页（文档站重定向后的新址，页面不带版本）另读了对各配置键的措辞，只作旁证、与源码分开标注。
 - Claude Code：官方文档（CLI 参考、无头运行、工具参考、hooks、MCP、skills、settings、Agent SDK 类型参考），页面不带版本、描述的是最新发布（读时 CHANGELOG 顶部是 2.1.318，文档页修改日期 2026-11-03/04，离 2.1.312 六个补丁号内）；官方 CHANGELOG（2.1.312 在列、无日期；npm registry 记录 2.1.312 发布于 2026-10-27）。没有读本机安装内容，没有实测。
 - DSH：公开仓库（MIT）在已装版本对应的 dsh-v0.2.1-rc.2 标签上（2026-10-17 发布的预发布）。读了 CLI 参考、工具目录文档、基础 bundle 的行表，tool-web 与 web 各后端、skill、MCP 客户端、ACP 各包的说明与配置行；DeepSeek 官方的 Search 与 Fetch API 文档；npm registry 的版本记录。随包约 300 个插件没有逐个读。
 - ZCode：官方文档站（zcode.z.ai，页面无版本无日期、只写桌面 App）与开源仓库（Apache-2.0）的主干——仓库只给 3.x（App 版本号）标签，没有 0.17.x 的 CLI 标签；主干里 CLI 的版本串恰是 0.17.1、App 的版本串 3.17.2，但主干与装好的 0.17.1 之间差多少提交无法从公开来源判断，本份的源码结论都按"主干 2026-11-06"记。另读官方反馈仓库里的第三方条目作旁证（2026-10 的报告）。没有读本机安装内容，没有运行 ZCode。
@@ -23,11 +23,11 @@
 
 ### Codex CLI 0.164.0（CLI 形态，产品经 app-server 驱动）
 
-1. **能不能只留联网工具：不能完全。**〔源码〕一个回合的工具在一处装配，模型可见的有：exec_command 与 write_stdin（shell）、apply_patch、update_plan、view_image、托管的 web_search、独立的 web.run、多代理工具、MCP 工具与动态工具。能经单次调用关掉的：`--disable shell_tool`（全局旗标，源码注明等价于 `-c features.shell_tool=false`）让 shell 工具整个不注册；`view_image` 与 `sleep_tool` 同为功能旗标（默认开）；`tools.update_plan.enabled=false` 关计划工具；`web_search=disabled` 移除托管联网搜索。thread/start 还收一个 `config` 参数：逐回合的覆盖表，按与 `-c` 相同的合并落到本回合（字段本身没有文档注释，语义读自消费它的代码）。关不掉的：apply_patch 没有功能旗标或配置键，按模型元数据注册；多代理工具没有功能旗标；用户配置的 MCP 服务器移除不了——`-c` 覆盖只增改不删，空表合并等于没写（`mcp_servers={}` 不生效），也没有工具允许清单机制。
-2. **强制还是约定：关得掉的部分是强制。**〔源码〕功能旗标关闭时工具根本不注册（装配处的条件原文如此），不是靠指令；`web_search=disabled` 同样是工具不出现。沙箱（read-only 等）只管命令的文件与网络，不移除任何工具。
+1. **能不能只留联网工具：接近能——除 apply_patch 与几个可再关的默认工具外，都有单次调用的开关。**〔源码〕一个回合的工具在一处装配，逐类说。shell 用 `--disable shell_tool`（全局旗标，源码注明等价于 `-c features.shell_tool=false`），关了就不注册；`view_image`、`sleep_tool`、`image_generation`、`goals` 同为功能键且默认开，逐个可关。多代理工具的功能键是 `multi_agent`（功能表里 Stable、默认开），另有 `[agents]` 表的 `agents.enabled`（默认 true）；多代理版本的推导次序是 `multi_agent_v2` 功能键、`agents.enabled=false`（覆盖分支，压过模型元数据）、所选模型自己的元数据、`features.multi_agent`（最后的回退分支）——所以 `agents.enabled=false` 无条件不注册多代理工具，`features.multi_agent=false` 则可能被模型元数据越过。apps（连接器）用 `features.apps=false`（默认开；关掉后插件安装类工具不注册），单个 app 用 `apps.<id>.enabled=false`。update_plan 只在 `tools.update_plan.enabled=true` 时注册（这个键的缺省是 false，默认不在）。联网搜索用 `web_search=disabled` 移除。thread/start 还收一个 `config` 参数：逐回合的覆盖表，按与 `-c` 相同的合并落到本回合（字段本身没有文档注释，语义读自消费它的代码）。MCP 逐服务器关：`mcp_servers.<id>.enabled=false`（源码注释"When `false`, Codex skips initializing this MCP server"）、插件自带的服务器用 `plugins.<plugin>.mcp_servers.<server>.enabled=false`，服务器内另有 `enabled_tools` 与 `disabled_tools` 收窄；`-c` 的点路径覆盖在叶子处替换，这些键既可经 `-c` 也可经 thread/start 的 `config` 单次生效；空表 `mcp_servers={}` 仍不生效（覆盖只增改不删），但叶子键逐个写得进。全盘没有工具允许清单机制。〔文档〕厂商配置参考（页面无版本）把 `features.multi_agent`、`agents.enabled`、`mcp_servers.<id>.enabled`、`enabled_tools`、`disabled_tools`、`plugins.<plugin>.mcp_servers.<server>.enabled`、`apps.<id>.enabled` 都列为文档化的键。关掉 shell_tool、view_image、多代理、apps 与全部 MCP 服务器之后，回合里还剩：apply_patch——唯一的门是模型元数据（所选模型是否设了它，公开源码读不出，不知道），没有功能键或配置键；request_user_input（`tools.experimental_request_user_input` 不写即开，默认注册的交互工具，不碰文件）；image_gen 与 get_goal、create_goal、update_goal（功能键默认开，可再关；goal 三件操作的是目标状态，不是文件系统）；以及所选模型的 experimental_supported_tools 点名的几个（服务端模型目录说了算，公开源码读不出，不知道）。tool_search 在没有 MCP、没有 apps 时没有可延迟装载的工具，不注册；notes 与 history 的扩展工具默认不装（要默认关的 TokenBudget 功能键等条件）。
+2. **强制还是约定：强制。**〔源码〕功能键、`agents.enabled` 或 `tools.update_plan.enabled` 关掉时工具根本不注册（装配处的条件原文如此），不是靠指令；MCP 服务器 `enabled=false` 时连接管理器滤掉它、不起连接，工具与资源工具都不出现；`web_search=disabled` 同样是工具不出现。apply_patch 在 read-only 沙箱加 never 批准策略下注册不受限，但每一次写调用都被 harness 拒绝（拒绝理由原文"writing is blocked by read-only sandbox; rejected by user approval settings"），写不了任何文件；它也不给模型任何读文件的能力——工具输出只有 A/M/D 的状态行，校验时内部读到的文件内容不返回给模型。沙箱（read-only 等）管的是命令与写路径，本身不移除工具。
 3. **联网在哪里执行：都在提供方服务器。**〔源码〕web_search 序列化为提供方 Responses API 的 web_search 工具类型，由提供方执行；装配只看提供方能力与 web_search 模式，不看沙箱的 networkAccess。web.run 默认关（开发中的旗标），启用后也是经远端 Search API 执行，不是本机抓取。一个常规回合里没有本机网页抓取工具，file:// 与 localhost 无从谈起。
-4. **原生回报：有政策回显，没有工具集回报。**〔源码〕thread/start 的应答回显 sandbox 与 approvalPolicy（产品 review 档已在核对 sandbox 回显），不回显工具集；config/read 返回合并后的生效配置，含 web_search 模式（mcp_servers 是否出现在应答里是〔推断〕：读自序列化方式，没有端到端引文）。没有任何方法或事件报告本回合实际可用的工具集。
-5. **关用户 MCP 等：没有逐次参数。**〔源码〕`-c` 与 `--enable/--disable` 只增改不删；app-server 的启动旗标里没有关 MCP 的；`CODEX_HOME` 环境变量可以把整个配置根指到别处（源码注释记默认 `~/.codex`）。与 ADR-030 对照（只列事实）：`-c`、`--disable`、thread/start 的 `config` 都是 harness 自己的单次调用参数，不改用户文件；`CODEX_HOME` 换的不是一档权限，而是这个进程读哪份用户配置。
+4. **原生回报：有政策与配置回显，没有工具集回报。**〔源码〕thread/start 的应答回显 sandbox 与 approvalPolicy（产品 review 档已在核对 sandbox 回显），不回显工具集。config/read 的应答构造端到端确认过：生效配置序列化后，`mcp_servers` 以服务器 id 为键出现在应答里（含已禁用的，因为是合并后的生效配置），`agents` 与 `features` 同样出现；`tools` 是应答类型的具名字段、只见 web_search 一项，其余 tools 表项不回显——产品由此能拿到用户配置了哪些服务器。另有 `mcpServerStatus/list`：逐服务器回名称、连接状态与工具表。没有任何方法或事件报告本回合实际可用的工具集。
+5. **关用户 MCP、多代理、apps 的参数：都是 harness 自己的单次调用配置。**〔源码〕逐服务器 `mcp_servers.<id>.enabled=false` 与 `plugins.<plugin>.mcp_servers.<server>.enabled=false`——产品先经 config/read 或 mcpServerStatus/list 拿到服务器名，再逐个写覆盖；多代理 `agents.enabled=false`（或 `features.multi_agent=false`，注意第 1 条的推导次序）；apps `features.apps=false` 或逐个 `apps.<id>.enabled=false`。app-server 的启动旗标里没有一键全关 MCP 的；`CODEX_HOME` 环境变量可以把整个配置根指到别处（源码注释记默认 `~/.codex`）。与 ADR-030 对照（只列事实）：`-c`、`--disable`、thread/start 的 `config` 都是 harness 自己的单次调用参数，不改用户文件；`CODEX_HOME` 换的不是一档权限，而是这个进程读哪份用户配置。
 
 ### Claude Code CLI 2.1.312（CLI 形态，产品以 print 模式加 stream-json 驱动）
 
@@ -57,7 +57,7 @@
 
 | harness | 只留联网工具 | 强制还是约定 | 抓取在哪里执行 | 原生回报 | 关用户 MCP 等的参数 |
 | --- | --- | --- | --- | --- | --- |
-| Codex CLI 0.164.0（app-server） | 不能完全：shell、view_image、计划、联网搜索可关（`--disable shell_tool` 等、`web_search=disabled`、thread/start 的 `config` 覆盖），apply_patch、多代理工具关不掉，用户 MCP 移除不了 | 关掉的部分强制（不注册） | 搜索：提供方服务器（托管 web_search）；没有本机抓取工具 | thread/start 回显 sandbox 与批准策略；config/read 给生效配置；无工具集回报 | 无逐次参数；`-c` 只增改不删；`CODEX_HOME` 换整个配置根 |
+| Codex CLI 0.164.0（app-server） | 接近能：shell、view_image、多代理（`agents.enabled` 或 `features.multi_agent`）、apps（`features.apps`、`apps.<id>.enabled`）、逐个 MCP 服务器（`mcp_servers.<id>.enabled` 等）都经 `-c` 或 thread/start 的 `config` 单次可关；剩 apply_patch（无开关，是否在按模型元数据而定）与默认的 request_user_input、image_gen、goal 工具（各有功能键可关） | 强制（不注册；禁用的 MCP 服务器不起连接；read-only 沙箱加 never 下 apply_patch 每次写被拒、读不出文件内容） | 搜索：提供方服务器（托管 web_search）；没有本机抓取工具 | thread/start 回显 sandbox 与批准策略；config/read 应答含 `mcp_servers`（按 id、含禁用的）、`agents`、`features`；`mcpServerStatus/list` 列服务器；无工具集回报 | 逐服务器 `mcp_servers.<id>.enabled=false`、`plugins.<plugin>.mcp_servers.<server>.enabled`；多代理 `agents.enabled`；apps `features.apps` 或 `apps.<id>.enabled`；服务器名经 config/read 或 `mcpServerStatus/list` 拿；`CODEX_HOME` 换整个配置根 |
 | Claude Code CLI 2.1.312（print 模式） | 文档层面能：`--tools WebSearch,WebFetch` 加 `--disallowedTools "mcp__*"` | 强制（文档措辞；未实测） | 搜索：Anthropic 的服务端；抓取：本机 CLI（拒绝 localhost 与无点主机名；file:// 未提） | 有：system/init 报告 tools、mcp_servers、permissionMode 等 | MCP 用 `--strict-mcp-config`；hooks 用 `--settings '{"disableAllHooks": true}'`；skills 不列 Skill 或 `--disable-slash-commands`；插件无单独旗标（`--bare`、`--setting-sources`） |
 | DSH CLI 0.2.1-rc.2（ACP） | 能：`--patch` 禁 tool-web 之外的工具行；tool-web 行内可再单独关 search 或 fetch | 强制（行禁用即不装） | 搜索：DeepSeek 的服务器（默认后端）；抓取：本机 HTTP，此版只许公共目的地（回环、私网、file:// 都取不到） | 会话内无工具集回报；`--dump-config` 无模型核对组合态（含禁用行） | MCP 逐服务器是补丁行、默认全关、无一键全禁；skills 禁行或 `includeDefaultRoots: false`；同一 `--patch` 机制 |
 | ZCode CLI 0.17.1（app-server；源码为主干） | 内建工具能：`toolAllowlist: ["WebSearch", "WebFetch"]`；MCP 工具是否受管不知道 | 内建：注册层强制；MCP：不知道 | 搜索：提供方服务器（provider_native web_search，US-only）；抓取：本机（拒绝 file://、localhost、无点主机名与非公共 IP） | settings 回显 mode 与 permission.mode；无工具集或 allowlist 的回报 | `mcpServers: []` 整体替换用户与项目的 MCP（插件服务器仍并入）；skills、hooks、插件无逐会话关法 |
@@ -69,13 +69,13 @@
 - Claude 的 `--tools WebSearch,WebFetch` 加 `--disallowedTools "mcp__*"` 在 2.1.312 上的实际工具集——init 事件的 tools 与 mcp_servers 字段本身就能核对；
 - ZCode 装好的 0.17.1 上 `toolAllowlist: ["WebSearch", "WebFetch"]` 的实际效果，尤其 MCP 工具与插件服务器是否仍可见（源码读不到的那段）；
 - DSH 只留 tool-web 行时回合实际可见的工具集——dump-config 核对组合之外，还要一次回合看 tool_call 事件；
-- Codex 关掉 shell_tool 等之后回合实际可见的工具面——apply_patch、多代理工具与用户 MCP 工具是否仍出现。
+- Codex 关掉 shell_tool、view_image、多代理、apps 与各 MCP 服务器之后回合实际可见的工具面——apply_patch、request_user_input、image_gen 与 goal 工具是否出现（apply_patch 是否在，取决于所选模型在服务端目录里的元数据，公开源码读不出），以及各项覆盖在本机用户配置上是否按源码语义生效。
 
-没取的：把某一家的强弱读成选择。四家在"能不能只留联网"上事实不同（两家能、一家文档层面能、一家不能完全），强制与抓取位置也不同，怎样权衡是开发者的决定。也没有做任何实测：本份全部依据公开来源与本仓库已有记录。
+没取的：把某一家的强弱读成选择。四家在"能不能只留联网"上事实不同（DSH 与 ZCode 的内建工具有原生机制，Claude Code 文档层面能，Codex 接近能——多代理、apps、逐个 MCP 服务器都有关开，剩 apply_patch 无开关、按模型而定，read-only 沙箱下其写被拒、也读不出文件内容），强制与抓取位置也不同，怎样权衡是开发者的决定。也没有做任何实测：本份全部依据公开来源与本仓库已有记录。
 
 ## 时效
 
-- 任一家升级都要重核：Codex 越过 0.164.0（功能旗标表与 `-c` 合并语义都可能动）；Claude Code 越过 2.1.312（本份引的文档页描述最新发布，读时已是 2.1.318，措辞要对照）；DSH 的 rc 以天计（0.2.2-rc.1 已于 2026-11-04 发布，主干已把 web_fetch 改为允许回环与私网，与本份记的 0.2.1-rc.2 相反）；ZCode 越过 0.17.1（主干没有 0.x 标签，装好的版本与主干的关系每次都要重判）。
+- 任一家升级都要重核：Codex 越过 0.164.0（功能键表、`[agents]`/`[tools]`/`mcp_servers` 各键的语义、多代理版本推导的次序——模型元数据先于 `features.multi_agent` 的回退——与 `-c` 合并语义都可能动）；Claude Code 越过 2.1.312（本份引的文档页描述最新发布，读时已是 2.1.318，措辞要对照）；DSH 的 rc 以天计（0.2.2-rc.1 已于 2026-11-04 发布，主干已把 web_fetch 改为允许回环与私网，与本份记的 0.2.1-rc.2 相反）；ZCode 越过 0.17.1（主干没有 0.x 标签，装好的版本与主干的关系每次都要重判）。
 - ZCode 给 CLI 发布标签，或其反馈仓库里"session/create 收工具配置"的请求落地时，ZCode 一节的推断可以升级为核对。
 - Claude 的 `--tools` 对 MCP 工具的措辞、hooks 的合并规则、`--bare` 的范围，DSH 的行表或 `--patch` 语义（按行整体替换 config）、DeepSeek Search 与 Fetch API 或默认后端，任一变动。
 - 本仓库 DSH 适配器对 2026-10-06 读包的重记，会使本份转述的那条 `commands` 行记录过时。
