@@ -58,7 +58,7 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
 
     def test_native_outcomes_keep_permission_and_stop_facts_without_a_permission_file(self):
         for harness, levels in PERMISSION_LEVELS.items():
-            for permission in ("read", "write", "full"):
+            for permission in ("web", "read", "write", "full"):
                 for status in ("ok", "error", "unknown"):
                     with self.subTest(harness=harness, permission=permission, status=status):
                         root = ensure_private_dir(self.base / f"{harness}-{permission}-{status}")

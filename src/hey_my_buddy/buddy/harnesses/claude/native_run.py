@@ -53,7 +53,7 @@ from typing import Any, Callable, Mapping
 from ....protocol.reasons import reason as make_reason
 
 from ....errors import BoardError
-from ....json_codec import canonical_json
+from ....json_codec import canonical_json, decode_strict_json
 from ....private_dirs import ensure_private_dir
 from ....paths import native_path
 from ....private_files import read_bytes
@@ -297,7 +297,7 @@ def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Pr
     private_json(native_root / _SETTINGS_FILE, settings)
     mcp_config_path = None
     inquiry_tools = ()
-    if inquiry is not None:
+    if inquiry is not None and request.permission != "web":
         mcp_config_path = str(native_root / "inquiry-mcp.json")
         private_json(Path(mcp_config_path), {"mcpServers": {inquiry.server_name: inquiry.mcp_server}})
         inquiry_tools = tuple(f"mcp__{inquiry.server_name}__{name}" for name in INQUIRY_TOOLS)
@@ -305,6 +305,7 @@ def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Pr
                           effort=request.buddy.effort,
                           settings_path=str(native_root / _SETTINGS_FILE),
                           read_only=read_only, output_schema=request.output_schema.value,
+                          web_only=request.permission == "web",
                           full_access=request.permission == "full",
                           mcp_config_path=mcp_config_path, inquiry_tools=inquiry_tools)
     return _Preparation(session_id=session_id, deadline=deadline, invocation_root=invocation_root,
@@ -903,6 +904,9 @@ def _effective_policy(preparation: _Preparation) -> EffectivePolicy:
                  "sandbox": preparation.settings["sandbox"]}
     if "permissions" in preparation.settings:
         requested["permissions"] = preparation.settings["permissions"]
+    if "--strict-mcp-config" in preparation.args:
+        requested["strictMcpConfig"] = True
+        requested["mcpConfig"] = decode_strict_json(_flag_value(preparation.args, "--mcp-config"))
     return EffectivePolicy(
         tools=PolicyFact(requested=requested))
 

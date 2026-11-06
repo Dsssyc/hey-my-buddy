@@ -520,6 +520,24 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(native_run.NONE_SCOPE_DISABLED_ROWS, CONFIRMED_NONE_ROWS,
                          "the shipped list must stay the Host-confirmed inventory")
 
+    def test_web_scope_retains_only_the_native_web_tool_row(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
+        request = self.fast_request("prompt", scope="web")
+        with mock.patch.dict(os.environ, {"DSH_PERMISSION_MODE": "inherited-mode"}):
+            result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                         services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.raw, '{"choice":"a"}')
+        rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
+        disabled = [row["id"] for row in rows[2:]]
+        self.assertEqual(disabled, [*(row for row in CONFIRMED_NONE_ROWS if row != "tool-web"),
+                                    native_run.PLAN_MODE_ROW])
+        self.assertTrue(all(row["disabled"] is True for row in rows[2:]))
+        self.assertEqual(result.effective_policy.tools.requested.value, {"disabledRows": disabled})
+        observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
+        self.assertIsNone(observed["permissionMode"])
+
     def test_a_spawn_failure_reports_an_unavailable_agent_and_no_started_model(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         with mock.patch.object(native_run, "launch_for",
@@ -800,6 +818,20 @@ class MountTests(NativeRunCase):
 
 
 class WorkerSeamTests(NativeRunCase):
+    def test_web_scope_uses_the_same_patch_with_bound_carrier(self):
+        request, bound, mount = self.worker_request(level="web")
+        self.micro_task_agent_args(mount)
+        result = run(request, observer=worker_observer, services=bound.services,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.parsed.value["disposition"], "completed")
+        rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
+        self.assertEqual([row["id"] for row in rows[2:]],
+                         [*(row for row in CONFIRMED_NONE_ROWS if row != "tool-web"),
+                          native_run.PLAN_MODE_ROW])
+        self.assertEqual(result.effective_policy.tools.requested.value,
+                         {"disabledRows": [row["id"] for row in rows[2:]]})
+
     def test_large_utf8_worker_prompt_reaches_native_acp_peer_complete(self):
         capture = self.base / "native-prompt.ndjson"
         task_text = "核对文件🙂，正文只出现一次-97ba54"

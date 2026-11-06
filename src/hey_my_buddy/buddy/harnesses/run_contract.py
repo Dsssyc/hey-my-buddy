@@ -62,7 +62,7 @@ FORMAT_VERSION = 1
 from ...protocol.harness_names import HARNESS_NAMES
 
 HarnessName = Literal[*HARNESS_NAMES]
-PermissionLevel = Literal["none", "read", "write", "full"]
+PermissionLevel = Literal["none", "web", "read", "write", "full"]
 EndStatus = Literal["ok", "error", "cancelled", "unknown"]
 SchemaStatus = Literal["valid", "invalid", "unknown"]
 GroupState = Literal["gone", "alive", "unknown"]

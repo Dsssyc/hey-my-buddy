@@ -156,6 +156,7 @@ def _permission_sandbox(request: RunRequest) -> tuple[str, dict]:
     """One turn's native thread mode and explicit file/network policy."""
     level = request.permission
     return {
+        "web": ("read-only", {"type": "readOnly", "networkAccess": True}),
         "read": ("read-only", {"type": "readOnly", "networkAccess": True}),
         "write": ("workspace-write", {"type": "workspaceWrite", "writableRoots": [request.cwd],
                                     "networkAccess": True}),
@@ -672,6 +673,40 @@ def _check_thread_receipt(response: dict, cwd: str, *, mode: str, previous: str 
     return thread_id
 
 
+def _web_config(connection: Connection, request: RunRequest) -> dict:
+    """Restrict this thread through native overrides, never user config files.
+
+    config/read reports the merged server names, including disabled servers.
+    TOML-quoted path components keep dots in a server or plugin id literal.
+    See the Codex CLI 0.164.0 research note, facts 1, 4 and 5.
+    """
+    if request.permission != "web":
+        return {}
+    configured = connection.call("config/read", {"cwd": request.cwd, "includeLayers": False}).get("config")
+    if not isinstance(configured, dict):
+        raise CodexProtocolError("invalid-config-readback", "Codex did not report its native configuration")
+    overrides = {"web_search": "live", "features.shell_tool": False,
+                 "features.view_image": False, "agents.enabled": False,
+                 "features.multi_agent": False, "features.multi_agent_v2": False,
+                 "features.apps": False}
+
+    def disable_servers(servers, prefix):
+        if not isinstance(servers, dict):
+            raise CodexProtocolError("invalid-config-readback", "Codex reported an invalid MCP server table")
+        for name in servers:
+            overrides[f"{prefix}.{json.dumps(name, ensure_ascii=False)}.enabled"] = False
+
+    disable_servers(configured.get("mcp_servers", {}), "mcp_servers")
+    plugins = configured.get("plugins", {})
+    if not isinstance(plugins, dict):
+        raise CodexProtocolError("invalid-config-readback", "Codex reported an invalid plugin table")
+    for name, plugin in plugins.items():
+        if not isinstance(plugin, dict):
+            raise CodexProtocolError("invalid-config-readback", "Codex reported an invalid plugin configuration")
+        disable_servers(plugin.get("mcp_servers", {}), f"plugins.{json.dumps(name, ensure_ascii=False)}.mcp_servers")
+    return overrides
+
+
 def _configure_worker(connection: Connection, request: RunRequest, prep: _Preparation,
                       state: _RunState, inquiry: ClientInquiryServices | None = None) -> str:
     """Worker buddy selection: continuation checks, then one start or resume."""
@@ -680,6 +715,10 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     sandbox, _policy = _permission_sandbox(request)
     state.requested = requested
     inquiry_config = {"dynamicTools": inquiry.dynamic_tools} if inquiry is not None else {}
+    config = _web_config(connection, request)
+    permission_config = {"config": config} if config else {}
+    if config:
+        state.worker_policy = {"config": config}
     if mode == "native-session":
         binding = _read_binding(prep.native_root, previous)
         expected = {"taskId": request.identity.task_id, "threadId": previous,
@@ -709,7 +748,8 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
                                          "an interrupted Codex turn requires its exact previous attempt checkpoint")
             response = connection.call("thread/resume", {"threadId": previous, "cwd": request.cwd,
                                                          "model": requested["model"], "modelProvider": requested["provider"],
-                                                         "approvalPolicy": "never", "sandbox": sandbox})
+                                                         "approvalPolicy": "never", "sandbox": sandbox,
+                                                         **permission_config})
             state.binding_path = _binding_path(prep.native_root, previous)
         except CodexProtocolError as error:
             if error.code != "native-rpc-error":
@@ -719,7 +759,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
         response = connection.call("thread/start", {"cwd": request.cwd, "model": requested["model"],
                                                     "modelProvider": requested["provider"], "approvalPolicy": "never",
                                                     "sandbox": sandbox, "serviceName": "hey-my-buddy",
-                                                    **inquiry_config})
+                                                    **inquiry_config, **permission_config})
     else:
         raise CodexProtocolError("invalid-resume-mode",
                                  "Codex requires an explicit initial, native or reconstructed turn")
@@ -746,12 +786,16 @@ def _configure_review(connection: Connection, request: RunRequest,
     """One-shot read configuration with the same sandbox as a read Worker."""
     cwd, spec = request.cwd, buddy_spec(request)
     sandbox, policy = _permission_sandbox(request)
+    config = _web_config(connection, request)
     response = connection.call("thread/start", {
         "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
         "approvalPolicy": "never", "sandbox": sandbox, "serviceName": "hey-my-buddy",
         "experimentalRawEvents": True, "ephemeral": True,
+        **({"config": config} if config else {}),
     })
     state.worker_policy = {"sandboxPolicy": policy, "approvalPolicy": "never"}
+    if config:
+        state.worker_policy["config"] = config
     sandbox = response.get("sandbox")
     acknowledged = {"sandbox": sandbox,
                     "approvalPolicy": response.get("approvalPolicy"), "model": response.get("model"),
@@ -1063,7 +1107,7 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
     if mode in ("worker", "review"):
         _sandbox, params["sandboxPolicy"] = _permission_sandbox(request)
     if mode == "worker":
-        state.worker_policy = {"sandboxPolicy": params["sandboxPolicy"],
+        state.worker_policy = {**(state.worker_policy or {}), "sandboxPolicy": params["sandboxPolicy"],
                                "approvalPolicy": params["approvalPolicy"]}
     initial = not state.initial_request_attempted
     state.initial_request_attempted = True

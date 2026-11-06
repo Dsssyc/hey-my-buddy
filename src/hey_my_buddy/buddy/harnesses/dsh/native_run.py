@@ -178,9 +178,11 @@ UNREAD_SHAPE_KINDS = ("initialize", "agentInfo", "configOptions",
 
 def _launch_policy(request: RunRequest) -> tuple[list[dict], dict[str, str]]:
     """Map the shared permission to DSH's native launch configuration."""
-    if request.permission == "none":
+    if request.permission in ("none", "web"):
+        disabled = (NONE_SCOPE_DISABLED_ROWS if request.permission == "none" else
+                    tuple(row for row in NONE_SCOPE_DISABLED_ROWS if row != "tool-web"))
         rows = [{"id": name, "disabled": True}
-                for name in (*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW)]
+                for name in (*disabled, PLAN_MODE_ROW)]
         return rows, {}
     return [], {PERMISSION_MODE_ENV: PERMISSION_MODES[request.permission]}
 
@@ -1611,7 +1613,7 @@ def _effective_policy(request: RunRequest, state: _RunState) -> EffectivePolicy:
             tools=PolicyFact(requested=_json_package({"permissionMode": state.permission_mode})))
     if not state.session_opened:
         return EffectivePolicy()
-    if request.permission == "none":
+    if request.permission in ("none", "web"):
         requested = {"disabledRows": [row["id"] for row in state.scope_rows]}
         return EffectivePolicy(
             tools=PolicyFact(requested=_json_package(requested)))

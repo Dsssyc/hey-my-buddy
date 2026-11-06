@@ -67,6 +67,10 @@ for line in sys.stdin:
         assert 'titleGenerationEnabled' not in p
         if case == 'discovery' or case == 'native-config' and 'mcpServers' not in p:
             assert p['toolAllowlist'] == []
+        elif case == 'web-final':
+            assert p['mode'] == 'yolo'
+            assert p['toolAllowlist'] == ['WebSearch', 'WebFetch'] and p['mcpServers'] == []
+            assert p['offPeakToolEnabled'] is False and p['dynamicWorkflowEnabled'] is False
         elif case in ('write-final', 'write-post-close'):
             assert p.get('mode') == 'yolo' and p['mcpServers'] == []
         else:

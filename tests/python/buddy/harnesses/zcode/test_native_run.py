@@ -128,6 +128,9 @@ def fixture_observe(endpoint, **kwargs):
 
 FALLBACK_PREFERENCES = {"memoryEnabled": {"value": False, "source": "fallback"},
                         "nativeSearchEnhancementsEnabled": {"value": True, "source": "fallback"}}
+WEB_CREATE_PARAMS = {"mode": "yolo", "toolAllowlist": ["WebSearch", "WebFetch"],
+                     "mcpServers": [], "offPeakToolEnabled": False,
+                     "dynamicWorkflowEnabled": False}
 
 
 class NativeRunCase(FakeAppServerTests):
@@ -371,6 +374,23 @@ class FastSeamTests(NativeRunCase):
         # Read runs in the same normal mode as write: ZCode has no native
         # read-only session for a headless turn.
         self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
+
+    def test_web_scope_keeps_the_final_message_carrier_and_native_web_allowlist(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE, RunResult
+        os.environ["HMB_ZCODE_TEST_CASE"] = "web-final"
+        request = self.fast_request(structured_prompt("Web scope", SCHEMA)).model_copy(update={"permission": "web"})
+        original_open = native_run._open_root
+        with mock.patch.object(native_run, "_open_root", wraps=original_open) as opened:
+            result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                         services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.raw, '{"choice":"a"}')
+        self.assertEqual(opened.call_args.kwargs["create_params"], WEB_CREATE_PARAMS)
+        self.assertEqual(result.effective_policy.tools.requested.value, WEB_CREATE_PARAMS)
+        self.assertEqual(RunResult.from_payload(result.to_payload()).effective_policy.tools.requested.value,
+                         WEB_CREATE_PARAMS)
+        self.assertEqual(native_run.native_evidence(result)["toolAllowlist"],
+                         WEB_CREATE_PARAMS["toolAllowlist"])
 
     def test_a_late_tool_frame_after_settlement_is_the_role_call_not_the_scopes(self):
         # The EOF drain hands a late tool fact to the role observer: a rule that
@@ -624,6 +644,18 @@ def evidence_call(result):
 
 
 class WorkerSeamTests(MockNativeCase):
+    def test_web_scope_reaches_bound_session_without_adding_completion_mcp_server(self):
+        os.environ.update(self.environment)
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
+        request, services = self.worker_request(self.turn_input())
+        request = request.model_copy(update={"permission": "web"})
+        original_open = native_run._open_root
+        with mock.patch.object(native_run, "_open_root", wraps=original_open) as opened:
+            result = run(request, observer=worker_observer, services=services,
+                         cancelled=lambda: False)
+        self.assertEqual(opened.call_args.kwargs["create_params"], WEB_CREATE_PARAMS)
+        self.assertEqual(result.effective_policy.tools.requested.value, WEB_CREATE_PARAMS)
+
     def test_oversized_native_session_identity_fails_before_activity(self):
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "oversized-session"

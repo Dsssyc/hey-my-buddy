@@ -14,6 +14,7 @@ import json
 import os
 import tempfile
 import unittest
+from typing import get_args
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest import mock
 
@@ -176,6 +177,31 @@ class CodecRoundtripTests(unittest.TestCase):
         self.assertNotIn("toolScope", request.to_payload())
         with self.assertRaises(BoardError):
             edited(request, permission="unknown")
+
+    def test_web_permission_order_and_harness_declarations_share_the_contract(self):
+        from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS, adapter_capabilities, buddy_capabilities
+        levels = ("none", "web", "read", "write", "full")
+        self.assertEqual(get_args(rc.PermissionLevel), levels)
+        request = edited(full_request(Path(tempfile.gettempdir()).resolve()), permission="web")
+        self.assertEqual(rc.RunRequest.from_payload(request.to_payload()).permission, "web")
+        for harness, declared in PERMISSION_LEVELS.items():
+            with self.subTest(harness=harness):
+                self.assertEqual(tuple(declared), tuple(level for level in levels if level in declared))
+                self.assertEqual(declared["web"], "enforced")
+                self.assertIn("permission:web", adapter_capabilities(harness))
+                self.assertIn("permission:web", buddy_capabilities(harness, []))
+
+    def test_undeclared_web_permission_is_refused(self):
+        from hey_my_buddy.buddy.harnesses.registry import require_permission
+        from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
+        for harness, declared in PERMISSION_LEVELS.items():
+            require_permission({"harness": harness}, "web")
+            with self.subTest(harness=harness), mock.patch.dict(PERMISSION_LEVELS, {
+                    harness: {level: value for level, value in declared.items() if level != "web"}}):
+                with self.assertRaises(BoardError) as rejected:
+                    require_permission({"harness": harness}, "web")
+                self.assertEqual(rejected.exception.code, "UNSUPPORTED_CAPABILITY")
+                self.assertEqual(rejected.exception.details["requiredCapability"], "permission:web")
 
     def test_codex_full_worker_selects_the_worker_carrier(self):
         from hey_my_buddy.buddy.harnesses.codex import native_run as codex

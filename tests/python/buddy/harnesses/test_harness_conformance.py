@@ -44,7 +44,7 @@ from hey_my_buddy.protocol.tool_evidence import ACP_CATEGORIES, NATIVE_TOOL_CATE
 ROOT = Path(__file__).resolve().parents[4]
 DELIVERY_MODES = ("realtime", "cooperative-checkpoint", "unsupported")
 ENFORCEMENTS = ("enforced", "convention")
-PERMISSIONS = ("none", "read", "write", "full")
+PERMISSIONS = ("none", "web", "read", "write", "full")
 #: The surface every coding harness shares; `native-session` is deliberately
 #: not here, because it tracks each adapter's own native-resume declaration.
 SHARED_CAPABILITIES = ("inquiry", "workspace", "cancel", "artifacts", "deadline")

@@ -681,6 +681,20 @@ class WorkerCarrierTests(NativeRunCase):
 
 
 class ReadCarrierTests(NativeRunCase):
+    def test_web_run_sends_only_native_web_tools_and_an_empty_strict_mcp_config(self):
+        self.fixture_case("ok")
+        result = self.execute(self.request(scope="web", schema=READ_SCHEMA))
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        argv = self.fixture_state()["argv"]
+        self.assertEqual(flag_value(argv, "--tools"), "WebSearch,WebFetch")
+        self.assertEqual(flag_value(argv, "--allowedTools"), "WebSearch,WebFetch")
+        self.assertEqual(flag_value(argv, "--disallowedTools"), "mcp__*")
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertEqual(json.loads(flag_value(argv, "--mcp-config")), {"mcpServers": {}})
+        self.assertEqual(flag_value(argv, "--permission-mode"), "default")
+        self.assertEqual(json.loads(native_path(Path(flag_value(argv, "--settings"))).read_bytes()),
+                         native_run.permission_sandbox_settings("web"))
+
     def argv_and_settings(self, result):
         argv = self.fixture_state()["argv"]
         settings = json.loads(native_path(Path(flag_value(argv, "--settings"))).read_bytes())

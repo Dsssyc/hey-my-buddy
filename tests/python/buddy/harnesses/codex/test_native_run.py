@@ -82,6 +82,31 @@ def observed_activity(endpoint):
 
 
 class RejectionPhaseTests(unittest.TestCase):
+    def test_web_overrides_use_native_config_and_quote_server_ids(self):
+        connection = mock.Mock()
+        connection.call.return_value = {"config": {
+            "mcp_servers": {"local.files": {}, "disabled": {"enabled": False}},
+            "plugins": {"my.plugin": {"mcp_servers": {"user.data": {}}}},
+        }}
+        request = mock.Mock(permission="web", cwd="/private/checkout")
+        overrides = native_run._web_config(connection, request)
+        connection.call.assert_called_once_with("config/read", {"cwd": request.cwd, "includeLayers": False})
+        self.assertEqual(overrides, {
+            "web_search": "live", "features.shell_tool": False, "features.view_image": False,
+            "agents.enabled": False, "features.multi_agent": False, "features.multi_agent_v2": False,
+            "features.apps": False, 'mcp_servers."local.files".enabled': False,
+            'mcp_servers."disabled".enabled': False,
+            'plugins."my.plugin".mcp_servers."user.data".enabled': False,
+        })
+
+    def test_web_unreadable_config_stops_before_thread_admission(self):
+        for configured in (None, [], {"mcp_servers": []}, {"plugins": []}, {"plugins": {"p": None}}):
+            connection = mock.Mock()
+            connection.call.return_value = {"config": configured}
+            with self.subTest(configured=configured), self.assertRaises(CodexProtocolError):
+                native_run._web_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
+            self.assertEqual(connection.call.call_count, 1)
+
     def test_input_start_and_foreign_activity_do_not_start_the_root_model(self):
         from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
         evidence = TurnEvidence("root", "current")
@@ -873,6 +898,38 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_web_native_threads_and_resumes_keep_the_restricted_config(self):
+        self.set_case("ok")
+        for turn_id in (None, "turn-check"):
+            with self.subTest(carrier="worker" if turn_id else "final-message"):
+                request = self.request(permission="web", output_schema=OUTCOME_SCHEMA if turn_id else REVIEW_SCHEMA,
+                                       prompt="Web probe", turn_id=turn_id, input_sha256="a" * 64)
+                result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                             services=self.worker_services() if turn_id else None, cancelled=lambda: False)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
+                thread = trace["threads"][result.native_identity.session_id]
+                self.assertEqual(thread["start"]["sandbox"], "read-only")
+                self.assertEqual(thread["start"]["approvalPolicy"], "never")
+                config = thread["start"]["config"]
+                self.assertEqual(config["web_search"], "live")
+                self.assertFalse(config["features.shell_tool"])
+                self.assertFalse(config["features.view_image"])
+                self.assertFalse(config["agents.enabled"])
+                self.assertFalse(config["features.apps"])
+                self.assertEqual(result.effective_policy.tools.requested.value["config"], config)
+                self.assertEqual(thread["turnRequests"], [{"cwd": str(self.cwd),
+                    "sandboxPolicy": {"type": "readOnly", "networkAccess": True}, "approvalPolicy": "never"}])
+                if turn_id:
+                    resumed = self.request(permission="web", output_schema=OUTCOME_SCHEMA, prompt="Continue",
+                        turn_id=turn_id, input_sha256="b" * 64, native=Path(request.private_state.native_root).name,
+                        continuation=RunContinuation(mode="native-session", previous_session_id=result.native_identity.session_id))
+                    continued = run(resumed, observer=lambda _facts: FEEDBACK_CONTINUE,
+                                    services=self.worker_services(), cancelled=lambda: False)
+                    self.assertEqual(continued.end.status, "ok", continued.end.message)
+                    trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
+                    self.assertEqual(trace["threads"][continued.native_identity.session_id]["resumeRequests"][-1]["config"], config)
+
     def test_complete_worker_prompt_over_two_mib_reaches_the_native_peer(self):
         # The prompt's two real byte budgets carry it past 2 MiB: the task text
         # (1,048,550 of the 1 MiB submission bound) and the continuation input

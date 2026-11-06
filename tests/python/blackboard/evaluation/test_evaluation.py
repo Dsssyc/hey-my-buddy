@@ -104,7 +104,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         board = self.board()
         catalog_result = self.seed_catalog(board)
         buddy = next(item for item in catalog_result["buddies"] if item["buddyId"] == BUDDY_ID)
-        expected_permissions = {"permission:none", "permission:read", "permission:write", "permission:full"}
+        expected_permissions = {"permission:none", "permission:web", "permission:read", "permission:write", "permission:full"}
         self.assertFalse(any(cap.startswith("permission:") or cap in ("decision", "routing:fast") for cap in buddy["capabilities"]))
         with board.store.db.read() as db:
             stored = json.loads(db.execute("SELECT capabilities_json FROM buddies WHERE buddy_id=?", (BUDDY_ID,)).fetchone()[0])
