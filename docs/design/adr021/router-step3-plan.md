@@ -1,6 +1,6 @@
 # Router 第三步执行计划：探索、修正计为缺陷与门铃
 
-2026-11-06，Host 起草，待开发者确认。依据 [ADR-021](../../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 6、7、16 条（2026-11-06 改）、[ADR-026](../../decisions/026-delegation-authority.md) 第 7 条与 2026-10-25 的补充、[ADR-022](../../decisions/022-expected-duration-and-graceful-stop.md) 2026-10-25 的补充，以及 [ADR-032](../../decisions/032-host-interface-delegation-loop.md) 第 8 条。前两步见[第一步执行计划](router-step1-plan.md)与[第二步执行计划](router-step2-plan.md)。
+2026-11-06，Host 起草，开发者同日确认：这一步装为 0.63.0；画像面、只联网一档与模型的对应关系是下一步，装为 0.64.0；两步装上之后再重做 Buddy 页与 Router。依据 [ADR-021](../../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 6、7、16 条（2026-11-06 改）、[ADR-026](../../decisions/026-delegation-authority.md) 第 7 条与 2026-10-25 的补充、[ADR-022](../../decisions/022-expected-duration-and-graceful-stop.md) 2026-10-25 的补充，以及 [ADR-032](../../decisions/032-host-interface-delegation-loop.md) 第 8 条。前两步见[第一步执行计划](router-step1-plan.md)与[第二步执行计划](router-step2-plan.md)。
 
 ## 目标
 
@@ -55,7 +55,7 @@
 
 ### 控制台
 
-- **Router 设置**里加探索名额一项（每 N 个给 1 个，或关闭；旁附一句说明），放在现有的设置里，重做时搬进新页面。
+- **路由面的设置**里加探索名额一项（每 N 个给 1 个，或关闭；旁附一句说明），与模式、预算档、重试间隔放在一起（第 16 条）；重做时随路由面的设置一起搬。
 - **路由记录**：给了名额并改选的，标“探索”，悬停时说明首选是谁；照常选择的不标。
 - **路由记录**里读出 `routerIndex`，写明是第几个 Router 做的选择。
 - 文字走 i18n，中英文都有。
