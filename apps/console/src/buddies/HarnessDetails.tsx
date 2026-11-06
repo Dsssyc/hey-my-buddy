@@ -68,7 +68,10 @@ function LocationBlock({ row, name, view, gate, onCheck, onSavePath }: {
       <Hint text={[location.review.note, location.review.reason].filter(Boolean).join(" ")}>
         <span tabIndex={0} className={hintTarget}>{location.review.text}</span>
       </Hint>
+      <span className={label}>{t("harness.pane.web")}</span>
+      <span>{t(row.permissions?.web === "enforced" ? "harness.web.eligible" : "harness.web.ineligible")}</span>
     </div>
+    <p className="mt-3 text-xs text-ink3">{t("harness.web.description")}</p>
     {location.exception && <Exception exception={location.exception} />}
     <div className={buttons}>
       <Hint text={refusal}><Button variant="outline" aria-disabled={inert || undefined}

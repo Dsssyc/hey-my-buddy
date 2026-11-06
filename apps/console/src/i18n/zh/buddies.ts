@@ -1,3 +1,4 @@
+import modelProfile from "./model-profile";
 import harness from "./buddies-harness";
 import roles from "./buddies-roles";
 import evaluation from "./evaluation";
@@ -6,6 +7,17 @@ import maintenance from "./maintenance";
 /** The Buddy page: the catalogue of buddies and the roles they hold. */
 export default {
   maintenance,
+  modelProfile,
+  profile: {
+    title: "画像面",
+    buddy: "画像 buddy",
+    choose: "选择 buddy",
+    search: "搜索 buddy",
+    none: "未指定",
+    noCandidates: "没有已启用、可用且具备强制只联网档位的 buddy",
+    budget: "画像预算",
+    dataFlow: "构建画像时，模型名称与对应关系候选会发给画像 buddy 的模型提供方；画像 buddy 可以联网查找公开资料。",
+  },
   sections: {
     label: "Buddy 的分区",
     catalog: "目录",

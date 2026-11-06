@@ -112,10 +112,11 @@ export function useEditor(
   const currentHistory = historyEntries?.key === sourceKey ? historyEntries.entries : null;
   const view: ConsoleView = useMemo(() => {
     const recorded = historyView(snapshot, currentHistory);
-    if (!draft) return recorded;
+    if (!draft) return { ...recorded, modelCorrespondenceChanges: [] };
     const edited = { ...recorded, buddies: draft.buddies,
       preferences: draft.preferences,
-      modelServiceNotes: draft.modelServiceNotes, configuration: draft.configuration,
+      modelNotes: draft.modelNotes, modelCorrespondenceChanges: draft.modelCorrespondenceChanges,
+      configuration: draft.configuration,
       modelServiceConcurrency: draft.modelServiceConcurrency };
     return edited;
   }, [snapshot, draft, currentHistory]);

@@ -118,7 +118,7 @@ describe("the Router list", () => {
     expect(screen.getByText("还没有 Router")).toBeTruthy();
     expect(screen.getByText(/点“添加”/)).toBeTruthy();
     expect(queryRouterList()).toBeNull();
-    expect(within(rolesRegion()).queryByRole("status")).toBeNull();
+    expect(within(section("列表")).queryByRole("status")).toBeNull();
   });
 
   it("sends no command when the view is entered", async () => {
@@ -796,5 +796,45 @@ describe("exploration quota", () => {
     await user.click(saveButton());
     await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { explorationEvery: 2 } });
+  });
+});
+
+describe("profile plane", () => {
+  it("offers only enabled, available buddies with an enforced web level and publishes the chosen buddy", async () => {
+    const data = snapshot();
+    data.harnesses = data.harnesses.map(harness => ({ ...harness, permissions: harness.harness === "claude" ? { web: "enforced" } : { web: "convention" } }));
+    const f = fixture(data);
+    const user = userEvent.setup();
+    await openRoles(f);
+    expect(within(section("画像 buddy")).getByText("尚未指定画像 buddy。")).toBeTruthy();
+    await user.click(within(section("画像 buddy")).getByRole("button", { name: "选择 buddy" }));
+    const dialog = screen.getByRole("dialog", { name: "选择 buddy" });
+    expect(within(dialog).getByRole("button", { name: MEDIUM })).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: HIGH })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: FLASH })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: GLM })).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: MEDIUM }));
+    expect(unsavedIn("画像 buddy")).toHaveLength(1);
+    await user.click(saveButton());
+    await screen.findByText("设置已保存");
+    expect(patchOf(f.published[0])).toEqual({ configuration: { profileBuddyId: MEDIUM_ID } });
+  });
+
+  it("publishes the profile budget independently", async () => {
+    const f = fixture(snapshot());
+    const user = userEvent.setup();
+    await openRoles(f);
+    await user.click(within(section("画像预算")).getByRole("radio", { name: "标准" }));
+    await user.click(saveButton());
+    await screen.findByText("设置已保存");
+    expect(patchOf(f.published[0])).toEqual({ configuration: { profileBudget: "standard" } });
+  });
+
+  it("shows a service readiness reason only while one is recorded", async () => {
+    await openRoles(fixture(snapshot({ configuration: { profileBuddyId: SOL_ID, profileUnavailableReason: { code: "profile-web-unsupported", params: {} } } })));
+    expect(within(section("画像 buddy")).getByText("画像 buddy 的 harness 未声明强制只联网档位。")).toBeTruthy();
+    cleanup();
+    await openRoles(fixture(snapshot({ configuration: { profileBuddyId: MEDIUM_ID, profileUnavailableReason: null } })));
+    expect(within(section("画像 buddy")).queryByRole("status")).toBeNull();
   });
 });

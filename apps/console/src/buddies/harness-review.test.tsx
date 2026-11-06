@@ -30,3 +30,11 @@ describe("declared review level", () => {
     expect(word().getAttribute("aria-description")).toBe(note);
   });
 });
+
+describe("declared web level", () => {
+  it.each([["enforced", "强制限制"], ["convention", "未声明强制限制"]] as const)("shows %s with a visible description", async (web, expected) => {
+    await openHarness(fixture({ harnesses: [harness({ harness: "codex", status: "ready", permissions: { web } })] }));
+    expect(fieldValue(paneBlock("位置"), "只联网").textContent).toBe(expected);
+    expect(paneBlock("位置").textContent).toContain("只联网档位只允许使用联网工具，可供画像面使用。");
+  });
+});

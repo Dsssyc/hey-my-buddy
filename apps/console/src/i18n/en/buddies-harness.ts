@@ -32,6 +32,7 @@ export default {
     manual: "Manual",
     checked: "Checked",
     review: "Review",
+    web: "Web only",
     pickPath: "Set path",
     reason: "Reason",
     tried: "Locations tried",
@@ -42,6 +43,11 @@ export default {
     ineligible: "Not eligible",
     unknown: "Unknown",
     note: "Eligibility comes from the harness's read-only level declaration, not verification of a native call.",
+  },
+  web: {
+    eligible: "Enforced",
+    ineligible: "No enforced declaration",
+    description: "The web only level allows web tools and can serve the profile plane.",
   },
   path: {
     title: "Path of {{name}}",

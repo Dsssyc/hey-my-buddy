@@ -5,7 +5,7 @@ import { macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
 
 describe("L4 ordered Router list configuration", () => {
   const current = { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600,
-    defaultRoutingMode: "fast", routingBudget: "brief" };
+    defaultRoutingMode: "fast", routingBudget: "brief", profileBuddyId: null, profileBudget: "deep" };
   it("accepts the list settings and rejects retired slots, selectors or intervals", () => {
     expect(validRoutingConfiguration(current)).toBe(true);
     for (const explorationEvery of [null, 2, 5]) expect(validRoutingConfiguration({ ...current, explorationEvery })).toBe(true);
@@ -33,9 +33,9 @@ describe("L4 ordered Router list configuration", () => {
 });
 
 describe("snapshot upgrade boundary and routing health", () => {
-  const configuration = { explorationEvery: 5, routerBuddyIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
+  const configuration = { explorationEvery: 5, routerBuddyIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" };
   const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration, buddies: [],
-    preferences: [], modelServiceNotes: [], modelServiceConcurrency: [],
+    preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [],
     tasks: { pendingCount: 0 } };
   const health = { available: false, reason: { code: "router-consecutive-failures", params: {} }, windowSize: 20, sampleCount: 3,
     failureCount: 3, consecutiveFailures: 3, abstentionCount: 0, cancelledCount: 0,
@@ -233,8 +233,8 @@ describe("local read verification evidence", () => {
 });
 
 describe("conditional reads (ETag / If-None-Match / 304)", () => {
-  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
-    buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
+  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief", profileBuddyId: null, profileBudget: "deep" },
+    buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
   function jsonResponse(value: unknown, etag?: string) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (etag) headers.ETag = etag;

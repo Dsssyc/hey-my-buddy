@@ -28,7 +28,7 @@ const harnessCandidate = z.union([candidateFields,
 export type HarnessCandidate = z.infer<typeof harnessCandidate>;
 
 export const permissionLevelsSchema = z.strictObject({
-  none: z.enum(["enforced", "convention"]).optional(), read: z.enum(["enforced", "convention"]).optional(),
+  none: z.enum(["enforced", "convention"]).optional(), web: z.enum(["enforced", "convention"]).optional(), read: z.enum(["enforced", "convention"]).optional(),
   write: z.enum(["enforced", "convention"]).optional(), full: z.enum(["enforced", "convention"]).optional(),
 }).refine(value => !Object.values(value).some(enforcement => enforcement === undefined));
 export type PermissionLevels = z.infer<typeof permissionLevelsSchema>;
@@ -69,6 +69,12 @@ export type TokenUsage = {
   completeness?: "complete" | "partial" | "unknown";
   coverage?: "native-root-session" | "native-root-thread" | "native-attempt";
 };
+
+const recordedTokenUsageSchema = z.object({
+  inputTokens: safeCount.nullable(), cachedInputTokens: safeCount.nullable(), outputTokens: safeCount.nullable(), source: nonblankString, scope: z.literal("attempt"),
+  inputBasis: z.enum(["includes-cached", "excludes-cached"]).optional(), completeness: z.enum(["complete", "partial", "unknown"]).optional(),
+  coverage: z.enum(["native-root-session", "native-root-thread", "native-attempt"]).optional(),
+}).refine(usage => usage.inputBasis === "excludes-cached" || usage.inputTokens === null || usage.cachedInputTokens === null || usage.cachedInputTokens <= usage.inputTokens);
 
 /** A provider's retained cooling record; only a future deadline is active. */
 export const providerCoolingSchema = z.looseObject({
@@ -116,11 +122,92 @@ const preferenceMode = z.enum(["prefer", "pin", "exclude"]);
 export type PreferenceMode = z.infer<typeof preferenceMode>;
 export const preferencesSchema = z.array(z.strictObject({ buddyId: z.string(), mode: preferenceMode, note: z.string().nullable() }));
 export type Preference = z.infer<typeof preferencesSchema>[number];
-/** The model service's human note. */
-export type ModelServiceNote = ModelService & {
+/** The user's note belongs to a model identity, across its service names. */
+export type ModelNote = {
+  modelId: string;
   text: string;
-  updatedAt: string | null;
+  updatedAt: string;
 };
+export type ModelCorrespondence = ModelService & {
+  correspondenceId: string;
+  modelId: string;
+  createdAt: string;
+  source: "same-name" | "user" | "profile";
+  evidenceUrl: string | null;
+  evidenceDate: string | null;
+  canUndo: boolean;
+};
+export type ModelCorrespondenceChange = ModelService & (
+  | { action: "map"; modelId: string }
+  | { action: "undo" }
+  | { action: "generation"; displayName: string }
+);
+export type ModelProfileClaim = {
+  polarity: "strength" | "weakness";
+  claim: string;
+  sourceUrl: string;
+  sourceDate: string;
+  sourceKind: "vendor" | "third-party";
+};
+export type ModelProfile = {
+  positioning: string;
+  builtAt: string;
+  profileRunId: string;
+  claims: ModelProfileClaim[];
+};
+export type ProfileRun = {
+  profileRunId: string;
+  taskId: string;
+  buddyId: string;
+  buddy: { harness: string; provider: string; model: string; effort: string };
+  state: "running" | "completed" | "failed";
+  reason: Reason | null;
+  startedAt: string;
+  finishedAt: string | null;
+  correctionRounds: number;
+  usage: { attempts: { attemptId: string; elapsedMs: number | null; toolCalls: number | null; tokenUsage: TokenUsage | null }[] } | null;
+};
+export type Model = {
+  modelId: string;
+  displayName: string;
+  names: ModelService[];
+  profile: ModelProfile | null;
+  latestProfileRun: ProfileRun | null;
+};
+export type ProfileStartResult =
+  | { status: "unavailable"; reason: Reason }
+  | { status: "running"; profileRunId: string; runId: string; buddyId: string;
+      buddy?: { harness: string; provider: string; model: string; effort: string }; usesQuota?: boolean };
+
+const modelServiceSchema = z.looseObject({ harness: nonblankString, provider: nonblankString, model: nonblankString });
+export const modelNoteSchema = z.looseObject({ modelId: nonblankString, text: z.string(), updatedAt: dateString });
+export const modelCorrespondenceSchema = modelServiceSchema.extend({
+  correspondenceId: nonblankString, modelId: nonblankString, createdAt: dateString,
+  source: z.enum(["same-name", "user", "profile"]), evidenceUrl: z.string().nullable(),
+  evidenceDate: z.string().nullable(), canUndo: z.boolean(),
+});
+export const modelProfileClaimSchema = z.looseObject({
+  polarity: z.enum(["strength", "weakness"]), claim: nonblankString,
+  sourceUrl: z.url(), sourceDate: z.iso.date(), sourceKind: z.enum(["vendor", "third-party"]),
+});
+export const modelProfileSchema = z.looseObject({
+  positioning: nonblankString, builtAt: dateString, profileRunId: nonblankString,
+  claims: z.array(modelProfileClaimSchema),
+});
+export const profileRunSchema = z.looseObject({
+  profileRunId: nonblankString, taskId: nonblankString, buddyId: nonblankString,
+  buddy: z.looseObject({ harness: nonblankString, provider: nonblankString, model: nonblankString, effort: nonblankString }),
+  state: z.enum(["running", "completed", "failed"]), reason: reason.nullable(),
+  startedAt: dateString, finishedAt: dateString.nullable(), correctionRounds: safeCount,
+  usage: z.looseObject({ attempts: z.array(z.looseObject({
+    attemptId: nonblankString, elapsedMs: safeCount.nullable(), toolCalls: safeCount.nullable(),
+    tokenUsage: recordedTokenUsageSchema.nullable(),
+  })) }).nullable(),
+});
+export const modelSchema = z.looseObject({
+  modelId: nonblankString, displayName: nonblankString, names: z.array(modelServiceSchema),
+  profile: modelProfileSchema.nullable(), latestProfileRun: profileRunSchema.nullable(),
+});
 type Decision = {
   decisionId: string;
   runId?: string | null;
@@ -276,6 +363,8 @@ export const configurationSchema = z.looseObject({
   explorationEvery: integer.min(2).nullable(),
   routingBudgetLimits: z.custom<RoutingBudgetLimits>().optional(),
   maintenanceBuddyId: nonblankString.nullable().optional(), maintenanceIntervalSeconds: integer.positive().optional(),
+  profileBuddyId: nonblankString.nullable(), profileBudget: routingBudget,
+  profileUnavailableReason: reason.nullish().optional(),
 }).refine(config => !["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId"].some(key => key in config));
 export type Configuration = z.infer<typeof configurationSchema>;
 
@@ -323,15 +412,11 @@ export const kindEvaluationSchema = z.object({ harness: nonblankString, model: n
     infrastructureFailures: z.array(z.object({ provider: z.string(), count: safeCount, lastAt: z.string().nullable() })) }),
 });
 export type KindEvaluation = z.infer<typeof kindEvaluationSchema>;
-const maintenanceTokenUsageSchema = z.object({
-  inputTokens: safeCount.nullable(), cachedInputTokens: safeCount.nullable(), outputTokens: safeCount.nullable(), source: nonblankString, scope: z.literal("attempt"),
-  inputBasis: z.enum(["includes-cached", "excludes-cached"]).optional(), completeness: z.enum(["complete", "partial", "unknown"]).optional(),
-  coverage: z.enum(["native-root-session", "native-root-thread", "native-attempt"]).optional(),
-}).refine(usage => usage.inputBasis === "excludes-cached" || usage.inputTokens === null || usage.cachedInputTokens === null || usage.cachedInputTokens <= usage.inputTokens);
+
 export const maintenanceSchema = z.object({ pendingCount: safeCount, runs: z.array(z.object({
   maintenanceRunId: nonblankString, triggerType: z.enum(["manual", "interval"]), buddyId: nonblankString, buddy: routerHealthIdentitySchema, taskId: nonblankString,
   state: z.enum(["running", "completed", "failed"]), reason: reason.nullable(), startedAt: dateString, finishedAt: dateString.nullable(),
-  usage: z.object({ attempts: z.array(z.object({ attemptId: nonblankString, elapsedMs: z.number().nullable(), toolCalls: safeCount.nullable(), tokenUsage: maintenanceTokenUsageSchema.nullable() })) }).nullable(),
+  usage: z.object({ attempts: z.array(z.object({ attemptId: nonblankString, elapsedMs: z.number().nullable(), toolCalls: safeCount.nullable(), tokenUsage: recordedTokenUsageSchema.nullable() })) }).nullable(),
 })) });
 export type Maintenance = z.infer<typeof maintenanceSchema>;
 
@@ -351,7 +436,9 @@ export type ReminderSettings = z.infer<typeof reminderSettingsSchema>;
 export const snapshotReadSchema = z.object({
   csrfToken: z.string(), eventCursor: safeCount, configuration: configurationSchema.nullable(),
   buddies: z.array(z.custom<Buddy>()), preferences: preferencesSchema,
-  modelServiceNotes: z.array(z.custom<ModelServiceNote>()), modelServiceConcurrency: z.array(z.custom<ModelServiceConcurrencyEntry>(isModelServiceConcurrencyEntry)),
+  models: z.array(modelSchema), modelNotes: z.array(modelNoteSchema),
+  modelCorrespondences: z.array(modelCorrespondenceSchema),
+  modelServiceConcurrency: z.array(z.custom<ModelServiceConcurrencyEntry>(isModelServiceConcurrencyEntry)),
   tasks: z.object({ pendingCount: safeCount }),
   maintenance: maintenanceSchema.optional(), domainNodes: z.array(domainNodeSchema).optional(), kindEvaluations: z.array(kindEvaluationSchema).optional(),
   // Drafts share this field's nullable type; a server read still requires settings.
@@ -377,8 +464,9 @@ export type Snapshot = z.infer<typeof snapshotReadSchema> & {
 /** Local draft of the fields a human may publish through `user_policy_publish`. */
 export type Draft = Pick<
   Snapshot,
-  "buddies" | "preferences" | "modelServiceNotes" | "configuration"
+  "buddies" | "preferences" | "modelNotes" | "modelCorrespondences" | "configuration"
 > & {
+  modelCorrespondenceChanges: ModelCorrespondenceChange[];
   /**
    * User limit settings keyed by the exact model service tuple. Occupancy (`active`)
    * is never carried here, so a draft cannot publish it.
@@ -388,12 +476,15 @@ export type Draft = Pick<
 /** Full console view: recorded facts with the human draft's user fields. */
 export type ConsoleView = Omit<Snapshot, "modelServiceConcurrency"> & {
   modelServiceConcurrency: ModelServiceConcurrencySetting[];
+  modelCorrespondenceChanges?: ModelCorrespondenceChange[];
 };
 /** One page of retained buddy identities, including unavailable history. */
 export type BuddyPage = {
   buddies: Buddy[];
   preferences: Preference[];
-  modelServiceNotes?: ModelServiceNote[];
+  models: Model[];
+  modelNotes: ModelNote[];
+  modelCorrespondences: ModelCorrespondence[];
   /** Concurrent-task entries for the model services this page represents. */
   modelServiceConcurrency: ModelServiceConcurrencyEntry[];
   nextCursor: string | null;

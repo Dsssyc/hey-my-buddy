@@ -4,8 +4,8 @@ import {
   changeCount,
   configurationChanged,
   draftDiffers,
-  modelServiceNoteChanges,
-  modelServiceNoteText,
+  modelNoteChanges,
+  modelNoteText,
   makeDraft,
   modelServiceConcurrencyChanges,
   preferenceChanges,
@@ -13,12 +13,13 @@ import {
   publication,
   rebaseDraft,
   setConcurrencyLimit,
-  setModelServiceNote,
+  setModelNote,
+  stageModelCorrespondence,
   setPreference,
 } from "./draft";
 import { blockingIssues } from "./policy";
 import type { HistoryEntries } from "./draft";
-import type { Draft, ModelServiceNote, Buddy, Snapshot } from "./types";
+import type { Draft, ModelNote, Buddy, Snapshot } from "./types";
 
 const flash = { effortRank: null,
   buddyId: "flash-off",
@@ -44,14 +45,15 @@ const retired = {
   unavailableReason: { code: "catalog.native-unavailable", params: {} },
 } satisfies Buddy;
 const retiredModelService = { harness: "dsh", provider: "deepseek-official", model: "retired-model" };
-const note = (modelService: typeof flashModelService, text: string): ModelServiceNote =>
-  ({ ...modelService, text, updatedAt: null });
+const note = (modelService: typeof flashModelService, text: string): ModelNote =>
+  ({ modelId: modelService.model, text, updatedAt: "2026-11-01T00:00:00Z" });
 const snapshot = {
   buddies: [flash],
 
   preferences: [],
-      modelServiceNotes: [],
-  configuration: { explorationEvery: 5, routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
+  models: [{ modelId: flash.model, displayName: flash.model, names: [flashModelService], profile: null, latestProfileRun: null }],
+  modelNotes: [], modelCorrespondences: [],
+  configuration: { explorationEvery: 5, routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" as const,
   },
 
   modelServiceConcurrency: [
@@ -60,6 +62,20 @@ const snapshot = {
 } as unknown as Snapshot;
 
 describe("editing a published snapshot", () => {
+  it("shares one note across service names mapped to the same model", () => {
+    const baseline = makeDraft(snapshot);
+    const secondService = { harness: "codex", provider: "openai", model: "flash-alias" };
+    const mapping = { ...secondService, correspondenceId: "alias", modelId: flash.model,
+      createdAt: "2026-11-01T00:00:00Z", source: "user" as const,
+      evidenceUrl: null, evidenceDate: null, canUndo: true };
+    const mapped = { ...baseline, modelCorrespondences: [...baseline.modelCorrespondences, mapping] };
+    const draft = setModelNote(mapped, mapping.modelId, "same model");
+    expect(modelNoteText(draft, flash.model)).toBe("same model");
+    expect(publication(mapped, draft, "note").modelNoteChanges).toEqual([
+      { modelId: flash.model, text: "same model" },
+    ]);
+  });
+
   it("keeps the server snapshot unchanged while editing", () => {
     const draft = makeDraft(snapshot);
     draft.buddies[0].enabled = false;
@@ -68,7 +84,7 @@ describe("editing a published snapshot", () => {
 
   it("publishes only the dirty user patches, never a table, a card or an effective preference", () => {
     const baseline = makeDraft(snapshot);
-    let draft = setModelServiceNote(baseline, flash, "我的使用备注");
+    let draft = setModelNote(baseline, flash.model, "我的使用备注");
     draft = setPreference(draft, "flash-off", "exclude", "太贵");
     draft = {
       ...draft,
@@ -79,7 +95,7 @@ describe("editing a published snapshot", () => {
       commandId: "c",
       buddySettings: [{ buddyId: "flash-off", enabled: false }],
       preferenceChanges: [{ buddyId: "flash-off", mode: "exclude", note: "太贵" }],
-      modelServiceNoteChanges: [{ ...flashModelService, text: "我的使用备注" }],
+      modelNoteChanges: [{ modelId: flash.model, text: "我的使用备注" }],
     });
     const wire = JSON.stringify(patch);
     // Program-owned buddy facts are not human publication inputs.
@@ -104,15 +120,15 @@ describe("editing a published snapshot", () => {
   it("sends a clear for an emptied note, a cleared preference", () => {
     const baseline = {
       ...makeDraft(snapshot),
-      modelServiceNotes: [note(flashModelService, "旧备注")],
+      modelNotes: [note(flashModelService, "旧备注")],
       preferences: [{ buddyId: "flash-off", mode: "exclude" as const, note: "贵" }],
     };
-    let draft = setModelServiceNote(baseline, flash, "");
+    let draft = setModelNote(baseline, flash.model, "");
     draft = setPreference(draft, "flash-off", "");
     const patch = publication(baseline, draft, "c");
-    expect(patch.modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "" }]);
+    expect(patch.modelNoteChanges).toEqual([{ modelId: flash.model, text: "" }]);
     expect(patch.preferenceChanges).toEqual([{ buddyId: "flash-off", mode: null, note: null }]);
-    expect(modelServiceNoteChanges(baseline, draft)).toEqual([{ ...flashModelService, text: "" }]);
+    expect(modelNoteChanges(baseline, draft)).toEqual([{ modelId: flash.model, text: "" }]);
     expect(preferenceChanges(baseline, draft)).toEqual([{ buddyId: "flash-off", mode: null, note: null }]);
   });
 
@@ -128,15 +144,15 @@ describe("editing a published snapshot", () => {
       ...snapshot,
       buddies: [flash, retired],
       preferences: [{ buddyId: "retired", mode: "pin", note: "以前固定" }],
-      configuration: { explorationEvery: 5, routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { explorationEvery: 5, routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" as const},
     } as Snapshot);
     const draft = { ...baseline };
     expect(publication(baseline, draft, "c")).not.toHaveProperty("preferenceChanges");
     expect(publication(baseline, draft, "c")).not.toHaveProperty("configuration");
     // An unrelated note still publishes while the old settings stay as they are.
-    const withNote = setModelServiceNote(draft, flash, "只改备注");
+    const withNote = setModelNote(draft, flash.model, "只改备注");
     const patch = publication(baseline, withNote, "c");
-    expect(patch.modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "只改备注" }]);
+    expect(patch.modelNoteChanges).toEqual([{ modelId: flash.model, text: "只改备注" }]);
     expect(patch).not.toHaveProperty("preferenceChanges");
     expect(patch).not.toHaveProperty("buddySettings");
   });
@@ -162,10 +178,10 @@ describe("editing a published snapshot", () => {
     const preferred = setPreference(baseline, flash.buddyId, "prefer", "更快");
     expect(draftDiffers(baseline, preferred)).toBe(true);
     expect(changeCount(baseline, preferred)).toBe(1);
-    const noted = setModelServiceNote(preferred, flash, "备注");
+    const noted = setModelNote(preferred, flash.model, "备注");
     expect(changeCount(baseline, noted)).toBe(2);
     // An emptied note that never existed is not content.
-    expect(draftDiffers(baseline, setModelServiceNote(baseline, flash, ""))).toBe(false);
+    expect(draftDiffers(baseline, setModelNote(baseline, flash.model, ""))).toBe(false);
     const disabled = {
       ...baseline,
       buddies: [{ ...baseline.buddies[0], enabled: false }],
@@ -193,7 +209,7 @@ describe("editing a published snapshot", () => {
 
   it("rebases the draft onto refreshed directory facts without losing user patches", () => {
     const baseline = makeDraft(snapshot);
-    let draft = setModelServiceNote(baseline, flash, "保留的备注");
+    let draft = setModelNote(baseline, flash.model, "保留的备注");
     draft = setPreference(draft, "flash-off", "prefer", "更快");
     draft = {
       ...draft,
@@ -217,9 +233,9 @@ describe("editing a published snapshot", () => {
     // Program availability is adopted; the user's enablement and note are replayed.
     expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-off")!.available).toBe(false);
     expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-off")!.enabled).toBe(false);
-    expect(modelServiceNoteText(adopted.draft, flash)).toBe("保留的备注");
+    expect(modelNoteText(adopted.draft, flash.model)).toBe("保留的备注");
     const patch = publication(adopted.baseline, adopted.draft, "c");
-    expect(patch.modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "保留的备注" }]);
+    expect(patch.modelNoteChanges).toEqual([{ modelId: flash.model, text: "保留的备注" }]);
     expect(patch.preferenceChanges).toEqual([{ buddyId: "flash-off", mode: "prefer", note: "更快" }]);
     expect(patch.buddySettings).toEqual([{ buddyId: "flash-off", enabled: false }]);
     expect(buddySettings(baseline, draft)).toEqual([
@@ -229,16 +245,33 @@ describe("editing a published snapshot", () => {
 });
 
 describe("replaying a draft on refreshed content", () => {
+  it("publishes one correspondence action and pauses it if the current mapping changes", () => {
+    const mapped = { ...flashModelService, correspondenceId: "first", modelId: flash.model,
+      createdAt: "2026-11-01T00:00:00Z", source: "same-name" as const,
+      evidenceUrl: null, evidenceDate: null, canUndo: true };
+    const current = { ...snapshot, modelCorrespondences: [mapped] } as Snapshot;
+    const baseline = makeDraft(current);
+    const change = { ...flashModelService, action: "generation" as const, displayName: "Flash next" };
+    const draft = stageModelCorrespondence(baseline, change);
+    expect(changeCount(baseline, draft)).toBe(1);
+    expect(publication(baseline, draft, "map").modelCorrespondenceChanges).toEqual([change]);
+    expect(rebaseDraft(draft, baseline, current).conflicts).toEqual([]);
+    const changed = { ...current, modelCorrespondences: [{ ...mapped, correspondenceId: "second" }] } as Snapshot;
+    expect(rebaseDraft(draft, baseline, changed).conflicts).toMatchObject([
+      { kind: "changed", field: "modelCorrespondence" },
+    ]);
+  });
+
   it("keeps the local note when another writer changed the same field", () => {
-    const baseline = { ...makeDraft(snapshot), modelServiceNotes: [note(flashModelService, "A")] };
-    const draft = setModelServiceNote(baseline, flash, "B");
-    const refreshed = { ...snapshot, modelServiceNotes: [note(flashModelService, "C")] };
+    const baseline = { ...makeDraft(snapshot), modelNotes: [note(flashModelService, "A")] };
+    const draft = setModelNote(baseline, flash.model, "B");
+    const refreshed = { ...snapshot, modelNotes: [note(flashModelService, "C")] };
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
-    expect(modelServiceNoteText(adopted.baseline, flash)).toBe("C");
-    expect(modelServiceNoteText(adopted.draft, flash)).toBe("B");
-    expect(publication(adopted.baseline, adopted.draft, "save").modelServiceNoteChanges).toEqual([
-      { ...flashModelService, text: "B" },
+    expect(modelNoteText(adopted.baseline, flash.model)).toBe("C");
+    expect(modelNoteText(adopted.draft, flash.model)).toBe("B");
+    expect(publication(adopted.baseline, adopted.draft, "save").modelNoteChanges).toEqual([
+      { modelId: flash.model, text: "B" },
     ]);
   });
 
@@ -281,11 +314,11 @@ describe("retained history with local removals", () => {
 
   it("still fills identities neither the draft nor the baseline knows", () => {
     const baseline = makeDraft(snapshot);
-    const page: HistoryEntries = { buddies: [retired], modelServiceNotes: [note(retiredModelService, "history")] };
+    const page: HistoryEntries = { buddies: [retired], modelNotes: [note(retiredModelService, "history")] };
     const adopted = rebaseDraft(baseline, baseline, snapshot, page);
     expect(adopted.conflicts).toEqual([]);
     expect(adopted.draft.buddies.some(row => row.buddyId === retired.buddyId)).toBe(true);
-    expect(modelServiceNoteText(adopted.draft, retired)).toBe("history");
+    expect(modelNoteText(adopted.draft, retired.model)).toBe("history");
   });
 });
 
@@ -316,7 +349,7 @@ describe("model modelService concurrency", () => {
     expect(wire).not.toContain("active");
     expect(wire).not.toContain("flash-off");
     // An unrelated edit keeps the concurrency patch out entirely.
-    expect(publication(baseline, setModelServiceNote(baseline, flash, "只改备注"), "c"))
+    expect(publication(baseline, setModelNote(baseline, flash.model, "只改备注"), "c"))
       .not.toHaveProperty("modelServiceConcurrency");
   });
 
@@ -417,6 +450,14 @@ describe("private same-origin API", () => {
 });
 
 describe("independent Router and budget fields", () => {
+  it("publishes profile buddy and budget separately", () => {
+    const baseline = makeDraft(snapshot);
+    const buddy = { ...baseline, configuration: { ...baseline.configuration!, profileBuddyId: flash.buddyId } };
+    expect(publication(baseline, buddy, "profile-buddy").configuration).toEqual({ profileBuddyId: flash.buddyId });
+    const budget = { ...baseline, configuration: { ...baseline.configuration!, profileBudget: "brief" as const } };
+    expect(publication(baseline, budget, "profile-budget").configuration).toEqual({ profileBudget: "brief" });
+  });
+
   it("keeps an empty exploration input dirty when exploration was off", () => {
     const baseline = makeDraft({ ...snapshot, configuration: { ...snapshot.configuration!, explorationEvery: null } });
     const draft = { ...baseline, configuration: { ...baseline.configuration!, explorationEvery: NaN } };
@@ -450,17 +491,17 @@ describe("independent Router and budget fields", () => {
     const baseline = makeDraft(snapshot);
     const draft = { ...baseline, configuration: { ...baseline.configuration!,
       routerBuddyIds: ["review"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast" as const,
-      routingBudget: "brief" as const } };
+      routingBudget: "brief" as const, profileBuddyId: null, profileBudget: "deep" as const } };
     expect(publication(baseline, draft, "dual").configuration).toEqual({
       routerBuddyIds: ["review"], defaultRoutingMode: "fast", routingBudget: "brief",
     });
     expect(changeCount(baseline, draft) - changeCount(baseline, baseline)).toBe(3);
   });
   it("keeps an unchanged standard budget and publishes budget alone with a stale Router", () => {
-    const baseline = makeDraft({ ...snapshot, buddies: [], configuration: { explorationEvery: 5, routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"} } as Snapshot);
-    const equivalent = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "standard" as const } };
+    const baseline = makeDraft({ ...snapshot, buddies: [], configuration: { explorationEvery: 5, routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" as const} } as Snapshot);
+    const equivalent = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "standard" as const, profileBuddyId: null, profileBudget: "deep" as const } };
     expect(draftDiffers(baseline, equivalent)).toBe(false);
-    const draft = { ...equivalent, configuration: { ...equivalent.configuration!, routingBudget: "brief" as const } };
+    const draft = { ...equivalent, configuration: { ...equivalent.configuration!, routingBudget: "brief" as const, profileBuddyId: null, profileBudget: "deep" as const } };
     expect(draftDiffers(baseline, draft)).toBe(true);
     expect(configurationChanged(baseline, draft)).toBe(true);
     expect(publication(baseline, draft, "budget").configuration).toEqual({ routingBudget: "brief" });
@@ -469,11 +510,11 @@ describe("independent Router and budget fields", () => {
 
   it("replays Router and budget fields independently over fresh settings", () => {
     const baseline = makeDraft(snapshot);
-    const draft = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "brief" as const } };
-    const fresh = { ...snapshot, configuration: { ...snapshot.configuration!, routerBuddyIds: ["new-model"], routingBudget: "deep" as const } };
+    const draft = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "brief" as const, profileBuddyId: null, profileBudget: "deep" as const } };
+    const fresh = { ...snapshot, configuration: { ...snapshot.configuration!, routerBuddyIds: ["new-model"], routingBudget: "deep" as const, profileBuddyId: null, profileBudget: "deep" as const } };
     const adopted = rebaseDraft(draft, baseline, fresh);
     expect(adopted.conflicts).toEqual([]);
-    expect(adopted.draft.configuration).toMatchObject({ routerBuddyIds: ["new-model"], routingBudget: "brief" });
+    expect(adopted.draft.configuration).toMatchObject({ routerBuddyIds: ["new-model"], routingBudget: "brief", profileBuddyId: null, profileBudget: "deep" as const });
     expect(publication(adopted.baseline, adopted.draft, "save").configuration).toEqual({ routingBudget: "brief" });
   });
 });
@@ -482,17 +523,17 @@ describe("unavailable Router settings in the editor", () => {
   const unavailable = { ...snapshot, configuration: null } as Snapshot;
   it("publishes unrelated changes while leaving upgrade-only settings null", () => {
     const baseline = makeDraft(unavailable);
-    const draft = setModelServiceNote(baseline, flash, "仍可保存备注");
+    const draft = setModelNote(baseline, flash.model, "仍可保存备注");
     expect(blockingIssues(baseline, draft)).toEqual([]);
     expect(publication(baseline, draft, "note")).not.toHaveProperty("configuration");
     const merged = rebaseDraft(draft, baseline, { ...unavailable,});
     expect(merged.conflicts).toEqual([]);
     expect(merged.draft.configuration).toBeNull();
-    expect(modelServiceNoteText(merged.draft, flash)).toBe("仍可保存备注");
+    expect(modelNoteText(merged.draft, flash.model)).toBe("仍可保存备注");
   });
   it("keeps a dirty Router intent as a conflict when refreshed settings need upgrade", () => {
     const baseline = makeDraft(snapshot);
-    const draft = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "brief" as const } };
+    const draft = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "brief" as const, profileBuddyId: null, profileBudget: "deep" as const } };
     const merged = rebaseDraft(draft, baseline, unavailable);
     expect(merged.conflicts).toMatchObject([{ field: "configuration", kind: "changed" }]);
     expect(merged.draft).toBe(draft);
@@ -500,7 +541,7 @@ describe("unavailable Router settings in the editor", () => {
   it("sends only the single Router, mode and budget through the form publication request", async () => {
     const baseline = makeDraft(snapshot);
     const draft = { ...baseline, configuration: { ...baseline.configuration!, routerBuddyIds: ["chosen"], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "fast" as const, routingBudget: "deep" as const } };
+      defaultRoutingMode: "fast" as const, routingBudget: "deep" as const, profileBuddyId: null, profileBudget: "deep" as const } };
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
     const patch = publication(baseline, draft, "single-router");
     await createApi("", fetcher as typeof fetch).command("user_policy_publish", patch, "csrf");

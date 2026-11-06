@@ -262,13 +262,12 @@ describe("synthetic preview fixtures through the real console parsers", () => {
       accepted: true, facts: { macroTaskId: "macro-33333333-3333-4333-8333-333333333333", rows: 7 },
     });
 
-    // A preview snapshot must carry the single Router and the model service note
-    // schema the current console requires (the original schema-13 defect).
+    // A preview snapshot must carry the current Router and profile settings.
     const snapshotFacts = snapshots[0].facts as { configuration: Record<string, unknown>; harnesses: unknown[] };
     expect(snapshotFacts.configuration).toMatchObject({
       routerBuddyIds: expect.any(Array),
       routerRetryIntervalSeconds: expect.any(Number), explorationEvery: 5,
-      defaultRoutingMode: "fast", routingBudget: "standard",
+      defaultRoutingMode: "fast", routingBudget: "standard", profileBudget: "deep",
     });
     expect("decisionBuddyId" in snapshotFacts.configuration).toBe(false);
     expect("routerBuddyId" in snapshotFacts.configuration).toBe(false);

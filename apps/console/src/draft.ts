@@ -1,7 +1,10 @@
 import i18n from "i18next";
 import type {
   Draft,
-  ModelServiceNote,
+  ModelNote,
+  ModelCorrespondenceChange,
+  ModelCorrespondence,
+  Model,
   ModelServiceConcurrencyEntry,
   ModelServiceConcurrencySetting,
   ModelService,
@@ -17,18 +20,19 @@ import { concurrencyLimit, modelServiceKey } from "./console-data";
 export type HistoryEntries = {
   buddies?: Buddy[];
   preferences?: Preference[];
-  modelServiceNotes?: ModelServiceNote[];
+  modelNotes?: ModelNote[];
+  models?: Model[];
+  modelCorrespondences?: ModelCorrespondence[];
   modelServiceConcurrency?: ModelServiceConcurrencyEntry[];
 };
-
-const modelServiceOf = (row: ModelService): ModelService =>
-  ({ harness: row.harness, provider: row.provider, model: row.model });
 
 export function makeDraft(snapshot: Snapshot): Draft {
   return structuredClone({
     buddies: snapshot.buddies,
     preferences: snapshot.preferences,
-    modelServiceNotes: snapshot.modelServiceNotes ?? [],
+    modelNotes: snapshot.modelNotes,
+    modelCorrespondences: snapshot.modelCorrespondences,
+    modelCorrespondenceChanges: [],
     configuration: snapshot.configuration,
     // The draft carries the user limit settings only; occupancy is observation
     // and is dropped here so no publication path can ever emit it.
@@ -38,34 +42,40 @@ export function makeDraft(snapshot: Snapshot): Draft {
   });
 }
 
-function emptyModelServiceNote(modelService: ModelService): ModelServiceNote {
-  return { ...modelServiceOf(modelService), text: "", updatedAt: null };
+function emptyModelNote(modelId: string): ModelNote {
+  return { modelId, text: "", updatedAt: "" };
 }
 
-/** One note per model service; empty text is a deliberate clear, not a delete. */
-export function setModelServiceNote(
+/** One note per model identity; empty text clears it. */
+export function setModelNote(
   draft: Draft,
-  modelService: ModelService,
+  modelId: string,
   text: string,
 ): Draft {
-  const key = modelServiceKey(modelService);
-  const known = draft.modelServiceNotes.find((a) => modelServiceKey(a) === key);
-  const next: ModelServiceNote = { ...(known ?? emptyModelServiceNote(modelService)), text };
+  const known = draft.modelNotes.find((a) => a.modelId === modelId);
+  const next: ModelNote = { ...(known ?? emptyModelNote(modelId)), text };
   return {
     ...draft,
-    modelServiceNotes: [
-      ...draft.modelServiceNotes.filter((a) => modelServiceKey(a) !== key),
+    modelNotes: [
+      ...draft.modelNotes.filter((a) => a.modelId !== modelId),
       next,
     ],
   };
 }
 
-export function modelServiceNoteText(
-  source: { modelServiceNotes: ModelServiceNote[] },
-  modelService: ModelService,
+export function modelNoteText(
+  source: { modelNotes: ModelNote[] },
+  modelId: string,
 ): string {
-  const key = modelServiceKey(modelService);
-  return source.modelServiceNotes.find((a) => modelServiceKey(a) === key)?.text ?? "";
+  return source.modelNotes.find((a) => a.modelId === modelId)?.text ?? "";
+}
+
+/** Replaces any staged change for this service; one publication has one action per service. */
+export function stageModelCorrespondence(draft: Draft, change: ModelCorrespondenceChange): Draft {
+  const key = modelServiceKey(change);
+  return { ...draft, modelCorrespondenceChanges: [
+    ...draft.modelCorrespondenceChanges.filter(row => modelServiceKey(row) !== key), change,
+  ] };
 }
 
 /** An empty mode clears this buddy's preference. */
@@ -92,8 +102,16 @@ function addMissingModelServices<T extends ModelService>(
   return added.length ? [...current, ...added] : current;
 }
 
-type UserRows = Pick<Draft, "buddies" | "preferences" | "modelServiceNotes">
-  & { modelServiceConcurrency?: ModelServiceConcurrencySetting[] };
+function addMissingById<T extends { modelId: string }>(current: T[], extra: T[] | undefined): T[] {
+  if (!extra?.length) return current;
+  const known = new Set(current.map(row => row.modelId));
+  const added = extra.filter(row => !known.has(row.modelId) && (known.add(row.modelId), true));
+  return added.length ? [...current, ...added] : current;
+}
+
+type UserRows = Pick<Draft, "buddies" | "preferences" | "modelNotes" | "modelCorrespondences">
+  & { modelServiceConcurrency?: ModelServiceConcurrencySetting[];
+    models?: Model[] };
 
 /**
  * Adds retained history rows the snapshot no longer lists. Live snapshot rows
@@ -113,7 +131,9 @@ export function withHistory<T extends UserRows>(
     ...source,
     buddies: addMissing(source.buddies, entries.buddies),
     preferences: addMissing(source.preferences, entries.preferences),
-    modelServiceNotes: addMissingModelServices(source.modelServiceNotes, entries.modelServiceNotes),
+    modelNotes: addMissingById(source.modelNotes, entries.modelNotes),
+    ...(source.models ? { models: addMissingById(source.models, entries.models) } : {}),
+    modelCorrespondences: addMissingModelServices(source.modelCorrespondences, entries.modelCorrespondences),
     modelServiceConcurrency: addMissingModelServices(source.modelServiceConcurrency ?? [], retainedSettings),
   };
 }
@@ -170,23 +190,24 @@ export function modelServiceConcurrencyChanges(
 type BuddySettingPatch = { buddyId: string; enabled: boolean };
 /** One buddy's preference; `mode: null` clears it. */
 type PreferenceChangePatch = { buddyId: string; mode: PreferenceMode | null; note: string | null };
-/** Model service note patch; `text: ""` clears the note. */
-type ModelServiceNoteChangePatch = ModelService & { text: string };
+/** Model note patch; `text: ""` clears the note. */
+type ModelNoteChangePatch = { modelId: string; text: string };
 
 export type UserPolicyPublication = {
   commandId: string;
   buddySettings?: BuddySettingPatch[];
   preferenceChanges?: PreferenceChangePatch[];
-  modelServiceNoteChanges?: ModelServiceNoteChangePatch[];
+  modelNoteChanges?: ModelNoteChangePatch[];
+  modelCorrespondenceChanges?: ModelCorrespondenceChange[];
   configuration?: Partial<Pick<Configuration,
-    "routerBuddyIds" | "routerRetryIntervalSeconds" | "explorationEvery" | "defaultRoutingMode" | "routingBudget" | "maintenanceBuddyId" | "maintenanceIntervalSeconds">>;
+    "routerBuddyIds" | "routerRetryIntervalSeconds" | "explorationEvery" | "defaultRoutingMode" | "routingBudget" | "maintenanceBuddyId" | "maintenanceIntervalSeconds" | "profileBuddyId" | "profileBudget">>;
   /** Limit patches per model service; the board refuses any `active` occupancy here. */
   modelServiceConcurrency?: ModelServiceConcurrencySetting[];
 };
 
 type UserEditable = Pick<
   Draft,
-  "buddies" | "preferences" | "modelServiceNotes" | "configuration" | "modelServiceConcurrency"
+  "buddies" | "preferences" | "modelNotes" | "modelCorrespondenceChanges" | "configuration" | "modelServiceConcurrency"
 >;
 
 const byBuddyId = (a: { buddyId: string }, b: { buddyId: string }) =>
@@ -220,20 +241,20 @@ export function preferenceChanges(baseline: Draft, draft: Draft): PreferenceChan
   return changed.sort(byBuddyId);
 }
 
-/** Model service note patches; `text: ""` clears the recorded note. */
-export function modelServiceNoteChanges(
+/** Model note patches; `text: ""` clears the recorded note. */
+export function modelNoteChanges(
   baseline: Draft,
   draft: Draft,
-): ModelServiceNoteChangePatch[] {
-  const before = new Map(baseline.modelServiceNotes.map((a) => [modelServiceKey(a), a]));
-  const after = new Map(draft.modelServiceNotes.map((a) => [modelServiceKey(a), a]));
-  const changed: ModelServiceNoteChangePatch[] = [];
+): ModelNoteChangePatch[] {
+  const before = new Map(baseline.modelNotes.map((a) => [a.modelId, a]));
+  const after = new Map(draft.modelNotes.map((a) => [a.modelId, a]));
+  const changed: ModelNoteChangePatch[] = [];
   for (const key of new Set([...before.keys(), ...after.keys()])) {
     const previous = before.get(key)?.text ?? "";
     const next = after.get(key)?.text ?? "";
-    if (previous !== next) changed.push({ ...modelServiceOf((after.get(key) ?? before.get(key))!), text: next });
+    if (previous !== next) changed.push({ modelId: key, text: next });
   }
-  return changed.sort(byModelService);
+  return changed.sort((a, b) => a.modelId.localeCompare(b.modelId));
 }
 
 /** The ordered Router list is equal when it holds the same ids in the same order. */
@@ -241,7 +262,7 @@ export function routerListEqual(a: string[] | undefined, b: string[] | undefined
   return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
 }
 
-const ROUTER_FIELDS = ["routerBuddyIds", "defaultRoutingMode", "routerRetryIntervalSeconds", "explorationEvery", "maintenanceBuddyId", "maintenanceIntervalSeconds"] as const;
+const ROUTER_FIELDS = ["routerBuddyIds", "defaultRoutingMode", "routerRetryIntervalSeconds", "explorationEvery", "maintenanceBuddyId", "maintenanceIntervalSeconds", "profileBuddyId", "profileBudget"] as const;
 
 export function routerFieldChanged(baseline: Draft, draft: Draft, field: typeof ROUTER_FIELDS[number]): boolean {
   if (!baseline.configuration || !draft.configuration) return false;
@@ -271,13 +292,15 @@ export function publication(
 ): UserPolicyPublication {
   const settings = buddySettings(baseline, draft);
   const preferences = preferenceChanges(baseline, draft);
-  const notes = modelServiceNoteChanges(baseline, draft);
+  const notes = modelNoteChanges(baseline, draft);
+  const correspondences = draft.modelCorrespondenceChanges;
   const concurrency = modelServiceConcurrencyChanges(baseline, draft);
   return {
     commandId,
     ...(settings.length ? { buddySettings: settings } : {}),
     ...(preferences.length ? { preferenceChanges: preferences } : {}),
-    ...(notes.length ? { modelServiceNoteChanges: notes } : {}),
+    ...(notes.length ? { modelNoteChanges: notes } : {}),
+    ...(correspondences.length ? { modelCorrespondenceChanges: correspondences } : {}),
     ...(concurrency.length ? { modelServiceConcurrency: concurrency } : {}),
     ...(configurationChanged(baseline, draft)
       ? { configuration: {
@@ -291,6 +314,8 @@ export function publication(
             ? { defaultRoutingMode: draft.configuration!.defaultRoutingMode } : {}),
           ...(routerFieldChanged(baseline, draft, "maintenanceBuddyId") ? { maintenanceBuddyId: draft.configuration!.maintenanceBuddyId } : {}),
           ...(routerFieldChanged(baseline, draft, "maintenanceIntervalSeconds") ? { maintenanceIntervalSeconds: draft.configuration!.maintenanceIntervalSeconds } : {}),
+          ...(routerFieldChanged(baseline, draft, "profileBuddyId") ? { profileBuddyId: draft.configuration!.profileBuddyId } : {}),
+          ...(routerFieldChanged(baseline, draft, "profileBudget") ? { profileBudget: draft.configuration!.profileBudget } : {}),
           ...(routingBudgetChanged(baseline, draft) ? { routingBudget: draft.configuration!.routingBudget ?? "standard" } : {}),
         } }
       : {}),
@@ -309,10 +334,11 @@ function fingerprint(draft: UserEditable): string {
       .map(({ buddyId, enabled }) => ({ buddyId, enabled }))
       .sort(byBuddyId),
     preferences: [...draft.preferences].map(({ buddyId, mode, note }) => ({ buddyId, mode, note })).sort(byBuddyId),
-    modelServiceNotes: draft.modelServiceNotes
+    modelNotes: draft.modelNotes
       .filter((a) => a.text)
-      .map((a) => ({ key: modelServiceKey(a), text: a.text }))
+      .map((a) => ({ key: a.modelId, text: a.text }))
       .sort((a, b) => a.key.localeCompare(b.key)),
+    modelCorrespondenceChanges: [...draft.modelCorrespondenceChanges].sort(byModelService),
     configuration: draft.configuration ? {
       routerBuddyIds: draft.configuration.routerBuddyIds ?? [],
       routerRetryIntervalSeconds: draft.configuration.routerRetryIntervalSeconds,
@@ -321,6 +347,8 @@ function fingerprint(draft: UserEditable): string {
       routingBudget: draft.configuration.routingBudget,
       maintenanceBuddyId: draft.configuration.maintenanceBuddyId,
       maintenanceIntervalSeconds: draft.configuration.maintenanceIntervalSeconds,
+      profileBuddyId: draft.configuration.profileBuddyId,
+      profileBudget: draft.configuration.profileBudget,
     } : null,
     modelServiceConcurrency: [...draft.modelServiceConcurrency]
       .map(({ harness, provider, model, limit }) => ({ key: modelServiceKey({ harness, provider, model }), limit }))
@@ -345,7 +373,8 @@ export function changeCount(baseline: Draft, draft: Draft): number {
   ).length;
   return buddySettings(baseline, draft).length
     + preferenceChanges(baseline, draft).length
-    + modelServiceNoteChanges(baseline, draft).length
+    + modelNoteChanges(baseline, draft).length
+    + draft.modelCorrespondenceChanges.length
     + concurrency
     + ROUTER_FIELDS.filter(field => routerFieldChanged(baseline, draft, field)).length
     + (routingBudgetChanged(baseline, draft) ? 1 : 0);
@@ -360,7 +389,7 @@ export function changeCount(baseline: Draft, draft: Draft): number {
 type RebaseConflictKind = "changed" | "unread";
 type RebaseConflict = {
   kind: RebaseConflictKind;
-  field: "enabled" | "preference" | "modelServiceNote" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "explorationEvery" | "modelServiceConcurrency" | "maintenanceBuddyId" | "maintenanceIntervalSeconds";
+  field: "enabled" | "preference" | "modelNote" | "modelCorrespondence" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "explorationEvery" | "modelServiceConcurrency" | "maintenanceBuddyId" | "maintenanceIntervalSeconds" | "profileBuddyId" | "profileBudget";
   /** The buddy id, or the `harness/provider/model` of a model service field. */
   buddyId: string;
   message: string;
@@ -375,9 +404,12 @@ type RebaseOutcome = {
 const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   get maintenanceBuddyId() { return i18n.t("buddies:maintenance.buddy"); },
   get maintenanceIntervalSeconds() { return i18n.t("buddies:maintenance.interval"); },
+  get profileBuddyId() { return i18n.t("buddies:profile.buddy"); },
+  get profileBudget() { return i18n.t("buddies:profile.budget"); },
   get enabled() { return i18n.t("console:enabledState"); },
   get preference() { return i18n.t("console:reasoningEffortPreference"); },
-  get modelServiceNote() { return i18n.t("console:modelServiceNote"); },
+  get modelNote() { return i18n.t("console:modelNote"); },
+  get modelCorrespondence() { return i18n.t("console:modelCorrespondence"); },
   get configuration() { return i18n.t("console:routerList"); },
   get defaultRoutingMode() { return i18n.t("console:defaultRoutingMode"); },
   get routingBudget() { return i18n.t("console:routingBudget"); },
@@ -390,12 +422,12 @@ const modelServiceText = (modelService: ModelService) => `${modelService.harness
 
 function conflictSubject(field: RebaseConflict["field"], buddyId: string): string {
   if (field === "configuration") return buddyId ? i18n.t("console:routerListForBuddy", { v0: buddyId }) : i18n.t("console:routerList");
-  if (field === "maintenanceBuddyId" || field === "maintenanceIntervalSeconds") return FIELD_NAMES[field];
+  if (field === "maintenanceBuddyId" || field === "maintenanceIntervalSeconds" || field === "profileBuddyId" || field === "profileBudget") return FIELD_NAMES[field];
   if (field === "defaultRoutingMode") return i18n.t("console:defaultRoutingMode");
   if (field === "routingBudget") return i18n.t("console:routingBudget");
   if (field === "explorationEvery") return FIELD_NAMES[field];
   if (field === "routerRetryIntervalSeconds") return i18n.t("console:retryInterval");
-  if (field === "modelServiceNote" || field === "modelServiceConcurrency") {
+  if (field === "modelCorrespondence" || field === "modelServiceConcurrency") {
     return i18n.t("console:forModelService", { v0: buddyId, v1: FIELD_NAMES[field] });
   }
   return i18n.t("console:forBuddy", { v0: buddyId, v1: FIELD_NAMES[field] });
@@ -473,15 +505,27 @@ export function rebaseDraft(
     else preferenceMerges.set(buddyId, { buddyId, mode: mode.value, note: note.value || null });
   }
 
-  // Model service notes: replay the local text over the refreshed value.
-  const mergedNotes = new Map<string, ModelServiceNoteChangePatch>();
-  for (const change of modelServiceNoteChanges(baseline, draft)) {
-    const key = modelServiceKey(change);
-    if (!freshModelServices.has(key)) {
-      fail("unread", "modelServiceNote", modelServiceText(change));
+  // Model notes: replay the local text over the refreshed model identity.
+  const mergedNotes = new Map<string, ModelNoteChangePatch>();
+  for (const change of modelNoteChanges(baseline, draft)) {
+    const key = change.modelId;
+    if (!snapshot.models.some(model => model.modelId === key)) {
+      fail("unread", "modelNote", key);
       continue;
     }
     mergedNotes.set(key, change);
+  }
+
+  // Undo is relative to the latest correspondence. A concurrent remap must
+  // be reviewed before replaying an action onto a different current row.
+  for (const change of draft.modelCorrespondenceChanges) {
+    const key = modelServiceKey(change);
+    const previous = baseline.modelCorrespondences.find(row => modelServiceKey(row) === key);
+    const fresh = nextBaseline.modelCorrespondences.find(row => modelServiceKey(row) === key);
+    if (!fresh) fail("unread", "modelCorrespondence", modelServiceText(change));
+    else if (previous?.correspondenceId !== fresh.correspondenceId) {
+      fail("changed", "modelCorrespondence", modelServiceText(change));
+    }
   }
 
   let mergedRouting = nextBaseline.configuration;
@@ -521,12 +565,12 @@ export function rebaseDraft(
 
   const preferences = nextBaseline.preferences.filter(p => !preferenceMerges.has(p.buddyId) && !preferenceRemovals.has(p.buddyId));
   for (const preference of preferenceMerges.values()) preferences.push(preference);
-  const modelServiceNotes = nextBaseline.modelServiceNotes.filter(
-    (annotation) => !mergedNotes.has(modelServiceKey(annotation)),
+  const modelNotes = nextBaseline.modelNotes.filter(
+    (annotation) => !mergedNotes.has(annotation.modelId),
   );
   for (const [key, change] of mergedNotes) {
-    const known = nextBaseline.modelServiceNotes.find((a) => modelServiceKey(a) === key);
-    modelServiceNotes.push({ ...(known ?? emptyModelServiceNote(change)), text: change.text });
+    const known = nextBaseline.modelNotes.find((a) => a.modelId === key);
+    modelNotes.push({ ...(known ?? emptyModelNote(key)), text: change.text });
   }
   return {
     baseline: nextBaseline,
@@ -538,7 +582,8 @@ export function rebaseDraft(
           : buddy,
       ),
       preferences,
-      modelServiceNotes,
+      modelNotes,
+      modelCorrespondenceChanges: draft.modelCorrespondenceChanges,
       configuration: mergedRouting,
       modelServiceConcurrency: nextBaseline.modelServiceConcurrency.map((entry) =>
         mergedConcurrency.get(modelServiceKey(entry)) ?? entry),

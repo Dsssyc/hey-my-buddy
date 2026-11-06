@@ -10,7 +10,7 @@ beforeEach(() => vi.stubGlobal("matchMedia", (query: string) => ({ matches: fals
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 const snapshot = { eventCursor: 8, csrfToken: "csrf", consoleSession: { id: "session" },
-  buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], configuration: null,
+  buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [], configuration: null,
   decisions: [], tasks: { pendingCount: 0 }, capabilities: {} } as Snapshot;
 
 /** The editor on a writable page, with the clock in the test's hands. */

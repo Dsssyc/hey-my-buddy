@@ -31,6 +31,7 @@ export default {
     manual: "手动",
     checked: "检测",
     review: "审阅",
+    web: "只联网",
     pickPath: "指定路径",
     reason: "原因",
     tried: "试过的位置",
@@ -42,6 +43,11 @@ export default {
     ineligible: "不可用",
     unknown: "未知",
     note: "资格来自 harness 的只读档位声明，不代表原生调用已验证。",
+  },
+  web: {
+    eligible: "强制限制",
+    ineligible: "未声明强制限制",
+    description: "只联网档位只允许使用联网工具，可供画像面使用。",
   },
   path: {
     title: "{{name}} 路径",

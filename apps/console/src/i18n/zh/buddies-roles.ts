@@ -63,7 +63,7 @@ export default {
   exploration: {
     name: "探索名额", on: "每 N 个给 1 个", off: "关闭", interval: "探索间隔微任务数",
     disabled: "探索已关闭", invalid: "需要不小于 2 的整数",
-    explanation: "探索会让证据少的同型 buddy 偶尔被选中，好积累证据。",
+    explanation: "探索会偶尔改选样本更少的同型 buddy（harness、模型与推理强度都相同的算同型），让它也积累证据。",
   },
   retry: {
     name: "重试间隔",

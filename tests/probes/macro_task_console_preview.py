@@ -15,9 +15,9 @@ Safety boundary:
 * ``POST /api/command`` serves
   read operations (``workflow_get``,
   ``message_list``, ``selection_get``, ``selection_list``, ``buddy_list``)
-  with fixed-shape fixture payloads, and answers a
-  check of the harnesses (``capabilities``) with the same synthetic rows
-  without probing anything. Operations the
+  with fixed-shape fixture payloads. A harness check (``capabilities``)
+  answers synthetic rows and ``profile_start`` answers a synthetic
+  unavailable reason without probing or starting anything. Operations the
   0.15.1 browser allowlist removed (decide/continue/acknowledge/takeover/
   per-run cancel/retry and friends) answer ``METHOD_NOT_FOUND`` exactly like
   the real console; the still-allowed writes (settings operations and
@@ -63,7 +63,8 @@ artifacts add ``partial``/``verified``/``final`` flags, ``kind`` may be
 ``partial-output`` and an artifact may carry ``cumulativePatch``; integration
 verification adds ``hostPaths``; task views, attempts and turns carry a
 per-attempt ``tokenUsage`` (``null`` when unknown, never a zero); and the
-console snapshot adds four harness rows with provider cooling facts.
+console snapshot adds four harness rows with provider cooling facts, current
+model correspondences, a profile and recorded profile runs.
 Absent or unknown values stay explicitly null.
 
 The asset directory is Host-supplied; the repository's current bundle lives at
@@ -163,6 +164,17 @@ CFG_CODEX = {"harness": "codex", "provider": "openai", "model": "gpt-5-codex", "
 CFG_GLM = {"harness": "zcode", "provider": "zai", "model": "glm-5", "effort": "high"}
 CFG_CLAUDE = {"harness": "claude", "provider": "anthropic", "model": "claude-opus-5-5", "effort": "high"}
 CONFIGS = (CFG_FLASH, CFG_CODEX, CFG_GLM, CFG_CLAUDE)
+MODEL_IDS = {
+    "deepseek-flash": "00000000-0000-4000-8000-000000000001",
+    "deepseek-v4-pro": "00000000-0000-4000-8000-000000000002",
+    "gpt-5-codex": "00000000-0000-4000-8000-000000000003",
+    "gpt-5-mini": "00000000-0000-4000-8000-000000000004",
+    "glm-5": "00000000-0000-4000-8000-000000000005",
+    "claude-opus-5-5": "00000000-0000-4000-8000-000000000006",
+    "claude-sonnet-5-5": "00000000-0000-4000-8000-000000000007",
+    "claude-haiku-4-5": "00000000-0000-4000-8000-000000000008",
+}
+PROFILE_UNAVAILABLE_REASON = {"code": "profile-web-unsupported", "params": {}}
 ROUTER_BUDDY = CFG_CODEX
 ROUTER_BUDDY_ID = ":".join(ROUTER_BUDDY[key] for key in ("harness", "provider", "model", "effort"))
 ROUTING_FACT_KEYS = ("routerBuddyIds", "routerIdentities", "routerBuddyId", "routerBuddy", "routerIndex",
@@ -230,12 +242,12 @@ MARKER_EVENTS = {"dispatch": "task.submitted", "decide": "workflow.request_appro
                  "accept": "workflow.acknowledged", "reject": "workflow.acknowledged",
                  "conclude": "workflow.host_concluded",
                  "cancel": "workflow.cancelled", "takeover": "workflow.takeover"}
-#: The preview's browser command allowlist: five reads plus settings operations
-#: and the two synthetic deletion operations. Everything else is METHOD_NOT_FOUND.
+#: The preview's browser command allowlist: five reads, profile availability,
+#: settings operations and the two synthetic deletion operations.
 ALLOWED_OPERATIONS = (
     "selection_get", "selection_list", "buddy_list", "workflow_get", "message_list", "user_policy_publish",
     "model_catalog_refresh", "macro_task_stop", "capabilities", "reminder_settings_set",
-    "macro_task_deletion_preview", "macro_task_delete", "quota_redetect",
+    "macro_task_deletion_preview", "macro_task_delete", "quota_redetect", "profile_start",
 )
 #: Operations the 0.15.1 read-only repair removed from the browser surface.
 REMOVED_OPERATIONS = (
@@ -2559,11 +2571,63 @@ def buddy_views() -> list[dict]:
     return sorted(views, key=lambda view: used.index(view["buddyId"]) if view["buddyId"] in used else len(used))
 
 
-def policy_views() -> dict:
-    """Synthetic user policy: three buddy preferences and one model note."""
-    def model_service(cfg: dict) -> dict:
-        return {key: cfg[key] for key in ("harness", "provider", "model")}
+def model_views() -> dict:
+    """Current model identities, profile facts and service correspondences."""
+    names: dict[str, list[dict]] = {name: [] for name in MODEL_IDS}
+    correspondences = []
+    for harness, provider, name, _efforts, _enabled in CATALOG:
+        service = {"harness": harness, "provider": provider, "model": name}
+        names[name].append(service)
+        source = ("profile" if name == "gpt-5-mini"
+                  else "user" if harness == "zcode" else "same-name")
+        correspondences.append({**service,
+                                "correspondenceId": f"synthetic-correspondence-{len(correspondences) + 1}",
+                                "modelId": MODEL_IDS[name], "createdAt": instant(1, len(correspondences)),
+                                "source": source,
+                                "evidenceUrl": "https://example.org/synthetic-preview/model" if source == "profile" else None,
+                                "evidenceDate": "2026-09-20" if source == "profile" else None,
+                                "canUndo": source != "same-name"})
+    profiled_id = MODEL_IDS["gpt-5-codex"]
+    profile_run = {"profileRunId": "synthetic-profile-run-completed", "taskId": "synthetic-profile-task-completed",
+                   "buddyId": ROUTER_BUDDY_ID, "buddy": ROUTER_BUDDY,
+                   "state": "completed", "reason": None, "startedAt": instant(8, 10),
+                   "finishedAt": instant(8, 12), "correctionRounds": 0,
+                   "usage": {"attempts": [{"attemptId": "synthetic-profile-attempt-completed",
+                                           "elapsedMs": 120000, "toolCalls": 5,
+                                           "tokenUsage": {"inputTokens": 4200, "cachedInputTokens": 900,
+                                                          "outputTokens": 650, "source": "synthetic-preview",
+                                                          "scope": "attempt", "inputBasis": "includes-cached"}}]}}
+    failed_run = {"profileRunId": "synthetic-profile-run-failed", "taskId": "synthetic-profile-task-failed",
+                  "buddyId": ROUTER_BUDDY_ID, "buddy": ROUTER_BUDDY,
+                  "state": "failed", "reason": {"code": "profile-answer-invalid",
+                                                  "params": {"errors": ["answer.claims[0].sourceUrl: required"]}},
+                  "startedAt": instant(8, 20), "finishedAt": instant(8, 21),
+                  "correctionRounds": 2,
+                  "usage": {"attempts": [{"attemptId": "synthetic-profile-attempt-failed",
+                                          "elapsedMs": 60000, "toolCalls": 2, "tokenUsage": None}]}}
+    models = []
+    for name, model_id in sorted(MODEL_IDS.items()):
+        profile = None
+        latest_run = None
+        if model_id == profiled_id:
+            profile = {"positioning": "Synthetic preview: strong at coding and repository work.",
+                       "builtAt": instant(8, 12), "profileRunId": profile_run["profileRunId"],
+                       "claims": [{"polarity": "strength", "claim": "Handles multi-file code changes.",
+                                   "sourceUrl": "https://example.org/synthetic-preview/coding",
+                                   "sourceDate": "2026-09-20", "sourceKind": "vendor"},
+                                  {"polarity": "weakness", "claim": "Long tasks can consume more tokens.",
+                                   "sourceUrl": "https://example.org/synthetic-preview/usage",
+                                   "sourceDate": "2026-09-21", "sourceKind": "third-party"}]}
+            latest_run = profile_run
+        elif name == "glm-5":
+            latest_run = failed_run
+        models.append({"modelId": model_id, "displayName": name, "names": names[name],
+                       "profile": profile, "latestProfileRun": latest_run})
+    return {"models": models, "modelCorrespondences": correspondences}
 
+
+def policy_views() -> dict:
+    """Synthetic buddy preferences and one human note on a model identity."""
     def buddy_id(cfg: dict) -> str:
         return f"{cfg['harness']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}"
 
@@ -2572,8 +2636,10 @@ def policy_views() -> dict:
                    {"buddyId": buddy_id(CFG_CODEX), "mode": "pin", "note": None}]
     return {
         "preferences": sorted(preferences, key=lambda entry: entry["buddyId"]),
-        "modelServiceNotes": [{**model_service(CFG_CODEX), "text": "synthetic preview family note",
-                               "updatedAt": "2026-09-26T00:00:00Z"}],
+        "modelNotes": [{"modelId": MODEL_IDS[CFG_CODEX["model"]],
+                        "text": "Synthetic preview: preferred for code review.",
+                        "updatedAt": "2026-09-26T00:00:00Z"}],
+        **model_views(),
     }
 
 
@@ -2726,6 +2792,9 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
                           "maintenanceBuddyId": "dsh:deepseek-official:deepseek-flash:max",
                           "maintenanceIntervalSeconds": 3600,
+                          "profileBuddyId": "dsh:deepseek-partner:deepseek-flash:max",
+                          "profileBudget": "deep",
+                          "profileUnavailableReason": PROFILE_UNAVAILABLE_REASON,
                           "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
                                                   "toolCalls": 24}},
         "buddies": buddies,
@@ -2918,6 +2987,12 @@ def command_result(scenario: str, operation: str, params: Any, state: PreviewSta
     if operation not in ALLOWED_OPERATIONS:
         raise PreviewError("METHOD_NOT_FOUND",
                            f"Operation {operation!r} is not available through the console")
+    if operation == "profile_start":
+        if set(params) != {"modelId"} or not isinstance(params["modelId"], str):
+            raise PreviewError("INVALID_ARGUMENT", "modelId is required")
+        if params["modelId"] not in MODEL_IDS.values():
+            raise PreviewError("NOT_FOUND", "Unknown modelId")
+        return {"status": "unavailable", "reason": PROFILE_UNAVAILABLE_REASON}
     if operation == "quota_redetect":
         if set(params) != {"requestId", "harness", "provider"} or not all(
                 isinstance(params[key], str) and params[key] for key in ("requestId", "harness", "provider")):
@@ -3029,8 +3104,8 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/tasks/{SESSION_DSH[0]}/attempts/{SESSION_DSH[1]}/session",
         f"GET  {base}/api/runtime-version",
         f"POST {base}/api/command  workflow_get · message_list · selection_get · selection_list · "
-        f"buddy_list · macro_task_deletion_preview · macro_task_delete "
-        f"(deletion is in-memory only; other writes: 403; removed ops: 404)",
+        f"buddy_list · profile_start · macro_task_deletion_preview · macro_task_delete "
+        f"(profile unavailable; deletion is in-memory only; other writes: 403; removed ops: 404)",
     )
 
 
@@ -3398,7 +3473,8 @@ def reason_problems(value: Any, registry: dict, path: str = "reply") -> list[str
     elif isinstance(value, dict):
         for key, item in value.items():
             field = f"{path}.{key}"
-            if key in ("reason", "releaseReason", "unavailableReason", "catalogReason", "decisionAdapterReason") and item is not None:
+            if key in ("reason", "releaseReason", "unavailableReason", "catalogReason",
+                       "decisionAdapterReason", "profileUnavailableReason") and item is not None:
                 if (not isinstance(item, dict) or set(item) != {"code", "params"}
                         or item.get("code") not in registry or not isinstance(item.get("params"), dict)
                         or set(item["params"]) - set(registry[item["code"]])):

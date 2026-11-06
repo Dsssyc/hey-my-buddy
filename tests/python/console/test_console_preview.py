@@ -24,6 +24,48 @@ SPEC.loader.exec_module(preview)
 
 
 class LeadStopPreviewTests(unittest.TestCase):
+    def test_model_profile_preview_uses_current_snapshot_and_command_shapes(self):
+        snapshot = preview.console_snapshot('normal', True)
+        self.assertNotIn('modelServiceNotes', snapshot)
+        self.assertEqual(snapshot['configuration']['profileBudget'], 'deep')
+        self.assertIn(snapshot['configuration']['profileBuddyId'],
+                      {buddy['buddyId'] for buddy in snapshot['buddies']})
+        self.assertEqual(snapshot['configuration']['profileUnavailableReason'],
+                         {'code': 'profile-web-unsupported', 'params': {}})
+        models = {row['modelId']: row for row in snapshot['models']}
+        self.assertEqual(len(models), len(preview.MODEL_IDS))
+        self.assertEqual(set(row['source'] for row in snapshot['modelCorrespondences']),
+                         {'same-name', 'profile', 'user'})
+        for row in snapshot['modelCorrespondences']:
+            self.assertIn(row['modelId'], models)
+            self.assertIn({key: row[key] for key in ('harness', 'provider', 'model')},
+                          models[row['modelId']]['names'])
+            if row['source'] == 'profile':
+                self.assertTrue(row['evidenceUrl'].startswith('https://'))
+                self.assertIsNotNone(row['evidenceDate'])
+                self.assertTrue(row['canUndo'])
+        self.assertEqual(snapshot['modelNotes'][0]['modelId'], preview.MODEL_IDS['gpt-5-codex'])
+        profiled = models[preview.MODEL_IDS['gpt-5-codex']]
+        self.assertEqual({claim['polarity'] for claim in profiled['profile']['claims']},
+                         {'strength', 'weakness'})
+        self.assertEqual(profiled['profile']['profileRunId'], profiled['latestProfileRun']['profileRunId'])
+        self.assertEqual(profiled['latestProfileRun']['state'], 'completed')
+        self.assertEqual(profiled['latestProfileRun']['usage']['attempts'][0]['tokenUsage']['inputTokens'], 4200)
+        unprofiled = models[preview.MODEL_IDS['glm-5']]
+        self.assertIsNone(unprofiled['profile'])
+        self.assertEqual(unprofiled['latestProfileRun']['state'], 'failed')
+        self.assertEqual(unprofiled['latestProfileRun']['reason']['code'], 'profile-answer-invalid')
+        self.assertIsNone(models[preview.MODEL_IDS['gpt-5-mini']]['latestProfileRun'])
+        page = preview.command_result('normal', 'buddy_list', {})
+        for field in ('models', 'modelCorrespondences', 'modelNotes'):
+            self.assertEqual(page[field], snapshot[field])
+        self.assertEqual(preview.command_result('normal', 'profile_start',
+                         {'modelId': profiled['modelId']}),
+                         {'status': 'unavailable', 'reason': snapshot['configuration']['profileUnavailableReason']})
+        with self.assertRaises(preview.PreviewError) as missing:
+            preview.command_result('normal', 'profile_start', {'modelId': 'missing'})
+        self.assertEqual(missing.exception.code, 'NOT_FOUND')
+
     def test_unconcluded_failures_and_cancellations_wait_for_host(self):
         page = preview.macro_task_page({'filter': 'host'})
         summary = next(item for group in page['groups'] for item in group['macroTasks']

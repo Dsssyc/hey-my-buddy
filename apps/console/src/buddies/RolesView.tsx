@@ -15,6 +15,7 @@ import type { Configuration, Buddy, RoutingBudget, RoutingMode, Snapshot } from 
 import type { Editor } from "../use-editor";
 import type { ConsoleApi } from "../api";
 import { MaintenanceView } from "./MaintenanceView";
+import { ProfileSettingsView } from "./ProfileSettingsView";
 import { RolesRecords } from "./RolesRecords";
 import { RouterList, routerLineId } from "./RouterList";
 import type { BuddyLocation } from "./navigation";
@@ -173,6 +174,7 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
       </Section>
 
       <MaintenanceView snapshot={snapshot} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} />
+      <ProfileSettingsView snapshot={snapshot} editor={editor} />
 
       <Section name={t("roles.records.name")} id={RECORDS_ID} tabIndex={-1}>
         <RolesRecords health={snapshot.routingHealth} />

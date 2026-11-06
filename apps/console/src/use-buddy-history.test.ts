@@ -11,7 +11,7 @@ function buddy(buddyId: string): Buddy {
     description: "", source: "fixture" };
 }
 function page(ids: string[], nextCursor: string | null = null): BuddyPage {
-  return { buddies: ids.map(buddy), preferences: [], modelServiceConcurrency: [], nextCursor };
+  return { buddies: ids.map(buddy), preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [], nextCursor };
 }
 function fakeApi(handler: (params: Record<string, unknown>) => BuddyPage | Promise<BuddyPage>) {
   const command = vi.fn(async (_operation: string, params: Record<string, unknown>) => handler(params));
@@ -22,7 +22,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("bounded retained model history", () => {
   it("invalidates retained history when an event changes outside the bounded snapshot", () => {
-    const visible = { eventCursor: 12, buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], configuration: null } as unknown as Snapshot;
+    const visible = { eventCursor: 12, buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [], configuration: null } as unknown as Snapshot;
     expect(historySourceKey({ ...visible, eventCursor: 13 })).not.toBe(historySourceKey(visible));
   });
   it("bounds query terms and length", () => {
@@ -72,26 +72,25 @@ describe("bounded retained model history", () => {
     await waitFor(() => expect(result.current.page?.buddies.map(row => row.buddyId)).toEqual(["fresh"]));
   });
 
-  it("rereads a retained-only model service note when the board event cursor moves", async () => {
-    const modelService = { harness: "dsh", provider: "deepseek-official", model: "retired" };
+  it("rereads a retained model note when the board event cursor moves", async () => {
     let note = "older note";
     const { api, command } = fakeApi(() => ({ ...page(["retired"]),
-      modelServiceNotes: [{ ...modelService, text: note, updatedAt: null }] }));
-    const visible = { eventCursor: 8, buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], configuration: null } as unknown as Snapshot;
+      modelNotes: [{ modelId: "retired", text: note, updatedAt: "2026-11-01T00:00:00Z" }] }));
+    const visible = { eventCursor: 8, buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [], configuration: null } as unknown as Snapshot;
     const { result, rerender } = renderHook(({ snapshot }) => useBuddyHistory(api, "csrf", historySourceKey(snapshot),
       { query: "", harness: "", enabled: true }), { initialProps: { snapshot: visible } });
     act(() => result.current.open());
-    await waitFor(() => expect(result.current.page?.modelServiceNotes?.[0].text).toBe("older note"));
+    await waitFor(() => expect(result.current.page?.modelNotes[0].text).toBe("older note"));
     note = "newer note";
     rerender({ snapshot: { ...visible, eventCursor: 9 } });
     expect(result.current.page).toBeNull();
-    await waitFor(() => expect(result.current.page?.modelServiceNotes?.[0].text).toBe("newer note"));
+    await waitFor(() => expect(result.current.page?.modelNotes[0].text).toBe("newer note"));
     expect(command).toHaveBeenCalledTimes(2);
   });
 
   it("does not render an old retained page during the cursor-change render", () => {
     const visible = { eventCursor: 8, csrfToken: "csrf", consoleSession: { id: "session" },
-      buddies: [], preferences: [], modelServiceNotes: [],
+      buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [],
       modelServiceConcurrency: [], configuration: null, decisions: [], tasks: { pendingCount: 0 }, capabilities: {} } as Snapshot;
     const { api } = fakeApi(() => page([]));
     const { result, rerender } = renderHook(({ snapshot }) => useEditor(api, snapshot, async () => snapshot, true, ""),

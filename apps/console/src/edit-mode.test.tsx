@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiError, type ConsoleApi } from "./api";
-import type { ModelServiceNote, Buddy, Snapshot } from "./types";
+import type { ModelNote, Buddy, Snapshot } from "./types";
 import { chip, effortCell, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 /** One model service with an enabled and a disabled effort, plus a second enabled model service. */
@@ -24,7 +24,7 @@ function catalog(): Buddy[] {
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashModelService = { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
 const FLASH = "dsh / deepseek-official / deepseek-flash";
-const flashNote = (text: string): ModelServiceNote => ({ ...flashModelService, text, updatedAt: null });
+const flashNote = (text: string): ModelNote => ({ modelId: "deepseek-flash", text, updatedAt: "2026-11-01T00:00:00Z" });
 /** A buddy that only a completed program discovery can add. */
 const discovered = "dsh:deepseek-official:deepseek-v5:medium";
 
@@ -35,10 +35,12 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
     buddies,
 
-    modelServiceNotes: [flashNote("原备注")],
+    models: ["deepseek-flash", "deepseek-v4-pro"].map(model => ({ modelId: model, displayName: model, names: [{ harness: "dsh", provider: "deepseek-official", model }], profile: null, latestProfileRun: null })),
+    modelCorrespondences: ["deepseek-flash", "deepseek-v4-pro"].map(model => ({ harness: "dsh", provider: "deepseek-official", model, correspondenceId: model, modelId: model, createdAt: "2026-11-01T00:00:00Z", source: "same-name" as const, evidenceUrl: null, evidenceDate: null, canUndo: false })),
+    modelNotes: [flashNote("原备注")],
     preferences: [], decisions: [],
 
     modelServiceConcurrency: [
@@ -59,9 +61,9 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
       if (scripted === "network") throw new ApiError("NETWORK", "lost publish reply");
       if (scripted === "forbidden") throw new ApiError("FORBIDDEN", "stale CSRF after restart");
       state = { ...state,
-        modelServiceNotes: params.modelServiceNoteChanges
-          ? params.modelServiceNoteChanges.map((change: { text: string }) => flashNote(change.text))
-          : state.modelServiceNotes,
+        modelNotes: params.modelNoteChanges
+          ? params.modelNoteChanges.map((change: { text: string }) => flashNote(change.text))
+          : state.modelNotes,
         buddies: params.buddySettings
           ? state.buddies.map(buddy => ({ ...buddy, enabled: params.buddySettings.find(
               (change: { buddyId: string; enabled: boolean }) => change.buddyId === buddy.buddyId)?.enabled ?? buddy.enabled }))
@@ -73,7 +75,9 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
       // The program publishes the directory itself; the page only re-reads it.
       // A discovery can coincide with another settings publication.
       state = { ...state,
-        ...(options.discoveryNote ? { modelServiceNotes: [flashNote(options.discoveryNote)] } : {}),
+        ...(options.discoveryNote ? { modelNotes: [flashNote(options.discoveryNote)] } : {}),
+        models: [...state.models, { modelId: "deepseek-v5", displayName: "deepseek-v5", names: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-v5" }], profile: null, latestProfileRun: null }],
+        modelCorrespondences: [...state.modelCorrespondences, { harness: "dsh", provider: "deepseek-official", model: "deepseek-v5", correspondenceId: "deepseek-v5", modelId: "deepseek-v5", createdAt: "2026-11-01T00:00:00Z", source: "same-name", evidenceUrl: null, evidenceDate: null, canUndo: false }],
         buddies: [...state.buddies, { effortRank: null, buddyId: discovered, label: "deepseek-v5 · medium", harness: "dsh",
           provider: "deepseek-official", model: "deepseek-v5", effort: "medium", available: true, enabled: false,
           capabilities: [], contextWindow: null, source: "catalog:refresh", description: "" }] };
@@ -100,7 +104,7 @@ async function openBuddy(api: ConsoleApi, user: ReturnType<typeof userEvent.setu
   await listed(2, 3);
   await selectModel(user, FLASH, "DSH");
 }
-const note = () => within(pane()).getByRole("textbox", { name: "备注" }) as HTMLTextAreaElement;
+const note = () => within(pane()).getByRole("textbox", { name: /^模型备注/ }) as HTMLTextAreaElement;
 
 const saveBar = () => screen.queryByRole("region", { name: "未保存的修改" });
 const save = () => within(saveBar()!).getByRole("button", { name: /^(保存|重试同一保存)$/ });
@@ -143,7 +147,7 @@ describe("direct editing and the save bar", () => {
     expect(f.published[0]).toMatchObject({ commandId: expect.any(String) });
     expect(f.published[0]).not.toHaveProperty("expectedRevision");
     // Only the changed model service note is published: no buddies table and no card.
-    expect(f.published[0].modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "本地草稿，未发布" }]);
+    expect(f.published[0].modelNoteChanges).toEqual([{ modelId: "deepseek-flash", text: "本地草稿，未发布" }]);
     expect(f.published[0]).not.toHaveProperty("annotationChanges");
     expect(f.published[0]).not.toHaveProperty("buddies");
     expect(f.published[0]).not.toHaveProperty("cards");
@@ -236,13 +240,13 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.clear(note());
     await user.type(note(), "我的备注");
-    f.setSnapshot({ ...f.snapshot(), modelServiceNotes: [flashNote("其他窗口的备注")] });
+    f.setSnapshot({ ...f.snapshot(), modelNotes: [flashNote("其他窗口的备注")] });
     await readSnapshotOnForeground(f.api.snapshot);
     expect(note().value).toBe("我的备注");
     await user.click(save());
     await screen.findByText(PUBLISHED);
     expect(f.published).toHaveLength(1);
-    expect(f.published[0].modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "我的备注" }]);
+    expect(f.published[0].modelNoteChanges).toEqual([{ modelId: "deepseek-flash", text: "我的备注" }]);
     expect(note().value).toBe("我的备注");
   });
 
@@ -276,7 +280,7 @@ describe("direct editing and the save bar", () => {
     expect(note().value).toBe("原备注，我的补充");
     await user.click(save());
     await screen.findByText(PUBLISHED);
-    expect(f.published[0].modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "原备注，我的补充" }]);
+    expect(f.published[0].modelNoteChanges).toEqual([{ modelId: "deepseek-flash", text: "原备注，我的补充" }]);
   });
 
   it("keeps an unsaved note while discovery refreshes the directory", async () => {
@@ -292,7 +296,7 @@ describe("direct editing and the save bar", () => {
     await user.click(save());
     await screen.findByText(PUBLISHED);
     expect(f.published[0]).not.toHaveProperty("expectedRevision");
-    expect(f.published[0].modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "原备注，保留的备注" }]);
+    expect(f.published[0].modelNoteChanges).toEqual([{ modelId: "deepseek-flash", text: "原备注，保留的备注" }]);
     expect(f.published[0]).not.toHaveProperty("buddies");
   });
 

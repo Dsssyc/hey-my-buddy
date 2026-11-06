@@ -42,10 +42,10 @@ function fixture(options: { discoveryLimit?: number } = {}) {
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
     buddies,
 
-    modelServiceNotes: [], preferences: [], decisions: [],
+    models: [], modelNotes: [], modelCorrespondences: [], preferences: [], decisions: [],
     modelServiceConcurrency: [flashEntry, retiredEntry],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
@@ -70,7 +70,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
 
 
     if (operation === "buddy_list") {
-      return { buddies, modelServiceNotes: [], preferences: [],         modelServiceConcurrency: structuredClone(state.modelServiceConcurrency), nextCursor: null };
+      return { buddies, models: [], modelNotes: [], modelCorrespondences: [], preferences: [],         modelServiceConcurrency: structuredClone(state.modelServiceConcurrency), nextCursor: null };
     }
     if (operation === "model_catalog_refresh") {
       // The program publishes directory facts itself. A discovery can also

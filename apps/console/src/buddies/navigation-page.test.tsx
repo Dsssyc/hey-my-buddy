@@ -1,3 +1,4 @@
+import { modelFacts } from "./model-fixtures";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -83,9 +84,9 @@ function snapshot(routerBuddyId: string | null = solMediumId): SnapshotWithHarne
     consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: routerBuddyId ? [routerBuddyId] : [], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "review" as const, routingBudget: "standard" },
+      defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" },
     buddies: buddies(),
-    preferences: [], modelServiceNotes: [],
+    preferences: [], models: [], modelNotes: [], modelCorrespondences: [],
     decisions: [],
     modelServiceConcurrency: [
       { ...sonnet, limit: 2, active: 0 }, { ...sol, limit: 2, active: 0 },
@@ -94,7 +95,7 @@ function snapshot(routerBuddyId: string | null = solMediumId): SnapshotWithHarne
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
   };
-  return { ...base, harnesses: harnesses() };
+  return { ...base, ...modelFacts(base.buddies), harnesses: harnesses() };
 }
 
 function fixture(routerBuddyId: string | null = solMediumId, extra: Partial<Snapshot> = {}) {
@@ -103,7 +104,8 @@ function fixture(routerBuddyId: string | null = solMediumId, extra: Partial<Snap
     if (operation === "buddy_list") {
       // Only the checked 显示不可用 asks for this page; the fixture keeps
       // every recorded row on one bounded page.
-      return { buddies: state.buddies, modelServiceNotes: state.modelServiceNotes,
+      return { buddies: state.buddies, models: state.models, modelNotes: state.modelNotes,
+        modelCorrespondences: state.modelCorrespondences,
         preferences: state.preferences,
         modelServiceConcurrency: state.modelServiceConcurrency, nextCursor: null };
     }

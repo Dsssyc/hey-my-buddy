@@ -7,6 +7,7 @@ import { formatDateTime } from "./i18n/format";
 import type { Buddy, Snapshot, Task } from "./types";
 import { timelineOfRecords } from "./task-detail/task-detail.fixtures";
 import { macroTaskGroups, macroTaskSummary } from "./macro-task-fixtures";
+import { modelFacts } from "./buddies/model-fixtures";
 import { catalogue, effortCell, levelSwitch, listed, modelButton, note, pane, selectModel } from "./buddies/page.testing";
 
 const dsh = (model: string) => `dsh / deepseek-official / ${model}`;
@@ -52,9 +53,9 @@ function fixture(records: Task[] = []) {
   const snapshot: Snapshot = { csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [buddies[0].buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [buddies[0].buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
     buddies,
-    preferences: [], modelServiceNotes: [], decisions: [],
+    preferences: [], ...modelFacts(buddies), modelNotes: [], decisions: [],
     modelServiceConcurrency: [],
     tasks: { pendingCount },
     capabilities: { selection: false } };

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { ApiError, errorText, validPreferences } from "./api";
 import { isModelServiceConcurrencyEntry, modelServiceKey } from "./console-data";
+import { modelSchema, modelNoteSchema, modelCorrespondenceSchema } from "./types";
 import type { ModelService, BuddyPage, Snapshot } from "./types";
 
 /** One bounded page of retained identities, including unavailable history. */
@@ -22,12 +23,15 @@ export const FILTER_DEBOUNCE_MS = 300;
 /** Rejects an incomplete envelope instead of rendering invented buddy facts. */
 function parseBuddyPage(value: unknown): BuddyPage {
   const page = value as BuddyPage | null;
-  // Model service notes are optional on a page, but a present value must be a list.
-  const optionalList = (value: unknown) => value === undefined || Array.isArray(value);
   const valid = !!page
     && Array.isArray(page.buddies)
     && validPreferences(page.preferences)
-    && optionalList(page.modelServiceNotes)
+    && Array.isArray(page.models)
+    && page.models.every(row => modelSchema.safeParse(row).success)
+    && Array.isArray(page.modelNotes)
+    && page.modelNotes.every(row => modelNoteSchema.safeParse(row).success)
+    && Array.isArray(page.modelCorrespondences)
+    && page.modelCorrespondences.every(row => modelCorrespondenceSchema.safeParse(row).success)
     && Array.isArray(page.modelServiceConcurrency)
     && page.modelServiceConcurrency.every(isModelServiceConcurrencyEntry)
     && (page.nextCursor === null || typeof page.nextCursor === "string");
@@ -69,6 +73,12 @@ function addMissingModelServices<T extends ModelService>(current: T[], extra: T[
   return added.length ? [...current, ...added] : current;
 }
 
+function addMissingModels<T extends { modelId: string }>(current: T[], extra: T[]): T[] {
+  const known = new Set(current.map(row => row.modelId));
+  const added = extra.filter(row => !known.has(row.modelId) && (known.add(row.modelId), true));
+  return added.length ? [...current, ...added] : current;
+}
+
 /**
  * Appends one page within the current source content generation.
  */
@@ -77,7 +87,9 @@ export function mergePage(previous: BuddyPage | null, next: BuddyPage): BuddyPag
   return {
     buddies: addMissing(previous.buddies, next.buddies),
     preferences: addMissing(previous.preferences, next.preferences),
-    modelServiceNotes: addMissingModelServices(previous.modelServiceNotes ?? [], next.modelServiceNotes ?? []),
+    models: addMissingModels(previous.models, next.models),
+    modelNotes: addMissingModels(previous.modelNotes, next.modelNotes),
+    modelCorrespondences: addMissingModelServices(previous.modelCorrespondences, next.modelCorrespondences),
     modelServiceConcurrency: addMissingModelServices(previous.modelServiceConcurrency, next.modelServiceConcurrency),
     nextCursor: next.nextCursor,
   };
@@ -100,7 +112,9 @@ export function historySourceKey(snapshot: Snapshot): string {
     eventCursor: snapshot.eventCursor,
     buddies: snapshot.buddies.map(({ buddyId, available, enabled }) => [buddyId, available, enabled]),
     preferences: snapshot.preferences,
-    modelServiceNotes: snapshot.modelServiceNotes,
+    models: snapshot.models,
+    modelNotes: snapshot.modelNotes,
+    modelCorrespondences: snapshot.modelCorrespondences,
     modelServiceConcurrency: snapshot.modelServiceConcurrency.map(({ harness, provider, model, limit }) => [harness, provider, model, limit]),
     configuration: snapshot.configuration,
     unavailableBuddyCount: snapshot.unavailableBuddyCount,

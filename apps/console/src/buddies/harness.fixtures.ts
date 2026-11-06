@@ -1,3 +1,4 @@
+import { modelFacts } from "./model-fixtures";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { vi } from "vitest";
@@ -53,9 +54,9 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
     csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+    configuration: { explorationEvery: 5, routerBuddyIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" },
     buddies: [buddy],
-    preferences: [], modelServiceNotes: [], decisions: [],
+    preferences: [], ...modelFacts([buddy]), modelNotes: [], decisions: [],
 
     modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 },

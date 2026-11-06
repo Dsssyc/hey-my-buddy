@@ -4,7 +4,7 @@ import { Hint } from "@/components/hint";
 import { CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { UnsavedMark } from "@/components/ui/state-mark";
 import { concurrencyEntryFor, MODEL_SERVICE_CONCURRENCY_DEFAULT } from "../console-data";
-import { modelServiceNoteText } from "../draft";
+import { modelNoteText } from "../draft";
 import type { ConsoleView, Snapshot } from "../types";
 import { CoolingStatus } from "./cooling";
 import { modelIdentity, reasonTexts } from "./models";
@@ -16,9 +16,11 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
 }) {
   const { t } = useTranslation("buddies");
   const member = row.modelService.buddies[0];
+  const modelId = data.modelCorrespondences.find(entry => entry.harness === member.harness && entry.provider === member.provider && entry.model === member.model)?.modelId;
   const enabled = row.chips.filter(chip => chip.buddy.enabled);
   const changed = row.chips.some(chip => chip.unsaved)
-    || modelServiceNoteText(data, member) !== modelServiceNoteText(recorded, member)
+    || !!modelId && modelNoteText(data, modelId) !== modelNoteText(recorded, modelId)
+    || !!data.modelCorrespondenceChanges?.some(entry => entry.harness === member.harness && entry.provider === member.provider && entry.model === member.model)
     || !Object.is(row.limit, concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT);
   const occupancy = row.occupancy === null ? t("models.occupancyUnknown") : t("models.occupancy", { active: row.occupancy, limit: row.limit });
   // The open row keeps its neutral tint under the pointer: hover deepens it.

@@ -1,3 +1,4 @@
+import modelProfile from "./model-profile";
 import type zh from "../zh/buddies";
 import harness from "./buddies-harness";
 import roles from "./buddies-roles";
@@ -6,6 +7,17 @@ import maintenance from "./maintenance";
 
 export default {
   maintenance,
+  modelProfile,
+  profile: {
+    title: "Profile plane",
+    buddy: "Profile buddy",
+    choose: "Choose buddy",
+    search: "Search buddies",
+    none: "Not set",
+    noCandidates: "No enabled, available buddy has an enforced web only level",
+    budget: "Profile budget",
+    dataFlow: "Building a profile sends model names and correspondence candidates to the profile buddy's model provider; the buddy can search public web sources.",
+  },
   sections: {
     label: "Sections of the Buddies page",
     catalog: "Catalog",

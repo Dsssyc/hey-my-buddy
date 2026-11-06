@@ -1,3 +1,4 @@
+import { modelFacts } from "./model-fixtures";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import type userEvent from "@testing-library/user-event";
 import { createElement } from "react";
@@ -75,9 +76,9 @@ export function snapshot({ routers = [], configuration = {}, routingHealth, sess
     csrfToken: "csrf", eventCursor: 0, consoleSession: sessionPresent ? { id: "fixture-session" } : undefined as unknown as ConsoleSession,
 
     configuration: configuration === null ? null
-      : { explorationEvery: 5, routerBuddyIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", ...configuration },
+      : { explorationEvery: 5, routerBuddyIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", profileBuddyId: null, profileBudget: "deep", profileUnavailableReason: { code: "profile-not-configured", params: {} }, ...configuration },
     buddies: buddies(),
-    preferences: [], modelServiceNotes: [],
+    ...modelFacts(buddies()), modelNotes: [], preferences: [],
  decisions: [],
     modelServiceConcurrency: [],
     tasks: { pendingCount: 0 },

@@ -1,3 +1,4 @@
+import { modelFacts } from "./model-fixtures";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,12 +29,12 @@ function buddy(modelService: typeof sonnet, effort: string, extra: Partial<Buddy
 }
 
 function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: HarnessHealth[] } {
-  return {
+  const state: Snapshot & { harnesses: HarnessHealth[] } = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" },
     buddies: [buddy(sonnet, "medium", { enabled: true }), buddy(sonnet, "high"), buddy(sol, "medium"), buddy(sol, "low")],
-    preferences: [], modelServiceNotes: [], decisions: [],
+    preferences: [], models: [], modelNotes: [], modelCorrespondences: [], decisions: [],
  modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 }, capabilities: {},
     harnesses: [
@@ -42,6 +43,7 @@ function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: Harnes
     ],
     ...extra,
   };
+  return { ...state, ...modelFacts(state.buddies) };
 }
 
 type Reply = (params: Record<string, any>) => unknown;
@@ -70,7 +72,7 @@ function open(f: ReturnType<typeof fixture>) {
 
 /** One page of retained rows, as `buddy_list` returns it. */
 function page(buddies: Buddy[], _state: Snapshot) {
-  return { buddies, preferences: [], modelServiceNotes: [],
+  return { buddies, preferences: [], ...modelFacts(buddies), modelNotes: [],
  modelServiceConcurrency: [], nextCursor: null };
 }
 

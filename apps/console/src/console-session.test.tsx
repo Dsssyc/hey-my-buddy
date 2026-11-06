@@ -66,11 +66,13 @@ function fixture(options: {
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: session(),
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
     buddies,
     unavailableBuddyCount: 1,
 
-    modelServiceNotes: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", updatedAt: null }],
+    models: [{ modelId: "deepseek-flash", displayName: "deepseek-flash", names: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash" }], profile: null, latestProfileRun: null }],
+    modelNotes: [{ modelId: "deepseek-flash", text: "原人工意见", updatedAt: "2026-11-01T00:00:00Z" }],
+    modelCorrespondences: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", correspondenceId: "flash-map", modelId: "deepseek-flash", createdAt: "2026-11-01T00:00:00Z", source: "same-name", evidenceUrl: null, evidenceDate: null, canUndo: false }],
     preferences: [], decisions: [],
     modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }],
     tasks: { pendingCount: 0 },
@@ -104,7 +106,7 @@ function fixture(options: {
     }
     if (operation === "message_list") return { messages: [], cursor: 0 };
     if (operation === "buddy_list") {
-      return { buddies: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], nextCursor: null };
+      return { buddies: [], models: [], modelNotes: [], modelCorrespondences: [], preferences: [], modelServiceConcurrency: [], nextCursor: null };
     }
     if (operation === "selection_get") {
       return { decision: { decisionId: String(params.decisionId), status: "completed",
@@ -172,9 +174,9 @@ afterEach(() => {
 function envelope(consoleSession: unknown, include = true) {
   return {
     configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "fast", routingBudget: "standard" },
+      defaultRoutingMode: "fast", routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" },
 
-    buddies: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 },
+    buddies: [], models: [], modelNotes: [], modelCorrespondences: [], preferences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     csrfToken: "csrf", eventCursor: 0,
     ...(include ? { consoleSession } : {}),
   };

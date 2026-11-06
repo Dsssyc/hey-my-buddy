@@ -106,7 +106,7 @@ describe("maintenance controls", () => {
   });
   it("offers only enabled available no-tool buddies and publishes maintenance edits through the shared draft", async () => {
     const f = fixture(state()); await openRoles(f); const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "选择 buddy" }));
+    await user.click(within(document.querySelector<HTMLElement>('[data-slot="maintenance-plane"]')!).getByRole("button", { name: "选择 buddy" }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText(/dsh \/ deepseek-official/)).toBeTruthy();
     expect(within(dialog).queryByText(/codex/)).toBeNull();
@@ -136,7 +136,7 @@ describe("maintenance controls", () => {
   ] as const) it(`reports ${result.status} without inventing a start`, async () => {
     const f = fixture(state(), { maintenance_start: () => result }); await openRoles(f);
     await userEvent.click(screen.getByRole("button", { name: "立即维护" }));
-    await waitFor(() => expect(screen.getByRole("status").textContent).toContain(feedback));
+    await waitFor(() => expect(within(document.querySelector<HTMLElement>('[data-slot="maintenance-plane"]')!).getByRole("status").textContent).toContain(feedback));
     expect(f.operations).toEqual(["maintenance_start"]);
   });
   it("keeps an unsuccessful domain edit open and shows its error inside the dialog", async () => {

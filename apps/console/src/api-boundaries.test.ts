@@ -10,9 +10,9 @@ import type { Snapshot } from "./types";
 const unsafe = Number.MAX_SAFE_INTEGER + 1;
 const date = "Fri, 09 Oct 2026 18:05:00 GMT"; // Date.parse, rather than ISO-only validation.
 const configuration = { explorationEvery: 5, routerBuddyIds: [" head ", "head"], routerRetryIntervalSeconds: 1,
-  defaultRoutingMode: "fast", routingBudget: "brief" };
+  defaultRoutingMode: "fast", routingBudget: "brief", profileBuddyId: null, profileBudget: "deep" };
 const snapshot = { csrfToken: "", eventCursor: 0, consoleSession: { id: " session " }, configuration,
-  buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 } };
+  buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 } };
 
 // Keep undefined, NaN and unsafe integers intact at the parser boundary.
 function apiFor(value: unknown, command = false) {
@@ -52,7 +52,7 @@ describe("authenticated snapshot read boundaries", () => {
         code: "INVALID_RESPONSE", message: i18n.t(`common:error.${error}`),
       });
     }
-    for (const key of ["eventCursor", "csrfToken", "configuration", "buddies", "preferences", "modelServiceNotes", "modelServiceConcurrency", "tasks"]) {
+    for (const key of ["eventCursor", "csrfToken", "configuration", "buddies", "preferences", "models", "modelNotes", "modelCorrespondences", "modelServiceConcurrency", "tasks"]) {
       await expect(apiFor(without(snapshot, key)).snapshot()).rejects.toMatchObject({
         code: "INVALID_RESPONSE", message: i18n.t("common:error.snapshot"),
       });
@@ -69,8 +69,40 @@ describe("authenticated snapshot read boundaries", () => {
         .rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
     const value = { ...snapshot, eventCursor: Number.MAX_SAFE_INTEGER, buddies: [null],
-      modelServiceNotes: [false], modelServiceConcurrency: [entry], tasks: { pendingCount: Number.MAX_SAFE_INTEGER } };
+      modelServiceConcurrency: [entry], tasks: { pendingCount: Number.MAX_SAFE_INTEGER } };
     await expect(apiFor(value).snapshot()).resolves.toMatchObject(value);
+  });
+
+  it("validates model profiles and correspondences before rendering", async () => {
+    const service = { harness: "dsh", provider: "fixture", model: "alpha" };
+    const model = { modelId: "alpha", displayName: "Alpha", names: [service],
+      profile: { positioning: "Fast model", builtAt: "2026-11-01T00:00:00Z", profileRunId: "run",
+        claims: [{ polarity: "strength", claim: "Fast", sourceUrl: "https://example.org/model",
+          sourceDate: "2026-11-01", sourceKind: "vendor" }] }, latestProfileRun: null };
+    const correspondence = { ...service, correspondenceId: "map", modelId: "alpha",
+      createdAt: "2026-11-01T00:00:00Z", source: "profile", evidenceUrl: null,
+      evidenceDate: null, canUndo: true };
+    const value = { ...snapshot, models: [model], modelNotes: [{ modelId: "alpha", text: "note", updatedAt: "2026-11-01T00:00:00Z" }],
+      modelCorrespondences: [correspondence] };
+    await expect(apiFor(value).snapshot()).resolves.toMatchObject(value);
+    await expect(apiFor({ ...value, models: [{ ...model, profile: { ...model.profile,
+      claims: [{ ...model.profile.claims[0], polarity: "unknown" }] } }] }).snapshot())
+      .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(apiFor({ ...value, modelCorrespondences: [{ ...correspondence, canUndo: "yes" }] }).snapshot())
+      .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(apiFor({ ...value, modelCorrespondences: [{ ...correspondence, source: "guess" }] }).snapshot())
+      .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(apiFor({ ...value, models: [{ ...model, latestProfileRun: {
+      profileRunId: "run", taskId: "task", buddyId: "buddy", buddy: { ...service, effort: "high" },
+      state: "success", reason: null, startedAt: "2026-11-01T00:00:00Z", finishedAt: null,
+      correctionRounds: 0, usage: null,
+    } }] }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(apiFor({ ...value, models: [{ ...model, latestProfileRun: {
+      profileRunId: "run", taskId: "task", buddyId: "buddy", buddy: { ...service, effort: "high" },
+      state: "completed", reason: null, startedAt: "2026-11-01T00:00:00Z", finishedAt: null,
+      correctionRounds: 0, usage: { attempts: [{ attemptId: "attempt", elapsedMs: 10, toolCalls: 1,
+        tokenUsage: { inputTokens: {}, cachedInputTokens: null, outputTokens: 1, source: "native", scope: "attempt" } }] },
+    } }] }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
   });
 });
 

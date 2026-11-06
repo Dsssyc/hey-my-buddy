@@ -4,15 +4,16 @@ import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
+import { modelFacts } from "./buddies/model-fixtures";
 import { listed, note, pane, selectModel } from "./buddies/page.testing";
 
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 
-const initial = (): Snapshot => ({
+const initial = (): Snapshot => { const snapshot: Snapshot = ({
   csrfToken: "fixture-csrf", eventCursor: 0,
   consoleSession: { id: "fixture-session" },
 
-  configuration: { explorationEvery: 5, routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
+  configuration: { explorationEvery: 5, routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep",
   },
   buddies: [
     { effortRank: null,
@@ -32,14 +33,14 @@ const initial = (): Snapshot => ({
   ],
 
   preferences: [],
-      modelServiceNotes: [],
+      models: [], modelNotes: [], modelCorrespondences: [],
 
   decisions: [],
 
   modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 0 }],
   tasks: { pendingCount: 0 },
   capabilities: { selection: false },
-});
+}); return { ...snapshot, ...modelFacts(snapshot.buddies) }; };
 
 const emptyMacroTasks = () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false });
 

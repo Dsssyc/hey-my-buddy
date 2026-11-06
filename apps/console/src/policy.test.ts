@@ -3,7 +3,7 @@ import {
   makeDraft,
   publication,
   setConcurrencyLimit,
-  setModelServiceNote as setNote,
+  setModelNote as setNote,
   setPreference,
 } from "./draft";
 import {
@@ -57,11 +57,11 @@ function snapshot(buddies: Buddy[] = [worker], extra: Partial<Snapshot> = {}): S
     csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [worker.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [worker.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
     buddies,
     preferences: [],
 
-    modelServiceNotes: [],
+    models: [], modelNotes: [], modelCorrespondences: [],
     evidence: [],
     decisions: [],
 
@@ -179,12 +179,12 @@ describe("blocking new changes", () => {
       ...baseline,
       buddies: baseline.buddies.map(p => p.buddyId === retired.buddyId ? { ...p, enabled: false } : p),
     };
-    draft = setNote(draft, retired, "保留经验");
+    draft = setNote(draft, retired.model, "保留经验");
     expect(blockingIssues(baseline, draft)).toEqual([]);
     const patch = publication(baseline, draft, "c");
     expect(patch.buddySettings).toEqual([{ buddyId: retired.buddyId, enabled: false }]);
-    expect(patch.modelServiceNoteChanges).toEqual([
-      { harness: "dsh", provider: "deepseek-official", model: "retired-model", text: "保留经验" },
+    expect(patch.modelNoteChanges).toEqual([
+      { modelId: "retired-model", text: "保留经验" },
     ]);
   });
 
@@ -243,7 +243,7 @@ describe("blocking new changes", () => {
   it("saves review mode when the first item is fast-only and the next item supports review", () => {
     const first = { ...coder, capabilities: ["routing:fast"] };
     const baseline = makeDraft(snapshot([first, worker], { configuration: { explorationEvery: 5, routerBuddyIds: [first.buddyId, worker.buddyId], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "fast", routingBudget: "standard",
+      defaultRoutingMode: "fast", routingBudget: "standard", profileBuddyId: null, profileBudget: "deep",
     } }));
     const changed = { ...baseline, configuration: { ...baseline.configuration!, defaultRoutingMode: "review" as const } };
     expect(blockingIssues(baseline, changed)).toEqual([]);
@@ -254,18 +254,18 @@ describe("blocking new changes", () => {
 describe("stale settings needing attention", () => {
   it("reports a stale Router with its resolving action without blocking an unrelated note", () => {
     const baseline = makeDraft(snapshot([worker, retired], {
-      configuration: { explorationEvery: 5, routerBuddyIds: [retired.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { explorationEvery: 5, routerBuddyIds: [retired.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
     }));
     const attention = decisionAttention(baseline)!;
     expect(attention.router).toBe(true);
     expect(attention.message).toContain("设为 Router");
     expect(blockingIssues(baseline, baseline)).toEqual([]);
-    const withNote = setNote(baseline, worker, "只改备注");
+    const withNote = setNote(baseline, worker.model, "只改备注");
     expect(blockingIssues(baseline, withNote)).toEqual([]);
     const patch = publication(baseline, withNote, "c");
     expect(patch).not.toHaveProperty("configuration");
-    expect(patch.modelServiceNoteChanges).toEqual([
-      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "只改备注" },
+    expect(patch.modelNoteChanges).toEqual([
+      { modelId: "deepseek-flash", text: "只改备注" },
     ]);
   });
 
@@ -289,7 +289,7 @@ describe("stale settings needing attention", () => {
 
   it("treats a missing decision buddy as needing attention, not as an error", () => {
     const baseline = makeDraft(snapshot([worker], {
-      configuration: { explorationEvery: 5, routerBuddyIds: ["gone:model:off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { explorationEvery: 5, routerBuddyIds: ["gone:model:off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
     }));
     expect(decisionAttention(baseline)?.message).toContain("已不在目录中");
     expect(blockingIssues(baseline, baseline)).toEqual([]);

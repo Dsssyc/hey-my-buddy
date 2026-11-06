@@ -12,8 +12,8 @@ function snapshot(): Snapshot {
   return {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    buddies: [], preferences: [], modelServiceNotes: [], decisions: [],
+    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
+    buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [], decisions: [],
  modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: {},
   };

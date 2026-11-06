@@ -65,10 +65,10 @@ function fixture() {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "review" as const, routingBudget: "standard" },
+      defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" },
     buddies: live,
     unavailableBuddyCount: buddies.filter(p => !p.available).length,
- modelServiceNotes: [], preferences: [],  decisions: [],
+ models: [], modelNotes: [], modelCorrespondences: [], preferences: [],  decisions: [],
 
     modelServiceConcurrency: [],
     tasks: { pendingCount: 0 },
@@ -85,7 +85,7 @@ function fixture() {
       const slice = [...visible].sort((a, b) => a.buddyId.localeCompare(b.buddyId))
         .filter(p => p.buddyId > after).slice(0, limit);
       const page: BuddyPage = {
-        buddies: slice, preferences: [],         modelServiceNotes: [], modelServiceConcurrency: [],
+        buddies: slice, preferences: [],         models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [],
         nextCursor: null,
       };
       return page;

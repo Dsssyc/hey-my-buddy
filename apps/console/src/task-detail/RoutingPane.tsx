@@ -47,7 +47,7 @@ export function RoutingPane({ step, ctx, tabs }: { step: Step; ctx: Context; tab
       </span>} />
     <Section name={t("routing.chosen")}><div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <span className="font-mono text-xs">{quad(span.routing?.selectedBuddy) ?? unrecorded}</span>
-      {entry?.exploration.quota && entry.exploration.reselected && <Hint text={t("routing.preferredBuddy", { buddy: entry.exploration.preferredBuddyId ?? unrecorded })}>
+      {entry?.exploration.quota && entry.exploration.reselected && <Hint text={t("routing.preferredBuddy", { buddy: entry.exploration.preferredBuddyId?.split(":").join(" / ") ?? unrecorded })}>
         <span tabIndex={0} className="border border-border px-1.5 py-0.5 text-xs text-ink2 focus-visible:outline focus-visible:outline-ring">{t("routing.exploration")}</span>
       </Hint>}
     </div></Section>

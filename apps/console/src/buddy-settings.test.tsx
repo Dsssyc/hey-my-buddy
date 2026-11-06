@@ -86,11 +86,11 @@ function snapshot(options: Options = {}): HarnessSnapshot {
     consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: options.routerBuddyId === undefined ? [mediumId] : options.routerBuddyId === null ? [] : [options.routerBuddyId],
-      routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" },
+      routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" },
     buddies: buddies(),
     preferences: options.preferences ?? [],
 
-    modelServiceNotes: [],
+    models: [], modelNotes: [], modelCorrespondences: [],
 
     decisions: [],
 
@@ -110,22 +110,21 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
     ...state,
 
     preferences: [...state.preferences],
-    modelServiceNotes: [...state.modelServiceNotes],
+    modelNotes: [...state.modelNotes],
     configuration: state.configuration ? { ...state.configuration, ...(params.configuration ?? {}) } : null,
   };
   for (const setting of params.buddySettings ?? []) {
     next.buddies = next.buddies.map(entry => entry.buddyId === setting.buddyId ? { ...entry, enabled: setting.enabled } : entry);
   }
-  const key = (entry: { harness: string; provider: string; model: string }) => JSON.stringify([entry.harness, entry.provider, entry.model]);
   for (const change of params.preferenceChanges ?? []) {
     next.preferences = next.preferences.filter(entry => entry.buddyId !== change.buddyId);
     if (change.mode !== null) {
       next.preferences.push({ buddyId: change.buddyId, mode: change.mode, note: change.note });
     }
   }
-  for (const change of params.modelServiceNoteChanges ?? []) {
-    next.modelServiceNotes = next.modelServiceNotes.filter(entry => key(entry) !== key(change));
-    next.modelServiceNotes.push({ ...change, updatedAt: null });
+  for (const change of params.modelNoteChanges ?? []) {
+    next.modelNotes = next.modelNotes.filter(entry => entry.modelId !== change.modelId);
+    next.modelNotes.push({ ...change, updatedAt: "2026-11-07T00:00:00Z" });
   }
   return next;
 }
@@ -140,7 +139,8 @@ function fixture(options: Options = {}) {
     if (operation === "buddy_list") {
       // Only a checked 显示不可用 asks for this page; it mirrors the board's
       // bounded contract and just returns the current rows.
-      return { buddies: state.buddies, modelServiceNotes: state.modelServiceNotes,
+      return { buddies: state.buddies, models: state.models, modelNotes: state.modelNotes,
+        modelCorrespondences: state.modelCorrespondences,
         preferences: state.preferences,
         modelServiceConcurrency: state.modelServiceConcurrency, nextCursor: null };
     }

@@ -50,7 +50,7 @@ for (const words of [
         await expect(mark).toBeVisible();
         const before = await mark.boundingBox();
         await mark.hover();
-        await expect(page.getByRole("tooltip")).toContainText(`${words.preferred}dsh:deepseek-official:deepseek-v4-pro:max`);
+        await expect(page.getByRole("tooltip")).toContainText(`${words.preferred}dsh / deepseek-official / deepseek-v4-pro / max`);
         expect(await mark.boundingBox()).toEqual(before);
         await page.mouse.move(0, 0);
         await expect(page.getByRole("tooltip")).toHaveCount(0);

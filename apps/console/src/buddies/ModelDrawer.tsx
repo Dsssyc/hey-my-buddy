@@ -13,10 +13,13 @@ import {
   concurrencyEntryFor,
   concurrencyLimit,
 } from "../console-data";
-import { modelServiceNoteText, setConcurrencyLimit, setModelServiceNote, setPreference } from "../draft";
+import { setConcurrencyLimit, setPreference } from "../draft";
 import { formatDateTime } from "../i18n/format";
 import type { ConsoleView, PreferenceMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
+import type { ConsoleApi } from "../api";
+import { modelServiceKey } from "../console-data";
+import { ModelProfile } from "./ModelProfile";
 import { CoolingStatus } from "./cooling";
 import { ConcurrencyNotice } from "./ConcurrencyNotice";
 import { KindEvaluation } from "./KindEvaluation";
@@ -24,7 +27,6 @@ import { modelIdentity, reasonTexts } from "./models";
 import type { BuddyChip, ModelRow } from "./models";
 
 const MODES = ["prefer", "pin", "exclude"] as const satisfies readonly PreferenceMode[];
-const field = "h-8 rounded-md border border-input bg-card px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-disabled:opacity-50 aria-invalid:border-destructive";
 const choice = "h-8 px-2 text-xs";
 
 /** The addressable panel for the selected buddy, below its reasoning-effort strip. */
@@ -106,10 +108,11 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
 }
 
 /** A model's shared settings and one selected buddy, unfolded below its row. */
-export function ModelDrawer({ row, harnessState, data, recorded, editor, selectedBuddyId, onSelectBuddy, onOpenTask }: {
+export function ModelDrawer({ row, harnessState, data, recorded, editor, selectedBuddyId, onSelectBuddy, onOpenTask, api, refresh, mutationsAvailable }: {
   row: ModelRow; harnessState?: string; data: ConsoleView; recorded: Snapshot; editor: Editor;
   selectedBuddyId: string; onSelectBuddy: (id: string) => void;
   onOpenTask?: (macroTaskId: string, runId: string) => void;
+  api?: ConsoleApi; refresh?: () => Promise<Snapshot | null>; mutationsAvailable?: boolean;
 }) {
   const { t } = useTranslation("buddies");
   const editing = editor.editing;
@@ -117,7 +120,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
   const { modelService, key } = row;
   const member = modelService.buddies[0];
   const selected = row.chips.find(chip => chip.buddy.buddyId === selectedBuddyId)!;
-  const note = modelServiceNoteText(data, member);
+  const modelId = data.modelCorrespondences.find(entry => modelServiceKey(entry) === key)?.modelId;
   const publishedLimit = concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT;
   const limitInvalid = concurrencyLimit(row.limit) === null;
   const buddyIds = new Set(modelService.buddies.map(buddy => buddy.buddyId));
@@ -145,7 +148,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
             {row.pending && row.pendingSince && <time dateTime={row.pendingSince}>{formatDateTime(Date.parse(row.pendingSince))}</time>}
           </span></Hint>
         </div>
-        <div className="grid flex-1 grid-cols-[max-content_minmax(0,1fr)] grid-rows-[auto_auto_minmax(64px,1fr)] items-center gap-x-3 gap-y-2.5">
+        <div className="grid flex-1 grid-cols-[max-content_minmax(0,1fr)] grid-rows-[auto_auto] items-center gap-x-3 gap-y-2.5">
           {name(t("pane.concurrency"), !Object.is(row.limit, publishedLimit), { htmlFor: `${id}-limit` })}
           <div className="flex min-w-0 flex-wrap items-center gap-2.5">
             <Hint text={editingLock}><Input id={`${id}-limit`} type="number" inputMode="numeric" className="h-8 w-48 max-w-full bg-card px-2.5 text-sm tabular-nums shadow-none"
@@ -163,12 +166,6 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
             </span>
           </div>
           <ConcurrencyNotice id={`${id}-concurrency-notice`} />
-          <div className="self-start pt-1.5">{name(t("pane.note"), note !== modelServiceNoteText(recorded, member), { htmlFor: `${id}-note` })}</div>
-          <Hint text={editingLock}><textarea id={`${id}-note`} rows={3} maxLength={4000} value={note}
-            readOnly={!editing} aria-disabled={!editing || undefined} className={cn(field, "h-full min-h-16 w-full resize-y self-stretch py-1.5")}
-            onChange={event => {
-              if (editing) editor.update(draft => setModelServiceNote(draft, member, event.target.value));
-            }} /></Hint>
         </div>
       </div>
       <div className="flex min-w-0 flex-col border-t border-line pt-4 min-[900px]:border-t-0 min-[900px]:border-l min-[900px]:pt-0 min-[900px]:pl-7">
@@ -195,6 +192,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
         <BuddySettings chip={selected} data={data} recorded={recorded} editor={editor} modelAvailable={row.available} />
       </div>
     </div>
+    {modelId && <ModelProfile key={modelId} modelId={modelId} snapshot={recorded} data={data} editor={editor} api={api} refresh={refresh} mutationsAvailable={!!mutationsAvailable} />}
     <KindEvaluation key={selected.buddy.buddyId}
       evaluation={data.kindEvaluations?.find(item => item.harness === selected.buddy.harness && item.model === selected.buddy.model && item.effort === selected.buddy.effort)}
       domains={data.domainNodes ?? []} onOpenTask={onOpenTask} />

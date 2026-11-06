@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
-import type { ModelServiceNote, Preference, Buddy, BuddyPage, Snapshot } from "./types";
+import type { ModelNote, Preference, Buddy, BuddyPage, Snapshot } from "./types";
 import {
   chip, choosePreference, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, note, pane, queryModel, search, selectModel,
 } from "./buddies/page.testing";
@@ -40,7 +40,9 @@ function catalog(): Buddy[] {
 function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSize?: number } = {}) {
   const buddies = catalog();
   const decisionId = options.staleDecision ? retiredMax : flashOff;
-  const modelServiceNotes: ModelServiceNote[] = [{ ...retiredModelService, text: "用户保留的历史意见", updatedAt: null }];
+  const modelNotes: ModelNote[] = [{ modelId: "retired-model", text: "用户保留的历史意见", updatedAt: "2026-11-01T00:00:00Z" }];
+  const models = ["deepseek-flash", "retired-model"].map(model => ({ modelId: model, displayName: model, names: [{ harness: "dsh", provider: "deepseek-official", model }], profile: null, latestProfileRun: null }));
+  const correspondences = ["deepseek-flash", "retired-model"].map(model => ({ harness: "dsh", provider: "deepseek-official", model, correspondenceId: model, modelId: model, createdAt: "2026-11-01T00:00:00Z", source: "same-name" as const, evidenceUrl: null, evidenceDate: null, canUndo: false }));
   const preferences: Preference[] = options.stalePin
     ? [{ buddyId: retiredMax, mode: "pin" as const, note: "以前固定" }]
     : [];
@@ -56,7 +58,8 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     return {
       buddies: slice,
 
-      modelServiceNotes: ids.has(retiredMax) || ids.has(retiredLow) ? modelServiceNotes : [],
+      models, modelCorrespondences: correspondences.filter(row => [...slice].some(buddy => buddy.model === row.model)),
+      modelNotes: ids.has(retiredMax) || ids.has(retiredLow) ? modelNotes : [],
       preferences: preferences.filter(p => ids.has(p.buddyId)),
 
       modelServiceConcurrency: [],
@@ -67,14 +70,15 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
     buddies: live,
     // `unavailableBuddyCount` counts every unavailable row in the table,
     // including a listed one such as the retained decision buddy; the console
     // subtracts what it has loaded and pages the rest.
     unavailableBuddyCount: buddies.filter(p => !p.available).length,
 
-    modelServiceNotes: live.some(p => p.buddyId === retiredMax || p.buddyId === retiredLow) ? modelServiceNotes : [],
+    models, modelCorrespondences: correspondences.filter(row => live.some(buddy => buddy.model === row.model)),
+    modelNotes: live.some(p => p.buddyId === retiredMax || p.buddyId === retiredLow) ? modelNotes : [],
     preferences: preferences.filter(p => live.some(x => x.buddyId === p.buddyId)),
      decisions: [],
 
@@ -266,7 +270,7 @@ describe("unavailable buddies", () => {
     expect(f.published[0]).toEqual({
       commandId: expect.any(String),
       buddySettings: [{ buddyId: retiredMax, enabled: false }],
-      modelServiceNoteChanges: [{ ...retiredModelService, text: "用户保留的历史意见，仍可用于历史对照" }],
+      modelNoteChanges: [{ modelId: "retired-model", text: "用户保留的历史意见，仍可用于历史对照" }],
     });
     const wire = JSON.stringify(f.published[0]);
     // Availability, provider and model are program-owned and are never uploaded.
@@ -375,8 +379,8 @@ describe("stale settings and unrelated saves", () => {
     // The stale selector stays untouched and does not block the unrelated patch.
     expect(f.published[0].configuration).toBeUndefined();
     expect(f.published[0].preferenceChanges).toBeUndefined();
-    expect(f.published[0].modelServiceNoteChanges).toEqual([
-      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "只改这条意见" },
+    expect(f.published[0].modelNoteChanges).toEqual([
+      { modelId: "deepseek-flash", text: "只改这条意见" },
     ]);
   });
 
@@ -393,8 +397,8 @@ describe("stale settings and unrelated saves", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published[0]).not.toHaveProperty("preferenceChanges");
-    expect(f.published[0].modelServiceNoteChanges).toEqual([
-      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "，补充说明" },
+    expect(f.published[0].modelNoteChanges).toEqual([
+      { modelId: "deepseek-flash", text: "，补充说明" },
     ]);
   });
 });
@@ -428,7 +432,8 @@ describe("the two filters as browser habits", () => {
     const f = fixture();
     const state = f.snapshot();
     state.unavailableBuddyCount = 0;
-    f.command.mockImplementation(async () => ({ buddies: state.buddies, preferences: [], modelServiceConcurrency: [], nextCursor: null }));
+    f.command.mockImplementation(async () => ({ buddies: state.buddies, preferences: [], models: state.models, modelNotes: state.modelNotes,
+      modelCorrespondences: state.modelCorrespondences, modelServiceConcurrency: [], nextCursor: null }));
     window.location.hash = "#buddies";
     const view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);
