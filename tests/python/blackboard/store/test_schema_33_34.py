@@ -70,8 +70,8 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
     def test_floor_chain_and_direct_33_match_a_new_current_board(self):
         floor, floor_db = self.restored('floor', schema33=False)
         direct, direct_db = self.restored('direct')
-        self.assertEqual(upgrade.upgrade_state(floor['state']), {'sourceSchema': 30, 'targetSchema': 35})
-        self.assertEqual(upgrade.upgrade_state(direct['state']), {'sourceSchema': 33, 'targetSchema': 35})
+        self.assertEqual(upgrade.upgrade_state(floor['state']), {'sourceSchema': 30, 'targetSchema': 36})
+        self.assertEqual(upgrade.upgrade_state(direct['state']), {'sourceSchema': 33, 'targetSchema': 36})
         self.assertEqual(self.schema(floor_db), self.schema(direct_db))
         self.assert_new_structure(direct_db)
 

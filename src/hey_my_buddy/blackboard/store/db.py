@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 36
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 AGENT_TOKEN_VERSION = 1
@@ -603,11 +603,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS workflow_runs_creation_key_unique ON workflow_
     # Routing is owned work, but not a coding turn or a user-authorized helper.
     # Each link binds one existing decision task to a run; old
     # links remain auditable and retain their real attempt/stop evidence.
+    # exploration is this routing's frozen quota fact: what the routing was
+    # allowed and what it did with it, written while the routing runs and never
+    # rewritten after it settles.
     """
 CREATE TABLE IF NOT EXISTS workflow_routes (
     decision_id         TEXT PRIMARY KEY REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
     run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     state               TEXT NOT NULL CHECK (state IN ('pending','resolved','needs-host','fenced')),
+    exploration         TEXT NOT NULL CHECK (exploration IN ('pre-exploration','ineligible','counted','quota-kept','quota-reselected')),
     created_at          TEXT NOT NULL
 );
 """,
@@ -1083,13 +1087,19 @@ ROUTER_MAINTENANCE_COLUMNS = (
     "maintenance_interval_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (maintenance_interval_seconds >= 1)",
 )
 
+#: The exploration quota interval: one quota per N eligible routings, NULL for
+#: exploration off. The default is the admitted default of a fresh board and
+#: the value an upgrading board's existing settings take.
+ROUTER_EXPLORATION_COLUMN = "exploration_every INTEGER DEFAULT 5 CHECK (exploration_every IS NULL OR exploration_every >= 2)"
+
 ROUTER_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS router_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
     budget_preset TEXT NOT NULL CHECK (budget_preset IN ('brief','standard','deep')),
     retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
-, {', '.join(ROUTER_MAINTENANCE_COLUMNS)});
+, {', '.join(ROUTER_MAINTENANCE_COLUMNS)}
+, {ROUTER_EXPLORATION_COLUMN});
 CREATE TABLE IF NOT EXISTS router_buddies (
     position INTEGER PRIMARY KEY CHECK (position >= 0),
     buddy_id TEXT NOT NULL UNIQUE

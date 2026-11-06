@@ -95,7 +95,7 @@ class CurrentCoreTests(BoardTestCase):
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
         signature = json.loads((Path(__file__).resolve().parents[2] / "protocol" / "contract_signatures.json").read_text(encoding="utf-8"))
         self.assertEqual(CONTRACT_VERSION, signature["contractVersion"])
-        self.assertEqual(SCHEMA_VERSION, 35)
+        self.assertEqual(SCHEMA_VERSION, 36)
         board = self.board()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
@@ -144,6 +144,7 @@ class CurrentCoreTests(BoardTestCase):
             ("blackboard/store/schema_32_33.py", "UPDATE meta SET value='33' WHERE key='schema_version'"),
             ("blackboard/store/schema_33_34.py", "UPDATE meta SET value='34' WHERE key='schema_version'"),
             ("blackboard/store/schema_34_35.py", "UPDATE meta SET value='35' WHERE key='schema_version'"),
+            ("blackboard/store/schema_35_36.py", "UPDATE meta SET value='36' WHERE key='schema_version'"),
         ]))
         board = self.board()
         with board.store.db.read() as connection:

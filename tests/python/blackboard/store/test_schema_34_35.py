@@ -60,7 +60,7 @@ class Schema34To35Tests(unittest.TestCase):
 
         files = {name: native_read_bytes(fixture['state'] / name) for name in fixture['resourceFiles']}
         with mock.patch.dict(upgrade.STEPS, {34: convert_cleanup_stock}):
-            self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 33, 'targetSchema': 35})
+            self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 33, 'targetSchema': 36})
         with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
             connection.row_factory = sqlite3.Row
             for row in connection.execute('SELECT * FROM workspace_cleanup_plans'):
@@ -164,7 +164,7 @@ class Schema34To35Tests(unittest.TestCase):
             schema_34_35.upgrade(connection)
 
         with mock.patch.dict(upgrade.STEPS, {34: audit_schema_34_stock}):
-            self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 30, 'targetSchema': 35})
+            self.assertEqual(upgrade_state(fixture['state']), {'sourceSchema': 30, 'targetSchema': 36})
         with sqlite3.connect(path) as connection:
             connection.row_factory = sqlite3.Row
             self.assertEqual({row['project_id'] for row in connection.execute('SELECT * FROM projects')}, expected_projects)

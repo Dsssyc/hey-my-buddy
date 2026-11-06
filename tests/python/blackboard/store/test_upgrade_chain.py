@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from blackboard.store.upgrade_fixture import FIXTURE, FIXTURE_ROOT_TOKEN, load_fixture, complete_fixture_cleanup
-from hey_my_buddy.blackboard.store import schema_30_31, schema_32_33, schema_34_35, upgrade
+from hey_my_buddy.blackboard.store import schema_30_31, schema_32_33, schema_34_35, schema_35_36, upgrade
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.install.upgrade import preflight
 from hey_my_buddy.errors import BoardError
@@ -24,7 +24,7 @@ def digest(value):
 
 class FrozenUpgradeTests(unittest.TestCase):
     def test_new_step_has_no_current_package_imports(self):
-        for step in (schema_32_33, schema_34_35):
+        for step in (schema_32_33, schema_34_35, schema_35_36):
             source = ast.parse(Path(step.__file__).read_text(encoding='utf-8'))
             self.assertFalse([node for node in ast.walk(source) if isinstance(node, (ast.Import, ast.ImportFrom))
                               and (any(alias.name.startswith('hey_my_buddy') for alias in node.names)
