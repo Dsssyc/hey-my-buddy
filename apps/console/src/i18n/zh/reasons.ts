@@ -118,6 +118,7 @@ export default {
   "router-catalog-unavailable": "Router 的目录不可用：{{cause}}",
   "router-disabled": "Router 已停用。",
   "router-dispatch-unverified": "无法确认 Router 的派发结果。",
+  "router-exploration-out-of-bounds": "Router 的探索改选超出边界（{{bound}}）。",
   "router-evidence-out-of-bounds": "Router 使用了边界之外的证据。",
   "router-harness-unavailable": "Router 的 harness 不可用：{{cause}}",
   "router-incomplete": "Router 的执行尚未完成。",

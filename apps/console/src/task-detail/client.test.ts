@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ConsoleApi } from "../api";
 import { createTaskDetailClient } from "./client";
 
-const entry = (id: string) => ({ decisionId: id, status: "completed", source: "model-selection", selectedBuddy: null, routerBuddy: null, routingMode: "fast", reason: null });
+const entry = (id: string) => ({ routerIndex: 0, exploration: { quota: false, reselected: false, preferredBuddyId: null }, decisionId: id, status: "completed", source: "model-selection", selectedBuddy: null, routerBuddy: null, routingMode: "fast", reason: null });
 const reply = (entries: string[], nextCursor: number | null, audit = true) => ({
   runId: "m1", revision: 1, routingHistory: { entries: entries.map(entry), nextCursor, total: 9 },
   ...(audit ? { audit: { turns: [], continuations: [], requests: [], hostConclusions: [] } } : {}),

@@ -9,7 +9,7 @@ import type { Snapshot } from "./types";
 
 const unsafe = Number.MAX_SAFE_INTEGER + 1;
 const date = "Fri, 09 Oct 2026 18:05:00 GMT"; // Date.parse, rather than ISO-only validation.
-const configuration = { routerBuddyIds: [" head ", "head"], routerRetryIntervalSeconds: 1,
+const configuration = { explorationEvery: 5, routerBuddyIds: [" head ", "head"], routerRetryIntervalSeconds: 1,
   defaultRoutingMode: "fast", routingBudget: "brief" };
 const snapshot = { csrfToken: "", eventCursor: 0, consoleSession: { id: " session " }, configuration,
   buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 } };

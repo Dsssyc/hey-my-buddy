@@ -4,10 +4,12 @@ import { ApiError, createApi, errorText, parseRoutingHealth, readVerificationTex
 import { macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
 
 describe("L4 ordered Router list configuration", () => {
-  const current = { routerBuddyIds: [], routerRetryIntervalSeconds: 600,
+  const current = { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600,
     defaultRoutingMode: "fast", routingBudget: "brief" };
   it("accepts the list settings and rejects retired slots, selectors or intervals", () => {
     expect(validRoutingConfiguration(current)).toBe(true);
+    for (const explorationEvery of [null, 2, 5]) expect(validRoutingConfiguration({ ...current, explorationEvery })).toBe(true);
+    for (const explorationEvery of [undefined, 0, 1, 2.5, NaN, "5", true]) expect(validRoutingConfiguration({ ...current, explorationEvery })).toBe(false);
     expect(validRoutingConfiguration({ ...current, defaultRoutingMode: "review", routerBuddyIds: ["review", "fast"] })).toBe(true);
     // An empty list is an explicit clear; duplicates are a board refusal.
     expect(validRoutingConfiguration({ ...current, routerBuddyIds: [] })).toBe(true);
@@ -31,7 +33,7 @@ describe("L4 ordered Router list configuration", () => {
 });
 
 describe("snapshot upgrade boundary and routing health", () => {
-  const configuration = { routerBuddyIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
+  const configuration = { explorationEvery: 5, routerBuddyIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
   const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration, buddies: [],
     preferences: [], modelServiceNotes: [], modelServiceConcurrency: [],
     tasks: { pendingCount: 0 } };
@@ -231,7 +233,7 @@ describe("local read verification evidence", () => {
 });
 
 describe("conditional reads (ETag / If-None-Match / 304)", () => {
-  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
+  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
     buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
   function jsonResponse(value: unknown, etag?: string) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };

@@ -267,7 +267,7 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     const snapshotFacts = snapshots[0].facts as { configuration: Record<string, unknown>; harnesses: unknown[] };
     expect(snapshotFacts.configuration).toMatchObject({
       routerBuddyIds: expect.any(Array),
-      routerRetryIntervalSeconds: expect.any(Number),
+      routerRetryIntervalSeconds: expect.any(Number), explorationEvery: 5,
       defaultRoutingMode: "fast", routingBudget: "standard",
     });
     expect("decisionBuddyId" in snapshotFacts.configuration).toBe(false);

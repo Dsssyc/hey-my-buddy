@@ -370,12 +370,21 @@ function parseContinuation(value: unknown): Continuation {
 function parseRoutingEntry(value: unknown): RoutingEntry {
   const entry = rec(value, "routingHistory");
   const mode = entry.routingMode;
+  const exploration = rec(entry.exploration, "routingHistory.exploration");
+  const routerIndex = intOrNull(entry.routerIndex, "routingHistory.routerIndex");
+  if (routerIndex !== null && routerIndex < 0) refuse("routingHistory.routerIndex");
   const hasDomain = Object.prototype.hasOwnProperty.call(entry, "domainNodeId");
   const hasDomainName = Object.prototype.hasOwnProperty.call(entry, "domainNodeName");
   const hasTaskType = Object.prototype.hasOwnProperty.call(entry, "taskType");
   if (hasDomain !== hasTaskType || hasDomain !== hasDomainName) refuse("routingHistory.judgment");
   return {
     decisionId: str(entry.decisionId, "routingHistory.decisionId"), status: str(entry.status, "routingHistory.status"),
+    routerIndex,
+    exploration: {
+      quota: bool(exploration.quota, "routingHistory.exploration.quota"),
+      reselected: bool(exploration.reselected, "routingHistory.exploration.reselected"),
+      preferredBuddyId: strOrNull(exploration.preferredBuddyId, "routingHistory.exploration.preferredBuddyId"),
+    },
     source: strOrNull(entry.source, "routingHistory.source"),
     selectedBuddy: parseBuddy(entry.selectedBuddy, "routingHistory.selectedBuddy"),
     routerBuddy: parseBuddy(entry.routerBuddy, "routingHistory.routerBuddy"),

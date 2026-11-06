@@ -766,3 +766,35 @@ describe("addresses of the view", () => {
     expect(rolesRegion().contains(document.activeElement)).toBe(false);
   });
 });
+
+
+describe("exploration quota", () => {
+  const input = () => within(section("探索名额")).getByRole("spinbutton", { name: "探索间隔微任务数" });
+  it.each([null, 7])("publishes exploration %s as its own setting", async every => {
+    const f = fixture(snapshot());
+    const user = userEvent.setup();
+    await openRoles(f);
+    expect(input()).toHaveProperty("value", "5");
+    if (every === null) await user.click(within(section("探索名额")).getByRole("radio", { name: "关闭" }));
+    else { await user.clear(input()); await user.type(input(), String(every)); }
+    expect(unsavedIn("探索名额")).toHaveLength(1);
+    await user.click(saveButton());
+    await screen.findByText("设置已保存");
+    expect(patchOf(f.published[0])).toEqual({ configuration: { explorationEvery: every } });
+  });
+  it.each(["", "1", "2.5"])("blocks an invalid quota %j until corrected", async value => {
+    const f = fixture(snapshot());
+    const user = userEvent.setup();
+    await openRoles(f);
+    await user.clear(input());
+    if (value) await user.type(input(), value);
+    await user.tab();
+    expect(input().getAttribute("aria-invalid")).toBe("true");
+    await user.click(saveButton());
+    expect(f.published).toHaveLength(0);
+    await user.clear(input()); await user.type(input(), "2");
+    await user.click(saveButton());
+    await screen.findByText("设置已保存");
+    expect(patchOf(f.published[0])).toEqual({ configuration: { explorationEvery: 2 } });
+  });
+});

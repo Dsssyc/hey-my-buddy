@@ -108,6 +108,7 @@ export default {
     overloaded: "因模型服务满载排除 {{n}} 个：{{list}}", excluded: "用户排除 {{n}} 个：{{list}}", cooling: "冷却中的候选 {{n}} 个：{{list}}", coolingBuddy: "{{buddy}}（至 {{time}}）", prefer: "优先考虑 {{buddy}}：{{note}}", pin: "固定选择 {{buddy}}：{{note}}", exclude: "排除 {{buddy}}：{{note}}",
   },
   routing: {
+    exploration: "探索", preferredBuddy: "首选：{{buddy}}", routerPosition: "第 {{n}} 个 Router",
     reason: "理由",
     chosen: "选择", abstained: "放弃选择", notCalled: "未调用 Router", elapsed: "耗时 {{time}}", toolCalls: "工具调用 {{n}}", source: "来源",
     domainNode: "领域节点", unclassified: "未归类", taskType: "任务类型",

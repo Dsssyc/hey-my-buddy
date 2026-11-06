@@ -97,6 +97,7 @@ export const REASON = "这是一个需要读懂布局代码的改动，近期同
 
 export const routing = (overrides: Partial<RoutingEntry> = {}): RoutingEntry => ({
   decisionId: "decision-1", status: "completed", source: "model-selection", selectedBuddy: CODEX, routerBuddy: ROUTER, routingMode: "fast",
+  routerIndex: 0, exploration: { quota: false, reselected: false, preferredBuddyId: null },
   reason: null, note: REASON, ...overrides,
 });
 

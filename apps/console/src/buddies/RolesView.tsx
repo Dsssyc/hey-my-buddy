@@ -7,7 +7,7 @@ import { Section } from "@/components/section";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Segmented, SegmentedItem } from "@/components/ui/segmented";
-import { ROUTER_RETRY_INTERVAL_MAX, ROUTER_RETRY_INTERVAL_MIN, retryIntervalSeconds } from "../console-data";
+import { ROUTER_RETRY_INTERVAL_MAX, ROUTER_RETRY_INTERVAL_MIN, retryIntervalSeconds, validExplorationEvery } from "../console-data";
 import { routerListEqual } from "../draft";
 import { locale } from "../i18n";
 import { formatDuration } from "../i18n/format";
@@ -69,12 +69,16 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
     list: changed && !routerListEqual(recorded.routerBuddyIds, configuration.routerBuddyIds),
     mode: changed && recorded.defaultRoutingMode !== configuration.defaultRoutingMode,
     budget: changed && recorded.routingBudget !== configuration.routingBudget,
+    exploration: changed && recorded.explorationEvery !== configuration.explorationEvery,
     interval: changed && recorded.routerRetryIntervalSeconds !== configuration.routerRetryIntervalSeconds,
   };
   const mark = (is: boolean) => is ? t("unsaved") : undefined;
   const limits = recorded?.routingBudgetLimits;
   const interval = configuration?.routerRetryIntervalSeconds;
   const intervalInvalid = !!configuration && retryIntervalSeconds(interval) === null;
+
+  const every = configuration?.explorationEvery;
+  const explorationInvalid = !!configuration && !validExplorationEvery(every);
 
   const handledLocation = useRef<BuddyLocation | null>(null);
   // An address that names a part of this view lands on it: the line of the buddy serving now, or the list when none does.
@@ -145,6 +149,27 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
             {intervalInvalid && t("roles.retry.range", { min: ROUTER_RETRY_INTERVAL_MIN, max: ROUTER_RETRY_INTERVAL_MAX })}
           </span>
         </div>
+      </Section>
+
+      <Section name={t("roles.exploration.name")} unsaved={mark(unsaved.exploration)}>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Segmented aria-label={t("roles.exploration.name")} value={!configuration ? "" : every === null ? "off" : "on"}
+            onValueChange={value => change({ explorationEvery: value === "off" ? null : 5 })}>
+            {(["on", "off"] as const).map(value => <Hint key={value} text={locked}>
+              <SegmentedItem value={value} aria-disabled={!!locked || undefined}>{t(`roles.exploration.${value}`)}</SegmentedItem>
+            </Hint>)}
+          </Segmented>
+          <Hint text={locked ?? (every === null ? t("roles.exploration.disabled") : undefined)}>
+            <Input type="number" inputMode="numeric" min={2} step={1}
+              className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
+              value={every === undefined || every === null || Number.isNaN(every) ? "" : every}
+              disabled={every === null} readOnly={!!locked} aria-disabled={!!locked || every === null || undefined}
+              aria-label={t("roles.exploration.interval")} aria-invalid={explorationInvalid || undefined}
+              onChange={event => change({ explorationEvery: event.target.value === "" ? NaN : Number(event.target.value) })} />
+          </Hint>
+          <span className="text-xs text-fail" aria-live="polite">{explorationInvalid && t("roles.exploration.invalid")}</span>
+        </div>
+        <p className="mt-2 text-xs text-ink3">{t("roles.exploration.explanation")}</p>
       </Section>
 
       <MaintenanceView snapshot={snapshot} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} />

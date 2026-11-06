@@ -129,13 +129,13 @@ describe("the compact collaboration record", () => {
 describe("the audit", () => {
   const result = { ...turn, summary: "结果", remaining: ["还差一项"] };
   const entry = { decisionId: "d1", status: "completed", source: "single-candidate", selectedBuddy: { harness: "dsh", provider: "p", model: "m", effort: "off", buddyId: "x", label: "L" },
-    routerBuddy: null, routingMode: "review", reason: null, note: null };
+    routerBuddy: null, routerIndex: null, exploration: { quota: false, reselected: false, preferredBuddyId: null }, routingMode: "review", reason: null, note: null };
   const audit = { runId: "m1", audit: { turns: [result], continuations: [], requests: [], hostConclusions: [] }, routingHistory: { entries: [entry], nextCursor: 12, total: 40 } };
 
   it("carries every turn with its result, the Host's inputs, the requests and the first page of the routes", () => {
     const parsed = parseAudit(audit, "m1");
     expect(parsed.audit.turns[0]).toMatchObject({ turnId: "t1", attemptId: "a1", summary: "结果", remaining: ["还差一项"] });
-    expect(parsed.routing.entries).toEqual([{ decisionId: "d1", status: "completed", source: "single-candidate", routerBuddy: null, routingMode: "review", reason: null, note: null,
+    expect(parsed.routing.entries).toEqual([{ decisionId: "d1", status: "completed", source: "single-candidate", routerBuddy: null, routerIndex: null, exploration: { quota: false, reselected: false, preferredBuddyId: null }, routingMode: "review", reason: null, note: null,
       selectedBuddy: { harness: "dsh", provider: "p", model: "m", effort: "off" } }]);
     expect(parsed.routing.nextCursor).toBe(12);
   });
@@ -162,6 +162,17 @@ describe("the audit", () => {
     expect(() => parseAudit({ ...audit, runId: "other" }, "m1")).toThrow(ApiError);
     expect(() => parseAudit({ ...audit, routingHistory: undefined }, "m1")).toThrow(ApiError);
     expect(() => parseAudit({ ...audit, routingHistory: { entries: [{ ...entry, routingMode: "slow" }], nextCursor: null } }, "m1")).toThrow(ApiError);
+  });
+
+  it("reads exploration and Router position and refuses malformed facts", () => {
+    const read = (patch: Record<string, unknown>) => parseRoutingPage({ runId: "m1", routingHistory: {
+      entries: [{ ...entry, ...patch }], nextCursor: null,
+    } }, "m1").entries[0];
+    const exploration = { quota: true, reselected: true, preferredBuddyId: "dsh:p:m:max" };
+    expect(read({ routerIndex: 1, exploration })).toMatchObject({ routerIndex: 1, exploration });
+    for (const patch of [{ routerIndex: -1 }, { routerIndex: 0.5 }, { exploration: null },
+      { exploration: { ...exploration, quota: "yes" } }, { exploration: { ...exploration, reselected: 1 } },
+      { exploration: { ...exploration, preferredBuddyId: 3 } }]) expect(() => read(patch)).toThrow(ApiError);
   });
 
   it("reads a page of routes on its own, with the cursor that goes on", () => {

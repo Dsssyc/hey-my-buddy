@@ -18,7 +18,7 @@ const failing: RoutingHealth = {
 
 function attention(options: { routers?: string[]; mode?: "fast" | "review"; health?: RoutingHealth; configuration?: null } = {}) {
   const configuration = options.configuration === null ? null
-    : { routerBuddyIds: options.routers ?? [reviewer], routerRetryIntervalSeconds: 600,
+    : { explorationEvery: 5, routerBuddyIds: options.routers ?? [reviewer], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: options.mode ?? "review", routingBudget: "standard" };
   const buddies = [buddy(reviewer, ["execution:claude", "routing:fast", "decision"]), buddy(worker, ["execution:codex"])];
   const harnesses = [

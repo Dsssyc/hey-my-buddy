@@ -51,7 +51,7 @@ const snapshot = {
 
   preferences: [],
       modelServiceNotes: [],
-  configuration: { routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
+  configuration: { explorationEvery: 5, routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
 
   modelServiceConcurrency: [
@@ -128,7 +128,7 @@ describe("editing a published snapshot", () => {
       ...snapshot,
       buddies: [flash, retired],
       preferences: [{ buddyId: "retired", mode: "pin", note: "以前固定" }],
-      configuration: { routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { explorationEvery: 5, routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     } as Snapshot);
     const draft = { ...baseline };
     expect(publication(baseline, draft, "c")).not.toHaveProperty("preferenceChanges");
@@ -417,6 +417,22 @@ describe("private same-origin API", () => {
 });
 
 describe("independent Router and budget fields", () => {
+  it("keeps an empty exploration input dirty when exploration was off", () => {
+    const baseline = makeDraft({ ...snapshot, configuration: { ...snapshot.configuration!, explorationEvery: null } });
+    const draft = { ...baseline, configuration: { ...baseline.configuration!, explorationEvery: NaN } };
+    expect(draftDiffers(baseline, draft)).toBe(true);
+    expect(blockingIssues(baseline, draft)).toHaveLength(1);
+  });
+  it.each([null, 7])("replays exploration %s independently and publishes only that field", explorationEvery => {
+    const baseline = makeDraft(snapshot);
+    const draft = { ...baseline, configuration: { ...baseline.configuration!, explorationEvery } };
+    expect(draftDiffers(baseline, draft)).toBe(true);
+    expect(changeCount(baseline, draft) - changeCount(baseline, baseline)).toBe(1);
+    const adopted = rebaseDraft(draft, baseline, { ...snapshot, configuration: { ...snapshot.configuration!, explorationEvery: 9, routerRetryIntervalSeconds: 30 } });
+    expect(adopted.conflicts).toEqual([]);
+    expect(adopted.draft.configuration?.routerRetryIntervalSeconds).toBe(30);
+    expect(publication(adopted.baseline, adopted.draft, "explore").configuration).toEqual({ explorationEvery });
+  });
   it("publishes an emptied list as the explicit clear patch", () => {
     const baseline = makeDraft(snapshot);
     const draft = { ...baseline, configuration: { ...baseline.configuration!, routerBuddyIds: [] } };
@@ -441,7 +457,7 @@ describe("independent Router and budget fields", () => {
     expect(changeCount(baseline, draft) - changeCount(baseline, baseline)).toBe(3);
   });
   it("keeps an unchanged standard budget and publishes budget alone with a stale Router", () => {
-    const baseline = makeDraft({ ...snapshot, buddies: [], configuration: { routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"} } as Snapshot);
+    const baseline = makeDraft({ ...snapshot, buddies: [], configuration: { explorationEvery: 5, routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"} } as Snapshot);
     const equivalent = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "standard" as const } };
     expect(draftDiffers(baseline, equivalent)).toBe(false);
     const draft = { ...equivalent, configuration: { ...equivalent.configuration!, routingBudget: "brief" as const } };

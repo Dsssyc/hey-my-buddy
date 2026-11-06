@@ -6,7 +6,7 @@ import {
   preferenceChanges,
   buddySettings,
 } from "./draft";
-import { concurrencyLimit, modelServiceKey, retryIntervalSeconds } from "./console-data";
+import { concurrencyLimit, modelServiceKey, retryIntervalSeconds, validExplorationEvery } from "./console-data";
 import { buddyName, buddyTitle } from "./buddy-name";
 
 /** The two capabilities have distinct authority and cannot stand in for each other. */
@@ -171,6 +171,9 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       buddyId: "", label: i18n.t("console:retryInterval"),
       message: i18n.t("console:retryIntervalMustBeAnIntegerFrom"),
     });
+  }
+  if (draft.configuration && !validExplorationEvery(draft.configuration.explorationEvery)) {
+    issues.push({ buddyId: "", label: i18n.t("buddies:roles.exploration.name"), message: i18n.t("buddies:roles.exploration.invalid") });
   }
   if (draft.configuration?.maintenanceIntervalSeconds !== undefined && (!Number.isSafeInteger(draft.configuration.maintenanceIntervalSeconds) || draft.configuration.maintenanceIntervalSeconds < 1)) {
     issues.push({ buddyId: "", label: i18n.t("buddies:maintenance.interval"), message: i18n.t("buddies:maintenance.intervalInvalid") });

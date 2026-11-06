@@ -120,6 +120,7 @@ export default {
   "router-catalog-unavailable": "The Router's catalog is unavailable: {{cause}}",
   "router-disabled": "The Router is disabled.",
   "router-dispatch-unverified": "The Router dispatch result could not be confirmed.",
+  "router-exploration-out-of-bounds": "The Router's exploration selection exceeds its bounds ({{bound}}).",
   "router-evidence-out-of-bounds": "The Router used evidence outside its bounds.",
   "router-harness-unavailable": "The Router's harness is unavailable: {{cause}}",
   "router-incomplete": "The Router execution is incomplete.",

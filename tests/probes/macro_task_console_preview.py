@@ -166,7 +166,7 @@ CONFIGS = (CFG_FLASH, CFG_CODEX, CFG_GLM, CFG_CLAUDE)
 ROUTER_BUDDY = CFG_CODEX
 ROUTER_BUDDY_ID = ":".join(ROUTER_BUDDY[key] for key in ("harness", "provider", "model", "effort"))
 ROUTING_FACT_KEYS = ("routerBuddyIds", "routerIdentities", "routerBuddyId", "routerBuddy", "routerIndex",
-                     "routingMode", "routingBudget", "routerRetryIntervalSeconds", "budget", "routerProblem")
+                     "routingMode", "routingBudget", "routerRetryIntervalSeconds", "budget", "routerProblem", "exploration")
 #: The synthetic model catalogue: every model with its reasoning-effort levels,
 #: and the levels that are enabled. The four buddies above, which the runs use,
 #: are among them. The other rows only fill the catalogue, so that the models
@@ -455,6 +455,7 @@ def routing(decision_id: str, task_id: str, status: str, selected: dict | None, 
             "generation": 1, "selectedBuddy": selected, "reason": program_reason, "note": note,
             "routerBuddyIds": [ROUTER_BUDDY_ID], "routerIdentities": [ROUTER_BUDDY],
             "routerBuddyId": ROUTER_BUDDY_ID, "routerBuddy": ROUTER_BUDDY, "routerIndex": 0,
+            "exploration": {"quota": False, "reselected": False, "preferredBuddyId": None},
             "routingMode": mode, "routingBudget": "standard", "routerRetryIntervalSeconds": 600, "routerProblem": None,
             "constraints": constraints,
             "requiredCapabilities": [], "routingBasis": None,
@@ -475,7 +476,9 @@ ROUTING_A1 = routing("preview-decision-a1", "preview-run-a1-router", "completed"
 ROUTING_A1.update(routerBuddyIds=["dsh:deepseek-official:deepseek-flash:max"],
                   routerIdentities=[CFG_FLASH], routerBuddyId="dsh:deepseek-official:deepseek-flash:max",
                   routerBuddy=CFG_FLASH, domainNodeId="preview-domain-ui",
-                  domainNodeName="界面工程", taskType="change")
+                  domainNodeName="界面工程", taskType="change",
+                  exploration={"quota": True, "reselected": True,
+                               "preferredBuddyId": "dsh:deepseek-official:deepseek-v4-pro:max"})
 ROUTING_A2 = routing("preview-decision-a2", "preview-run-a2-router", "failed", None,
                      "合成预览：候选超出路由边界，等待 Host 选择配置。", {"harness": "claude"},
                      attempt_id="att-router-a2", program_reason=reason("router-out-of-bounds", bound="constraints"))
@@ -2719,7 +2722,7 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
         "reminderSettings": {"silenceSeconds": 900, "revision": 1, "updatedAt": instant(0, 0)},
         "consoleSession": {"id": SYNTHETIC_SESSION_ID},
         "configuration": {"routerBuddyIds": [entry["buddyId"] for entry in routers],
-                          "routerRetryIntervalSeconds": 600,
+                          "routerRetryIntervalSeconds": 600, "explorationEvery": 5,
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
                           "maintenanceBuddyId": "dsh:deepseek-official:deepseek-flash:max",
                           "maintenanceIntervalSeconds": 3600,

@@ -75,7 +75,7 @@ export function snapshot({ routers = [], configuration = {}, routingHealth, sess
     csrfToken: "csrf", eventCursor: 0, consoleSession: sessionPresent ? { id: "fixture-session" } : undefined as unknown as ConsoleSession,
 
     configuration: configuration === null ? null
-      : { routerBuddyIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", ...configuration },
+      : { explorationEvery: 5, routerBuddyIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", ...configuration },
     buddies: buddies(),
     preferences: [], modelServiceNotes: [],
  decisions: [],

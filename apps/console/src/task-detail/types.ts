@@ -167,6 +167,8 @@ export type Audit = {
 
 /** One recorded routing decision of a micro task (`workflow_get`'s `routingHistory`). */
 export type RoutingEntry = {
+  routerIndex: number | null;
+  exploration: { quota: boolean; reselected: boolean; preferredBuddyId: string | null };
   decisionId: string;
   status: string;
   source: string | null;

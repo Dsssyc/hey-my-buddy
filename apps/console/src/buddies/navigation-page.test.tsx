@@ -82,7 +82,7 @@ function snapshot(routerBuddyId: string | null = solMediumId): SnapshotWithHarne
     csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: routerBuddyId ? [routerBuddyId] : [], routerRetryIntervalSeconds: 600,
+    configuration: { explorationEvery: 5, routerBuddyIds: routerBuddyId ? [routerBuddyId] : [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
     buddies: buddies(),
     preferences: [], modelServiceNotes: [],

@@ -17,7 +17,7 @@ import type { DeletionBlocker, DeletionBlockerKind, MacroTaskDeletionPreview } f
 
 function snapshotFixture(): Snapshot {
   return { csrfToken: "synthetic-csrf", eventCursor: 0, consoleSession: { id: "session-fixture" },
-    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], decisions: [], tasks: { pendingCount: 0 }, capabilities: {} };
 }
 function preview(extra: Partial<MacroTaskDeletionPreview> = {}): MacroTaskDeletionPreview {

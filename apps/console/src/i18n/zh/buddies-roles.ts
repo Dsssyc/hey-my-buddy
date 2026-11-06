@@ -60,6 +60,11 @@ export default {
     deep: "深入",
     toolCalls: "{{n}} 次工具调用",
   },
+  exploration: {
+    name: "探索名额", on: "每 N 个给 1 个", off: "关闭", interval: "探索间隔微任务数",
+    disabled: "探索已关闭", invalid: "需要不小于 2 的整数",
+    explanation: "探索会让证据少的同型 buddy 偶尔被选中，好积累证据。",
+  },
   retry: {
     name: "重试间隔",
     label: "重试间隔秒数",

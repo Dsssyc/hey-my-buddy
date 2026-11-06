@@ -19,7 +19,7 @@ function snapshotFixture(): Snapshot {
   return {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session-a" },
 
-    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     buddies: [], preferences: [], modelServiceNotes: [], decisions: [],
  modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: {},
@@ -87,7 +87,7 @@ function harness(options: StopOptions = {}) {
       if (!task) throw new Error(`Unknown run: ${String(params.runId)}`);
       return params.includeAudit
         ? { ...workflowFixture(task), audit: { turns: [], continuations: [], requests: [], hostConclusions: [] },
-          routingHistory: { entries: [{ decisionId: "decision-r2-first", status: "completed", source: "model-selection", selectedBuddy: null, routerBuddy: null, routingMode: "fast", reason: "第一轮的路由依据" }], nextCursor: null, total: 1 } }
+          routingHistory: { entries: [{ routerIndex: 0, exploration: { quota: false, reselected: false, preferredBuddyId: null }, decisionId: "decision-r2-first", status: "completed", source: "model-selection", selectedBuddy: null, routerBuddy: null, routingMode: "fast", reason: "第一轮的路由依据" }], nextCursor: null, total: 1 } }
         : workflowFixture(task);
     }
     if (operation === "message_list") return { messages: [], cursor: 41 };

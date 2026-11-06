@@ -273,6 +273,7 @@ type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; tool
 export const configurationSchema = z.looseObject({
   routerBuddyIds: z.array(nonblankString).refine(ids => new Set(ids).size === ids.length),
   routerRetryIntervalSeconds: integer.min(1).max(2147483647), defaultRoutingMode: routingMode, routingBudget,
+  explorationEvery: integer.min(2).nullable(),
   routingBudgetLimits: z.custom<RoutingBudgetLimits>().optional(),
   maintenanceBuddyId: nonblankString.nullable().optional(), maintenanceIntervalSeconds: integer.positive().optional(),
 }).refine(config => !["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId"].some(key => key in config));

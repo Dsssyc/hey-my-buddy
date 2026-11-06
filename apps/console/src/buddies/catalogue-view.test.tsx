@@ -31,7 +31,7 @@ function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: Harnes
   return {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     buddies: [buddy(sonnet, "medium", { enabled: true }), buddy(sonnet, "high"), buddy(sol, "medium"), buddy(sol, "low")],
     preferences: [], modelServiceNotes: [], decisions: [],
  modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],

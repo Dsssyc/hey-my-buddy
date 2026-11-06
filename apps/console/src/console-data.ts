@@ -66,6 +66,11 @@ export function retryIntervalSeconds(value: unknown): number | null {
     ? value
     : null;
 }
+/** Null disables exploration; otherwise one eligible micro task in N gets a quota. */
+export function validExplorationEvery(value: unknown): value is number | null {
+  return value === null || typeof value === "number" && Number.isInteger(value) && value >= 2;
+}
+
 export type ModelServiceGroup = { key: string; name: string; harness: string; provider: string; buddies: Buddy[] };
 export function modelServices(buddies: Buddy[]): ModelServiceGroup[] {
   const groups = new Map<string, ModelServiceGroup>();

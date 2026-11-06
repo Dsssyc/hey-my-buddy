@@ -60,6 +60,11 @@ export default {
     deep: "Deep",
     toolCalls: "{{n}} tool calls",
   },
+  exploration: {
+    name: "Exploration quota", on: "One in every N", off: "Off", interval: "Micro tasks per exploration quota",
+    disabled: "Exploration is off", invalid: "Enter an integer of at least 2",
+    explanation: "Exploration occasionally selects a buddy of the same type with less evidence, so it can build up evidence.",
+  },
   retry: {
     name: "Retry interval",
     label: "Retry interval in seconds",

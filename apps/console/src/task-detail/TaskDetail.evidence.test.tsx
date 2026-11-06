@@ -93,6 +93,14 @@ describe("the integration and the acceptance", () => {
 });
 
 describe("a route", () => {
+  it.each([[true, true], [true, false], [false, false]])("marks exploration only when quota=%s and reselected=%s", async (quota, reselected) => {
+    open({ step: 2, replies: { routing: [routing({ routerIndex: 1, exploration: { quota, reselected, preferredBuddyId: "dsh:p:preferred:max" } })] } });
+    await ready();
+    expect(pane().textContent).toContain("第 2 个 Router");
+    const mark = within(pane()).queryByText("探索", { exact: true });
+    if (quota && reselected) expect(mark?.getAttribute("aria-description")).toBe("首选：dsh:p:preferred:max");
+    else expect(mark).toBeNull();
+  });
   it("shows a recorded domain and task type, including an unclassified domain, but leaves old routes clear", async () => {
     open({ step: 2, replies: { routing: [routing({ domainNodeId: "domain-1", domainNodeName: "界面工程", taskType: "change" })] } });
     await ready();

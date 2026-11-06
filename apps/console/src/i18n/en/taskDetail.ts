@@ -109,6 +109,7 @@ export default {
     overloaded: "Excluded for model service overload: {{n}}; {{list}}", excluded: "Excluded by the user: {{n}}; {{list}}", cooling: "Cooling down: {{n}}; {{list}}", coolingBuddy: "{{buddy}} (until {{time}})", prefer: "Preferred {{buddy}}: {{note}}", pin: "Pinned {{buddy}}: {{note}}", exclude: "Excluded {{buddy}}: {{note}}",
   },
   routing: {
+    exploration: "Exploration", preferredBuddy: "Preferred: {{buddy}}", routerPosition: "Router #{{n}}",
     reason: "Reason",
     chosen: "Choice", abstained: "Abstained", notCalled: "No Router was called", elapsed: "Time: {{time}}", toolCalls: "Tool calls: {{n}}", source: "Source",
     domainNode: "Domain", unclassified: "Unclassified", taskType: "Task type",

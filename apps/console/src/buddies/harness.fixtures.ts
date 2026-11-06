@@ -53,7 +53,7 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
     csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+    configuration: { explorationEvery: 5, routerBuddyIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     buddies: [buddy],
     preferences: [], modelServiceNotes: [], decisions: [],
 

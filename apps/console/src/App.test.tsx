@@ -12,7 +12,7 @@ const initial = (): Snapshot => ({
   csrfToken: "fixture-csrf", eventCursor: 0,
   consoleSession: { id: "fixture-session" },
 
-  configuration: { routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
+  configuration: { explorationEvery: 5, routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
   buddies: [
     { effortRank: null,

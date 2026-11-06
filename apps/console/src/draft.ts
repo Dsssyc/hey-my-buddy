@@ -179,7 +179,7 @@ export type UserPolicyPublication = {
   preferenceChanges?: PreferenceChangePatch[];
   modelServiceNoteChanges?: ModelServiceNoteChangePatch[];
   configuration?: Partial<Pick<Configuration,
-    "routerBuddyIds" | "routerRetryIntervalSeconds" | "defaultRoutingMode" | "routingBudget" | "maintenanceBuddyId" | "maintenanceIntervalSeconds">>;
+    "routerBuddyIds" | "routerRetryIntervalSeconds" | "explorationEvery" | "defaultRoutingMode" | "routingBudget" | "maintenanceBuddyId" | "maintenanceIntervalSeconds">>;
   /** Limit patches per model service; the board refuses any `active` occupancy here. */
   modelServiceConcurrency?: ModelServiceConcurrencySetting[];
 };
@@ -241,7 +241,7 @@ export function routerListEqual(a: string[] | undefined, b: string[] | undefined
   return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
 }
 
-const ROUTER_FIELDS = ["routerBuddyIds", "defaultRoutingMode", "routerRetryIntervalSeconds", "maintenanceBuddyId", "maintenanceIntervalSeconds"] as const;
+const ROUTER_FIELDS = ["routerBuddyIds", "defaultRoutingMode", "routerRetryIntervalSeconds", "explorationEvery", "maintenanceBuddyId", "maintenanceIntervalSeconds"] as const;
 
 export function routerFieldChanged(baseline: Draft, draft: Draft, field: typeof ROUTER_FIELDS[number]): boolean {
   if (!baseline.configuration || !draft.configuration) return false;
@@ -285,6 +285,8 @@ export function publication(
             ? { routerBuddyIds: draft.configuration!.routerBuddyIds ?? [] } : {}),
           ...(routerFieldChanged(baseline, draft, "routerRetryIntervalSeconds")
             ? { routerRetryIntervalSeconds: draft.configuration!.routerRetryIntervalSeconds } : {}),
+          ...(routerFieldChanged(baseline, draft, "explorationEvery")
+            ? { explorationEvery: draft.configuration!.explorationEvery } : {}),
           ...(routerFieldChanged(baseline, draft, "defaultRoutingMode")
             ? { defaultRoutingMode: draft.configuration!.defaultRoutingMode } : {}),
           ...(routerFieldChanged(baseline, draft, "maintenanceBuddyId") ? { maintenanceBuddyId: draft.configuration!.maintenanceBuddyId } : {}),
@@ -314,6 +316,7 @@ function fingerprint(draft: UserEditable): string {
     configuration: draft.configuration ? {
       routerBuddyIds: draft.configuration.routerBuddyIds ?? [],
       routerRetryIntervalSeconds: draft.configuration.routerRetryIntervalSeconds,
+      explorationEvery: Number.isNaN(draft.configuration.explorationEvery) ? "invalid" : draft.configuration.explorationEvery,
       defaultRoutingMode: draft.configuration.defaultRoutingMode,
       routingBudget: draft.configuration.routingBudget,
       maintenanceBuddyId: draft.configuration.maintenanceBuddyId,
@@ -357,7 +360,7 @@ export function changeCount(baseline: Draft, draft: Draft): number {
 type RebaseConflictKind = "changed" | "unread";
 type RebaseConflict = {
   kind: RebaseConflictKind;
-  field: "enabled" | "preference" | "modelServiceNote" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "modelServiceConcurrency" | "maintenanceBuddyId" | "maintenanceIntervalSeconds";
+  field: "enabled" | "preference" | "modelServiceNote" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "explorationEvery" | "modelServiceConcurrency" | "maintenanceBuddyId" | "maintenanceIntervalSeconds";
   /** The buddy id, or the `harness/provider/model` of a model service field. */
   buddyId: string;
   message: string;
@@ -378,6 +381,7 @@ const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   get configuration() { return i18n.t("console:routerList"); },
   get defaultRoutingMode() { return i18n.t("console:defaultRoutingMode"); },
   get routingBudget() { return i18n.t("console:routingBudget"); },
+  get explorationEvery() { return i18n.t("buddies:roles.exploration.name"); },
   get routerRetryIntervalSeconds() { return i18n.t("console:retryInterval"); },
   get modelServiceConcurrency() { return i18n.t("console:concurrencyLimit"); },
 };
@@ -389,6 +393,7 @@ function conflictSubject(field: RebaseConflict["field"], buddyId: string): strin
   if (field === "maintenanceBuddyId" || field === "maintenanceIntervalSeconds") return FIELD_NAMES[field];
   if (field === "defaultRoutingMode") return i18n.t("console:defaultRoutingMode");
   if (field === "routingBudget") return i18n.t("console:routingBudget");
+  if (field === "explorationEvery") return FIELD_NAMES[field];
   if (field === "routerRetryIntervalSeconds") return i18n.t("console:retryInterval");
   if (field === "modelServiceNote" || field === "modelServiceConcurrency") {
     return i18n.t("console:forModelService", { v0: buddyId, v1: FIELD_NAMES[field] });
