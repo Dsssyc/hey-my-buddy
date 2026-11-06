@@ -22,6 +22,129 @@ class MessageTests(WorkflowTestCase):
     current = lead_helpers.LeadLifecycleTests.current
     wakeups = lead_helpers.LeadLifecycleTests.wakeups
 
+    def test_own_accept_and_queued_cancel_of_newly_created_tasks_do_not_ring(self):
+        for action in ('accept', 'cancel'):
+            with self.subTest(action=action):
+                board = self.board(max_concurrent=2)
+                lead, claim = self.lead(board, name='own-' + action)
+                child = self.owned(board, claim, name='handled')
+                self.owned(board, claim, name='ongoing')
+                if action == 'accept':
+                    self.finish_turn(board, self.claim(board, 'w2', run_id=child['runId']), worker_id='w2')
+                    self.accept_run(board, self.current(board, child), credential=claim['agentCredential'])
+                else:
+                    board.call('workflow_cancel', {'runId': child['runId'], 'credential': claim['agentCredential']})
+                self.wait(board, claim)
+                self.assertEqual(self.current(board, lead)['state'], 'waiting-owned')
+                self.assertEqual(self.wakeups(board, lead), [])
+
+    def test_unclaimed_issues_before_the_next_input_keep_ringing_until_await_claims_them(self):
+        for kind in ('execution', 'service'):
+            with self.subTest(kind=kind):
+                board = self.board(max_concurrent=2)
+                lead, claim = self.lead(board, name='unclaimed-' + kind)
+                child = self.owned(board, claim)
+                child_claim = self.claim(board, 'w2', run_id=child['runId'])['claim']
+                self.wait(board, claim)
+                if kind == 'execution':
+                    board.store.record_execution_issue(child_claim['attempt']['attemptId'], 'connection', RuntimeError('pending'))
+                else:
+                    board.store.record_service_issue('scheduler', RuntimeError('pending'))
+                resumed = self.claim(board, run_id=lead['runId'], claim_request_id='first-ring')['claim']
+                self.wait(board, resumed)
+                self.assertEqual(self.current(board, lead)['state'], 'executing')
+                self.assertEqual(len(self.wakeups(board, lead)), 2)
+                resumed = self.claim(board, run_id=lead['runId'], claim_request_id='claim-content')['claim']
+                self.assertEqual(self.observe(board, child['runId'], credential=resumed['agentCredential'])['outcome'], 'issue')
+                self.wait(board, resumed)
+                self.assertEqual(self.current(board, lead)['state'], 'waiting-owned')
+
+    def test_unclaimed_reminder_before_the_next_input_keeps_ringing(self):
+        clock = FakeClock()
+        board = self.board(max_concurrent=2, clock=clock)
+        lead, claim = self.lead(board)
+        child = self.owned(board, claim, expectedSeconds=10)
+        self.claim(board, 'w2', run_id=child['runId'])
+        self.wait(board, claim)
+        clock.advance(10)
+        reminders.collect(board.store)
+        resumed = self.claim(board, run_id=lead['runId'], claim_request_id='first-reminder')['claim']
+        self.wait(board, resumed)
+        self.assertEqual(self.current(board, lead)['state'], 'executing')
+        self.assertEqual(len(self.wakeups(board, lead)), 2)
+
+    def test_first_issue_delivery_uses_the_updated_cause_with_the_original_identity(self):
+        board = self.board()
+        run = self.submit(board)
+        attempt = self.claim(board, run_id=run['runId'])['claim']['attempt']['attemptId']
+        board.store.record_execution_issue(attempt, 'connection', RuntimeError('first cause'))
+        with board.store.db.read() as connection:
+            opening = connection.execute('SELECT occurrence_seq FROM execution_issues WHERE attempt_id=?', (attempt,)).fetchone()[0]
+        board.store.record_execution_issue(attempt, 'connection', RuntimeError('current cause'))
+        reply = self.receipt(board, run['runId'])
+        current = {**reply['selectedAttempt']['issues'][0], 'attemptId': attempt}
+        self.assertEqual(reply['executionIssues'][0], current)
+        self.assertEqual(current['message'], 'current cause')
+        with board.store.db.read() as connection:
+            receipt = connection.execute('SELECT occurrence_seq,observation_seq FROM issue_deliveries').fetchone()
+            self.assertEqual(receipt['occurrence_seq'], opening)
+            self.assertGreater(receipt['observation_seq'], opening)
+
+    def test_delivery_preserves_observation_time_when_event_append_is_later(self):
+        board = self.board()
+        run = self.submit(board)
+        attempt = self.claim(board, run_id=run['runId'])['claim']['attempt']['attemptId']
+        observed = '2026-11-06T00:00:01.000Z'
+        appended = '2026-11-06T00:00:01.001Z'
+        with patch.object(board.store, 'now', side_effect=[observed, appended]):
+            board.store.record_execution_issue(attempt, 'connection', RuntimeError('current cause'))
+        reply = self.receipt(board, run['runId'], 'observation-clock')
+        self.assertEqual(reply['executionIssues'][0]['observedAt'], observed)
+        self.assertEqual(reply['selectedAttempt']['issues'][0]['observedAt'], observed)
+        board.store.clear_execution_issue(attempt, 'connection')
+        self.assertEqual(self.receipt(board, run['runId'], 'observation-clock')['executionIssues'][0]['observedAt'], observed)
+
+    def test_issue_resolved_before_delivery_does_not_ring_or_get_claimed(self):
+        board = self.board(max_concurrent=2)
+        lead, claim = self.lead(board)
+        child = self.owned(board, claim)
+        board.store.record_service_issue('scheduler', RuntimeError('short-lived'))
+        board.store.clear_service_issue('scheduler')
+        self.wait(board, claim)
+        self.assertEqual(self.current(board, lead)['state'], 'waiting-owned')
+        self.assertNotIn('issue', self.receipt(board, child['runId']))
+
+    def test_writing_an_owned_event_never_decorates_or_embeds_an_await_view(self):
+        board = self.board()
+        _, claim = self.lead(board)
+        child = self.owned(board, claim)
+        with patch.object(board.store, '_decorate', side_effect=AssertionError('event computed task view')):
+            with board.store.db.write() as connection:
+                seq = board.store._append_event(connection, 'attempt.progress', task_id=child['runId'])
+        with board.store.db.read() as connection:
+            payload = json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?', (seq,)).fetchone()[0])
+        self.assertNotIn('awaitMessage', payload)
+
+    def test_accepting_owned_work_and_its_cleanup_do_not_ring_the_lead_again(self):
+        board = self.board(max_concurrent=2)
+        lead, claim = self.lead(board)
+        child = self.owned(board, claim, name='to-accept')
+        self.owned(board, claim, name='still-queued')
+        self.wait(board, claim)
+        child_claim = self.claim(board, 'w2', run_id=child['runId'])
+        self.finish_turn(board, child_claim, worker_id='w2')
+        resumed = self.claim(board, run_id=lead['runId'], claim_request_id='accept-delivery')['claim']
+        delivered = self.current(board, child)
+        self.accept_run(board, delivered, credential=resumed['agentCredential'])
+        with board.store.db.read() as connection:
+            cleanup = connection.execute("SELECT actor_role FROM events WHERE task_id=? AND kind='workflow.cleanup_planned'",
+                                         (child['runId'],)).fetchone()
+        self.assertIsNotNone(cleanup)
+        self.assertIsNone(cleanup['actor_role'])
+        self.wait(board, resumed)
+        self.assertEqual(self.current(board, lead)['state'], 'waiting-owned')
+        self.assertEqual(len(self.wakeups(board, lead)), 1)
+
     def service(self, board, credential=None):
         def call(method, params, directory):
             params = {**params, **({'credential': credential} if credential else {})}
@@ -82,10 +205,10 @@ class MessageTests(WorkflowTestCase):
         self.assertEqual(self.observe(board, run['runId'])['outcome'], 'issue')
         self.assertNotIn('issue', self.receipt(board, run['runId']))
         with board.store.db.read() as connection:
-            rows = connection.execute('SELECT issue_kind,occurrence_seq FROM issue_deliveries WHERE task_id=?',
+            rows = connection.execute('SELECT e.kind,d.occurrence_seq FROM issue_deliveries d JOIN events e ON e.seq=d.occurrence_seq WHERE d.task_id=?',
                                       (run['runId'],)).fetchall()
         self.assertEqual(len(rows), 2)
-        self.assertEqual({row['issue_kind'] for row in rows}, {'execution'})
+        self.assertEqual({row['kind'] for row in rows}, {'execution.issue'})
         self.assertNotEqual(rows[0]['occurrence_seq'], rows[1]['occurrence_seq'])
 
     def test_same_wait_replays_its_issue_even_after_resolution_and_a_new_occurrence(self):

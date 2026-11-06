@@ -137,18 +137,17 @@ def _scan(store, connection, now: str, instant: float, *, record: bool) -> tuple
     return delay, changed
 
 
-def pending(store, connection, task, *, after: int = 0):
+def pending(connection, task):
     """The selected execution's next undelivered reminder, for either observer."""
-    attempt = store._selected_attempt(connection, task)
-    if attempt is None or attempt['execution_state'] in ('finalizing', 'finished') or attempt['result_json'] is not None:
-        return None
     return connection.execute(
-        'SELECT r.*, a.started_at FROM attempt_reminders r'
-        ' JOIN attempts a ON a.attempt_id=r.attempt_id'
+        'SELECT r.*, a.started_at, e.seq AS event_seq FROM tasks t'
+        ' JOIN attempts a ON a.attempt_id=COALESCE(t.active_attempt_id,t.selected_attempt_id)'
+        ' JOIN attempt_reminders r ON r.attempt_id=a.attempt_id'
         " JOIN events e ON e.kind='attempt.reminder' AND e.attempt_id=r.attempt_id"
         " AND json_extract(e.payload_json,'$.reminderId')=r.reminder_id"
-        ' WHERE r.attempt_id=? AND r.delivered_at IS NULL AND e.seq>? ORDER BY r.reminder_id LIMIT 1',
-        (attempt['attempt_id'], after),
+        " WHERE t.task_id=? AND a.execution_state NOT IN ('finalizing','finished') AND a.result_json IS NULL"
+        ' AND r.delivered_at IS NULL ORDER BY r.reminder_id LIMIT 1',
+        (task['task_id'],),
     ).fetchone()
 
 
@@ -164,7 +163,7 @@ def consume(store, connection, task, delivery_id: str) -> dict | None:
             from ...errors import BoardError
             raise BoardError('CONFLICT', 'reminderWaitId belongs to a different run')
         return view(delivered)
-    row = pending(store, connection, task)
+    row = pending(connection, task)
     if row is None:
         return None
     connection.execute('UPDATE attempt_reminders SET delivered_at=?,delivery_id=? WHERE reminder_id=?',

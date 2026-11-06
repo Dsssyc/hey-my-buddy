@@ -214,6 +214,18 @@ def load_fixture(state: Path) -> dict:
             "operations": bind(json.loads(stock["operations.json"])), "bindings": bindings}
 
 
+def load_issue_stock(fixture: dict) -> None:
+    """Add unchanged problem rows and events from the floor's issue writers."""
+    metadata = fixture['issueStock']
+    stock = (FIXTURE / 'schema-30-issue-stock.sql').read_bytes()
+    if _sha(stock) != metadata['sha256'] or _sha((FIXTURE / 'board.sql').read_bytes()) != metadata['baseSha256']:
+        raise ValueError('Issue stock digest changed')
+    with closing(sqlite3.connect(fixture['state'] / 'board.sqlite3')) as connection, connection:
+        if connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] != '30':
+            raise ValueError('Issue stock requires the restored floor schema')
+        connection.executescript(stock.decode('utf-8'))
+
+
 def load_delivered_stock(fixture: dict) -> None:
     """Add the floor writer's delivered v3 run and its bound physical evidence."""
     metadata = json.loads((FIXTURE / "metadata.json").read_text(encoding="utf-8"))

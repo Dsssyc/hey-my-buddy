@@ -165,6 +165,16 @@
       "taskId": "00000000-0000-0000-0000-0000000000be"
     }
   },
+  "issueStock": {
+    "baseGeneratorSha256": "bf9dca2be9079e544ca7fa8387158e478930d3ecd71f89ce8cbb26c0e3286fcd",
+    "baseSha256": "6e10bba3a3ece8edddfc7a9cfe32cfdec4affc8b4b68dd54e06349718f1a3d2c",
+    "derivation": "Floor issue writers record, update, clear, reopen and update each kind at one timestamp; event identities are shifted by 9000000 to avoid the independent supplements.",
+    "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --issue-stock-for tests/fixtures/upgrade-floor --work-dir tmp/<new-issue-stock-dir>",
+    "generatorSha256": "09a6582a19d4d82685f10ee8d3de9474d2d3675fd3a59e7249c6579ea651b3bb",
+    "schemaVersion": 30,
+    "sha256": "256db29dfab73811ce5280f463bd5087dbb04c83184252c861afba8aa2c2b8c6",
+    "writerCommit": "4de1dd9478980e924a4a86b2c50aaca33e33b79d"
+  },
   "legacyStock": {
     "baseSha256": "5a47ea433035f6d034090d7657dec5aabd2a3c4955ffa30cc136800624ad4274",
     "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/w3/<new-private-dir> --output-dir tmp/w3/<new-output-dir> --legacy-stock-for tests/fixtures/upgrade-floor",

@@ -233,19 +233,13 @@ class BoardStore:
         attempt_id: str | None = None,
         revision: int | None = None,
         payload: dict | None = None,
+        wake_owned: bool = True,
     ) -> int:
         at = self.now()
         event_payload = dict(payload or {})
         actor = event_payload.pop("actor", None)
-        if task_id is not None and connection.execute(
-            'SELECT 1 FROM workflow_lead_tasks WHERE owned_run_id=?', (task_id,),
-        ).fetchone() is not None:
-            from ...protocol.awaiting import message_key, message_kind
-            task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (task_id,)).fetchone()
-            view = self._decorate(connection, task)
-            message = message_kind(view)
-            if message is not None:
-                event_payload['awaitMessage'] = {'kind': message, 'key': message_key(view)}
+        if actor is not None and actor['role'] == 'lead' and task_id is not None:
+            revision = connection.execute('SELECT revision FROM tasks WHERE task_id=?', (task_id,)).fetchone()[0]
         cursor = connection.execute(
             "INSERT INTO events(task_id, attempt_id, revision, kind, payload_json, actor_role, actor_id, created_at) VALUES(?,?,?,?,?,?,?,?)",
             (task_id, attempt_id, revision, kind, canonical_json(event_payload),
@@ -264,7 +258,8 @@ class BoardStore:
             )
         from ..tasks.macro_tasks import record_activity
         record_activity(connection, task_id, seq, at)
-        self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=at)
+        if wake_owned:
+            self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=at)
         return seq
 
     def head(self) -> int:
@@ -2431,33 +2426,42 @@ class BoardStore:
         self._notify(head)
 
     def _record_runtime_issue(self, stage: str, error, *, attempt_id: str | None = None) -> None:
-        code = error.code if isinstance(error, BoardError) else type(error).__name__
-        message = (error.message if isinstance(error, BoardError) else str(error))[:4000]
-        table = "execution_issues" if attempt_id is not None else "service_issues"
-        selector = "attempt_id=? AND stage=?" if attempt_id is not None else "stage=?"
-        keys = (attempt_id, stage) if attempt_id is not None else (stage,)
         with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id) if attempt_id is not None else None
-            if attempt is not None and stage == "connection" and attempt["execution_state"] in ("finalizing", "finished"):
+            if not self._write_runtime_issue(connection, stage, error, attempt=attempt, now=self.now()):
                 return
-            previous = connection.execute(f"SELECT code,message FROM {table} WHERE {selector}", keys).fetchone()
-            if previous is not None and (previous["code"], previous["message"]) == (code, message):
-                return
-            now = self.now()
-            task_id = attempt["task_id"] if attempt is not None else None
-            if attempt_id is not None:
-                connection.execute("INSERT INTO execution_issues VALUES(?,?,?,?,?) ON CONFLICT(attempt_id,stage)"
-                    " DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at",
-                    (attempt_id, stage, code, message, now))
-            else:
-                connection.execute("INSERT INTO service_issues VALUES(?,?,?,?) ON CONFLICT(stage)"
-                    " DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at",
-                    (stage, code, message, now))
-            kind = 'execution.issue' if attempt_id is not None else 'service.issue'
-            self._append_event(connection, kind if previous is None else kind + '_updated',
-                task_id=task_id, attempt_id=attempt_id, payload={"stage": stage, "code": code, "message": message})
             head = self._head_of(connection)
         self._notify(head)
+
+    def _write_runtime_issue(self, connection, stage: str, error, *, attempt, now: str) -> bool:
+        code = error.code if isinstance(error, BoardError) else type(error).__name__
+        message = (error.message if isinstance(error, BoardError) else str(error))[:4000]
+        attempt_id = attempt['attempt_id'] if attempt is not None else None
+        if attempt is not None and stage == 'connection' and attempt['execution_state'] in ('finalizing', 'finished'):
+            return False
+        table = 'execution_issues' if attempt is not None else 'service_issues'
+        selector = 'attempt_id=? AND stage=?' if attempt is not None else 'stage=?'
+        keys = (attempt_id, stage) if attempt is not None else (stage,)
+        previous = connection.execute(f'SELECT * FROM {table} WHERE {selector}', keys).fetchone()
+        if previous is not None and (previous['code'], previous['message']) == (code, message):
+            return False
+        task_id = attempt['task_id'] if attempt is not None else None
+        kind = 'execution.issue' if attempt is not None else 'service.issue'
+        seq = self._append_event(connection, kind if previous is None else kind + '_updated',
+                                 task_id=task_id, attempt_id=attempt_id, wake_owned=False,
+                                 payload={'stage': stage, 'code': code, 'message': message})
+        occurrence = seq if previous is None else previous['occurrence_seq']
+        if attempt is not None:
+            connection.execute('INSERT INTO execution_issues VALUES(?,?,?,?,?,?) ON CONFLICT(attempt_id,stage)'
+                               ' DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at',
+                               (attempt_id, stage, code, message, now, occurrence))
+        else:
+            connection.execute('INSERT INTO service_issues VALUES(?,?,?,?,?) ON CONFLICT(stage)'
+                               ' DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at',
+                               (stage, code, message, now, occurrence))
+        if previous is None:
+            self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=now)
+        return True
 
     def release_execution(self, attempt_id: str, *, reason: str) -> dict:
         """Release a dispatch when its creator proves no execution process was created."""

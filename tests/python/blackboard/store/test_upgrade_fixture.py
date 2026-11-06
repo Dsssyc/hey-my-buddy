@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, load_delivered_stock, complete_fixture_cleanup, _git, _sha, _json
+from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, load_issue_stock, load_delivered_stock, complete_fixture_cleanup, _git, _sha, _json
 from hey_my_buddy.protocol.workspace_manifest import artifact_manifest, record_reference, turn_manifest
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router_sequence
@@ -24,6 +24,36 @@ from hey_my_buddy.paths import native_path
 
 
 class UpgradeFixtureTests(unittest.TestCase):
+    def test_issue_stock_pins_openings_and_delivers_the_latest_observation_after_upgrade(self):
+        fixture = load_fixture(self.root / 'issue-stock')
+        load_issue_stock(fixture)
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            originals = {table: list(connection.execute(f'SELECT * FROM {table}'))
+                         for table in ('execution_issues', 'service_issues')}
+            self.assertTrue(all(originals.values()))
+            openings = dict(connection.execute("SELECT kind,seq FROM events WHERE json_extract(payload_json,'$.stage')='upgrade-stock'"
+                                               " AND json_extract(payload_json,'$.message')='current occurrence'"))
+            self.assertEqual(set(openings), {'execution.issue', 'service.issue'})
+        upgrade_state(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            for table, kind in (('execution_issues', 'execution.issue'), ('service_issues', 'service.issue')):
+                rows = list(connection.execute(f'SELECT * FROM {table}'))
+                self.assertEqual([row[:-1] for row in rows], originals[table])
+                self.assertEqual([row[-1] for row in rows], [openings[kind]])
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM issue_deliveries').fetchone()[0], 0)
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+        store = BoardStore(fixture['state'])
+        self.addCleanup(store.db.close)
+        run_id = fixture['stableIds']['failed']
+        replies = [store.task_wait({'runId': run_id, 'consumeReminders': True,
+                                    'reminderWaitId': f'floor-issue-{index}', 'timeoutMs': 0}) for index in range(2)]
+        self.assertEqual({reply['issue']['kind'] for reply in replies}, {'execution', 'service'})
+        self.assertTrue(all(reply['issue']['detail']['message'] == 'current occurrence updated' for reply in replies))
+        store.record_service_issue('upgrade-stock', RuntimeError('updated after upgrade'))
+        with store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT occurrence_seq FROM service_issues WHERE stage='upgrade-stock'").fetchone()[0],
+                             openings['service.issue'])
+
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='uf-'))
 
@@ -1188,10 +1218,13 @@ class UpgradeFixtureTests(unittest.TestCase):
         for row in upgraded.execute('SELECT * FROM workspace_cleanup_plans'):
             self.assertNotIn('expiresAt', WorkflowCoordinator._plan_view(row))
 
-    def test_stock_provenance_uses_current_generator_and_fixed_floor(self):
+    def test_stock_provenance_keeps_the_base_and_pins_the_current_issue_generator(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         root = Path(__file__).resolve().parents[4]
-        generator_sha256 = _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes())
+        self.assertEqual(metadata['issueStock']['generatorSha256'],
+                         _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
+        self.assertEqual(metadata['issueStock']['writerCommit'], metadata['sourceCommit'])
+        generator_sha256 = metadata['issueStock']['baseGeneratorSha256']
         for field in ('generatorSha256', 'cleanupStockGeneratorSha256', 'reservationStockGeneratorSha256',
                       'deliveredStockGeneratorSha256', 'growth30GeneratorSha256', 'growth33GeneratorSha256'):
             with self.subTest(field=field):

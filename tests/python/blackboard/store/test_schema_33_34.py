@@ -138,8 +138,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
             stem = 'schema-' + str(schema) + '-workspace-growth'
             self.assertEqual(metadata[stage + 'WriterCommit'], commit)
             self.assertEqual(metadata[stage + 'BaseSha256'], hashlib.sha256((FIXTURE / 'board.sql').read_bytes()).hexdigest())
-            self.assertEqual(metadata[stage + 'GeneratorSha256'], hashlib.sha256(
-                (source / 'packaging/generate-upgrade-fixture.py').read_bytes()).hexdigest())
+            self.assertEqual(metadata[stage + 'GeneratorSha256'], metadata['issueStock']['baseGeneratorSha256'])
             for suffix, key in (('stock.sql','SqlSha256'), ('resources.json','ResourcesSha256')):
                 self.assertEqual(metadata[stage + key], hashlib.sha256((FIXTURE / (stem + '-' + suffix)).read_bytes()).hexdigest())
         fixture, _db = self.restored('wrong-stage', schema33=False)
@@ -228,7 +227,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
         self.assertEqual(legacy['baseSha256'], hashlib.sha256((FIXTURE / 'board.sql').read_bytes()).hexdigest())
         self.assertEqual(legacy['sourceResourcesSha256'], metadata['resourcesSha256'])
         source = Path(__file__).resolve().parents[4]
-        self.assertEqual(legacy['generatorSha256'], hashlib.sha256((source / 'packaging/generate-upgrade-fixture.py').read_bytes()).hexdigest())
+        self.assertEqual(legacy['generatorSha256'], metadata['issueStock']['baseGeneratorSha256'])
         self.assertEqual(legacy['history'], {
             'manifest1To2': 'e87ac40ef5475e7fb0768a2b5b47ccd5095292f8',
             'manifest2To3': '8810d564b9b652c02d75b8fa75a50ab1349def51',

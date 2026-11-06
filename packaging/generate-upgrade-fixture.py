@@ -2073,6 +2073,92 @@ def derive_legacy_stock(args):
     print(json_text({'legacyStock': results, 'sourceRunId': run_id}))
 
 
+def issue_stock_main():
+    """Append only issue stock through the floor writers; keep base exports intact."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--issue-stock-for', type=Path, required=True)
+    parser.add_argument('--work-dir', type=Path, required=True)
+    parser.add_argument('--populate-issues', action='store_true')
+    args = parser.parse_args()
+    work, fixed = args.work_dir.resolve(), args.issue_stock_for.resolve()
+    root = Path(__file__).resolve().parents[1]
+    if args.populate_issues:
+        from hey_my_buddy.blackboard.store.store import BoardStore
+        from hey_my_buddy.errors import BoardError
+        store = BoardStore(work / 'state', clock=lambda: AT)
+        with store.db.read() as connection:
+            attempt = connection.execute("SELECT selected_attempt_id FROM tasks WHERE task_id=?",
+                                         (json.loads((fixed / 'metadata.json').read_text())['stableIds']['failed'],)).fetchone()[0]
+            before = connection.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
+        for kind in ('execution', 'service'):
+            def record(text):
+                failure = BoardError('FIXTURE_ISSUE', text)
+                if kind == 'execution':
+                    store.record_execution_issue(attempt, 'upgrade-stock', failure)
+                else:
+                    store.record_service_issue('upgrade-stock', failure)
+            record('previous occurrence')
+            record('previous occurrence updated')
+            if kind == 'execution':
+                store.clear_execution_issue(attempt, 'upgrade-stock')
+            else:
+                store.clear_service_issue('upgrade-stock')
+            record('current occurrence')
+            record('current occurrence updated')
+        statements = ['-- Issue stock from the released schema-30 writers; event ids rebased by 9000000.']
+        with store.db.read() as connection:
+            for table in ('events', 'execution_issues', 'service_issues'):
+                rows = connection.execute('SELECT * FROM ' + table + (' WHERE seq>?' if table == 'events' else ''),
+                                          (before,) if table == 'events' else ()).fetchall()
+                for row in rows:
+                    values = dict(row)
+                    if table == 'events':
+                        values['seq'] += 9000000
+                    columns = ','.join('"' + column + '"' for column in values)
+                    quoted = ','.join(connection.execute('SELECT quote(?)', (value,)).fetchone()[0] for value in values.values())
+                    statements.append(f'INSERT INTO "{table}"({columns}) VALUES({quoted});')
+        store.db.close()
+        (work / 'issue-stock.sql').write_text('\n'.join(statements) + '\n', encoding='utf-8')
+        return
+    if not work.is_relative_to(root / 'tmp'):
+        raise ValueError('issue work-dir must be a new checkout-private tmp/ directory')
+    work.mkdir(parents=True, exist_ok=False)
+    (work / 'scratch').mkdir()
+    (work / 'home').mkdir(mode=0o700)
+    source = work / 'source'
+    source.mkdir()
+    archive = work / 'floor.tar'
+    with archive.open('wb') as stream:
+        run(['git', 'archive', FLOOR_COMMIT], cwd=root, stdout=stream)
+    with tarfile.open(archive) as stream:
+        stream.extractall(source, filter='data')
+    env = private_environment(work)
+    env.update(HOME=str(work / 'home'), CODEX_HOME=str(work / 'home/codex'),
+               CLAUDE_CONFIG_DIR=str(work / 'home/claude'), DSH_HOME=str(work / 'home/dsh'),
+               ZCODE_DATA_BASE_DIR=str(work / 'home/zcode'), XDG_CONFIG_HOME=str(work / 'home/config'),
+               XDG_DATA_HOME=str(work / 'home/data'), XDG_CACHE_HOME=str(work / 'home/cache'))
+    run(['uv', 'sync', '--frozen', '--no-install-project', '--link-mode', 'copy', '--project', str(source)], cwd=root, env=env)
+    import runpy
+    loader = runpy.run_path(str(root / 'tests/python/blackboard/store/upgrade_fixture.py'))
+    loader['load_fixture'](work / 'state')
+    env['PYTHONPATH'] = str(source / 'src')
+    run(['uv', 'run', '--no-sync', '--project', str(source), 'python', str(Path(__file__).resolve()),
+         '--issue-stock-for', str(fixed), '--work-dir', str(work), '--populate-issues'], cwd=root, env=env)
+    stock = (work / 'issue-stock.sql').read_bytes()
+    (fixed / 'schema-30-issue-stock.sql').write_bytes(stock)
+    metadata_path = fixed / 'metadata.json'
+    metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+    metadata['issueStock'] = {'writerCommit': FLOOR_COMMIT, 'schemaVersion': FLOOR_SCHEMA,
+                             'generatorSha256': digest(Path(__file__).read_bytes()),
+                             'baseSha256': digest((fixed / 'board.sql').read_bytes()), 'sha256': digest(stock),
+                             'baseGeneratorSha256': metadata['generatorSha256'],
+                             'generationCommand': 'uv run --frozen python packaging/generate-upgrade-fixture.py'
+                                                  ' --issue-stock-for tests/fixtures/upgrade-floor --work-dir tmp/<new-issue-stock-dir>',
+                             'derivation': 'Floor issue writers record, update, clear, reopen and update each kind at one timestamp;'
+                                           ' event identities are shifted by 9000000 to avoid the independent supplements.'}
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path, required=True)
@@ -2108,4 +2194,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--issue-stock-for" in sys.argv:
+        issue_stock_main()
+    else:
+        main()

@@ -155,10 +155,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.continue_run(board, child_view, credential=lead_claim["agentCredential"])
         second = self.claim(board, "w2", claim_request_id="owned-native", run_id=child["runId"])
         self.assertEqual(second["claim"]["turn"]["resumeMode"], "native-session")
-        # Consume the earlier attention boundary before parking for this native
-        # turn, so the wake under test can only come from its own result.
-        self.wait(board, lead_claim)
-        lead_claim = self.claim(board, claim_request_id="lead-after-attention", run_id=lead["runId"])["claim"]
+        # The Lead already answered this boundary; waiting must not ring it again.
         self.wait(board, lead_claim)
         self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
         earlier_wakeups = len(self.wakeups(board, lead))
@@ -257,15 +254,12 @@ class LeadLifecycleTests(WorkflowTestCase):
             "inputs":[],"writeScope":["."],"expectedSeconds":60,
         }])
         self.wait(board, claim)
-        # The earlier assistance happened after the first Lead input and already
-        # caused a wake on waiting. Consume it and park again before the helper yields.
-        next_claim = self.claim(board, claim_request_id="lead-second", run_id=lead["runId"])["claim"]
-        self.wait(board, next_claim)
+        self.assertEqual(self.current(board, lead)['state'], 'waiting-owned')
         helper = board.call("workflow_get", {"runId": helpers["children"][0]["taskId"]})
         self.finish_owned(board, helper, disposition="attention")
         self.assertEqual(self.current(board, lead)["state"], "executing")
         self.assertEqual(self.current(board, child)["activeRequest"]["kind"], "helper-attention")
-        self.assertEqual(len(self.wakeups(board, lead)), 2)
+        self.assertEqual(len(self.wakeups(board, lead)), 1)
 
     def test_multiple_boundaries_before_next_turn_coalesce_and_freeze_at_input_time(self):
         board = self.board()
@@ -403,8 +397,6 @@ class LeadLifecycleTests(WorkflowTestCase):
                                          "workspace": {"kind": "existing", "access": "write"}}])
         helper_id = approved["children"][0]["taskId"]
         helper_claim = self.claim(board, "w2", claim_request_id="helper-to-stop", run_id=helper_id)
-        self.wait(board, claim)
-        claim = self.claim(board, claim_request_id="lead-stops-helper-tree", run_id=lead["runId"])["claim"]
         prior_wakeups = len(self.wakeups(board, lead))
         board.call("workflow_cancel", {"runId": child["runId"], "credential": claim["agentCredential"]})
         self.assertFalse(self.current(board, child)["task"]["workflowShutdown"]["descendantsConfirmed"])
@@ -435,9 +427,6 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.continue_run(board,current,buddy="route",credential=claim["agentCredential"])
         board.store.workflow.prepare_continuation_workspace({"runId":child["runId"]})
         child = self.current(board,child)
-        # Consume the earlier boundary before testing this Router's own stop.
-        self.wait(board,claim)
-        claim = self.claim(board,claim_request_id="lead-before-router-stop",run_id=lead["runId"])["claim"]
         previous_wakes = len(self.wakeups(board,lead))
         route_id = child["routing"]["taskId"]
         route_claim = self.claim(board, "router", claim_request_id="router-to-stop", run_id=route_id)["claim"]

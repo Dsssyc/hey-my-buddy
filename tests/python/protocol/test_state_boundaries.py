@@ -116,6 +116,8 @@ class StateBoundaryTests(unittest.TestCase):
 
         def request(endpoint, operation, params, resource="control", *, state_dir):
             self.assertIs(state_dir, self.state)
+            if operation == 'task_wait':
+                return run
             return (lifecycle if params.get("action") == "open" else {"running": False}) if operation == "console" else {"task": run}
 
         with patch.object(transport, "get_state_dir", side_effect=AssertionError("internal CLI reselected state")), \

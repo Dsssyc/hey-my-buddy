@@ -527,8 +527,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                            " VALUES(?,?,?)", (attempt_id, "identity-absent", "settled"))
                 db.execute("INSERT INTO attempt_shutdown_evidence(attempt_id,evidence_kind,detail_json,observed_at)"
                            " VALUES(?,?,?,?)", (attempt_id, "identity-absent", "{}", now))
-                db.execute("INSERT INTO execution_issues(attempt_id,stage,code,message,observed_at)"
-                           " VALUES(?,?,?,?,?)", (attempt_id, "fixture", "FIXTURE", "private issue", now))
+                board.store._write_runtime_issue(db, 'fixture', BoardError('FIXTURE', 'private issue'),
+                                                attempt=board.store._attempt_row(db, attempt_id), now=now)
                 db.execute("INSERT INTO attempt_activity(attempt_id,task_id,activity_json,"
                            "updated_at) VALUES(?,?,?,?)",
                            (attempt_id, task_id, "{}", now))

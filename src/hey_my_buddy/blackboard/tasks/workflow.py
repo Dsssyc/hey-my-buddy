@@ -1541,8 +1541,6 @@ class WorkflowCoordinator:
         request_id = f"routing-{uuid.uuid4()}"
         decision_id = run["current_routing_id"]
         payload = {"source": "routing"}
-        connection.execute("UPDATE workflow_runs SET state='awaiting-host', active_request_id=?, updated_at=? WHERE run_id=?",
-                           (request_id, now, run["run_id"]))
         self._record_system_request(connection, run, reason, payload, now,
                                     request_id=request_id, decision_id=decision_id)
         self.board._append_event(connection, "workflow.routing_needs_host", task_id=run["run_id"],
@@ -2284,6 +2282,8 @@ class WorkflowCoordinator:
             'UPDATE workflow_runs SET state=?, active_request_id=?, updated_at=? WHERE run_id=?',
             (state, request_id, now, run_id),
         )
+        if (run['state'], run['active_request_id']) != (state, request_id):
+            connection.execute('UPDATE tasks SET revision=revision+1 WHERE task_id=?', (run_id,))
         connection.execute(
             "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
             ("helper-attention" if boundary is not None and boundary["child_task_id"] else "awaiting-host" if boundary is not None else "awaiting-helpers", now, run_id),
@@ -5659,9 +5659,12 @@ class WorkflowCoordinator:
                 continue
             turn = connection.execute('SELECT * FROM workflow_turns WHERE turn_id=?', (lead['current_turn_id'],)).fetchone()
             context = _turn_input_context(turn['input_json'])
-            task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (lead['owned_run_id'],)).fetchone()
-            if messages.ready(self.board, connection, task, after=context['ownedFactsCursor']):
-                self._wake_lead(connection, lead, seq, now, owned_run_id=task['task_id'])
+            task = connection.execute('SELECT task_id,revision,state,active_attempt_id,selected_attempt_id FROM tasks WHERE task_id=?',
+                                      (lead['owned_run_id'],)).fetchone()
+            source = messages.ready(self.board, connection, task, previous=context['ownedAwaitStates'].get(task['task_id']),
+                                    lead_run_id=lead['run_id'], cursor=context['ownedFactsCursor'])
+            if source is not None:
+                self._wake_lead(connection, lead, source, now, owned_run_id=task['task_id'])
 
     def _owned_descendant_reported(self, connection, task_id: str, seq: int) -> None:
         """Expose a stopped owned micro task's descendant result, including uncertainty."""
@@ -5710,20 +5713,18 @@ class WorkflowCoordinator:
     def _owned_since_input(self, connection, run_id: str, turn_row):
         from . import messages
         context = _turn_input_context(turn_row['input_json'])
-        rows = connection.execute(
-            "SELECT l.owned_run_id AS run_id,MAX(e.seq) AS seq FROM workflow_lead_tasks l"
-            " JOIN events e ON e.task_id=l.owned_run_id OR e.kind='service.issue'"
-            " WHERE l.lead_run_id=? AND e.seq>?"
-            " AND (COALESCE(e.actor_role,'')!='lead' OR COALESCE(e.actor_id,'')!=l.lead_run_id)"
-            " GROUP BY l.owned_run_id ORDER BY seq", (run_id, context['ownedFactsCursor']),
-        ).fetchall()
-        for row in rows:
-            task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (row['run_id'],)).fetchone()
-            if messages.ready(self.board, connection, task, after=context['ownedFactsCursor']):
-                return row
+        tasks = connection.execute('SELECT t.task_id,t.revision,t.state,t.active_attempt_id,t.selected_attempt_id FROM tasks t'
+                                   ' JOIN workflow_lead_tasks l ON l.owned_run_id=t.task_id'
+                                   ' WHERE l.lead_run_id=? ORDER BY l.created_at,l.owned_run_id', (run_id,)).fetchall()
+        for task in tasks:
+            source = messages.ready(self.board, connection, task, previous=context['ownedAwaitStates'].get(task['task_id']),
+                                    lead_run_id=run_id, cursor=context['ownedFactsCursor'])
+            if source is not None:
+                return {'seq': source, 'run_id': task['task_id']}
         return None
 
     def _owned_turn_context(self, connection, run_id: str, previous) -> dict:
+        from . import messages
         cursor = self.board._head_of(connection)
         previous_cursor = _turn_input_context(previous["input_json"])["ownedFactsCursor"] if previous else None
         total = connection.execute("SELECT COUNT(*) FROM workflow_lead_tasks WHERE lead_run_id=?", (run_id,)).fetchone()[0]
@@ -5735,7 +5736,14 @@ class WorkflowCoordinator:
         ).fetchall()
         facts = [{"runId": row["run_id"], "state": row["state"], "executionState": row["execution_state"], "queueReason": row["queue_reason"], "activeRequestId": row["active_request_id"], "turnId": row["current_turn_id"], "attemptId": row["current_attempt_id"] or row["final_attempt_id"], "finalArtifactId": row["final_artifact_id"], "activitySeq": row["activity_seq"]}
                  for row in rows]
-        return {"ownedMicroTasks": facts, "ownedMicroTasksTotal": total, "ownedFactsCursor": cursor}
+        states = {}
+        for task in connection.execute('SELECT t.task_id,t.revision,t.state,t.active_attempt_id,t.selected_attempt_id FROM tasks t'
+                                       ' JOIN workflow_lead_tasks l ON l.owned_run_id=t.task_id WHERE l.lead_run_id=?',
+                                       (run_id,)).fetchall():
+            observed = messages.observation(self.board, connection, task)
+            states[task['task_id']] = {key: observed[key] for key in ('revision', 'workflowShutdown') if key in observed}
+        return {"ownedMicroTasks": facts, "ownedMicroTasksTotal": total, "ownedFactsCursor": cursor,
+                'ownedAwaitStates': states}
 
     def _turn_context(self, connection, run_row, continuation, previous, turn_index) -> dict:
         context: dict[str, Any] = {

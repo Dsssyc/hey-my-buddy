@@ -3,8 +3,8 @@
 This step owns its DDL and conversion. Existing routes predate exploration, so
 they record ``pre-exploration``; existing settings take the default quota
 interval of 5. Nothing else a route or the settings row holds is rewritten.
-Issue deliveries start empty; occurrence identities reference the existing issue
-events without rewriting the issue tables or their evidence.
+Issue rows pin their opening event, found from the last resolution and the
+observations in its still-open interval. Deliveries start empty.
 """
 from __future__ import annotations
 
@@ -54,6 +54,22 @@ TABLE_DDL = {
     PRIMARY KEY (harness, model, effort, domain_node_id, task_type),
     CHECK (successes + failures = samples)
 )""",
+    'execution_issues': """CREATE TABLE execution_issues (
+    attempt_id          TEXT NOT NULL REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    stage               TEXT NOT NULL,
+    code                TEXT NOT NULL,
+    message             TEXT NOT NULL,
+    observed_at         TEXT NOT NULL,
+    occurrence_seq      INTEGER NOT NULL UNIQUE REFERENCES events(seq) ON DELETE RESTRICT,
+    PRIMARY KEY (attempt_id, stage)
+)""",
+    'service_issues': """CREATE TABLE service_issues (
+    stage               TEXT PRIMARY KEY,
+    code                TEXT NOT NULL,
+    message             TEXT NOT NULL,
+    observed_at         TEXT NOT NULL,
+    occurrence_seq      INTEGER NOT NULL UNIQUE REFERENCES events(seq) ON DELETE RESTRICT
+)""",
 }
 
 INDEX_DDL = (
@@ -64,16 +80,17 @@ INDEX_DDL = (
     """CREATE INDEX workflow_routes_exploration_idx ON workflow_routes(exploration)""",
     """CREATE INDEX events_issue_occurrences_idx
     ON events(kind, attempt_id, json_extract(payload_json, '$.stage'), seq)
-    WHERE kind='execution.issue' OR kind='service.issue'""",
+    WHERE kind='execution.issue' OR kind='service.issue'
+    OR kind='execution.issue_updated' OR kind='service.issue_updated'""",
 )
 
 ISSUE_DELIVERIES_DDL = """CREATE TABLE issue_deliveries (
     task_id         TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
-    issue_kind      TEXT NOT NULL CHECK (issue_kind IN ('execution','service')),
     occurrence_seq  INTEGER NOT NULL REFERENCES events(seq) ON DELETE RESTRICT,
+    observation_seq INTEGER NOT NULL REFERENCES events(seq) ON DELETE RESTRICT,
+    observed_at     TEXT NOT NULL,
     wait_id         TEXT NOT NULL UNIQUE,
-    delivered_at    TEXT NOT NULL,
-    PRIMARY KEY (task_id, issue_kind, occurrence_seq)
+    PRIMARY KEY (task_id, occurrence_seq)
 )"""
 
 
@@ -126,6 +143,27 @@ def _accumulate_defects(connection):
                 raise ValueError(f"Schema 35 → 36: fixed micro task {run_id} has no classified sample")
 
 
+def _opening_event(connection, row, *, execution):
+    attempt = row['attempt_id'] if execution else None
+    prefix = 'execution' if execution else 'service'
+    clear = connection.execute(
+        "SELECT COALESCE(MAX(seq),0) FROM events WHERE attempt_id IS ? AND ("
+        " (kind=? AND json_extract(payload_json,'$.stage')=?)"
+        " OR (kind='execution.received' AND ?='connection')"
+        " OR (kind='execution.shutdown_confirmed' AND ? IN ('connection','shutdown','recovery')))",
+        (attempt, prefix + '.issue_resolved', row['stage'], row['stage'] if execution else None,
+         row['stage'] if execution else None),
+    ).fetchone()[0]
+    opening = connection.execute(
+        "SELECT MIN(seq) FROM events WHERE kind=? AND attempt_id IS ?"
+        " AND json_extract(payload_json,'$.stage')=? AND seq>?",
+        (prefix + '.issue', attempt, row['stage'], clear),
+    ).fetchone()[0]
+    if opening is None:
+        raise ValueError(f"No opening event for {prefix} issue {row['stage']}")
+    return opening
+
+
 def upgrade(connection):
     stock = {table: _rows(connection, table) for table in TABLE_DDL}
     for row in stock['workflow_routes']:
@@ -135,6 +173,9 @@ def upgrade(connection):
     for table in ('kind_statistics', 'kind_cell_statistics'):
         for row in stock[table]:
             row['defects'] = 0
+    for table in ('execution_issues', 'service_issues'):
+        for row in stock[table]:
+            row['occurrence_seq'] = _opening_event(connection, row, execution=table == 'execution_issues')
     for table, rows in stock.items():
         _rebuild(connection, table, rows)
     for ddl in INDEX_DDL:

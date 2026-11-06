@@ -31,11 +31,3 @@ def message_kind(run: dict) -> str | None:
         if not isinstance(run.get("workflowShutdown"), dict) or shutdown_confirmed(run):
             return workflow
     return None
-
-
-def message_key(run: dict) -> list:
-    """The workflow facts whose revision or delivery can carry a new message."""
-    workflow = run.get('workflow') or {}
-    return [run['revision'], run.get('workflowState'), run.get('state'),
-            workflow.get('activeRequestId'), run.get('selectedAttemptId'), run.get('resultAvailable'),
-            run.get('workflowShutdown')]

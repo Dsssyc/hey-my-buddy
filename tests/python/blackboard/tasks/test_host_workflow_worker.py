@@ -3,11 +3,26 @@ from hey_my_buddy.paths import native_path
 """Real daemon/Worker/CLI quota recovery with an offline harness, never a paid rerun."""
 import json
 import subprocess
+import time
 from hey_my_buddy.blackboard.tasks.workspace import _git_command
 from pathlib import Path
 from buddy.harnesses.fixture_selection import select_fixture
 
 from blackboard.tasks.test_workflow_worker import MicroTaskWorkerTestCase, BUDDY
+
+
+def await_boundary(case, run_id, seconds=90, *, output='full'):
+    """These recovery tests need the turn boundary after any issue delivery."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        remaining = max(1, int(deadline - time.monotonic()))
+        code, reply = case.cli('await', json.dumps({'runId': run_id, 'waitSeconds': remaining, 'output': output}),
+                               env=case.env(), timeout=remaining + 20)
+        case.assertEqual(code, 0, reply)
+        if reply['outcome'] != 'issue':
+            return reply
+        case.assertTrue(reply['executionIssues'] or reply['serviceIssues'], reply)
+    case.fail('The private recovery fixture did not reach a turn boundary')
 
 
 class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
@@ -25,6 +40,8 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
         enable_fixture_buddy(store, {**BUDDY, "effort": "high"})
 
     def call(self, method, params):
+        if method == 'await':
+            return await_boundary(self, params['runId'], params.get('waitSeconds', 90))
         code, reply = self.cli(method, json.dumps({**params, "output": "full"}), env=self.env())
         self.assertEqual(code, 0, reply)
         return reply
@@ -35,7 +52,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             "buddy": " / ".join(BUDDY.values()), "checkout": "worktree", "access": "write",
             "inputs": [], "writeScope": ["."], "expectedSeconds": 600})
         # A terminal failed micro task is an await outcome, not a CLI transport error.
-        _code, stopped = self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}), env=self.env(), timeout=110)
+        stopped = await_boundary(self, submitted['runId'])
         current = self.call("get", {"runId": submitted["runId"]})
         self.assertEqual(current["state"], "failed", (current, stopped))
         self.assertTrue(current["shutdown"]["selfConfirmed"])
@@ -169,7 +186,7 @@ class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):
                 "buddy": "codex / openai / fixture-model / low", "task": "Offline model overload",
                 "cwd": str(self.repo), "checkout": "worktree", "access": "write",
                 "inputs": [], "writeScope": ["."], "expectedSeconds": 600})
-            awaited = self.call("await", {"runId": submitted["runId"], "waitSeconds": 90})
+            awaited = self.call('await', {'runId': submitted['runId'], 'waitSeconds': 90})
             current = self.call("get", {"runId": submitted["runId"]})
             self.assertEqual(current["state"], "failed", current)
             self.assertEqual(awaited["status"], "failed", awaited)
@@ -178,8 +195,11 @@ class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):
                 self.assertEqual(failure["nativeCode"], "serverOverloaded")
                 self.assertEqual(failure["rejectionPhase"], "during-model")
             for method in ("get", "await"):
-                code, brief = self.cli(method, json.dumps({"runId": submitted["runId"]}), env=self.env())
-                self.assertEqual(code, 0, brief)
+                if method == 'await':
+                    brief = await_boundary(self, submitted['runId'], output='brief')
+                else:
+                    code, brief = self.cli(method, json.dumps({"runId": submitted["runId"]}), env=self.env())
+                    self.assertEqual(code, 0, brief)
                 failure = brief["providerRejection"] if method == "get" else brief["result"]["providerRejection"]
                 self.assertEqual((failure["code"], failure["nativeCode"]), ("overloaded", "serverOverloaded"))
             self.assertNotIn("quotaFailure", current)
@@ -288,9 +308,7 @@ class NativeContextFailureTests(MicroTaskWorkerTestCase):
                 "expectedSeconds": 600,
             }), env=self.env())
             self.assertEqual(code, 0, submitted)
-            code, awaited = self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}),
-                                     env=self.env(), timeout=110)
-            self.assertEqual(code, 0, awaited)
+            awaited = await_boundary(self, submitted['runId'])
             code, current = self.cli("get", json.dumps({"runId": submitted["runId"], "output": "full"}),
                                      env=self.env())
             self.assertEqual(code, 0, current)
