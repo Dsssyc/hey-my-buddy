@@ -45,7 +45,6 @@ class AdmissionTests(unittest.TestCase):
         observer.signal(signal.SIGTERM)
         self.assertEqual(signals, [])
         rows.clear()
-        self.assertEqual(observer.observe(), "empty")
         self.assertEqual(observer.observe(), "identity-absent")
 
     def test_new_session_member_after_root_reaping_is_unknown_and_unsignalled(self):
@@ -102,24 +101,35 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(observer.observe(), "alive")
         self.assertEqual(observer.live, {102: 11})
 
-    def test_two_empty_scans_are_required_and_a_late_fork_resets_them(self):
+    def test_two_empty_scans_complete_one_observation(self):
         rows = {101: ProcessMember(101, 10, 1, 101, False)}
-        starts = {101: 10}
-        observer, _ = self.observer(rows, starts)
+        observer, _ = self.observer(rows, {101: 10})
         observer.alive = lambda pid: None  # Unreaped root pins its PID.
-        self.assertEqual(observer.observe(), "empty")
+        with patch.object(observer, "snapshot", return_value=rows) as snapshot:
+            self.assertEqual(observer.observe(), "identity-absent")
+        self.assertEqual(snapshot.call_count, 2)
+
+    def test_late_fork_in_second_scan_returns_alive(self):
+        root = ProcessMember(101, 10, 1, 101, False)
+        child = ProcessMember(102, 11, 1, 101, True)
+        observer, _ = self.observer({}, {101: 10, 102: 11})
+        observer.alive = lambda pid: None
         # First PID list missed a child born while its parent was being read.
-        rows[102] = ProcessMember(102, 11, 1, 101, True)
-        starts[102] = 11
-        self.assertEqual(observer.observe(), "alive")
-        rows.pop(102)
-        starts.pop(102)
-        self.assertEqual(observer.observe(), "empty")
-        with patch.object(observer, "snapshot", side_effect=OSError):
-            with self.assertRaises(OSError):
+        with patch.object(observer, "snapshot", side_effect=[{101: root}, {101: root, 102: child}]) as snapshot:
+            self.assertEqual(observer.observe(), "alive")
+        self.assertEqual(snapshot.call_count, 2)
+        self.assertEqual(observer.live, {102: 11})
+
+    def test_failed_second_scan_does_not_prove_absence(self):
+        observer, _ = self.observer({}, {})
+        with patch.object(observer, "snapshot", side_effect=[{}, OSError("second scan failed")]) as snapshot:
+            with self.assertRaisesRegex(OSError, "second scan failed"):
                 observer.observe()
-        self.assertEqual(observer.observe(), "empty")
-        self.assertEqual(observer.observe(), "identity-absent")
+        self.assertEqual(snapshot.call_count, 2)
+        # A later observation must obtain both scans of its own.
+        with patch.object(observer, "snapshot", return_value={}) as snapshot:
+            self.assertEqual(observer.observe(), "identity-absent")
+        self.assertEqual(snapshot.call_count, 2)
 
     @unittest.skipIf(os.name == "nt", "POSIX process observation")
     def test_process_exiting_mid_scan_is_disappearance_not_identity_change(self):

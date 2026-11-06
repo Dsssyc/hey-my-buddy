@@ -204,6 +204,49 @@ class ExecutionObservationTests(unittest.TestCase):
             inspect.assert_not_called()
             store.recover_executions.assert_not_called()
 
+    def test_finalizing_without_connection_recovers_after_alive_then_gone_without_issue(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.task_get.return_value = {"task": {"attemptState": "finalizing", "cancelRequested": False}}
+            store.execution_finished.return_value = True
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
+            claim, location = self.recovered(root)
+            handle = SimpleNamespace(**location.__dict__, process=Mock(), _members=Mock(),
+                observe=Mock(side_effect=[(0, "alive"), (0, "gone")]), budget_path=location.budget_path)
+            scheduler._handles["attempt"] = (handle, POSIX_IDENTITY)
+            scheduler._condition.wait_for = Mock(return_value=True)
+            with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint") as read:
+                self.monitor(scheduler, claim, handle, POSIX_IDENTITY)
+            self.assertEqual(handle.observe.call_count, 2)
+            store.record_execution_issue.assert_not_called()
+            store.recover_executions.assert_called_once_with(
+                "attempt", process_identity=POSIX_IDENTITY, stopped_evidence={"kind": "identity-absent"})
+            self.assertNotIn("attempt", scheduler._handles)
+            read.assert_not_called()
+            self.live_registry.bind.assert_not_called()
+
+    def test_finalizing_without_connection_records_unknown_shutdown_issue(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.task_get.return_value = {"task": {"attemptState": "finalizing", "cancelRequested": False}}
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
+            claim, location = self.recovered(root)
+            handle = SimpleNamespace(**location.__dict__, process=Mock(), _members=Mock(),
+                observe=Mock(return_value=(0, "unknown")), budget_path=location.budget_path)
+            scheduler._handles["attempt"] = (handle, POSIX_IDENTITY)
+            scheduler._condition.wait_for = lambda *_args, **_kw: scheduler._stopping.set()
+            with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint") as read:
+                self.monitor(scheduler, claim, handle, POSIX_IDENTITY)
+            handle.observe.assert_called_once_with()
+            store.record_execution_issue.assert_called_once()
+            attempt_id, stage, error = store.record_execution_issue.call_args.args
+            self.assertEqual((attempt_id, stage, error.code, error.message), (
+                "attempt", "shutdown", "EXECUTION_UNKNOWN", "Execution shutdown cannot be verified"))
+            store.recover_executions.assert_not_called()
+            self.assertIn("attempt", scheduler._handles)
+            read.assert_not_called()
+            self.live_registry.bind.assert_not_called()
+
     def test_unknown_process_identity_prevents_connection_and_signalling_after_deadline(self):
         with tempfile.TemporaryDirectory() as root:
             store = Mock(directory=Path(root))

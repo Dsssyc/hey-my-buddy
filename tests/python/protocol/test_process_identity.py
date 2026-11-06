@@ -88,15 +88,16 @@ class ProcessIdentityTests(unittest.TestCase):
         source.group = False
         self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "identity-absent")
 
-    def test_unreadable_boot_breaks_consecutive_empty_scans(self):
+    def test_unreadable_boot_is_unknown_and_next_call_proves_absence(self):
         source = Source(started_at=None)
         source.group = False
         members = identity._posix_members(RECORD, source)
-        self.assertEqual(identity.inspect_process_identity(RECORD, source=source, members=members), "unknown")
-        with mock.patch.object(source, "boot_id", side_effect=OSError):
-            self.assertEqual(identity.inspect_process_identity(RECORD, source=source, members=members), "unknown")
-        self.assertEqual(identity.inspect_process_identity(RECORD, source=source, members=members), "unknown")
-        self.assertEqual(identity.inspect_process_identity(RECORD, source=source, members=members), "identity-absent")
+        with mock.patch.object(members, "snapshot", wraps=source.snapshot) as snapshot:
+            with mock.patch.object(source, "boot_id", side_effect=OSError):
+                self.assertEqual(identity.inspect_process_identity(RECORD, source=source, members=members), "unknown")
+            snapshot.assert_not_called()
+            self.assertEqual(identity.inspect_process_identity(RECORD, source=source, members=members), "identity-absent")
+        self.assertEqual(snapshot.call_count, 2)
 
     def test_reused_pid_with_surviving_group_is_unknown_and_never_signalled(self):
         source = Source()

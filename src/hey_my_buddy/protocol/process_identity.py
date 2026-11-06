@@ -269,12 +269,8 @@ def inspect_process_identity(record: dict, *, source=None, members=None) -> str:
         if record["jobName"] is not None:
             with source.open_job(record["jobName"]) as job:
                 return _inspect_job_identity(record, source, job)
-        persistent = members is not None
         members = members or _posix_members(record, source)
-        observation = _inspect_posix(record, source, members)
-        if observation == "empty" and not persistent:
-            observation = _inspect_posix(record, source, members)
-        return "unknown" if observation == "empty" else observation
+        return _inspect_posix(record, source, members)
     except Exception as error:
         if not _observation_failure(error):
             raise
@@ -288,11 +284,7 @@ def _posix_members(record, source):
 
 
 def _inspect_posix(record, source, members):
-    try:
-        current_boot = source.boot_id()
-    except OSError:
-        members.invalidate_observation()
-        raise
+    current_boot = source.boot_id()
     if current_boot != record["bootId"]:
         return "boot-changed"
     return members.observe()

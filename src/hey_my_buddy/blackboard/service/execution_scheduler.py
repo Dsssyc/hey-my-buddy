@@ -448,7 +448,7 @@ class ExecutionScheduler:
                 try:
                     if handle.process is not None:
                         _, state = handle.observe()
-                        observation = {"gone": "identity-absent", "empty": "unknown"}.get(state, state)
+                        observation = "identity-absent" if state == "gone" else state
                     else:
                         observation = inspect_process_identity(identity, members=members)
                     if observer.watch is not None and observer.watch.error is not None:

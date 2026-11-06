@@ -69,26 +69,15 @@ class SessionProcesses:
         self.known: dict[int, int] = {pid: started_at}
         self.live: dict[int, int] = {}
         self.lock = lock or threading.RLock()
-        self._empty_observations = 0
 
     def observe(self) -> str:
-        """One scan; two consecutive empty scans are needed to prove absence."""
+        """Prove absence with two consecutive empty scans in this observation."""
         with self.lock:
-            try:
-                observation = self._observe()
-            except OSError:
-                self._empty_observations = 0
-                raise
-            if observation != "identity-absent":
-                self._empty_observations = 0
-                return observation
-            self._empty_observations += 1
-            return "identity-absent" if self._empty_observations >= 2 else "empty"
-
-    def invalidate_observation(self) -> None:
-        """An unavailable prerequisite breaks consecutive empty evidence."""
-        with self.lock:
-            self._empty_observations = 0
+            observation = self._observe()
+            if observation == "identity-absent":
+                # The next PID list starts after the first scan finished.
+                return self._observe()
+            return observation
 
     def _observe(self) -> str:
         root_before = self.creation(self.pid)

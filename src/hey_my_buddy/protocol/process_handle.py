@@ -100,7 +100,7 @@ class ProcessHandle:
         return self.poll() is not None
 
     def observe(self) -> tuple[int | None, str]:
-        """Read the root exit and scan its member boundary once, under one lock."""
+        """Read the root exit and observe its member boundary under one lock."""
         with self.stop_lock:
             if self.job is not None or os.name == "nt":
                 code = self.process.poll()
@@ -136,8 +136,7 @@ class ProcessHandle:
         return self.session_observation() != "gone"
 
     def session_observation(self) -> str:
-        observation = self.observe()[1]
-        return "unknown" if observation == "empty" else observation
+        return self.observe()[1]
 
     def _session_observation(self) -> str:
         if self._confirmed:
@@ -164,8 +163,6 @@ class ProcessHandle:
             code, observation = self.observe()
             if code is not None and observation == "gone":
                 return True
-            if observation == "empty":
-                continue  # The next PID list starts after the first scan finished.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False

@@ -117,6 +117,28 @@ class StopSequenceTests(unittest.TestCase):
 
 
 class RealStdioStopTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX session observation")
+    def test_quick_child_exit_observes_only_alive_and_gone(self):
+        child = owned_popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+                            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+        handle = ProcessHandle(child, log_paths={}, stop_channel="stdin")
+        try:
+            self.assertEqual(handle.observe(), (None, "alive"))
+            child.stdin.close()
+            deadline = time.monotonic() + 5
+            while True:
+                code, state = handle.observe()
+                self.assertIn(state, {"alive", "gone"})
+                if code is not None and state == "gone":
+                    break
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+            self.assertEqual(code, 0)
+            self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
+        finally:
+            handle.terminate(grace_seconds=0)
+
     def test_stdin_channel_without_pipe_stops_child_before_rejecting_ownership(self):
         child = owned_popen([sys.executable, "-c", "import time; time.sleep(30)"],
                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
