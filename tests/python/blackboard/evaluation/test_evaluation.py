@@ -414,7 +414,7 @@ class ConsoleCoreTests(BoardTestCase):
         board = self.board()
         core = board.evaluation.console_core()
         for key in ("configuration", "buddies",
-                    "modelServiceConcurrency", "unavailableBuddyCount", "preferences", "modelNotes", "models", "modelMappings",
+                    "modelServiceConcurrency", "unavailableBuddyCount", "preferences", "modelNotes", "models", "modelCorrespondences",
                     "decisions"):
             self.assertIn(key, core)
         snapshot = board.evaluation.snapshot({})

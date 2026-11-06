@@ -146,6 +146,7 @@ class Daemon:
             self._reminders = Scheduler(self.store)
             self._reminders.thread.start()
             from ..routing.maintenance import Scheduler as MaintenanceScheduler
+            self.store.profile.recover_files()
             self._router_maintenance = MaintenanceScheduler(self.store)
             self._router_maintenance.thread.start()
             self._maintenance = threading.Thread(target=self._maintain, name="workspace-maintenance", daemon=True)

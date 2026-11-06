@@ -178,6 +178,9 @@
   "micro-task-not-found": [],
   "micro-task-not-owned": [],
   "maintenance-answer-invalid": ["errors"],
+  "profile-answer-invalid": ["errors"],
+  "profile-not-configured": [],
+  "profile-web-unsupported": [],
   "model-cursor-shape-unreadable": [],
   "model-list-shape-unreadable": [],
   "native-authority-required": [

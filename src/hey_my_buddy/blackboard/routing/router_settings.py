@@ -7,7 +7,7 @@ from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
 
 FIELDS = frozenset({"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget",
-                    "maintenanceBuddyId", "maintenanceIntervalSeconds", "explorationEvery"})
+                    "maintenanceBuddyId", "maintenanceIntervalSeconds", "profileBuddyId", "profileBudget", "explorationEvery"})
 MODES = ("fast", "review")
 PRESETS = ("brief", "standard", "deep")
 RETRY_INTERVAL_MIN_SECONDS = 1
@@ -18,7 +18,7 @@ EXPLORATION_EVERY_MIN = 2
 DEFAULT_ROUTER_SETTINGS = {"routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
                            "defaultRoutingMode": "fast", "routingBudget": "standard",
                            "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600,
-                           "explorationEvery": 5}
+                           "profileBuddyId": None, "profileBudget": "deep", "explorationEvery": 5}
 
 
 def _object(value: object, fields: frozenset[str], label: str) -> Mapping:
@@ -85,6 +85,13 @@ def validate_router_settings_patch(value: object) -> dict:
         if buddy_id is not None:
             _buddy_entries([buddy_id], "maintenanceBuddyId")
         result["maintenanceBuddyId"] = buddy_id
+    if "profileBuddyId" in entry:
+        buddy_id = entry["profileBuddyId"]
+        if buddy_id is not None:
+            _buddy_entries([buddy_id], "profileBuddyId")
+        result["profileBuddyId"] = buddy_id
+    if "profileBudget" in entry:
+        result["profileBudget"] = _choice(entry["profileBudget"], PRESETS, "profileBudget")
     if "maintenanceIntervalSeconds" in entry:
         seconds = entry["maintenanceIntervalSeconds"]
         if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:

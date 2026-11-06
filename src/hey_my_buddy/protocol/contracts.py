@@ -59,6 +59,9 @@ class BuddyControl:
     def maintenance_start(self, request_json: str) -> str:
         ...
 
+    def profile_start(self, request_json: str) -> str:
+        ...
+
     def maintenance_pending(self, request_json: str) -> str:
         ...
 
@@ -104,6 +107,9 @@ class BuddyControl:
         ...
 
     def execution_result(self, request_json: str) -> str:
+        ...
+
+    def execution_profile(self, request_json: str) -> str:
         ...
 
     def execution_maintenance(self, request_json: str) -> str:

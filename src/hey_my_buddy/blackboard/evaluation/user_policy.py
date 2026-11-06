@@ -5,7 +5,7 @@ from ...protocol import schemas
 from ...errors import BoardError
 from . import models
 
-PATCH_FIELDS = frozenset({'buddySettings', 'preferenceChanges', 'modelNoteChanges', 'modelMappingChanges',
+PATCH_FIELDS = frozenset({'buddySettings', 'preferenceChanges', 'modelNoteChanges', 'modelCorrespondenceChanges',
                           'configuration', 'modelServiceConcurrency'})
 MODEL_SERVICE_FIELDS = ('harness', 'provider', 'model')
 
@@ -48,12 +48,13 @@ def require_console() -> None:
 
 def policy_view(connection, buddy_ids: list[str]) -> dict:
     """User-owned buddy preferences and model annotations for the console."""
+    from ..routing.profile_data import console_model_view
     return {
         'preferences': preferences(connection, buddy_ids),
         'modelNotes': model_notes(connection),
-        'models': [models.model_view(connection, row[0]) for row in connection.execute(
+        'models': [console_model_view(connection, row[0]) for row in connection.execute(
             'SELECT model_id FROM models ORDER BY display_name,model_id')],
-        'modelMappings': models.mapping_view(connection, buddy_ids),
+        'modelCorrespondences': models.correspondence_view(connection, buddy_ids),
     }
 
 
@@ -100,7 +101,7 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     annotations = params.get('modelNoteChanges', [])
     if not isinstance(annotations, list):
         raise BoardError('INVALID_ARGUMENT', 'modelNoteChanges must be a list')
-    mapping_count = models.apply_user_changes(connection, params.get('modelMappingChanges', []), now)
+    correspondence_count = models.apply_user_changes(connection, params.get('modelCorrespondenceChanges', []), now)
     model_limits = _model_service_concurrency_changes(params)
     buddies = {}
     for entry in settings + preferences:
@@ -192,6 +193,10 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             buddy_id = configuration['maintenanceBuddyId']
             if connection.execute('SELECT 1 FROM buddies WHERE buddy_id=?', (buddy_id,)).fetchone() is None:
                 raise BoardError('NOT_FOUND', 'Unknown maintenance buddyId', buddyId=buddy_id)
+        if configuration.get('profileBuddyId') is not None:
+            buddy_id = configuration['profileBuddyId']
+            if connection.execute('SELECT 1 FROM buddies WHERE buddy_id=?', (buddy_id,)).fetchone() is None:
+                raise BoardError('NOT_FOUND', 'Unknown profile buddyId', buddyId=buddy_id)
         router._write_settings(connection, configuration)
         if 'routingBudget' in configuration:
             evaluation.board._append_event(connection, 'evaluation.routing_budget_changed',
@@ -200,7 +205,7 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         'buddySettings': len(settings),
         'preferenceChanges': len(preferences),
         'modelNoteChanges': len(annotations),
-        'modelMappingChanges': mapping_count,
+        'modelCorrespondenceChanges': correspondence_count,
         'modelServiceConcurrency': len(model_limits),
         'provided': sorted(provided),
     }

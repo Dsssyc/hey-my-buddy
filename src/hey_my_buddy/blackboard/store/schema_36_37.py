@@ -1,4 +1,4 @@
-"""Schema 36 → 37: model identities and append-only service mappings.
+"""Schema 36 → 37: model identities and append-only service correspondences.
 
 This frozen step owns its table definitions and conversion; it imports no current
 schema or product code. Existing names each become one model.
@@ -12,8 +12,11 @@ from uuid import uuid4
 
 TABLE_DDL = {
     'models': 'CREATE TABLE models (\n    model_id TEXT PRIMARY KEY,\n    display_name TEXT NOT NULL\n)',
-    'model_mappings': "CREATE TABLE model_mappings (\n    mapping_id TEXT PRIMARY KEY,\n    harness TEXT NOT NULL,\n    provider TEXT NOT NULL,\n    model TEXT NOT NULL,\n    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,\n    created_at TEXT NOT NULL,\n    source TEXT NOT NULL CHECK (source IN ('same-name','profile','user')),\n    evidence_json TEXT\n)",
+    'model_correspondences': "CREATE TABLE model_correspondences (\n    correspondence_id TEXT PRIMARY KEY,\n    harness TEXT NOT NULL,\n    provider TEXT NOT NULL,\n    model TEXT NOT NULL,\n    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,\n    created_at TEXT NOT NULL,\n    source TEXT NOT NULL CHECK (source IN ('same-name','profile','user')),\n    evidence_url TEXT,\n    evidence_date TEXT,\n    CHECK ((source='profile' AND evidence_url IS NOT NULL AND evidence_url <> '' AND evidence_date IS NOT NULL AND evidence_date <> '')\n        OR (source!='profile' AND evidence_url IS NULL AND evidence_date IS NULL))\n)",
     'model_notes': 'CREATE TABLE model_notes (\n    model_id   TEXT PRIMARY KEY REFERENCES models(model_id) ON DELETE RESTRICT,\n    text       TEXT NOT NULL,\n    updated_at TEXT NOT NULL\n)',
+    'profile_runs': "CREATE TABLE profile_runs (\n    profile_run_id TEXT PRIMARY KEY,\n    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,\n    buddy_id TEXT NOT NULL REFERENCES buddies(buddy_id) ON DELETE RESTRICT,\n    task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE RESTRICT,\n    state TEXT NOT NULL CHECK (state IN ('running','completed','failed')),\n    reason_code TEXT,\n    reason_params_json TEXT,\n    started_at TEXT NOT NULL,\n    finished_at TEXT,\n    correction_rounds INTEGER NOT NULL DEFAULT 0\n        CHECK (typeof(correction_rounds)='integer' AND correction_rounds >= 0),\n    usage_json TEXT CHECK (usage_json IS NULL OR (json_valid(usage_json) AND json_type(usage_json)='object')),\n    CHECK ((state='running') = (finished_at IS NULL)),\n    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)\n        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL\n            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object')),\n    CHECK (state!='failed' OR reason_code IS NOT NULL),\n    CHECK (finished_at IS NULL OR finished_at >= started_at)\n)",
+    'model_profiles': 'CREATE TABLE model_profiles (\n    model_id TEXT PRIMARY KEY REFERENCES models(model_id) ON DELETE RESTRICT,\n    positioning TEXT NOT NULL,\n    built_at TEXT NOT NULL,\n    profile_run_id TEXT NOT NULL REFERENCES profile_runs(profile_run_id) ON DELETE RESTRICT\n)',
+    'model_profile_claims': "CREATE TABLE model_profile_claims (\n    model_id TEXT NOT NULL REFERENCES model_profiles(model_id) ON DELETE RESTRICT,\n    ordinal INTEGER NOT NULL CHECK (typeof(ordinal)='integer' AND ordinal >= 0),\n    polarity TEXT NOT NULL CHECK (polarity IN ('strength','weakness')),\n    claim TEXT NOT NULL,\n    source_url TEXT NOT NULL,\n    source_date TEXT NOT NULL,\n    source_kind TEXT NOT NULL CHECK (source_kind IN ('vendor','third-party')),\n    PRIMARY KEY (model_id, ordinal)\n)",
     'attempts': "CREATE TABLE attempts (\n    attempt_id          TEXT PRIMARY KEY,\n    task_id             TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,\n    generation          INTEGER NOT NULL,\n    nonce_verifier      TEXT NOT NULL,\n    execution_state     TEXT NOT NULL\n        CHECK (execution_state IN ('starting','executing','finalizing','uncertain','finished')),\n    ownership           TEXT NOT NULL DEFAULT 'owned' CHECK (ownership IN ('owned','uncertain')),\n    runtime_identity    TEXT,\n    adapter             TEXT NOT NULL,\n    -- Frozen model-service identity (harness/provider/model, no effort dimension).\n    -- Written once by the claim transaction that resolved it and never updated\n    -- afterwards, so a historical or shutdown-uncertain attempt can never change\n    -- which model service's concurrency slot it occupies. NULL for model-less work\n    -- (commands) which counts only against the machine-wide ceiling.\n    model_harness       TEXT,\n    model_provider      TEXT,\n    model_model         TEXT,\n    model_id            TEXT REFERENCES models(model_id) ON DELETE RESTRICT,\n    result_json         TEXT,\n    result_form         TEXT CHECK (result_form IN ('archived-report-v1','current-report-v2')),\n    shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,\n    cancel_requested_at TEXT,\n    stop_initiator      TEXT CHECK (stop_initiator IN ('host','lead','console','service','unknown')),\n    grace_deadline      TEXT,\n    force_reason        TEXT,\n    force_requested_at  TEXT,\n    identity_confirmed_at TEXT,\n    cleanup_pending     INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0,1)),\n    started_at          TEXT,\n    finished_at         TEXT,\n    created_at          TEXT NOT NULL,\n    updated_at          TEXT NOT NULL,\n    revision            INTEGER NOT NULL DEFAULT 1,\n    CHECK ((result_json IS NULL AND result_form IS NULL)\n        OR (result_json IS NOT NULL AND result_form IS NOT NULL)),\n    UNIQUE(task_id, generation)\n)",
     'kind_summaries': 'CREATE TABLE kind_summaries (\n    harness            TEXT NOT NULL,\n    model_id           TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,\n    effort             TEXT NOT NULL,\n    text               TEXT NOT NULL,\n    maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(maintenance_run_id) ON DELETE RESTRICT,\n    PRIMARY KEY (harness, model_id, effort)\n)',
     'kind_summary_evidence': 'CREATE TABLE kind_summary_evidence (\n    harness TEXT NOT NULL,\n    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,\n    effort  TEXT NOT NULL,\n    run_id  TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,\n    cited   INTEGER NOT NULL CHECK (cited IN (0, 1)),\n    PRIMARY KEY (harness, model_id, effort, run_id),\n    FOREIGN KEY (harness, model_id, effort) REFERENCES kind_summaries(harness, model_id, effort) ON DELETE RESTRICT\n)',
@@ -26,7 +29,7 @@ TABLE_DDL = {
 INDEX_DDL = {
     'attempts_router_binding_unique': 'CREATE UNIQUE INDEX attempts_router_binding_unique ON attempts(attempt_id, task_id, generation)',
     'attempts_router_outcome_binding_unique': 'CREATE UNIQUE INDEX attempts_router_outcome_binding_unique ON attempts(attempt_id, task_id)',
-    'model_mappings_service_idx': 'CREATE INDEX model_mappings_service_idx\n    ON model_mappings(harness, provider, model)',
+    'model_correspondences_service_idx': 'CREATE INDEX model_correspondences_service_idx\n    ON model_correspondences(harness, provider, model)',
     'attempts_effective_unique': "CREATE UNIQUE INDEX attempts_effective_unique ON attempts(task_id)\n    WHERE execution_state IN ('starting','executing','finalizing','uncertain')",
     'attempts_active_idx': 'CREATE INDEX attempts_active_idx ON attempts(execution_state)',
     'attempts_model_service_idx': 'CREATE INDEX attempts_model_service_idx\n    ON attempts(model_harness, model_provider, model_model) WHERE model_model IS NOT NULL',
@@ -34,9 +37,18 @@ INDEX_DDL = {
 }
 
 TRIGGER_DDL = {
-    'model_mappings_no_update': "CREATE TRIGGER model_mappings_no_update BEFORE UPDATE ON model_mappings\nBEGIN SELECT RAISE(ABORT, 'model mappings are append-only'); END",
-    'model_mappings_no_delete': "CREATE TRIGGER model_mappings_no_delete BEFORE DELETE ON model_mappings\nBEGIN SELECT RAISE(ABORT, 'model mappings are append-only'); END",
+    'model_correspondences_no_update': "CREATE TRIGGER model_correspondences_no_update BEFORE UPDATE ON model_correspondences\nBEGIN SELECT RAISE(ABORT, 'model correspondences are append-only'); END",
+    'model_correspondences_no_delete': "CREATE TRIGGER model_correspondences_no_delete BEFORE DELETE ON model_correspondences\nBEGIN SELECT RAISE(ABORT, 'model correspondences are append-only'); END",
 }
+
+ROUTER_SETTINGS_DDL = """CREATE TABLE router_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
+    budget_preset TEXT NOT NULL CHECK (budget_preset IN ('brief','standard','deep')),
+    retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
+, maintenance_buddy_id TEXT, maintenance_interval_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (maintenance_interval_seconds >= 1)
+, exploration_every INTEGER DEFAULT 5 CHECK (exploration_every IS NULL OR exploration_every >= 2)
+, profile_buddy_id TEXT REFERENCES buddies(buddy_id) ON DELETE RESTRICT, profile_budget TEXT NOT NULL DEFAULT 'deep' CHECK (profile_budget IN ('brief','standard','deep')));"""
 
 KIND_TABLES = (
     'kind_summaries', 'kind_summary_evidence', 'kind_statistics',
@@ -58,7 +70,9 @@ def _insert_rows(connection, table, rows):
 
 
 def upgrade(connection):
-    stock = {table: _rows(connection, table) for table in ('attempts', 'model_service_notes', *KIND_TABLES)}
+    stock = {table: _rows(connection, table) for table in ('attempts', 'model_service_notes', 'router_settings', *KIND_TABLES)}
+    for row in stock['router_settings']:
+        row['profile_budget'] = 'deep'
     names = {row['model'] for row in stock['model_service_notes']}
     names.update(row['model'] for row in connection.execute('SELECT model FROM buddies'))
     names.update(row['model_model'] for row in stock['attempts'] if row['model_model'] is not None)
@@ -72,8 +86,8 @@ def upgrade(connection):
                     for row in stock['attempts'] if row['model_model'] is not None)
     services.update((row['harness'], row['provider'], row['model'])
                     for row in stock['model_service_notes'])
-    # These mappings are established by this upgrade; older execution and note
-    # timestamps do not claim a mapping history that did not yet exist.
+    # These correspondences are established by this upgrade; older execution and note
+    # timestamps do not claim a correspondence history that did not yet exist.
     mapped_at = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
 
     # Drop children first. The installer has foreign key enforcement disabled
@@ -81,7 +95,7 @@ def upgrade(connection):
     for table in ('kind_summary_evidence', 'kind_summaries',
                   'kind_cell_statistics_buckets', 'kind_statistics_buckets',
                   'kind_cell_statistics', 'kind_statistics', 'attempts',
-                  'model_service_notes'):
+                  'model_service_notes', 'router_settings'):
         connection.execute(f'DROP TABLE "{table}"')
     for table in TABLE_DDL:
         connection.execute(TABLE_DDL[table])
@@ -89,11 +103,13 @@ def upgrade(connection):
         connection.execute(ddl)
     for ddl in TRIGGER_DDL.values():
         connection.execute(ddl)
+    connection.execute(ROUTER_SETTINGS_DDL)
+    _insert_rows(connection, 'router_settings', stock['router_settings'])
 
     connection.executemany('INSERT INTO models(model_id,display_name) VALUES(?,?)',
                            ((model_ids[name], name) for name in sorted(names)))
     connection.executemany(
-        'INSERT INTO model_mappings(mapping_id,harness,provider,model,model_id,created_at,source)'
+        'INSERT INTO model_correspondences(correspondence_id,harness,provider,model,model_id,created_at,source)'
         " VALUES(?,?,?,?,?,?,'same-name')",
         ((str(uuid4()), harness, provider, name, model_ids[name],
           mapped_at)

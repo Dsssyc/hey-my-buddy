@@ -45,6 +45,7 @@ CONTROL_OPERATIONS = (
     "console",
     "reminder_settings_set",
     "maintenance_start",
+    "profile_start",
     "maintenance_pending",
     "domain_rename",
     "domain_merge",
@@ -60,6 +61,7 @@ CONTROL_OPERATIONS = (
     "execution_progress",
     "execution_result",
     "execution_maintenance",
+    "execution_profile",
     "message_get",
     "message_list",
     "inquiry_observe",
@@ -394,6 +396,14 @@ class BoardService(_BaseResource):
             schemas.reject_unknown(params, set(), "maintenance.start")
             return self.store.maintenance.trigger(manual=True)
         return self._guard("maintenance.start", request_json, handler)
+
+    def profile_start(self, request_json: str) -> str:
+        def handler(params):
+            self._require_console()
+            schemas.reject_unknown(params, {"modelId"}, "profile.start")
+            model_id = schemas.required_string(params, "modelId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN)
+            return self.store.profile.trigger(model_id)
+        return self._guard("profile.start", request_json, handler)
 
     def maintenance_pending(self, request_json: str) -> str:
         def handler(params):
@@ -838,6 +848,9 @@ class BoardService(_BaseResource):
 
     def execution_result(self, request_json: str) -> str:
         return self._guard("execution.result", request_json, self.store.execution_result_reference)
+
+    def execution_profile(self, request_json: str) -> str:
+        return self._guard("execution.profile", request_json, self.store.profile.answer)
 
     def execution_maintenance(self, request_json: str) -> str:
         return self._guard("execution.maintenance", request_json, self.store.maintenance.answer)

@@ -97,6 +97,7 @@ CONSOLE_OPERATIONS = (
     "user_policy_publish",
     "reminder_settings_set",
     "maintenance_start",
+    "profile_start",
     "maintenance_pending",
     "task_cancel",
     "domain_rename",

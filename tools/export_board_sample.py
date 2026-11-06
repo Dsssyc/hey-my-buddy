@@ -146,10 +146,10 @@ def _select(connection, source_schema: int,
         model_ids = {row['model_id'] for row in records['attempts'] if row['model_id'] is not None}
         services = {(row['model_harness'], row['model_provider'], row['model_model'])
                     for row in records['attempts'] if row['model_id'] is not None}
-        records['model_mappings'] = [dict(row) for row in connection.execute(
-            'SELECT * FROM model_mappings ORDER BY rowid')
+        records['model_correspondences'] = [dict(row) for row in connection.execute(
+            'SELECT * FROM model_correspondences ORDER BY rowid')
             if (row['harness'], row['provider'], row['model']) in services]
-        model_ids.update(row['model_id'] for row in records['model_mappings'])
+        model_ids.update(row['model_id'] for row in records['model_correspondences'])
         records['models'] = _rows(connection, 'models', 'model_id', model_ids)
     attempts = {row['attempt_id'] for row in records['attempts']}
     for table in ('attempt_process_identities', 'attempt_interruptions', 'attempt_shutdown_evidence',

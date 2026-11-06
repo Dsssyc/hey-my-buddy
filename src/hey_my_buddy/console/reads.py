@@ -56,9 +56,9 @@ def _maintenance_view(connection) -> dict:
 
 
 def _kind_evaluations(connection) -> list[dict]:
-    from ..blackboard.evaluation.models import CURRENT_MAPPINGS, model_view
+    from ..blackboard.evaluation.models import CURRENT_CORRESPONDENCES, model_view
     kinds = [dict(row) for row in connection.execute(
-        'SELECT b.harness,m.model_id,b.effort FROM buddies b JOIN (' + CURRENT_MAPPINGS + ') m'
+        'SELECT b.harness,m.model_id,b.effort FROM buddies b JOIN (' + CURRENT_CORRESPONDENCES + ') m'
         ' ON m.harness=b.harness AND m.provider=b.provider AND m.model=b.model'
         ' UNION SELECT harness,model_id,effort FROM kind_statistics'
         ' UNION SELECT harness,model_id,effort FROM kind_summaries ORDER BY harness,model_id,effort')]

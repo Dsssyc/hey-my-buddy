@@ -175,7 +175,7 @@ def validate_claim_turn(claim: dict) -> None:
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid task or attempt")
     if task["spec"]["adapter"] == "decision":
         decision = claim.get("decisionInput")
-        if (not isinstance(decision, dict) or decision.get("routingMode") not in ("fast", "review")
+        if (not isinstance(decision, dict) or decision.get("routingMode") not in ("fast", "review", "profile")
                 or not isinstance(decision.get("buddy"), dict)
                 or not isinstance(decision["buddy"].get("harness"), str)
                 or not decision["buddy"]["harness"]):
@@ -185,6 +185,12 @@ def validate_claim_turn(claim: dict) -> None:
                     or decision.get("maintenanceRunId") != task["spec"]["decision"]["decisionId"]
                     or not isinstance(decision.get("input"), dict)):
                 raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid maintenance input")
+        elif task["spec"].get("decision", {}).get("kind") == "profile":
+            if (decision.get("kind") != "profile" or decision["routingMode"] != "profile"
+                    or decision.get("profileRunId") != task["spec"]["decision"]["decisionId"]
+                    or not isinstance(decision.get("input"), dict)
+                    or not isinstance(decision.get("budget"), dict)):
+                raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid profile input")
         elif not isinstance(decision.get("budget"), dict):
             raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid routing budget")
     if "turn" not in claim:
@@ -626,8 +632,9 @@ class Execution:
         self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
     ) -> dict:
         from ...install import runtime
-        from ..roles.run_execution import set_maintenance_publisher
+        from ..roles.run_execution import set_maintenance_publisher, set_profile_publisher
         set_maintenance_publisher(self._maintenance_answer)
+        set_profile_publisher(self._profile_answer)
 
         context = ExecutionContext(
             task_id=task["taskId"],
@@ -809,6 +816,19 @@ class Execution:
             response = self.client.call("execution_maintenance", {
                 "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": self.nonce,
                 "round": round_index, "answer": reference})
+            return files.read(self.state_dir, run_id, response["feedback"])
+        finally:
+            files.discard_reference(self.state_dir, run_id, reference)
+
+    def _profile_answer(self, raw, round_index, observations):
+        from ...protocol import profile as files
+        run_id = self.claim["decisionInput"]["profileRunId"]
+        reference = files.publish(self.state_dir, run_id, {"answer": raw, "observations": observations})
+        attempt = self.claim["attempt"]
+        try:
+            response = self.client.call("execution_profile", {
+                "attemptId": attempt["attemptId"], "generation": attempt["generation"],
+                "nonce": self.nonce, "round": round_index, "answer": reference})
             return files.read(self.state_dir, run_id, response["feedback"])
         finally:
             files.discard_reference(self.state_dir, run_id, reference)

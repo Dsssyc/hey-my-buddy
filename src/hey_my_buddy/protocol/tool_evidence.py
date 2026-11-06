@@ -39,6 +39,7 @@ MAX_CALL_BYTES = 32 * 1024
 # Router runs alone are judged; Worker permissions stay native.
 PERMISSION_TOOL_CATEGORIES = {
     "none": frozenset(),
+    "web": frozenset({"fetch"}),
     "read": frozenset({"read", "search", "execute", "fetch"}),
 }
 

@@ -56,6 +56,11 @@ class Schema36To37Tests(unittest.TestCase):
             self.assertEqual(connection.execute(
                 "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '37')
             self.assertEqual({row[0] for row in connection.execute('SELECT display_name FROM models')}, names)
+            for table in ('profile_runs', 'model_profiles', 'model_profile_claims'):
+                self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0)
+            settings = connection.execute(
+                'SELECT profile_buddy_id,profile_budget FROM router_settings').fetchone()
+            self.assertEqual(tuple(settings), (None, 'deep'))
             self.assertEqual(list(connection.execute('PRAGMA foreign_key_check')), [])
             for table in KIND_TABLES:
                 rows = [dict(row) for row in connection.execute(
@@ -75,12 +80,30 @@ class Schema36To37Tests(unittest.TestCase):
                 self.assertEqual(new['display_name'], old['model_model'])
                 for key, value in old.items():
                     self.assertEqual(new[key], value, key)
+            model_id = connection.execute('SELECT model_id FROM models LIMIT 1').fetchone()[0]
+            for source, url, date in (
+                ('profile', None, '2026-11-07'),
+                ('profile', 'https://example.org/model', None),
+                ('profile', '', '2026-11-07'),
+                ('same-name', 'https://example.org/model', None),
+                ('user', None, '2026-11-07'),
+            ):
+                with self.subTest(source=source, url=url, date=date), self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        'INSERT INTO model_correspondences(correspondence_id,harness,provider,model,model_id,created_at,source,evidence_url,evidence_date)'
+                        ' VALUES(?,?,?,?,?,?,?,?,?)',
+                        ('invalid-correspondence', 'h', 'p', 'm', model_id, '2026-11-07T00:00:00Z', source, url, date))
+            connection.execute(
+                'INSERT INTO model_correspondences(correspondence_id,harness,provider,model,model_id,created_at,source,evidence_url,evidence_date)'
+                ' VALUES(?,?,?,?,?,?,?,?,?)',
+                ('profile-correspondence', 'h', 'p', 'm', model_id, '2026-11-07T00:00:00Z', 'profile',
+                 'https://example.org/model', '2026-11-07'))
             with self.assertRaises(sqlite3.IntegrityError):
-                connection.execute("UPDATE model_mappings SET source='user' "
-                                   "WHERE mapping_id=(SELECT mapping_id FROM model_mappings LIMIT 1)")
+                connection.execute("UPDATE model_correspondences SET source='user' "
+                                   "WHERE correspondence_id=(SELECT correspondence_id FROM model_correspondences LIMIT 1)")
             connection.rollback()
             with self.assertRaises(sqlite3.IntegrityError):
-                connection.execute('DELETE FROM model_mappings')
+                connection.execute('DELETE FROM model_correspondences')
             connection.rollback()
 
         fresh = Database(self.root / 'fresh')
@@ -90,6 +113,41 @@ class Schema36To37Tests(unittest.TestCase):
         with sqlite3.connect(path) as upgraded, fresh.read() as created:
             self.assertEqual([tuple(row) for row in upgraded.execute(query)],
                              [tuple(row) for row in created.execute(query)])
+
+    def test_profile_run_and_claim_constraints(self):
+        path = self.schema_36()
+        with sqlite3.connect(path) as connection:
+            connection.row_factory = sqlite3.Row
+            step_upgrade(connection)
+            connection.commit()
+            connection.execute('PRAGMA foreign_keys=ON')
+            model_id = connection.execute('SELECT model_id FROM models LIMIT 1').fetchone()[0]
+            buddy_id = connection.execute('SELECT buddy_id FROM buddies LIMIT 1').fetchone()[0]
+            task_id = connection.execute('SELECT task_id FROM tasks LIMIT 1').fetchone()[0]
+            connection.execute(
+                'INSERT INTO profile_runs(profile_run_id,model_id,buddy_id,task_id,state,started_at) '
+                "VALUES('run-1',?,?,?,'running','2026-01-01T00:00:00Z')",
+                (model_id, buddy_id, task_id))
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    'INSERT INTO model_profiles(model_id,positioning,built_at,profile_run_id) '
+                    "VALUES(?,'brief','2026-01-01T00:00:00Z','absent')", (model_id,))
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute("UPDATE profile_runs SET correction_rounds=-1 WHERE profile_run_id='run-1'")
+            connection.execute(
+                "UPDATE profile_runs SET state='completed',finished_at='2026-01-01T00:01:00Z',"
+                "usage_json=? WHERE profile_run_id='run-1'", ('{"attempts":[]}',))
+            connection.execute(
+                'INSERT INTO model_profiles(model_id,positioning,built_at,profile_run_id) '
+                "VALUES(?,'brief','2026-01-01T00:01:00Z','run-1')", (model_id,))
+            connection.execute(
+                'INSERT INTO model_profile_claims(model_id,ordinal,polarity,claim,source_url,source_date,source_kind) '
+                "VALUES(?,0,'strength','fast','https://example.org','2026-01-01','third-party')", (model_id,))
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    'INSERT INTO model_profile_claims(model_id,ordinal,polarity,claim,source_url,source_date,source_kind) '
+                    "VALUES(?,1,'neutral','fast','https://example.org','2026-01-01','vendor')", (model_id,))
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
 
     def test_notes_merge_by_exact_name_without_losing_different_text(self):
         path = self.schema_36()
@@ -110,7 +168,7 @@ class Schema36To37Tests(unittest.TestCase):
                              ('[h / a / different]\nfirst\n\n[h / b / different]\nsecond',
                               '2026-01-02T00:00:00Z'))
             self.assertEqual(connection.execute(
-                "SELECT COUNT(*) FROM model_mappings WHERE model='same'").fetchone()[0], 2)
+                "SELECT COUNT(*) FROM model_correspondences WHERE model='same'").fetchone()[0], 2)
             self.assertEqual(list(connection.execute('PRAGMA foreign_key_check')), [])
 
 

@@ -324,7 +324,7 @@ class UpgradeChainTests(unittest.TestCase):
             row = self.db.execute('SELECT model_id FROM attempts WHERE attempt_id=?', (old['attempt_id'],)).fetchone()
             self.assertEqual(display[row['model_id']] if row['model_id'] else None, old['model_model'])
         mappings = {(row['harness'], row['provider'], row['model']): display[row['model_id']]
-                    for row in self.db.execute('SELECT harness,provider,model,model_id FROM model_mappings')}
+                    for row in self.db.execute('SELECT harness,provider,model,model_id FROM model_correspondences')}
         for old in buddies:
             self.assertEqual(mappings[old['harness'], old['provider'], old['model']], old['model'])
         saved_notes = {display[row['model_id']]: row['text'] for row in self.db.execute(

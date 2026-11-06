@@ -130,7 +130,7 @@ class DecisionCoordinator:
         to *before* the claim commits and before the dispatch is claimed.
         """
         descriptor = decision_spec(spec or {})
-        if descriptor and descriptor["kind"] == "maintain":
+        if descriptor and descriptor["kind"] in ("maintain", "profile"):
             identity = descriptor["document"]["buddy"]
             return (identity["harness"], identity["provider"], identity["model"])
         row = self._row(connection, descriptor["decisionId"]) if descriptor else None
@@ -522,10 +522,10 @@ class DecisionCoordinator:
             # with the task's attempt evidence.
             "cwd": str(self.board.directory / "attempts" / task_id),
             "task": ("Maintain domains, task classifications and buddy kind summaries."
-                     if kind == "maintain" else "Bounded selection decision over the current evaluation table."),
+                     if kind == "maintain" else "Build a public model profile." if kind == "profile" else "Bounded selection decision over the current evaluation table."),
             "requiredCapabilities": [DECISION_ADAPTER],
             "decision": {"decisionId": decision_id, "kind": kind,
-                         **({"document": document} if kind == "maintain" else {})},
+                         **({"document": document} if kind in ("maintain", "profile") else {})},
         }
         if router_budget_seconds is not None:
             spec["routerBudgetSeconds"] = router_budget_seconds + TIMEOUT_GRACE_SECONDS
@@ -651,8 +651,8 @@ class DecisionCoordinator:
         """
         spec = json.loads(task["spec_json"])
         descriptor = decision_spec(spec)
-        if descriptor["kind"] == "maintain":
-            return self.board.maintenance.prepare_claim(connection, task, now)
+        if descriptor["kind"] in ("maintain", "profile"):
+            return getattr(self.board, "maintenance" if descriptor["kind"] == "maintain" else "profile").prepare_claim(connection, task, now)
         row = self._row(connection, descriptor["decisionId"])
         if row["status"] != "queued":
             return "decision-closed"
@@ -712,9 +712,9 @@ class DecisionCoordinator:
         model input is persisted for audit.
         """
         descriptor = decision_spec(spec)
-        if descriptor["kind"] == "maintain":
-            self.board._append_event(connection, "maintenance.claimed", task_id=task["task_id"],
-                attempt_id=attempt_id, payload={"maintenanceRunId": descriptor["decisionId"], "generation": generation})
+        if descriptor["kind"] in ("maintain", "profile"):
+            self.board._append_event(connection, ("maintenance" if descriptor["kind"] == "maintain" else "profile") + ".claimed", task_id=task["task_id"],
+                attempt_id=attempt_id, payload={("maintenanceRunId" if descriptor["kind"] == "maintain" else "profileRunId"): descriptor["decisionId"], "generation": generation})
             return descriptor["document"]
         row = self._row(connection, descriptor["decisionId"])
         dispatch = router_sequence.dispatch(connection, task["task_id"])
@@ -742,8 +742,8 @@ class DecisionCoordinator:
 
     def released(self, connection: sqlite3.Connection, *, task: sqlite3.Row, reason: dict, now: str) -> dict | None:
         """Advance only on the Worker's recorded proof it never crossed spawn."""
-        if (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") == "maintain":
-            return self.board.maintenance.finish(connection, task_id=task["task_id"], now=now,
+        if (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") in ("maintain", "profile"):
+            return getattr(self.board, "maintenance" if decision_spec(json.loads(task["spec_json"]))["kind"] == "maintain" else "profile").finish(connection, task_id=task["task_id"], now=now,
                                                   code=reason["code"], params=reason["params"])
         row = self._decision_for_task(connection, task)
         if row is None or row["status"] in TERMINAL_DECISION_STATUSES:
@@ -767,11 +767,11 @@ class DecisionCoordinator:
 
     def cancelled(self, connection: sqlite3.Connection, *, task: sqlite3.Row, reason: dict, now: str) -> dict | None:
         """Durable cancel intent: the decision is cancelled, not silently forgotten."""
-        if (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") == "maintain":
+        if (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") in ("maintain", "profile"):
             # A running execution retains its maintenance slot until its
             # confirmed stop; a never-started queued task can settle now.
             if task["active_attempt_id"] is None:
-                return self.board.maintenance.finish(connection, task_id=task["task_id"], now=now,
+                return getattr(self.board, "maintenance" if decision_spec(json.loads(task["spec_json"]))["kind"] == "maintain" else "profile").finish(connection, task_id=task["task_id"], now=now,
                                                       code=reason["code"], params=reason["params"])
             return None
         row = self._decision_for_task(connection, task)
@@ -792,8 +792,8 @@ class DecisionCoordinator:
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
         if task is None:
             return
-        if (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") == "maintain":
-            self.board.maintenance.finish(connection, task_id=task["task_id"], now=now,
+        if (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") in ("maintain", "profile"):
+            getattr(self.board, "maintenance" if decision_spec(json.loads(task["spec_json"]))["kind"] == "maintain" else "profile").finish(connection, task_id=task["task_id"], now=now,
                                            code=reason["code"], params=reason["params"])
             return
         row = self._decision_for_task(connection, task)
@@ -825,8 +825,8 @@ class DecisionCoordinator:
         descriptor = decision_spec(spec)
         if not descriptor:
             return None
-        if descriptor["kind"] == "maintain":
-            return self.board.maintenance.complete(connection, task=task, attempt=attempt, status=status,
+        if descriptor["kind"] in ("maintain", "profile"):
+            return getattr(self.board, "maintenance" if descriptor["kind"] == "maintain" else "profile").complete(connection, task=task, attempt=attempt, status=status,
                 result=result, shutdown_confirmed=shutdown_confirmed, error=error, now=now)
         row = self._row(connection, descriptor["decisionId"])
         if row is None:
@@ -1084,7 +1084,7 @@ class DecisionCoordinator:
         roots = evidence.get("nativeIdentity")
         if not isinstance(roots, list) or any(identity not in roots for identity in reported):
             return {"code": unverified}
-        permission = {"fast": "none", "review": "read"}[document["routingMode"]]
+        permission = {"fast": "none", "review": "read", "profile": "web"}[document["routingMode"]]
         judged = tool_evidence.judge_tool_evidence(evidence, permission, state_dir=self.board.directory)
         if judged is None:
             return None
@@ -1521,7 +1521,7 @@ class DecisionCoordinator:
             # The frozen execution identity the Host can delegate with directly,
             # captured from the admitted input. ``decisionModel`` is the decision
             # call's own requested/resolved identity and is deliberately separate.
-            "selectedBuddy": selected,
+            "selectedBuddy": {key: value for key, value in selected.items() if key != "modelProfile"} if selected else None,
             "decisionModel": {
                 "requested": actor["buddy"] if actor else None,
                 "resolved": (output or {}).get("resolved"),

@@ -117,7 +117,7 @@ class RouterContractTests(unittest.TestCase):
         for key in facts:
             self.assertIn('"' + key + '":', prompt)
         self.assertIn('"usage":', prompt)
-        self.assertIn("Router protocol version 16", prompt)
+        self.assertIn("Router protocol version 17", prompt)
 
     def test_both_instruction_modes_name_usage_cost_and_effort_cost(self):
         for mode in ("fast", "review"):

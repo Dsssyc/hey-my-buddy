@@ -148,9 +148,10 @@ class UserPolicyTests(BoardTestCase):
             self.user('user_policy_publish', self.payload(
                 self.publication_params(), 'overflow-limit',
                 buddySettings=[{'buddyId': 'live', 'enabled': False}],
-                modelServiceConcurrency=[{**self.model_key(), 'limit': 2 ** 63}],
+                modelServiceConcurrency=[{**LIVE_MODEL_SERVICE, 'limit': 2 ** 63}],
             ))
         self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+        self.assertIn('positive SQLite integer', str(caught.exception))
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM model_service_concurrency').fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT enabled FROM buddies WHERE buddy_id='live'").fetchone()[0], 1)

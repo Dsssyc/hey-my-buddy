@@ -70,8 +70,10 @@ def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:
 
 
 def collect(handle: ProcessHandle) -> AdapterOutcome:
-    from .run_execution import read_fast_result, read_review_result
-    project = read_review_result if handle.role_run_control["operation"] == "review" else read_fast_result
+    from .run_execution import read_fast_result, read_review_result, read_profile_result
+    operation = handle.role_run_control["operation"]
+    project = (read_profile_result if operation == "profile" else
+               read_review_result if operation == "review" else read_fast_result)
     payload = project(handle)
     stopped = handle.shutdown_confirmed() is True
     status = "ok" if payload.get("status") == "ok" and handle.exit_code == 0 and stopped else "failed"

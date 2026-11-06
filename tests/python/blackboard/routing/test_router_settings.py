@@ -14,7 +14,7 @@ class RouterSettingsTests(unittest.TestCase):
         self.assertEqual(DEFAULT_ROUTER_SETTINGS, {"routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
                                                   "defaultRoutingMode": "fast", "routingBudget": "standard",
                                                   "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600,
-                                                  "explorationEvery": 5})
+                                                  "profileBuddyId": None, "profileBudget": "deep", "explorationEvery": 5})
 
     def test_patch_preserves_omissions_and_explicit_clear(self):
         self.assertEqual(validate_router_settings_patch({"routingBudget": "brief"}), {"routingBudget": "brief"})

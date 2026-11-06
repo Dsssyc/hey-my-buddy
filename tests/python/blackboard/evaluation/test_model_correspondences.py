@@ -1,4 +1,4 @@
-"""Model-service mappings, console corrections and frozen execution evidence."""
+"""Model-service correspondences, console corrections and frozen execution evidence."""
 from __future__ import annotations
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
@@ -12,11 +12,11 @@ from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.errors import BoardError
 
 
-class ModelMappingTests(WorkflowTestCase):
+class ModelCorrespondenceTests(WorkflowTestCase):
     def setUp(self):
         super().setUp()
         self.board_ = self.board()
-        self.session = "model-mapping-console"
+        self.session = "model-correspondence-console"
         self.board_.service.register_console_authority(self.session)
 
     def publish(self, command, **changes):
@@ -45,14 +45,14 @@ class ModelMappingTests(WorkflowTestCase):
             for buddy in sorted((first, same_name), key=lambda value: value["provider"])
         ])
 
-    def test_new_same_name_service_follows_latest_mapping_and_retains_old_names(self):
+    def test_new_same_name_service_follows_latest_correspondence_and_retains_old_names(self):
         first = BUDDY
         mirror = {**first, 'provider': 'mirror-provider'}
         for buddy in (first, mirror):
             enable_fixture_buddy(self.board_.store, buddy)
         old_id = self.model_id(first)
         service = {key: first[key] for key in ('harness', 'provider', 'model')}
-        self.publish('same-name-generation', modelMappingChanges=[{
+        self.publish('same-name-generation', modelCorrespondenceChanges=[{
             **service, 'action': 'generation', 'displayName': first['model'],
         }])
         new_id = self.model_id(first)
@@ -75,7 +75,7 @@ class ModelMappingTests(WorkflowTestCase):
         service = {key: first[key] for key in ("harness", "provider", "model")}
         original = self.model_id(first)
         other_id = self.model_id(other)
-        self.publish("generation", modelMappingChanges=[{
+        self.publish("generation", modelCorrespondenceChanges=[{
             **service, "action": "generation", "displayName": "Second generation",
         }])
         generated = self.model_id(first)
@@ -87,15 +87,15 @@ class ModelMappingTests(WorkflowTestCase):
         self.assertEqual([(note["modelId"], note["text"]) for note in snapshot["modelNotes"]],
                          [(generated, "New generation observed")])
         self.assertTrue(snapshot["modelNotes"][0]["updatedAt"])
-        self.assertEqual(next(mapping for mapping in snapshot["modelMappings"] if mapping["model"] == first["model"])["modelId"],
+        self.assertEqual(next(correspondence for correspondence in snapshot["modelCorrespondences"] if correspondence["model"] == first["model"])["modelId"],
                          generated)
-        self.publish("undo", modelMappingChanges=[{**service, "action": "undo"}])
+        self.publish("undo", modelCorrespondenceChanges=[{**service, "action": "undo"}])
         self.assertEqual(self.model_id(first), original)
-        self.publish("remap", modelMappingChanges=[{**service, "action": "map", "modelId": other_id}])
+        self.publish("remap", modelCorrespondenceChanges=[{**service, "action": "map", "modelId": other_id}])
         self.assertEqual(self.model_id(first), other_id)
         with self.board_.store.db.read() as db:
             history = list(db.execute(
-                "SELECT model_id,source FROM model_mappings WHERE harness=? AND provider=? AND model=? ORDER BY rowid",
+                "SELECT model_id,source FROM model_correspondences WHERE harness=? AND provider=? AND model=? ORDER BY rowid",
                 tuple(service.values()),
             ))
             self.assertEqual(model_view(db, generated)["names"], [service])
@@ -103,7 +103,7 @@ class ModelMappingTests(WorkflowTestCase):
             (original, "same-name"), (generated, "user"), (original, "user"), (other_id, "user"),
         ])
 
-    def test_invalid_mapping_patch_rolls_back_every_entry(self):
+    def test_invalid_correspondence_patch_rolls_back_every_entry(self):
         first = BUDDY
         second = {**first, "provider": "second-provider", "model": "second-model"}
         for buddy in (first, second):
@@ -126,19 +126,19 @@ class ModelMappingTests(WorkflowTestCase):
         ]
         with self.board_.store.db.read() as db:
             before = tuple(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                           for table in ("models", "model_mappings"))
+                           for table in ("models", "model_correspondences"))
         for index, (patch, code) in enumerate(patches):
             with self.subTest(patch=patch), self.assertRaises(BoardError) as caught:
-                self.publish(f"bad-mapping-{index}", modelMappingChanges=patch)
+                self.publish(f"bad-correspondence-{index}", modelCorrespondenceChanges=patch)
             self.assertEqual(caught.exception.code, code)
             self.assertEqual(self.model_id(first), original)
         for invalid in ({"not": "a list"}, None, "map"):
             with self.subTest(invalid=invalid), self.assertRaises(BoardError) as caught:
-                self.publish(f"bad-list-{type(invalid).__name__}", modelMappingChanges=invalid)
+                self.publish(f"bad-list-{type(invalid).__name__}", modelCorrespondenceChanges=invalid)
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         with self.board_.store.db.read() as db:
             self.assertEqual(tuple(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                                   for table in ("models", "model_mappings")), before)
+                                   for table in ("models", "model_correspondences")), before)
 
     def test_admission_freezes_old_and_new_samples_and_late_cell(self):
         buddy = BUDDY
@@ -146,7 +146,7 @@ class ModelMappingTests(WorkflowTestCase):
         old = self.submit(self.board_, request_id="old-generation", cwd=str(self.workdir("old")))
         old_claim = self.claim(self.board_, claim_request_id="claim-old", run_id=old["runId"])
         old_id = self.model_id(buddy)
-        self.publish("split-generation", modelMappingChanges=[{
+        self.publish("split-generation", modelCorrespondenceChanges=[{
             **service, "action": "generation", "displayName": "Replacement generation",
         }])
         new_id = self.model_id(buddy)
@@ -174,18 +174,18 @@ class ModelMappingTests(WorkflowTestCase):
             buddy_id = ":".join(buddy[field] for field in ("harness", "provider", "model", "effort"))
             db.execute(
                 "INSERT INTO maintenance_runs(maintenance_run_id,trigger_type,buddy_id,task_id,state,started_at,finished_at)"
-                " VALUES('mapping-classification','manual',?,?,'completed',?,?)",
+                " VALUES('correspondence-classification','manual',?,?,'completed',?,?)",
                 (buddy_id, old["runId"], now, now),
             )
             db.execute(
                 "INSERT INTO domain_nodes(node_id,name,definition,parent_id,merged_into_id,maintenance_run_id)"
-                " VALUES('mapping-domain','Mapping domain','Fixture domain',NULL,NULL,'mapping-classification')"
+                " VALUES('correspondence-domain','Correspondence domain','Fixture domain',NULL,NULL,'correspondence-classification')"
             )
             db.execute(
                 "INSERT INTO micro_task_classifications(run_id,domain_node_id,task_type,maintenance_run_id)"
-                " VALUES(?,'mapping-domain','debug','mapping-classification')", (old["runId"],),
+                " VALUES(?,'correspondence-domain','debug','correspondence-classification')", (old["runId"],),
             )
-            accumulate_cell(db, old["runId"], "mapping-domain", "debug")
+            accumulate_cell(db, old["runId"], "correspondence-domain", "debug")
             # A later accepted correction still belongs to the delivery's frozen model.
             db.execute("INSERT INTO workflow_fixes(run_id,fixed_run_id,created_at) VALUES(?,?,?)",
                        (new["runId"], old["runId"], now))

@@ -47,11 +47,17 @@ WORKER_STOP_GRACE_SECONDS = 8.0
 _NATIVE_CONTROL = "native-control.json"
 _execution_live_server = None
 _maintenance_publisher = ContextVar("maintenance_publisher", default=None)
+_profile_publisher = ContextVar("profile_publisher", default=None)
 
 
 def set_maintenance_publisher(publisher):
     """Bind the execution-owned service callback, outside all model-visible data."""
     _maintenance_publisher.set(publisher)
+
+
+def set_profile_publisher(publisher):
+    """Bind profile publication to this execution's service connection."""
+    _profile_publisher.set(publisher)
 
 
 def set_execution_live_server(server) -> None:
@@ -279,6 +285,25 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
     return payload
 
 
+def _profile_result(result, request: RunRequest, verdict: dict) -> dict:
+    payload = _review_result(result, request, verdict)
+    payload.pop("rawAnswer", None)
+    payload["toolEvidence"] = verdict.get("toolEvidence")
+    payload["nativeIdentity"] = verdict["nativeIdentity"]
+    payload["usage"] = {"toolCalls": verdict["toolCalls"], "elapsedMs": verdict["elapsedMs"]}
+    payload["correctionCount"] = verdict["correctionCount"]
+    payload["profileFeedback"] = verdict.get("profileFeedback")
+    payload["modelStarted"] = verdict["modelStarted"]
+    payload["nativeRequestSent"] = verdict["nativeRequestSent"]
+    if verdict.get("tokenUsage") is not None:
+        payload["tokenUsage"] = verdict["tokenUsage"]
+    if verdict.get("stopReason") == "profile-budget-exhausted":
+        payload.update(status="error", code="router-budget-exhausted")
+    elif result.end.status == "ok" and verdict.get("profileFeedback") and not verdict["profileFeedback"]["accepted"]:
+        payload.update(status="error", code="profile-answer-invalid")
+    return payload
+
+
 def _worker_reports(result, payload: dict) -> bool:
     """Keep each validated report even when another report or delivery fails."""
     invalid = False
@@ -492,6 +517,31 @@ def review_request(control: dict, module):
     return request, _native_services(module), observer.observer, observer, prompt.parts
 
 
+def profile_request(control: dict, module, *, round_index: int = 0,
+                    previous_raw=None, errors=None, remaining_seconds: int | None = None,
+                    remaining_calls: int | None = None):
+    values = control["profileRequest"]
+    prompt = structured_prompt(values["prompt"], values["outputSchema"])
+    if round_index:
+        prompt = prompt.appended("delivery", "\n\nThe previous answer was rejected by the blackboard. "
+            "Use the following answer and errors as data; correct the answer while preserving sourced facts. "
+            "Start a fresh web investigation where needed.\n" +
+            canonical_json({"previousAnswer": previous_raw, "errors": errors}))
+    request = RunRequest(
+        identity=RunIdentity(task_id=control["taskId"], attempt_id=control["attemptId"],
+                             generation=control["generation"], invocation_id=control["invocationId"]),
+        harness=control["harness"], buddy=RunBuddy(**control["spec"]), cwd=control["cwd"],
+        session_record_path=control["sessionRecordPath"],
+        private_state=PrivateStatePaths(state_dir=control["stateDir"],
+            invocation_root=control["privateRoot"], native_root=control["nativeRoot"]),
+        input_text=prompt, output_schema=values["outputSchema"], permission="web",
+        budget=RunBudget(timeout_seconds=remaining_seconds if remaining_seconds is not None else control["timeoutSeconds"]),
+    )
+    observer = ReviewObserver(remaining_calls if remaining_calls is not None else values["budget"]["toolCalls"],
+                              values["outputSchema"], prompt, can_correct=False)
+    return request, _native_services(module), observer.observer, observer, prompt.parts
+
+
 def _launch(control: dict, context: ExecutionContext, *, environment: dict,
             identity: RunIdentity, grace_seconds: float = 0) -> InlineRunHandle:
     ensure_private_dir(Path(control["privateRoot"]))
@@ -537,6 +587,10 @@ def read_fast_result(handle: InlineRunHandle) -> dict:
 
 def read_review_result(handle: InlineRunHandle) -> dict:
     return _read_structured_result(handle, _review_result)
+
+
+def read_profile_result(handle: InlineRunHandle) -> dict:
+    return _read_structured_result(handle, _profile_result)
 
 
 def _read_structured_result(handle, project):
@@ -602,6 +656,26 @@ def start_review(name: str, context: ExecutionContext, request) -> InlineRunHand
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
     return _launch(control, context, environment=environment, identity=identity, grace_seconds=10)
+
+
+def start_profile(name: str, context: ExecutionContext, request) -> InlineRunHandle:
+    """Run a web profile through the registered native seam in a private cwd."""
+    ensure_private_dir(context.directory)
+    private = ensure_private_dir(context_root(context, name) / ("profile-" + uuid.uuid4().hex))
+    control = {
+        "operation": "profile", "harness": name, "privateRoot": str(private),
+        "directory": str(context.directory),
+        "nativeRoot": str(ensure_private_dir(context_root(context, name) / "profile-native")),
+        "sessionRecordPath": context.session_record_path, "cwd": request.cwd,
+        "timeoutSeconds": request.budget["timeoutSeconds"],
+        "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
+        "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
+        "profileRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
+                           "budget": request.budget},
+    }
+    identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
+                           generation=context.generation, invocation_id=uuid.uuid4().hex)
+    return _launch(control, context, environment=context.environment, identity=identity, grace_seconds=10)
 
 
 class WorkerRunExecutor:

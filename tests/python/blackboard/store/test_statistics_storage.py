@@ -130,7 +130,7 @@ class StatisticsStorageTests(WorkflowTestCase):
                                  ("rework_rounds", -1), ("failures", 1), ("model_id", None)):
                 with self.subTest(field=field, value=value), self.assertRaises(sqlite3.IntegrityError):
                     db.execute(f"UPDATE kind_statistics SET {field}=?", (value,))
-            model_id = db.execute("SELECT model_id FROM model_mappings WHERE harness=? AND provider=? AND model=?"
+            model_id = db.execute("SELECT model_id FROM model_correspondences WHERE harness=? AND provider=? AND model=?"
                                   " ORDER BY rowid DESC LIMIT 1",
                                   tuple(BUDDY[field] for field in ("harness", "provider", "model"))).fetchone()[0]
             values = (BUDDY["harness"], model_id, BUDDY["effort"], "input_tokens", 1, 0, 1)

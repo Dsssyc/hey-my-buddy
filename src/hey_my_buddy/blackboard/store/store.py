@@ -181,6 +181,8 @@ class BoardStore:
         self.decisions = DecisionCoordinator(self, self.evaluation)
         from ..routing.maintenance import Maintenance
         self.maintenance = Maintenance(self)
+        from ..routing.profile import Profile
+        self.profile = Profile(self)
         # The micro-task workflow layer wraps this same store: it opens no second
         # authority and every one of its mutations is one of these transactions.
         self.workflow = WorkflowCoordinator(self, clock=self._clock)
@@ -814,7 +816,7 @@ class BoardStore:
                                       " JOIN tasks t ON t.task_id=d.task_id WHERE t.state='queued'"):
             model_services.add((row["harness"], row["provider"], row["model"]))
         for row in connection.execute("SELECT spec_json FROM tasks WHERE state='queued' AND adapter='decision'"
-                                      " AND json_extract(spec_json,'$.decision.kind')='maintain'"):
+                                      " AND json_extract(spec_json,'$.decision.kind') IN ('maintain','profile')"):
             model_services.add(self.decisions.selector_model_service(connection, json.loads(row[0])))
         return model_services
 
@@ -1262,8 +1264,8 @@ class BoardStore:
                 if receipt is not None:
                     return receipt
             task = self._task_row(connection, params)
-            if console_authority is not None and (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") != "maintain":
-                raise BoardError("FORBIDDEN", "A console session may cancel only maintenance executions; use macro task stop for Host work",
+            if console_authority is not None and (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") not in ("maintain", "profile"):
+                raise BoardError("FORBIDDEN", "A console session may cancel only maintenance or profile executions; use macro task stop for Host work",
                                  runId=task["task_id"])
             self.workflow.guard_task_control(connection, task, params, operation="task_cancel")
             now = self.now()

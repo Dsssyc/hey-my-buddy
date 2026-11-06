@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 __all__ = [
     'FastPreparation',
     'ReviewPreparation',
+    'ProfilePreparation',
     'WorkerPreparation',
     'prepare_worker_run',
     'run_harness',
@@ -191,7 +192,23 @@ class ReviewPreparation:
             object.__setattr__(self, "run_module", run_seam(self.harness))
 
 
-def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -> InlineRunHandle:
+@dataclass(frozen=True)
+class ProfilePreparation:
+    """A web call in an empty private directory, with one total budget."""
+
+    harness: str
+    request: ReadOnlyStructuredRequest
+    context: ExecutionContext
+    private_cwd: Path
+    run_module: HarnessRun | None = None
+
+    def __post_init__(self):
+        from ..harnesses.registry import run_seam
+        if self.run_module is None:
+            object.__setattr__(self, "run_module", run_seam(self.harness))
+
+
+def start_router_preparation(preparation: FastPreparation | ReviewPreparation | ProfilePreparation) -> InlineRunHandle:
     """Start the prepared role through its frozen registered run.
 
     Eligibility and the selected description stay frozen at preparation. A
@@ -201,6 +218,9 @@ def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -
     if isinstance(preparation, FastPreparation):
         from .run_execution import start_fast
         return start_fast(module, preparation.harness, preparation.context, preparation.request)
+    if isinstance(preparation, ProfilePreparation):
+        from .run_execution import start_profile
+        return start_profile(preparation.harness, preparation.context, preparation.request)
     from .run_execution import start_review
     return start_review(preparation.harness, preparation.context, preparation.request)
 

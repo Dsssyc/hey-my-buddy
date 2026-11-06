@@ -629,7 +629,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                     self.assertEqual(json.loads(new[3]), expected)
             elif name == 'router_settings':
                 self.assertEqual([row[:len(original[0])] for row in actual], original)
-                self.assertEqual(actual[0][-2:], (3600, 5))
+                self.assertEqual(actual[0][-4:], (3600, 5, None, 'deep'))
             elif name in ('decision_requests', 'router_requests'):
                 columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
                 self.assertEqual([tuple(row[columns.index(column)] for column in old_columns[name])

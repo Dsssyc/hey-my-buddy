@@ -215,22 +215,61 @@ CREATE TABLE IF NOT EXISTS models (
     model_id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS model_mappings (
-    mapping_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS model_correspondences (
+    correspondence_id TEXT PRIMARY KEY,
     harness TEXT NOT NULL,
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
     created_at TEXT NOT NULL,
     source TEXT NOT NULL CHECK (source IN ('same-name','profile','user')),
-    evidence_json TEXT
+    evidence_url TEXT,
+    evidence_date TEXT,
+    CHECK ((source='profile' AND evidence_url IS NOT NULL AND evidence_url <> '' AND evidence_date IS NOT NULL AND evidence_date <> '')
+        OR (source!='profile' AND evidence_url IS NULL AND evidence_date IS NULL))
 );
-CREATE INDEX IF NOT EXISTS model_mappings_service_idx
-    ON model_mappings(harness, provider, model);
-CREATE TRIGGER IF NOT EXISTS model_mappings_no_update BEFORE UPDATE ON model_mappings
-BEGIN SELECT RAISE(ABORT, 'model mappings are append-only'); END;
-CREATE TRIGGER IF NOT EXISTS model_mappings_no_delete BEFORE DELETE ON model_mappings
-BEGIN SELECT RAISE(ABORT, 'model mappings are append-only'); END;
+CREATE INDEX IF NOT EXISTS model_correspondences_service_idx
+    ON model_correspondences(harness, provider, model);
+CREATE TRIGGER IF NOT EXISTS model_correspondences_no_update BEFORE UPDATE ON model_correspondences
+BEGIN SELECT RAISE(ABORT, 'model correspondences are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS model_correspondences_no_delete BEFORE DELETE ON model_correspondences
+BEGIN SELECT RAISE(ABORT, 'model correspondences are append-only'); END;
+CREATE TABLE IF NOT EXISTS profile_runs (
+    profile_run_id TEXT PRIMARY KEY,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
+    buddy_id TEXT NOT NULL REFERENCES buddies(buddy_id) ON DELETE RESTRICT,
+    task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    state TEXT NOT NULL CHECK (state IN ('running','completed','failed')),
+    reason_code TEXT,
+    reason_params_json TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    correction_rounds INTEGER NOT NULL DEFAULT 0
+        CHECK (typeof(correction_rounds)='integer' AND correction_rounds >= 0),
+    usage_json TEXT CHECK (usage_json IS NULL OR (json_valid(usage_json) AND json_type(usage_json)='object')),
+    CHECK ((state='running') = (finished_at IS NULL)),
+    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)
+        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object')),
+    CHECK (state!='failed' OR reason_code IS NOT NULL),
+    CHECK (finished_at IS NULL OR finished_at >= started_at)
+);
+CREATE TABLE IF NOT EXISTS model_profiles (
+    model_id TEXT PRIMARY KEY REFERENCES models(model_id) ON DELETE RESTRICT,
+    positioning TEXT NOT NULL,
+    built_at TEXT NOT NULL,
+    profile_run_id TEXT NOT NULL REFERENCES profile_runs(profile_run_id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS model_profile_claims (
+    model_id TEXT NOT NULL REFERENCES model_profiles(model_id) ON DELETE RESTRICT,
+    ordinal INTEGER NOT NULL CHECK (typeof(ordinal)='integer' AND ordinal >= 0),
+    polarity TEXT NOT NULL CHECK (polarity IN ('strength','weakness')),
+    claim TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    source_date TEXT NOT NULL,
+    source_kind TEXT NOT NULL CHECK (source_kind IN ('vendor','third-party')),
+    PRIMARY KEY (model_id, ordinal)
+);
 """
 
 #: One row per recorded execution root. POSIX roots carry their boot session and
@@ -1119,6 +1158,10 @@ ROUTER_MAINTENANCE_COLUMNS = (
 #: exploration off. The default is the admitted default of a fresh board and
 #: the value an upgrading board's existing settings take.
 ROUTER_EXPLORATION_COLUMN = "exploration_every INTEGER DEFAULT 5 CHECK (exploration_every IS NULL OR exploration_every >= 2)"
+ROUTER_PROFILE_COLUMNS = (
+    "profile_buddy_id TEXT REFERENCES buddies(buddy_id) ON DELETE RESTRICT",
+    "profile_budget TEXT NOT NULL DEFAULT 'deep' CHECK (profile_budget IN ('brief','standard','deep'))",
+)
 
 ROUTER_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS router_settings (
@@ -1127,7 +1170,8 @@ CREATE TABLE IF NOT EXISTS router_settings (
     budget_preset TEXT NOT NULL CHECK (budget_preset IN ('brief','standard','deep')),
     retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
 , {', '.join(ROUTER_MAINTENANCE_COLUMNS)}
-, {ROUTER_EXPLORATION_COLUMN});
+, {ROUTER_EXPLORATION_COLUMN}
+, {', '.join(ROUTER_PROFILE_COLUMNS)});
 CREATE TABLE IF NOT EXISTS router_buddies (
     position INTEGER PRIMARY KEY CHECK (position >= 0),
     buddy_id TEXT NOT NULL UNIQUE

@@ -12,6 +12,7 @@ from pathlib import Path
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ...private_files import publish_bytes, read_bytes
+from ...private_dirs import ensure_private_dir
 from ...protocol.capabilities import select_input_limit
 from ...protocol.input_failure import INPUT_REJECTED, input_failure, is_input_too_large
 from ...protocol.input_limit import check_prompt_input
@@ -26,6 +27,131 @@ from ..harnesses.run_contract import (
 from . import run_execution
 from .controller import run_harness
 from .prompts import wrap_up_prompt
+
+
+def _profile_execute(control, handle, module, started):
+    """Correct a profile in fresh native sessions under one web budget."""
+    from ...protocol.capabilities import select_input_limit
+    from ...protocol.input_limit import check_prompt_input
+    from ..harnesses.runtime_selection import environment_for, selected
+    from ...protocol import tool_evidence, usage
+
+    budget = control["profileRequest"]["budget"]
+    deadline = started + budget["timeoutSeconds"]
+    remaining_calls = budget["toolCalls"]
+    total_calls = 0
+    usage_readings = []
+    evidences = []
+    native_identities = []
+    model_started = []
+    request_sent = []
+    feedback = None
+    previous_raw = None
+    errors = None
+    result = request = observer = None
+    round_index = 0
+    stop_reason = None
+    while round_index <= 2:
+        remaining_seconds = math.ceil(deadline - time.monotonic())
+        if remaining_seconds <= 0 or (round_index and remaining_calls <= 0):
+            stop_reason = "profile-budget-exhausted"
+            break
+        invocation_root = ensure_private_dir(Path(control["privateRoot"]) / f"call-{round_index + 1}")
+        next_control = {**control, "invocationId": uuid.uuid4().hex,
+                        "privateRoot": str(invocation_root)}
+        request, services, observing, observer, parts = run_execution.profile_request(
+            next_control, module, round_index=round_index, previous_raw=previous_raw,
+            errors=errors, remaining_seconds=remaining_seconds, remaining_calls=remaining_calls)
+        handle.request = request
+        handle.role_run_active_control = next_control
+        handle.role_run_active_identity = request.identity
+        record = selected(request.harness, environment_for())
+        version = record.get("version") if record is not None else None
+        if check_prompt_input(select_input_limit(request.harness, version), parts).blocked:
+            result = RunResult(identity=request.identity, harness=request.harness,
+                end=RunEnd(status="error", reason_code="input-rejected",
+                           message="The profile prompt exceeds the harness input limit"),
+                harness_version=version, buddy=ResultBuddy(requested=request.buddy),
+                stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
+            break
+        with _inline_live(request, services, handle) as live_services:
+            result = run_harness(module, request, observer=observing, services=live_services,
+                                 cancelled=lambda: handle.cancelled.is_set() or time.monotonic() >= deadline)
+        model_started.append(result.model_started)
+        request_sent.append(result.native_request_sent)
+        tools = result.tool_evidence.value if result.tool_evidence is not None else {}
+        evidences.append(tools if tools else None)
+        if result.native_identity is not None:
+            native_identities.append(result.native_identity.to_payload())
+        calls = tools.get("toolCalls")
+        if type(calls) is not int:
+            calls = 0
+        total_calls += calls
+        remaining_calls -= calls
+        usage_readings.append(usage.normalize_token_usage(result.usage.value)
+                              if result.usage is not None else None)
+        if observer.stop_reason is not None or total_calls > budget["toolCalls"]:
+            stop_reason = "profile-budget-exhausted"
+            break
+        if result.end.status != "ok":
+            break
+        if result.stop_evidence.native.group_state != "gone":
+            break
+        raw = result.value.raw if result.value is not None else None
+        if raw is None:
+            break
+        observations = {"toolCalls": calls, "toolMarkerFrames": tools.get("toolMarkerFrames", 0),
+                        "deniedInteractions": tools.get("deniedInteractions", 0)}
+        publisher = run_execution._profile_publisher.get()
+        if publisher is None:
+            raise BoardError("INVALID_ARGUMENT", "The profile service publisher is unavailable")
+        feedback = publisher(raw, round_index, observations)
+        if feedback["accepted"] or not feedback["errors"] or round_index == 2:
+            break
+        previous_raw, errors = raw, feedback["errors"]
+        round_index += 1
+    if result is None or request is None:
+        raise BoardError("INVALID_ARGUMENT", "The profile budget expired before a native call")
+    token_usage = None
+    if usage_readings:
+        totals = {"version": 1, "source": "profile/native-sessions", "scope": "attempt",
+                  "inputBasis": "includes-cached",
+                  "completeness": "complete" if all(reading is not None and reading["completeness"] == "complete"
+                                                       for reading in usage_readings) else "partial",
+                  "nativeRecords": sum((reading or {}).get("nativeRecords", 0) for reading in usage_readings) or 1}
+        for field in ("inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens"):
+            values = [(reading or {}).get(field) for reading in usage_readings]
+            totals[field] = sum(values) if all(value is not None for value in values) else None
+        token_usage = usage.normalize_token_usage(totals)
+    aggregate_evidence = None
+    if len(evidences) == 1:
+        aggregate_evidence = evidences[0]
+    elif evidences and all(evidence is not None for evidence in evidences):
+        binding = evidences[0]["binding"]
+        roots = []
+        calls = []
+        for evidence in evidences:
+            if evidence["binding"] != binding:
+                raise BoardError("INVALID_ARGUMENT", "Profile run evidence has inconsistent bindings")
+            roots.extend(evidence["nativeIdentity"])
+            calls.extend(tool_evidence.read_tool_calls(evidence, state_dir=Path(control["stateDir"])))
+        aggregate_evidence = {
+            "version": tool_evidence.TOOL_EVIDENCE_VERSION, "binding": binding,
+            "nativeIdentity": roots,
+            "streamComplete": all(evidence["streamComplete"] for evidence in evidences),
+            "calls": tool_evidence.write_tool_calls(binding, calls, state_dir=Path(control["stateDir"])),
+            "toolCalls": sum(evidence["toolCalls"] for evidence in evidences),
+            "unsettledToolCalls": sum(evidence["unsettledToolCalls"] for evidence in evidences),
+        }
+    def any_fact(values):
+        return True if True in values else None if None in values else False
+    verdict = {"modelStarted": any_fact(model_started), "nativeRequestSent": any_fact(request_sent),
+               "stopReason": stop_reason, "elapsedMs": round((time.monotonic() - started) * 1000),
+               "toolCalls": total_calls, "correctionCount": round_index,
+               "profileFeedback": feedback, "tokenUsage": token_usage,
+               "toolEvidence": aggregate_evidence, "nativeIdentity": native_identities}
+    code = 0 if result.end.status == "ok" and stop_reason is None and feedback and feedback["accepted"] else 1
+    return result, request, verdict, code
 
 
 @contextmanager
@@ -140,6 +266,8 @@ def _wrap_up_usage(first: RunResult, summary: RunResult) -> FrozenJson | None:
 def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
     module = run_seam(control["harness"])
     started = time.monotonic()
+    if control["operation"] == "profile":
+        return _profile_execute(control, handle, module, started)
     input_error = None
     if control["operation"] == "worker":
         request, services, observer, input_error, parts = run_execution.worker_request(control, module)

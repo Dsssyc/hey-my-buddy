@@ -947,7 +947,8 @@ class DecisionSurfaceTests(DecisionTestCase):
         self.assertEqual(compact["decisionModel"]["requested"]["model"], CATALOG_BUDDY["model"])
         # The ordered list and each dispatch's compact trial add explicit facts;
         # the summary still omits the frozen model packet and raw tool stream.
-        self.assertLess(len(json.dumps(compact)), 3700, "the default read includes frozen Router settings and bounded receipts but stays small")
+        self.assertNotIn("modelProfile", compact["selectedBuddy"])
+        self.assertLess(len(json.dumps(compact)), 4000, "the default read includes frozen Router settings and bounded receipts but stays small")
         self.assertTrue({"input", "output", "requested", "toolEvidence"}.isdisjoint(compact))
         audit = self.decision(board, request["decisionId"])
         self.assertEqual(audit["input"]["operation"], "select")

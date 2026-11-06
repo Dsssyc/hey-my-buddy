@@ -178,6 +178,7 @@ def _loads(store, connection, services, *, now):
 
 def candidate_facts(store, connection, buddies, *, now: str) -> dict:
     """The aggregate packet frozen for a Router, with explicit no-data rates."""
+    from .profile_data import profile_view
     statistics = domain_statistics(connection, buddies)
     summaries = {_key(row, KIND): row["text"] for row in connection.execute(
         "SELECT harness,model_id,effort,text FROM kind_summaries")}
@@ -191,6 +192,7 @@ def candidate_facts(store, connection, buddies, *, now: str) -> dict:
             "infrastructureFailures": statistics[buddy["buddy_id"]]["infrastructureFailures"],
             "summary": summaries.get(_kind(connection, buddy)),
             "modelId": _kind(connection, buddy)[1],
+            "modelProfile": profile_view(connection, _kind(connection, buddy)[1]),
             "modelDisplayName": model_view(connection, _kind(connection, buddy)[1])["displayName"],
             "modelNames": model_view(connection, _kind(connection, buddy)[1])["names"],
         } for buddy in buddies

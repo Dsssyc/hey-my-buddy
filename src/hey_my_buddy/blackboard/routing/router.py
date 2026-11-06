@@ -31,6 +31,8 @@ CONFIG_COLUMNS = {
     "maintenanceBuddyId": "maintenance_buddy_id",
     "maintenanceIntervalSeconds": "maintenance_interval_seconds",
     "explorationEvery": "exploration_every",
+    "profileBuddyId": "profile_buddy_id",
+    "profileBudget": "profile_budget",
 }
 
 INSTRUCTIONS = """Router protocol version 17.
@@ -58,6 +60,8 @@ then later named for correction by another micro task through its fixes field.
 Each candidate identifies its model with modelId, modelDisplayName and modelNames.
 User notes are keyed by modelId. Names retain the services recorded for that model, including former correspondences.
 A candidate's modelId states its current correspondence.
+Each candidate's modelProfile supplies public claims with sources and dates. User notes take precedence over the profile.
+For an unclassified task of type create, change or debug, favor models whose profiles indicate stronger overall ability.
 Read each candidate's kind summary as qualitative observations alongside the
 program's numbers; the summary contains no numeric statistics. Evidence of kind summary may cite
 a buddyId with an optional explanatory excerpt.
@@ -106,6 +110,8 @@ then later named for correction by another micro task through its fixes field.
 Each candidate identifies its model with modelId, modelDisplayName and modelNames.
 User notes are keyed by modelId. Names retain the services recorded for that model, including former correspondences.
 A candidate's modelId states its current correspondence.
+Each candidate's modelProfile supplies public claims with sources and dates. User notes take precedence over the profile.
+For an unclassified task of type create, change or debug, favor models whose profiles indicate stronger overall ability.
 Read each candidate's kind summary as qualitative observations alongside the
 program's numbers; the summary contains no numeric statistics. Evidence of kind summary may cite
 a buddyId with an optional explanatory excerpt.
@@ -297,7 +303,9 @@ def buddy_problem(connection, buddy_id: str, routing_mode: str, *, now=None) -> 
     if cooldown is not None:
         return unavailable("router-quota-exhausted", retryAt=cooldown["coolingUntil"])
     from ...protocol.capabilities import PERMISSION_LEVELS
-    level = "none" if routing_mode == "fast" else "read"
+    level = {"fast": "none", "review": "read", "profile": "web"}[routing_mode]
+    if level == "web" and PERMISSION_LEVELS[row["harness"]].get("web") != "enforced":
+        return unavailable("profile-web-unsupported")
     if level not in PERMISSION_LEVELS[row["harness"]]:
         code = "router-no-tool-unsupported" if routing_mode == "fast" else "router-review-unsupported"
         return unavailable(code)
@@ -327,6 +335,8 @@ def configuration(connection) -> dict:
         "maintenanceBuddyId": row["maintenance_buddy_id"],
         "maintenanceIntervalSeconds": row["maintenance_interval_seconds"],
         "explorationEvery": row["exploration_every"],
+        "profileBuddyId": row["profile_buddy_id"],
+        "profileBudget": row["profile_budget"],
     }
 
 
