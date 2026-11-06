@@ -5,7 +5,7 @@ import json
 
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_decision import (DecisionTestCase, CATALOG_BUDDY, SECOND_BUDDY,
-                                         THIRD_BUDDY, BUDDY_ID, SECOND_BUDDY_ID)
+                                         THIRD_BUDDY, THIRD_BUDDY_ID, BUDDY_ID, SECOND_BUDDY_ID)
 from blackboard.tasks.test_workflow import NONCE, WorkflowTestCase
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.errors import BoardError
@@ -59,8 +59,13 @@ class ExplorationRoutingTests(WorkflowTestCase):
                                              'manifestSha256': owned['decisionInput']['executionWorkspace']['manifestSha256']},
                        'decision': decision}})
 
-    def seed_cell_samples(self, board):
-        """One judged cell where the preferred kind has samples and the other none."""
+    def seed_domains(self, board, *, nodes, cells=(), overall=()):
+        """Insert a maintenance-run-owned domain tree and kind statistics.
+
+        ``nodes`` are (nodeId, name, parentId) triples, ``cells`` are
+        (buddy, nodeId, taskType, samples) kind cells and ``overall`` are
+        (buddy, samples) overall rows; every sample succeeds first-pass.
+        """
         task = board.submit_execution(
             requestId="exploration-maintenance", task="Synthetic maintenance", adapter="command",
             argv=["true"], cwd=str(self.workdir("maintenance")))["task"]["runId"]
@@ -68,9 +73,17 @@ class ExplorationRoutingTests(WorkflowTestCase):
             now = board.store.now()
             db.execute("INSERT INTO maintenance_runs VALUES('domains','manual',?,?,"
                        "'completed',NULL,NULL,?,?)", (BUDDY_ID, task, now, now))
-            db.execute("INSERT INTO domain_nodes VALUES('ipc','IPC','IPC expertise',NULL,NULL,'domains')")
-            db.execute("INSERT INTO kind_cell_statistics VALUES('dsh','deepseek-flash','off',"
-                       "'ipc','change',2,2,2,0,0)")
+            for node_id, name, parent in nodes:
+                db.execute("INSERT INTO domain_nodes VALUES(?,?,?,?,NULL,'domains')",
+                           (node_id, name, name + " expertise", parent))
+            for buddy, node_id, task_type, samples in cells:
+                db.execute("INSERT INTO kind_cell_statistics VALUES(?,?,?,?,?,?,?,?,?,?)",
+                           (buddy["harness"], buddy["model"], buddy["effort"],
+                            node_id, task_type, samples, samples, samples, 0, 0))
+            for buddy, samples in overall:
+                db.execute("INSERT INTO kind_statistics VALUES(?,?,?,?,?,?,?,?)",
+                           (buddy["harness"], buddy["model"], buddy["effort"],
+                            samples, samples, samples, 0, 0))
 
     # -- counting and giving -------------------------------------------------
     def test_the_counted_routings_since_the_last_quota_decide_the_next_quota(self):
@@ -148,16 +161,25 @@ class ExplorationRoutingTests(WorkflowTestCase):
         self.assertNotIn("exploration", snapshot["facts"])
 
     # -- answer shape and publication ----------------------------------------
-    def test_a_reselection_to_the_least_sampled_kind_publishes_and_is_recorded(self):
+    def test_a_reselection_to_a_less_sampled_kind_publishes_and_is_recorded(self):
         board = self.board()
         self.seed(board)
         self.configure(board, 2)
-        self.seed_cell_samples(board)
-        first = self.routed(board, "warm-up")
+        # The preferred kind's five samples live on the sibling sub-domain, so
+        # the comparison must run at the judged node's first-level ancestor:
+        # at the judged sub-domain itself the preferred kind has none.
+        self.seed_domains(board, nodes=[("systems", "Systems", None), ("ipc", "IPC", "systems"),
+                                        ("concurrency", "Concurrency", "systems")],
+                          cells=[(CATALOG_BUDDY, "concurrency", "change", 5)])
+        self.routed(board, "warm-up")
         second = self.routed(board, "quota")
         self.assertEqual(self.route_state(board, second)[0]["exploration"], "quota-kept")
         claim = self.router_claim(board, second)
         self.assertEqual(claim["claim"]["decisionInput"]["exploration"], {"quota": True})
+        self.assertEqual(claim["claim"]["decisionInput"]["domainNodes"], [
+            {"nodeId": "concurrency", "name": "Concurrency", "parentId": "systems"},
+            {"nodeId": "ipc", "name": "IPC", "parentId": "systems"},
+            {"nodeId": "systems", "name": "Systems", "parentId": None}])
         self.select(board, claim, quota_decision(
             preferred=BUDDY_ID, buddy_id=SECOND_BUDDY_ID, reselected=True, domain_node_id="ipc"))
         decision = board.call("selection_get", {"decisionId": second["routing"]["decisionId"]})["decision"]
@@ -174,11 +196,33 @@ class ExplorationRoutingTests(WorkflowTestCase):
                                                 "preferredBuddyId": BUDDY_ID})
         self.assertEqual(entry["selectedBuddy"]["buddyId"], SECOND_BUDDY_ID)
 
-    def test_a_reselection_to_a_sampled_kind_is_refused_and_keeps_the_route_quota(self):
+    def test_a_less_sampled_group_need_not_be_the_least_sampled(self):
+        board = self.board()
+        # Three kinds at one first-level domain: 5 samples, 1 sample and none.
+        # The 1-sample kind is not the least sampled, yet 1 is fewer than 5.
+        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
+        self.configure(board, 2)
+        self.seed_domains(board, nodes=[("systems", "Systems", None), ("ipc", "IPC", "systems")],
+                          cells=[(CATALOG_BUDDY, "ipc", "change", 5), (THIRD_BUDDY, "ipc", "change", 1)])
+        self.routed(board, "warm-up")
+        second = self.routed(board, "quota")
+        claim = self.router_claim(board, second)
+        self.select(board, claim, quota_decision(
+            preferred=BUDDY_ID, buddy_id=THIRD_BUDDY_ID, reselected=True, domain_node_id="ipc"))
+        decision = board.call("selection_get", {"decisionId": second["routing"]["decisionId"]})["decision"]
+        self.assertEqual(decision["status"], "completed")
+        self.assertEqual(decision["buddyId"], THIRD_BUDDY_ID)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT exploration FROM workflow_routes WHERE decision_id=?",
+                                                (second["routing"]["decisionId"],)).fetchone()[0],
+                             "quota-reselected")
+
+    def test_a_reselection_to_a_group_not_less_sampled_than_the_preferred_is_refused(self):
         board = self.board()
         self.seed(board)
         self.configure(board, 2)
-        self.seed_cell_samples(board)
+        self.seed_domains(board, nodes=[("systems", "Systems", None), ("ipc", "IPC", "systems")],
+                          cells=[(CATALOG_BUDDY, "ipc", "change", 5)])
         self.routed(board, "warm-up")
         second = self.routed(board, "quota")
         claim = self.router_claim(board, second)
@@ -195,6 +239,30 @@ class ExplorationRoutingTests(WorkflowTestCase):
         entry = next(item for item in history["routingHistory"]["entries"]
                      if item["decisionId"] == second["routing"]["decisionId"])
         self.assertEqual(entry["exploration"], {"quota": True, "reselected": False, "preferredBuddyId": None})
+
+    def test_an_unclassified_judgment_compares_overall_statistics(self):
+        board = self.board()
+        self.seed(board)
+        self.configure(board, 2)
+        self.seed_domains(board, nodes=[("systems", "Systems", None)],
+                          overall=[(CATALOG_BUDDY, 3)])
+        self.routed(board, "warm-up")
+        accepted = self.routed(board, "quota-accepted")
+        claim = self.router_claim(board, accepted)
+        self.select(board, claim, quota_decision(
+            preferred=BUDDY_ID, buddy_id=SECOND_BUDDY_ID, reselected=True))
+        decision = board.call("selection_get", {"decisionId": accepted["routing"]["decisionId"]})["decision"]
+        self.assertEqual(decision["status"], "completed")
+        self.assertEqual(decision["buddyId"], SECOND_BUDDY_ID)
+        # The refused direction compares the same way: 3 is not fewer than 0.
+        self.routed(board, "counted")
+        refused = self.routed(board, "quota-refused")
+        claim = self.router_claim(board, refused, claim_id="router-2")
+        self.select(board, claim, quota_decision(
+            preferred=SECOND_BUDDY_ID, buddy_id=BUDDY_ID, reselected=True))
+        decision = board.call("selection_get", {"decisionId": refused["routing"]["decisionId"]})["decision"]
+        self.assertEqual(decision["status"], "needs-host")
+        self.assertEqual(decision["reason"]["code"], "router-exploration-out-of-bounds")
 
     def test_keeping_the_preferred_choice_publishes_and_stays_quota_kept(self):
         board = self.board()
@@ -224,6 +292,11 @@ class ExplorationRoutingTests(WorkflowTestCase):
         # disabled, so the retry builds a complete fresh Router input.
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
         self.configure(board, 2)
+        # The reselection must clear the quota's own check (fewer overall
+        # samples than the preferred kind) so the disabled-buddy refusal, not
+        # the exploration refusal, triggers the retry.
+        self.seed_domains(board, nodes=[("systems", "Systems", None)],
+                          overall=[(CATALOG_BUDDY, 3)])
         self.routed(board, "warm-up")
         second = self.routed(board, "quota")
         claim = self.router_claim(board, second)

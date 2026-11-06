@@ -72,6 +72,15 @@ SELECT COUNT(*) FROM workflow_routes
    COALESCE((SELECT max(rowid) FROM workflow_routes WHERE exploration='quota-reselected'), 0))
 """
 
+
+def _first_level_domain(nodes: list[dict], node_id: str) -> str:
+    """The first-level ancestor of one node, from a frozen domain tree alone."""
+    by_id = {node["nodeId"]: node for node in nodes}
+    current = node_id
+    while by_id[current]["parentId"] is not None:
+        current = by_id[current]["parentId"]
+    return current
+
 def decision_spec(spec: dict) -> dict | None:
     """The decision descriptor of a task specification, when this is a decision task."""
     return spec.get("decision")
@@ -245,8 +254,16 @@ class DecisionCoordinator:
             "buddies": [{**self._buddy_input(row), **candidate_evidence[row["buddy_id"]]}
                         for row in buddies],
             "preferences": preferences,
-            "domainNodes": [{"nodeId": row["node_id"], "name": row["name"]} for row in connection.execute(
-                "SELECT node_id,name FROM domain_nodes WHERE merged_into_id IS NULL ORDER BY node_id")],
+            # A node's parent is its own unless that parent was merged away, in
+            # which case it follows the merge target, as the statistics rollup
+            # does; the tree is complete, so the first level derives from it.
+            "domainNodes": [{"nodeId": row["node_id"], "name": row["name"], "parentId": row["parent_id"]}
+                            for row in connection.execute(
+                                "SELECT node_id,name,"
+                                " COALESCE((SELECT merged.merged_into_id FROM domain_nodes merged"
+                                "           WHERE merged.node_id = domain_nodes.parent_id),"
+                                "          parent_id) AS parent_id"
+                                " FROM domain_nodes WHERE merged_into_id IS NULL ORDER BY node_id")],
             "taskTypes": [{"id": key, "definition": value} for key, value in TASK_TYPES.items()],
             # User notes are kept per model service; the model service key is on every buddy.
             "annotations": user_policy.model_service_notes(connection, buddy_ids),
@@ -1084,26 +1101,35 @@ class DecisionCoordinator:
 
     @staticmethod
     def _exploration_problem(document: dict, decision: dict) -> dict | None:
-        """The quota's program fact: a reselection is sample-minimal in its cell.
+        """The quota's program fact: a reselection is less sampled than the preferred kind.
 
-        Sample counts come from the frozen input's own statistics, never a live
-        table: each legal candidate carries its kind's cells, and a candidate
-        whose input has no cell for the judgment's domain and task type has no
-        samples there. The reselected buddy's kind must hold the minimum.
+        Candidates are compared as kinds (harness, model, effort) at the level
+        the frozen input states: the first-level domain ancestor of the answer's
+        judged node — traced through the input's own parent links — or the
+        overall statistics when the judgment is unclassified. Sample counts
+        come from the same input's per-kind statistics, never a live table; a
+        kind absent from that level has no samples there. The reselected kind
+        must hold fewer samples than the preferred kind.
         """
         if not decision["reselected"]:
             return None
-        node_id, task_type = decision["domainNodeId"], decision["taskType"]
-        cell_samples = {}
+        if decision["domainNodeId"] is None:
+            def level_samples(candidate):
+                return (candidate.get("statistics") or {}).get("overall", {}).get("samples", 0)
+        else:
+            level = _first_level_domain(document["domainNodes"], decision["domainNodeId"])
+
+            def level_samples(candidate):
+                return ((candidate.get("statistics") or {}).get("byDomain") or {}).get(level, {}).get("samples", 0)
+        samples = {}
         for candidate in document["buddies"]:
-            kind = (candidate["harness"], candidate["model"], candidate["effort"])
-            cell = ((candidate.get("statistics") or {}).get("byDomainTaskType") or {}).get(node_id) or {}
-            entry = cell.get(task_type) or {}
-            cell_samples.setdefault(kind, entry.get("samples", 0))
+            samples.setdefault((candidate["harness"], candidate["model"], candidate["effort"]), level_samples(candidate))
         chosen = next(item for item in document["buddies"] if item["buddyId"] == decision["buddyId"])
-        kind = (chosen["harness"], chosen["model"], chosen["effort"])
-        if cell_samples[kind] != min(cell_samples.values()):
-            return {"code": "router-exploration-out-of-bounds", "params": {"bound": "not-sample-minimal"}}
+        preferred = next(item for item in document["buddies"] if item["buddyId"] == decision["preferredBuddyId"])
+        chosen_kind = (chosen["harness"], chosen["model"], chosen["effort"])
+        preferred_kind = (preferred["harness"], preferred["model"], preferred["effort"])
+        if not samples[chosen_kind] < samples[preferred_kind]:
+            return {"code": "router-exploration-out-of-bounds", "params": {"bound": "not-less-sampled"}}
         return None
 
     def _publish_select(self, connection: sqlite3.Connection, row: sqlite3.Row, *, dispatch: dict, output: dict, now: str) -> dict:
