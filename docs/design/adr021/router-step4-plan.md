@@ -1,6 +1,6 @@
 # Router 第四步执行计划：只联网一档、画像面与模型的对应关系
 
-2026-11-06，Host 起草，开发者同日确认。这一步装为 0.64.0（契约 0.64.0，schema 37），带最基本、可用、可交互的界面；Buddy 页与 Router 的大幅调整等看过呈现的内容再做。依据 [ADR-021](../../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 2、6、11–14、24 条（含 2026-11-06 的修改）、[ADR-023](../../decisions/023-harness-integration-principles.md) 共用档位第 1–5 条、[ADR-030](../../decisions/030-harness-layer-scope.md)，以及[只联网一档的调研](../../research/2026-11-06-network-only-tool-scope.md)。现状引自“Router 余下部分的盘点”（2026-11-06，只读）与 Host 的核对。
+2026-11-06，Host 起草，开发者同日确认。这一步装为 0.64.0（契约 0.64.0，schema 37），带最基本、可用、可交互的界面；Buddy 页与 Router 的大幅调整等看过呈现的内容再做。依据 [ADR-021](../../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 2、6、11–14、24 条（含 2026-11-06 的修改）、[ADR-023](../../decisions/023-harness-integration-principles.md) 共用档位第 1–5 条、[ADR-030](../../decisions/030-harness-layer-scope.md)，以及[只联网一档的调研](../../research/2026-11-06-network-only-tool-scope.md)。现状引自“Router 余下部分的盘点”（2026-11-06，只读）与 Host 的核对。2026-11-07 装上，见[安装记录](../../acceptance/installs/0.64.0.md)。
 
 ## 开发者 11-06 的决定
 
