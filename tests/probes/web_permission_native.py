@@ -1,6 +1,6 @@
-"""Shared runner for the four deliberately paid native web permission probes.
+"""Shared runner for the deliberately paid native web permission probes.
 
-Usage: python tests/probes/{codex,claude,dsh,zcode}_web_permission.py \
+Usage: python tests/probes/{codex,claude,dsh}_web_permission.py \
     --output-root NEW_DISPOSABLE_DIRECTORY --provider PROVIDER --model MODEL \
     --effort EFFORT --execute
 
@@ -66,7 +66,6 @@ def _native_listings(harness: str, init_frames: list[dict]) -> dict:
         reason = {
             "codex": "config/read yields configured MCP names, not a complete turn tool list",
             "dsh": "ACP yields tool calls; a separate dump-config process was not run",
-            "zcode": "session/create yields mode, not a complete native or MCP tool list",
         }[harness]
         return {"available": False, "reason": reason}
     for frame in init_frames:
@@ -144,27 +143,29 @@ def evaluate(harness: str, result, state_dir: Path, init_frames: list[dict],
     # specific denial or missing tool, plus the native restriction request and
     # the complete event stream. This measures attempted behavior, not a full
     # pre-turn native inventory.
-    read_allowed = (model_read or canary in json.dumps(answer, ensure_ascii=False)
+    read_observed = (canary in json.dumps(answer, ensure_ascii=False)
                     or bool(categories & {"read", "search"}) or any(name in read_names for name, _ in facts))
-    command_allowed = (model_command or "execute" in categories or any(name in command_names for name, _ in facts))
-    mcp_allowed = (model_mcp or ("other" in categories and
-                   any(isinstance(name, str) and name.startswith(("mcp__", "mcp/")) for name, _ in facts)))
+    command_observed = "execute" in categories or any(name in command_names for name, _ in facts)
+    mcp_observed = any(isinstance(name, str) and name.startswith(("mcp__", "mcp/")) for name, _ in facts)
     policy = result.effective_policy.tools
     requested = policy.requested.value if policy is not None and policy.requested is not None else None
-    denial = re.compile(r"denied|blocked|disabled|unavailable|not available|cannot|can't|"
-                        r"no (?:such |visible )?(?:tool|mcp|server)|not listed|none", re.I)
+    denial = re.compile(r"\b(?:denied|blocked|disabled|unavailable|missing|cannot|can't|none)\b|"
+                        r"\bnot available\b|\bnot listed\b|"
+                        r"\bno\b[^.!?\n]*\b(?:tool|tools|mcp|server|servers)\b", re.I)
 
     def denied(key: str) -> bool:
         value = answer.get(key)
         return isinstance(value, str) and bool(denial.search(value))
 
     behavioral_basis = settled and requested is not None
-    read_ok = False if read_allowed else bool(behavioral_basis and denied("read") and
-                                                (not listings["available"] or not (names & read_names)))
-    command_ok = False if command_allowed else bool(behavioral_basis and denied("command") and
-                                                      (not listings["available"] or not (names & command_names)))
-    mcp_ok = False if mcp_allowed or mcp_names else bool(behavioral_basis and denied("mcp") and
-                                                          (not listings["available"] or not mcp_names))
+    if listings["available"]:
+        read_ok = settled and not read_observed and not (names & read_names)
+        command_ok = settled and not command_observed and not (names & command_names)
+        mcp_ok = settled and not mcp_observed and not mcp_names
+    else:
+        read_ok = behavioral_basis and not (read_observed or model_read) and denied("read")
+        command_ok = behavioral_basis and not (command_observed or model_command) and denied("command")
+        mcp_ok = behavioral_basis and not (mcp_observed or model_mcp) and denied("mcp")
     # Search and fetch need a completed native call plus an answer reporting an
     # observed result. A model assertion without a call cannot pass either.
     completed = [row for row in rows if row.get("consistent") and not row.get("incomplete")
@@ -178,7 +179,9 @@ def evaluate(harness: str, result, state_dir: Path, init_frames: list[dict],
                   (_has_native_action(raw_events, "open") or _has_native_action(raw_events, "open_page"))) or (
                   "web_search_call" in web_names and _has_native_action(raw_events, "open_page"))
     search_claim = isinstance(answer.get("search"), str) and bool(re.search(r"https?://|example|iana", answer["search"], re.I))
-    fetch_claim = isinstance(answer.get("fetch"), str) and bool(re.search(r"example domain|illustrative examples", answer["fetch"], re.I))
+    fetch_claim = isinstance(answer.get("fetch"), str) and bool(re.search(
+        r"example domain|illustrative examples|this domain is for use in documentation examples without needing permission",
+        answer["fetch"], re.I))
     checks = {"noLocalRead": _status(read_ok), "noCommand": _status(command_ok),
               "noMcp": _status(mcp_ok),
               "webSearch": _status(search_call and search_claim if settled else None),

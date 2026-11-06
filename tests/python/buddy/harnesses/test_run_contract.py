@@ -184,18 +184,22 @@ class CodecRoundtripTests(unittest.TestCase):
         self.assertEqual(get_args(rc.PermissionLevel), levels)
         request = edited(full_request(Path(tempfile.gettempdir()).resolve()), permission="web")
         self.assertEqual(rc.RunRequest.from_payload(request.to_payload()).permission, "web")
+        self.assertEqual({name for name, declared in PERMISSION_LEVELS.items() if "web" in declared},
+                         {"codex", "claude", "dsh"})
         for harness, declared in PERMISSION_LEVELS.items():
             with self.subTest(harness=harness):
                 self.assertEqual(tuple(declared), tuple(level for level in levels if level in declared))
-                self.assertEqual(declared["web"], "enforced")
-                self.assertIn("permission:web", adapter_capabilities(harness))
-                self.assertIn("permission:web", buddy_capabilities(harness, []))
+                if "web" in declared:
+                    self.assertEqual(declared["web"], "enforced")
+                self.assertEqual("permission:web" in adapter_capabilities(harness), "web" in declared)
+                self.assertEqual("permission:web" in buddy_capabilities(harness, []), "web" in declared)
 
     def test_undeclared_web_permission_is_refused(self):
         from hey_my_buddy.buddy.harnesses.registry import require_permission
         from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
         for harness, declared in PERMISSION_LEVELS.items():
-            require_permission({"harness": harness}, "web")
+            if "web" in declared:
+                require_permission({"harness": harness}, "web")
             with self.subTest(harness=harness), mock.patch.dict(PERMISSION_LEVELS, {
                     harness: {level: value for level, value in declared.items() if level != "web"}}):
                 with self.assertRaises(BoardError) as rejected:

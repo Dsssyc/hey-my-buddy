@@ -1025,13 +1025,6 @@ def _session_mode() -> str:
     return "yolo"
 
 
-def _web_create_params() -> dict:
-    """Restrict a session to ZCode's two built-in web tools."""
-    return {"mode": _session_mode(), "toolAllowlist": ["WebSearch", "WebFetch"],
-            "mcpServers": [], "offPeakToolEnabled": False,
-            "dynamicWorkflowEnabled": False}
-
-
 def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
         services: Any, cancelled: Callable[[], bool]) -> RunResult:
     """Run one native ZCode execution: the single native path of this harness."""
@@ -1277,8 +1270,6 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
         create_params = {"toolAllowlist": [],
                          "mcpServers": [], "offPeakToolEnabled": False,
                          "dynamicWorkflowEnabled": False}
-    elif request.permission == "web":
-        create_params = _web_create_params()
     else:
         # A read or write permission without a bound service runs the same
         # final-message carrier over the user's native tools.
@@ -1330,8 +1321,7 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
     mounted session service, a continuation and live observers."""
     mount = services.mount
     mode, previous = _continuation_of(request)
-    create_params = (_web_create_params() if request.permission == "web" else
-                     {"mode": _session_mode(), "mcpServers": list(mount.mcp_servers)})
+    create_params = {"mode": _session_mode(), "mcpServers": list(mount.mcp_servers)}
     state.create_params = create_params
     snapshot = None
     if mode == "native-session":
@@ -1714,7 +1704,7 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
             completion = CompletionEvidence(stream_end=drained)
     effective = EffectivePolicy()
     if state.session_opened and state.create_params is not None:
-        if request.permission in ("none", "web"):
+        if request.permission == "none":
             effective = EffectivePolicy(
                 tools=PolicyFact(requested=_json_package(state.create_params)))
         else:

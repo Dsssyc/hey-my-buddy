@@ -693,8 +693,11 @@ def _web_config(connection: Connection, request: RunRequest) -> dict:
     def disable_servers(servers, prefix):
         if not isinstance(servers, dict):
             raise CodexProtocolError("invalid-config-readback", "Codex reported an invalid MCP server table")
-        for name in servers:
-            overrides[f"{prefix}.{json.dumps(name, ensure_ascii=False)}.enabled"] = False
+        for name, server in servers.items():
+            if not isinstance(server, dict):
+                raise CodexProtocolError("invalid-config-readback", "Codex reported an invalid MCP server configuration")
+            if server.get("enabled") is not False:
+                overrides[f"{prefix}.{json.dumps(name, ensure_ascii=False)}.enabled"] = False
 
     disable_servers(configured.get("mcp_servers", {}), "mcp_servers")
     plugins = configured.get("plugins", {})

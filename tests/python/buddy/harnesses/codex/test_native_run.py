@@ -95,12 +95,25 @@ class RejectionPhaseTests(unittest.TestCase):
             "web_search": "live", "features.shell_tool": False, "features.view_image": False,
             "agents.enabled": False, "features.multi_agent": False, "features.multi_agent_v2": False,
             "features.apps": False, 'mcp_servers."local.files".enabled': False,
-            'mcp_servers."disabled".enabled': False,
             'plugins."my.plugin".mcp_servers."user.data".enabled': False,
         })
 
+    def test_web_overrides_leave_disabled_transportless_mcp_entries_untouched(self):
+        connection = mock.Mock()
+        connection.call.return_value = {"config": {
+            "mcp_servers": {"computer-use": {"enabled": False}, "active": {"enabled": True}},
+            "plugins": {"my.plugin": {"mcp_servers": {
+                "disabled": {"enabled": False}, "active": {"enabled": True}}}},
+        }}
+        overrides = native_run._web_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
+        self.assertNotIn('mcp_servers."computer-use".enabled', overrides)
+        self.assertNotIn('plugins."my.plugin".mcp_servers."disabled".enabled', overrides)
+        self.assertIs(overrides['mcp_servers."active".enabled'], False)
+        self.assertIs(overrides['plugins."my.plugin".mcp_servers."active".enabled'], False)
+
     def test_web_unreadable_config_stops_before_thread_admission(self):
-        for configured in (None, [], {"mcp_servers": []}, {"plugins": []}, {"plugins": {"p": None}}):
+        for configured in (None, [], {"mcp_servers": []}, {"mcp_servers": {"bad": None}},
+                           {"plugins": []}, {"plugins": {"p": None}}):
             connection = mock.Mock()
             connection.call.return_value = {"config": configured}
             with self.subTest(configured=configured), self.assertRaises(CodexProtocolError):
