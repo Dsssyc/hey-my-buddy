@@ -168,11 +168,11 @@
   "issueStock": {
     "baseGeneratorSha256": "2f4bdad5b6d35f2742267e46af1c09b780cd6559460595bf5ed019bc5cda175d",
     "baseSha256": "e9eb533375f732720af376b06089dedbf5427442d380a26e7d4f2d972796ff38",
-    "derivation": "Floor issue writers record, update, clear, reopen and update each kind at one timestamp; event identities are shifted by 9000000 to avoid the independent supplements.",
+    "derivation": "Floor issue writers record, update, clear, reopen and update each kind at one timestamp; a connection issue and report are copied from the floor-written execution issue, followed by a shutdown confirmation without deleting the copied row; event identities are shifted by 9000000 to avoid the independent supplements.",
     "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --issue-stock-for tests/fixtures/upgrade-floor --work-dir tmp/<new-issue-stock-dir>",
-    "generatorSha256": "2f4bdad5b6d35f2742267e46af1c09b780cd6559460595bf5ed019bc5cda175d",
+    "generatorSha256": "c07b8784f1a7e41da0d22838c6b9872fde782016eec5be4d402e20df69bae6b5",
     "schemaVersion": 30,
-    "sha256": "01e662b52f6a7cd1818d11974d123894e0c49ca654e957348540d5266a56f022",
+    "sha256": "040dafe41ecc242de001a9dd094a42a8150da44888f7762ba1a69812474d6651",
     "writerCommit": "4de1dd9478980e924a4a86b2c50aaca33e33b79d"
   },
   "legacyStock": {

@@ -2105,6 +2105,22 @@ def issue_stock_main():
                 store.clear_service_issue('upgrade-stock')
             record('current occurrence')
             record('current occurrence updated')
+        # Derive the historical leftover from a floor-written row and report.
+        # A shutdown confirmation clears connection issues in current writers;
+        # leave the row behind to reproduce stock from before that deletion.
+        with store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO execution_issues SELECT attempt_id,'connection',code,message,observed_at"
+                " FROM execution_issues WHERE attempt_id=? AND stage='upgrade-stock'", (attempt,))
+            connection.execute(
+                "INSERT INTO events(task_id,attempt_id,revision,kind,payload_json,actor_role,actor_id,created_at)"
+                " SELECT task_id,attempt_id,revision,kind,json_set(payload_json,'$.stage','connection'),"
+                " actor_role,actor_id,created_at FROM events WHERE attempt_id=? AND kind='execution.issue'"
+                " ORDER BY seq DESC LIMIT 1", (attempt,))
+            connection.execute(
+                "INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at)"
+                " SELECT task_id,attempt_id,'execution.shutdown_confirmed','{}',created_at"
+                " FROM events WHERE attempt_id=? AND kind='execution.issue' ORDER BY seq DESC LIMIT 1", (attempt,))
         statements = ['-- Issue stock from the released schema-30 writers; event ids rebased by 9000000.']
         with store.db.read() as connection:
             for table in ('events', 'execution_issues', 'service_issues'):
@@ -2155,6 +2171,8 @@ def issue_stock_main():
                              'generationCommand': 'uv run --frozen python packaging/generate-upgrade-fixture.py'
                                                   ' --issue-stock-for tests/fixtures/upgrade-floor --work-dir tmp/<new-issue-stock-dir>',
                              'derivation': 'Floor issue writers record, update, clear, reopen and update each kind at one timestamp;'
+                                           ' a connection issue and report are copied from the floor-written execution issue,'
+                                           ' followed by a shutdown confirmation without deleting the copied row;'
                                            ' event identities are shifted by 9000000 to avoid the independent supplements.'}
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 

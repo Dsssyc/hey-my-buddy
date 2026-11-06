@@ -31,6 +31,16 @@ class UpgradeFixtureTests(unittest.TestCase):
             originals = {table: list(connection.execute(f'SELECT * FROM {table}'))
                          for table in ('execution_issues', 'service_issues')}
             self.assertTrue(all(originals.values()))
+            stale = [row for row in originals['execution_issues'] if row[1] == 'connection']
+            self.assertEqual(len(stale), 1)
+            originals['execution_issues'] = [row for row in originals['execution_issues'] if row[1] != 'connection']
+            report = connection.execute(
+                "SELECT MAX(seq) FROM events WHERE attempt_id=? AND kind='execution.issue'"
+                " AND json_extract(payload_json,'$.stage')='connection'", (stale[0][0],)).fetchone()[0]
+            cleared = connection.execute(
+                "SELECT MAX(seq) FROM events WHERE attempt_id=? AND kind='execution.shutdown_confirmed'",
+                (stale[0][0],)).fetchone()[0]
+            self.assertGreater(cleared, report)
             openings = dict(connection.execute("SELECT kind,seq FROM events WHERE json_extract(payload_json,'$.stage')='upgrade-stock'"
                                                " AND json_extract(payload_json,'$.message')='current occurrence'"))
             self.assertEqual(set(openings), {'execution.issue', 'service.issue'})
@@ -42,6 +52,14 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertEqual([row[-1] for row in rows], [openings[kind]])
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM issue_deliveries').fetchone()[0], 0)
             self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+            fresh = Database(self.root / 'fresh-issue-stock')
+            try:
+                fresh.initialize()
+                with sqlite3.connect(fresh.path) as created:
+                    query = 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
+                    self.assertEqual(list(connection.execute(query)), list(created.execute(query)))
+            finally:
+                fresh.close()
         store = BoardStore(fixture['state'])
         self.addCleanup(store.db.close)
         run_id = fixture['stableIds']['failed']

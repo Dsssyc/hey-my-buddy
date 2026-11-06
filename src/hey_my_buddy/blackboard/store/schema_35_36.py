@@ -3,8 +3,8 @@
 This step owns its DDL and conversion. Existing routes predate exploration, so
 they record ``pre-exploration``; existing settings take the default quota
 interval of 5. Nothing else a route or the settings row holds is rewritten.
-Issue rows pin their opening event, found from the last resolution and the
-observations in its still-open interval. Deliveries start empty.
+Resolved issue rows left by older writers are discarded. Still-open rows pin
+their opening event after the last resolution. Deliveries start empty.
 """
 from __future__ import annotations
 
@@ -154,6 +154,13 @@ def _opening_event(connection, row, *, execution):
         (attempt, prefix + '.issue_resolved', row['stage'], row['stage'] if execution else None,
          row['stage'] if execution else None),
     ).fetchone()[0]
+    latest = connection.execute(
+        "SELECT MAX(seq) FROM events"
+        " WHERE kind=? AND attempt_id IS ? AND json_extract(payload_json,'$.stage')=?",
+        (prefix + '.issue', attempt, row['stage']),
+    ).fetchone()[0]
+    if latest is not None and latest < clear:
+        return None
     opening = connection.execute(
         "SELECT MIN(seq) FROM events WHERE kind=? AND attempt_id IS ?"
         " AND json_extract(payload_json,'$.stage')=? AND seq>?",
@@ -174,8 +181,13 @@ def upgrade(connection):
         for row in stock[table]:
             row['defects'] = 0
     for table in ('execution_issues', 'service_issues'):
+        issues = []
         for row in stock[table]:
-            row['occurrence_seq'] = _opening_event(connection, row, execution=table == 'execution_issues')
+            opening = _opening_event(connection, row, execution=table == 'execution_issues')
+            if opening is not None:
+                row['occurrence_seq'] = opening
+                issues.append(row)
+        stock[table] = issues
     for table, rows in stock.items():
         _rebuild(connection, table, rows)
     for ddl in INDEX_DDL:

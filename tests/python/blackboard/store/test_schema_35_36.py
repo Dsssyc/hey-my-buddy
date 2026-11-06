@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from collections import Counter
 
-from blackboard.store.upgrade_fixture import load_fixture
+from blackboard.store.upgrade_fixture import load_fixture, load_issue_stock
 from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33, schema_33_34, schema_34_35
 from hey_my_buddy.blackboard.store.schema_35_36 import upgrade as step_upgrade
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
@@ -99,6 +99,49 @@ class Schema35To36Tests(unittest.TestCase):
             actual = {tuple(row[:3]): row[3] for row in connection.execute(
                 'SELECT harness,model,effort,defects FROM kind_statistics WHERE defects > 0')}
             self.assertEqual(actual, dict(expected))
+
+    def test_step_discards_only_issues_cleared_by_the_matching_event(self):
+        fixture = load_fixture(self.root / 'issue-state')
+        load_issue_stock(fixture)
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            connection.row_factory = sqlite3.Row
+            for step in (schema_30_31, schema_31_32, schema_32_33, schema_33_34, schema_34_35):
+                step.upgrade(connection)
+            connection.commit()
+            stale = dict(connection.execute("SELECT * FROM execution_issues WHERE stage='connection'").fetchone())
+            report = connection.execute(
+                "SELECT MAX(seq) FROM events WHERE kind='execution.issue'"
+                " AND json_extract(payload_json,'$.stage')='connection'").fetchone()[0]
+            cleared = connection.execute(
+                "SELECT MAX(seq) FROM events WHERE kind='execution.shutdown_confirmed'").fetchone()[0]
+            self.assertGreater(cleared, report)
+            for stage, event, removed in (
+                ('connection', 'execution.shutdown_confirmed', True),
+                ('connection', 'execution.received', True),
+                ('shutdown', 'execution.shutdown_confirmed', True),
+                ('recovery', 'execution.shutdown_confirmed', True),
+                ('native', 'execution.issue_resolved', True),
+                ('shutdown', 'execution.received', False),
+                ('recovery', 'execution.received', False),
+                ('native', 'execution.shutdown_confirmed', False),
+            ):
+                with self.subTest(stage=stage, event=event):
+                    connection.execute('SAVEPOINT issue_case')
+                    connection.execute("UPDATE execution_issues SET stage=? WHERE stage='connection'", (stage,))
+                    connection.execute("UPDATE events SET payload_json=json_set(payload_json,'$.stage',?) WHERE seq=?",
+                                       (stage, report))
+                    connection.execute("UPDATE events SET kind=?,payload_json=json_object('stage',?) WHERE seq=?",
+                                       (event, stage, cleared))
+                    step_upgrade(connection)
+                    residual = connection.execute('SELECT * FROM execution_issues WHERE stage=?', (stage,)).fetchone()
+                    if removed:
+                        self.assertIsNone(residual)
+                    else:
+                        self.assertEqual(dict(residual), {**stale, 'stage': stage, 'occurrence_seq': report})
+                    self.assertIsNotNone(connection.execute(
+                        "SELECT * FROM execution_issues WHERE stage='upgrade-stock'").fetchone())
+                    connection.execute('ROLLBACK TO issue_case')
+                    connection.execute('RELEASE issue_case')
 
     def test_the_new_forms_have_database_fences(self):
         fixture = load_fixture(self.root / 'state')
