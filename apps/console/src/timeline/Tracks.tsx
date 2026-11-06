@@ -17,6 +17,7 @@ import { fitAdjacentLabel, fitLabel, useTextMeasure } from "./labels";
 import type { Interval, Label, Occupancy } from "./labels";
 import { MarkerCluster, markerAt, markerHasKey, markerKey } from "./MarkerCluster";
 import { ConclusionMark } from "./ConclusionMark";
+import { NowAxisLine } from "./NowLine";
 import { fragmentHitPath, IdlePattern, WaitingDiamond, TIMELINE_OUTSET_PX as INSET_PX } from "./trackMarks";
 import { eventActions } from "./events";
 import { isFailedRow } from "./failure";
@@ -141,6 +142,7 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds, co
       {visibleGapLabels.has(gap.startMs) && <text data-slot="gap-label" x={center} y={16} textAnchor="middle" className="fill-ink2">{gapLabels[index]}</text>}
     </g>; })}
     {scale.ticks.map(tick => <line key={tick.atMs} x1={scale.toX(tick.atMs)!} x2={scale.toX(tick.atMs)!} y1={tick.labeled ? 24 : 27} y2={31} className="stroke-ink3"/>)}
+    {ongoing && <NowAxisLine x={nowX} height={TIMELINE_AXIS_PX}/>}
     {labels.map(label => <text data-slot="axis-label" key={label.left} x={label.left} y={label.y} className={label.className}>{label.text}</text>)}
     {showNow && measure(now) <= width && <text data-slot="axis-label" x={nowLeft} y={16} className="fill-live">{now}</text>}
     {pointer !== null && Number.isFinite(pointerWidth) && pointerRight - (pointerBounds?.left ?? 0) >= pointerWidth + 4 && <g data-slot="pointer-clock" transform={`translate(${pointerLeft} 0)`}>
