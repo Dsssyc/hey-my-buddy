@@ -63,7 +63,7 @@ Use `fixes` only for repair of an accepted micro task. Explicitly authorized `de
 
 ### Await and get
 
-`await` observes one `runId` for a bounded window, returning a boundary, delivery, reminder or window end. It starts no task and does not stop work when the window ends. [Host waiting](host.md) owns supervision; the [envelope](#await-envelope) lists the response facts.
+`await` observes one `runId` for a bounded window, returning a boundary, delivery, reminder, new execution or service issue or window end. It starts no task and does not stop work when the window ends. [Host waiting](host.md) owns supervision; the [envelope](#await-envelope) lists the response facts.
 
 `get` selects exactly one of `runId`, `macroTaskId`, project `cwd` and `buddies`. A macro task view includes its goal and members, including an empty collection; a project view includes macro tasks and standalone micro tasks. `{"buddies":true}` lists every enabled buddy by its complete name, the form `submit` and `continue` take, with `available` and, when it cannot take work now, the recorded `coolingUntil` of its provider or the catalog's `unavailableReason`. Collections accept pagination, while `includeAudit` and `routingHistory` apply only to a run. Each collection's cursor continues that collection; a run's routing history has its own numeric cursor.
 
@@ -184,4 +184,4 @@ Input errors name the field and legal combinations. `CONFLICT` can mean an answe
 
 The envelope contains `runId`, task `status`, `workflowState`, `outcome`, `actions`, wait duration/window, `timedOut` and aggregate `shutdownConfirmed`. At a Host boundary it carries `requestId` and `requestKind`; a fixed output carries `artifactId`. Applicable replies also include shutdown detail, routing, queue reason, reminders, input failure, execution/service issues and result evidence. A micro task without a checkout can carry `unsealedChanges`.
 
-`delivered` asks for review of the fixed artifact. `waiting-host` asks for a response to its request. `expected-duration` and `native-silence` are reminders; `wait-timeout` and `unavailable` end only this wait. A missing or unreadable terminal receipt can return `result-unavailable`. The advertised `actions` come from the authoritative run view; the envelope supplies no full command templates. This batch adds no new-issue wakeup condition. Follow [host.md](host.md) for all waiting decisions.
+`delivered` asks for review of the fixed artifact. `waiting-host` asks for a response to its request. `expected-duration` and `native-silence` are reminders; `issue` delivers one new execution or service issue, once; `wait-timeout` and `unavailable` end only this wait. A missing or unreadable terminal receipt can return `result-unavailable`. The advertised `actions` come from the authoritative run view; the envelope supplies no full command templates. Follow [host.md](host.md) for all waiting decisions.

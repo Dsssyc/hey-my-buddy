@@ -4,17 +4,18 @@ This page owns how any Host waits on its micro tasks and finds open work again. 
 
 ## One wait per running micro task
 
-`await` with a `runId` returns when that micro task reaches a boundary, delivers, sends a reminder or the wait window ends; it never starts work and never cancels it. Run one `await` per running micro task. If your harness can run a command in the background and wake you when it exits, run each `await` that way and keep working; otherwise run it in the foreground, where it holds your turn. `waitSeconds` defaults to 86,400 seconds (24 hours), which is also its maximum; give a foreground `await` one shorter than your command tool's own time limit, so that the wait ends before the tool gives up on it.
+`await` with a `runId` returns when that micro task reaches a boundary, delivers, sends a reminder, meets a new execution or service issue or the wait window ends; it never starts work and never cancels it. Run one `await` per running micro task. If your harness can run a command in the background and wake you when it exits, run each `await` that way and keep working; otherwise run it in the foreground, where it holds your turn. `waitSeconds` defaults to 86,400 seconds (24 hours), which is also its maximum; give a foreground `await` one shorter than your command tool's own time limit, so that the wait ends before the tool gives up on it.
 
 Act on the reply's `outcome`, using the ids it carries:
 
 - `delivered`: read the full `get`, check the Worker's report and the fixed output against the brief, then `accept` the `artifactId` or send it back with `continue`.
 - `waiting-host`: answer its `requestId` with `continue`.
 - `expected-duration` or `native-silence` is a reminder: look at `get`, then wait again.
+- `issue`: a new execution or service issue, given first in `executionIssues` or `serviceIssues`; tell the user when it needs them, then wait again.
 - `wait-timeout` or `unavailable` ends only that wait: wait again for the same `runId`.
 - Any other outcome is a stopped micro task: read the full `get` and act on its `actions`.
 
-A reply can also carry execution or service issues; they do not end a wait by themselves. `EXECUTION_UNKNOWN` says the service cannot verify an execution's process: tell the user and keep waiting on the same `runId`, since unknown never means stopped.
+Each new issue ends a wait once: an issue that stays open does not end the next wait again, its reappearance after it cleared is a new issue, and an issue that cleared before any wait saw it is not reported. Other replies can carry the open issues too. `EXECUTION_UNKNOWN` says the service cannot verify an execution's process: tell the user and keep waiting on the same `runId`, since unknown never means stopped.
 
 Answer exactly the ids a reply gives, never ones remembered from an earlier reply. If a reply is lost, send the same request again, whatever the command: it returns the original instead of acting twice. Do not poll `get` beside a wait.
 
