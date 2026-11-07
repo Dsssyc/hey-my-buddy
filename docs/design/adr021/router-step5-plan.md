@@ -25,7 +25,7 @@
 - **画像的对应建议**：答案的每条建议带 `relation`（same 或 successor）；`blackboard/routing/profile_data.py` 的 `apply_answer` 对 successor 新建一个以候选名字命名的模型并把候选改对应过去。候选只含对应到别的模型的服务（`build_packet`）。
 - **撤回**：`blackboard/evaluation/models.py` 的撤回追加一行，复制同一模型服务倒数第二行的模型；表上有禁止更新与删除的触发器。读整段历史的有两处：`model_view` 的 `names`（路由输入、维护数据包、控制台、画像数据包里“曾经对应到这个模型的名字”）与 `correspondence_view` 的 `canUndo`。外键指向 `models(model_id)` 的表有 11 张，全是 `ON DELETE RESTRICT`。
 - **工具证据**：`protocol/tool_evidence.py` 第 2 版，每次调用一行，只有工具名与类别，没有成败；键集合是严格的，加字段就要升版本。四个 harness 的原生事件里都有成败：Codex 的命令执行有 `status` 与 `exitCode`（网页搜索的条目在我们的样本里没有状态），Claude Code 的 `tool_result.is_error`，DSH 的 ACP `status`（completed 或 failed），ZCode 的 `result` 或 `error` 与 `result.success`；各 harness 的证据收集都把它丢掉了。
-- **DSH 的工具行**（2026-11-07 改定，按 [ADR-023](../../decisions/023-harness-integration-principles.md) 第 10 条）：只联网与不用工具两档启动 DSH 前，用不含用户那一层的 `dsh --profile acp --dump-default-config` 读出现有的全部 `tool-` 行（0.2.2-rc.1 起是参数，输出是 YAML），在启动补丁里关掉这一档不需要的全部行，只联网只留联网所需的几行。读不出或认不出格式时，只联网一档不运行并写明原因，不用工具一档照旧由黑板事后判定。用户用 `dsh plugin add` 装的插件所带的行是否在不含用户层的输出里，实现方先查清；不在的话，改读完整的配置，在内存里只取行名，其余不保存、不写日志。
+- **DSH 的工具行**：`buddy/harnesses/dsh/native_run.py` 的 `NONE_SCOPE_DISABLED_ROWS` 是 2026-10-06 读出的 15 行，只联网一档留着 `tool-web`；启动时不检查有没有别的行。2026-11-07 在 DSH CLI 0.2.2-rc.1 上重跑只联网的原生核实，五项都通过，但没有读工具行清单本身。 同日 Host 用不含用户那一层的 `--dump-default-config` 读出：0.2.2-rc.1 的 `acp` 配置档有 18 个 `tool-` 行，多出 `tool-executor-native`、`tool-executor-ptc`、`tool-plugin-manager`、`tool-working-directory` 四行，少了 `tool-ralph`、`tool-subagent-list-agents`。
 
 ## 口径（Host 定，开发者可改）
 
@@ -54,7 +54,7 @@
 
 - **证据第 3 版**：每次调用一行加成败，取值成功、失败与未知；各 harness 从原生事件取，拿不到的写未知，不猜。第 2 版的文件在它的 attempt 结束后若还有读者，实现方先列出并停下来问。
 - **画像运行的记录**：按工具名的调用次数与失败次数，在读的时候从这次运行的执行结果（证据第 3 版的汇总）推出，不另存进 `profile_runs`，也就没有存量要转换；证据是第 2 版的旧运行，读出来是未知。（2026-11-07 Host 改：原来写另存一份、旧行写成未知，另存的那一份能从执行结果推出，是冗余。）
-- **DSH 的工具行**：只联网与不用工具两档启动 DSH 前读出它实际的 `tool-` 行（2026-10-06 用的是不调模型的 `dump-config`，实现方核对 0.2.2-rc.1 上的读法）；有清单之外的就不运行，记新的原因并写明是哪几行，停在安全的一边。0.2.2-rc.1 若已有新行，先报给 Host，核实它们做什么之后再定是否加进关掉的清单。
+- **DSH 的工具行**（2026-11-07 改定，按 [ADR-023](../../decisions/023-harness-integration-principles.md) 第 10 条）：只联网与不用工具两档启动 DSH 前，用不含用户那一层的 `dsh --profile acp --dump-default-config` 读出现有的全部 `tool-` 行（0.2.2-rc.1 起是参数，输出是 YAML），在启动补丁里关掉这一档不需要的全部行，只联网只留联网所需的几行。读不出或认不出格式时，只联网一档不运行并写明原因，不用工具一档照旧由黑板事后判定。用户用 `dsh plugin add` 装的插件所带的行是否在不含用户层的输出里，实现方先查清；不在的话，改读完整的配置，在内存里只取行名，其余不保存、不写日志。
 
 ### 控制台（最少的改动）
 
