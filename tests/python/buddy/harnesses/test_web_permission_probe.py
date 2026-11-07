@@ -34,7 +34,7 @@ class WebPermissionProbeTests(unittest.TestCase):
         for index, (name, category) in enumerate(calls):
             for phase in ("start", "end"):
                 evidence.observe({"nativeIdentity": native, "callId": f"call-{index}",
-                                  "toolName": name, "category": category, "phase": phase})
+                                  "toolName": name, "category": category, "phase": phase, "outcome": "unknown"})
         package = evidence.finish([native], complete)
         refs = ()
         if native_details is not None:

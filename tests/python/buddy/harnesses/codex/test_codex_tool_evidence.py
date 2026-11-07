@@ -166,10 +166,45 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])), [{
             "nativeIdentity": ROOT, "callId": "item-1", "categories": ["execute"],
             "phases": ["end", "start"], "facts": [{"toolName": "commandExecution", "category": "execute"}],
-            "consistent": True, "endBeforeStart": False,
+            "consistent": True, "endBeforeStart": False, "outcome": "unknown",
             "incomplete": False, "malformed": False, "belongsToRoot": True,
         }])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
+
+    def test_native_terminal_metadata_sets_outcome_without_reading_output(self):
+        cases = (
+            ({"status": "completed", "exitCode": 0}, "success"),
+            ({"status": "completed", "exitCode": 7}, "failure"),
+            ({"status": "failed"}, "failure"),
+            ({"status": "declined"}, "failure"),
+            ({"exitCode": 0}, "unknown"),
+            ({"status": "completed"}, "unknown"),
+        )
+        for terminal, expected in cases:
+            with self.subTest(terminal=terminal):
+                projector = new_projector()
+                self.observe_root(projector)
+                projector.observe_notification(frame("item/started", {"type": "commandExecution", "id": "cmd"}))
+                projector.observe_notification(frame("item/completed", {
+                    "type": "commandExecution", "id": "cmd", "aggregatedOutput": "error", **terminal}))
+                package = projector.finish(True)
+                self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["outcome"], expected)
+        projector = new_projector()
+        self.observe_root(projector)
+        projector.observe_notification(raw({"type": "web_search_call", "id": "web"}))
+        projector.observe_notification(raw({"type": "function_call_output", "id": "web", "output": "ok"}))
+        package = projector.finish(True)
+        self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["outcome"], "unknown")
+        for status, expected in (("completed", "success"), ("failed", "failure")):
+            with self.subTest(raw_status=status):
+                projector = new_projector()
+                self.observe_root(projector)
+                projector.observe_notification(raw({"type": "function_call", "call_id": "raw", "name": "shell"}))
+                projector.observe_notification(raw({"type": "function_call_output", "call_id": "raw",
+                                                    "status": status, "output": "unexamined"}))
+                package = projector.finish(True)
+                self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["outcome"],
+                                 expected)
 
     def test_raw_call_is_the_start_and_only_the_output_is_the_end(self):
         projector = new_projector()
@@ -473,7 +508,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                                                "attemptId": context.attempt_id, "generation": context.generation})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": "thread-1", "turnId": "native-turn-1"}])
         self.assertTrue(evidence["streamComplete"])
-        self.assertEqual(evidence["version"], 2)
+        self.assertEqual(evidence["version"], 3)
         self.assertEqual(evidence["toolCalls"], 2)
         self.assertEqual(evidence["unsettledToolCalls"], 0)
         self.assertEqual([(call["callId"], call["categories"], call["phases"])

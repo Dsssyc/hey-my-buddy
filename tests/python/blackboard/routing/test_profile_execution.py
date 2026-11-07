@@ -13,6 +13,7 @@ from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import profile as files
+from hey_my_buddy.protocol import tool_evidence
 
 
 NONCE = "p" * 32
@@ -69,9 +70,9 @@ class ProfileExecutionTests(BoardTestCase):
             "sourceUrl": "https://example.org/model", "sourceDate": "2026-01-01", "sourceKind": "vendor"}],
             "correspondences": correspondences or []}
 
-    def settle(self, claim, *, tool_calls=0, tool_name=None, stream_complete=True):
+    def settle(self, claim, *, tool_calls=0, tool_name=None, stream_complete=True, outcomes=None):
         result = {**claim_tool_receipt(claim, tool_calls, state_dir=self.board_.directory,
-                                       tool_name=tool_name, stream_complete=stream_complete), "status": "ok",
+                                       tool_name=tool_name, stream_complete=stream_complete, outcomes=outcomes), "status": "ok",
                   "operation": "profile", "requested": claim["decisionInput"]["buddy"],
                   "usage": {"elapsedMs": 120, "toolCalls": tool_calls},
                   "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}}}
@@ -128,6 +129,7 @@ class ProfileExecutionTests(BoardTestCase):
         self.assertEqual(view["latestProfileRun"]["state"], "completed")
         self.assertEqual(view["latestProfileRun"]["usage"]["attempts"][0]["elapsedMs"], 120)
         self.assertEqual(view["latestProfileRun"]["correctionRounds"], 0)
+        self.assertEqual(view["latestProfileRun"]["toolSummary"], [])
         replacement = self.start()
         self.assertNotEqual(replacement["profileRunId"], started["profileRunId"])
         next_claim = self.claim(replacement)
@@ -141,6 +143,74 @@ class ProfileExecutionTests(BoardTestCase):
         self.assertEqual([item["claim"] for item in replaced["profile"]["claims"]],
                          ["Different sourced claim"])
         self.assertEqual(replaced["profile"]["profileRunId"], replacement["profileRunId"])
+
+    def test_latest_run_reads_outcome_summary_from_result_even_when_publication_fails(self):
+        self.configure()
+        claim = self.claim(self.start())
+        self.answer(claim, 0, self.valid_answer())
+        self.settle(claim, tool_calls=3, tool_name='read', outcomes=['success', 'failure', 'unknown'])
+        # Reading a forbidden tool prevents publication; its observed outcomes
+        # still explain this failed run and require no access to native files.
+        with patch('hey_my_buddy.protocol.tool_evidence.read_tool_calls', side_effect=AssertionError('no file reads')):
+            view = self.model_view()['latestProfileRun']
+        self.assertEqual(view['state'], 'failed')
+        self.assertEqual(view['toolSummary'], [
+            {'toolName': 'read', 'calls': 3, 'failed': 1, 'unknown': 1}])
+        with self.board_.store.db.read() as db:
+            stored = json.loads(db.execute('SELECT usage_json FROM profile_runs WHERE task_id=?',
+                                          (claim['task']['taskId'],)).fetchone()[0])
+        self.assertNotIn('toolSummary', stored)
+        self.assertNotIn('toolSummary', stored['attempts'][0])
+
+    def test_old_run_without_outcome_summary_is_unknown_and_is_not_rewritten(self):
+        self.configure()
+        claim = self.claim(self.start())
+        self.answer(claim, 0, self.valid_answer())
+        self.settle(claim)
+        attempt_id = claim['attempt']['attemptId']
+        with self.board_.store.db.write() as db:
+            recorded = json.loads(db.execute('SELECT result_json FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()[0])
+            evidence = recorded['result']['toolEvidence']
+            evidence['version'] = 2
+            evidence.pop('toolSummary')
+            legacy = json.dumps(recorded)
+            # Represent a pre-v3 sealed result, never feed old evidence to a
+            # new execution or regenerate its per-call file.
+            db.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?', (legacy, attempt_id))
+        with patch('hey_my_buddy.protocol.tool_evidence.read_tool_calls', side_effect=AssertionError('no legacy file reads')):
+            self.assertIsNone(self.model_view()['latestProfileRun']['toolSummary'])
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute('SELECT result_json FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()[0], legacy)
+
+    def test_latest_run_sums_summaries_of_all_its_attempt_results(self):
+        self.configure()
+        claim = self.claim(self.start())
+        self.answer(claim, 0, self.valid_answer())
+        self.settle(claim, tool_calls=2, tool_name='read', outcomes=['failure', 'unknown'])
+        with self.board_.store.db.write() as db:
+            original = db.execute('SELECT * FROM attempts WHERE attempt_id=?', (claim['attempt']['attemptId'],)).fetchone()
+            next_attempt = dict(original)
+            next_attempt.update(attempt_id='later-profile-attempt', generation=original['generation'] + 1)
+            recorded = json.loads(next_attempt['result_json'])
+            binding = {**recorded['result']['toolEvidence']['binding'],
+                       'attemptId': next_attempt['attempt_id'], 'generation': next_attempt['generation']}
+            collector = tool_evidence.ToolEventEvidence(binding, state_dir=self.board_.directory)
+            identity = {'sessionId': 'later-profile-session'}
+            for index, (name, outcome) in enumerate((('read', 'success'), ('read', 'failure'), ('search', 'unknown'))):
+                for phase in ('start', 'end'):
+                    collector.observe({'nativeIdentity': identity, 'callId': f'call-{index}',
+                                       'toolName': name, 'category': 'read', 'phase': phase,
+                                       'outcome': outcome if phase == 'end' else 'unknown'})
+            recorded['result']['toolEvidence'] = collector.finish([identity], True)
+            recorded['result']['nativeIdentity'] = identity
+            recorded['result']['usage']['toolCalls'] = 3
+            next_attempt['result_json'] = json.dumps(recorded)
+            columns = ','.join(next_attempt)
+            db.execute(f'INSERT INTO attempts({columns}) VALUES({",".join("?" for _ in next_attempt)})', tuple(next_attempt.values()))
+        with patch('hey_my_buddy.protocol.tool_evidence.read_tool_calls', side_effect=AssertionError('no file reads')):
+            self.assertEqual(self.model_view()['latestProfileRun']['toolSummary'], [
+                {'toolName': 'read', 'calls': 4, 'failed': 2, 'unknown': 1},
+                {'toolName': 'search', 'calls': 1, 'failed': 0, 'unknown': 1}])
 
     def test_invalid_answers_return_field_feedback_and_preserve_previous_profile(self):
         self.configure()

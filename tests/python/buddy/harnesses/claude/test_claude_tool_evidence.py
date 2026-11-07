@@ -62,14 +62,16 @@ def block_stop(session="session-root"):
             "event": {"type": "content_block_stop", "index": 1}}
 
 
-def tool_result(call_id, session="session-root", parent=None):
+def tool_result(call_id, session="session-root", parent=None, is_error=None):
     fields = {}
     if session is not None:
         fields["session_id"] = session
     if parent is not None:
         fields["parent_tool_use_id"] = parent
-    return {"type": "user", "message": {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": call_id, "content": "ok"}]}, **fields}
+    block = {"type": "tool_result", "tool_use_id": call_id, "content": "ok"}
+    if is_error is not None:
+        block["is_error"] = is_error
+    return {"type": "user", "message": {"role": "user", "content": [block]}, **fields}
 
 
 def result_frame(session="session-root"):
@@ -113,6 +115,14 @@ def settled_stream():
 
 
 class ProjectionTests(unittest.TestCase):
+    def test_tool_result_error_flag_sets_only_explicit_outcomes(self):
+        for error, expected in ((False, "success"), (True, "failure"), (None, "unknown")):
+            with self.subTest(error=error):
+                _, package = project([init_frame(), assistant_tool("Read", "toolu_1"),
+                                      tool_result("toolu_1", is_error=error)])
+                self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["outcome"],
+                                 expected)
+
     def test_collector_uses_its_explicit_state_root(self):
         with tempfile.TemporaryDirectory(prefix="claude-evidence-root-") as directory:
             state_dir = Path(directory) / "state"
@@ -130,7 +140,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(package["nativeIdentity"], [ROOT])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (2, 0))
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(package["version"], 2)
+        self.assertEqual(package["version"], 3)
         self.assertEqual([(call["callId"], call["categories"], call["phases"])
                           for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
                          [("toolu_1", ["read"], ["end", "start"]),
@@ -559,7 +569,7 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["usage"]["toolCalls"], 2)
         self.assertIsInstance(receipt["usage"]["elapsedMs"], int)
         evidence = receipt["toolEvidence"]
-        self.assertEqual(evidence["version"], 2)
+        self.assertEqual(evidence["version"], 3)
         self.assertEqual(evidence["binding"], {"harness": "claude", "taskId": "micro-task-1",
                                                "attemptId": context.attempt_id, "generation": 1})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": session}])

@@ -137,5 +137,25 @@ def console_model_view(connection, model_id):
         "buddy": {key: latest[key] for key in ('harness', 'provider', 'model', 'effort')},
         "state": latest['state'], "reason": reason_from_json(latest['reason_code'], latest['reason_params_json']),
         "startedAt": latest['started_at'], "finishedAt": latest['finished_at'], "correctionRounds": latest['correction_rounds'],
-        "usage": json.loads(latest['usage_json']) if latest['usage_json'] else None}
+        "usage": json.loads(latest['usage_json']) if latest['usage_json'] else None,
+        "toolSummary": _profile_tool_summary(connection, latest['task_id'])}
     return {**model_view(connection, model_id), "profile": profile_view(connection, model_id), "latestProfileRun": run}
+
+
+def _profile_tool_summary(connection, task_id):
+    """Read sealed result summaries; older evidence has no outcome statistics.
+
+    Null means unknown, including a result without evidence. An empty list
+    means no tools were observed. Pending attempts have no facts to contribute.
+    """
+    from ...protocol.tool_evidence import merge_tool_summaries
+    summaries = []
+    for row in connection.execute(
+            'SELECT result_json FROM attempts WHERE task_id=? AND result_json IS NOT NULL ORDER BY generation',
+            (task_id,)):
+        result = json.loads(row['result_json']).get('result') or {}
+        evidence = result.get('toolEvidence')
+        if evidence is None or evidence['version'] == 2:
+            return None
+        summaries.append(evidence['toolSummary'])
+    return merge_tool_summaries(summaries)

@@ -425,7 +425,7 @@ class CodecRoundtripTests(unittest.TestCase):
         for index in range(1000):
             for phase in ("start", "end"):
                 collector.observe({"nativeIdentity": root, "callId": f"c{index}" + "x" * 120,
-                                   "toolName": "mcp_" + "n" * 500, "category": "other", "phase": phase})
+                                   "toolName": "mcp_" + "n" * 500, "category": "other", "phase": phase, "outcome": "unknown"})
         package = collector.finish([root], True)
         self.assertGreater(package["calls"]["bytes"], rc.MAX_PACKAGE_BYTES)
         self.assertLess(len(json.dumps(package).encode()), 4096)
@@ -776,13 +776,13 @@ class InterfaceSurfaceTests(unittest.TestCase):
         carried = json.loads(json.dumps(package))
         row = {"nativeIdentity": {}, "callId": None, "categories": ["other"], "phases": [],
                "facts": [{"toolName": None, "category": "other"}], "consistent": True,
-               "endBeforeStart": False, "incomplete": True, "malformed": True, "belongsToRoot": False}
+               "endBeforeStart": False, "incomplete": True, "malformed": True, "belongsToRoot": False, "outcome": "unknown"}
         carried["calls"] = tool_evidence.write_tool_calls(carried["binding"], [row], state_dir=STATE_DIR)
         payload = full_result().to_payload()
         payload["toolEvidence"] = carried
         decoded = rc.RunResult.from_payload(payload)
         self.assertEqual(list(tool_evidence.read_tool_calls(decoded.tool_evidence.value, state_dir=STATE_DIR)), [row])
-        for mutation in ({"version": 1}, {"calls": []},
+        for mutation in ({"version": 1}, {"version": 2}, {"calls": []},
                          {"calls": {**package["calls"], "sha256": "x" * 64}},
                          {"calls": {**package["calls"], "path": "relative/calls.jsonl"}},
                          {"calls": {**package["calls"], "bytes": True}}):

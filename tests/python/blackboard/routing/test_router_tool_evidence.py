@@ -19,8 +19,8 @@ SECOND_ROOT = {"sessionId": "session-2", "inputId": "input-2"}
 def settled(category, call_id, identity=None, tool="native-tool"):
     identity = dict(identity or ROOT)
     return [
-        {"nativeIdentity": identity, "callId": call_id, "toolName": tool, "category": category, "phase": "start"},
-        {"nativeIdentity": identity, "callId": call_id, "toolName": tool, "category": category, "phase": "end"},
+        {"nativeIdentity": identity, "callId": call_id, "toolName": tool, "category": category, "phase": "start", "outcome": "unknown"},
+        {"nativeIdentity": identity, "callId": call_id, "toolName": tool, "category": category, "phase": "end", "outcome": "unknown"},
     ]
 
 

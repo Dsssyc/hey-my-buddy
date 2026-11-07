@@ -228,6 +228,28 @@ class ProjectionTests(unittest.TestCase):
         facts.add_root("s-1", "t-1")
         return facts
 
+    def test_native_result_and_error_kinds_set_outcome(self):
+        cases = (("result", {"result": {"success": True}}, "success"),
+                 ("result", {"result": {"success": False}}, "failure"),
+                 ("result", {"result": {"content": "ok"}}, "unknown"),
+                 ("error", {"error": {"message": "failed"}}, "failure"))
+        for kind, extra, expected in cases:
+            with self.subTest(kind=kind, extra=extra):
+                facts = self.facts()
+                facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read"}))
+                facts.observe(frame({"kind": kind, "toolCallId": "c-1", **extra}, seq=3))
+                call = list(tool_evidence.read_tool_calls(facts.finish(True), state_dir=self.state_dir))[0]
+                self.assertEqual(call["outcome"], expected)
+
+    def test_verified_permission_denial_is_a_failed_end(self):
+        facts = self.facts()
+        facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read"}))
+        facts.observe_denial({**ROOT, "event": "tool.permission.denied", "status": "failed",
+                              "toolCallId": "c-1", "context": {"decision": "deny", "toolName": "Read"}})
+        package = facts.finish(True)
+        call = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))[0]
+        self.assertEqual((call["outcome"], call["phases"]), ("failure", ["end", "start"]))
+
     def test_verified_delivery_exclusion_joins_the_root_and_preserves_unsettled_counts(self):
         facts = self.facts()
         for session, turn, name in (("s-1", "t-1", "mcp__session__finish"),
@@ -284,7 +306,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir)), [
             {"nativeIdentity": dict(ROOT), "callId": "c-1", "categories": ["read"],
              "phases": ["end", "start"], "facts": [{"toolName": "Read", "category": "read"}],
-             "consistent": True, "endBeforeStart": False,
+             "consistent": True, "endBeforeStart": False, "outcome": "unknown",
              "incomplete": False, "malformed": False, "belongsToRoot": True}])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
         self.assertEqual(package["binding"], BINDING)
@@ -327,7 +349,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir)), [
             {"nativeIdentity": dict(ROOT), "callId": "c-1", "categories": ["other"],
              "phases": ["end"], "facts": [{"toolName": None, "category": "other"}],
-             "consistent": True, "endBeforeStart": True,
+             "consistent": True, "endBeforeStart": True, "outcome": "unknown",
              "incomplete": True, "malformed": True, "belongsToRoot": True}])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (0, 0))
         self.assertFalse(package["streamComplete"])
@@ -341,7 +363,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir)), [
             {"nativeIdentity": dict(ROOT), "callId": None, "categories": ["execute"],
              "phases": ["start"], "facts": [{"toolName": "Bash", "category": "execute"}],
-             "consistent": True, "endBeforeStart": False,
+             "consistent": True, "endBeforeStart": False, "outcome": "unknown",
              "incomplete": True, "malformed": True, "belongsToRoot": True}])
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
@@ -618,7 +640,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         outcome = self.execute("ok")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         package = outcome.result["toolEvidence"]
-        self.assertEqual(package["version"], 2)
+        self.assertEqual(package["version"], 3)
         self.assertEqual(package["binding"], {"harness": "zcode", "taskId": "task",
                                               "attemptId": "attempt", "generation": 1})
         self.assertEqual(package["nativeIdentity"], [{"sessionId": "s-1", "turnId": "t-1"}])
@@ -660,7 +682,9 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
 
     def test_foreign_child_call_is_a_kept_foreign_fact(self):
         outcome = self.execute("tool-foreign")
-        self.assertEqual(outcome.result["code"], "no-tool-violation")
+        # The lifecycle observer rejects a foreign session before the role's
+        # no-tool judgment; projection still retains its native call below.
+        self.assertEqual(outcome.result["code"], "invalid-protocol")
         package = outcome.result["toolEvidence"]
         call = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))[0]
         self.assertEqual(call["nativeIdentity"], {"sessionId": "s-child", "turnId": "t-child"})

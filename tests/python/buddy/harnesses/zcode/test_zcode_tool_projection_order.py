@@ -91,6 +91,25 @@ class NativeProjectionTests(unittest.TestCase):
         self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True), state_dir=self.state_dir))[0]["phases"],
                          ["start"])
 
+    def test_conflicting_metadata_and_canonical_outcomes_stay_unknown(self):
+        self.scheduled()
+        self.metadata("failed")
+        self.canonical("tool.updated", {"kind": "result", "toolCallId": "read", "result": {"success": True}})
+        package = self.facts.finish(True)
+        self.assertEqual(package["toolSummary"], [
+            {"toolName": "Read", "calls": 1, "failed": 0, "unknown": 1}])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))[0]["outcome"], "unknown")
+        self.assertIsNotNone(self.judge())
+
+    def test_disagreeing_repeated_terminal_facts_stay_unknown(self):
+        self.scheduled()
+        self.canonical("tool.updated", {"kind": "result", "toolCallId": "read", "result": {"success": True}})
+        self.canonical("tool.updated", {"kind": "result", "toolCallId": "read"})
+        package = self.facts.finish(True)
+        self.assertEqual(package["toolSummary"], [
+            {"toolName": "Read", "calls": 1, "failed": 0, "unknown": 1}])
+        self.assertIsNotNone(self.judge())
+
     def test_metadata_start_without_canonical_start_stays_incomplete(self):
         self.operation("scheduled")
         self.metadata("scheduled", turn=None)

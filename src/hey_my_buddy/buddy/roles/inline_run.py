@@ -143,6 +143,7 @@ def _profile_execute(control, handle, module, started):
             "calls": tool_evidence.write_tool_calls(binding, calls, state_dir=Path(control["stateDir"])),
             "toolCalls": sum(evidence["toolCalls"] for evidence in evidences),
             "unsettledToolCalls": sum(evidence["unsettledToolCalls"] for evidence in evidences),
+            "toolSummary": tool_evidence.merge_tool_summaries(evidence["toolSummary"] for evidence in evidences),
         }
     def any_fact(values):
         return True if True in values else None if None in values else False

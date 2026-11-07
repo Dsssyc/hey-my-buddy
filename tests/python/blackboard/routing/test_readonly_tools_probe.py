@@ -7,7 +7,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
-from hey_my_buddy.protocol.tool_evidence import read_tool_calls, write_tool_calls
+from hey_my_buddy.protocol.tool_evidence import read_tool_calls, summarize_tool_calls, write_tool_calls
 
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from blackboard.routing.fixtures.router_tool_receipt import tool_receipt
@@ -138,6 +138,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
                     call['categories'] = ['execute']
                     call['facts'] = [{'toolName': 'native-command', 'category': 'execute'}]
                 evidence['calls'] = write_tool_calls(evidence['binding'], calls, state_dir=self.state_dir)
+                evidence['toolSummary'] = summarize_tool_calls(calls)
                 self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True,
                                                 state_dir=self.state_dir)['status'], 'passed')
                 packet['permission'] = 'none'

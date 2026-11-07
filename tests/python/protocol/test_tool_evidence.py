@@ -45,11 +45,11 @@ def native_fact(tool, call_id="call-1", phase="start", identity=None, **extra):
     return {"nativeIdentity": dict(identity or IDENTITY), "callId": call_id, "toolName": tool, "phase": phase, **extra}
 
 
-def settled_events(category, call_id="call-1", identity=None, tool="native-tool"):
+def settled_events(category, call_id="call-1", identity=None, tool="native-tool", outcome="unknown"):
     identity = dict(identity or IDENTITY)
     return [
-        {"nativeIdentity": identity, "callId": call_id, "toolName": tool, "category": category, "phase": "start"},
-        {"nativeIdentity": identity, "callId": call_id, "toolName": tool, "category": category, "phase": "end"},
+        {"nativeIdentity": identity, "callId": call_id, "toolName": tool, "category": category, "phase": "start", "outcome": "unknown"},
+        {"nativeIdentity": identity, "callId": call_id, "toolName": tool, "category": category, "phase": "end", "outcome": outcome},
     ]
 
 
@@ -73,7 +73,7 @@ class NormalizeToolEventTests(unittest.TestCase):
                     self.assertEqual(event["category"], category)
                     self.assertEqual(
                         set(event),
-                        {"nativeIdentity", "callId", "toolName", "category", "phase"},
+                        {"nativeIdentity", "callId", "toolName", "category", "phase", "outcome"},
                     )
 
     def test_unregistered_tools_stay_other_and_never_borrow_a_legal_category(self):
@@ -146,10 +146,62 @@ class NormalizeToolEventTests(unittest.TestCase):
         event = tool_evidence.normalize_tool_event("zcode", native_fact(
             "Read", arguments={"path": "/etc/passwd"}, content="file body", modelClaim="read-only"))
         self.assertEqual(event, {"nativeIdentity": dict(IDENTITY), "callId": "call-1",
-                                 "toolName": "Read", "category": "read", "phase": "start"})
+                                 "toolName": "Read", "category": "read", "phase": "start", "outcome": "unknown"})
 
 
 class ToolEventEvidenceTests(unittest.TestCase):
+    def test_outcomes_are_counted_by_tool_after_deduplication_and_delivery_exclusion(self):
+        tracker = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
+        events = (settled_events("fetch", "ok", tool="WebFetch", outcome="success")
+                  + settled_events("fetch", "failed", tool="WebFetch", outcome="failure")
+                  + settled_events("fetch", "unknown", tool="WebFetch")
+                  + settled_events("search", "search", tool="Grep", outcome="success")
+                  + settled_events("other", "delivery", tool="finish", outcome="success"))
+        for event in events * 3:
+            tracker.observe(event)
+        package = tracker.finish([IDENTITY], True, exclude_calls={(canonical_json(IDENTITY), "delivery")})
+        self.assertEqual(package["toolSummary"], [
+            {"toolName": "Grep", "calls": 1, "failed": 0, "unknown": 0},
+            {"toolName": "WebFetch", "calls": 3, "failed": 1, "unknown": 1}])
+        self.assertEqual([row["outcome"] for row in call_rows(package)],
+                         ["success", "failure", "unknown", "success"])
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR))
+
+    def test_open_calls_are_unknown_and_orphan_ends_add_no_calls(self):
+        package = collect([settled_events("fetch", "open", tool="WebFetch")[0],
+                           settled_events("fetch", "orphan", tool="WebFetch", outcome="failure")[1]])
+        self.assertEqual(package["toolSummary"], [
+            {"toolName": "WebFetch", "calls": 1, "failed": 0, "unknown": 1}])
+
+    def test_codex_typed_and_raw_names_count_one_native_operation(self):
+        package = collect(settled_events("execute", tool="commandExecution", outcome="success")
+                          + settled_events("execute", tool="shell"), binding={**BINDING, "harness": "codex"})
+        self.assertEqual(package["toolSummary"], [
+            {"toolName": "shell", "calls": 1, "failed": 0, "unknown": 0}])
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR))
+
+    def test_conflicting_outcomes_are_unknown_and_cannot_publish(self):
+        for outcomes in (("success", "failure"), ("failure", "success")):
+            with self.subTest(outcomes=outcomes):
+                package = collect([event for outcome in outcomes for event in
+                                   settled_events("read", outcome=outcome)])
+                self.assertEqual(call_rows(package)[0]["outcome"], "unknown")
+                self.assertTrue(call_rows(package)[0]["incomplete"])
+                self.assertEqual(package["toolSummary"], [
+                    {"toolName": "native-tool", "calls": 1, "failed": 0, "unknown": 1}])
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
+                                 tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_incomplete_call_does_not_claim_a_known_outcome(self):
+        tracker = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
+        for event in settled_events("read", outcome="success"):
+            tracker.observe(event)
+        tracker.observe_incomplete("zcode", native_fact("native-tool", phase="end"))
+        package = tracker.finish([IDENTITY], True)
+        self.assertEqual(call_rows(package)[0]["outcome"], "unknown")
+        self.assertEqual(package["toolSummary"], [
+            {"toolName": "native-tool", "calls": 1, "failed": 0, "unknown": 1}])
+
     def test_product_tool_path_over_260_characters_is_published_and_read_as_ordinary_path(self):
         state = STATE_DIR / ('long-state-' + 'a' * 50)
         binding = {**BINDING, 'taskId': 'f' * 36, 'attemptId': 'a' * 36}
@@ -247,7 +299,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
             "facts": [{"toolName": "shell", "category": "execute"}],
             "consistent": True, "endBeforeStart": False, "incomplete": True,
             "malformed": True, "belongsToRoot": False,
-        }])
+         "outcome": "unknown"}])
         self.assertFalse(package["streamComplete"])
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
@@ -274,7 +326,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
     def test_package_carries_exactly_the_fixed_fields_and_digest_file(self):
         package = collect(settled_events("read"))
         self.assertEqual(set(package), tool_evidence.PACKAGE_FIELDS)
-        self.assertEqual(package["version"], 2)
+        self.assertEqual(package["version"], 3)
         self.assertEqual(package["binding"], BINDING)
         self.assertEqual(package["nativeIdentity"], [IDENTITY])
         self.assertTrue(package["streamComplete"])
@@ -285,7 +337,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
             "phases": ["end", "start"], "facts": [{"toolName": "native-tool", "category": "read"}],
             "consistent": True, "endBeforeStart": False,
             "incomplete": False, "malformed": False, "belongsToRoot": True,
-        }])
+         "outcome": "unknown"}])
 
     def test_a_settled_call_counts_once_and_raw_high_level_duplicates_collapse(self):
         package = collect(settled_events("read") * 3)
@@ -382,6 +434,42 @@ class ToolEventEvidenceTests(unittest.TestCase):
 
 
 class JudgeToolEvidenceTests(unittest.TestCase):
+    def test_v2_new_evidence_is_rejected_even_with_a_valid_call_file(self):
+        package = collect(settled_events("read"))
+        for legacy in ({**package, "version": 2},
+                       {key: value for key, value in {**package, "version": 2}.items() if key != "toolSummary"}):
+            with self.subTest(fields=set(legacy)):
+                with self.assertRaises(BoardError):
+                    tool_evidence.validate_tool_evidence_package(legacy)
+                self.assertEqual(tool_evidence.judge_tool_evidence(legacy, "read", state_dir=STATE_DIR),
+                                 tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_summary_cannot_claim_success_for_a_failed_call(self):
+        package = collect(settled_events("fetch", tool="WebFetch", outcome="failure"))
+        package["toolSummary"][0]["failed"] = 0
+        tool_evidence.validate_tool_evidence_package(package)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_summary_schema_rejects_invalid_counts_duplicates_and_extra_fields(self):
+        package = collect(settled_events("read"))
+        entry = package["toolSummary"][0]
+        for summary in (None, [entry, entry], [{**entry, "calls": True}],
+                        [{**entry, "failed": 2}], [{**entry, "unknown": -1}],
+                        [{**entry, "extra": 1}], [{**entry, "toolName": ""}]):
+            with self.subTest(summary=summary), self.assertRaises(BoardError):
+                tool_evidence.validate_tool_evidence_package({**package, "toolSummary": summary})
+
+    def test_invalid_outcome_or_known_outcome_without_end_is_rejected(self):
+        package = collect(settled_events("read"))
+        row = call_rows(package)[0]
+        for change in ({"outcome": "ok"}, {"outcome": False},
+                       {"outcome": "success", "phases": ["start"]}):
+            with self.subTest(change=change):
+                reference = tool_evidence.write_tool_calls(BINDING, [{**row, **change}], state_dir=STATE_DIR)
+                self.assertEqual(tool_evidence.judge_tool_evidence({**package, "calls": reference}, "read", state_dir=STATE_DIR),
+                                 tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
     def test_fast_mode_requires_complete_zero_tool_evidence(self):
         self.assertIsNone(tool_evidence.judge_tool_evidence(collect([]), "none", state_dir=STATE_DIR))
         self.assertEqual(tool_evidence.judge_tool_evidence(collect(settled_events("read")), "none", state_dir=STATE_DIR),

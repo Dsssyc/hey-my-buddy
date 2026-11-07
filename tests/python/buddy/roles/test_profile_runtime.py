@@ -26,7 +26,7 @@ class ProfileRuntimeTests(unittest.TestCase):
                                           "toolCalls": tool_calls}},
         }
 
-    def _run(self, control, responses):
+    def _run(self, control, responses, *, outcomes=None):
         seen = []
         publications = []
         handle = run_execution.InlineRunHandle(control, rc.RunIdentity(
@@ -47,9 +47,10 @@ class ProfileRuntimeTests(unittest.TestCase):
                 "attemptId": "attempt", "generation": 1}, state_dir=Path(control["stateDir"]))
             for index in range(calls):
                 evidence.observe({"nativeIdentity": identity, "callId": f"call-{index}",
-                                  "toolName": "web_search_call", "category": "fetch", "phase": "start"})
+                                  "toolName": "web_search_call", "category": "fetch", "phase": "start", "outcome": "unknown"})
                 evidence.observe({"nativeIdentity": identity, "callId": f"call-{index}",
-                                  "toolName": "web_search_call", "category": "fetch", "phase": "end"})
+                                  "toolName": "web_search_call", "category": "fetch", "phase": "end",
+                                  "outcome": outcomes[len(seen) - 1][index] if outcomes else "unknown"})
             result = rc.RunResult(
                 identity=request.identity, harness=request.harness,
                 end=rc.RunEnd(status="ok", native_exit_code=0),
@@ -105,6 +106,21 @@ class ProfileRuntimeTests(unittest.TestCase):
         self.assertEqual(verdict['tokenUsage']['inputTokens'], 36)
         self.assertEqual(verdict['tokenUsage']['cachedInputTokens'], 6)
         self.assertEqual(verdict['tokenUsage']['outputTokens'], 9)
+
+    def test_correction_rounds_preserve_and_sum_each_call_outcome(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _seen, _publications, verdict, code = self._run(
+                self._control(Path(directory), tool_calls=5),
+                [('first', 2), ('second', 1), ('final', 1)],
+                outcomes=[['success', 'failure'], ['unknown'], ['failure']])
+            package = verdict['toolEvidence']
+            self.assertEqual(package['version'], 3)
+            self.assertEqual(package['toolSummary'], [
+                {'toolName': 'web_search_call', 'calls': 4, 'failed': 2, 'unknown': 1}])
+            self.assertEqual([row['outcome'] for row in tool_evidence.read_tool_calls(package, state_dir=Path(directory))],
+                             ['success', 'failure', 'unknown', 'failure'])
+            self.assertIsNone(tool_evidence.judge_tool_evidence(package, 'web', state_dir=Path(directory)))
+        self.assertEqual(code, 0)
 
     def test_rejected_answer_cannot_start_another_session_after_tool_budget(self):
         with tempfile.TemporaryDirectory() as directory:

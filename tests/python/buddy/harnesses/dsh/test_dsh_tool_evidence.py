@@ -51,6 +51,18 @@ class DshToolFactsTests(unittest.TestCase):
         self.addCleanup(private.cleanup)
         self.state_dir = Path(private.name) / "state"
 
+    def test_terminal_acp_status_sets_outcome_and_pending_stays_unknown(self):
+        for status, expected in (("completed", "success"), ("failed", "failure"),
+                                 ("in_progress", "unknown")):
+            with self.subTest(status=status):
+                collector = DshToolFacts(dict(BINDING), state_dir=self.state_dir)
+                collector.add_root("session-1")
+                collector.observe(update(name="read", status=status))
+                package = collector.finish(True)
+                call = list(read_tool_calls(package, state_dir=self.state_dir))[0]
+                self.assertEqual(call["outcome"], expected)
+                self.assertEqual(package["unsettledToolCalls"], int(status == "in_progress"))
+
     def test_known_names_classify_through_the_fixed_table_and_unknown_stay_other(self):
         for name, category in (("read", "read"), ("glob", "search"), ("bash", "execute"), ("write", "edit"), ("edit", "edit"), ("run-command", "other")):
             with self.subTest(name=name):

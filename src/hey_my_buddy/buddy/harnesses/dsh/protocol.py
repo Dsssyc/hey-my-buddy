@@ -68,6 +68,10 @@ def _bounded_text(value: object) -> str | None:
     return value if isinstance(value, str) and 0 < len(value) <= 512 else None
 
 
+def _status_outcome(status: str) -> str:
+    return "success" if status == "completed" else "failure"
+
+
 class DshToolFacts:
     """One run's tool-fact projection across its correction sessions.
 
@@ -120,25 +124,26 @@ class DshToolFacts:
         call_id = _bounded_text(update.get("toolCallId"))
         name = _bounded_text(update.get("title"))
         if kind == "tool_call":
-            self._project(identity, call_id, name, "start")
+            self._project(identity, call_id, name, "start", "unknown")
             if isinstance(update.get("status"), str) and update["status"] in _TERMINAL_STATUS:
                 # A one-frame call: the opening frame already carries the terminal
                 # status, so the same named call gets its end fact from it.
-                self._project(identity, call_id, name, "end")
+                self._project(identity, call_id, name, "end", _status_outcome(update["status"]))
             return
         if update.get("status") not in _TERMINAL_STATUS:
             return  # pending/in_progress: no settled fact exists yet
         remembered = self._names.get((session, call_id)) if session and call_id else None
-        self._project(identity, call_id, remembered, "end")
+        self._project(identity, call_id, remembered, "end", _status_outcome(update["status"]))
 
     def _project(self, identity: dict, call_id: str | None, name: str | None,
-                 phase: str) -> None:
+                 phase: str, outcome: str) -> None:
         if identity and call_id and name:
             key = (identity["sessionId"], call_id)
             if phase == "start":
                 self._names.setdefault(key, name)
             event = normalize_tool_event(HARNESS, {
-                "nativeIdentity": identity, "callId": call_id, "toolName": name, "phase": phase})
+                "nativeIdentity": identity, "callId": call_id, "toolName": name,
+                "phase": phase, "outcome": outcome})
             self.evidence.observe(event)
             return
         self._incomplete(identity, call_id, name, phase)

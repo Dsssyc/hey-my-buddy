@@ -152,7 +152,8 @@ class CodexToolEventProjector:
             self._incomplete(params, tool_name=kind, phase=None)
             return
         self._observe(params, phase="start" if method == "item/started" else "end",
-                      tool_name=kind, call_id=item.get("id") or item.get("call_id"))
+                      tool_name=kind, call_id=item.get("id") or item.get("call_id"),
+                      outcome=_native_outcome(item, kind) if method == "item/completed" else "unknown")
 
     def _raw(self, params) -> None:
         item = params.get("item") if isinstance(params, dict) else None
@@ -186,12 +187,15 @@ class CodexToolEventProjector:
             correlated = self._started.get((canonical_json(identity), call_id))
         # Without a proven association only the output's own type is reported.
         self._observe(params, phase="end", tool_name=correlated[0] if correlated else kind,
-                      native_type=correlated[1] if correlated else None, call_id=call_id)
+                      native_type=correlated[1] if correlated else None, call_id=call_id,
+                      outcome=_native_outcome(item, kind))
 
-    def _observe(self, params, *, phase: str, tool_name, call_id, native_type=None) -> None:
+    def _observe(self, params, *, phase: str, tool_name, call_id, native_type=None,
+                 outcome="unknown") -> None:
         identity = native_identity(params)
         fact = {"nativeIdentity": identity or {}, "callId": call_id,
-                "toolName": tool_name, "phase": phase, **({"type": native_type} if native_type else {})}
+                "toolName": tool_name, "phase": phase, "outcome": outcome,
+                **({"type": native_type} if native_type else {})}
         if (identity is None or "sessionId" not in identity or "turnId" not in identity
                 or not isinstance(call_id, str) or not call_id or len(call_id) > 512):
             # A frame without a provable session/turn pair cannot be bound to
@@ -210,6 +214,19 @@ class CodexToolEventProjector:
     def _incomplete(self, params, *, tool_name, phase) -> None:
         self.evidence.observe_incomplete(HARNESS, {"nativeIdentity": native_identity(params) or {},
                                                    "callId": None, "toolName": tool_name, "phase": phase})
+
+
+def _native_outcome(item: dict, kind: str) -> str:
+    """Use terminal native metadata; never inspect output text or result bodies."""
+    status = item.get("status")
+    if status in ("failed", "declined"):
+        return "failure"
+    exit_code = item.get("exitCode")
+    if kind == "commandExecution":
+        if type(exit_code) is int and exit_code != 0:
+            return "failure"
+        return "success" if status == "completed" and type(exit_code) is int and exit_code == 0 else "unknown"
+    return "success" if status == "completed" else "unknown"
 
 def native_identity(params) -> dict | None:
     """The frame's real session/turn pair, or ``None`` when both are absent.

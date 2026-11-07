@@ -162,7 +162,10 @@ class ZcodeToolFacts:
             # The envelope type is not an operation type and is never passed as
             # one; the shared table classifies the scheduled tool name alone.
             self.evidence.observe(normalize_tool_event(HARNESS, {
-                "nativeIdentity": dict(identity), "callId": call_id, "toolName": name, "phase": phase}))
+                "nativeIdentity": dict(identity), "callId": call_id, "toolName": name,
+                "phase": phase,
+                "outcome": ("failure" if outcome is False else "success" if outcome is True
+                            else "unknown") if phase == "end" else "unknown"}))
             return
         self._incomplete(params, identity, call_id, phase, name)
 
@@ -251,7 +254,8 @@ class ZcodeToolFacts:
         if key in self._metadata_outcomes and self._metadata_outcomes[key] is not False:
             self._incomplete(record, identity, call_id, "end", name)
         self.evidence.observe(normalize_tool_event(HARNESS, {
-            "nativeIdentity": identity, "callId": call_id, "toolName": name, "phase": "end"}))
+            "nativeIdentity": identity, "callId": call_id, "toolName": name,
+            "phase": "end", "outcome": "failure"}))
 
     def read_denials(self) -> None:
         """Project permission refusals from this invocation's native JSONL log."""

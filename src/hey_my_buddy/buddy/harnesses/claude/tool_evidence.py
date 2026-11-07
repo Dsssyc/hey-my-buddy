@@ -117,10 +117,10 @@ class ReadOnlyToolEvidence:
         if frame.get("type") == "result" and parent is None and identity in self._roots:
             self._evidence.close_root(identity)
             return
-        for call_id, name, phase, use_input in self._facts(frame):
+        for call_id, name, phase, use_input, outcome in self._facts(frame):
             if phase == "start":
                 self._observe_delivery_use(identity, provable, parent, call_id, name, use_input)
-            self._record(identity, provable, call_id, name, phase)
+            self._record(identity, provable, call_id, name, phase, outcome)
 
     def finish(self, stream_complete: bool, *,
                exclude_calls: tuple[tuple[str, str], ...] | None = None) -> dict:
@@ -279,17 +279,20 @@ class ReadOnlyToolEvidence:
 
     @staticmethod
     def _facts(frame: dict):
-        """The native tool facts one frame carries, as (call id, name, phase, use input)."""
+        """The native tool facts one frame carries, with its explicit result state."""
         frame_type = frame.get("type")
         if frame_type == "assistant":
             for block in _content(frame):
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     yield (_native_id(block.get("id")), _native_id(block.get("name")), "start",
-                           block.get("input"))
+                           block.get("input"), "unknown")
         elif frame_type == "user":
             for block in _content(frame):
                 if isinstance(block, dict) and block.get("type") == "tool_result":
-                    yield _native_id(block.get("tool_use_id")), None, "end", None
+                    error = block.get("is_error")
+                    outcome = ("failure" if error is True else "success" if error is False
+                               else "unknown")
+                    yield _native_id(block.get("tool_use_id")), None, "end", None, outcome
         elif frame_type == "stream_event":
             event = frame.get("event")
             block = event.get("content_block") if isinstance(event, dict) else None
@@ -299,9 +302,9 @@ class ReadOnlyToolEvidence:
             # the one place the delivered value is observed.
             if isinstance(event, dict) and event.get("type") == "content_block_start" \
                     and isinstance(block, dict) and block.get("type") == "tool_use":
-                yield _native_id(block.get("id")), _native_id(block.get("name")), "start", None
+                yield _native_id(block.get("id")), _native_id(block.get("name")), "start", None, "unknown"
 
-    def _record(self, identity: dict, provable: bool, call_id, name, phase) -> None:
+    def _record(self, identity: dict, provable: bool, call_id, name, phase, outcome) -> None:
         key = None
         if call_id is not None:
             key = (tuple(sorted(identity.items())), call_id)
@@ -310,7 +313,8 @@ class ReadOnlyToolEvidence:
                 # same native call names it, and an uncorrelatable end stays
                 # unnamed instead of borrowing one.
                 name = self._correlated.get(key)
-        fact = {"nativeIdentity": identity, "callId": call_id, "phase": phase}
+        fact = {"nativeIdentity": identity, "callId": call_id, "phase": phase,
+                "outcome": outcome}
         if name is not None:
             fact["toolName"] = name
         try:
