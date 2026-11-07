@@ -1,4 +1,6 @@
 {
+  "dsh-tool-inventory-unreadable": ["version"],
+  "dsh-tool-inventory-format-unrecognized": ["version"],
   "ANCESTOR_TERMINAL": [],
   "CONFLICT": [],
   "ILLEGAL_TRANSITION": [],

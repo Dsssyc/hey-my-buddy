@@ -16,7 +16,7 @@ const samples: Record<string, unknown> = {
   processes: [{ pid: 321, startedAt: 456, executable: "python" }],
   unreadableProcesses: [{ pid: 654, startedAt: 789, executable: "python" }],
   requiredCapability: "decision", retryAt: "2026-10-18T01:02:03Z", shape: "object", total: 12,
-  unfinished: [{ runId: "micro-1", state: "executing" }], utf16Units: 32768,
+  unfinished: [{ runId: "micro-1", state: "executing" }], utf16Units: 32768, version: "0.2.2-rc.1",
 };
 
 afterEach(() => setLanguageChoice("browser"));

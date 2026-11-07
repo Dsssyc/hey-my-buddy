@@ -58,14 +58,9 @@ from buddy.harnesses.dsh.acp.support import FAKE_AGENT
 #: through the same ``worker_services`` the real carrier frames.
 CARRIER_MODULE = "hey_my_buddy.buddy.roles.session_mcp"
 
-#: The Host-confirmed tool-providing rows the none scope disables, as recorded
-#: in the acceptance document; the shipped constant must stay this list.
-CONFIRMED_NONE_ROWS = (
-    "tool-bash", "tool-pwsh", "tool-jobs", "tool-fs", "tool-fs-search",
-    "tool-skill", "tool-subagent-control", "tool-subagent-list-agents",
-    "tool-subagent", "tool-subagent-fork", "tool-workflow", "tool-todo",
-    "tool-goal", "tool-ralph", "tool-web",
-)
+from buddy.harnesses.dsh.acp.fake_agent import TOOL_ROWS
+
+CONFIRMED_NONE_ROWS = TOOL_ROWS
 
 SCHEMA = {"type": "object", "properties": {"choice": {"type": "string", "enum": ["a"]}},
           "required": ["choice"], "additionalProperties": False}
@@ -563,11 +558,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(policy.requested.value["disabledRows"],
                          [row["id"] for row in rows[2:]])
 
-    def test_the_shipped_none_scope_rows_are_the_confirmed_inventory(self):
-        self.assertEqual(native_run.NONE_SCOPE_DISABLED_ROWS, CONFIRMED_NONE_ROWS,
-                         "the shipped list must stay the Host-confirmed inventory")
-
-    def test_web_scope_retains_only_the_native_web_tool_row(self):
+    def test_web_scope_retains_only_the_three_verified_native_rows(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
         request = self.fast_request("prompt", scope="web")
@@ -578,12 +569,67 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.value.raw, '{"choice":"a"}')
         rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
         disabled = [row["id"] for row in rows[2:]]
-        self.assertEqual(disabled, [*(row for row in CONFIRMED_NONE_ROWS if row != "tool-web"),
+        self.assertEqual(disabled, [*(row for row in CONFIRMED_NONE_ROWS if row not in {"tool-web", "tool-working-directory", "tool-executor-native"}),
                                     native_run.PLAN_MODE_ROW])
         self.assertTrue(all(row["disabled"] is True for row in rows[2:]))
         self.assertEqual(result.effective_policy.tools.requested.value, {"disabledRows": disabled})
         observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
         self.assertIsNone(observed["permissionMode"])
+
+    def test_unknown_tool_row_is_disabled_and_each_scope_keeps_only_its_allowlist(self):
+        inventory = (*TOOL_ROWS, "tool-new-plugin")
+        for scope, retained in (("web", {"tool-web", "tool-working-directory", "tool-executor-native"}),
+                                ("none", set())):
+            with self.subTest(scope=scope):
+                self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
+                                         "--inventory-output", "\n".join("- id: " + row for row in inventory)]
+                request = self.fast_request("prompt", scope=scope)
+                result = run(request, observer=lambda _f: FEEDBACK_CONTINUE,
+                             services=None, cancelled=lambda: False)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                patch = json.loads(native_path(Path(request.private_state.invocation_root) /
+                                               "dsh-launch-patch.json").read_text())
+                disabled = {row["id"] for row in patch if row.get("disabled")}
+                self.assertEqual(disabled, set(inventory) - retained | {"plan-mode"})
+                self.assertTrue(all(row["disabled"] is True for row in patch[2:]))
+
+    def test_inventory_failure_blocks_web_but_none_runs_with_a_versioned_reason_and_no_dump_leak(self):
+        for arguments, reason in ((["--inventory-failure"], "dsh-tool-inventory-unreadable"),
+                                   (["--inventory-output", "private: synthetic-private-secret"],
+                                    "dsh-tool-inventory-format-unrecognized"),
+                                   (["--inventory-output", "- id: tool-web\n  config: [synthetic-private-secret"],
+                                    "dsh-tool-inventory-format-unrecognized")):
+            for scope in ("web", "none"):
+                with self.subTest(arguments=arguments, scope=scope):
+                    self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
+                                             *arguments]
+                    request = self.fast_request("prompt", scope=scope)
+                    with mock.patch.object(native_run, "selected", return_value={"version": "0.2.2-rc.1"}):
+                        with mock.patch.object(native_run, "_launch_agent", wraps=native_run._launch_agent) as launch:
+                            result = run(request, observer=lambda _f: FEEDBACK_CONTINUE,
+                                         services=None, cancelled=lambda: False)
+                    if scope == "web":
+                        launch.assert_not_called()
+                        self.assertEqual(result.end.reason_code, reason)
+                        self.assertIn("0.2.2-rc.1", result.end.message)
+                        self.assertIn("could not be read" if "unreadable" in reason else "unrecognized YAML",
+                                      result.end.message)
+                        self.assertFalse(result.native_request_sent)
+                        self.assertEqual(result.harness_version, "0.2.2-rc.1")
+                    else:
+                        launch.assert_called_once()
+                        self.assertEqual(result.end.status, "ok", result.end.message)
+                        self.assertEqual(result.effective_policy.tools.requested.value,
+                                         {"disabledRows": ["plan-mode"]})
+                    facts = next(ref for ref in result.evidence_refs if ref.kind == "dsh-native-facts")
+                    payload = json.loads(native_path(Path(facts.location)).read_text())
+                    self.assertEqual(payload["toolInventory"],
+                                     {"code": reason, "params": {"version": "0.2.2-rc.1"}})
+                    self.assertNotIn("synthetic-private-secret", json.dumps(result.to_payload()))
+                    paths = [Path(ref.location) for ref in result.evidence_refs]
+                    paths.append(self.agent_log_path)
+                    for path in paths:
+                        self.assertNotIn(b"synthetic-private-secret", native_path(path).read_bytes())
 
     def test_a_spawn_failure_reports_an_unavailable_agent_and_no_started_model(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -874,7 +920,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
         rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
         self.assertEqual([row["id"] for row in rows[2:]],
-                         [*(row for row in CONFIRMED_NONE_ROWS if row != "tool-web"),
+                         [*(row for row in CONFIRMED_NONE_ROWS if row not in {"tool-web", "tool-working-directory", "tool-executor-native"}),
                           native_run.PLAN_MODE_ROW])
         self.assertEqual(result.effective_policy.tools.requested.value,
                          {"disabledRows": [row["id"] for row in rows[2:]]})

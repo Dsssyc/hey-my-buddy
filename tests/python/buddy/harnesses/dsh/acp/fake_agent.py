@@ -33,6 +33,9 @@ from pathlib import Path
 
 from hey_my_buddy.paths import native_path
 
+# Synthetic row inventory for the default ACP-profile dump.
+TOOL_ROWS = ('tool-bash', 'tool-executor-native', 'tool-executor-ptc', 'tool-fs', 'tool-fs-search', 'tool-goal', 'tool-jobs', 'tool-plugin-manager', 'tool-pwsh', 'tool-result-pruner', 'tool-skill', 'tool-subagent', 'tool-subagent-control', 'tool-subagent-fork', 'tool-todo', 'tool-web', 'tool-workflow', 'tool-working-directory')
+
 _LOG_LOCK = threading.Lock()
 
 #: The encoded working-directory component this fake writes its rollouts
@@ -1144,6 +1147,9 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
                         help="private output file for the selected incoming frame")
     # The public launch face the run module's driver always passes, accepted and
     # recorded like the installed agent's: the profile name and the patch file.
+    parser.add_argument("--dump-default-config", action="store_true")
+    parser.add_argument("--inventory-output", default=None)
+    parser.add_argument("--inventory-failure", action="store_true")
     parser.add_argument("--profile", default=None)
     parser.add_argument("--patch", default=None)
     parser.add_argument("--delay", action="append", default=[],
@@ -1250,6 +1256,13 @@ def main() -> int:
     native_path(log_path.parent).mkdir(parents=True, exist_ok=True)
     if not check_private_home(log_path, Path(args.fixture_root)):
         return 3
+    if args.dump_default_config:
+        if args.inventory_failure:
+            print("synthetic-private-secret", file=sys.stderr)
+            return 1
+        print(args.inventory_output if args.inventory_output is not None else
+              "\n".join("- id: " + row + "\n  name: fake" for row in TOOL_ROWS))
+        return 0
     log(log_path, {"event": "launch-face", "profile": args.profile, "patch": args.patch})
     FakeAgent(args).serve()
     return 0

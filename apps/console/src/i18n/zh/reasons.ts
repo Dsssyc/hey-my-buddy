@@ -1,4 +1,6 @@
 export default {
+  "dsh-tool-inventory-unreadable": "无法读取 DSH CLI {{version}} 的工具行；只联网档位不可用，不用工具档位由黑板事后判定。",
+  "dsh-tool-inventory-format-unrecognized": "无法识别 DSH CLI {{version}} 的工具行 YAML 格式；只联网档位不可用，不用工具档位由黑板事后判定。",
   "workflow.input-rejected": "{{harness}} 拒收输入。",
   "checkout.process-blockers": "正在使用此检出的进程：{{processes}}。首次执行后启动且工作目录读不到的进程：{{unreadableProcesses}}。",
   "checkout.process-scan-failed": "未能完整检查进程的工作目录；观察恢复后可重试删除。",

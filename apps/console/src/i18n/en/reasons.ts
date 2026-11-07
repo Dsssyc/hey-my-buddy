@@ -1,6 +1,8 @@
 import type zh from "../zh/reasons";
 
 export default {
+  "dsh-tool-inventory-unreadable": "DSH CLI {{version}} tool rows could not be read; web scope is unavailable and none scope uses the blackboard’s tool judgment after the run.",
+  "dsh-tool-inventory-format-unrecognized": "DSH CLI {{version}} tool-row YAML format was not recognized; web scope is unavailable and none scope uses the blackboard’s tool judgment after the run.",
   "workflow.input-rejected": "{{harness}} rejected the input.",
   "checkout.process-blockers": "Processes using this checkout: {{processes}}. Processes started since its first execution with unreadable working directories: {{unreadableProcesses}}.",
   "checkout.process-scan-failed": "Process working directories could not be fully checked. Retry deletion after the observation is available.",

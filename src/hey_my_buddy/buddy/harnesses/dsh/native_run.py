@@ -87,9 +87,10 @@ from ..run_contract import (
     fold_unknown_events,
     unknown_event_name,
 )
-from ..runtime_selection import launch_for, environment_for
+from ..runtime_selection import launch_for, environment_for, selected
 from ..session_record import SessionRecord
 from .session_content import DshSessionProjector
+from .tool_inventory import read_tool_rows, UNREADABLE, UNRECOGNIZED
 from .acp import AcpClient
 from .acp.client import PermissionPolicy
 from .acp.connection import (
@@ -119,22 +120,12 @@ PERMISSION_MODES = {"read": READ_ONLY_MODE, "write": "workspace-write",
 #: The mode-control tool row the none-scope probe disables together with the
 #: tool rows, so no plan-mode tool survives either.
 PLAN_MODE_ROW = "plan-mode"
-#: The confirmed DSH tool-providing rows the ``none`` scope disables through the
-#: public launch patch. The list is a public value of this integration line,
-#: bound to the installed DSH's public composition surface: the Host's
-#: no-model ``dump-config`` read (2026-10-06, private HOME/DSH_HOME) found
-#: sixteen ``tool-`` rows, of which ``tool-result-pruner`` is context pruning
-#: and the remaining fifteen are the tool-providing rows — including the two
-#: platform-exclusive shells. The historical fourteen-row count predates this
-#: surface read and is superseded by it. A future row outside this list is
-#: reported as a retained fact, never claimed as restricted; ``commands`` rows
-#: cannot be disabled and no vendor package is statically proven here.
-NONE_SCOPE_DISABLED_ROWS: tuple[str, ...] = (
-    "tool-bash", "tool-pwsh", "tool-jobs", "tool-fs", "tool-fs-search",
-    "tool-skill", "tool-subagent-control", "tool-subagent-list-agents",
-    "tool-subagent", "tool-subagent-fork", "tool-workflow", "tool-todo",
-    "tool-goal", "tool-ralph", "tool-web",
-)
+#: Retained rows match the Host's DSH CLI 0.2.2-rc.1 native verification
+#: (2026-11-07). Newly discovered rows are disabled, including disabled defaults.
+WEB_SCOPE_RETAINED_ROWS = frozenset({"tool-web", "tool-working-directory", "tool-executor-native"})
+NONE_SCOPE_RETAINED_ROWS: frozenset[str] = frozenset()
+_INVENTORY_REASONS = {UNREADABLE: "dsh-tool-inventory-unreadable",
+                      UNRECOGNIZED: "dsh-tool-inventory-format-unrecognized"}
 # -- the private session record's launch constants ------------------------------------
 
 #: DSH writes its session rollout under the sessions root this run's launch
@@ -175,14 +166,25 @@ UNREAD_SHAPE_KINDS = ("initialize", "agentInfo", "configOptions",
 #: empty reading.
 
 
-def _launch_policy(request: RunRequest) -> tuple[list[dict], dict[str, str]]:
-    """Map the shared permission to DSH's native launch configuration."""
+def _launch_policy(request: RunRequest, state: _RunState, deadline: float) -> tuple[list[dict], dict[str, str]]:
+    """Express the scope against every tool row in the current ACP profile."""
     if request.permission in ("none", "web"):
-        disabled = (NONE_SCOPE_DISABLED_ROWS if request.permission == "none" else
-                    tuple(row for row in NONE_SCOPE_DISABLED_ROWS if row != "tool-web"))
-        rows = [{"id": name, "disabled": True}
-                for name in (*disabled, PLAN_MODE_ROW)]
-        return rows, {}
+        environment = dict(environment_for())
+        record = selected("dsh", environment)
+        version = version_text(record.get("version")) if record is not None else None
+        state.harness_version = version
+        command, launch_environment = launch_for("dsh", environment)
+        inventory, problem = read_tool_rows(
+            command, environment=environment, launch_environment=launch_environment,
+            cwd=request.cwd, private_root=Path(request.private_state.invocation_root), deadline=deadline)
+        if problem is not None:
+            state.native_facts["toolInventory"] = make_reason(_INVENTORY_REASONS[problem], version=version or "unknown")
+            if request.permission == "web":
+                detail = ("could not be read" if problem == UNREADABLE else "has an unrecognized YAML entry format")
+                raise NativeError(problem, f"DSH CLI {version or 'unknown'}: tool inventory {detail}; web scope unavailable")
+        retained = (NONE_SCOPE_RETAINED_ROWS if request.permission == "none" else WEB_SCOPE_RETAINED_ROWS)
+        rows = [{"id": name, "disabled": True} for name in (inventory or ()) if name not in retained]
+        return [*rows, {"id": PLAN_MODE_ROW, "disabled": True}], {}
     return [], {PERMISSION_MODE_ENV: PERMISSION_MODES[request.permission]}
 
 
@@ -940,7 +942,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                     raise NativeError("native-resume-unavailable",
                                       "the previous native session does not match this micro task, "
                                       "checkout and buddy")
-            scope_rows, extra_env = _launch_policy(request)
+            scope_rows, extra_env = _launch_policy(request, state, deadline)
             state.scope_rows = scope_rows
             state.permission_mode = extra_env.get(PERMISSION_MODE_ENV)
             policy = (_AttentionPolicy(AttentionRecorder(
@@ -1621,10 +1623,7 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
                    record: dict | None = None,
                    stderr_mirror: str | None = None) -> tuple:
     """The run's retained private evidence: refusal records and protocol facts."""
-    if client is None:
-        return ()
     refs: list[EvidenceRef] = []
-    connection_facts = client.facts()
 
     def retain(kind: str, name: str, value: dict) -> None:
         target = invocation_root / name
@@ -1641,6 +1640,10 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
         retain("dsh-session-record", "dsh-session-record.json", record)
     if state.native_facts:
         retain("dsh-native-facts", "dsh-native-facts.json", state.native_facts)
+
+    if client is None:
+        return tuple(refs)
+    connection_facts = client.facts()
 
     if state.provenance is not None:
         # The accepted finish's ordered native evidence; the role reads it back
