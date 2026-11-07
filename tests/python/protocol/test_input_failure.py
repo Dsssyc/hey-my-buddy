@@ -26,20 +26,15 @@ class InputFailureTests(unittest.TestCase):
             self.assertIs(value["modelResponded"], False)
             self.assertNotIn("modelStarted", value)
 
-    def test_both_versions_are_read_without_rewriting_legacy_facts(self):
+    def test_the_boundary_refuses_version_one_and_stored_values_read_as_written(self):
         for unknown in (False, True):
-            for old_value in (False, True, None):
-                value = failure(unknown=unknown)
-                value["version"] = 1
-                value.pop("modelResponded")
-                value["modelStarted"] = old_value
-                original = deepcopy(value)
-                self.assertEqual(normalize_input_failure(value), original)
-                self.assertEqual(input_failure_view({"result": {"inputFailure": value}}), original)
-                self.assertEqual(value, original)
-                self.assertNotIn("modelResponded", value)
+            value = failure(unknown=unknown)
+            legacy = {**value, "version": 1, "modelStarted": value["modelResponded"]}
+            legacy.pop("modelResponded")
+            self.assertIsNone(normalize_input_failure(legacy))
+            self.assertEqual(input_failure_view({"result": {"inputFailure": legacy}}), legacy)
 
-    def test_version_selects_one_field_and_only_new_preflight_requires_no_response(self):
+    def test_version_two_with_model_responded_is_the_only_accepted_shape(self):
         value = failure()
         legacy = {**value, "version": 1, "modelStarted": value["modelResponded"]}
         legacy.pop("modelResponded")

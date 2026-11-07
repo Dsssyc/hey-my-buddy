@@ -45,10 +45,10 @@ def _parts(value) -> bool:
 def normalize_input_failure(value) -> dict | None:
     """Validate a failure package at the result boundary, without inferring facts."""
     if (not isinstance(value, dict) or type(value.get("version")) is not int
-            or value["version"] not in (1, 2)):
+            or value["version"] != 2):
         return None
-    model_key = "modelResponded" if value["version"] == 2 else "modelStarted"
-    required = {"version", "stage", "harness", "limit", "measurement", "nativeRequestSent", model_key}
+    required = {"version", "stage", "harness", "limit", "measurement", "nativeRequestSent",
+                "modelResponded"}
     optional = {"nativeMethod", "nativeCode", "input_error_code", "max_chars", "actual_chars", "message"}
     if (not required <= value.keys() or value.keys() - required - optional
             or value["stage"] not in ("preflight", "native-admission")):
@@ -85,12 +85,11 @@ def normalize_input_failure(value) -> dict | None:
                       or sum(measurement["utf8Parts"].values()) != measurement["utf8Bytes"]):
         return None
     if any(value[key] is not None and type(value[key]) is not bool
-           for key in ("nativeRequestSent", model_key)):
+           for key in ("nativeRequestSent", "modelResponded")):
         return None
-    # The v1 model flag is retained by shape only; it has no current meaning.
     if value["stage"] == "preflight" and (not known or measurement["total"] <= limit["value"]
             or value["nativeRequestSent"] is not False
-            or value["version"] == 2 and value["modelResponded"] is not False
+            or value["modelResponded"] is not False
             or bool(value.keys() & optional)):
         return None
     if any(key in value and not _text(value[key], maximum)

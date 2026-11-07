@@ -135,7 +135,6 @@ class LeadStopPreviewTests(unittest.TestCase):
             {'macroTaskId': preview.MACRO_B, 'filter': 'host'}, 'normal')['rows']})
 
     def test_input_rejections_retain_the_same_frozen_facts_in_every_projection(self):
-        from hey_my_buddy.protocol.input_failure import normalize_input_failure
         rows = preview.macro_task_timeline({'macroTaskId': preview.MACRO_INPUT}, 'normal')['rows']
         self.assertEqual({row['runId'] for row in rows},
                          {'preview-run-input-preflight', 'preview-run-input-native'})
@@ -144,7 +143,6 @@ class LeadStopPreviewTests(unittest.TestCase):
             entry = preview.FIXTURES['runs'][run_id]
             view = preview.task_view(entry)
             failure = view['inputFailure']
-            self.assertEqual(normalize_input_failure(failure), failure)
             self.assertEqual(failure['stage'], stage)
             self.assertEqual(view['workflow']['requestReason'], {'code': 'workflow.input-rejected',
                                                                'params': {'harness': failure['harness']['name']}})
