@@ -25,7 +25,7 @@
 - **画像的对应建议**：答案的每条建议带 `relation`（same 或 successor）；`blackboard/routing/profile_data.py` 的 `apply_answer` 对 successor 新建一个以候选名字命名的模型并把候选改对应过去。候选只含对应到别的模型的服务（`build_packet`）。
 - **撤回**：`blackboard/evaluation/models.py` 的撤回追加一行，复制同一模型服务倒数第二行的模型；表上有禁止更新与删除的触发器。读整段历史的有两处：`model_view` 的 `names`（路由输入、维护数据包、控制台、画像数据包里“曾经对应到这个模型的名字”）与 `correspondence_view` 的 `canUndo`。外键指向 `models(model_id)` 的表有 11 张，全是 `ON DELETE RESTRICT`。
 - **工具证据**：`protocol/tool_evidence.py` 第 2 版，每次调用一行，只有工具名与类别，没有成败；键集合是严格的，加字段就要升版本。四个 harness 的原生事件里都有成败：Codex 的命令执行有 `status` 与 `exitCode`（网页搜索的条目在我们的样本里没有状态），Claude Code 的 `tool_result.is_error`，DSH 的 ACP `status`（completed 或 failed），ZCode 的 `result` 或 `error` 与 `result.success`；各 harness 的证据收集都把它丢掉了。
-- **DSH 的工具行**：`buddy/harnesses/dsh/native_run.py` 的 `NONE_SCOPE_DISABLED_ROWS` 是 2026-10-06 读出的 15 行，只联网一档留着 `tool-web`；启动时不检查有没有别的行。2026-11-07 在 DSH CLI 0.2.2-rc.1 上重跑只联网的原生核实，五项都通过，但没有读工具行清单本身。
+- **DSH 的工具行**（2026-11-07 改定，按 [ADR-023](../../decisions/023-harness-integration-principles.md) 第 10 条）：只联网与不用工具两档启动 DSH 前，用不含用户那一层的 `dsh --profile acp --dump-default-config` 读出现有的全部 `tool-` 行（0.2.2-rc.1 起是参数，输出是 YAML），在启动补丁里关掉这一档不需要的全部行，只联网只留联网所需的几行。读不出或认不出格式时，只联网一档不运行并写明原因，不用工具一档照旧由黑板事后判定。用户用 `dsh plugin add` 装的插件所带的行是否在不含用户层的输出里，实现方先查清；不在的话，改读完整的配置，在内存里只取行名，其余不保存、不写日志。
 
 ## 口径（Host 定，开发者可改）
 
@@ -70,6 +70,7 @@
 2. **模型开始的事实统一并在运行中报出**：四个 harness 的 `model_started` 与观察者事实、模型前重试改看 `nativeRequestSent`、存下的值的两条路先停下来问。与第 1 个同时开工。
 3. **Router 调用只限模型开始之前的等待**：在第 1、2 个之上；扩展 37→38 一步的设置；执行进程、调度器、角色层、路由、Host 面与原因码。删掉了守卫，Host 验收时另请一次独立审查。
 4. **工具调用的成败与 DSH 的工具行**：在第 2 个之上（同一批 harness 文件）；证据第 3 版、画像运行的记录、DSH 启动时的检查；扩展 37→38 一步。可与第 3 个同时，写入范围不重叠时。
+4b. **DSH 的两档按 ADR-023 第 10 条改写**：在第 4 个之后（同在 DSH 的文件里）；`buddy/harnesses/dsh/native_run.py` 的启动补丁、读出工具行、新的原因码与中英文字。
 5. **控制台**：在第 3、4 个之上。
 
 文档（ADR-021、`docs/reference` 里写到预算的几页、`CONTEXT.md`、harness 文档）由 Host 随各批改。
