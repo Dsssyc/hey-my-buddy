@@ -12,6 +12,7 @@ from console.test_console import ConsoleTestCase
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.tasks import micro_task, storage
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.reasons import reason
 
 
 class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
@@ -21,6 +22,21 @@ class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
     report = failover.FailoverTests.report
     current_task = failover.FailoverTests.current_task
     next_claim = failover.FailoverTests.next_claim
+
+    def test_repeated_routing_stop_records_only_new_requests_and_escalations(self):
+        request, claim = self.start(micro_task=True)
+        task_id = claim["task"]["taskId"]
+        for initiator in ("host", "host", "host", "console", "console"):
+            with self.board_.store.db.write() as connection:
+                self.board_.store.workflow._cancel_routes(
+                    connection, "run-1", reason("micro-task-cancelled"), self.board_.store.now(),
+                    actor={"role": initiator}, initiator=initiator)
+            with self.board_.store.db.read() as connection:
+                count = connection.execute("SELECT COUNT(*) FROM events WHERE task_id=? AND kind='task.cancel_requested'",
+                                           (task_id,)).fetchone()[0]
+                self.assertEqual(count, 1 if initiator == "host" else 2)
+        attempt = self.board_.call("task_get", {"runId": task_id})["task"]["selectedAttempt"]
+        self.assertEqual(attempt["stopInitiator"], "console")
 
     def claim(self, suffix="1", *, task_id=None):
         result = super().claim(suffix, task_id=task_id)

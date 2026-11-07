@@ -81,6 +81,7 @@ export default {
   "journal-question-unknown": "问询日志中的问题未登记。",
   "journal-record-invalid": "问询日志记录无效。",
   "journal-task-mismatch": "问询日志属于另一个微任务。",
+  "micro-task.owned-concluded": "所属微任务 {{runId}} 已作结论，此微任务随之结束。",
   "lead.owned-concluded": "Lead 微任务 {{leadRunId}} 已作结论，名下微任务随之结束。",
   "lead.result-refused": "Lead 的 {{disposition}} 结果与名下微任务状态不符（共 {{total}} 项）：{{unfinished}}。",
   "macro-task-deletion.attached-branch": "检出仍附着在分支上。",

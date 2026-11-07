@@ -15,13 +15,20 @@ const samples: Record<string, unknown> = {
   missingCapabilities: ["decision"], operation: "probe", recordId: "record-1",
   processes: [{ pid: 321, startedAt: 456, executable: "python" }],
   unreadableProcesses: [{ pid: 654, startedAt: 789, executable: "python" }],
-  requiredCapability: "decision", retryAt: "2026-10-18T01:02:03Z", seconds: 60, shape: "object", total: 12,
+  requiredCapability: "decision", runId: "micro-1", retryAt: "2026-10-18T01:02:03Z", seconds: 60, shape: "object", total: 12,
   unfinished: [{ runId: "micro-1", state: "executing" }], utf16Units: 32768, version: "0.2.2-rc.1",
 };
 
 afterEach(() => setLanguageChoice("browser"));
 
 describe("the program reason catalog", () => {
+  it("names the owning micro task for a helper cascade in both languages", () => {
+    const reason = { code: "micro-task.owned-concluded", params: { runId: "root-1" } };
+    setLanguageChoice("zh");
+    expect(reasonText(reason)).toBe("所属微任务 root-1 已作结论，此微任务随之结束。");
+    setLanguageChoice("en");
+    expect(reasonText(reason)).toBe("Owning micro task root-1 was concluded, ending this micro task.");
+  });
   for (const [language, router, count] of [
     ["zh", "Router 的模型在 60 秒内没有开始作答。", "模型未开始作答"],
     ["en", "The Router's model did not start responding within 60 seconds.", "Model did not start responding"],

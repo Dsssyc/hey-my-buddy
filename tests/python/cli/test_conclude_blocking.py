@@ -6,24 +6,15 @@ import io
 import json
 from pathlib import Path
 import tempfile
-import threading
 import unittest
 from unittest import mock
 
 from hey_my_buddy.cli import blocking, main as cli
 from hey_my_buddy.cli.blocking import conclude_run
 from hey_my_buddy.protocol.transport import ServiceError
-
-
-class Clock:
-    def __init__(self):
-        self.value = 0.0
-
-    def __call__(self):
-        return self.value
-
-    def advance(self, seconds):
-        self.value += seconds
+from hey_my_buddy.protocol.requests import parse_request
+from hey_my_buddy.errors import BoardError
+from cli.test_blocking import Clock
 
 
 class ConcludeTests(unittest.TestCase):
@@ -48,7 +39,133 @@ class ConcludeTests(unittest.TestCase):
             return {"runId": "lead-1", "conclusionId": "conclusion-1"}
         answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
         self.assertEqual(answer["conclusionId"], "conclusion-1")
-        self.assertEqual(calls, [("conclude", self.packet)])
+        self.assertEqual(calls, [("conclude", {"runId": "lead-1", "note": "Finish"})])
+
+    def test_service_model_rejects_cli_wait_field(self):
+        with self.assertRaises(BoardError) as raised:
+            parse_request("conclude", self.packet, audience="service")
+        self.assertIn("waitSeconds", str(raised.exception))
+
+    def test_confirmed_stop_definitive_rejection_records_no_conclusion(self):
+        for code in ("CONFLICT", "WORKSPACE_SCOPE_VIOLATION"):
+            with self.subTest(code=code):
+                attempts = 0
+                def service(method, params, directory):
+                    nonlocal attempts
+                    if method == "conclude":
+                        attempts += 1
+                        if attempts == 1:
+                            raise ServiceError("SHUTDOWN_UNCONFIRMED", "Stopping", cancellationRecorded=True)
+                        raise ServiceError(code, "Rejected")
+                    return self.view(confirmed=True)
+                answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
+                self.assertEqual(answer["error"]["code"], code)
+                self.assertIs(answer["conclusionRecorded"], False)
+
+    def test_transport_failure_after_resend_leaves_conclusion_unknown(self):
+        for code in ("C_TWO_IO", "INVALID_RESPONSE"):
+            with self.subTest(code=code):
+                attempts = 0
+                def service(method, params, directory):
+                    nonlocal attempts
+                    if method == "conclude":
+                        attempts += 1
+                        if attempts == 1:
+                            raise ServiceError("SHUTDOWN_UNCONFIRMED", "Stopping", cancellationRecorded=True)
+                        raise ServiceError(code, "No authoritative reply")
+                    return self.view(confirmed=True)
+                answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
+                self.assertIsNone(answer["conclusionRecorded"])
+
+    def test_lost_resend_remains_unknown_if_a_later_retry_is_unauthorized(self):
+        (self.state_dir / "upgrade.json").write_text("{}", encoding="utf-8")
+        attempts = 0
+        def service(method, params, directory):
+            nonlocal attempts
+            if method == "conclude":
+                attempts += 1
+                if attempts == 1:
+                    raise ServiceError("SHUTDOWN_UNCONFIRMED", "Stopping", cancellationRecorded=True)
+                if attempts == 2:
+                    raise ServiceError("SERVICE_UNAVAILABLE", "Reply lost after possible commit")
+                raise ServiceError("UNAUTHORIZED", "The Lead's credential was revoked before replay")
+            return self.view(confirmed=True)
+        with mock.patch.object(blocking.time, "sleep", side_effect=self.clock.advance):
+            answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
+        self.assertEqual(answer["error"]["code"], "UNAUTHORIZED")
+        self.assertIsNone(answer["conclusionRecorded"])
+
+    def test_resend_handover_stops_retrying_at_the_deadline(self):
+        (self.state_dir / "upgrade.json").write_text("{}", encoding="utf-8")
+        attempts = 0
+        def service(method, params, directory):
+            nonlocal attempts
+            if method == "conclude":
+                attempts += 1
+                if attempts > 10:
+                    self.fail("The expired handover kept retrying conclude")
+                if attempts == 1:
+                    raise ServiceError("SHUTDOWN_UNCONFIRMED", "Stopping", cancellationRecorded=True)
+                raise ServiceError("SERVICE_UNAVAILABLE", "Still handing over")
+            return self.view(confirmed=True)
+        with mock.patch.object(blocking.time, "sleep", side_effect=self.clock.advance):
+            answer = conclude_run({**self.packet, "waitSeconds": 1}, self.state_dir,
+                                  service=service, clock=self.clock)
+        self.assertIsNone(answer["conclusionRecorded"])
+        self.assertEqual(self.clock(), 1)
+
+    def test_interrupted_initial_conclude_reports_unknown_facts(self):
+        def service(method, params, directory):
+            raise KeyboardInterrupt
+        answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
+        self.assertEqual(answer["error"]["code"], "WAIT_ABANDONED")
+        self.assertIsNone(answer["cancellationRecorded"])
+        self.assertIsNone(answer["conclusionRecorded"])
+
+    def test_cli_prints_json_when_initial_conclude_is_interrupted(self):
+        output = io.StringIO()
+        with (contextlib.redirect_stdout(output),
+              mock.patch.object(cli, "get_state_dir", return_value=self.state_dir),
+              mock.patch.object(cli, "_call_service", side_effect=KeyboardInterrupt)):
+            status = cli.main(["conclude", json.dumps(self.packet)], credential_document=None)
+        answer = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertEqual(answer["error"]["code"], "WAIT_ABANDONED")
+        self.assertIsNone(answer["cancellationRecorded"])
+        self.assertIsNone(answer["conclusionRecorded"])
+
+    def test_upgrade_handover_rearms_resend(self):
+        (self.state_dir / "upgrade.json").write_text("{}", encoding="utf-8")
+        attempts = 0
+        def service(method, params, directory):
+            nonlocal attempts
+            if method == "conclude":
+                attempts += 1
+                if attempts == 1:
+                    raise ServiceError("SHUTDOWN_UNCONFIRMED", "Stopping", cancellationRecorded=True)
+                if attempts == 2:
+                    raise ServiceError("SERVICE_UNAVAILABLE", "Daemon changed")
+                return {"conclusionId": "done"}
+            return self.view(confirmed=True)
+        with mock.patch.object(blocking.time, "sleep", side_effect=self.clock.advance):
+            answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
+        self.assertEqual(answer["conclusionId"], "done")
+        self.assertEqual(attempts, 3)
+
+    def test_timeout_error_uses_latest_shutdown_facts(self):
+        def service(method, params, directory):
+            if method == "conclude":
+                raise ServiceError("SHUTDOWN_UNCONFIRMED", "Stopping", cancellationRecorded=True,
+                                   unconfirmedRunIds=["stale-child"])
+            if method == "task_get":
+                return self.view()
+            self.clock.advance(params["timeoutMs"] / 1000)
+            return {**self.view(), "workflowShutdown": {"selfConfirmed": True,
+                    "descendantsConfirmed": False, "unconfirmedRunIds": ["current-child"]}}
+        answer = conclude_run({**self.packet, "waitSeconds": 1}, self.state_dir,
+                              service=service, clock=self.clock)
+        self.assertEqual(answer["shutdown"]["unconfirmedRunIds"], ["current-child"])
+        self.assertNotIn("unconfirmedRunIds", answer["error"].get("details", {}))
 
     def test_descendant_only_stop_retries_identical_packet_without_consuming_reminders(self):
         calls = []
@@ -76,6 +193,7 @@ class ConcludeTests(unittest.TestCase):
         self.assertFalse(calls[2][1]["consumeReminders"])
         self.assertNotIn("reminderWaitId", calls[2][1])
         self.assertEqual(calls[0][1], calls[3][1])
+        self.assertNotIn("waitSeconds", calls[0][1])
 
     def test_target_run_is_observed_but_owner_packet_is_retried(self):
         packet = {**self.packet, "targetRunId": "child-1"}
@@ -218,18 +336,6 @@ class ConcludeTests(unittest.TestCase):
             answer = conclude_run(self.packet, self.state_dir, service=service, clock=self.clock)
         self.assertEqual(answer["conclusionId"], "done")
         self.assertEqual(calls, ["conclude", "task_get", "task_wait", "task_wait", "conclude"])
-
-    def test_abandonment_reports_cancellation_already_requested(self):
-        stop = threading.Event()
-        def service(method, params, directory):
-            stop.set()
-            raise ServiceError("SHUTDOWN_UNCONFIRMED", "Still stopping",
-                               cancellationRecorded=True)
-        answer = conclude_run(self.packet, self.state_dir, service=service,
-                              clock=self.clock, stop=stop)
-        self.assertEqual(answer["error"]["code"], "WAIT_ABANDONED")
-        self.assertTrue(answer["cancellationRecorded"])
-        self.assertFalse(answer["conclusionRecorded"])
 
     def test_keyboard_interrupt_after_cancellation_keeps_the_stop_fact(self):
         def service(method, params, directory):

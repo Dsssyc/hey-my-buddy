@@ -83,6 +83,7 @@ export default {
   "journal-question-unknown": "The question in the inquiry journal is not registered.",
   "journal-record-invalid": "The inquiry journal record is invalid.",
   "journal-task-mismatch": "The inquiry journal belongs to another micro task.",
+  "micro-task.owned-concluded": "Owning micro task {{runId}} was concluded, ending this micro task.",
   "lead.owned-concluded": "Lead micro task {{leadRunId}} was concluded, ending this owned micro task.",
   "lead.result-refused": "The Lead's {{disposition}} result does not match its owned micro task states ({{total}} recorded): {{unfinished}}.",
   "macro-task-deletion.attached-branch": "The checkout is still attached to a branch.",

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import tempfile
-import threading
 import unittest
 from unittest import mock
 
@@ -172,12 +171,23 @@ class AwaitTests(unittest.TestCase):
         self.assertEqual(calls, ["task_get", "task_wait"])
         self.assertNotIn("cancel", calls)
 
-    def test_client_stop_abandons_only_this_wait(self):
-        stop = threading.Event()
-        stop.set()
+    def test_client_interrupt_abandons_only_this_wait(self):
+        def service(method, params, directory):
+            raise KeyboardInterrupt
         with self.assertRaises(WaitAbandoned) as raised:
-            await_run({"runId": "run-1"}, self.state_dir, stop=stop)
+            await_run({"runId": "run-1"}, self.state_dir, service=service)
         self.assertEqual(raised.exception.run_id, "run-1")
+
+    def test_workflow_error_preserves_service_details(self):
+        run = {"runId": "run-1", "state": "completed", "workflowState": "awaiting-host",
+               "actions": ["continue", "get"]}
+        def service(method, params, directory):
+            if method in ("task_get", "task_wait"):
+                return run
+            raise ServiceError("CONFLICT", "View changed", revision=9)
+        answer = await_run({"runId": "run-1"}, self.state_dir, service=service, clock=self.clock)
+        self.assertEqual(answer["error"], {"code": "CONFLICT", "message": "View changed",
+                                           "details": {"revision": 9}})
 
 
 if __name__ == "__main__":

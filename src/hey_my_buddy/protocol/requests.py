@@ -373,18 +373,29 @@ class AcceptRequest(Request):
         return self
 
 
-class ConcludeRequest(Request):
+class _ConcludeRequest(Request):
     """End a micro task, cancelling active work and waiting for confirmed shutdown first."""
     rules: ClassVar[tuple[str, ...]] = (
         "artifactId answers the delivered or current stopped turn's fixed result; runId alone concludes when no result is being answered",
-        "active work and owned descendants are cancelled first; the CLI waits up to waitSeconds for confirmed shutdown",
+        "active work and owned descendants are cancelled first; confirmation precedes conclusion",
         "if shutdown remains unconfirmed, cancellation is recorded but no conclusion is recorded; call conclude again to retry",
     )
     runId: RunId
     targetRunId: RunId | None = None
     artifactId: RunId | None = None
     note: Note
+
+
+class ConcludeRequest(_ConcludeRequest):
+    """End a micro task, cancelling active work and waiting for confirmed shutdown first."""
+    rules: ClassVar[tuple[str, ...]] = _ConcludeRequest.rules + (
+        "the CLI waits up to waitSeconds for confirmed shutdown after cancelling active work",
+    )
     waitSeconds: Annotated[int, Field(strict=True, ge=1, le=86400)] = 86400
+
+
+class ConcludeWireRequest(_ConcludeRequest):
+    """Service conclude has no local wait parameter."""
 
 
 class CancelRequest(Request):
@@ -559,6 +570,8 @@ def request_model(name: str, *, audience: Literal["host", "operations", "role", 
     normalized_name = name.replace(".", "_")
     method = OPERATION_TO_METHOD.get(normalized_name, normalized_name)
     if audience == "service":
+        if method == "conclude":
+            return ConcludeWireRequest
         if method == "console":
             return ConsoleWireRequest
         if normalized_name == "service_control":

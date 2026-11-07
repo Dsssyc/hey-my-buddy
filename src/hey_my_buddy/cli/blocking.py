@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import threading
 import time
 import uuid
 from typing import Any, Callable
@@ -98,9 +97,10 @@ def _workflow_facts(run: dict, *, service: Callable[..., dict], state_dir: Path)
 
 
 def _upgrade_handover(state_dir: Path, deadline: float, clock: Callable[[], float]) -> bool:
-    if not (state_dir / "upgrade.json").exists():
+    remaining = deadline - clock()
+    if remaining <= 0 or not (state_dir / "upgrade.json").exists():
         return False
-    time.sleep(min(UPGRADE_HANDOVER_POLL_SECONDS, max(deadline - clock(), 0.0)))
+    time.sleep(min(UPGRADE_HANDOVER_POLL_SECONDS, remaining))
     return True
 
 
@@ -121,27 +121,20 @@ def _wait_slice(run: dict, *, deadline: float, clock: Callable[[], float],
         raise
 
 
-def _service_error(error: ServiceError) -> dict:
-    return error.payload()
-
-
 def await_run(
     params: dict | AwaitRequest,
     state_dir: Path,
-    stop: threading.Event | None = None,
     clock: Callable[[], float] = time.monotonic,
     service: Callable[..., dict] = _call_service,
 ) -> dict:
     """Wait for one admitted run, preserving the existing wakeup conditions."""
     request = params if isinstance(params, AwaitRequest) else parse_request("await", params)
     run_id, wait_seconds = request.runId, request.waitSeconds
-    if stop is not None and stop.is_set():
-        raise WaitAbandoned(run_id)
     started = clock()
-    run = service("task_get", {"runId": run_id}, state_dir)
     deadline = started + wait_seconds
     reminder_wait_id = uuid.uuid4().hex
     try:
+        run = service("task_get", {"runId": run_id}, state_dir)
         # An already visible workflow boundary must not bypass the one-time
         # delivery of a new issue. This also keeps Lead's doorbell and its next
         # await consistent when the issue arrives after an owned delivery.
@@ -149,8 +142,6 @@ def await_run(
             run = service('task_wait', {'runId': run_id, 'timeoutMs': 0, 'consumeReminders': True,
                                         'reminderWaitId': reminder_wait_id}, state_dir)
         while True:
-            if stop is not None and stop.is_set():
-                raise WaitAbandoned(run_id)
             reminder = run.get("reminder")
             kind = message_kind(run)
             if kind == 'issue':
@@ -165,7 +156,7 @@ def await_run(
                 except ServiceError as error:
                     return _view(run, outcome="unavailable", started=started,
                                  wait_seconds=wait_seconds, clock=clock,
-                                 error={"code": error.code, "message": str(error)})
+                                 error=error.payload())
                 if run["workflowState"] != "awaiting-host":
                     run = service("task_get", {"runId": run_id}, state_dir)
                     continue
@@ -176,7 +167,7 @@ def await_run(
                     except ServiceError as error:
                         return _view(run, outcome="waiting-host", started=started,
                                      wait_seconds=wait_seconds, clock=clock,
-                                     error={"code": error.code, "message": str(error)})
+                                     error=error.payload())
                 return _view(run, outcome="waiting-host", started=started,
                              wait_seconds=wait_seconds, clock=clock, result=result)
             if kind is not None:
@@ -192,7 +183,7 @@ def await_run(
             except ServiceError as error:
                 return _view(run, outcome="unavailable", started=started,
                              wait_seconds=wait_seconds, clock=clock,
-                             error=_service_error(error))
+                             error=error.payload())
             if next_run is not None:
                 run = next_run
         if not run.get("resultAvailable"):
@@ -201,7 +192,7 @@ def await_run(
             except ServiceError as error:
                 return _view(run, outcome="unavailable", started=started,
                              wait_seconds=wait_seconds, clock=clock,
-                             error={"code": error.code, "message": str(error)})
+                             error=error.payload())
             return _view(run, outcome="result-unavailable", started=started,
                          wait_seconds=wait_seconds, clock=clock,
                          error={"code": "RESULT_NOT_AVAILABLE", "message": "No persisted execution result is available"})
@@ -211,7 +202,7 @@ def await_run(
         except ServiceError as error:
             return _view(run, outcome="result-unavailable", started=started,
                          wait_seconds=wait_seconds, clock=clock,
-                         error={"code": error.code, "message": str(error)})
+                         error=error.payload())
         if result is None:
             return _view(run, outcome="result-unavailable", started=started,
                          wait_seconds=wait_seconds, clock=clock,
@@ -225,13 +216,13 @@ def await_run(
 def conclude_run(
     params: dict | ConcludeRequest,
     state_dir: Path,
-    stop: threading.Event | None = None,
     clock: Callable[[], float] = time.monotonic,
     service: Callable[..., dict] = _call_service,
 ) -> dict:
     """Conclude, then wait for confirmed tree shutdown before an identical retry."""
     request = params if isinstance(params, ConcludeRequest) else parse_request("conclude", params)
     wire = dump_request(request)
+    wire.pop("waitSeconds", None)
     owner_id = request.runId
     target_id = request.targetRunId or owner_id
     wait_seconds = request.waitSeconds
@@ -239,10 +230,16 @@ def conclude_run(
     deadline = started + wait_seconds
     try:
         return service("conclude", wire, state_dir)
+    except KeyboardInterrupt:
+        return {"runId": owner_id, "actions": ["get", "conclude"],
+                "cancellationRecorded": None, "conclusionRecorded": None,
+                "shutdownConfirmed": None, "waitedSeconds": round(max(clock() - started, 0.0), 1),
+                "waitSeconds": wait_seconds, "timedOut": False,
+                "error": {"code": "WAIT_ABANDONED", "message": "The initial conclude reply was interrupted"},
+                **({"targetRunId": target_id} if request.targetRunId is not None else {})}
     except ServiceError as error:
         if error.code != "SHUTDOWN_UNCONFIRMED" or error.details.get("cancellationRecorded") is not True:
             raise
-        shutdown_error = error
 
     run: dict | None = None
 
@@ -264,37 +261,42 @@ def conclude_run(
         return result
 
     retry_sent = False
+    uncertain_reply = False
     try:
         while True:
-            if stop is not None and stop.is_set():
-                return pending_error({"code": "WAIT_ABANDONED",
-                                      "message": "The conclude wait was abandoned after cancellation was requested"})
             if run is not None and _shutdown_confirmed(run):
                 try:
                     retry_sent = True
                     return service("conclude", wire, state_dir)
                 except ServiceError as error:
                     if error.code != "SHUTDOWN_UNCONFIRMED":
-                        return pending_error(_service_error(error), conclusion_recorded=None)
+                        unknown_reply = (error.code in ("SERVICE_UNAVAILABLE", "INVALID_RESPONSE")
+                                         or error.code.startswith("C_TWO_"))
+                        uncertain_reply = uncertain_reply or unknown_reply
+                        if unknown_reply and _upgrade_handover(state_dir, deadline, clock):
+                            continue
+                        return pending_error(error.payload(), conclusion_recorded=None if uncertain_reply else False)
                     retry_sent = False
-                    shutdown_error = error
+                    uncertain_reply = False
                     run = None
                     continue
             if deadline - clock() <= 0:
-                return pending_error(_service_error(shutdown_error), timed_out=True)
+                return pending_error({"code": "SHUTDOWN_UNCONFIRMED",
+                                      "message": "Cancellation is recorded; shutdown is not confirmed and no conclusion has been recorded"},
+                                     timed_out=True)
             if run is None:
                 try:
                     run = service("task_get", {"runId": target_id}, state_dir)
                 except ServiceError as error:
                     if _upgrade_handover(state_dir, deadline, clock):
                         continue
-                    return pending_error(_service_error(error))
+                    return pending_error(error.payload())
                 continue
             try:
                 next_run = _wait_slice(run, deadline=deadline, clock=clock, service=service,
                                        state_dir=state_dir, consume_reminders=False)
             except ServiceError as error:
-                return pending_error(_service_error(error))
+                return pending_error(error.payload())
             if next_run is not None:
                 run = next_run
     except KeyboardInterrupt:

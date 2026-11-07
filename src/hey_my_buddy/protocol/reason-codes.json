@@ -179,6 +179,7 @@
   "micro-task-cancelled": [],
   "micro-task-not-found": [],
   "micro-task-not-owned": [],
+  "micro-task.owned-concluded": ["runId"],
   "maintenance-answer-invalid": ["errors"],
   "profile-answer-invalid": ["errors"],
   "profile-not-configured": [],
