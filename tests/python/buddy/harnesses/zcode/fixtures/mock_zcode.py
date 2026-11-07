@@ -67,6 +67,14 @@ def wait_file(name, timeout=20.0):
     return native_path(path).exists()
 
 
+def wait_path(path, timeout=10.0):
+    """Block until any private file exists, always bounded."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not native_path(path).exists():
+        time.sleep(0.02)
+    return native_path(path).exists()
+
+
 def record_commands():
     try:
         native_path(log_dir).mkdir(parents=True, exist_ok=True)
@@ -229,8 +237,28 @@ def complete_turn():
     event_turn = "turn-wrong" if case == "wrong-turn" else turn_id
     event("tool.updated", {"kind": "scheduled", "toolName": tool, "toolCallId": "root-call", "inputOmitted": True, "inputRef": "model_stream"}, root=event_root, turn=event_turn)
     event("tool.updated", {"kind": "result", "toolCallId": "root-call", "result": {"success": case != "tool-error", "truncated": case == "truncated", "content": content}}, root=event_root, turn=event_turn)
-    if case == "duplicate":
+    if case == "second-finish":
+        # The root calls the finish tool again after its accepted receipt. The
+        # model sees the first result before scheduling the repeat, so the
+        # fixture waits for the controller's acceptance marker, asks the real
+        # bridge, and records what the model received.
+        marker = log_dir.parent / "finish-accepted.json"
+        accepted = wait_path(marker)
+        _receipt, answer = mcp_call("hey_my_buddy_finish_turn", outcome_for())
+        record = {"waitedForAcceptance": accepted, "refused": _receipt is None, "answer": answer}
+        try:
+            native_path(log_dir).mkdir(parents=True, exist_ok=True)
+            native_path(log_dir / "second-finish-answer.json").write_text(json.dumps(record), encoding="utf-8", newline="\n")
+        except OSError:
+            pass
         event("tool.updated", {"kind": "scheduled", "toolName": tool, "toolCallId": "second-call"})
+        event("tool.updated", {"kind": "error", "toolCallId": "second-call", "error": "the turn already ended"})
+    if case == "post-finish-tool":
+        # The root uses ZCode's own todo tool after its accepted finish; the
+        # call changes no checkout file and is a retained fact, not a failure.
+        event("tool.updated", {"kind": "scheduled", "toolName": "TodoWrite", "toolCallId": "call-todo"})
+        event("tool.updated", {"kind": "result", "toolCallId": "call-todo",
+                               "result": {"success": True, "truncated": False}})
     event("turn.completed", {"inputId": prompt_input_id, "resultType": "error_during_execution" if case == "turn-failure" else "success", "response": "fixture final text is not the outcome"})
     send({"method": "state.updated", "params": {"sessionId": session_id, "reason": "prompt_failed" if case == "prompt-failure" else "prompt_completed"}})
 

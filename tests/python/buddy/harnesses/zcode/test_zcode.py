@@ -238,9 +238,41 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["provenance"]["toolCallId"], "root-call")
 
+    def test_a_second_finish_after_the_accepted_receipt_keeps_the_first_answer(self):
+        # The observed incident: the root calls the finish tool again after its
+        # receipt was accepted. The accepted receipt stays the turn's answer,
+        # the repeat is a retained fact, and the finish tool tells the model
+        # the truth — this turn has already ended — instead of a second receipt.
+        context = self.context("second-finish")
+        _, outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        provenance = outcome.result["turn"]["provenance"]
+        self.assertEqual(provenance["toolCallId"], "root-call")
+        record = provenance["postFinishToolCalls"]
+        self.assertEqual(record["count"], 1)
+        self.assertEqual(record["records"][0]["toolCallId"], "second-call")
+        self.assertTrue(record["records"][0]["toolName"].endswith("__hey_my_buddy_finish_turn"))
+        answer = json.loads(self.native_log(context, "second-finish-answer.json"))
+        self.assertTrue(answer["waitedForAcceptance"], "the controller must publish its acceptance")
+        envelope = json.loads(answer["answer"])
+        self.assertEqual(envelope["reason"], "turn-ended")
+        self.assertIn("already ended", envelope["detail"])
+
+    def test_a_task_tool_after_the_accepted_finish_is_a_fact(self):
+        # The other observed incident: the root runs ZCode's own todo tool
+        # after its accepted finish. The turn completes with the accepted
+        # receipt and the call is a retained fact.
+        context = self.context("post-finish-tool")
+        _, outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        provenance = outcome.result["turn"]["provenance"]
+        self.assertEqual(provenance["toolCallId"], "root-call")
+        self.assertEqual(provenance["postFinishToolCalls"],
+                         {"count": 1, "records": [{"toolName": "TodoWrite", "toolCallId": "call-todo"}]})
+
     def test_protocol_failures_never_import_a_turn(self):
         cases = {"wrong-root": "missing-finish", "wrong-turn": "missing-finish", "tool-error": "finish-tool-failed",
-                 "truncated": "finish-tool-failed", "duplicate": "duplicate-finish", "turn-failure": "native-turn-failed",
+                 "truncated": "finish-tool-failed", "turn-failure": "native-turn-failed",
                  "prompt-failure": "native-turn-failed", "close-failed": "session-close-unconfirmed",
                  "wrong-input": "wrong-native-turn", "forged-receipt": "invalid-finish"}
         for index, (case, code) in enumerate(cases.items(), 1):

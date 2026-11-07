@@ -199,7 +199,8 @@ class CompleteOutcomeTests(unittest.TestCase):
 
     def test_completion_tools_refuse_oversize_and_accept_corrected_retry(self):
         configuration = {"identity": self.turn, "inputSha256": "a" * 64, "key": "b" * 64,
-                         "attentionPath": str(self.root / "attention.json")}
+                         "attentionPath": str(self.root / "attention.json"),
+                         "finishAcceptedPath": str(self.root / "finish-accepted.json")}
         for field in ("remaining", "decisions", "artifacts"):
             for items in (["item"] * 10000, ["汉" * 22000]):
                 with self.subTest(field=field, item_count=len(items)):

@@ -199,7 +199,8 @@ class DshReceiptSeamTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64,
-                       "attentionPath": str(Path(temporary.name) / "absent-attention.json")}
+                       "attentionPath": str(Path(temporary.name) / "absent-attention.json"),
+                       "finishAcceptedPath": str(Path(temporary.name) / "finish-accepted.json")}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
         self.native = "mcp__buddy_x__hey_my_buddy_finish_turn"
 

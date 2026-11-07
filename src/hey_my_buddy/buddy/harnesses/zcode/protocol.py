@@ -829,8 +829,12 @@ class RootTurnEvidence:
     """Only signed results in the explicitly admitted root turn can count.
 
     Answers require successful, untruncated root tool evidence and a signed
-    attempt-bound receipt. Native inquiry delivery is tracked by inquiry.py.
-    Child, relayed and background calls never become root evidence.
+    attempt-bound receipt. The first verified finish result fixes the turn's
+    answer for good: every root tool call after it — and a finish call repeated
+    before any result — is a bounded retained fact in the provenance, never a
+    second result and never a failed turn. Native inquiry delivery is tracked
+    by inquiry.py. Child, relayed and background calls never become root
+    evidence.
     """
 
     def __init__(self, session_id: str, input_id: str, tool_name: str, bridge: dict, *,
@@ -838,11 +842,17 @@ class RootTurnEvidence:
                  on_answer: Callable[[dict, str], None] | None = None,
                  validate_outcome: Callable[[object], str | None],
                  mounted_tools: tuple[str, ...] | list[str],
-                 on_unknown: Callable[[str], None] | None = None):
+                 on_unknown: Callable[[str], None] | None = None,
+                 on_finish_receipt: Callable[[dict], None] | None = None):
         self.session_id, self.input_id, self.tool_name, self.bridge = session_id, input_id, tool_name, bridge
         self.answer_name, self.on_answer = answer_name, on_answer
         self.validate_outcome = validate_outcome
         self.on_unknown = on_unknown or (lambda _label: None)
+        #: Called once, the moment a finish receipt verifies and becomes this
+        #: turn's fixed answer. The driver publishes the acceptance the
+        #: session-tools bridge reads, so a repeated finish call is answered
+        #: with the truth instead of a second receipt.
+        self.on_finish_receipt = on_finish_receipt
         #: The bare session tools this run actually mounted — a required,
         #: caller-provided set with no default: a signed refusal envelope
         #: verifies only for a tool this run really bound, and the verifier
@@ -852,6 +862,10 @@ class RootTurnEvidence:
         self.call_id: str | None = None
         self.receipt: dict | None = None
         self.finish_failed = False
+        #: Root tool calls the root made after its finish was fixed: after the
+        #: accepted receipt every later call, and before any result a repeated
+        #: finish call. Each is a bounded fact — never a second result.
+        self.post_finish_calls: list[dict] = []
         #: Root-session calls whose result carried verified delivery evidence
         #: (a verified receipt or a verified signed refusal envelope). Only
         #: these are the completion mechanism's own calls; everything else the
@@ -922,7 +936,16 @@ class RootTurnEvidence:
         tool_call_id = data.get("toolCallId")
         if kind == "scheduled":
             name = data.get("toolName")
-            if self.call_id is not None and not (self.answer_name is not None and name == self.answer_name):
+            is_answer = self.answer_name is not None and name == self.answer_name
+            if self.call_id is not None and not is_answer:
+                if self.receipt is not None or name == self.tool_name:
+                    # The accepted receipt is this turn's answer, so a later
+                    # root tool call — another finish call included — is a
+                    # retained fact, never a second result; a finish call
+                    # repeated before any result is the same fact, with the
+                    # first call's result the only one that can count.
+                    self._post_finish_fact(name, tool_call_id)
+                    return
                 raise NativeError("duplicate-finish", "the root scheduled another tool after its finish call")
             if name == self.tool_name:
                 if not isinstance(tool_call_id, str) or not tool_call_id:
@@ -962,6 +985,8 @@ class RootTurnEvidence:
                 self.receipt = verify_receipt(content, self.bridge, self.validate_outcome)
                 self.verified_delivery_calls.add(tool_call_id)
                 self.result_seq = seq
+                if self.on_finish_receipt is not None:
+                    self.on_finish_receipt(self.receipt)
             return
         if kind in ("result", "error") and tool_call_id in self.answer_calls:
             self._answer_result(data, kind, tool_call_id)
@@ -1023,6 +1048,15 @@ class RootTurnEvidence:
         self.finish_failed = True
         self.call_id, self.call_seq = None, -1
 
+    def _post_finish_fact(self, name: object, tool_call_id: object) -> None:
+        # One bounded identifier pair per later root call; arguments, outputs
+        # and raw names never enter evidence.
+        self.post_finish_calls.append({
+            "toolName": native_tool_name(name) if isinstance(name, str) and name.strip() else "<unknown>",
+            "toolCallId": truncate_text(tool_call_id, NATIVE_ID_CHARS)
+                          if isinstance(tool_call_id, str) and tool_call_id else None,
+        })
+
     def provenance(self) -> dict:
         return {
             "harness": "zcode", "tool": "hey_my_buddy_finish_turn", "turnEnd": "completed", "rootSessionMatched": True,
@@ -1032,4 +1066,6 @@ class RootTurnEvidence:
             "turnCompletedOrdinal": self.completed_ordinal, "promptCompletedOrdinal": self.settled_ordinal,
             "sessionCloseOrdinal": self.close_ordinal, "toolResultSuccess": True, "toolResultTruncated": False,
             "turnResultType": "success", "settlement": "session-closed",
+            "postFinishToolCalls": {"count": len(self.post_finish_calls),
+                                    "records": list(self.post_finish_calls)},
         }

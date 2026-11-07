@@ -34,7 +34,8 @@ class ReceiptTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64,
-                       "attentionPath": str(Path(temporary.name) / "absent-attention.json")}
+                       "attentionPath": str(Path(temporary.name) / "absent-attention.json"),
+                       "finishAcceptedPath": str(Path(temporary.name) / "finish-accepted.json")}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
 
     def receipt(self):
@@ -181,7 +182,8 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64,
-                       "attentionPath": str(Path(temporary.name) / "absent-attention.json")}
+                       "attentionPath": str(Path(temporary.name) / "absent-attention.json"),
+                       "finishAcceptedPath": str(Path(temporary.name) / "finish-accepted.json")}
         self.names = {"hey_my_buddy_finish_turn": "mcp__buddy_x__hey_my_buddy_finish_turn",
                       "hey_my_buddy_checkpoint": "mcp__buddy_x__hey_my_buddy_checkpoint",
                       "hey_my_buddy_answer_inquiry": "mcp__buddy_x__hey_my_buddy_answer_inquiry"}

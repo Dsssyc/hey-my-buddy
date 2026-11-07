@@ -39,7 +39,8 @@ class WorkerServicesCase(unittest.TestCase):
         self.attention = self.root / "attention.json"
         self.journal = self.root / "inquiry.results.jsonl"
         self.configuration = {"identity": dict(IDENTITY), "inputSha256": "a" * 64, "key": "b" * 64,
-                              "attentionPath": str(self.attention), "inquiryJournalPath": str(self.journal)}
+                              "attentionPath": str(self.attention), "inquiryJournalPath": str(self.journal),
+                              "finishAcceptedPath": str(self.root / "finish-accepted.json")}
 
     @staticmethod
     def outcome(disposition: str) -> dict:
@@ -264,6 +265,23 @@ class FinishBoundaryTests(WorkerServicesCase):
         self.assertEqual(receipt["inputSha256"], "a" * 64)
         self.assertEqual(receipt["outcome"]["disposition"], "completed")
         self.assertEqual(len(receipt["receiptId"]), 32)
+
+    def test_a_finish_after_the_accepted_receipt_is_refused_with_the_truth(self):
+        # The native driver publishes its acceptance at the marker path; while
+        # no marker exists the finish tool mints normally, and once it exists
+        # every later finish call is told the turn already ended — no second
+        # receipt is minted, whatever the arguments carry.
+        first = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("completed")))
+        marker = self.root / "finish-accepted.json"
+        self.assertFalse(marker.exists())
+        marker.write_text(json.dumps({"receiptId": first["receiptId"]}), encoding="utf-8")
+        for arguments in (self.outcome("completed"), {"disposition": "bogus"}):
+            with self.subTest(arguments=arguments):
+                envelope = self.envelope(self.call("hey_my_buddy_finish_turn", arguments),
+                                         "hey_my_buddy_finish_turn")
+                self.assertEqual(envelope["reason"], "turn-ended")
+                self.assertIn("already ended", envelope["detail"])
+                self.assertIn("no second result is accepted", envelope["detail"])
 
     def test_an_invalid_outcome_is_corrected_before_any_host_condition_is_named(self):
         self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}), encoding="utf-8", newline="\n")

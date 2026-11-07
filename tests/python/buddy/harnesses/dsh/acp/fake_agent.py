@@ -137,6 +137,7 @@ class FakeAgent:
         self.permission_command = args.permission_command
         self.permission_path = args.permission_path
         self.finish_fail_then_retry = args.finish_fail_then_retry
+        self.finish_again = args.finish_again
         self.no_finish = args.no_finish
         self.forge_receipt = args.forge_receipt
         self.stop_reason = args.stop_reason
@@ -803,6 +804,22 @@ class FakeAgent:
                                                  "expectedArtifacts": [],
                                                  "acceptance": "the Host accepts the attention receipt"}}
                 finish(attention_outcome, "call_finish_3")
+        if self.finish_again and "tool-refusal" not in text:
+            # The root calls the finish tool again after its accepted receipt.
+            # The model saw the accepted result first, so wait for the
+            # controller's published acceptance, then record what the bridge
+            # answered for the repeat.
+            marker = Path(self.bridge_config).parent / "finish-accepted.json"
+            bounded = time.monotonic() + 10
+            while time.monotonic() < bounded and not native_path(marker).exists():
+                time.sleep(0.05)
+            result = worker_services.call_session_tool(self.finish_tool.rsplit("__", 1)[-1],
+                                                       completed_outcome, configuration)
+            answer = result["content"][0]["text"]
+            tool_frame("call_finish_2", self.finish_tool, "in_progress")
+            tool_result("call_finish_2", "completed", answer)
+            log(self.log_path, {"event": "finish-again", "refused": result.get("isError") is True,
+                                "answer": answer})
         self.notify_client("session/update", {"sessionId": frame_id,
                                               "update": {"sessionUpdate": "usage_update",
                                                          "used": 900, "size": 1000000}})
@@ -1209,6 +1226,8 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
                         help="finish the prompt without an agent message chunk")
     parser.add_argument("--finish-fail-then-retry", action="store_true",
                         help="the first finish call fails natively and the root retries")
+    parser.add_argument("--finish-again", action="store_true",
+                        help="call the finish tool again after the accepted receipt and record what it answered")
     parser.add_argument("--no-finish", action="store_true",
                         help="end the micro task prompt without ever calling the finish tool")
     parser.add_argument("--forge-receipt", action="store_true",

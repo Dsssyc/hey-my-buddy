@@ -23,7 +23,8 @@ class FinishToolTests(unittest.TestCase):
         self.attention = self.root / "attention.json"
         self.journal = self.root / "inquiry.results.jsonl"
         self.config = {"identity": IDENTITY, "inputSha256": "a" * 64, "key": "b" * 64,
-                       "attentionPath": str(self.attention), "inquiryJournalPath": str(self.journal)}
+                       "attentionPath": str(self.attention), "inquiryJournalPath": str(self.journal),
+                       "finishAcceptedPath": str(self.root / "finish-accepted.json")}
 
     def call(self, name: str, arguments: dict) -> dict:
         return respond({"jsonrpc": "2.0", "id": 1, "method": "tools/call",

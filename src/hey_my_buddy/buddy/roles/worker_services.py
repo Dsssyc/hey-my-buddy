@@ -19,7 +19,8 @@ hash, signing key and the private journal/attention paths — which the owning
 controller publishes.
 
 Every expected refusal — invalid tool arguments, an outstanding native
-attention request, a pending inquiry, an unknown or terminal inquiry — is
+attention request, a pending inquiry, an unknown or terminal inquiry, a finish
+call after this turn's accepted receipt — is
 returned as an ``isError`` result whose text is a signed, attempt/input/tool-
 bound tool-refusal envelope: the native wrapper may surface such an error as a
 *successful* tool result, and the controller recovers the turn for a corrected
@@ -35,6 +36,7 @@ import secrets
 from copy import deepcopy
 from pathlib import Path
 
+from ...paths import native_path
 from ...private_files import read_text
 from ...errors import BoardError
 from ...protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records
@@ -105,7 +107,8 @@ FINISH_DESCRIPTION = (
     "Conclude the owning Buddy root turn with completed, assistance or attention. Include all six fields: "
     "disposition, summary, remaining, decisions, artifacts, request. For completed, request must be null. "
     "Correct validation errors and retry; stop after one successful receipt, once your work and internal "
-    "subagents have settled. "
+    "subagents have settled. A call after this turn's accepted receipt is refused: the turn has already "
+    "ended and no second result is accepted. "
     "A refused call returns a signed JSON refusal envelope whose detail names the correction; read it, fix "
     "the call and retry in this same turn. This tool does not dispatch other tasks."
 )
@@ -129,6 +132,10 @@ ATTENTION_REFUSAL = (
     "a completed outcome is not accepted while that request is unresolved."
 )
 INQUIRY_CHANNEL_ABSENT = "this turn has no mounted inquiry channel"
+TURN_ENDED_REFUSAL = (
+    "This turn has already ended with an accepted finish receipt; that recorded outcome stands and no second "
+    "result is accepted. Do not call this tool or any other tool again; end the native turn."
+)
 
 
 def micro_task_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
@@ -164,6 +171,18 @@ def attention_requests(configuration: dict) -> int:
     except FileNotFoundError:
         return 0
     return len(value["requests"])
+
+
+def finish_accepted(configuration: dict) -> bool:
+    """Whether the owning controller already accepted this turn's finish receipt.
+
+    The marker the native driver writes the moment it verifies and fixes the
+    finish receipt — the same private-state pattern as the attention record —
+    is the bridge's only truthful answer for a repeated finish call: the
+    turn's answer is already fixed, so a second result is refused instead of
+    minted.
+    """
+    return native_path(Path(configuration["finishAcceptedPath"])).exists()
 
 
 def read_inquiry_entries(configuration: dict) -> dict[str, dict] | None:
@@ -341,11 +360,13 @@ def session_tools(*, delegation_authority: bool = False, checkpoint: bool = True
 def call_session_tool(name: object, arguments: object, configuration: dict) -> dict | None:
     """Apply one session tool call's rules; ``None`` names no tool of this role.
 
-    The finish boundary order is part of the contract: an invalid outcome is
-    corrected before an outstanding attention request is named, and a pending
-    inquiry blocks only a ``completed`` disposition, so the root always gets
-    the most actionable refusal first and may correct, checkpoint, answer and
-    retry inside the same native turn.
+    The finish boundary order is part of the contract: a turn that already
+    ended is named before anything else, because no correction can replace the
+    accepted receipt; an invalid outcome is corrected before an outstanding
+    attention request is named, and a pending inquiry blocks only a
+    ``completed`` disposition, so the root always gets the most actionable
+    refusal first and may correct, checkpoint, answer and retry inside the
+    same native turn.
     """
     if name == "hey_my_buddy_checkpoint":
         pending = pending_inquiries(configuration)
@@ -358,6 +379,12 @@ def call_session_tool(name: object, arguments: object, configuration: dict) -> d
     if name == "hey_my_buddy_answer_inquiry":
         return _answer_inquiry(arguments, configuration)
     if name == "hey_my_buddy_finish_turn":
+        if finish_accepted(configuration):
+            # The owning controller already fixed this turn's finish receipt;
+            # no correction can change that, so every other refusal would be
+            # misleading. The repeat is told the truth and no second receipt
+            # is minted.
+            return _refusal(configuration, "hey_my_buddy_finish_turn", "turn-ended", TURN_ENDED_REFUSAL)
         error = validate_outcome(arguments, delegation_authority=configuration.get("delegationAuthority") is True)
         if error:
             return _refusal(configuration, "hey_my_buddy_finish_turn", "invalid-arguments", error)

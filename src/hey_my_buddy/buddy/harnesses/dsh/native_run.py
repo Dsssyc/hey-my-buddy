@@ -268,7 +268,8 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
     checkpoint_tool = qualified.get("hey_my_buddy_checkpoint")
     answer_tool = qualified.get("hey_my_buddy_answer_inquiry")
     bridge = {"identity": dict(identity), "inputSha256": input_sha256, "key": secrets.token_hex(32),
-              "attentionPath": str(attention_path), "delegationAuthority": delegation_authority}
+              "attentionPath": str(attention_path), "delegationAuthority": delegation_authority,
+              "finishAcceptedPath": str(root / "finish-accepted.json")}
     if inquiry is not None:
         bridge["inquiryJournalPath"] = inquiry["resultsPath"]
     bridge_path = root / "finish-bridge.json"
@@ -1317,6 +1318,13 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
                                              servers=list(mount.mcp_servers),
                                              state=state, tools=tools, activity=activity,
                                              sessions=sessions, deadline=deadline)
+    def accept_finish_receipt(receipt: dict) -> None:
+        # Published the moment the receipt becomes this turn's fixed answer:
+        # the session-tools bridge reads this marker to answer a repeated
+        # finish call with the truth instead of a second receipt.
+        private_json(Path(mount.bridge["finishAcceptedPath"]),
+                     {"receiptId": receipt["receiptId"]}, exclusive=True)
+
     evidence = RootTurnEvidence(
         session_id, mount.finish_tool, mount.bridge,
         checkpoint_name=mount.checkpoint_tool, answer_name=mount.answer_tool,
@@ -1324,7 +1332,8 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         if inquiry_bridge is not None else None,
         on_answer=(lambda receipt, call_id: inquiry_bridge.record_answer(receipt, call_id))
         if inquiry_bridge is not None else None,
-        validate_outcome=services.validate_outcome, mounted_tools=mount.bare_tools)
+        validate_outcome=services.validate_outcome, mounted_tools=mount.bare_tools,
+        on_finish_receipt=accept_finish_receipt)
     state.round_evidence = evidence
     if inquiry_bridge is not None:
         inquiry_bridge.activate(session_id)

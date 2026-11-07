@@ -339,7 +339,8 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
     has_inquiry = inquiry is not None
     bridge = {"identity": dict(identity), "inputSha256": input_sha256, "key": secrets.token_hex(32),
               "attentionPath": str(attention_path), "delegationAuthority": delegation_authority,
-              "toolNames": [tool["name"] for tool in session_tools]}
+              "toolNames": [tool["name"] for tool in session_tools],
+              "finishAcceptedPath": str(root / "finish-accepted.json")}
     if has_inquiry:
         # The MCP tools only read this journal; every record in it is written
         # by the driver after root-turn evidence verified.
@@ -1407,12 +1408,20 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         publish_activity()
 
     def bind_worker_session(opened_session: str) -> None:
+        def accept_finish_receipt(receipt: dict) -> None:
+            # Published the moment the receipt becomes this turn's fixed
+            # answer: the session-tools bridge reads this marker to answer a
+            # repeated finish call with the truth instead of a second receipt.
+            private_json(Path(mount.bridge["finishAcceptedPath"]),
+                         {"receiptId": receipt["receiptId"]}, exclusive=True)
+
         outcome.evidence = RootTurnEvidence(
             opened_session, mount.input_id, mount.finish_tool, mount.bridge,
             answer_name=mount.answer_tool,
             on_answer=outcome.inquiry_bridge.record_answer if outcome.inquiry_bridge is not None else None,
             validate_outcome=services.validate_outcome,
-            mounted_tools=mount.bare_tools, on_unknown=connection.on_unknown)
+            mounted_tools=mount.bare_tools, on_unknown=connection.on_unknown,
+            on_finish_receipt=accept_finish_receipt)
         outcome.projection.session_id = opened_session
         outcome.attempt_usage.session_id = opened_session
         connection.observe = observe

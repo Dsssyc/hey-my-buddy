@@ -1152,6 +1152,33 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual([call["callId"] for call in calls], ["call_finish_1"])
         self.assertTrue(calls[0]["belongsToRoot"])
 
+    def test_a_second_finish_after_acceptance_keeps_the_first_receipt(self):
+        # The accepted receipt stays the turn's answer; the repeat is a
+        # retained fact, stays a task-tool fact, and the finish tool tells the
+        # model the truth — this turn has already ended.
+        request, bound, mount = self.worker_request()
+        self.micro_task_agent_args(mount, finish_again=True)
+        result = run(request, observer=worker_observer, services=bound.services,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.schema_status, "valid")
+        self.assertEqual(result.value.parsed.value["disposition"], "completed")
+        provenance = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "turn-provenance"))).read_bytes())
+        self.assertEqual(provenance["toolCallId"], "call_finish_1")
+        self.assertEqual(provenance["postFinishToolCalls"],
+                         {"count": 1, "records": [{"toolName": mount.finish_tool, "toolCallId": "call_finish_2"}]})
+        package = result.tool_evidence.value
+        self.assertEqual(package["toolCalls"], 1,
+                         "the repeated finish call stays a task-tool fact; the accepted call is the delivery evidence")
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
+        self.assertEqual([call["callId"] for call in calls], ["call_finish_2"])
+        again = next(entry for entry in self.agent_log() if entry.get("event") == "finish-again")
+        self.assertTrue(again["refused"])
+        envelope = json.loads(again["answer"])
+        self.assertEqual(envelope["reason"], "turn-ended")
+        self.assertIn("already ended", envelope["detail"])
+
     def test_a_completed_turn_without_a_finish_tool_fails(self):
         request, bound, mount = self.worker_request()
         self.micro_task_agent_args(mount, no_finish=True)

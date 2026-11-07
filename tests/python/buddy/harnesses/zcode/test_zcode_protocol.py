@@ -57,9 +57,11 @@ class ReceiptTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="zcode-receipt-attention-")
         self.addCleanup(temporary.cleanup)
+        self.temporary = Path(temporary.name)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64,
-                       "attentionPath": str(Path(temporary.name) / "absent-attention.json")}
+                       "attentionPath": str(self.temporary / "absent-attention.json"),
+                       "finishAcceptedPath": str(self.temporary / "finish-accepted.json")}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
 
     def receipt(self):
@@ -234,8 +236,75 @@ class ReceiptTests(unittest.TestCase):
         with self.assertRaises(NativeError):
             self.root_event(tracker, 4, "tool.updated", {"kind": "error", "toolCallId": "accepted"})
         self.assertIs(tracker.receipt, accepted)
-        with self.assertRaises(NativeError):
-            self.root_event(tracker, 5, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "duplicate"})
+
+    def test_tools_after_the_accepted_receipt_are_facts_and_the_turn_completes(self):
+        tracker = self.started_tracker()
+        self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "accepted"})
+        self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "accepted",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        accepted = tracker.receipt
+        # A plain task tool after the accepted finish — the TodoWrite incident —
+        # and a repeated finish call: neither fails the turn, both are retained
+        # facts, and the accepted receipt stays the answer.
+        self.root_event(tracker, 4, "tool.updated", {"kind": "scheduled", "toolName": "TodoWrite", "toolCallId": "todo-1"})
+        self.root_event(tracker, 5, "tool.updated", {"kind": "result", "toolCallId": "todo-1",
+            "result": {"success": True, "truncated": False}})
+        self.root_event(tracker, 6, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "second"})
+        self.root_event(tracker, 7, "tool.updated", {"kind": "result", "toolCallId": "second",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        self.root_event(tracker, 8, "turn.completed", {"inputId": "input-root", "resultType": "success"})
+        tracker.observe({"method": "state.updated", "params": {"sessionId": "sess-root", "reason": "prompt_completed"}}, 9)
+        tracker.close_ordinal = 10
+        self.assertIs(tracker.receipt, accepted)
+        provenance = tracker.provenance()
+        self.assertEqual(provenance["toolCallId"], "accepted")
+        self.assertEqual(provenance["postFinishToolCalls"], {"count": 2, "records": [
+            {"toolName": "TodoWrite", "toolCallId": "todo-1"},
+            {"toolName": "finish", "toolCallId": "second"}]})
+
+    def test_a_repeated_finish_before_any_result_is_a_fact_and_the_first_result_counts(self):
+        tracker = self.started_tracker()
+        self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "first"})
+        self.root_event(tracker, 3, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "second"})
+        self.root_event(tracker, 4, "tool.updated", {"kind": "result", "toolCallId": "second",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        self.root_event(tracker, 5, "tool.updated", {"kind": "result", "toolCallId": "first",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        self.root_event(tracker, 6, "turn.completed", {"inputId": "input-root", "resultType": "success"})
+        tracker.observe({"method": "state.updated", "params": {"sessionId": "sess-root", "reason": "prompt_completed"}}, 7)
+        tracker.close_ordinal = 8
+        self.assertEqual(tracker.provenance()["toolCallId"], "first")
+        self.assertEqual(tracker.provenance()["postFinishToolCalls"],
+                         {"count": 1, "records": [{"toolName": "finish", "toolCallId": "second"}]})
+
+    def test_another_tool_between_the_finish_call_and_its_result_still_fails(self):
+        tracker = self.started_tracker()
+        self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "finish-1"})
+        with self.assertRaises(NativeError) as error:
+            self.root_event(tracker, 3, "tool.updated", {"kind": "scheduled", "toolName": "TodoWrite", "toolCallId": "todo"})
+        self.assertEqual(error.exception.code, "duplicate-finish")
+
+    def test_the_accepted_receipt_publishes_the_marker_the_bridge_reads(self):
+        published = []
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge,
+                                   validate_outcome=validate_outcome, mounted_tools=("hey_my_buddy_finish_turn",),
+                                   on_finish_receipt=published.append)
+        self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
+        self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "accepted"})
+        self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "accepted",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0]["receiptId"], tracker.receipt["receiptId"])
+        # A turn that ends without a finish never publishes the marker.
+        unpublished = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge,
+                                       validate_outcome=validate_outcome,
+                                       mounted_tools=("hey_my_buddy_finish_turn",),
+                                       on_finish_receipt=published.append)
+        self.root_event(unpublished, 1, "turn.started", {"inputId": "input-root"})
+        with self.assertRaises(NativeError) as error:
+            self.root_event(unpublished, 2, "turn.completed", {"inputId": "input-root", "resultType": "success"})
+        self.assertEqual(error.exception.code, "missing-finish")
+        self.assertEqual(len(published), 1)
 
     def test_a_wrapper_successful_refusal_result_recovers_for_a_corrected_retry(self):
         # The incident shape: the MCP isError refusal (a signed envelope) is
@@ -326,7 +395,8 @@ class ReceiptSeamTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64,
-                       "attentionPath": str(Path(temporary.name) / "absent-attention.json")}
+                       "attentionPath": str(Path(temporary.name) / "absent-attention.json"),
+                       "finishAcceptedPath": str(Path(temporary.name) / "finish-accepted.json")}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
         self.native = "mcp__buddy_x__hey_my_buddy_finish_turn"
 
