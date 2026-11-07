@@ -17,19 +17,19 @@ export const OPUS: Buddy = { harness: "claude", provider: "anthropic", model: "c
 const ROUTER: Buddy = { harness: "codex", provider: "openai", model: "gpt-6-luna", effort: "high" };
 export const HOST = { role: "host" as const };
 
-export function inputFailure(known = true): InputFailure {
+export function inputFailure(known = true, version: 1 | 2 = 2): InputFailure {
   const parts = { role: 1000, task: 1000000, hostInput: 20000, context: 26000, delivery: 1000, format: 577 };
   const declaration = { form: "cli-app-server", scope: "turn-start-text", source: "synthetic-declaration" };
   return {
-    version: 1, stage: known ? "preflight" : "native-admission",
+    version, stage: known ? "preflight" : "native-admission",
     harness: { name: "codex", form: declaration.form, version: "synthetic-1.0" },
     limit: known ? { ...declaration, state: "known", value: 1048576, unit: "unicode-scalars", versions: ["synthetic-1.0"] }
       : { ...declaration, state: "unknown", note: "No numeric declaration" },
     measurement: { unit: "unicode-scalars", total: 1048577, parts,
       ...(!known ? { utf8Bytes: 2097154, utf8Parts: Object.fromEntries(Object.entries(parts).map(([key, value]) => [key, value * 2])) as typeof parts } : {}) },
-    nativeRequestSent: !known, modelStarted: known ? false : null,
+    nativeRequestSent: !known, ...(version === 1 ? { modelStarted: known ? false : null } : { modelResponded: known ? false : null }),
     ...(!known ? { max_chars: 1000000, actual_chars: 1048577, nativeCode: "input_too_large" } : {}),
-  };
+  } as InputFailure;
 }
 
 export const at = (clock: string, second = 0) => `2026-09-26T${clock}:${String(second).padStart(2, "0")}Z`;

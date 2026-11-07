@@ -46,15 +46,15 @@ class InlineModelStartTests(unittest.TestCase):
                 observed = []
                 completed = []
                 def observer(facts):
-                    observed.append((facts["modelStarted"], handle.model_started))
+                    observed.append((facts["modelResponded"], handle.model_responded))
                     return rc.FEEDBACK_CONTINUE
                 correction = SimpleNamespace(stop_reason=None)
                 prepared = (request, None, observer, None if operation == "worker" else correction, {})
                 def run(_module, _request, *, observer, services, cancelled):
                     self.assertIsNone(services)
-                    observer({"modelStarted": False, "toolCalls": 0})
-                    observer({"modelStarted": True, "toolCalls": 0})
-                    observer({"modelStarted": False, "toolCalls": 0})
+                    observer({"modelResponded": False, "toolCalls": 0})
+                    observer({"modelResponded": True, "toolCalls": 0})
+                    observer({"modelResponded": False, "toolCalls": 0})
                     entered.set()
                     if not release.wait(10):
                         raise AssertionError("test did not release the native run")
@@ -76,7 +76,7 @@ class InlineModelStartTests(unittest.TestCase):
                     try:
                         self.assertTrue(entered.wait(10), completed)
                         self.assertTrue(thread.is_alive())
-                        self.assertTrue(handle.model_started)
+                        self.assertTrue(handle.model_responded)
                         self.assertEqual(observed, [(False, False), (True, True), (False, True)])
                     finally:
                         release.set()
@@ -102,6 +102,14 @@ class RegisteredDescriptionTests(unittest.TestCase):
 
 
 class NativeEvidenceProjectionTests(unittest.TestCase):
+    def test_current_role_receipt_has_only_the_model_responded_fact(self):
+        request = full_request(Path(tempfile.gettempdir()).resolve())
+        result = RunResult(identity=request.identity, harness=request.harness,
+                           end=rc.RunEnd(status="error"), model_responded=False)
+        payload = run_execution._base_result(result)
+        self.assertIs(payload["modelResponded"], False)
+        self.assertNotIn("modelStarted", payload)
+
     def test_inquiry_tool_failure_keeps_original_error_in_the_result(self):
         failure = {"records": [{"toolCallId": "answer-call", "toolName": "answer_inquiry",
                                 "error": "MCP tool call requires approval, but approval policy is never"}],
@@ -251,7 +259,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
                 "timeoutSeconds": WIRING_TIMEOUT}, threading.Event())
         result = json.loads(raw)
         self.assertEqual(code, 0)
-        self.assertFalse(result["modelStarted"])
+        self.assertFalse(result["modelResponded"])
         self.assertTrue(result["processState"]["shutdownConfirmed"])
         self.assertEqual(result["catalog"]["providers"][0]["models"][0]["id"], "fixture-model")
         self.assertFalse((root / "role-run-request.json").exists())

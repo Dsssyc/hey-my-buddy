@@ -157,13 +157,13 @@ class RuntimeVersionTests(unittest.TestCase):
             self.assertIsNone(result.harness_version)
         else:
             self.assertIsInstance(result.harness_version, str)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
     def assert_refused(self, result):
         self.assertEqual((result.end.status, result.end.reason_code), ("error", "native-shutdown-failed"))
         self.assertEqual(result.stop_evidence.native.group_state, "unknown")
-        self.assertFalse(result.model_started)
+        self.assertFalse(result.model_responded)
         self.assertIsNone(result.harness_version)
 
     def test_four_harnesses_report_version_or_none_and_continue(self):
@@ -365,7 +365,7 @@ class RuntimeVersionTests(unittest.TestCase):
                                              ("error", "invalid-native-result"))
                             self.assertEqual(result.stop_evidence.native.group_state,
                                              "gone" if stopped and not stop_error else "unknown")
-                            self.assertFalse(result.model_started)
+                            self.assertFalse(result.model_responded)
                         else:
                             with self.assertRaises(OSError) as caught:
                                 operation("claude", case, module)
@@ -451,7 +451,7 @@ class RuntimeVersionTests(unittest.TestCase):
                                 self.assertEqual((result.end.status, result.end.reason_code),
                                                  ("error", "harness-unavailable"))
                                 self.assertEqual(result.stop_evidence.native.group_state, "gone")
-                                self.assertFalse(result.model_started)
+                                self.assertFalse(result.model_responded)
                             else:
                                 error_type = module.ClaudeProtocolError if stopped else RuntimeError
                                 with self.assertRaises(error_type) as caught:
@@ -516,7 +516,7 @@ class RuntimeVersionTests(unittest.TestCase):
                         result = operation("dsh", case, module)
                         self.assertEqual((result.end.status, result.end.reason_code),
                                          ("error", "transport-error"))
-                        self.assertFalse(result.model_started)
+                        self.assertFalse(result.model_responded)
                     else:
                         with self.assertRaises(module.NativeError) as caught:
                             operation("dsh", case, module)

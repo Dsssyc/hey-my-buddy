@@ -203,7 +203,7 @@ def simulated_run(module, request, *, services, **options):
             process.stdout.close()
     return RunResult(identity=request.identity, harness=request.harness,
         end=RunEnd(status="error", reason_code="native-refused", message="model-free fixture"),
-        model_started=False, stop_evidence=StopEvidence(
+        model_responded=False, stop_evidence=StopEvidence(
             native=StopLayer(group_state="gone" if stopped else "unknown")))
 
 
@@ -216,7 +216,7 @@ class SimulatedExecutor(WorkerRunExecutor):
         root = Path(handle.role_run_control["privateRoot"])
         native_stop = json.loads((root / "native-stopped.json").read_text(encoding="utf-8"))
         stopped = native_stop["eofObserved"] is True and handle.shutdown_confirmed() is True
-        report = AdapterOutcome(status="failed", result={"modelStarted": False,
+        report = AdapterOutcome(status="failed", result={"modelResponded": False,
             "simulatedNativeStop": native_stop,
             "processState": {"shutdownConfirmed": stopped}}, error="model-free fixture",
             exit_code=handle.exit_code, shutdown_confirmed=stopped)

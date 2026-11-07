@@ -1,5 +1,6 @@
 """A stopped pre-model refusal requeues the same continuation under service authority."""
 from blackboard.tasks.test_workflow import WorkflowTestCase
+import json
 from hey_my_buddy.errors import BoardError
 
 
@@ -22,10 +23,11 @@ class RefusedResumeTests(WorkflowTestCase):
         self.assertEqual(second["claim"]["turn"]["resumeMode"], "native-session")
         return board, submitted["runId"], second
 
-    def refuse(self, board, claim, *, started=False, shutdown=True, code="native-resume-unavailable"):
+    def refuse(self, board, claim, *, responded=False, shutdown=True, code="native-resume-unavailable", legacy=False):
         def result(payload):
             payload.pop("turn")
-            payload.update(code=code, modelStarted=started, error="Fixture native refusal explanation.")
+            payload.update(code=code, error="Fixture native refusal explanation.")
+            payload["modelStarted" if legacy else "modelResponded"] = responded
         return self.finish_turn(board, claim, runner_status="failed", exit_code=1, seal=False,
                                 shutdown=shutdown, result_mutator=result)
 
@@ -96,8 +98,8 @@ class RefusedResumeTests(WorkflowTestCase):
     def test_helper_authorized_continuation_keeps_its_one_use_input(self):
         self.assert_auto_rebuild("zcode", continuation_kind="helper")
 
-    def test_started_unknown_and_unconfirmed_failures_do_not_requeue(self):
-        for index, facts in enumerate(({"started": True}, {"started": None}, {"started": 0},
+    def test_responded_unknown_and_unconfirmed_failures_do_not_requeue(self):
+        for index, facts in enumerate(({"responded": True}, {"responded": None}, {"responded": 0},
                                        {"code": "other-failure"}, {"shutdown": False})):
             with self.subTest(facts=facts):
                 board, run_id, second = self.native_turn(suffix=str(index))
@@ -107,6 +109,22 @@ class RefusedResumeTests(WorkflowTestCase):
                 self.assertEqual(view["continuationCount"], 1)
                 self.assertIsNone(view["resumeRecovery"])
                 self.assertIsNone(self.claim(board, "w2", claim_request_id="blocked-" + str(index), run_id=run_id)["claim"])
+
+    def test_legacy_model_started_is_retained_without_authorizing_automatic_rebuild(self):
+        for index, old_value in enumerate((False, True, None)):
+            with self.subTest(old_value=old_value):
+                board, run_id, second = self.native_turn(suffix="legacy-" + str(index))
+                self.refuse(board, second, responded=old_value, legacy=True)
+                view = board.call("workflow_get", {"runId": run_id})
+                self.assertEqual(view["state"], "failed")
+                self.assertEqual(view["continuationCount"], 1)
+                self.assertIsNone(view["resumeRecovery"])
+                with board.store.db.read() as connection:
+                    raw = connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                        (second["claim"]["attempt"]["attemptId"],)).fetchone()[0]
+                payload = json.loads(raw)["result"]
+                self.assertIs(payload["modelStarted"], old_value)
+                self.assertNotIn("modelResponded", payload)
 
     def test_initial_failure_does_not_requeue(self):
         board = self.board()

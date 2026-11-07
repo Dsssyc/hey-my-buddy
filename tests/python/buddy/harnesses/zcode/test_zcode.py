@@ -259,14 +259,14 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         handle, outcome = self.execute(self.context("config-mismatch", effort="high"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result["code"], "buddy-mismatch")
-        self.assertFalse(outcome.result["modelStarted"])
+        self.assertFalse(outcome.result["modelResponded"])
         self.assertIsNone(handle.result.buddy.checked.model)
         self.assertNotIn("turn", outcome.result)
 
     def test_unrecognized_model_readback_continues_and_retains_unknown_facts(self):
         handle, outcome = self.execute(self.context("config-unrecognized"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertTrue(outcome.result["modelStarted"])
+        self.assertTrue(outcome.result["modelResponded"])
         self.assertIsNone(handle.result.buddy.checked.model)
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
 
@@ -350,7 +350,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         _, refused = self.execute(self.context(index=2, previous=previous, effort="high"))
         self.assertEqual(refused.status, "failed", refused.to_report())
         self.assertEqual(refused.result.get("code"), "native-resume-unavailable")
-        self.assertIs(refused.result["modelStarted"], False)
+        self.assertIs(refused.result["modelResponded"], False)
         self.assertNotIn("turn", refused.result)
         reconstructed_handle, reconstructed = self.execute(self.context(index=3, previous=previous, mode="reconstructed-new-session", effort="high"))
         self.assertEqual(reconstructed.status, "ok", reconstructed.to_report())
@@ -366,7 +366,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         _, outcome = self.execute(self.context(previous="sess-missing"))
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.result.get("code"), "native-resume-unavailable")
-        self.assertIs(outcome.result["modelStarted"], False)
+        self.assertIs(outcome.result["modelResponded"], False)
 
     def test_bound_native_resume_rejects_missing_or_different_native_sessions(self):
         _, first = self.execute(self.context())

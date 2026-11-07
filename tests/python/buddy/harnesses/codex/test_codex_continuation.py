@@ -167,7 +167,7 @@ class CodexContinuationTests(WorkflowTestCase):
 
         def refusal(result):
             result.pop("turn")
-            result.update(code="native-resume-unavailable", modelStarted=False)
+            result.update(code="native-resume-unavailable", modelResponded=False)
 
         self.finish_turn(board, second, runner_status="failed", exit_code=1, seal=False, result_mutator=refusal)
         failed = board.call("workflow_get", {"runId": failed["runId"]})

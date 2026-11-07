@@ -281,11 +281,11 @@ class FastSeamTests(SeamCase):
         seen = []
 
         def observer(facts):
-            seen.append((facts["settled"], facts["modelStarted"]))
+            seen.append((facts["settled"], facts["modelResponded"]))
             return correction.observer(facts)
 
         result = self.fast_run("ok", correction, observer=observer)
-        self.assertIs(result.model_started, True)
+        self.assertIs(result.model_responded, True)
         self.assertEqual(seen[0], (False, False))
         self.assertIn((False, True), seen)
 
@@ -295,7 +295,7 @@ class FastSeamTests(SeamCase):
         result = run(request, observer=FastCorrection(FAST_SCHEMA, "Pick a buddy").observer,
                      services=None, cancelled=lambda: False)
         self.assertIs(result.native_request_sent, True)
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(result.native_admission_error.value, {
             "nativeMethod": "turn/start", "nativeCode": -32602,
             "message": "fixture admission refusal", "input_error_code": "input_too_large",
@@ -334,7 +334,7 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.value.schema_status, "unknown")
         self.assertEqual(result.value.correction_count, 0)
         self.assertIsNone(correction.stop_reason)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 0)
@@ -565,7 +565,7 @@ class FastSeamTests(SeamCase):
     def test_unverified_no_tool_policy_continues_with_readback_facts(self):
         result = self.fast_run("config-mismatch", FastCorrection(FAST_SCHEMA, "Pick a buddy"))
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         facts = native_run.native_evidence(result)
         self.assertEqual(facts["policyCheck"]["configReadback"]["status"], "unknown")
         self.assertEqual(facts["nativeConfigPolicy"]["web_search"], "enabled")
@@ -575,7 +575,7 @@ class FastSeamTests(SeamCase):
             with self.subTest(case=case):
                 result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a buddy"))
                 self.assertEqual(result.end.status, "ok", result.end.message)
-                self.assertTrue(result.model_started)
+                self.assertTrue(result.model_responded)
                 self.assertIsNone(result.buddy.checked.model)
                 self.assertEqual(native_run.native_evidence(result)["policyCheck"]["selectedModel"]["status"], "unknown")
 
@@ -583,7 +583,7 @@ class FastSeamTests(SeamCase):
         result = self.fast_run("wrong-model", FastCorrection(FAST_SCHEMA, "Pick a buddy"))
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "buddy-mismatch")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(native_run.native_evidence(result)["nativeThreadReceipt"]["model"], "other")
         trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
         self.assertNotIn("turns", trace)
@@ -595,7 +595,7 @@ class FastSeamTests(SeamCase):
                 trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
                 if case == "provider-wrong":
                     self.assertEqual(result.end.reason_code, "buddy-mismatch")
-                    self.assertIs(result.model_started, False)
+                    self.assertIs(result.model_responded, False)
                     self.assertNotIn("turns", trace)
                 else:
                     self.assertEqual(result.end.status, "ok", result.end.message)
@@ -653,7 +653,7 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "harness-unavailable")
         self.assertIn("could not start", result.end.message)
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "gone")
         self.assertIsNone(result.end.native_exit_code)
@@ -716,7 +716,7 @@ class ProviderReceiptSeamTests(CodexSeamCase):
             with self.subTest(mode=mode):
                 result = getattr(self, mode + "_run")("provider-wrong")
                 self.assertEqual(result.end.reason_code, code)
-                self.assertIs(result.model_started, False)
+                self.assertIs(result.model_responded, False)
                 trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
                 self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
 
@@ -734,7 +734,7 @@ class ProviderReceiptSeamTests(CodexSeamCase):
         continuation = RunContinuation(mode="native-session", previous_session_id=first.native_identity.session_id)
         result = self.worker_run("provider-wrong", continuation=continuation)
         self.assertEqual(result.end.reason_code, "buddy-mismatch")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
         thread = trace["threads"][first.native_identity.session_id]
         self.assertEqual(len(thread["turnRequests"]), 1)
@@ -777,11 +777,11 @@ class ReviewSeamTests(CodexSeamCase):
         seen = []
 
         def observer(facts):
-            seen.append((facts["settled"], facts["modelStarted"]))
+            seen.append((facts["settled"], facts["modelResponded"]))
             return FEEDBACK_CONTINUE
 
         result = self.review_run("readonly-network-disabled", observer=observer)
-        self.assertIs(result.model_started, True)
+        self.assertIs(result.model_responded, True)
         self.assertEqual(seen[0], (False, False))
         self.assertIn((False, True), seen)
 
@@ -908,7 +908,7 @@ class ReviewSeamTests(CodexSeamCase):
     def test_review_network_disabled_receipt_admits_turn(self):
         result = self.review_run("readonly-network-disabled")
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertIs(result.model_started, True)
+        self.assertIs(result.model_responded, True)
         facts = native_run.native_evidence(result)
         self.assertEqual(facts["policyCheck"]["threadReceipt"]["status"], "confirmed")
         self.assertIs(facts["nativePolicy"]["sandbox"]["networkAccess"], False)
@@ -918,7 +918,7 @@ class ReviewSeamTests(CodexSeamCase):
             with self.subTest(case=case):
                 result = self.review_run(case)
                 self.assertEqual(result.end.status, "ok", result.end.message)
-                self.assertTrue(result.model_started)
+                self.assertTrue(result.model_responded)
                 self.assertIsNone(result.buddy.checked.model)
                 self.assertEqual(native_run.native_evidence(result)["policyCheck"]["selectedModel"]["status"], "unknown")
 
@@ -926,7 +926,7 @@ class ReviewSeamTests(CodexSeamCase):
         result = self.review_run("readonly-model-mismatch")
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "readonly-configuration-mismatch")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(native_run.native_evidence(result)["nativePolicy"]["model"], "different-model")
         trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
         self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
@@ -937,7 +937,7 @@ class ReviewSeamTests(CodexSeamCase):
                 result = self.review_run(case)
                 self.assertEqual(result.end.status, "error")
                 self.assertEqual(result.end.reason_code, "readonly-policy-unverified")
-                self.assertIs(result.model_started, False)
+                self.assertIs(result.model_responded, False)
                 facts = native_run.native_evidence(result)
                 self.assertIn("nativePolicy", facts)
                 self.assertEqual(facts["policyCheck"]["threadReceipt"]["status"], "unknown")
@@ -970,18 +970,18 @@ class WorkerSeamTests(CodexSeamCase):
         seen = []
 
         def observer(facts):
-            seen.append(facts["modelStarted"])
+            seen.append(facts["modelResponded"])
             return FEEDBACK_CONTINUE
 
         result = self.worker_run("quota-before", observer=observer)
         self.assertIs(result.native_request_sent, True)
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(seen[0], False)
         self.assertNotIn(True, seen)
 
         seen.clear()
         result = self.worker_run("quota-activity-text", observer=observer)
-        self.assertIs(result.model_started, True)
+        self.assertIs(result.model_responded, True)
         self.assertEqual(seen[0], False)
         self.assertIn(True, seen)
 
@@ -1178,7 +1178,7 @@ class WorkerSeamTests(CodexSeamCase):
             failed = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=self.worker_services(), cancelled=lambda: False)
         self.assertEqual(failed.end.reason_code, 'harness-unavailable')
-        self.assertFalse(failed.model_started)
+        self.assertFalse(failed.model_responded)
         self.assertFalse(path.exists(), 'a failed startup must not create the session record')
         retried = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                       services=self.worker_services(), cancelled=lambda: False)
@@ -1386,7 +1386,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_unreadable_initial_config_keeps_catalog_unknown_and_continues(self):
         result = self.worker_run("config-unreadable")
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
         self.assertEqual(native_run.native_evidence(result)["catalogRead"]["discovery"]["reason"],
@@ -1472,7 +1472,7 @@ class WorkerSeamTests(CodexSeamCase):
         continuation = RunContinuation(mode="native-session", previous_session_id=first.native_identity.session_id)
         resumed = self.worker_run("ok", continuation=continuation)
         self.assertEqual(resumed.end.reason_code, "native-resume-unavailable")
-        self.assertIs(resumed.model_started, False)
+        self.assertIs(resumed.model_responded, False)
 
     def test_binding_with_an_unexpected_field_is_refused(self):
         first = self.worker_run("ok")
@@ -1484,7 +1484,7 @@ class WorkerSeamTests(CodexSeamCase):
         result = self.worker_run("ok", continuation=RunContinuation(
             mode="native-session", previous_session_id=previous))
         self.assertEqual(result.end.reason_code, "native-resume-unavailable")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
 
     def test_binding_write_failure_keeps_delivered_turn_and_disables_resume(self):
         original = native_run.private_json
@@ -1742,7 +1742,7 @@ class WorkerSeamTests(CodexSeamCase):
         result = self.worker_run(case, timeout=2, continuation=RunContinuation(
             mode='native-session', previous_session_id=previous))
         self.assertEqual(result.end.reason_code, code)
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertIsNone(result.native_identity)
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         if text is not None:
@@ -2322,7 +2322,7 @@ class CatalogTrustTests(CodexSeamCase):
                         message)
         self.assertNotIn("\N{REPLACEMENT CHARACTER}", message)
         self.assertIs(result.native_request_sent, True)
-        self.assertIsNone(result.model_started)
+        self.assertIsNone(result.model_responded)
         admission = result.native_admission_error.value
         self.assertEqual(admission["nativeCode"], -32000)
         self.assertNotIn("input_error_code", admission)
@@ -2357,7 +2357,7 @@ class CatalogTrustTests(CodexSeamCase):
         state = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8")) \
             if Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}
         self.assertEqual(state["threads"], {})
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertFalse(any(ref.kind == "model-check" for ref in result.evidence_refs))
 
     def test_a_listed_model_without_a_legal_effort_is_refused_before_any_turn(self):
@@ -2372,7 +2372,7 @@ class CatalogTrustTests(CodexSeamCase):
         state = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8")) \
             if Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}
         self.assertEqual(state["threads"], {})
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertFalse(any(ref.kind == "model-check" for ref in result.evidence_refs))
 
     def test_discovery_omits_a_row_without_a_legal_effort(self):

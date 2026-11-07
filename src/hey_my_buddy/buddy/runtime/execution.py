@@ -618,7 +618,7 @@ class Execution:
         return self.receipt(claim, {'status': 'failed', 'result': {
             'status': 'error', 'code': 'router-review-unavailable', 'reasonCode': code,
             'reason': 'The review harness is unavailable',
-            'modelStarted': False, 'harnessAttempts': history,
+            'modelResponded': False, 'harnessAttempts': history,
             **routing_facts(claim['decisionInput'], include_budget=False)},
             'error': code, 'exitCode': None, 'signal': None, 'shutdownConfirmed': True,
             'artifacts': [], 'terminationReason': TERMINATION_HARNESS_ERROR}, directory)

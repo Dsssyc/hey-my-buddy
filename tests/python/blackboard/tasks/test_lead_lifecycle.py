@@ -162,7 +162,7 @@ class LeadLifecycleTests(WorkflowTestCase):
 
         def refusal(result):
             result.pop("turn")
-            result.update(code="native-resume-unavailable", modelStarted=False, error="Fixture refusal")
+            result.update(code="native-resume-unavailable", modelResponded=False, error="Fixture refusal")
 
         self.finish_turn(board, second, worker_id="w2", runner_status="failed", exit_code=1, seal=False,
                          result_mutator=refusal)
@@ -192,7 +192,7 @@ class LeadLifecycleTests(WorkflowTestCase):
 
         def refusal(result):
             result.pop("turn")
-            result.update(code="native-resume-unavailable", modelStarted=False, error="Fixture refusal")
+            result.update(code="native-resume-unavailable", modelResponded=False, error="Fixture refusal")
 
         self.finish_turn(board, second, runner_status="failed", exit_code=1, seal=False, result_mutator=refusal)
         wakeups = self.wakeups(board, lead)

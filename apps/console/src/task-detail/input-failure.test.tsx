@@ -16,8 +16,8 @@ afterEach(() => { cleanup(); setLanguageChoice("browser"); });
 
 describe("input rejection at the console response boundary", () => {
   it("reads the same frozen facts on task, compact/current/audit turns, and requests", () => {
-    for (const known of [true, false]) {
-      const failure = inputFailure(known), record = workflow(), history = audit();
+    for (const version of [1, 2] as const) for (const known of [true, false]) {
+      const failure = inputFailure(known, version), record = workflow(), history = audit();
       const reason = { code: "workflow.input-rejected", params: { harness: "codex" } };
       record.turns[0]!.inputFailure = failure;
       record.currentTurn!.inputFailure = failure;
@@ -41,9 +41,9 @@ describe("input rejection at the console response boundary", () => {
     }
   });
 
-  it("requires every field of a present v1 package without filling missing facts", () => {
-    for (const known of [true, false]) {
-      const failure = inputFailure(known);
+  it("requires every field of a present v1 or v2 package without filling missing facts", () => {
+    for (const version of [1, 2] as const) for (const known of [true, false]) {
+      const failure = inputFailure(known, version);
       for (const object of [failure, failure.harness, failure.limit, failure.measurement, failure.measurement.parts, ...(!known ? [failure.measurement.utf8Parts!] : [])]) {
         for (const key of Object.keys(object)) {
           if (object === failure && ["max_chars", "actual_chars", "nativeCode"].includes(key)) continue;
@@ -58,7 +58,7 @@ describe("input rejection at the console response boundary", () => {
   });
 
   it.each([
-    (f: any) => { f.version = 2; },
+    (f: any) => { f.version = 3; },
     (f: any) => { f.stage = "native"; },
     (f: any) => { f.harness.name = "command"; },
     (f: any) => { f.harness.version = false; },
@@ -73,12 +73,24 @@ describe("input rejection at the console response boundary", () => {
     (f: any) => { f.measurement.parts.format = 1.5; },
     (f: any) => { f.measurement.parts.extra = 0; },
     (f: any) => { f.nativeRequestSent = true; },
-    (f: any) => { f.modelStarted = null; },
+    (f: any) => { f.modelResponded = null; },
+    (f: any) => { f.modelStarted = false; },
     (f: any) => { f.message = "native message on a preflight"; },
     (f: any) => { f.extra = true; },
   ])("refuses malformed or contradictory known facts %#", mutate => {
     const failure = inputFailure(); mutate(failure);
     expect(() => parseTask(task({ inputFailure: failure }), "m1")).toThrow(ApiError);
+  });
+
+  it("accepts historical v1 modelStarted values without interpreting them as preflight evidence", () => {
+    for (const modelStarted of [true, false, null]) {
+      const failure = { ...inputFailure(true, 1), modelStarted };
+      expect(parseInputFailure(failure, "inputFailure")).toEqual(failure);
+    }
+    expect(() => parseInputFailure({ ...inputFailure(true, 1), modelStarted: "unknown" }, "inputFailure")).toThrow(ApiError);
+    expect(() => parseInputFailure({ ...inputFailure(true, 1), modelResponded: false }, "inputFailure")).toThrow(ApiError);
+    expect(() => parseInputFailure({ ...inputFailure(true, 2), modelStarted: false }, "inputFailure")).toThrow(ApiError);
+    expect(() => parseInputFailure({ ...inputFailure(true, 2), modelResponded: true }, "inputFailure")).toThrow(ApiError);
   });
 
   it("refuses malformed unknown/native facts and bad request reasons", () => {
@@ -109,7 +121,25 @@ describe("input rejection presentation", () => {
         expect(screen.getByText(language === "zh" ? "原生报告上限" : "Native reported limit")).toBeTruthy();
         expect(screen.getByText(language === "zh" ? "未知" : "Unknown")).toBeTruthy();
       }
+      expect(screen.getByText(language === "zh" ? "模型开始作答" : "Model started responding")).toBeTruthy();
       expect(reasonText({ code: "workflow.input-rejected", params: { harness: "codex" } })).toContain(language === "zh" ? "拒收输入" : "rejected the input");
+      cleanup();
+    }
+  });
+
+  it("hides historical modelStarted in v1 while showing only v2 modelResponded in both languages", () => {
+    for (const language of ["zh", "en"] as const) {
+      setLanguageChoice(language);
+      for (const modelStarted of [true, false, null]) {
+        render(<InputFailureFacts failure={{ ...inputFailure(true, 1), modelStarted } as ReturnType<typeof inputFailure>} />);
+        const facts = document.querySelector("[data-slot=input-failure]")!;
+        expect(facts.textContent).toContain(language === "zh" ? "已发送原生请求" : "Native request sent");
+        expect(facts.textContent).not.toContain(language === "zh" ? "模型开始作答" : "Model started responding");
+        expect(facts.textContent).not.toContain(language === "zh" ? "模型已开始" : "Model started");
+        cleanup();
+      }
+      render(<InputFailureFacts failure={{ ...inputFailure(false, 2), modelResponded: true } as ReturnType<typeof inputFailure>} />);
+      expect(screen.getByText(language === "zh" ? "模型开始作答" : "Model started responding")).toBeTruthy();
       cleanup();
     }
   });

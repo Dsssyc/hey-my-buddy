@@ -14,11 +14,11 @@ def failure(stage):
                              "context": 0, "delivery": 0, "format": 0}}
     if not known:
         measurement.update(utf8Bytes=total, utf8Parts=dict(measurement["parts"]))
-    return {"version": 1, "stage": stage,
+    return {"version": 2, "stage": stage,
             "harness": {"name": "codex" if known else "dsh", "form": limit["form"],
                         "version": "0.164.0" if known else None},
             "limit": limit, "measurement": measurement,
-            "nativeRequestSent": not known, "modelStarted": False,
+            "nativeRequestSent": not known, "modelResponded": False,
             **({} if known else {"nativeMethod": "session/prompt", "nativeCode": -32602,
                                  "input_error_code": "input_too_large", "max_chars": 10,
                                  "actual_chars": total, "message": "The native input was rejected"})}

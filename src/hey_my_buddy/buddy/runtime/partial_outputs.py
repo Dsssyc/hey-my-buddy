@@ -17,7 +17,7 @@ def capture(context, outcome):
     if context.turn_input["version"] == NONE_TURN_INPUT_VERSION:
         return
     payload = outcome.result
-    if payload.get("modelStarted") is False:
+    if payload.get("modelResponded") is False:
         return
     state = context.environment.get("HMB_STATE_DIR")
     if not state:

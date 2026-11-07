@@ -117,7 +117,7 @@ class InitialCheckTests(unittest.TestCase):
         request = self.request()
         native_result = rc.RunResult(identity=request.identity, harness=request.harness,
             end=rc.RunEnd(status="error", reason_code="native-rpc-error", message="native refused the input"),
-            harness_version=native_version, native_request_sent=True, model_started=False,
+            harness_version=native_version, native_request_sent=True, model_responded=False,
             native_admission_error=admission,
             stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone" if stopped else "unknown")))
         handle = run_execution.InlineRunHandle(self.control, request.identity, grace_seconds=0)
@@ -144,7 +144,7 @@ class InitialCheckTests(unittest.TestCase):
                 self.assertEqual((calls, live_calls, code), (0, 0, 1))
                 self.assertEqual(result.end.reason_code, INPUT_REJECTED)
                 self.assertFalse(result.native_request_sent)
-                self.assertFalse(result.model_started)
+                self.assertFalse(result.model_responded)
                 self.assertIsNone(result.native_identity)
                 self.assertEqual(result.stop_evidence.native.group_state, "gone")
                 failure = result.input_failure.value
@@ -169,7 +169,7 @@ class InitialCheckTests(unittest.TestCase):
         self.assertEqual(failure["measurement"]["utf8Bytes"], len(request.input_text.encode()))
         self.assertEqual(sum(failure["measurement"]["utf8Parts"].values()), len(request.input_text.encode()))
         self.assertTrue(failure["nativeRequestSent"])
-        self.assertFalse(failure["modelStarted"])
+        self.assertFalse(failure["modelResponded"])
         for key, value in native_error.items():
             self.assertEqual(failure[key], value)
 
@@ -200,7 +200,7 @@ class InitialCheckTests(unittest.TestCase):
             sent.append(feedback.input_text)
             return rc.RunResult(identity=request.identity, harness=request.harness,
                 end=rc.RunEnd(status="error", reason_code="fixture-end"),
-                native_request_sent=True, model_started=True,
+                native_request_sent=True, model_responded=True,
                 stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
         with mock.patch.object(inline_run, "check_prompt_input", wraps=inline_run.check_prompt_input) as check:
             result, *_ = self.execute(known(initial_size), native_call=native)

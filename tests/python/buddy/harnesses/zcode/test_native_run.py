@@ -232,13 +232,13 @@ class FastSeamTests(NativeRunCase):
                 correction = FastCorrection(SCHEMA, prompt)
 
                 def observer(facts):
-                    seen.append((facts["settled"], facts["modelStarted"]))
+                    seen.append((facts["settled"], facts["modelResponded"]))
                     return correction.observer(facts)
 
                 result = run(self.fast_request(prompt), observer=observer,
                              services=None, cancelled=lambda: False)
                 self.assertIs(result.native_request_sent, True)
-                self.assertIs(result.model_started, expected)
+                self.assertIs(result.model_responded, expected)
                 self.assertEqual(seen[0], (False, False))
                 if expected:
                     self.assertIn((False, True), seen)
@@ -254,7 +254,7 @@ class FastSeamTests(NativeRunCase):
         result = run(self.fast_request(prompt), observer=FastCorrection(SCHEMA, prompt).observer,
                      services=None, cancelled=lambda: False)
         self.assertIs(result.native_request_sent, True)
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(result.native_admission_error.value, {
             "nativeMethod": "session/send", "nativeCode": "invalid_params",
             "message": "fixture admission refusal", "input_error_code": "input_too_large",
@@ -628,7 +628,7 @@ class FastSeamTests(NativeRunCase):
         # Nothing is claimed that the run never reached: no session opened, no
         # effective policy, no buddy check, no completion, no model,
         # and no native exit code — the holding side's own never-spawned fact.
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertIsNone(result.effective_policy.tools)
         checked = result.buddy.checked
         self.assertIsNone(checked.provider)
@@ -677,11 +677,11 @@ class WorkerSeamTests(MockNativeCase):
         seen = []
 
         def observer(facts):
-            seen.append((facts["settled"], facts["modelStarted"]))
+            seen.append((facts["settled"], facts["modelResponded"]))
             return worker_observer(facts)
 
         result = run(request, observer=observer, services=services, cancelled=lambda: False)
-        self.assertIs(result.model_started, True)
+        self.assertIs(result.model_responded, True)
         self.assertEqual(seen[0], (False, False))
         self.assertIn((False, True), seen)
 
@@ -932,7 +932,7 @@ class WorkerSeamTests(MockNativeCase):
         # leaves the root output status unprovable.
         self.assertEqual(result.buddy.checked.model.value, "fixture-model")
         self.assertIsNotNone(result.effective_policy.tools)
-        self.assertIsNone(result.model_started)
+        self.assertIsNone(result.model_responded)
         self.assertIsNone(result.completion_evidence)
         self.assertIsNotNone(result.end.message)
 

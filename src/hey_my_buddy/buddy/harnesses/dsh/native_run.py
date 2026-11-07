@@ -486,7 +486,7 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
-    model_started: bool = False
+    model_responded: bool = False
     native_request_sent: bool | None = False
     native_admission_error: dict | None = None
     initial_request_attempted: bool = False
@@ -715,12 +715,12 @@ class _RunFacts:
     def note_unknown(self, label: object) -> None:
         fold_unknown_events(self.unknown_counts, unknown_event_name(label))
 
-    def mapping(self, *, tool_calls: int, model_started: bool, settled: bool, raw_answer: str | None,
+    def mapping(self, *, tool_calls: int, model_responded: bool, settled: bool, raw_answer: str | None,
                 denied: int) -> dict:
         return {
             "settled": settled,
             "rawAnswer": raw_answer,
-            "modelStarted": model_started,
+            "modelResponded": model_responded,
             "toolCalls": tool_calls,
             # DSH has no separate marker-frame family: every tool frame is
             # already a projected fact counted in toolCalls.
@@ -827,7 +827,7 @@ def _fold_update(message: object, state: _RunState, *, facts: _RunFacts, tools: 
     if params.get("sessionId") == activity.session_id and isinstance(update, dict):
         output = _root_model_activity(update)
         state.root_model_activity |= output
-        state.model_started |= output
+        state.model_responded |= output
     activity.note(message, state.event_count)
     if inquiry_bridge is not None:
         inquiry_bridge.note_event(message, activity.phase)
@@ -898,7 +898,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
 
         def notify(*, settled: bool = False, raw: str | None = None) -> RunFeedback:
             feedback = observer(facts.mapping(tool_calls=tools.tool_calls, settled=settled,
-                                              model_started=state.model_started,
+                                              model_responded=state.model_responded,
                                               raw_answer=raw, denied=denied_count()))
             if feedback.action == "stop":
                 raise ObserverInterrupt()
@@ -1553,7 +1553,7 @@ def _build_result(request: RunRequest, *, state: _RunState,
         harness_version=state.harness_version,
         native_event_count=state.event_count or None,
         native_evidence=_native_evidence_facts(state),
-        model_started=(True if state.model_started else
+        model_responded=(True if state.model_responded else
                        False if not state.initial_request_attempted or
                        is_input_too_large(state.native_admission_error) or
                        (drained is True and state.prompt_stop_reason is not None) else None),

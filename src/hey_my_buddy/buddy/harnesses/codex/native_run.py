@@ -171,7 +171,7 @@ class _RunFacts:
     """The cumulative, normalized facts of one run, as the observer sees them."""
 
     def __init__(self):
-        self.model_started = False
+        self.model_responded = False
         self.unknown_counts: dict[str, int] = {}
         self.thread_notifications: dict[str, int] = {}
         self.markers = 0
@@ -189,7 +189,7 @@ class _RunFacts:
 
     def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None) -> dict:
         return {"settled": settled, "rawAnswer": raw_answer, "toolCalls": tool_calls,
-                "modelStarted": self.model_started,
+                "modelResponded": self.model_responded,
                 "toolMarkerFrames": self.markers,
                 "unknownEvents": {"countsByType": dict(self.unknown_counts),
                                   "total": sum(self.unknown_counts.values())},
@@ -968,9 +968,9 @@ class _EventChain:
 
     def note_model_activity(self, message: dict) -> None:
         evidence = self.state.turn_evidence
-        if evidence is not None and not self.facts.model_started and _root_model_output(
+        if evidence is not None and not self.facts.model_responded and _root_model_output(
                 message, evidence.thread_id, evidence.turn_id):
-            self.facts.model_started = True
+            self.facts.model_responded = True
             self.facts.dirty = True
 
     def bind(self, carrier: Callable[[dict], Any]) -> None:
@@ -1973,7 +1973,7 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
                    message=bounded_utf8(state.error_text, NATIVE_SUMMARY_BYTES)),
         harness_version=state.version,
         native_event_count=state.event_count or None,
-        model_started=(True if facts.model_started else
+        model_responded=(True if facts.model_responded else
                        False if not state.initial_request_attempted or
                        is_input_too_large(state.native_admission_error) or
                        (state.turn_evidence is not None and state.turn_evidence.completed is not None

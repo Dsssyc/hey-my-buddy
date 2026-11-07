@@ -78,7 +78,7 @@ export default {
     observedLimit: "Native reported limit", observedTotal: "Native reported total", nativeChars: "characters (native count)",
     unit: { "unicode-scalars": "Unicode scalars", "utf-8-bytes": "UTF-8 bytes" },
     part: { role: "Role", task: "Task", hostInput: "Host input", context: "Context", delivery: "Delivery", format: "Format" },
-    sent: "Native request sent", started: "Model started", yes: "Yes", no: "No",
+    sent: "Native request sent", responded: "Model started responding", yes: "Yes", no: "No",
   },
   providerRejection: { "overloaded": "Model service overloaded", "quota-exceeded": "Quota used up", "rate-limited": "Rate limited by the native service" },
   seal: {

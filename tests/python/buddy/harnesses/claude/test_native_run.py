@@ -125,20 +125,20 @@ class NativeRunCase(unittest.TestCase):
 
         result = self.execute(self.request(), observer=observe)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertIs(result.model_started, True)
-        self.assertIs(seen[0]["modelStarted"], False)
-        self.assertTrue(any(facts["modelStarted"] and not facts["settled"] for facts in seen))
-        self.assertEqual([facts["modelStarted"] for facts in seen],
-                         sorted(facts["modelStarted"] for facts in seen))
+        self.assertIs(result.model_responded, True)
+        self.assertIs(seen[0]["modelResponded"], False)
+        self.assertTrue(any(facts["modelResponded"] and not facts["settled"] for facts in seen))
+        self.assertEqual([facts["modelResponded"] for facts in seen],
+                         sorted(facts["modelResponded"] for facts in seen))
 
     def test_successful_terminal_without_root_model_output_does_not_start_model(self):
         self.fixture_case("terminal-only")
         seen = []
         result = self.execute(self.request(), observer=lambda facts: (seen.append(dict(facts)) or FEEDBACK_CONTINUE))
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertTrue(seen)
-        self.assertTrue(all(facts["modelStarted"] is False for facts in seen))
+        self.assertTrue(all(facts["modelResponded"] is False for facts in seen))
 
     def test_only_root_model_frames_count_as_output(self):
         root = "root-session"
@@ -329,7 +329,7 @@ class Batch4FactsTests(NativeRunCase):
         self.fixture_case("invalid-catalog")
         result = self.execute(self.request())
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
         facts = self.observations(result)
@@ -344,7 +344,7 @@ class Batch4FactsTests(NativeRunCase):
         result = self.execute(self.request())
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-buddy")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
         self.assertEqual(self.fixture_state()["userTurns"], 0)
@@ -522,7 +522,7 @@ class Batch4FactsTests(NativeRunCase):
                     self.assertNotIn("native-turn-facts", [ref.kind for ref in result.evidence_refs])
                     self.assertTrue(result.tool_evidence.value["streamComplete"])
                     self.assertEqual(result.stop_evidence.native.group_state, "gone")
-                    self.assertTrue(result.model_started)
+                    self.assertTrue(result.model_responded)
                     self.assertFalse(any(facts["settled"] for facts in callbacks))
                     self.assertIsNotNone(result.last_assistant_message)
                     verdict = {"stopReason": None, "elapsedMs": 1}
@@ -591,7 +591,7 @@ class WorkerCarrierTests(NativeRunCase):
                                                      separators=(",", ":"), ensure_ascii=False))
         completion = result.completion_evidence
         self.assertTrue(completion.stream_end)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         # The confirmed root is the session the CLI was actually launched with.
         self.assertEqual(result.native_identity.session_id,
                          flag_value(self.fixture_state()["argv"], "--session-id"))
@@ -618,7 +618,7 @@ class WorkerCarrierTests(NativeRunCase):
         result = self.execute(broken)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-buddy")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         checked = result.buddy.checked
         self.assertIsNone(checked.provider)
         self.assertIsNone(checked.model)
@@ -631,7 +631,7 @@ class WorkerCarrierTests(NativeRunCase):
         result = self.execute(request)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-buddy")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(self.fixture_state()["userTurns"], 0)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
@@ -875,7 +875,7 @@ class SettlementGuardTests(NativeRunCase):
         self.fixture_case("input-too-large")
         result = self.execute(self.request())
         self.assertIs(result.native_request_sent, True)
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(result.native_admission_error.value, {
             "nativeMethod": "stream-json/result", "nativeCode": "invalid_params",
             "message": "fixture admission refusal", "input_error_code": "input_too_large",

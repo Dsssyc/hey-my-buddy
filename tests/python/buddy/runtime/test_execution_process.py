@@ -43,7 +43,7 @@ class ExecutionEndpointTests(unittest.TestCase):
         from hey_my_buddy.install import runtime
 
         for sent, started in ((True, False), (None, False), (False, False), (False, None)):
-            with self.subTest(nativeRequestSent=sent, modelStarted=started), \
+            with self.subTest(nativeRequestSent=sent, modelResponded=started), \
                  tempfile.TemporaryDirectory(prefix="premodel-retry-") as directory:
                 state = Path(directory)
                 spec = {"adapter": "decision", "cwd": directory, "decision": {"kind": "maintain"}}
@@ -56,7 +56,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                                          stop_initiator=None, grace_expired=False)
                 holder = {"preflightControl": mock.Mock(), "harnessHistory": [{"harness": "dsh"}]}
                 outcome = AdapterOutcome(status="failed", shutdown_confirmed=True,
-                    result={"code": "transport-error", "nativeRequestSent": sent, "modelStarted": started})
+                    result={"code": "transport-error", "nativeRequestSent": sent, "modelResponded": started})
                 with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
                      mock.patch.object(controller, "worker_executor", return_value=object()), \
                      mock.patch.object(controller, "prepare_worker_run", return_value=controller.WorkerPreparation(True)), \

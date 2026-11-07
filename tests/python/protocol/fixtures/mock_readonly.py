@@ -147,7 +147,7 @@ def start(harness, context, request, fixture, options):
         handle.result = RunResult(
             identity=built_request.identity, harness=harness,
             end=RunEnd(status="error" if mode in _END else "ok", reason_code=reason_code,
-                       native_exit_code=exit_code), model_started=True,
+                       native_exit_code=exit_code), model_responded=True,
             buddy=ResultBuddy(requested=built_request.buddy, checked=CheckedBuddy(
                 provider=CheckedValue(value=context.spec["provider"]),
                 model=CheckedValue(value=context.spec["model"]), effort=CheckedValue(value=context.spec["effort"]))),

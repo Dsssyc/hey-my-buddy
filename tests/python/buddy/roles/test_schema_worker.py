@@ -251,7 +251,7 @@ class SchemaWorkerTests(NativeRunCase):
             root, _turn, _control, result, _request, _verdict, code = self.worker(previous="old-session")
         self.assertEqual(code, 1)
         self.assertEqual(result.end.reason_code, "invalid-resume-mode")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertFalse((root / "output.json").exists())
 
@@ -269,7 +269,7 @@ class SchemaWorkerTests(NativeRunCase):
                 payload = json.loads(frame)
                 self.assertEqual(code, 1)
                 self.assertEqual(payload["error"], "tokenSource none")
-                self.assertIs(payload["modelStarted"], False)
+                self.assertIs(payload["modelResponded"], False)
                 self.assertIs(payload["processState"]["shutdownConfirmed"], stopped is True)
 
     def test_native_schemas_stay_fixed_and_full_prompt_hashes_include_the_worker_role(self):

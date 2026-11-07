@@ -462,7 +462,7 @@ class _RunFacts:
     """The cumulative, normalized facts of one run, as the observer sees them."""
 
     def __init__(self):
-        self.model_started = False
+        self.model_responded = False
         self.unknown_counts: dict[str, int] = {}
         self.markers = 0
         self.denied: list[dict] = []
@@ -475,7 +475,7 @@ class _RunFacts:
         return {
             "settled": settled,
             "rawAnswer": raw_answer,
-            "modelStarted": self.model_started,
+            "modelResponded": self.model_responded,
             "toolCalls": tool_calls,
             "toolMarkerFrames": self.markers,
             "unknownEvents": {"countsByType": dict(self.unknown_counts),
@@ -1250,9 +1250,9 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
                 outcome.attempt_usage.observe(message, holder[0].turn_id)
                 model_activity = _root_model_activity(message, holder[0].session_id, holder[0].turn_id)
                 state.root_model_activity |= model_activity
-                first_output = model_activity and not facts.model_started
+                first_output = model_activity and not facts.model_responded
                 if first_output:
-                    facts.model_started = True
+                    facts.model_responded = True
             changed = classifier.observe(message)
             if changed or first_output:
                 notify()
@@ -1393,9 +1393,9 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         outcome.attempt_usage.observe(message, outcome.evidence.turn_id)
         model_activity = _root_model_activity(message, outcome.evidence.session_id, outcome.evidence.turn_id)
         state.root_model_activity |= model_activity
-        first_output = model_activity and not facts.model_started
+        first_output = model_activity and not facts.model_responded
         if first_output:
-            facts.model_started = True
+            facts.model_responded = True
         changed = classifier.observe(message)
         if changed or first_output:
             notify()
@@ -1731,7 +1731,7 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
                    native_exit_code=state.exit_code,
                    message=state.error_text),
         harness_version=spawn.version if spawn is not None else None,
-        model_started=(True if facts.model_started else
+        model_responded=(True if facts.model_responded else
                        False if not state.initial_request_attempted or
                        is_input_too_large(state.native_admission_error) or drained is True else None),
         native_request_sent=state.native_request_sent,

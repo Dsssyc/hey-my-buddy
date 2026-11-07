@@ -538,7 +538,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         outcome, context = self.run_review("no-efforts-row", index=6)
         self.assertNotEqual(outcome.status, "ok")
         self.assertEqual(outcome.result["code"], "invalid-buddy")
-        self.assertIs(outcome.result["modelStarted"], False)
+        self.assertIs(outcome.result["modelResponded"], False)
         evidence = outcome.result["toolEvidence"]
         self.assertEqual(evidence["binding"], {"harness": "codex", "taskId": context.task_id,
                                                "attemptId": context.attempt_id, "generation": context.generation})

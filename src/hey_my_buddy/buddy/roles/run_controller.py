@@ -58,11 +58,11 @@ def execute(control: dict, cancelled: threading.Event) -> tuple[str, int]:
     except Exception as error:
         unknown = specification["allowUnknown"] and getattr(error, "code", None) == "deadline"
         native_error = getattr(error, "native_error", None)
-        return canonical_json({"status": "unknown" if unknown else "error", "modelStarted": False,
+        return canonical_json({"status": "unknown" if unknown else "error", "modelResponded": False,
             "code": getattr(error, "code", None), "error": str(error).encode("utf-8")[:512].decode("utf-8", errors="ignore"),
             **({"nativeError": native_error} if native_error else {}), "processState": {
                 "shutdownConfirmed": getattr(error, "discovery_shutdown_confirmed", None) is True}}), 0 if unknown else 1
-    return canonical_json({"status": "ok", "modelStarted": False, specification["resultKey"]: value,
+    return canonical_json({"status": "ok", "modelResponded": False, specification["resultKey"]: value,
                            "processState": {"shutdownConfirmed": True, "nativeExitCode": 0}}), 0
 
 
@@ -79,7 +79,7 @@ def main() -> int:
         control = decode_strict_json(read_bytes(Path(args.control)))
         frame, code = execute(control, _cancelled)
     except BoardError as error:
-        frame, code = canonical_json({"status": "error", "modelStarted": False, **error.payload(),
+        frame, code = canonical_json({"status": "error", "modelResponded": False, **error.payload(),
                                       "processState": {"shutdownConfirmed": True}}), 1
     except Exception:
         frame, code = canonical_json({"status": "error", "code": "role-controller-failed",

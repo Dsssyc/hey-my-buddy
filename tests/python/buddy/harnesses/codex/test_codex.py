@@ -223,7 +223,7 @@ class CodexAdapterTests(unittest.TestCase):
         select_command(context.environment, self.root, "codex", [str(broken)])
         outcome = self.execute(context)
         self.assertEqual(outcome.status, 'failed', outcome.to_report())
-        self.assertIs(outcome.result['modelStarted'], False)
+        self.assertIs(outcome.result['modelResponded'], False)
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertFalse(list(native_path(Path(context.environment['HMB_STATE_DIR'])).rglob('codex-home')))
         self.assertEqual((self.home / 'auth.json').read_text(encoding="utf-8"), 'source login')
@@ -267,7 +267,7 @@ class CodexAdapterTests(unittest.TestCase):
         native_path(path).write_text(json.dumps(binding), encoding="utf-8", newline="\n")
         refused = self.execute(self.context(index=3, previous=first.result['sessionId']))
         self.assertEqual(refused.result['code'], 'native-resume-unavailable')
-        self.assertIs(refused.result['modelStarted'], False)
+        self.assertIs(refused.result['modelResponded'], False)
         rebuilt = self.execute(self.context(index=4, previous=first.result['sessionId'],
                                             mode='reconstructed-new-session'))
         self.assertEqual(rebuilt.status, 'ok', rebuilt.to_report())
@@ -317,7 +317,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertFalse(first.result["nativeSession"]["resumable"])
         second = self.execute(self.context(index=2, previous=first.result["sessionId"]))
         self.assertEqual(second.result["code"], "native-resume-unavailable")
-        self.assertIs(second.result["modelStarted"], False)
+        self.assertIs(second.result["modelResponded"], False)
 
     def test_disconnect_retains_completed_message_without_inventing_native_completion(self):
         outcome = self.execute(self.context("disconnect-after-message"))
@@ -338,7 +338,7 @@ class CodexAdapterTests(unittest.TestCase):
         second = self.execute(self.context(index=2, previous=first.result["sessionId"]))
         self.assertEqual(second.status, "failed")
         self.assertEqual(second.result["code"], "native-resume-unavailable")
-        self.assertIs(second.result["modelStarted"], False)
+        self.assertIs(second.result["modelResponded"], False)
 
     def test_native_resume_requires_matching_task_binding_and_history(self):
         first = self.execute(self.context())
@@ -350,7 +350,7 @@ class CodexAdapterTests(unittest.TestCase):
         changed = self.execute(self.context(index=3, previous=thread_id, effort="high"))
         self.assertEqual(changed.status, "failed")
         self.assertEqual(changed.result["code"], "native-resume-unavailable")
-        self.assertIs(changed.result["modelStarted"], False)
+        self.assertIs(changed.result["modelResponded"], False)
         reconstructed = self.execute(self.context(index=4, previous=thread_id, mode="reconstructed-new-session", effort="high"))
         self.assertEqual(reconstructed.status, "ok", reconstructed.to_report())
         self.assertNotEqual(reconstructed.result["turn"]["sessionId"], thread_id)
@@ -522,7 +522,7 @@ class CodexAdapterTests(unittest.TestCase):
     def test_read_only_accepts_disabled_network_receipt(self):
         result, _context = self.review('readonly-network-disabled', index=41)
         self.assertEqual(result.status, 'ok', result.result)
-        self.assertIs(result.result['modelStarted'], True)
+        self.assertIs(result.result['modelResponded'], True)
         self.assertEqual(result.result['policyCheck']['threadReceipt']['status'], 'confirmed')
         # The native receipt keeps its actual networkAccess value.
         self.assertIn('nativePolicy', result.result)

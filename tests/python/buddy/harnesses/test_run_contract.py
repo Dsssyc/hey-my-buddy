@@ -76,7 +76,7 @@ def full_result() -> rc.RunResult:
     return rc.RunResult(
         identity=identity(), harness="zcode",
         end=rc.RunEnd(status="ok", native_exit_code=0),
-        harness_version="0.42.0", model_started=True,
+        harness_version="0.42.0", model_responded=True,
 
         buddy=rc.ResultBuddy(
             requested=rc.RunBuddy(provider="fixture-provider", model="fixture-model", effort="off"),
@@ -279,6 +279,14 @@ class CodecRoundtripTests(unittest.TestCase):
         result = full_result()
         self.assertEqual(rc.RunResult.from_payload(result.to_payload()), result)
 
+    def test_current_result_uses_only_model_responded_without_an_old_name_alias(self):
+        payload = full_result().to_payload()
+        self.assertIs(payload["modelResponded"], True)
+        self.assertNotIn("modelStarted", payload)
+        payload["modelStarted"] = payload.pop("modelResponded")
+        with self.assertRaises(BoardError):
+            rc.RunResult.from_payload(payload)
+
     def test_the_format_version_is_the_exact_integer(self):
         text = json.dumps(full_request(self.root).to_payload())
         for wrong in ("true", "1.0"):
@@ -293,14 +301,14 @@ class CodecRoundtripTests(unittest.TestCase):
 
     def test_unknown_stays_unknown_in_a_minimal_result(self):
         result = rc.RunResult(identity=identity(), harness="codex", end=rc.RunEnd(status="cancelled"))
-        self.assertIsNone(result.model_started)
+        self.assertIsNone(result.model_responded)
         self.assertIsNone(result.buddy.requested)
         self.assertIsNone(result.usage)
         self.assertIsNone(result.native_identity)
         self.assertEqual(result.stop_evidence.native.group_state, "unknown")
         self.assertIsNone(result.stop_evidence.interrupt.requested)
         back = rc.RunResult.from_payload(result.to_payload())
-        self.assertIsNone(back.model_started)
+        self.assertIsNone(back.model_responded)
         self.assertIsNone(back.harness_version)
         # An absent optional text is None/JSON null end to end; the legacy
         # receipts' literal "unknown" spelling is a role projection, not a
@@ -494,8 +502,8 @@ class StrictScalarTypeTests(unittest.TestCase):
         with self.assertRaises(BoardError, msg="generation"):
             rc.RunRequest.from_payload(payload)
         result_payload = full_result().to_payload()
-        result_payload["modelStarted"] = 1
-        with self.assertRaises(BoardError, msg="modelStarted"):
+        result_payload["modelResponded"] = 1
+        with self.assertRaises(BoardError, msg="modelResponded"):
             rc.RunResult.from_payload(result_payload)
         result_payload = full_result().to_payload()
         result_payload["end"]["nativeExitCode"] = "0"

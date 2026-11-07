@@ -77,7 +77,7 @@ export default {
     observedLimit: "原生报告上限", observedTotal: "原生报告总量", nativeChars: "字符（原生计数）",
     unit: { "unicode-scalars": "Unicode 标量", "utf-8-bytes": "UTF-8 字节" },
     part: { role: "角色", task: "任务", hostInput: "Host 输入", context: "上下文", delivery: "交付", format: "格式" },
-    sent: "已发送原生请求", started: "模型已开始", yes: "是", no: "否",
+    sent: "已发送原生请求", responded: "模型开始作答", yes: "是", no: "否",
   },
   providerRejection: { "overloaded": "模型服务满载", "quota-exceeded": "额度耗尽", "rate-limited": "原生服务限流" },
   seal: {

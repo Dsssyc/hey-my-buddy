@@ -312,7 +312,7 @@ class SessionRunTests(NativeRunCase):
         request = self.fast_request('never sent')
         result = native_run.run(request, observer=lambda _f: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, 'error')
-        self.assertFalse(result.model_started)
+        self.assertFalse(result.model_responded)
         self.assertFalse(native_path(self.record(request).path).exists())
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
 
@@ -336,7 +336,7 @@ class SessionRunTests(NativeRunCase):
             result = native_run.run(request, observer=lambda _f: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, 'ok')
         self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         self.assertIsNotNone(result.native_identity.session_id)
         self.assertTrue(result.evidence_refs)

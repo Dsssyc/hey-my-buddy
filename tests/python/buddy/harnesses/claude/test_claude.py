@@ -536,7 +536,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                 outcome = self.execute(context)
                 self.assertEqual(outcome.status, "failed", outcome.to_report())
                 self.assertEqual(outcome.result["code"], "invalid-buddy")
-                self.assertFalse(outcome.result["modelStarted"])
+                self.assertFalse(outcome.result["modelResponded"])
                 self.assertNotIn("turn", outcome.result)
                 self.assertIsNone(self.last_handle.result.buddy.checked.model)
                 self.assertEqual(self.fixture_state()["userTurns"], 0)
@@ -558,7 +558,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         carried = self.execute(self.context(mode="initial", previous="old-session", index=9))
         self.assertEqual(carried.status, "failed")
         self.assertEqual(carried.result["code"], "invalid-resume-mode")
-        self.assertFalse(carried.result["modelStarted"])
+        self.assertFalse(carried.result["modelResponded"])
         self.assertNotIn("turn", carried.result)
         self.assertFalse((self.root / "fixture.json").exists(),
                          "an illegal turn must never start a native child")

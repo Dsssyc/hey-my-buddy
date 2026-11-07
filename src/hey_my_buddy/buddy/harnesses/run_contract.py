@@ -563,7 +563,7 @@ class RunResult(InternalModel):
     native_evidence: Optional[NativeEvidence] = None
     native_request_sent: Optional[bool] = None
     # First root-session model output: text, reasoning, a tool call or positive output tokens.
-    model_started: Optional[bool] = None
+    model_responded: Optional[bool] = None
     buddy: ResultBuddy = Field(default_factory=ResultBuddy)
     native_identity: Optional[NativeIdentity] = None
     value: Optional[RunValue] = None

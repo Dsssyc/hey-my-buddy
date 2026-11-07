@@ -37,7 +37,7 @@ export function InputFailureFacts({ failure }: { failure: InputFailure }) {
     </table>
     <Facts items={[
       [t("inputFailure.sent"), fact(failure.nativeRequestSent)],
-      [t("inputFailure.started"), fact(failure.modelStarted)],
+      ...(failure.version === 2 ? [[t("inputFailure.responded"), fact(failure.modelResponded)] as [string, string]] : []),
     ]} />
   </div>;
 }

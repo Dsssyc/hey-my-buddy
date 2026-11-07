@@ -192,7 +192,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         _, outcome = self.execute(context)
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result["code"], "native-resume-unavailable")
-        self.assertIs(outcome.result["modelStarted"], False)
+        self.assertIs(outcome.result["modelResponded"], False)
         self.assertTrue(outcome.shutdown_confirmed)
 
     def test_a_noncompleted_native_turn_keeps_its_reason_without_a_finish_receipt(self):

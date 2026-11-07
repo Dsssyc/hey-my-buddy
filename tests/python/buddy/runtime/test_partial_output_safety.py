@@ -17,7 +17,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
             "kind": "none", "path": "/private/fixture", "projectId": "folder-project",
             "projectKind": "folder", "access": "write", "integrator": {"role": "host"}}}
         context.effective_workspace = context.turn_input["executionWorkspace"]
-        result = AdapterOutcome("failed", result={"modelStarted": True}, shutdown_confirmed=True)
+        result = AdapterOutcome("failed", result={"modelResponded": True}, shutdown_confirmed=True)
         with patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module") as git:
             self.assertFalse(enrich(context, result))
             git.assert_not_called()
@@ -41,18 +41,18 @@ class PartialOutputSafetyTests(unittest.TestCase):
                 self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=False), expected)
 
     def test_unconfirmed_stop_and_explicit_pre_model_failure_never_scan_checkout(self):
-        for stopped, payload in ((False, {"modelStarted": True}), (True, {"modelStarted": False})):
+        for stopped, payload in ((False, {"modelResponded": True}), (True, {"modelResponded": False})):
             with self.subTest(stopped=stopped, payload=payload), patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module") as workspace:
                 result = AdapterOutcome("failed", result=payload, shutdown_confirmed=stopped)
                 capture(self.context(), result)
                 workspace.assert_not_called()
                 self.assertNotIn("partialWorkspaceSeal", result.result)
 
-    def test_model_started_without_changed_paths_publishes_no_partial_output(self):
-        # The runners set modelStarted before the request is sent, so it only
-        # guards retry; an unchanged checkout carries no work evidence to publish.
+    def test_model_responded_without_changed_paths_publishes_no_partial_output(self):
+        # Model output alone does not prove that managed files changed;
+        # an unchanged checkout carries no work evidence to publish.
         module = SimpleNamespace(seal=Mock(return_value={"changedPaths": []}))
-        result = AdapterOutcome("failed", result={"modelStarted": True, "code": "transport-error"},
+        result = AdapterOutcome("failed", result={"modelResponded": True, "code": "transport-error"},
                                 shutdown_confirmed=True)
         with patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module", return_value=module):
             capture(self.context(), result)
@@ -61,8 +61,8 @@ class PartialOutputSafetyTests(unittest.TestCase):
             self.assertNotIn(key, result.result)
 
     def test_changed_paths_publish_the_partial_output_regardless_of_model_state(self):
-        for payload in ({"modelStarted": True, "code": "transport-error"},
-                        {"modelStarted": None, "code": "native-exit"}, {}):
+        for payload in ({"modelResponded": True, "code": "transport-error"},
+                        {"modelResponded": None, "code": "native-exit"}, {}):
             with self.subTest(payload=payload), patch(
                     "hey_my_buddy.blackboard.tasks.workflow.workspace_module",
                     return_value=SimpleNamespace(seal=Mock(return_value={"changedPaths": ["src/one.py"]}))):
@@ -78,7 +78,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
         context.effective_workspace = None
         resolved = {"path": "/private/fixture", "workspaceId": "ws-" + "a" * 32}
         module = SimpleNamespace(seal=Mock(return_value={"changedPaths": ["src/one.py"]}))
-        result = AdapterOutcome("failed", result={"modelStarted": True}, shutdown_confirmed=True)
+        result = AdapterOutcome("failed", result={"modelResponded": True}, shutdown_confirmed=True)
         with patch("hey_my_buddy.buddy.runtime.partial_outputs.turn_manifest", return_value=resolved) as read, patch(
                 "hey_my_buddy.blackboard.tasks.workflow.workspace_module", return_value=module):
             capture(context, result)
@@ -88,7 +88,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
     def test_out_of_scope_failure_preserves_conflict_instead_of_a_partial_output(self):
         error = BoardError("WORKSPACE_SCOPE_VIOLATION", "outside declared scope", paths=["src/forbidden.py"])
         module = SimpleNamespace(seal=Mock(side_effect=error))
-        result = AdapterOutcome("failed", result={"modelStarted": True, "code": "transport-error"},
+        result = AdapterOutcome("failed", result={"modelResponded": True, "code": "transport-error"},
                                 error="Native transport closed", shutdown_confirmed=True)
         with patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module", return_value=module):
             capture(self.context(), result)
@@ -103,7 +103,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
         for reason in ("wrap-up", "grace-expired", "forced-stop"):
             with self.subTest(reason=reason):
                 module = SimpleNamespace(seal=Mock(return_value={"changedPaths": ["src/one.py"]}))
-                result = AdapterOutcome("cancelled", {"modelStarted": True, "stopReason": reason},
+                result = AdapterOutcome("cancelled", {"modelResponded": True, "stopReason": reason},
                                         shutdown_confirmed=True)
                 with patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module", return_value=module):
                     capture(self.context(), result)
@@ -132,7 +132,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
         context = self.context()
         context.turn_input["context"] = {"microTaskInputCommit": "initial-commit"}
         seal = {"changedPaths": ["src/one.py"], "manifestSha256": "sealed"}
-        result = AdapterOutcome("failed", result={"workspaceSeal": seal, "modelStarted": True,
+        result = AdapterOutcome("failed", result={"workspaceSeal": seal, "modelResponded": True,
                                 "code": "transport-error"}, error="Native transport closed", shutdown_confirmed=True)
         error = BoardError("WORKSPACE_PATCH_FAILED", "Git could not capture the patch")
         module = SimpleNamespace(cumulative_patch=Mock(side_effect=error), seal=Mock(return_value=seal))
@@ -151,7 +151,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
         context = self.context()
         context.turn_input["context"] = {"microTaskInputCommit": "initial-commit"}
         seal = {"changedPaths": ["src/one.py"]}
-        result = AdapterOutcome("cancelled", result={"workspaceSeal": seal, "modelStarted": True},
+        result = AdapterOutcome("cancelled", result={"workspaceSeal": seal, "modelResponded": True},
                                 error="Stopped by Host", shutdown_confirmed=True)
         error = BoardError("WORKSPACE_PATCH_FAILED", "Git could not capture the patch", path="src/one.py")
         module = SimpleNamespace(cumulative_patch=Mock(side_effect=error), seal=Mock(return_value=seal))
@@ -166,7 +166,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
 
     def test_partial_seal_failure_keeps_harness_cause(self):
         error = BoardError("WORKSPACE_SCOPE_VIOLATION", "outside declared scope", paths=["src/forbidden.py"])
-        result = AdapterOutcome("failed", result={"modelStarted": True, "code": "native-exit"},
+        result = AdapterOutcome("failed", result={"modelResponded": True, "code": "native-exit"},
                                 error="Native runner exited", shutdown_confirmed=True)
         with patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module",
                    return_value=SimpleNamespace(seal=Mock(side_effect=error))):

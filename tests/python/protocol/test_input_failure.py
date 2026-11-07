@@ -15,10 +15,42 @@ def failure(*, unknown=False):
              InputLimit.known(**fields, value=10, unit="unicode-scalars", versions=("0.164.0",)))
     check = check_prompt_input(limit, PromptParts("角色", '😀\\"\n', "输入", "上下文", "交付", "格式"))
     return input_failure(check, stage="native-admission" if unknown else "preflight", harness="codex",
-                         version=None if unknown else "0.164.0", native_request_sent=unknown, model_started=False)
+                         version=None if unknown else "0.164.0", native_request_sent=unknown, model_responded=False)
 
 
 class InputFailureTests(unittest.TestCase):
+    def test_writer_emits_only_version_two_and_the_model_responded_name(self):
+        for unknown in (False, True):
+            value = failure(unknown=unknown)
+            self.assertEqual(value["version"], 2)
+            self.assertIs(value["modelResponded"], False)
+            self.assertNotIn("modelStarted", value)
+
+    def test_both_versions_are_read_without_rewriting_legacy_facts(self):
+        for unknown in (False, True):
+            for old_value in (False, True, None):
+                value = failure(unknown=unknown)
+                value["version"] = 1
+                value.pop("modelResponded")
+                value["modelStarted"] = old_value
+                original = deepcopy(value)
+                self.assertEqual(normalize_input_failure(value), original)
+                self.assertEqual(input_failure_view({"result": {"inputFailure": value}}), original)
+                self.assertEqual(value, original)
+                self.assertNotIn("modelResponded", value)
+
+    def test_version_selects_one_field_and_only_new_preflight_requires_no_response(self):
+        value = failure()
+        legacy = {**value, "version": 1, "modelStarted": value["modelResponded"]}
+        legacy.pop("modelResponded")
+        for invalid in ({**value, "modelStarted": False}, {**legacy, "modelResponded": False},
+                        {**value, "version": 1}, {**legacy, "version": 2},
+                        {**value, "modelResponded": True}, {**value, "modelResponded": None},
+                        {**legacy, "modelStarted": 0}, {**value, "version": True},
+                        {**value, "version": 3}):
+            with self.subTest(invalid=invalid):
+                self.assertIsNone(normalize_input_failure(invalid))
+
     def test_known_and_unknown_roundtrip_through_the_native_result(self):
         for unknown in (False, True):
             with self.subTest(unknown=unknown):
@@ -34,7 +66,7 @@ class InputFailureTests(unittest.TestCase):
                 self.assertIsNone(input_failure_view({"result": {}}))
 
     def test_false_or_ambiguous_sending_and_model_facts_do_not_become_stop_proof(self):
-        value = {**failure(unknown=True), "nativeRequestSent": None, "modelStarted": None}
+        value = {**failure(unknown=True), "nativeRequestSent": None, "modelResponded": None}
         self.assertEqual(normalize_input_failure(value), value)
         result = rc.RunResult(identity=rc.RunIdentity(task_id="task", attempt_id="attempt", generation=1,
             invocation_id="invocation"), harness="codex", end=rc.RunEnd(status="error"), input_failure=value,
@@ -49,7 +81,7 @@ class InputFailureTests(unittest.TestCase):
         bad_bytes = deepcopy(failure(unknown=True))
         bad_bytes["measurement"]["utf8Bytes"] += 1
         bad_preflight = {**failure(), "nativeRequestSent": True}
-        bad_model = {**failure(), "modelStarted": 0}
+        bad_model = {**failure(), "modelResponded": 0}
         long_message = {**failure(unknown=True), "message": "中" * 171}
         for value in (bad_sum, bad_unknown, bad_bytes, bad_preflight, bad_model, long_message,
                       {**failure(), "extra": 1}):

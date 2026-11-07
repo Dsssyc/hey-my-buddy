@@ -213,7 +213,7 @@ class FastSeamTests(NativeRunCase):
                      observer=FastCorrection(SCHEMA, "fixture prompt").observer,
                      services=None, cancelled=lambda: False)
         self.assertIs(result.native_request_sent, True)
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(result.native_admission_error.value, {
             "nativeMethod": "session/prompt", "nativeCode": -32602,
             "message": "fixture admission refusal", "input_error_code": "input_too_large",
@@ -272,11 +272,11 @@ class FastSeamTests(NativeRunCase):
         # The observer's own cumulative statistics carry the unknown-event
         # count; a clean run saw none.
         self.assertTrue(all(facts["unknownEvents"]["total"] == 0 for facts in seen))
-        self.assertEqual(result.model_started, True)
-        self.assertIs(seen[0]["modelStarted"], False)
-        self.assertTrue(any(facts["modelStarted"] and not facts["settled"] for facts in seen))
-        self.assertEqual([facts["modelStarted"] for facts in seen],
-                         sorted(facts["modelStarted"] for facts in seen))
+        self.assertEqual(result.model_responded, True)
+        self.assertIs(seen[0]["modelResponded"], False)
+        self.assertTrue(any(facts["modelResponded"] and not facts["settled"] for facts in seen))
+        self.assertEqual([facts["modelResponded"] for facts in seen],
+                         sorted(facts["modelResponded"] for facts in seen))
         self.assertIsNotNone(result.native_identity.session_id)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertEqual(result.end.native_exit_code, 0)
@@ -301,9 +301,9 @@ class FastSeamTests(NativeRunCase):
         result = run(self.fast_request("prompt"), observer=observer,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertTrue(seen)
-        self.assertTrue(all(facts["modelStarted"] is False for facts in seen))
+        self.assertTrue(all(facts["modelResponded"] is False for facts in seen))
 
     def test_positive_root_output_tokens_start_model_without_message_chunk(self):
         fixture = self.base / "output-tokens.json"
@@ -319,9 +319,9 @@ class FastSeamTests(NativeRunCase):
 
         result = run(self.fast_request("prompt"), observer=observer,
                      services=None, cancelled=lambda: False)
-        self.assertIs(result.model_started, True)
-        self.assertIs(seen[0]["modelStarted"], False)
-        self.assertTrue(any(facts["modelStarted"] and not facts["settled"] for facts in seen))
+        self.assertIs(result.model_responded, True)
+        self.assertIs(seen[0]["modelResponded"], False)
+        self.assertTrue(any(facts["modelResponded"] and not facts["settled"] for facts in seen))
 
     def test_plan_and_input_usage_are_not_model_output(self):
         self.assertFalse(native_run._root_model_activity(
@@ -594,7 +594,7 @@ class FastSeamTests(NativeRunCase):
                          services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "harness-unavailable")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertIsNone(result.end.native_exit_code)
         self.assertIsNone(result.harness_version)
         self.assertIsNone(result.activity, "a failed spawn supplies no native activity")
@@ -610,7 +610,7 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "transport-error")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         stop = result.stop_evidence.native
         # The process was held, so the run started one: the held connection's
         # own facts are retained, and the leader's real exit is the end's code.
@@ -636,7 +636,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "transport-error")
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown", "an unobservable group is never gone")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
 
     def test_launch_bookkeeping_failure_keeps_the_wrapper_stop_evidence(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -653,7 +653,7 @@ class FastSeamTests(NativeRunCase):
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown",
                          "the wrapper's own finalize evidence rules, not the session count")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
 
     def test_a_late_tool_fact_reaches_the_role_and_stops_the_run(self):
         # A same-root tool fact emitted while the client drains at EOF still
@@ -784,7 +784,7 @@ class FastSeamTests(NativeRunCase):
         self.assertIn("max_tokens", result.end.message)
         self.assertIsNone(result.value, "a non-end turn owes no answer value")
         self.assertIsNone(result.completion_evidence)
-        self.assertEqual(result.model_started, True)
+        self.assertEqual(result.model_responded, True)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertEqual(result.end.native_exit_code, 0)
 
@@ -975,7 +975,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(result.value.schema_status, "valid")
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
         self.assertTrue(result.completion_evidence.stream_end)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])

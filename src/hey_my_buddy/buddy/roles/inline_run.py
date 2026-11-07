@@ -44,7 +44,7 @@ def _profile_execute(control, handle, module, started):
     usage_readings = []
     evidences = []
     native_identities = []
-    model_started = []
+    model_responded = []
     request_sent = []
     feedback = None
     previous_raw = None
@@ -78,7 +78,7 @@ def _profile_execute(control, handle, module, started):
         with _inline_live(request, services, handle) as live_services:
             result = run_harness(module, request, observer=partial(handle.observe, observing), services=live_services,
                                  cancelled=lambda: handle.cancelled.is_set() or time.monotonic() >= deadline)
-        model_started.append(result.model_started)
+        model_responded.append(result.model_responded)
         request_sent.append(result.native_request_sent)
         tools = result.tool_evidence.value if result.tool_evidence is not None else {}
         evidences.append(tools if tools else None)
@@ -146,7 +146,7 @@ def _profile_execute(control, handle, module, started):
         }
     def any_fact(values):
         return True if True in values else None if None in values else False
-    verdict = {"modelStarted": any_fact(model_started), "nativeRequestSent": any_fact(request_sent),
+    verdict = {"modelResponded": any_fact(model_responded), "nativeRequestSent": any_fact(request_sent),
                "stopReason": stop_reason, "elapsedMs": round((time.monotonic() - started) * 1000),
                "toolCalls": total_calls, "correctionCount": round_index,
                "profileFeedback": feedback, "tokenUsage": token_usage,
@@ -297,7 +297,7 @@ def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
                             if native_version != version else check)
             failure = input_failure(native_check, stage="native-admission", harness=request.harness,
                 version=native_version,
-                native_request_sent=result.native_request_sent, model_started=result.model_started,
+                native_request_sent=result.native_request_sent, model_responded=result.model_responded,
                 native_error=native_error)
             update = {"input_failure": FrozenJson(failure)}
             if is_input_too_large(native_error):
@@ -308,9 +308,9 @@ def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
         result = RunResult(identity=request.identity, harness=request.harness,
             end=RunEnd(status="error", reason_code=input_error.code, message=input_error.message),
             harness_version=version, buddy=ResultBuddy(requested=request.buddy),
-            native_request_sent=False, model_started=False,
+            native_request_sent=False, model_responded=False,
             input_failure=(input_failure(check, stage="preflight", harness=request.harness, version=version,
-                           native_request_sent=False, model_started=False)
+                           native_request_sent=False, model_responded=False)
                            if input_error.code == INPUT_REJECTED else None),
             stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
     wrap_up_candidate = False

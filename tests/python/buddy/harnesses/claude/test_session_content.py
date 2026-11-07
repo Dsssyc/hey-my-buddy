@@ -255,7 +255,7 @@ class RunRecordTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok")
         self.assertEqual(result.session_record_failure.code, "session-record-write-failed")
         self.assertEqual(result.identity, request.identity)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         self.assertIsNotNone(result.native_identity.session_id)
         self.assertIsNotNone(result.last_assistant_message)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")

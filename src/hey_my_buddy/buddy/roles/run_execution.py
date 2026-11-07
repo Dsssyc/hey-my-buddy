@@ -100,12 +100,12 @@ class InlineRunHandle:
                          if control["timeoutSeconds"] is not None else math.inf)
         self.thread: threading.Thread | None = None
         self.live_endpoint = None
-        self.model_started = False
+        self.model_responded = False
 
     def observe(self, observer, facts):
         """Retain native model output before the role judges the same facts."""
-        if facts.get("modelStarted") is True:
-            self.model_started = True
+        if facts.get("modelResponded") is True:
+            self.model_responded = True
         return observer(facts)
 
     @property
@@ -155,7 +155,7 @@ def _base_result(result) -> dict:
         "requested": result.buddy.requested.to_payload() if result.buddy.requested else None,
         "resolved": None,
         "nativeRequestSent": result.native_request_sent,
-        "modelStarted": result.model_started,
+        "modelResponded": result.model_responded,
         "processState": {"shutdownConfirmed": result.stop_evidence.native.group_state == "gone",
                          "nativeExitCode": result.end.native_exit_code},
     }
@@ -300,7 +300,7 @@ def _profile_result(result, request: RunRequest, verdict: dict) -> dict:
     payload["usage"] = {"toolCalls": verdict["toolCalls"], "elapsedMs": verdict["elapsedMs"]}
     payload["correctionCount"] = verdict["correctionCount"]
     payload["profileFeedback"] = verdict.get("profileFeedback")
-    payload["modelStarted"] = verdict["modelStarted"]
+    payload["modelResponded"] = verdict["modelResponded"]
     payload["nativeRequestSent"] = verdict["nativeRequestSent"]
     if verdict.get("tokenUsage") is not None:
         payload["tokenUsage"] = verdict["tokenUsage"]

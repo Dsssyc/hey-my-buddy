@@ -490,8 +490,8 @@ class _TurnCollector:
         self.last_activity: dict | None = None
         self._connection: Connection | None = None
         self._last_tool_calls = 0
-        self.model_started = False
-        self._last_model_started = False
+        self.model_responded = False
+        self._last_model_responded = False
         self._quiet = False
         self.inquiry = inquiry
         self.bridge = bridge
@@ -607,8 +607,8 @@ class _TurnCollector:
         if self.evidence is not None:
             initialized = self.evidence.init_observed
             activity = self.evidence.observe(frame)
-            if not self.model_started and _root_model_output(frame, self.evidence.session_id):
-                self.model_started = True
+            if not self.model_responded and _root_model_output(frame, self.evidence.session_id):
+                self.model_responded = True
             if self.bridge is not None:
                 if not initialized and self.evidence.init_observed:
                     self.bridge.activate(self.evidence.session_id)
@@ -635,9 +635,9 @@ class _TurnCollector:
                     + self.expected_permission_mode + ", native session reported " + self.evidence.permission_mode)
             if activity:
                 self.publish_activity(*activity)
-        if self.tools.tool_calls != self._last_tool_calls or self.model_started != self._last_model_started:
+        if self.tools.tool_calls != self._last_tool_calls or self.model_responded != self._last_model_responded:
             self._last_tool_calls = self.tools.tool_calls
-            self._last_model_started = self.model_started
+            self._last_model_responded = self.model_responded
             self._notify(settled=False, raw=None)
 
     def _observe_inquiry_tool(self, frame: dict) -> None:
@@ -730,7 +730,7 @@ class _TurnCollector:
 
     def facts(self, *, settled: bool, raw: str | None) -> dict:
         return {"settled": settled, "rawAnswer": raw,
-                "modelStarted": self.model_started,
+                "modelResponded": self.model_responded,
                 "toolCalls": self.tools.tool_calls,
                 "deniedInteractions": len(self.denied),
                 "unknownEvents": _unknown_events(self._connection)}
@@ -1106,7 +1106,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
             harness_version=spawn.version if spawn is not None else None,
             native_event_count=evidence.event_seq if evidence is not None and evidence.event_seq else None,
             native_evidence=native_evidence,
-            model_started=(True if collector is not None and collector.model_started
+            model_responded=(True if collector is not None and collector.model_responded
                            else False if not (collector is not None and collector.user_send_attempted)
                            or is_input_too_large(state.native_admission_error)
                            or state.drained is True else None),

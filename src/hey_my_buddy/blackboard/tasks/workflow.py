@@ -5963,7 +5963,7 @@ class WorkflowCoordinator:
         result = cls.result_payload(payload)
         return (turn_row is not None and turn_row["resume_mode"] == "native-session"
                 and result.get("code") == "native-resume-unavailable"
-                and result.get("modelStarted") is False
+                and result.get("modelResponded") is False
                 and payload.get("shutdownConfirmed") is True)
 
     def _overloaded_model_services(self, connection, run_id):
@@ -6109,7 +6109,7 @@ class WorkflowCoordinator:
                 self.board._append_event(connection, "workflow.native_resume_refused", task_id=run_row["run_id"],
                                          attempt_id=attempt["attempt_id"], revision=None,
                                          payload={**facts, "code": "native-resume-unavailable",
-                                                  "modelStarted": False, "shutdownConfirmed": True})
+                                                  "modelResponded": False, "shutdownConfirmed": True})
                 self.board._append_event(connection, "workflow.auto_continued", task_id=run_row["run_id"],
                                          attempt_id=attempt["attempt_id"], revision=None,
                                          payload=facts)

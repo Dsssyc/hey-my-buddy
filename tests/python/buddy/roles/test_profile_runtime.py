@@ -54,7 +54,7 @@ class ProfileRuntimeTests(unittest.TestCase):
             result = rc.RunResult(
                 identity=request.identity, harness=request.harness,
                 end=rc.RunEnd(status="ok", native_exit_code=0),
-                model_started=True, native_request_sent=True,
+                model_responded=True, native_request_sent=True,
                 buddy=rc.ResultBuddy(requested=request.buddy),
                 native_identity=rc.NativeIdentity(**{"session_id": identity["sessionId"]}),
                 value=rc.RunValue(schema_status="invalid", raw=raw),
@@ -101,7 +101,7 @@ class ProfileRuntimeTests(unittest.TestCase):
         self.assertEqual(verdict['toolCalls'], 2)
         self.assertEqual(verdict['correctionCount'], 2)
         self.assertTrue(verdict['profileFeedback']['accepted'])
-        self.assertTrue(verdict['modelStarted'])
+        self.assertTrue(verdict['modelResponded'])
         self.assertTrue(verdict['nativeRequestSent'])
         self.assertEqual(verdict['tokenUsage']['inputTokens'], 36)
         self.assertEqual(verdict['tokenUsage']['cachedInputTokens'], 6)
