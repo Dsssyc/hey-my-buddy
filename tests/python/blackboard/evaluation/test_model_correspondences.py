@@ -98,10 +98,98 @@ class ModelCorrespondenceTests(WorkflowTestCase):
                 "SELECT model_id,source FROM model_correspondences WHERE harness=? AND provider=? AND model=? ORDER BY rowid",
                 tuple(service.values()),
             ))
-            self.assertEqual(model_view(db, generated)["names"], [service])
+            # Undo removed the generation change; the note keeps its model alive
+            # with no remaining name of its own.
+            self.assertEqual(model_view(db, generated)["names"], [])
         self.assertEqual([(row["model_id"], row["source"]) for row in history], [
-            (original, "same-name"), (generated, "user"), (original, "user"), (other_id, "user"),
+            (original, "same-name"), (other_id, "user"),
         ])
+
+    def test_undo_walks_back_one_change_at_a_time_until_the_first_row(self):
+        first = BUDDY
+        other = {**first, "provider": "another-provider", "model": "another-name"}
+        for buddy in (first, other):
+            enable_fixture_buddy(self.board_.store, buddy)
+        service = {key: first[key] for key in ("harness", "provider", "model")}
+        original = self.model_id(first)
+        other_id = self.model_id(other)
+        self.publish("map-other", modelCorrespondenceChanges=[{**service, "action": "map", "modelId": other_id}])
+        self.publish("map-back", modelCorrespondenceChanges=[{**service, "action": "map", "modelId": original}])
+        self.assertEqual(self.model_id(first), original)
+        self.publish("undo-latest", modelCorrespondenceChanges=[{**service, "action": "undo"}])
+        self.assertEqual(self.model_id(first), other_id)
+        self.publish("undo-earlier", modelCorrespondenceChanges=[{**service, "action": "undo"}])
+        self.assertEqual(self.model_id(first), original)
+        with self.assertRaises(BoardError) as rejected:
+            self.publish("undo-first-row", modelCorrespondenceChanges=[{**service, "action": "undo"}])
+        self.assertEqual(rejected.exception.code, "INVALID_ARGUMENT")
+        with self.board_.store.db.read() as db:
+            history = list(db.execute(
+                "SELECT model_id,source FROM model_correspondences WHERE harness=? AND provider=? AND model=? ORDER BY rowid",
+                tuple(service.values())))
+        self.assertEqual([(row["model_id"], row["source"]) for row in history], [(original, "same-name")])
+
+    def test_undo_of_a_generation_removes_the_model_nothing_references(self):
+        first = BUDDY
+        enable_fixture_buddy(self.board_.store, first)
+        service = {key: first[key] for key in ("harness", "provider", "model")}
+        original = self.model_id(first)
+        self.publish("generation", modelCorrespondenceChanges=[{
+            **service, "action": "generation", "displayName": "Replacement generation",
+        }])
+        generated = self.model_id(first)
+        self.assertNotEqual(generated, original)
+        self.publish("undo", modelCorrespondenceChanges=[{**service, "action": "undo"}])
+        self.assertEqual(self.model_id(first), original)
+        with self.board_.store.db.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
+        snapshot = console_snapshot_projection(self.board_.service)[0]
+        self.assertNotIn(generated, {model["modelId"] for model in snapshot["models"]})
+
+    def test_undo_keeps_a_model_an_execution_or_statistics_still_references(self):
+        first = BUDDY
+        enable_fixture_buddy(self.board_.store, first)
+        service = {key: first[key] for key in ("harness", "provider", "model")}
+        original = self.model_id(first)
+        self.publish("generation", modelCorrespondenceChanges=[{
+            **service, "action": "generation", "displayName": "Executed generation",
+        }])
+        executed = self.model_id(first)
+        run = self.submit(self.board_, request_id="executed-generation", cwd=str(self.workdir("run")))
+        claim = self.claim(self.board_, claim_request_id="claim-executed", run_id=run["runId"])
+        self.finish_turn(self.board_, claim)
+        self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": run["runId"]}))
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT model_id FROM attempts WHERE task_id=?",
+                                        (run["runId"],)).fetchone()[0], executed)
+            self.assertEqual(db.execute("SELECT samples FROM kind_statistics WHERE model_id=?",
+                                        (executed,)).fetchone()[0], 1)
+
+        self.publish("generation-again", modelCorrespondenceChanges=[{
+            **service, "action": "generation", "displayName": "Counted generation",
+        }])
+        counted = self.model_id(first)
+        with self.board_.store.db.write() as db:
+            db.execute("INSERT INTO kind_statistics(harness,model_id,effort,samples,successes,first_passes,"
+                       "rework_rounds,failures) VALUES(?,?,?,1,1,0,0,0)",
+                       (first["harness"], counted, first["effort"]))
+
+        for command, model in (("undo-executed", executed), ("undo-counted", counted)):
+            with self.subTest(model=model):
+                self.publish(command, modelCorrespondenceChanges=[{**service, "action": "undo"}])
+                with self.board_.store.db.read() as db:
+                    self.assertIsNotNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (model,)).fetchone())
+        self.assertEqual(self.model_id(first), original)
+
+    def test_reference_column_list_matches_the_schema_foreign_keys(self):
+        from hey_my_buddy.blackboard.evaluation.models import MODEL_REFERENCE_COLUMNS
+        with self.board_.store.db.read() as db:
+            schema_references = sorted(
+                (table, row[3])
+                for table in [row[0] for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+                for row in db.execute(f'PRAGMA foreign_key_list("{table}")') if row[2] == 'models')
+        self.assertEqual(schema_references, sorted(MODEL_REFERENCE_COLUMNS))
 
     def test_invalid_correspondence_patch_rolls_back_every_entry(self):
         first = BUDDY

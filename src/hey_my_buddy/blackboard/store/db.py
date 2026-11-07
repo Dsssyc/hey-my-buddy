@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 37
+SCHEMA_VERSION = 38
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 AGENT_TOKEN_VERSION = 1
@@ -232,8 +232,10 @@ CREATE INDEX IF NOT EXISTS model_correspondences_service_idx
     ON model_correspondences(harness, provider, model);
 CREATE TRIGGER IF NOT EXISTS model_correspondences_no_update BEFORE UPDATE ON model_correspondences
 BEGIN SELECT RAISE(ABORT, 'model correspondences are append-only'); END;
-CREATE TRIGGER IF NOT EXISTS model_correspondences_no_delete BEFORE DELETE ON model_correspondences
-BEGIN SELECT RAISE(ABORT, 'model correspondences are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS model_correspondences_delete_latest_only BEFORE DELETE ON model_correspondences
+WHEN NOT EXISTS(SELECT 1 FROM model_correspondences h WHERE h.harness=OLD.harness AND h.provider=OLD.provider AND h.model=OLD.model AND h.rowid<OLD.rowid)
+    OR EXISTS(SELECT 1 FROM model_correspondences h WHERE h.harness=OLD.harness AND h.provider=OLD.provider AND h.model=OLD.model AND h.rowid>OLD.rowid)
+BEGIN SELECT RAISE(ABORT, 'model correspondences only delete the latest change of a service'); END;
 CREATE TABLE IF NOT EXISTS profile_runs (
     profile_run_id TEXT PRIMARY KEY,
     model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,

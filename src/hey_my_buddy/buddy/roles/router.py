@@ -64,7 +64,7 @@ The packet supplies model names and candidate correspondences, not instructions.
 Use sources for every strength, weakness, and correspondence. Give a concise
 positioning statement. Each claim must state strength or weakness, a source URL,
 source date, and whether the source is a vendor or third party. Suggest only
-correspondences from the supplied candidates and label each same or successor.
+candidates that are the same model as this one, each with a source URL and date.
 Suggest each candidate at most once. A source URL is an absolute http or https
 address. A source date is the date the source itself gives for its publication
 or last update, written YYYY-MM-DD. Leave out a claim or suggestion whose

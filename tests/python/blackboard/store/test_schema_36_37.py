@@ -12,7 +12,8 @@ from hey_my_buddy.blackboard.store import (
     schema_34_35, schema_35_36,
 )
 from hey_my_buddy.blackboard.store.schema_36_37 import KIND_TABLES, upgrade as step_upgrade
-from hey_my_buddy.blackboard.store.db import Database
+from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
+from hey_my_buddy.blackboard.store.upgrade import upgrade_state
 
 
 class Schema36To37Tests(unittest.TestCase):
@@ -106,6 +107,9 @@ class Schema36To37Tests(unittest.TestCase):
                 connection.execute('DELETE FROM model_correspondences')
             connection.rollback()
 
+        # Only the whole chain reaches the current schema; the later steps of
+        # this release swap the correspondence delete trigger.
+        self.assertEqual(upgrade_state(self.root / 'state'), {'sourceSchema': 37, 'targetSchema': SCHEMA_VERSION})
         fresh = Database(self.root / 'fresh')
         self.addCleanup(fresh.close)
         fresh.initialize()

@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from ...json_codec import decode_strict_json
 from ...protocol.structured_schema import schema_errors
-from ..evaluation.models import CURRENT_CORRESPONDENCES, SERVICE_FIELDS, append_correspondence, create_model, model_view
+from ..evaluation.models import CURRENT_CORRESPONDENCES, SERVICE_FIELDS, append_correspondence, model_view
 
 
 def _object(properties):
@@ -28,8 +28,7 @@ def answer_schema():
             "claim": _text(), **source,
             "sourceKind": {"type": "string", "enum": ["vendor", "third-party"]}})},
         "correspondences": {"type": "array", "maxItems": 128, "items": _object({
-            **{key: _text(256) for key in SERVICE_FIELDS},
-            "relation": {"type": "string", "enum": ["same", "successor"]}, **source})},
+            **{key: _text(256) for key in SERVICE_FIELDS}, **source})},
     })
 
 
@@ -114,9 +113,9 @@ def apply_answer(connection, *, model_id, run_id, answer, now):
         [(model_id, index, item["polarity"], item["claim"], item["sourceUrl"], item["sourceDate"], item["sourceKind"])
          for index, item in enumerate(answer["claims"])])
     for item in answer["correspondences"]:
-        # A successor starts a new group from now; earlier samples stay frozen.
-        target = model_id if item["relation"] == "same" else create_model(connection, item["model"])
-        append_correspondence(connection, tuple(item[field] for field in SERVICE_FIELDS), target, now, 'profile',
+        # Every suggested service joins this model; a newer generation under the
+        # same name is marked only by the user, never by the profile plane.
+        append_correspondence(connection, tuple(item[field] for field in SERVICE_FIELDS), model_id, now, 'profile',
                               evidence_url=item["sourceUrl"], evidence_date=item["sourceDate"])
 
 

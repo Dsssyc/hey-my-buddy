@@ -150,16 +150,21 @@ class ProfileExecutionTests(BoardTestCase):
         second = self.claim(self.start())
         malformed = {"positioning": "Replacement", "claims": [{"polarity": "strength",
             "claim": "unsupported", "sourceUrl": "https://example.org/model", "sourceDate": "2026-02-30",
-            "sourceKind": "vendor"}], "correspondences": [{**CANDIDATE_SERVICE, "relation": "same",
+            "sourceKind": "vendor"}], "correspondences": [{**CANDIDATE_SERVICE,
             "sourceUrl": "https://example.org/correspondence", "sourceDate": "2026-01-01"},
             {"harness": "dsh", "provider": "fixture", "model": "not-a-candidate",
-             "relation": "same", "sourceUrl": "https://example.org/correspondence", "sourceDate": "2026-01-01"}]}
+             "sourceUrl": "https://example.org/correspondence", "sourceDate": "2026-01-01"}]}
         _, feedback = self.answer(second, 0, malformed)
         self.assertFalse(feedback["accepted"])
         self.assertTrue(any("claims[0].sourceDate" in error for error in feedback["errors"]))
         self.assertTrue(any("correspondences[1]" in error and "candidates" in error for error in feedback["errors"]))
+        # The relation label is no longer part of the answer form.
+        malformed["correspondences"][0]["relation"] = "same"
         malformed["claims"][0].pop("sourceKind")
-        self.assertTrue(any("claims[0].sourceKind" in error for error in self.answer(second, 1, malformed)[1]["errors"]))
+        round_errors = self.answer(second, 1, malformed)[1]["errors"]
+        self.assertTrue(any("claims[0].sourceKind" in error for error in round_errors))
+        self.assertTrue(any("correspondences[0]" in error and "additionalProperties" in error
+                            for error in round_errors))
         self.assertFalse(self.answer(second, 2, {"positioning": [], "claims": [], "correspondences": []})[1]["accepted"])
         self.settle(second)
         view = self.model_view()
@@ -206,26 +211,20 @@ class ProfileExecutionTests(BoardTestCase):
         self.assertEqual(beyond_limit.exception.code, "INVALID_ARGUMENT")
         self.settle(claim)
 
-    def test_same_and_successor_correspondence_apply_immediately_and_user_can_undo(self):
+    def test_same_model_correspondence_applies_and_user_undo_removes_it(self):
         self.configure()
-        another = {"harness": "dsh", "provider": "fixture", "model": "newer"}
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
-                       "available,enabled,capabilities_json) VALUES('newer','newer','dsh','fixture','newer','off',1,1,'[]')")
-            ensure_model_service(db, *another.values(), self.board_.store.now())
         original = self.candidate_id
         claim = self.claim(self.start())
-        correspondences = [{**service, "relation": relation, "sourceUrl": "https://example.org/map",
-                     "sourceDate": "2026-01-01"} for service, relation in
-                    ((CANDIDATE_SERVICE, "same"), (another, "successor"))]
+        correspondences = [{**CANDIDATE_SERVICE, "sourceUrl": "https://example.org/map",
+                            "sourceDate": "2026-01-01"}]
         self.assertTrue(self.answer(claim, 0, self.valid_answer(correspondences=correspondences))[1]["accepted"])
         with self.board_.store.db.read() as db:
             self.assertEqual(current_model(db, *CANDIDATE_SERVICE.values()), original)
         self.settle(claim)
         with self.board_.store.db.read() as db:
             self.assertEqual(current_model(db, *CANDIDATE_SERVICE.values()), self.model_id)
-            successor = current_model(db, *another.values())
-            self.assertNotIn(successor, (self.model_id, original))
+            # The suggestion joined this model; it created no model of its own.
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM models").fetchone()[0], 3)
         snapshot = console_snapshot_projection(self.board_.service)[0]
         correspondence = next(item for item in snapshot["modelCorrespondences"] if item["model"] == "candidate")
         self.assertEqual(correspondence['modelId'], self.model_id)
@@ -236,6 +235,9 @@ class ProfileExecutionTests(BoardTestCase):
             "modelCorrespondenceChanges": [{**CANDIDATE_SERVICE, "action": "undo"}]})
         with self.board_.store.db.read() as db:
             self.assertEqual(current_model(db, *CANDIDATE_SERVICE.values()), original)
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM model_correspondences WHERE source='profile'").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM models").fetchone()[0], 3)
 
     def test_router_input_contains_profile_and_user_note(self):
         self.configure()
@@ -349,8 +351,8 @@ class ProfileExecutionTests(BoardTestCase):
                                                (None, False, 'router-tool-evidence-unverified')):
             with self.subTest(tool=tool_name, stream_complete=complete):
                 claim = self.claim(self.start())
-                suggestions = [{**CANDIDATE_SERVICE, 'relation': 'successor',
-                                'sourceUrl': 'https://example.org/new-model', 'sourceDate': '2026-01-01'}]
+                suggestions = [{**CANDIDATE_SERVICE, 'sourceUrl': 'https://example.org/new-model',
+                                'sourceDate': '2026-01-01'}]
                 self.assertTrue(self.answer(claim, 0, self.valid_answer(
                     positioning='Do not publish', correspondences=suggestions))[1]['accepted'])
                 self.assertEqual(self.model_view()['profile'], original_profile)

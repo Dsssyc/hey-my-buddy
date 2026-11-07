@@ -1,4 +1,4 @@
-"""Model identities and the append-only history of model-service correspondences."""
+"""Model identities and the correspondence history, undone by deleting its latest change."""
 from __future__ import annotations
 
 import uuid
@@ -10,6 +10,23 @@ SERVICE_FIELDS = ('harness', 'provider', 'model')
 CURRENT_CORRESPONDENCES = """SELECT m.rowid AS correspondence_order,m.* FROM model_correspondences m WHERE m.rowid=(
     SELECT MAX(h.rowid) FROM model_correspondences h
     WHERE h.harness=m.harness AND h.provider=m.provider AND h.model=m.model)"""
+
+#: Every column that can reference a model identity. Undo consults all of them
+#: before removing a model nothing uses any more; the schema's foreign keys on
+#: models(model_id) must stay equal to this list (a test enforces that).
+MODEL_REFERENCE_COLUMNS = (
+    ('model_correspondences', 'model_id'),
+    ('attempts', 'model_id'),
+    ('profile_runs', 'model_id'),
+    ('model_profiles', 'model_id'),
+    ('model_notes', 'model_id'),
+    ('kind_summaries', 'model_id'),
+    ('kind_summary_evidence', 'model_id'),
+    ('kind_statistics', 'model_id'),
+    ('kind_cell_statistics', 'model_id'),
+    ('kind_statistics_buckets', 'model_id'),
+    ('kind_cell_statistics_buckets', 'model_id'),
+)
 
 
 def current_model(connection, harness, provider, model):
@@ -103,15 +120,23 @@ def apply_user_changes(connection, values, now):
             model_id = schemas.required_string(value, 'modelId', max_length=128, pattern=schemas.IDENTIFIER_PATTERN)
             if connection.execute('SELECT 1 FROM models WHERE model_id=?', (model_id,)).fetchone() is None:
                 raise BoardError('NOT_FOUND', 'Unknown modelId')
+            append_correspondence(connection, service, model_id, now, 'user')
         elif action == 'undo':
-            previous = connection.execute(
-                'SELECT model_id FROM model_correspondences WHERE harness=? AND provider=? AND model=?'
-                ' ORDER BY rowid DESC LIMIT 1 OFFSET 1', service).fetchone()
-            if previous is None:
+            latest = connection.execute(
+                'SELECT rowid,model_id FROM model_correspondences WHERE harness=? AND provider=? AND model=?'
+                ' ORDER BY rowid DESC LIMIT 1', service).fetchone()
+            if latest is None or connection.execute(
+                    'SELECT 1 FROM model_correspondences WHERE harness=? AND provider=? AND model=?'
+                    ' AND rowid<? LIMIT 1', (*service, latest['rowid'])).fetchone() is None:
                 raise BoardError('INVALID_ARGUMENT', 'This model service has no previous correspondence')
-            model_id = previous[0]
+            connection.execute('DELETE FROM model_correspondences WHERE rowid=?', (latest['rowid'],))
+            # A model nothing references any more goes with the undone change.
+            if all(connection.execute(f'SELECT 1 FROM "{table}" WHERE {column}=? LIMIT 1',
+                                      (latest['model_id'],)).fetchone() is None
+                   for table, column in MODEL_REFERENCE_COLUMNS):
+                connection.execute('DELETE FROM models WHERE model_id=?', (latest['model_id'],))
         else:
             display_name = schemas.required_string(value, 'displayName', max_length=256)
             model_id = create_model(connection, display_name)
-        append_correspondence(connection, service, model_id, now, 'user')
+            append_correspondence(connection, service, model_id, now, 'user')
     return len(values)

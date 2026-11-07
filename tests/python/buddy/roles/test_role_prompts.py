@@ -332,7 +332,8 @@ class RolePromptTests(unittest.TestCase):
     def test_profile_prompt_states_each_answer_validation_rule(self):
         # The instruction paragraph wraps mid-phrase, so compare on spacing that
         # ignores the wrap points rather than on the literal source lines.
-        phrases = ("Suggest each candidate at most once", "absolute http or https address",
+        phrases = ("Suggest only candidates that are the same model as this one",
+                   "Suggest each candidate at most once", "absolute http or https address",
                    "written YYYY-MM-DD", "whose sources give no full date", "never guess a day")
         instructions = " ".join(router.PROFILE_INSTRUCTIONS.split())
         for phrase in phrases:
