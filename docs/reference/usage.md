@@ -81,7 +81,7 @@ Acceptance requires the real target path and ref with its commit before integrat
 "$HMB" conclude '{"runId":"<runId>","artifactId":"<artifactId>","note":"Reviewed the stopped result; this work will not be accepted or continued."}'
 ```
 
-Use `conclude` for stopped failed, cancelled or delivered work that will not continue, with `runId` and a note. Delivered work requires its current delivered `artifactId`. Failed or cancelled work may omit that field, or name an unanswered fixed result from its current turn; supplying it binds the conclusion to that exact result. Stop evidence, unresolved sites and live descendants still constrain conclusion. Acceptance and conclusion release reservations; the service retries blocked managed-checkout cleanup automatically. An ordinary existing checkout and a directory used without a checkout are never removed by that cleanup.
+Use `conclude` for work that will not continue, with `runId` and a note. Work that is queued, running or waiting at a boundary is cancelled first, with the same wrap-up as `cancel`, and the call then waits like `await` (the same `waitSeconds`) until every owned run has stopped, and records the conclusion; when the stop is still unconfirmed at the end of the wait, the reply says the cancellation is recorded and the conclusion is not, and `conclude` can simply be called again. A blocking condition anywhere in the owned tree, such as an open workspace conflict or a pending continuation, refuses the call before anything is cancelled. Delivered work requires its current delivered `artifactId`. Failed or cancelled work may omit that field, or name an unanswered fixed result from its current turn; supplying it binds the conclusion to that exact result. Stop evidence, unresolved sites and live descendants still constrain conclusion. Acceptance and conclusion release reservations; the service retries blocked managed-checkout cleanup automatically. An ordinary existing checkout and a directory used without a checkout are never removed by that cleanup.
 
 ## Execution records
 
@@ -103,7 +103,7 @@ Observation and inquiry do not continue or cancel a turn. The service derives th
 
 ## Cancellation and stopping
 
-`cancel` uses `runId` and an optional note. It records ordered cancellation across the owned graph, including routing and helpers; its reply never proves every process stopped. `get.shutdown` separates self and descendant confirmation. Unknown is not stopped. Continue only after the required stop evidence holds, or conclude stopped work that will not resume. [Operations](operations.md#cancellation-and-recovery) owns service restart and process recovery.
+`cancel` uses `runId` and an optional note. It records ordered cancellation across the owned graph, including routing and helpers; its reply never proves every process stopped. `get.shutdown` separates self and descendant confirmation. Unknown is not stopped. `cancel` is for work another turn or buddy will continue: continue only after the required stop evidence holds. To end work, call `conclude` directly. [Operations](operations.md#cancellation-and-recovery) owns service restart and process recovery.
 
 ## Waiting from your Host
 

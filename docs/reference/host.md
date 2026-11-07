@@ -4,7 +4,7 @@ This page owns how any Host waits on its micro tasks and finds open work again. 
 
 ## One wait per running micro task
 
-`await` with a `runId` returns when that micro task reaches a boundary, delivers, sends a reminder, meets a new execution or service issue or the wait window ends; it never starts work and never cancels it. Run one `await` per running micro task. If your harness can run a command in the background and wake you when it exits, run each `await` that way and keep working; otherwise run it in the foreground, where it holds your turn. `waitSeconds` defaults to 86,400 seconds (24 hours), which is also its maximum; give a foreground `await` one shorter than your command tool's own time limit, so that the wait ends before the tool gives up on it.
+`await` with a `runId` returns when that micro task reaches a boundary, delivers, sends a reminder, meets a new execution or service issue or the wait window ends; it never starts work and never cancels it. Run one `await` per running micro task. `conclude` on work that is still running waits the same way until the stop is confirmed, so run it like `await`. If your harness can run a command in the background and wake you when it exits, run each `await` that way and keep working; otherwise run it in the foreground, where it holds your turn. `waitSeconds` defaults to 86,400 seconds (24 hours), which is also its maximum; give a foreground `await` one shorter than your command tool's own time limit, so that the wait ends before the tool gives up on it.
 
 Act on the reply's `outcome`, using the ids it carries:
 
