@@ -100,6 +100,13 @@ class InlineRunHandle:
                          if control["timeoutSeconds"] is not None else math.inf)
         self.thread: threading.Thread | None = None
         self.live_endpoint = None
+        self.model_started = False
+
+    def observe(self, observer, facts):
+        """Retain native model output before the role judges the same facts."""
+        if facts.get("modelStarted") is True:
+            self.model_started = True
+        return observer(facts)
 
     @property
     def pid(self) -> int:

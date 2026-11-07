@@ -73,7 +73,7 @@ class NativeFactsTests(unittest.TestCase):
                     self.assertEqual(state.catalog_read["discovery"]["reason"],
                                      {"code": "config-shape-unreadable", "params": {}})
                     self.assertEqual(state.catalog_read["warnings"], [])
-                    self.assertFalse(state.model_started)
+                    self.assertFalse(state.initial_request_attempted)
 
     def test_readable_empty_config_still_uses_native_default_provider(self):
         connection = mock.Mock()
@@ -166,7 +166,7 @@ class NativeFactsTests(unittest.TestCase):
                             review_request = self.request.model_copy(update={"permission": "read"}) if mode == "review" else self.request
                             getattr(native_run, "_configure_" + mode)(connection, review_request, state)
                     self.assertEqual(caught.exception.code, code)
-                    self.assertFalse(state.model_started)
+                    self.assertFalse(state.initial_request_attempted)
                     self.assertNotIn("turn/start", [call.args[0] for call in connection.call.call_args_list])
 
     def test_unreadable_provider_continues_with_empty_checked_provider(self):

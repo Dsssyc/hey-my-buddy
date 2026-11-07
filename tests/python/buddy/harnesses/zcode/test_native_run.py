@@ -199,6 +199,52 @@ class MockNativeCase(ZcodeFixtureCase):
 
 
 class FastSeamTests(NativeRunCase):
+    def test_model_start_requires_root_output_and_counts_whitespace_text(self):
+        root = {"sessionId": "session", "turnId": "turn"}
+        def frame(kind, payload, **identity):
+            return {"method": "session/event", "params": {**root, **identity,
+                    "type": kind, "payload": payload}}
+
+        for message in (
+            frame("turn.started", {"inputId": "input"}),
+            frame("model.streaming", {"kind": "text_delta", "delta": ""}),
+            frame("model.streaming", {"kind": "text_delta", "delta": "child", "source": "sub-agent"}),
+            frame("model.streaming", {"kind": "text_delta", "delta": "foreign"}, sessionId="other"),
+            frame("tool.updated", {"kind": "result", "toolCallId": "missing"}),
+            frame("turn.completed", {"response": ""}),
+        ):
+            self.assertFalse(native_run._root_model_activity(message, "session", "turn"), message)
+        for message in (
+            frame("model.streaming", {"kind": "text_delta", "delta": " "}),
+            frame("model.streaming", {"kind": "reasoning_delta", "delta": "thought"}),
+            frame("model.streaming", {"kind": "tool_call", "toolCallId": "tool"}),
+            frame("turn.completed", {"response": "answer"}),
+            {"method": "v4/telemetry/event", "params": {**root, "kind": "usage.delta", "outputTokens": 1}},
+        ):
+            self.assertTrue(native_run._root_model_activity(message, "session", "turn"), message)
+
+    def test_admitted_turn_without_output_stays_false_and_output_is_live(self):
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
+        for case, expected in (("quota-before", False), ("usage-quota", True)):
+            with self.subTest(case=case):
+                os.environ["HMB_ZCODE_TEST_CASE"] = case
+                seen = []
+                correction = FastCorrection(SCHEMA, prompt)
+
+                def observer(facts):
+                    seen.append((facts["settled"], facts["modelStarted"]))
+                    return correction.observer(facts)
+
+                result = run(self.fast_request(prompt), observer=observer,
+                             services=None, cancelled=lambda: False)
+                self.assertIs(result.native_request_sent, True)
+                self.assertIs(result.model_started, expected)
+                self.assertEqual(seen[0], (False, False))
+                if expected:
+                    self.assertIn((False, True), seen)
+                else:
+                    self.assertNotIn((False, True), seen)
+
     def test_initial_native_input_refusal_keeps_structured_admission_facts(self):
         select_fixture(self.environment, self.root, "zcode",
                        Path(__file__).parent / "fixtures/mock_zcode.py")
@@ -624,6 +670,21 @@ def evidence_call(result):
 
 
 class WorkerSeamTests(MockNativeCase):
+    def test_worker_model_start_reaches_observer_before_settlement(self):
+        os.environ.update(self.environment)
+        os.environ["HMB_ZCODE_TEST_CASE"] = "session-content"
+        request, services = self.worker_request(self.turn_input())
+        seen = []
+
+        def observer(facts):
+            seen.append((facts["settled"], facts["modelStarted"]))
+            return worker_observer(facts)
+
+        result = run(request, observer=observer, services=services, cancelled=lambda: False)
+        self.assertIs(result.model_started, True)
+        self.assertEqual(seen[0], (False, False))
+        self.assertIn((False, True), seen)
+
     def test_oversized_native_session_identity_fails_before_activity(self):
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "oversized-session"
@@ -867,10 +928,11 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(result.end.reason_code, "wrong-native-turn")
         # Configure ran and the readback confirmed; the session opened; the
         # input was sent. Each reached stage keeps its fact in the failure: the
-        # readback values, the session-create fact and the model start.
+        # readback values and the session-create fact. A wrong input identity
+        # leaves the root output status unprovable.
         self.assertEqual(result.buddy.checked.model.value, "fixture-model")
         self.assertIsNotNone(result.effective_policy.tools)
-        self.assertTrue(result.model_started)
+        self.assertIsNone(result.model_started)
         self.assertIsNone(result.completion_evidence)
         self.assertIsNotNone(result.end.message)
 

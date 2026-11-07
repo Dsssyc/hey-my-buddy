@@ -143,6 +143,7 @@ class FakeAgent:
         self.session_updates_fixture = args.session_updates_fixture
         self.emit_tool_update = args.emit_tool_update
         self.bare_final = args.bare_final
+        self.no_answer_chunk = args.no_answer_chunk
         self.session_record = args.session_record
         self.config_options_fixture = args.config_options_fixture
         self.stderr_note = args.stderr_note
@@ -641,7 +642,7 @@ class FakeAgent:
         index = min(self.prompt_count, len(self.final_answers) - 1) if self.final_answers else 0
         self.prompt_count += 1
         answer = self.final_answers[index] if self.final_answers else '{"choice":"a"}'
-        if self.session_record != "quota-before":
+        if self.session_record != "quota-before" and not self.no_answer_chunk:
             self.notify_client("session/update", {"sessionId": session_id,
                                                   "update": {"sessionUpdate": "agent_message_chunk",
                                                              "content": {"type": "text", "text": answer}}})
@@ -1198,6 +1199,8 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
                         help="emit one completed tool_call/update pair before the answer")
     parser.add_argument("--bare-final", action="store_true",
                         help="emit no usage snapshot: only the message chunk and the stop")
+    parser.add_argument("--no-answer-chunk", action="store_true",
+                        help="finish the prompt without an agent message chunk")
     parser.add_argument("--finish-fail-then-retry", action="store_true",
                         help="the first finish call fails natively and the root retries")
     parser.add_argument("--no-finish", action="store_true",

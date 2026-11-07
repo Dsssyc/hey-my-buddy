@@ -462,6 +462,7 @@ class _RunFacts:
     """The cumulative, normalized facts of one run, as the observer sees them."""
 
     def __init__(self):
+        self.model_started = False
         self.unknown_counts: dict[str, int] = {}
         self.markers = 0
         self.denied: list[dict] = []
@@ -474,6 +475,7 @@ class _RunFacts:
         return {
             "settled": settled,
             "rawAnswer": raw_answer,
+            "modelStarted": self.model_started,
             "toolCalls": tool_calls,
             "toolMarkerFrames": self.markers,
             "unknownEvents": {"countsByType": dict(self.unknown_counts),
@@ -647,7 +649,6 @@ class _RunState:
     native_error: dict | None = None
     provider_rejection: dict | None = None
     root_model_activity: bool = False
-    model_started: bool = False
     native_request_sent: bool | None = False
     native_admission_error: dict | None = None
     initial_request_attempted: bool = False
@@ -928,7 +929,6 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
             state.native_admission_error = admission_error("session/send",
                 accepted.get("error") if isinstance(accepted.get("error"), dict) else accepted)
         raise NativeError("native-admission-failed", "the root input was not admitted by the native session")
-    state.model_started = True
     if after_admit is not None:
         after_admit(session_id)
     while not settled():
@@ -951,8 +951,10 @@ def _root_model_activity(message: dict, session_id: str, turn_id: str | None) ->
             "source", "parentToolCallId", "childSessionId", "childToolCallId", "agentId", "background")):
         return False
     kind = params.get("type")
+    if kind == "turn.completed":
+        return isinstance(data.get("response"), str) and bool(data["response"])
     if kind == "tool.updated":
-        return data.get("kind") in ("scheduled", "started", "progress", "result", "error")
+        return data.get("kind") in ("scheduled", "started")
     if kind == "model.streaming":
         stream_kind = data.get("kind")
         if stream_kind == "tool_call":
@@ -960,7 +962,7 @@ def _root_model_activity(message: dict, session_id: str, turn_id: str | None) ->
         # The two content stream frames the 0.17.0 app really emits (recorded
         # by the session-content probe); envelope frames carry no activity.
         return stream_kind in ("text_delta", "reasoning_delta") and isinstance(
-            data.get("delta"), str) and bool(data["delta"].strip())
+            data.get("delta"), str) and bool(data["delta"])
     return False
 
 
@@ -1121,6 +1123,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             feedback_due[0] = True
 
         try:
+            notify()
             spawn = _spawn_app_server(cwd=request.cwd, invocation_root=invocation_root, native_root=native_root,
                                       deadline=deadline, cancel=cancel, stderr_path=stderr_path, no_tools=no_tool,
                                       owned=owned_spawn)
@@ -1241,14 +1244,18 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
             # the role before any driver-side protocol check runs.
             tools.observe(message)
             _project_session(session, state, message)
-            changed = classifier.observe(message)
-            if changed:
-                notify()
+            first_output = False
             if holder:
                 holder[0].observe(message, ordinal)
                 outcome.attempt_usage.observe(message, holder[0].turn_id)
-                state.root_model_activity |= _root_model_activity(
-                    message, holder[0].session_id, holder[0].turn_id)
+                model_activity = _root_model_activity(message, holder[0].session_id, holder[0].turn_id)
+                state.root_model_activity |= model_activity
+                first_output = model_activity and not facts.model_started
+                if first_output:
+                    facts.model_started = True
+            changed = classifier.observe(message)
+            if changed or first_output:
+                notify()
         return observe
 
     protocol_holder: list = []
@@ -1381,14 +1388,17 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
             # canonical turn start, never from the observed events;
             # add_root keeps it unique by itself.
             tools.add_root(outcome.session_id, outcome.evidence.turn_id)
-        changed = classifier.observe(message)
-        if changed:
-            notify()
         # Attempt usage is observed next to the root-turn evidence; a
         # foreign session or an unstarted turn contributes nothing.
         outcome.attempt_usage.observe(message, outcome.evidence.turn_id)
-        state.root_model_activity |= _root_model_activity(
-            message, outcome.evidence.session_id, outcome.evidence.turn_id)
+        model_activity = _root_model_activity(message, outcome.evidence.session_id, outcome.evidence.turn_id)
+        state.root_model_activity |= model_activity
+        first_output = model_activity and not facts.model_started
+        if first_output:
+            facts.model_started = True
+        changed = classifier.observe(message)
+        if changed or first_output:
+            notify()
         outcome.projection.note(message, ordinal)
         if outcome.inquiry_bridge is not None:
             outcome.inquiry_bridge.note_event(message, outcome.projection.phase)
@@ -1721,9 +1731,9 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
                    native_exit_code=state.exit_code,
                    message=state.error_text),
         harness_version=spawn.version if spawn is not None else None,
-        model_started=(True if state.model_started else
+        model_started=(True if facts.model_started else
                        False if not state.initial_request_attempted or
-                       is_input_too_large(state.native_admission_error) else None),
+                       is_input_too_large(state.native_admission_error) or drained is True else None),
         native_request_sent=state.native_request_sent,
         native_admission_error=_native_error_package(state.native_admission_error),
         native_event_count=event_count if event_count else None,

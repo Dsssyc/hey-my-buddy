@@ -27,9 +27,8 @@ def capture(context, outcome):
         manifest = _workspace(context)
         seal = payload.pop("workspaceSeal", None) or workspace_module().seal(
             Path(state), manifest, context.task_id, context.attempt_id)
-        # A partial output is work evidence, not a process record: the runners
-        # set modelStarted before the request is sent, so it only guards retry
-        # and never proves work. Changed managed files are the concrete evidence.
+        # Model output alone does not prove workspace work. Changed managed
+        # files are the concrete evidence for a partial output.
         if seal and seal.get("changedPaths"):
             payload["partialWorkspaceSeal"] = seal
             payload["partialOutput"] = {"partial": True, "verified": False, "final": False}

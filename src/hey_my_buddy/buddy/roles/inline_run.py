@@ -7,6 +7,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 from ...errors import BoardError
@@ -75,7 +76,7 @@ def _profile_execute(control, handle, module, started):
                 stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
             break
         with _inline_live(request, services, handle) as live_services:
-            result = run_harness(module, request, observer=observing, services=live_services,
+            result = run_harness(module, request, observer=partial(handle.observe, observing), services=live_services,
                                  cancelled=lambda: handle.cancelled.is_set() or time.monotonic() >= deadline)
         model_started.append(result.model_started)
         request_sent.append(result.native_request_sent)
@@ -228,7 +229,7 @@ def _summary_run(control, request, result, module, deadline, handle):
         return control, request, result, False, time.monotonic() >= deadline
     try:
         with _inline_live(next_request, services, handle) as live_services:
-            summary = run_harness(module, next_request, observer=observer, services=live_services,
+            summary = run_harness(module, next_request, observer=partial(handle.observe, observer), services=live_services,
                                   cancelled=summary_cancelled)
     except Exception as error:
         summary = RunResult(identity=next_request.identity, harness=next_request.harness,
@@ -287,7 +288,7 @@ def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
         input_error = BoardError(INPUT_REJECTED, "The initial prompt exceeds the harness's declared input limit")
     if input_error is None:
         with _inline_live(request, services, handle) as live_services:
-            result = run_harness(module, request, observer=observer, services=live_services,
+            result = run_harness(module, request, observer=partial(handle.observe, observer), services=live_services,
                                  cancelled=handle.cancelled.is_set)
         if result.native_admission_error is not None:
             native_error = result.native_admission_error.value

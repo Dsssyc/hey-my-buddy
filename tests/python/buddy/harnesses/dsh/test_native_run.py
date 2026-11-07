@@ -30,6 +30,7 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses import run_contract
 from hey_my_buddy.buddy.harnesses.run_contract import (
+    FEEDBACK_CONTINUE,
     MAX_SCHEMA_BYTES,
     PrivateStatePaths,
     RunBudget,
@@ -272,6 +273,10 @@ class FastSeamTests(NativeRunCase):
         # count; a clean run saw none.
         self.assertTrue(all(facts["unknownEvents"]["total"] == 0 for facts in seen))
         self.assertEqual(result.model_started, True)
+        self.assertIs(seen[0]["modelStarted"], False)
+        self.assertTrue(any(facts["modelStarted"] and not facts["settled"] for facts in seen))
+        self.assertEqual([facts["modelStarted"] for facts in seen],
+                         sorted(facts["modelStarted"] for facts in seen))
         self.assertIsNotNone(result.native_identity.session_id)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertEqual(result.end.native_exit_code, 0)
@@ -283,6 +288,48 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir)), [])
         self.assertEqual(package["nativeIdentity"][0].get("sessionId"),
                          result.native_identity.session_id)
+
+    def test_foreign_chunk_and_successful_end_without_root_output_do_not_start_model(self):
+        self.extra_agent_args = ["--prompt-mode", "final", "--emit-foreign-chunk",
+                                 "--no-answer-chunk", "--bare-final"]
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return FEEDBACK_CONTINUE
+
+        result = run(self.fast_request("prompt"), observer=observer,
+                     services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIs(result.model_started, False)
+        self.assertTrue(seen)
+        self.assertTrue(all(facts["modelStarted"] is False for facts in seen))
+
+    def test_positive_root_output_tokens_start_model_without_message_chunk(self):
+        fixture = self.base / "output-tokens.json"
+        fixture.write_text(json.dumps({"updates": [{"sessionUpdate": "usage_update",
+                                                    "outputTokens": 1}]}), encoding="utf-8")
+        self.extra_agent_args = ["--prompt-mode", "final", "--no-answer-chunk", "--bare-final",
+                                 "--session-updates-fixture", str(fixture)]
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return FEEDBACK_CONTINUE
+
+        result = run(self.fast_request("prompt"), observer=observer,
+                     services=None, cancelled=lambda: False)
+        self.assertIs(result.model_started, True)
+        self.assertIs(seen[0]["modelStarted"], False)
+        self.assertTrue(any(facts["modelStarted"] and not facts["settled"] for facts in seen))
+
+    def test_plan_and_input_usage_are_not_model_output(self):
+        self.assertFalse(native_run._root_model_activity(
+            {"sessionUpdate": "plan", "entries": [{"content": "work"}]}))
+        self.assertFalse(native_run._root_model_activity(
+            {"sessionUpdate": "usage_update", "used": 100, "size": 1000000}))
+        self.assertTrue(native_run._root_model_activity(
+            {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " "}}))
 
     def test_usage_comes_from_the_private_session_record(self):
         # The optional record source: the fake agent writes one synthetic

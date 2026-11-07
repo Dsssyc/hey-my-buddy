@@ -171,6 +171,7 @@ class _RunFacts:
     """The cumulative, normalized facts of one run, as the observer sees them."""
 
     def __init__(self):
+        self.model_started = False
         self.unknown_counts: dict[str, int] = {}
         self.thread_notifications: dict[str, int] = {}
         self.markers = 0
@@ -188,6 +189,7 @@ class _RunFacts:
 
     def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None) -> dict:
         return {"settled": settled, "rawAnswer": raw_answer, "toolCalls": tool_calls,
+                "modelStarted": self.model_started,
                 "toolMarkerFrames": self.markers,
                 "unknownEvents": {"countsByType": dict(self.unknown_counts),
                                   "total": sum(self.unknown_counts.values())},
@@ -346,7 +348,7 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
-    model_started: bool = False
+    stream_truncated: bool = False
     native_request_sent: bool | None = False
     native_admission_error: dict | None = None
     initial_request_attempted: bool = False
@@ -877,6 +879,46 @@ def _configure_fast(connection: Connection, request: RunRequest, state: _RunStat
 # -- phase 4: input and events -----------------------------------------------------
 
 
+def _root_model_output(message: dict, thread_id: str, turn_id: str) -> bool:
+    """An output frame from the admitted root turn, never its start receipt."""
+    params = message.get("params")
+    if not isinstance(params, dict) or params.get("threadId") != thread_id or _event_turn(params) != turn_id:
+        return False
+    method = message.get("method")
+    if method in ("item/agentMessage/delta", "item/reasoning/textDelta",
+                  "item/reasoning/summaryTextDelta"):
+        return isinstance(params.get("delta"), str) and bool(params["delta"])
+    if method == "thread/tokenUsage/updated":
+        usage = params.get("tokenUsage")
+        last = usage.get("last") if isinstance(usage, dict) else None
+        return isinstance(last, dict) and any(type(last.get(key)) is int and last[key] > 0
+                                              for key in ("outputTokens", "reasoningOutputTokens"))
+    if method == "rawResponseItem/completed":
+        item = params.get("item")
+        kind = item.get("type") if isinstance(item, dict) else None
+        return isinstance(kind, str) and kind in RAW_TOOL_STARTS
+    if method == "turn/completed":
+        turn = params.get("turn")
+        items = turn.get("items") if isinstance(turn, dict) else None
+        return isinstance(items, list) and any(_model_output_item(item) for item in items)
+    if method in ("item/started", "item/updated", "item/completed"):
+        return _model_output_item(params.get("item"))
+    return False
+
+
+def _model_output_item(item: object) -> bool:
+    if not isinstance(item, dict):
+        return False
+    kind = item.get("type")
+    if isinstance(kind, str) and kind in TYPED_TOOL_ITEMS:
+        return True
+    if kind == "agentMessage":
+        return isinstance(item.get("text"), str) and bool(item["text"])
+    if kind == "reasoning":
+        return any(bool(item.get(key)) for key in ("text", "summary"))
+    return False
+
+
 class _EventChain:
     """Facts first, then the carrier's protocol stage.
 
@@ -887,9 +929,10 @@ class _EventChain:
     once the turn receipt binds the chain.
     """
 
-    def __init__(self, facts: _RunFacts, classifier: _Classifier,
+    def __init__(self, facts: _RunFacts, classifier: _Classifier, state: _RunState,
                  projector: CodexToolEventProjector | None, session: CodexSessionProjector | None, *, overflow_raises: bool):
         self.facts = facts
+        self.state = state
         self.classifier = classifier
         self.projector = projector
         self.overflow_raises = overflow_raises
@@ -918,13 +961,26 @@ class _EventChain:
                 return
             self.pending.append(message)
             return
-        self.carrier(message)
+        try:
+            self.carrier(message)
+        finally:
+            self.note_model_activity(message)
+
+    def note_model_activity(self, message: dict) -> None:
+        evidence = self.state.turn_evidence
+        if evidence is not None and not self.facts.model_started and _root_model_output(
+                message, evidence.thread_id, evidence.turn_id):
+            self.facts.model_started = True
+            self.facts.dirty = True
 
     def bind(self, carrier: Callable[[dict], Any]) -> None:
         self.carrier = carrier
         pending, self.pending = self.pending, []
         for message in pending:
-            carrier(message)
+            try:
+                carrier(message)
+            finally:
+                self.note_model_activity(message)
 
     def unbind(self) -> None:
         """Buffer again: the next round's frames precede its turn identity."""
@@ -1192,10 +1248,12 @@ def _run(request: RunRequest, services: RunServices, mode: str,
     with (session_record.protect() if session_record is not None else nullcontext()):
         session = (session_record.project(CodexSessionProjector, session_record)
                    if session_record is not None else None)
-        chain = _EventChain(facts, _Classifier(facts), projector, session, overflow_raises=mode == "fast")
+        chain = _EventChain(facts, _Classifier(facts), state, projector, session, overflow_raises=mode == "fast")
         inquiry_bridge: InquiryBridge | None = None
         inquiry_poller: list[_NativeInquiry] = []
         try:
+            _take_feedback(observer(facts.mapping(tool_calls=0, settled=False, raw_answer=None)),
+                           mode, settled=False)
             prep = _prepare(request, mode)
             if mode == "worker" and services.inquiry is not None:
                 configuration = services.inquiry.configuration
@@ -1257,6 +1315,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         if session is not None:
             session.record.project(session.close)
         _collect_provider_rejection(state, stream_truncated=chain.truncated)
+        state.stream_truncated = chain.truncated
         return _build_result(request, prep, state, mode, projector, facts, activity).model_copy(
             update={"session_record_failure": SessionRecordFailure(**session_record.failure)
                     if session_record is not None and session_record.failure is not None
@@ -1336,7 +1395,6 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     turn_id = turn.get("id") if isinstance(turn, dict) else None
     if not isinstance(turn_id, str) or not turn_id:
         raise CodexProtocolError("wrong-native-turn", "Codex did not acknowledge a native turn")
-    state.model_started = True
     state.turn_id = turn_id
     if chain.projector is not None:
         # The trusted root identity comes only from this native turn receipt.
@@ -1347,6 +1405,8 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     if isinstance(items, list):
         for item in items:
             evidence._observe_activity("item/started", {"item": item})
+            chain.note_model_activity({"method": "item/started", "params": {
+                "threadId": thread_id, "turnId": turn_id, "item": item}})
     native_inquiry = None
     if inquiry_bridge is not None and inquiry_services is not None:
         native_inquiry = _NativeInquiry(connection, evidence, thread_id, turn_id,
@@ -1365,6 +1425,8 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
 
     try:
         chain.bind(carrier)
+        if chain.facts.dirty:
+            connection.after_pump()
         if chain.session is not None:
             chain.session.record.project(chain.session.observe_root, thread_id, turn_id, request.input_text, turn.get("items") or [])
         activity.write(evidence, "waiting-model")
@@ -1429,7 +1491,6 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
                 raise CodexProtocolError("invalid-native-result", "Codex returned no native turn identity")
         elif not isinstance(turn_id, str):
             raise CodexProtocolError("wrong-native-turn", "No read-only turn identity")
-        state.model_started = True
         state.turn_id = turn_id
         if chain.projector is not None:
             # The trusted root identity comes only from this native turn receipt.
@@ -1450,6 +1511,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
         if isinstance(items, list):
             for item in items:
                 evidence._observe_activity("item/started", {"item": item})
+                chain.note_model_activity({"method": "item/started", "params": {
+                    "threadId": thread_id, "turnId": turn_id, "item": item}})
         state.usage_rounds.append(evidence)
         if mode == "fast":
             chain.bind(_FastProtocol(thread_id, turn_id, fast_state, evidence, state))
@@ -1468,6 +1531,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
                     activity.write(_evidence, observed[0], observed[1], model_turns_base=_round,
                                    tool_calls=chain.projector.tool_calls)
             chain.bind(carrier)
+        if chain.facts.dirty:
+            connection.after_pump()
         try:
             items = turn.get("items")
             if chain.session is not None:
@@ -1908,9 +1973,11 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
                    message=bounded_utf8(state.error_text, NATIVE_SUMMARY_BYTES)),
         harness_version=state.version,
         native_event_count=state.event_count or None,
-        model_started=(True if state.model_started else
+        model_started=(True if facts.model_started else
                        False if not state.initial_request_attempted or
-                       is_input_too_large(state.native_admission_error) else None),
+                       is_input_too_large(state.native_admission_error) or
+                       (state.turn_evidence is not None and state.turn_evidence.completed is not None
+                        and not state.stream_truncated) else None),
         native_request_sent=state.native_request_sent,
         native_admission_error=_native_error_package(state.native_admission_error),
         buddy=_checked_buddy(request, state, mode),

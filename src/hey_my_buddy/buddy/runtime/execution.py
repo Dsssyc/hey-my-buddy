@@ -764,7 +764,7 @@ class Execution:
             outcome.result = {**outcome.result, "evidenceRetention": retention_failure}
         if (holder.get('harnessHistory') and not timed_out
                 and not handle.cancel_requested and outcome.shutdown_confirmed and outcome.status == 'failed'
-                and outcome.result.get('modelStarted') is False
+                and outcome.result.get('nativeRequestSent') is False
                 and outcome.result.get('code') in {'harness-unavailable', 'invalid-native-result', 'invalid-protocol', 'transport-error', 'native-rpc-error', 'protocol-error', 'native-exit', 'connection-closed'}):
             holder['started'] = False
             holder['confirmed_stopped'] = True

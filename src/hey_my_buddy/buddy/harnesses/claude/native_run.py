@@ -81,6 +81,7 @@ from ..native_support import (
     INQUIRY_TOOL_NAME_CHARS,
     INQUIRY_FAILURE_BYTES,
 )
+from ..native_observations import native_counter
 from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
 from ..run_contract import (
     CheckedBuddy,
@@ -402,6 +403,59 @@ def _check_catalog(request: RunRequest, catalog: dict) -> bool:
 # -- the live collectors of one execution run ------------------------------------
 
 
+def _root_model_output(frame: dict, session_id: str) -> bool:
+    """Whether this native frame contains output from the allocated root model."""
+    if frame.get("parent_tool_use_id"):
+        return False
+    frame_session = frame.get("session_id")
+    if isinstance(frame_session, str) and frame_session and frame_session != session_id:
+        return False
+
+    def output_tokens(usage: object) -> bool:
+        if not isinstance(usage, dict):
+            return False
+        details = usage.get("output_tokens_details")
+        reasoning = details.get("thinking_tokens") if isinstance(details, dict) else None
+        return (native_counter(usage.get("output_tokens")) or 0) > 0 or (native_counter(reasoning) or 0) > 0
+
+    kind = frame.get("type")
+    if kind == "assistant":
+        if frame.get("error"):
+            return False
+        message = frame.get("message")
+        if not isinstance(message, dict):
+            return False
+        content = message.get("content")
+        if isinstance(content, list) and any(
+                isinstance(block, dict) and (
+                    block.get("type") == "tool_use" or
+                    (block.get("type") in ("text", "thinking", "reasoning") and
+                     isinstance(block.get(block["type"]), str) and bool(block[block["type"]]))
+                ) for block in content):
+            return True
+        return output_tokens(message.get("usage"))
+    if kind == "stream_event":
+        event = frame.get("event")
+        if not isinstance(event, dict):
+            return False
+        block = event.get("content_block")
+        delta = event.get("delta")
+        if event.get("type") == "content_block_start" and isinstance(block, dict):
+            return block.get("type") == "tool_use" or any(
+                isinstance(block.get(key), str) and bool(block[key])
+                for key in ("text", "thinking", "reasoning"))
+        if event.get("type") == "content_block_delta" and isinstance(delta, dict):
+            field = {"text_delta": "text", "thinking_delta": "thinking",
+                     "input_json_delta": "partial_json"}.get(delta.get("type"))
+            return field is not None and isinstance(delta.get(field), str) and bool(delta[field])
+        return event.get("type") == "message_delta" and output_tokens(event.get("usage"))
+    if kind == "result":
+        text = frame.get("result")
+        return (frame.get("subtype") == "success" and frame.get("is_error") is not True
+                and isinstance(text, str) and bool(text)) or output_tokens(frame.get("usage"))
+    return False
+
+
 class _TurnCollector:
     """The live observers of one run: tool facts, turn evidence, activity, the role observer.
 
@@ -436,6 +490,8 @@ class _TurnCollector:
         self.last_activity: dict | None = None
         self._connection: Connection | None = None
         self._last_tool_calls = 0
+        self.model_started = False
+        self._last_model_started = False
         self._quiet = False
         self.inquiry = inquiry
         self.bridge = bridge
@@ -551,6 +607,8 @@ class _TurnCollector:
         if self.evidence is not None:
             initialized = self.evidence.init_observed
             activity = self.evidence.observe(frame)
+            if not self.model_started and _root_model_output(frame, self.evidence.session_id):
+                self.model_started = True
             if self.bridge is not None:
                 if not initialized and self.evidence.init_observed:
                     self.bridge.activate(self.evidence.session_id)
@@ -577,8 +635,9 @@ class _TurnCollector:
                     + self.expected_permission_mode + ", native session reported " + self.evidence.permission_mode)
             if activity:
                 self.publish_activity(*activity)
-        if self.tools.tool_calls != self._last_tool_calls:
+        if self.tools.tool_calls != self._last_tool_calls or self.model_started != self._last_model_started:
             self._last_tool_calls = self.tools.tool_calls
+            self._last_model_started = self.model_started
             self._notify(settled=False, raw=None)
 
     def _observe_inquiry_tool(self, frame: dict) -> None:
@@ -671,6 +730,7 @@ class _TurnCollector:
 
     def facts(self, *, settled: bool, raw: str | None) -> dict:
         return {"settled": settled, "rawAnswer": raw,
+                "modelStarted": self.model_started,
                 "toolCalls": self.tools.tool_calls,
                 "deniedInteractions": len(self.denied),
                 "unknownEvents": _unknown_events(self._connection)}
@@ -702,6 +762,7 @@ def _send_and_settle(collector: _TurnCollector, spawn: _Spawn, preparation: _Pre
     """
     connection = spawn.connection
     collector.send_input(connection, preparation.session_id, request.cwd, request.input_text)
+    collector._notify(settled=False, raw=None)
     collector.replay_early()
     collector.publish_activity("waiting-model")
     evidence = collector.evidence
@@ -1045,10 +1106,10 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
             harness_version=spawn.version if spawn is not None else None,
             native_event_count=evidence.event_seq if evidence is not None and evidence.event_seq else None,
             native_evidence=native_evidence,
-            model_started=(True if evidence is not None and
-                           (evidence.root_model_activity or state.terminal_ok)
+            model_started=(True if collector is not None and collector.model_started
                            else False if not (collector is not None and collector.user_send_attempted)
-                           or is_input_too_large(state.native_admission_error) else None),
+                           or is_input_too_large(state.native_admission_error)
+                           or state.drained is True else None),
             native_request_sent=(True if user_sent else None if collector is not None and
                                  collector.user_send_attempted else False),
             native_admission_error=state.native_admission_error,

@@ -19,6 +19,7 @@ from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.buddy.harnesses.run_contract import RunRequest, RunResult, canonical_json
 from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation, worker_executor
 from hey_my_buddy.buddy.roles import run_controller, run_execution, structured_call, turn_io
+from hey_my_buddy.buddy.roles import inline_run
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 from buddy.harnesses.fixture_selection import select_fixture
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, SCHEMA
@@ -28,6 +29,62 @@ from buddy.harnesses.test_run_contract import full_request
 #: budget the machine's load cannot decide; the deadline subjects keep their
 #: own short values in the zcode suite.
 WIRING_TIMEOUT = 30
+
+
+class InlineModelStartTests(unittest.TestCase):
+    def test_all_roles_expose_model_output_before_native_completion_without_live_services(self):
+        for operation in ("worker", "fast", "review", "profile"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                request = full_request(root)
+                control = {"harness": request.harness, "operation": operation, "timeoutSeconds": 30,
+                           "privateRoot": str(root / "run"),
+                           "profileRequest": {"budget": {"timeoutSeconds": 30, "toolCalls": 10}}}
+                handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
+                entered = threading.Event()
+                release = threading.Event()
+                observed = []
+                completed = []
+                def observer(facts):
+                    observed.append((facts["modelStarted"], handle.model_started))
+                    return rc.FEEDBACK_CONTINUE
+                correction = SimpleNamespace(stop_reason=None)
+                prepared = (request, None, observer, None if operation == "worker" else correction, {})
+                def run(_module, _request, *, observer, services, cancelled):
+                    self.assertIsNone(services)
+                    observer({"modelStarted": False, "toolCalls": 0})
+                    observer({"modelStarted": True, "toolCalls": 0})
+                    observer({"modelStarted": False, "toolCalls": 0})
+                    entered.set()
+                    if not release.wait(10):
+                        raise AssertionError("test did not release the native run")
+                    return RunResult(identity=request.identity, harness=request.harness,
+                                     end=rc.RunEnd(status="error", reason_code="native-exit"))
+                def execute():
+                    try:
+                        completed.append(inline_run.execute(control, handle))
+                    except BaseException as error:
+                        completed.append(error)
+                factory = operation + "_request"
+                with mock.patch.object(run_execution, factory, return_value=prepared), \
+                     mock.patch.object(inline_run, "run_seam", return_value=object()), \
+                     mock.patch.object(inline_run, "selected", return_value=None), \
+                     mock.patch.object(inline_run, "check_prompt_input", return_value=SimpleNamespace(blocked=False)), \
+                     mock.patch.object(inline_run, "run_harness", side_effect=run):
+                    thread = threading.Thread(target=execute)
+                    thread.start()
+                    try:
+                        self.assertTrue(entered.wait(10), completed)
+                        self.assertTrue(thread.is_alive())
+                        self.assertTrue(handle.model_started)
+                        self.assertEqual(observed, [(False, False), (True, True), (False, True)])
+                    finally:
+                        release.set()
+                        thread.join(10)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(len(completed), 1)
+                if isinstance(completed[0], BaseException):
+                    raise completed[0]
 
 
 class RegisteredDescriptionTests(unittest.TestCase):

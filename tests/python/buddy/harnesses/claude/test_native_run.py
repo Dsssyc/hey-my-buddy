@@ -116,6 +116,54 @@ class NativeRunCase(unittest.TestCase):
     def fixture_state(self) -> dict:
         return json.loads(self.state_path.read_text(encoding="utf-8"))
 
+    def test_model_start_reaches_the_observer_before_the_root_turn_ends(self):
+        seen = []
+
+        def observe(facts):
+            seen.append(dict(facts))
+            return FEEDBACK_CONTINUE
+
+        result = self.execute(self.request(), observer=observe)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIs(result.model_started, True)
+        self.assertIs(seen[0]["modelStarted"], False)
+        self.assertTrue(any(facts["modelStarted"] and not facts["settled"] for facts in seen))
+        self.assertEqual([facts["modelStarted"] for facts in seen],
+                         sorted(facts["modelStarted"] for facts in seen))
+
+    def test_successful_terminal_without_root_model_output_does_not_start_model(self):
+        self.fixture_case("terminal-only")
+        seen = []
+        result = self.execute(self.request(), observer=lambda facts: (seen.append(dict(facts)) or FEEDBACK_CONTINUE))
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIs(result.model_started, False)
+        self.assertTrue(seen)
+        self.assertTrue(all(facts["modelStarted"] is False for facts in seen))
+
+    def test_only_root_model_frames_count_as_output(self):
+        root = "root-session"
+        assistant = {"type": "assistant", "session_id": root,
+                     "message": {"content": [{"type": "text", "text": "answer"}]}}
+        for frame in ({**assistant, "session_id": "foreign-session"},
+                      {**assistant, "parent_tool_use_id": "child-call"},
+                      {"type": "result", "session_id": "foreign-session",
+                       "usage": {"output_tokens": 5}},
+                      {"type": "assistant", "session_id": root,
+                       "message": {"content": [{"type": "text", "text": ""}]}}):
+            with self.subTest(frame=frame):
+                self.assertFalse(native_run._root_model_output(frame, root))
+        self.assertTrue(native_run._root_model_output(assistant, root))
+        self.assertTrue(native_run._root_model_output(
+            {"type": "stream_event", "session_id": root,
+             "event": {"type": "content_block_start", "content_block": {"type": "tool_use"}}}, root))
+        self.assertTrue(native_run._root_model_output(
+            {"type": "result", "session_id": root, "usage": {"output_tokens": 1}}, root))
+        self.assertTrue(native_run._root_model_output(
+            {"type": "result", "subtype": "success", "session_id": root, "result": "answer"}, root))
+        self.assertFalse(native_run._root_model_output(
+            {"type": "result", "subtype": "error_during_execution", "session_id": root,
+             "is_error": True, "result": "provider error"}, root))
+
 
 class NativeInquiryTests(NativeRunCase):
     def test_child_lifecycle_does_not_change_the_root_inquiry_window(self):

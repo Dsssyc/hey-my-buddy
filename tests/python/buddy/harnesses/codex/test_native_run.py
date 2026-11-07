@@ -82,6 +82,26 @@ def observed_activity(endpoint):
 
 
 class RejectionPhaseTests(unittest.TestCase):
+    def test_model_start_requires_root_output_instead_of_turn_start(self):
+        root = {"threadId": "root", "turnId": "current"}
+        empty = [
+            {"method": "turn/started", "params": {"threadId": "root", "turn": {"id": "current"}}},
+            {"method": "item/started", "params": {**root, "item": {"type": "reasoning", "id": "empty"}}},
+            {"method": "item/completed", "params": {**root, "item": {"type": "userMessage", "text": "input"}}},
+            {"method": "item/agentMessage/delta", "params": {"threadId": "child", "turnId": "current", "delta": "foreign"}},
+            {"method": "thread/tokenUsage/updated", "params": {**root, "tokenUsage": {"last": {"inputTokens": 10, "outputTokens": 0}}}},
+        ]
+        for frame in empty:
+            self.assertFalse(native_run._root_model_output(frame, "root", "current"), frame)
+        output = [
+            {"method": "item/agentMessage/delta", "params": {**root, "delta": " "}},
+            {"method": "item/reasoning/textDelta", "params": {**root, "delta": "thinking"}},
+            {"method": "item/started", "params": {**root, "item": {"type": "mcpToolCall", "id": "tool"}}},
+            {"method": "thread/tokenUsage/updated", "params": {**root, "tokenUsage": {"last": {"outputTokens": 1}}}},
+        ]
+        for frame in output:
+            self.assertTrue(native_run._root_model_output(frame, "root", "current"), frame)
+
     def test_web_overrides_use_nested_objects_with_literal_server_ids(self):
         connection = mock.Mock()
         connection.call.return_value = {"config": {
@@ -256,6 +276,19 @@ class SeamCase(unittest.TestCase):
 
 
 class FastSeamTests(SeamCase):
+    def test_model_start_is_reported_live_after_first_root_output(self):
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
+        seen = []
+
+        def observer(facts):
+            seen.append((facts["settled"], facts["modelStarted"]))
+            return correction.observer(facts)
+
+        result = self.fast_run("ok", correction, observer=observer)
+        self.assertIs(result.model_started, True)
+        self.assertEqual(seen[0], (False, False))
+        self.assertIn((False, True), seen)
+
     def test_initial_native_input_refusal_keeps_structured_admission_facts(self):
         self.set_case("input-too-large")
         request = self.request(permission="none", output_schema=FAST_SCHEMA, prompt="Pick a buddy")
@@ -740,6 +773,18 @@ class ReviewCorrection:
 
 
 class ReviewSeamTests(CodexSeamCase):
+    def test_review_model_start_reaches_observer_before_settlement(self):
+        seen = []
+
+        def observer(facts):
+            seen.append((facts["settled"], facts["modelStarted"]))
+            return FEEDBACK_CONTINUE
+
+        result = self.review_run("readonly-network-disabled", observer=observer)
+        self.assertIs(result.model_started, True)
+        self.assertEqual(seen[0], (False, False))
+        self.assertIn((False, True), seen)
+
     def test_review_provider_rejection_uses_common_root_activity(self):
         for case, phase in (("quota-before", "before-model"), ("quota-activity-text", "during-model"),
                             ("quota-before-truncated", "unknown")):
@@ -921,6 +966,25 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_admitted_worker_turn_without_output_stays_before_model(self):
+        seen = []
+
+        def observer(facts):
+            seen.append(facts["modelStarted"])
+            return FEEDBACK_CONTINUE
+
+        result = self.worker_run("quota-before", observer=observer)
+        self.assertIs(result.native_request_sent, True)
+        self.assertIs(result.model_started, False)
+        self.assertEqual(seen[0], False)
+        self.assertNotIn(True, seen)
+
+        seen.clear()
+        result = self.worker_run("quota-activity-text", observer=observer)
+        self.assertIs(result.model_started, True)
+        self.assertEqual(seen[0], False)
+        self.assertIn(True, seen)
+
     def test_web_native_threads_keep_the_restricted_config(self):
         self.set_case("ok")
         for turn_id in (None, "turn-check"):

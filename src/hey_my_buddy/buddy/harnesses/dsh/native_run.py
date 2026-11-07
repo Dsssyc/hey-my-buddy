@@ -97,7 +97,6 @@ from .acp.connection import (
 )
 from .acp.launch import LaunchOwnershipError
 from .protocol import (
-    MODEL_ACTIVITY_KINDS,
     UPDATE_KINDS,
     DshActivity,
     DshToolFacts,
@@ -716,11 +715,12 @@ class _RunFacts:
     def note_unknown(self, label: object) -> None:
         fold_unknown_events(self.unknown_counts, unknown_event_name(label))
 
-    def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None,
+    def mapping(self, *, tool_calls: int, model_started: bool, settled: bool, raw_answer: str | None,
                 denied: int) -> dict:
         return {
             "settled": settled,
             "rawAnswer": raw_answer,
+            "modelStarted": model_started,
             "toolCalls": tool_calls,
             # DSH has no separate marker-frame family: every tool frame is
             # already a projected fact counted in toolCalls.
@@ -790,10 +790,8 @@ def _root_model_activity(update: dict) -> bool:
     if kind in ("agent_message_chunk", "agent_thought_chunk"):
         content = update.get("content")
         return isinstance(content, dict) and any(
-            isinstance(content.get(key), str) and bool(content[key].strip())
+            isinstance(content.get(key), str) and bool(content[key])
             for key in ("text", "content"))
-    if kind == "plan":
-        return bool(update.get("entries"))
     if kind == "usage_update":
         return any(type(update.get(key)) is int and update[key] > 0
                    for key in ("outputTokens", "reasoningTokens"))
@@ -826,10 +824,10 @@ def _fold_update(message: object, state: _RunState, *, facts: _RunFacts, tools: 
     tools.observe(message)
     if evidence is not None:
         evidence.observe(message, state.event_count)
-    if kind in MODEL_ACTIVITY_KINDS and not state.model_started:
-        state.model_started = True
     if params.get("sessionId") == activity.session_id and isinstance(update, dict):
-        state.root_model_activity |= _root_model_activity(update)
+        output = _root_model_activity(update)
+        state.root_model_activity |= output
+        state.model_started |= output
     activity.note(message, state.event_count)
     if inquiry_bridge is not None:
         inquiry_bridge.note_event(message, activity.phase)
@@ -900,6 +898,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
 
         def notify(*, settled: bool = False, raw: str | None = None) -> RunFeedback:
             feedback = observer(facts.mapping(tool_calls=tools.tool_calls, settled=settled,
+                                              model_started=state.model_started,
                                               raw_answer=raw, denied=denied_count()))
             if feedback.action == "stop":
                 raise ObserverInterrupt()
@@ -1123,6 +1122,7 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
 
     thread = threading.Thread(target=send, daemon=True, name="dsh-acp-prompt")
     thread.start()
+    notify()
     interrupted = False
     interrupted_at: float | None = None
     denied_seen = -1
@@ -1181,10 +1181,6 @@ def _settle_stop_reason(state: _RunState, stop_reason: object) -> str | None:
         return UNREAD_STOP_REASON
     state.prompt_stop_reason = stop_reason
     if stop_reason == "end_turn":
-        # The native stop reason is itself the model turn's end fact; turn
-        # Earlier native activity may already have confirmed this fact.
-        if not state.model_started:
-            state.model_started = True
         return None
     if stop_reason == "cancelled":
         return "native-cancelled"
@@ -1559,7 +1555,8 @@ def _build_result(request: RunRequest, *, state: _RunState,
         native_evidence=_native_evidence_facts(state),
         model_started=(True if state.model_started else
                        False if not state.initial_request_attempted or
-                       is_input_too_large(state.native_admission_error) else None),
+                       is_input_too_large(state.native_admission_error) or
+                       (drained is True and state.prompt_stop_reason is not None) else None),
         native_request_sent=state.native_request_sent,
         native_admission_error=state.native_admission_error,
         buddy=ResultBuddy(

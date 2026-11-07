@@ -178,11 +178,12 @@ class SessionProjectionTests(unittest.TestCase):
         self.assertEqual([row["content"]["text"] for row in self.updates()[1:]], ["complete once"])
 
     def test_pre_receipt_content_has_no_role_buffer_limit_and_uses_the_receipts_identity(self):
-        from hey_my_buddy.buddy.harnesses.codex.native_run import _Classifier, _EventChain, _RunFacts
+        from hey_my_buddy.buddy.harnesses.codex.native_run import _Classifier, _EventChain, _RunFacts, _RunState
 
         self.projector.record_input('second turn')
         facts = _RunFacts()
-        chain = _EventChain(facts, _Classifier(facts), None, self.projector, overflow_raises=False)
+        chain = _EventChain(facts, _Classifier(facts), _RunState(), None, self.projector,
+                            overflow_raises=False)
         for index in range(300):
             chain.observe({'method': 'item/agentMessage/delta', 'params': {
                 'threadId': 'thread', 'turnId': 'second', 'itemId': 'early', 'delta': '字'}})

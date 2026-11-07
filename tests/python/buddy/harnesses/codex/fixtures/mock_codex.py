@@ -295,6 +295,10 @@ def main():
                         item["text"] = "partial output"
                     send({"method": "item/started", "params": {
                         "threadId": thread_id, "turnId": turn_id, "item": item}})
+                    if activity == "reasoning":
+                        send({"method": "item/reasoning/textDelta", "params": {
+                            "threadId": thread_id, "turnId": turn_id, "itemId": "activity-1",
+                            "delta": "partial reasoning"}})
                 elif activity == "tokens":
                     send_usage("quota-failure", thread_id, turn_id, turn_index)
                 error = {"message": "Selected model is at capacity. Please try a different model.",

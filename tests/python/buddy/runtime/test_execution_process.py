@@ -38,6 +38,41 @@ def self_identity_for_endpoint() -> dict:
 
 
 class ExecutionEndpointTests(unittest.TestCase):
+    def test_harness_retry_requires_proof_the_native_request_was_not_sent(self):
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.install import runtime
+
+        for sent, started in ((True, False), (None, False), (False, False), (False, None)):
+            with self.subTest(nativeRequestSent=sent, modelStarted=started), \
+                 tempfile.TemporaryDirectory(prefix="premodel-retry-") as directory:
+                state = Path(directory)
+                spec = {"adapter": "decision", "cwd": directory, "decision": {"kind": "maintain"}}
+                claim = {"task": {"taskId": "task", "spec": spec},
+                         "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                         "decisionInput": {"kind": "maintain", "buddy": {"harness": "dsh"}}}
+                execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+                execution.receipt = lambda claim, report, directory: report
+                handle = SimpleNamespace(wait=lambda timeout: 0, cancel_requested=False, result=None,
+                                         stop_initiator=None, grace_expired=False)
+                holder = {"preflightControl": mock.Mock(), "harnessHistory": [{"harness": "dsh"}]}
+                outcome = AdapterOutcome(status="failed", shutdown_confirmed=True,
+                    result={"code": "transport-error", "nativeRequestSent": sent, "modelStarted": started})
+                with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
+                     mock.patch.object(controller, "worker_executor", return_value=object()), \
+                     mock.patch.object(controller, "prepare_worker_run", return_value=controller.WorkerPreparation(True)), \
+                     mock.patch.object(controller, "worker_start", return_value=handle) as start, \
+                     mock.patch.object(controller, "worker_collect", return_value=outcome):
+                    if sent is False:
+                        with self.assertRaises(BoardError) as refused:
+                            execution._execute_selected(claim, claim["task"], spec, claim["attempt"], state, holder)
+                        self.assertEqual(refused.exception.code, "HARNESS_PREMODEL_FAILED")
+                        self.assertNotIn("handle", holder)
+                    else:
+                        report = execution._execute_selected(claim, claim["task"], spec, claim["attempt"], state, holder)
+                        self.assertEqual(report["result"]["nativeRequestSent"], sent)
+                        self.assertIs(holder["handle"], handle)
+                    start.assert_called_once()
+
     def test_review_unavailable_result_uses_frozen_request_without_copying_budget(self):
         execution = object.__new__(Execution)
         claim = {'decisionInput': {'routingMode': 'review', 'budget': {'preset': 'deep', 'timeoutSeconds': 600,
