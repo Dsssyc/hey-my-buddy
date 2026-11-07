@@ -228,6 +228,8 @@
 
 ## 委派与 Worker
 
+**ZCode 的 Worker 调用结束工具之后再调一次工具，整个回合就判失败。**（2026-11-07 验收 0.65.1 的顺带项微任务时撞到，Host 只读核对了日常黑板） `buddy/harnesses/zcode/protocol.py` 在根会话调用结束工具之后，见到回答工具以外的任何工具调用，就以 `duplicate-finish` 判这个回合失败。日常黑板上 164 次 ZCode 执行里有 4 次这样失败：两次结束之后调的是 ZCode 自己的待办工具 TodoWrite（11-03、11-07），它不改检出里的文件；另两次是又调了一次结束工具（11-03、11-05）。失败的回合封存了部分输出，工作没丢，但要 Host 在部分输出上再续一个回合才能交付。ADR-030 只保留三类拒绝：结果确实属于这个回合、进程确实停了、凭据不外泄，这两种都不在其中。Host 的建议：照 Codex 一个回合出了两条最终回答时的做法（2026-10-15），取回合结束前最后一次结束调用作为答案，被取代的结束调用与结束之后的工具调用记成事实，封存的输出照常以检出为准；DSH 的同类规则（`dsh/protocol.py` 对第二次结束调用）按同一条一起看。
+
 **`help` 把只能省略的字段也显示成可以是 null。**（2026-11-05 ADR-032 参考文档的盲审指出，Host 读代码核实） `cli/cli_help.py` 直接输出请求模型生成的 schema，可省略的字段带着 `anyOf … null` 与 `default: null`；而请求模型默认拒绝显式的 null，只有 `nullable_fields` 里的字段例外，目前只有 `harness-set` 的 `path`（`protocol/requests.py`）。照 help 写出 `"includeAudit": null` 这样的请求会被拒绝。建议：help 按 `nullable_fields` 呈现，可省略的字段只写“可省略”，能显式传 null 的才显示 null；随下一批改到 help 的工作顺带做。
 
 **执行层的内部规格还留着两个默认值。**（2026-11-05 写 ADR-032 文档时 Host 读代码记下） `protocol/schemas.py` 的 `normalize_spec` 只给检查套件写命令执行用（`tests/python/support.py` 的 `submit_execution`），却仍把没写的 `adapter` 当成 `dsh`、没写的 `expectedSeconds` 当成 1,800 秒：前者随即被“编程用的 harness 必须走微任务”拒绝，只把“没写”变成了另一种错误。`blackboard/routing/decision.py` 两处 `request.get("expectedSeconds", DEFAULT_EXPECTED_SECONDS)` 在 ADR-032 把 `expectedSeconds` 改为必填之后，看起来已经没有不带它的调用方，要先核对。建议：两处都改为必填，删掉 `DEFAULT_EXPECTED_SECONDS`；随下一批同一块的工作顺带做。（2026-11-06 门铃微任务开工前核对：前提不成立。`decision.py` 的 `SELECT_FIELDS` 不收 `expectedSeconds`，`request_select` 构造的请求不带它，`test_execution_recovery.py` 等测试直接调用这个入口；`test_blackboard.py` 的命令执行与 `test_dsh_session_storage.py` 的 `normalize_spec` 调用也都不传。要清理，就得让 `request_select` 收必填的 `expectedSeconds` 并补齐这些测试的调用，单独排一次，不再当顺带项。）
