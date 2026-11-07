@@ -421,6 +421,59 @@ def run_suite_child(root: Path, private_root: Path, directory_name: str, label: 
     return ChildOutcome(label, returncode, "".join(stdout), "".join(stderr), time.monotonic() - started)
 
 
+#: One budget for each short run of the selected Node that reads or judges its version.
+NODE_VERSION_SECONDS = 30.0
+
+#: Decides one Node version against the console's ``engines.node`` range with
+#: npm's semver, the range format's own implementation. It runs under the
+#: selected Node itself, so a Node too old for the frontend toolchain still
+#: reads its own conclusion instead of failing later in an unexplained
+#: ``SyntaxError``.
+NODE_RANGE_JUDGE = (
+    "const semver = require(process.argv[1]);"
+    "const range = require(process.argv[2]).engines.node;"
+    "process.stdout.write(semver.satisfies(process.argv[3], range) ? 'true' : 'false');"
+)
+
+
+def node_version_failure(node: str, console: Path) -> str | None:
+    """The frontend step's Node gate; ``None`` when the selection is supported.
+
+    The version is read from the selected Node itself and judged against the
+    console's declared ``engines.node`` range by npm's semver package, each in
+    one short run of that same Node: the step fails with the Node's location,
+    its version and the required range instead of an unexplained toolchain
+    error further in.
+    """
+    try:
+        probe = subprocess.run([node, "--version"], capture_output=True, encoding="utf-8",
+                                errors="replace", timeout=NODE_VERSION_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"Node.js at {node} could not be run to read its version: {error}\n"
+    version = probe.stdout.strip()
+    if probe.returncode != 0 or not version:
+        detail = probe.stderr.strip() or probe.stdout.strip() or f"exit {probe.returncode}"
+        return f"Node.js at {node} did not report a version: {detail}\n"
+    try:
+        judged = subprocess.run([node, "-e", NODE_RANGE_JUDGE,
+                                 str(console / "node_modules" / "semver"),
+                                 str(console / "package.json"), version],
+                                capture_output=True, encoding="utf-8", errors="replace",
+                                timeout=NODE_VERSION_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"Node.js {version} at {node} could not judge its version: {error}\n"
+    range_text = json.loads((console / "package.json").read_text(encoding="utf-8"))["engines"]["node"]
+    verdict = judged.stdout.strip()
+    if judged.returncode != 0 or verdict not in ("true", "false"):
+        detail = judged.stderr.strip() or judged.stdout.strip() or f"exit {judged.returncode}"
+        return (f"Node.js {version} at {node} could not be checked against apps/console's "
+                f"engines.node {range_text}: {detail}\n")
+    if verdict == "false":
+        return (f"Node.js {version} at {node} does not satisfy apps/console's engines.node "
+                f"{range_text}; point HMB_NODE at a supported Node.js.\n")
+    return None
+
+
 def run_frontend_suite(root: Path, private_root: Path, live: set, guard: threading.Lock,
                        stop: threading.Event) -> ChildOutcome | None:
     """One pool job: typecheck, unit tests, and a fresh build matching packaged assets."""
@@ -430,12 +483,17 @@ def run_frontend_suite(root: Path, private_root: Path, live: set, guard: threadi
     tsc = console / "node_modules" / "typescript" / "bin" / "tsc"
     vitest = console / "node_modules" / "vitest" / "vitest.mjs"
     vite = console / "node_modules" / "vite" / "bin" / "vite.js"
-    if not node or not tsc.is_file() or not vitest.is_file() or not vite.is_file():
+    semver = console / "node_modules" / "semver" / "package.json"
+    if (not node or not tsc.is_file() or not vitest.is_file() or not vite.is_file()
+            or not semver.is_file()):
         return ChildOutcome(
             FRONTEND_LABEL, 1, "",
             "Frontend checks require Node.js and console dev dependencies; "
             "run `npm --prefix apps/console ci` first.\n", time.monotonic() - started,
         )
+    unsupported = node_version_failure(node, console)
+    if unsupported is not None:
+        return ChildOutcome(FRONTEND_LABEL, 1, "", unsupported, time.monotonic() - started)
     built = private_root / "frontend" / "assets"
     outcome = run_suite_child(
         root, private_root, "frontend", FRONTEND_LABEL,

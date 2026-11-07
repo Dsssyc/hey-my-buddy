@@ -95,6 +95,8 @@ class FocusedChecksTests(unittest.TestCase):
                    if name == "frontend-vitest" else ""),
                 encoding="utf-8", newline="\n",
             )
+        (console / "node_modules" / "semver").mkdir(parents=True, exist_ok=True)
+        (console / "node_modules" / "semver" / "package.json").write_text("{}", encoding="utf-8")
         return console
 
     def invoke(self, arguments, *, process_table=(), node=sys.executable):
@@ -108,6 +110,9 @@ class FocusedChecksTests(unittest.TestCase):
             patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(self.temporary),
                                     "HMB_RUNTIME": "/fixture/pinned-runtime",
                                     "HMB_AGENT_CREDENTIAL_FD": "17", "HMB_NODE": node}),
+            # The synthetic frontend runs Python as Node; its version gate is
+            # covered separately by test_checks_node_version.
+            patch.object(checks, "node_version_failure", return_value=None),
             observer,
             patch.object(checks, "_windows_owned_processes",
                          return_value=([], ["fixture process observation incomplete"], []))
