@@ -129,7 +129,7 @@ class ProfileRuntimeTests(unittest.TestCase):
     def test_correction_rounds_preserve_and_sum_each_call_outcome(self):
         with tempfile.TemporaryDirectory() as directory:
             _seen, _publications, verdict, code = self._run(
-                self._control(Path(directory), tool_calls=5),
+                self._control(Path(directory)),
                 [('first', 2), ('second', 1), ('final', 1)],
                 outcomes=[['success', 'failure'], ['unknown'], ['failure']])
             package = verdict['toolEvidence']
