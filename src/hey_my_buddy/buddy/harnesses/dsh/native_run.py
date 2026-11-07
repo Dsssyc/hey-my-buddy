@@ -122,9 +122,9 @@ PERMISSION_MODES = {"read": READ_ONLY_MODE, "write": "workspace-write",
 PLAN_MODE_ROW = "plan-mode"
 #: The web scope keeps the web tools and the native executor row; DSH CLI
 #: 0.2.2-rc.1's working_directory also changes the session's working directory,
-#: which this plane never needs. This exact combination is not yet natively
-#: verified; the Host verifies it after installing this change. Newly discovered
-#: rows are disabled, including disabled defaults.
+#: which this plane never needs. This combination passed the native web probe,
+#: the board's judgment included, on DSH CLI 0.2.2-rc.1 (2026-11-07). Newly
+#: discovered rows are disabled, including disabled defaults.
 WEB_SCOPE_RETAINED_ROWS = frozenset({"tool-web", "tool-executor-native"})
 NONE_SCOPE_RETAINED_ROWS: frozenset[str] = frozenset()
 _INVENTORY_REASONS = {UNREADABLE: "dsh-tool-inventory-unreadable",
