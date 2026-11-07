@@ -117,6 +117,7 @@ export default {
   "not-enabled": "This buddy is not enabled.",
   "router-abstained": "The Router abstained; the Host decides the next action.",
   "router-all-unavailable": "Every Router in the list is currently unavailable.",
+  "router-budget-exhausted": "Before 0.65.0, this Router call reached its time or tool-call limit.",
   "router-not-responding": "The Router's model did not start responding within {{seconds}} seconds.",
   "router-catalog-unavailable": "The Router's catalog is unavailable: {{cause}}",
   "router-disabled": "The Router is disabled.",

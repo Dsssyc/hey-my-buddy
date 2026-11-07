@@ -1476,7 +1476,6 @@ class StructuredDeliveryTests(NativeRunCase):
         review = self.shared_review_observer()
         result = self.execute(self.review_request(), observer=review.observer)
         self.assertEqual(result.end.status, "ok")
-        self.assertIsNone(review.stop_reason)
         package = result.tool_evidence.value
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(self.base / "state")),
@@ -1488,7 +1487,6 @@ class StructuredDeliveryTests(NativeRunCase):
         review = self.shared_review_observer()
         result = self.execute(self.review_request(), observer=review.observer)
         package = self.package_of(result)
-        self.assertIsNone(review.stop_reason)
         self.assertEqual((package["toolCalls"], list(tool_evidence.read_tool_calls(package, state_dir=Path(self.base / "state")))), (0, []))
         self.assertEqual(result.value.parsed.value, self.delivered())
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(self.base / "state")))

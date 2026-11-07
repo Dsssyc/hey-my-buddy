@@ -163,8 +163,10 @@ class ExecutionEndpointTests(unittest.TestCase):
         from hey_my_buddy.buddy.roles import controller
         from hey_my_buddy.install import runtime
         for kind in ("maintain", "select-fast", "select-review", "profile"):
-            for responded in (False, True):
-                with self.subTest(kind=kind, responded=responded), tempfile.TemporaryDirectory() as directory:
+            for scenario in ("waiting", "responded", "finished"):
+                responded = scenario == "responded"
+                finished = scenario == "finished"
+                with self.subTest(kind=kind, scenario=scenario), tempfile.TemporaryDirectory() as directory:
                     state = Path(directory)
                     spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
                             "decision": {"kind": kind}}
@@ -180,11 +182,12 @@ class ExecutionEndpointTests(unittest.TestCase):
                         waits.append(timeout)
                         handle.model_responded = responded
                         clock[0] = 10_000.0
-                        return None if len(waits) == 1 else 0
+                        return None if len(waits) == 1 and not finished else 0
                     handle = SimpleNamespace(wait=wait, grace_deadline=None, force_stop_requested=False,
                                              cancel_requested=False, stop_initiator=None, grace_expired=False,
                                              result=None, model_responded=False)
-                    outcome = AdapterOutcome(status='ok', shutdown_confirmed=True)
+                    outcome = AdapterOutcome(status='failed' if finished else 'ok', shutdown_confirmed=True,
+                        result={'code': 'native-error'} if finished else {'modelResponded': True})
                     with mock.patch.object(runtime, 'resolve_runtime', return_value={}), \
                          mock.patch.object(controller, 'worker_executor', return_value=object()), \
                          mock.patch.object(controller, 'prepare_worker_run', return_value=controller.WorkerPreparation(True)), \
@@ -196,17 +199,22 @@ class ExecutionEndpointTests(unittest.TestCase):
                                                               execution.directory, {'preflightControl': mock.Mock()})
                     report = receipt['report']
                     self.assertEqual(report['elapsedSeconds'], 10_000)
-                    self.assertEqual((execution.directory / module.BUDGET).exists(), not responded)
-                    if responded:
+                    self.assertEqual((execution.directory / module.BUDGET).exists(), not responded and not finished)
+                    if finished:
+                        cancel.assert_not_called()
+                        self.assertEqual(report['result']['code'], 'native-error')
+                        self.assertEqual(report['terminationReason'], 'harness-error')
+                    elif responded:
                         cancel.assert_not_called()
                         self.assertEqual((report['status'], report['terminationReason']), ('ok', 'completed'))
                     else:
                         cancel.assert_called_once()
                         self.assertEqual(report['terminationReason'], 'deadline')
                         self.assertEqual(report['result']['code'], 'router-not-responding')
-                        self.assertEqual(report['result']['seconds'], 60)
+                        self.assertNotIn('seconds', report['result'])
+                        self.assertIs(report['result']['modelResponded'], False)
 
-    def test_model_response_removes_only_its_bound_wait_file_and_rearms_each_session(self):
+    def test_model_response_removes_wait_file_and_rearms_each_session(self):
         from hey_my_buddy.buddy.runtime import execution as module
         from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
         binding = {"taskId": "task", "attemptId": "attempt", "generation": 1}
@@ -219,7 +227,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             scheduler_handle = SimpleNamespace(budget_path=path, execution_binding=binding)
             with mock.patch.object(module, 'time', SimpleNamespace(monotonic=lambda: clock[0])):
                 wait.begin()
-                self.assertEqual(ExecutionScheduler._budget_deadline(scheduler_handle), 70)
+                self.assertEqual(ExecutionScheduler._budget_deadline(scheduler_handle), 70 + module.TIMEOUT_GRACE_SECONDS)
                 clock[0] = 30
                 handle.model_responded = True
                 wait.responded(handle)
@@ -229,17 +237,38 @@ class ExecutionEndpointTests(unittest.TestCase):
                 self.assertFalse(wait.expired(handle))
                 handle.model_responded = False
                 wait.begin()
-                self.assertEqual(ExecutionScheduler._budget_deadline(scheduler_handle), 10_060)
+                self.assertEqual(ExecutionScheduler._budget_deadline(scheduler_handle), 10_060 + module.TIMEOUT_GRACE_SECONDS)
                 clock[0] = 10_059
                 self.assertFalse(wait.expired(handle))
                 clock[0] = 10_060
                 self.assertTrue(wait.expired(handle))
                 self.assertEqual(notified.call_count, 2)
-                module.fsync_json(path, {"binding": {**binding, "attemptId": "other"}, "deadline": 10_060})
-                handle.model_responded = True
-                with self.assertRaises(BoardError):
-                    wait.responded(handle)
-                self.assertTrue(path.exists())
+                wait.responded(handle)
+                self.assertFalse(handle.model_responded, "model output after the timeout decision is not adopted")
+                self.assertTrue(path.exists(), "the fallback deadline remains after timeout")
+
+    def test_wait_publication_and_notification_do_not_hold_the_deadline_lock(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        with tempfile.TemporaryDirectory() as directory:
+            observed = threading.Event()
+            def read_deadline():
+                with wait.lock:
+                    self.assertIsNotNone(wait.deadline)
+                    observed.set()
+            def notify():
+                reader = threading.Thread(target=read_deadline, daemon=True)
+                reader.start()
+                self.assertTrue(observed.wait(1), "notification held the deadline lock")
+                reader.join(1)
+            wait = ModelResponseWait(Path(directory) / module.BUDGET,
+                {"taskId": "task", "attemptId": "attempt", "generation": 1}, 60, notify=notify)
+            publish = module.fsync_json
+            def publish_unlocked(*args, **kwargs):
+                notify()
+                observed.clear()
+                publish(*args, **kwargs)
+            with mock.patch.object(module, 'fsync_json', side_effect=publish_unlocked):
+                wait.begin()
 
     def test_model_response_wait_file_removal_failure_is_not_swallowed(self):
         from hey_my_buddy.buddy.runtime import execution as module
@@ -270,7 +299,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             execution.directory.mkdir(parents=True, mode=0o700)
             execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
             identity = rc.RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="call")
-            handle = run_execution.InlineRunHandle({"timeoutSeconds": None}, identity, grace_seconds=0)
+            handle = run_execution.InlineRunHandle({"timeoutSeconds": None}, identity)
             budget_path = execution.directory / module.BUDGET
             original_unlink = type(budget_path).unlink
             removals = []

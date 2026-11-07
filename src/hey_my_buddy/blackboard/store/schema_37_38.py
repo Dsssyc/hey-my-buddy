@@ -15,10 +15,13 @@ TRIGGER_DDL = {
         "BEGIN SELECT RAISE(ABORT, 'model correspondences only delete the latest change of a service'); END"),
 }
 
-ROUTER_SETTINGS_DDL = """CREATE TABLE IF NOT EXISTS router_settings (
+DEFAULT_MODEL_RESPONSE_WAIT_SECONDS = 60
+MAX_MODEL_RESPONSE_WAIT_SECONDS = 86400
+
+ROUTER_SETTINGS_DDL = f"""CREATE TABLE router_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
-    model_response_wait_seconds INTEGER NOT NULL DEFAULT 60 CHECK (typeof(model_response_wait_seconds)='integer' AND model_response_wait_seconds >= 1),
+    model_response_wait_seconds INTEGER NOT NULL DEFAULT {DEFAULT_MODEL_RESPONSE_WAIT_SECONDS} CHECK (typeof(model_response_wait_seconds)='integer' AND model_response_wait_seconds BETWEEN 1 AND {MAX_MODEL_RESPONSE_WAIT_SECONDS}),
     retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
 , maintenance_buddy_id TEXT, maintenance_interval_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (maintenance_interval_seconds >= 1)
 , exploration_every INTEGER DEFAULT 5 CHECK (exploration_every IS NULL OR exploration_every >= 2)

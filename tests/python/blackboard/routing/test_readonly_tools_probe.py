@@ -81,7 +81,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         packet = self.prepared()
         native, handle = Mock(), Mock()
         native.registered_start.return_value = handle
-        handle.wait.return_value = 0
+        handle.wait.side_effect = [None, 0]
         handle.shutdown_confirmed.return_value = True
         handle.model_responded = False
         self.args.execute = True
@@ -94,7 +94,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
             report = probe.run(self.args)
         self.assertEqual(report['status'], 'failed')
         self.assertEqual(report['reason'], {'code': 'router-not-responding', 'params': {'seconds': 60}})
-        handle.wait.assert_called_once_with(timeout=0.25)
+        self.assertEqual(handle.wait.call_args_list, [unittest.mock.call(timeout=0.25), unittest.mock.call(timeout=None)])
 
     def test_changed_input_or_buddy_cannot_reuse_approval(self):
         self.prepared()

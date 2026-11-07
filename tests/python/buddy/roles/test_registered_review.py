@@ -28,7 +28,7 @@ class RegisteredReviewTests(NativeRunCase):
             "stateDir": os.environ["HMB_STATE_DIR"],
             "directory": str(root),
             "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.jsonl"),
-            "cwd": str(self.cwd), "timeoutSeconds": None,
+            "cwd": str(self.cwd),
             "executionLiveFile": str(root / "execution-live.json"),
             "live": {"instanceId": "a" * 64, "token": "b" * 64},
             "canCorrect": False,
@@ -37,7 +37,7 @@ class RegisteredReviewTests(NativeRunCase):
         }
         identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                invocation_id=control["invocationId"])
-        handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
+        handle = run_execution.InlineRunHandle(control, identity)
         with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
                 mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)):
             result, request, verdict, code = inline_run.execute(control, handle)
@@ -85,6 +85,5 @@ class RegisteredReviewTests(NativeRunCase):
                          "Return exactly the supplied JSON Schema; do not repeat exploration.")
         self.assertEqual(observer.observer({"settled": True, "rawAnswer": "{"}).action, "continue")
         self.assertEqual(observer.observer({"toolCalls": 3}).action, "continue")
-        self.assertIsNone(observer.stop_reason)
         no_correction = ReviewObserver(READ_SCHEMA, "Choose", can_correct=False)
         self.assertEqual(no_correction.observer({"settled": True, "rawAnswer": "{"}).action, "continue")

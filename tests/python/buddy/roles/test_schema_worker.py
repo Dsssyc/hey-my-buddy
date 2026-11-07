@@ -196,7 +196,7 @@ class SchemaWorkerTests(NativeRunCase):
         identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                invocation_id=control["invocationId"], turn_id="turn",
                                input_sha256=run_execution.input_hash(turn))
-        handle = run_execution.InlineRunHandle(control, identity, grace_seconds=0)
+        handle = run_execution.InlineRunHandle(control, identity)
         with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
                 mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True), \
                 mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)):

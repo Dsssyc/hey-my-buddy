@@ -78,7 +78,7 @@ class RouterContractTests(unittest.TestCase):
             native = RunResult(identity=request.identity, harness='dsh',
                                end=RunEnd(status='cancelled'),
                                stop_evidence=StopEvidence(native=StopLayer(group_state='unknown')))
-            handle = InlineRunHandle(control, request.identity, grace_seconds=0)
+            handle = InlineRunHandle(control, request.identity)
             handle.request = request
             handle.result = native
             handle.verdict = {'stopReason': None, 'elapsedMs': 0}

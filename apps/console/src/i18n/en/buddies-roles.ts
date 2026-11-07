@@ -54,7 +54,7 @@ export default {
   },
   responseWait: {
     name: "Wait for the model to start responding (seconds)",
-    invalid: "Enter an integer of at least 1",
+    invalid: "Enter an integer from 1 to 86400",
   },
   exploration: {
     name: "Exploration quota", on: "One in every N", off: "Off", interval: "Micro tasks per exploration quota",

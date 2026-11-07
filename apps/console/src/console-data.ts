@@ -66,9 +66,10 @@ export function retryIntervalSeconds(value: unknown): number | null {
     ? value
     : null;
 }
-/** A model call may wait any positive, safely representable whole number of seconds. */
+/** The model response wait uses the service's 1–86400 second setting range. */
+export const MODEL_RESPONSE_WAIT_MAX = 86400;
 export function modelResponseWaitSeconds(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : null;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MODEL_RESPONSE_WAIT_MAX ? value : null;
 }
 /** Null disables exploration; otherwise one eligible micro task in N gets a quota. */
 export function validExplorationEvery(value: unknown): value is number | null {

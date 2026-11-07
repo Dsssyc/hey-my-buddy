@@ -377,6 +377,60 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         finally:
             store.db.close()
 
+    def test_scheduler_leaves_wait_timeout_to_execution_and_router_fails_over(self):
+        script, started, release, candidate = self.offline_router()
+        first = "dsh:deepseek-official:deepseek-flash:max"
+        second = "dsh:deepseek-official:deepseek-flash:off"
+        store = BoardStore(self.directory)
+        try:
+            with store.db.write() as connection:
+                # The offline native catalog offers deepseek-flash in both efforts;
+                # v4-pro remains the legal Worker choice, rather than a Router call.
+                connection.execute(
+                    "INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json)"
+                    " VALUES(?,?,'dsh','deepseek-official','deepseek-flash','off',1,1,'[]')", (second, second))
+                router._write_settings(connection, {
+                    "routerBuddyIds": [first, second], "modelResponseWaitSeconds": 3})
+        finally:
+            store.db.close()
+        environment = {"HMB_MAX_CONCURRENT": "1", "HMB_DSH_CLI": str(script)}
+        try:
+            with self.daemon(env=environment):
+                created = self.select_offline_router("router-wait-failover", "Choose after a model start timeout")
+                run_id = created["runId"]
+                def trial_changed():
+                    view = self.client().call("selection_get", {"decisionId": created["decisionId"]})["decision"]
+                    if view["runId"] != run_id or view["status"] in ("failed", "cancelled", "needs-host"):
+                        return view
+                    return None
+                next_dispatch = wait_for(trial_changed, timeout=45)
+                self.assertIsNotNone(next_dispatch, self.client().get(runId=run_id))
+                self.assertNotEqual(next_dispatch["runId"], run_id, next_dispatch)
+                self.assertEqual(next_dispatch["routerBuddyId"], second)
+                self.assertGreater(len(next_dispatch["routerTrials"]), 1, next_dispatch)
+                self.assertEqual(next_dispatch["routerTrials"][0]["code"], "router-not-responding")
+                self.assertEqual(next_dispatch["routerTrials"][1]["buddyId"], second)
+                first_task = self.client().get(runId=run_id)
+                first_attempt = first_task["selectedAttempt"]
+                self.assertEqual(first_task["state"], "failed", first_task)
+                self.assertEqual(first_task["terminationReason"], "deadline")
+                self.assertIsNone(first_attempt["cancelRequestedAt"])
+                self.assertIsNone(first_attempt["forceRequestedAt"])
+                result = first_attempt["result"]["result"]
+                self.assertEqual(result["code"], "router-not-responding")
+                self.assertIs(result["modelResponded"], False)
+                self.assertNotIn("seconds", result)
+                release.touch()
+                decision = wait_for(lambda: self._completed_decision(created["decisionId"]), timeout=30)
+                self.assertIsNotNone(decision, self.client().call("selection_get", {"decisionId": created["decisionId"]}))
+                self.assertEqual(decision["buddyId"], candidate)
+                health = self.client().call("health", {})["routingHealth"]
+                record = next(row for row in health["routers"] if row["buddyId"] == first)
+                self.assertEqual(record["windowNotRespondingCount"], 1)
+                self.assertEqual(record["lastError"]["code"], "router-not-responding")
+        finally:
+            release.touch()
+
     def test_router_result_after_restart_uses_frozen_decision_and_budget(self):
         script, started, release, candidate = self.offline_router()
         environment = {"HMB_MAX_CONCURRENT": "1", "HMB_DSH_CLI": str(script)}

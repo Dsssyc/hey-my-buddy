@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
+from .schema_37_38 import ROUTER_SETTINGS_DDL
 
 SCHEMA_VERSION = 38
 DB_FILE = "board.sqlite3"
@@ -1150,29 +1151,8 @@ CREATE TABLE IF NOT EXISTS router_outcomes (
 );
 """
 
-# Current Router settings; frozen upgrades carry their own definitions.
-ROUTER_MAINTENANCE_COLUMNS = (
-    "maintenance_buddy_id TEXT",
-    "maintenance_interval_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (maintenance_interval_seconds >= 1)",
-)
-
-#: The exploration quota interval: one quota per N eligible routings, NULL for
-#: exploration off. The default is the admitted default of a fresh board and
-#: the value an upgrading board's existing settings take.
-ROUTER_EXPLORATION_COLUMN = "exploration_every INTEGER DEFAULT 5 CHECK (exploration_every IS NULL OR exploration_every >= 2)"
-ROUTER_PROFILE_COLUMNS = (
-    "profile_buddy_id TEXT REFERENCES buddies(buddy_id) ON DELETE RESTRICT",
-)
-
 ROUTER_SCHEMA = f"""
-CREATE TABLE IF NOT EXISTS router_settings (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
-    model_response_wait_seconds INTEGER NOT NULL DEFAULT 60 CHECK (typeof(model_response_wait_seconds)='integer' AND model_response_wait_seconds >= 1),
-    retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
-, {', '.join(ROUTER_MAINTENANCE_COLUMNS)}
-, {ROUTER_EXPLORATION_COLUMN}
-, {', '.join(ROUTER_PROFILE_COLUMNS)});
+{ROUTER_SETTINGS_DDL}
 CREATE TABLE IF NOT EXISTS router_buddies (
     position INTEGER PRIMARY KEY CHECK (position >= 0),
     buddy_id TEXT NOT NULL UNIQUE

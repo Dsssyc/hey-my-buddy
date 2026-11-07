@@ -166,16 +166,17 @@ def run(args):
         no_response = False
         while True:
             finished = handle.wait(timeout=0.25) is not None
+            if finished:
+                model_wait.finished()
+                break
             if model_wait.expired(handle):
                 no_response = True
-                if not finished:
-                    native.cancel(handle)
-                    handle.wait(timeout=None)
-                break
-            if finished:
-                model_wait.responded(handle)
+                native.cancel(handle)
+                handle.wait(timeout=None)
                 break
         outcome = read_only.collect(handle)
+        if no_response:
+            outcome.result["modelResponded"] = False
         report.update(evaluate(packet, outcome, elapsed_ms=round((time.monotonic() - started) * 1000),
                                unchanged=router_input.digest(root / 'frozen') == packet['inputDigest'],
                                state_dir=Path(context.environment['HMB_STATE_DIR'])))

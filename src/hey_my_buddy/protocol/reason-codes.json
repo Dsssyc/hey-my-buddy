@@ -193,6 +193,7 @@
   "not-enabled": [],
   "router-abstained": [],
   "router-all-unavailable": [],
+  "router-budget-exhausted": [],
   "router-not-responding": ["seconds"],
   "router-catalog-unavailable": [
     "cause"

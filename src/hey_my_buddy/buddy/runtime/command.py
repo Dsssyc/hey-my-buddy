@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import math
 import os
 import shutil
 import subprocess
@@ -69,9 +68,7 @@ class CommandAdapter(Adapter):
         finally:
             os.close(stdout)
             os.close(stderr)
-        handle = ProcessHandle(process, stop_channel="signal", log_paths=log_paths)
-        handle.deadline = math.inf
-        return handle
+        return ProcessHandle(process, stop_channel="signal", log_paths=log_paths)
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
         shutdown_confirmed = handle.shutdown_confirmed()

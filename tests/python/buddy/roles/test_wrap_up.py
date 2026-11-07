@@ -67,12 +67,12 @@ class RoleStopTests(unittest.TestCase):
                         "executionLiveFile": str(self.root / "execution-live.json"),
                         "live": {"instanceId": "a" * 64, "token": "b" * 64},
                         "inputFile": str(self.root / "turn-input.json"),
-                        "outputFile": str(self.root / "turn-output.json"), "timeoutSeconds": None}
+                        "outputFile": str(self.root / "turn-output.json")}
         self.identity = request_for({**self.control, "timeoutSeconds": 60}).identity
 
     def _stop_handle(self):
         return run_execution.InlineRunHandle(
-            {**self.control, "timeoutSeconds": 60}, self.identity, grace_seconds=0)
+            {**self.control, "timeoutSeconds": 60}, self.identity)
 
     def test_host_stop_signals_once_and_keeps_original_deadline(self):
         handle = self._stop_handle()
@@ -169,7 +169,7 @@ class RoleStopTests(unittest.TestCase):
             return deadline + 1 if late_now[0] else native_clock()
         private_json(Path(control["inputFile"]), {"taskId": "task-stop", "attemptId": "attempt-stop",
                      "generation": 1, "turnId": "turn-stop", "resumeMode": "initial"})
-        handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
+        handle = run_execution.InlineRunHandle(control, request.identity)
         handle.wrap_up_started = True
         handle.grace_deadline = deadline
         handle.cancel_requested = True
@@ -219,7 +219,7 @@ class RoleStopTests(unittest.TestCase):
 
     def _finished_handle(self, result, code, *, initiator="host", **values):
         handle = run_execution.InlineRunHandle(
-            {**self.control, "timeoutSeconds": 60}, self.identity, grace_seconds=0)
+            {**self.control, "timeoutSeconds": 60}, self.identity)
         handle.result = result
         handle.request = self.last_request
         handle.verdict = self.last_verdict
@@ -503,7 +503,6 @@ class RoleStopTests(unittest.TestCase):
                    "nativeRoot": str(ensure_private_dir(self.root / "native")),
                    "sessionRecordPath": str(self.root / "session.jsonl"),
                    "executionLiveFile": str(self.root / "execution-live.json"),
-                   "timeoutSeconds": None,
                    "outputFile": str(context.turn_output_file())}
         identity = rc.RunIdentity(task_id="task-stop", attempt_id="attempt-stop", generation=1,
                                   invocation_id="first-invocation", turn_id="turn-stop",
@@ -538,7 +537,7 @@ class RoleStopTests(unittest.TestCase):
             with self.subTest(initiator=initiator):
                 native_path(context.turn_output_file()).unlink(missing_ok=True)
                 record = run_execution._worker_result(result, control, turn_input, request.input_text)
-                handle = run_execution.InlineRunHandle(control, identity, grace_seconds=0)
+                handle = run_execution.InlineRunHandle(control, identity)
                 handle.turn_record = record
                 handle.request = request
                 handle.result = result

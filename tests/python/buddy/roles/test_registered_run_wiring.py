@@ -35,9 +35,9 @@ class InlineModelStartTests(unittest.TestCase):
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 request = full_request(root)
-                control = {"harness": request.harness, "operation": operation, "timeoutSeconds": None,
+                control = {"harness": request.harness, "operation": operation,
                            "privateRoot": str(root / "run")}
-                handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
+                handle = run_execution.InlineRunHandle(control, request.identity)
                 entered = threading.Event()
                 release = threading.Event()
                 observed = []

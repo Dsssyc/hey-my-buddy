@@ -31,14 +31,13 @@ function invalid(parse: () => unknown, key: string) {
 }
 
 describe("authenticated snapshot read boundaries", () => {
-  it("preserves unknown fields and the untrimmed session id", async () => {
+  it("preserves unknown snapshot fields and the untrimmed session id", async () => {
     const consoleSession = { id: " session ", extra: { retained: true } };
-    const value = { ...snapshot, consoleSession, extra: true,
-      configuration: { ...configuration, extra: true } };
+    const value = { ...snapshot, consoleSession, extra: true };
     const parsed = await apiFor(value).snapshot();
     expect(parsed).toMatchObject(value);
     expect(parsed.consoleSession).toBe(consoleSession);
-    expect(parsed.configuration).toBe(value.configuration);
+    expect(parsed.configuration).toBe(configuration);
   });
   it("distinguishes snapshot, session, access and reminder refusals", async () => {
     for (const consoleSession of [undefined, null, [], {}, { id: "" }, { id: " \n " }, { id: 3 }]) {
@@ -128,18 +127,15 @@ describe("access, reminders and policy settings", () => {
       ...[0, 1.5, unsafe, "1", null].map(revision => ({ ...reminders, revision })),
       ...["", "not-a-date", 0, null].map(updatedAt => ({ ...reminders, updatedAt }))]) invalid(() => parseReminderSettings(value), "reminders");
   });
-  it("allows unknown configuration data and distinct whitespace ids, but rejects retired keys even when undefined", () => {
-    expect(validRoutingConfiguration({ ...configuration, extra: true })).toBe(true);
-    for (const key of ["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId", "routingBudget", "profileBudget", "routingBudgetLimits"]) {
-      expect(validRoutingConfiguration({ ...configuration, [key]: undefined })).toBe(false);
-    }
+  it("rejects unknown configuration data and accepts only the current response-wait range", () => {
+    expect(validRoutingConfiguration({ ...configuration, extra: true })).toBe(false);
     for (const [key, values] of Object.entries({ routerBuddyIds: [null, undefined, [" "], ["a", "a"], [1]],
       routerRetryIntervalSeconds: [null, undefined, 0, 1.5, 2147483648, "1"],
       defaultRoutingMode: [null, undefined, "other"],
-      modelResponseWaitSeconds: [null, undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "60"] })) {
+      modelResponseWaitSeconds: [null, undefined, 0, -1, 1.5, 86401, "60"] })) {
       for (const value of values) expect(validRoutingConfiguration({ ...configuration, [key]: value })).toBe(false);
     }
-    for (const mode of ["fast", "review"]) for (const seconds of [1, 60, 2147483648, Number.MAX_SAFE_INTEGER]) {
+    for (const mode of ["fast", "review"]) for (const seconds of [1, 60, 86400]) {
       expect(validRoutingConfiguration({ ...configuration, routerRetryIntervalSeconds: 2147483647,
         defaultRoutingMode: mode, modelResponseWaitSeconds: seconds })).toBe(true);
     }

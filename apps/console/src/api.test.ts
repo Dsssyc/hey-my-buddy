@@ -21,6 +21,8 @@ describe("L4 ordered Router list configuration", () => {
     }
     expect(validRoutingConfiguration({ ...current, modelResponseWaitSeconds: 0 })).toBe(false);
     expect(validRoutingConfiguration({ ...current, modelResponseWaitSeconds: 1 })).toBe(true);
+    expect(validRoutingConfiguration({ ...current, modelResponseWaitSeconds: 86400 })).toBe(true);
+    expect(validRoutingConfiguration({ ...current, modelResponseWaitSeconds: 86401 })).toBe(false);
     expect(validRoutingConfiguration({ ...current, defaultRoutingMode: "other" })).toBe(false);
     expect(validRoutingConfiguration({ ...current, routerBuddyIds: undefined })).toBe(false);
     expect(validRoutingConfiguration({ ...current, routerBuddyIds: [""] })).toBe(false);

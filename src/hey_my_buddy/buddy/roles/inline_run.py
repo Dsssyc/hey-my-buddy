@@ -323,8 +323,9 @@ def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
                     "usage": _wrap_up_usage(first, result),
                     "session_record_failure": first.session_record_failure or result.session_record_failure,
                 })
-    verdict = {"stopReason": correction.stop_reason if correction is not None else None,
-               "elapsedMs": round((time.monotonic() - started) * 1000)}
+    verdict = {"elapsedMs": round((time.monotonic() - started) * 1000)}
+    if control["operation"] == "fast":
+        verdict["stopReason"] = correction.stop_reason
     code = 0 if result.end.status == "ok" else 1
     if control["operation"] == "worker":
         delivered = False

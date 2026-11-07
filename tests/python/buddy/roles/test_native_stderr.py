@@ -57,7 +57,7 @@ def assert_summary_stderr(self, module, *, harness, spec, cwd, native_root, conf
         configure(services, "summary invocation stderr")
         return module.run(summary_request, services=services, observer=observer, cancelled=cancelled)
 
-    handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
+    handle = run_execution.InlineRunHandle(control, request.identity)
     with mock.patch.object(inline_run, "run_harness", side_effect=run_summary):
         _, summary_request, summary, delivered, expired = inline_run._summary_run(
             control, request, first, module, time.monotonic() + 30, handle)

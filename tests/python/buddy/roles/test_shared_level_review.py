@@ -67,14 +67,14 @@ class _ReviewCases:
             "stateDir": str(self.base / "state"),
             "directory": str(root), "nativeRoot": str(root / "native"),
             "sessionRecordPath": str(root / "session.jsonl"), "cwd": str(cwd),
-            "timeoutSeconds": None, "canCorrect": False,
+            "canCorrect": False,
             "readOnlyRequest": {"prompt": "Choose the legal buddy",
                                 "outputSchema": SCHEMA,
                                 "captureEvidence": False},
         }
         identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                invocation_id=control["invocationId"])
-        handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
+        handle = run_execution.InlineRunHandle(control, identity)
         with mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)):
             result, request, verdict, code = inline_run.execute(control, handle)
         payload = run_execution._review_result(result, request, verdict)

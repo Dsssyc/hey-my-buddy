@@ -30,6 +30,12 @@ describe("the program reason catalog", () => {
     expect(reasonText({ code: "router-not-responding", params: { seconds: 60 } })).toBe(router);
     expect(i18n.t("buddies:roles.records.notResponding")).toBe(count);
   });
+  it("explains the historical Router budget reason in both languages", () => {
+    setLanguageChoice("zh");
+    expect(reasonText({ code: "router-budget-exhausted", params: {} })).toBe("0.65.0 之前的这次 Router 调用达到时限或工具调用上限。");
+    setLanguageChoice("en");
+    expect(reasonText({ code: "router-budget-exhausted", params: {} })).toBe("Before 0.65.0, this Router call reached its time or tool-call limit.");
+  });
   it("has exactly the protocol's codes as its Chinese leaves", () => {
     expect(Object.values(zh).every(value => typeof value === "string")).toBe(true);
     expect(Object.keys(zh).sort()).toEqual(Object.keys(codes).sort());

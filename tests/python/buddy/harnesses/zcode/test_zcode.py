@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import tempfile
 import time
@@ -393,14 +392,12 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertEqual(outcome.result["turn"]["outcome"]["summary"], "fixture work completed")
-        self.assertEqual(handle.deadline, math.inf)
 
     def test_absent_budget_still_honors_explicit_cancellation(self):
         context = self.context("hang", timeout=None)
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertEqual(handle.deadline, math.inf)
         self.wait_native_input(context)
         self.adapter.cancel(handle)
         self.assertIsNotNone(handle.wait(15))

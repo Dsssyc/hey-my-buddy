@@ -115,6 +115,7 @@ export default {
   "not-enabled": "该 buddy 未启用。",
   "router-abstained": "Router 弃选，等待 Host 决定。",
   "router-all-unavailable": "列表中的 Router 当前均不可用。",
+  "router-budget-exhausted": "0.65.0 之前的这次 Router 调用达到时限或工具调用上限。",
   "router-not-responding": "Router 的模型在 {{seconds}} 秒内没有开始作答。",
   "router-catalog-unavailable": "Router 的目录不可用：{{cause}}",
   "router-disabled": "Router 已停用。",

@@ -353,16 +353,16 @@ export type ModelServiceConcurrencySetting = ModelService & { limit: number };
 export type ModelServiceConcurrencyEntry = ModelServiceConcurrencySetting & { active: number };
 const routingMode = z.enum(["fast", "review"]);
 export type RoutingMode = z.infer<typeof routingMode>;
-/** The ordered Router list; retired single/dual slot keys are refused even when undefined. */
-export const configurationSchema = z.looseObject({
+/** The current Router settings and service observation fields. */
+export const configurationSchema = z.strictObject({
   routerBuddyIds: z.array(nonblankString).refine(ids => new Set(ids).size === ids.length),
   routerRetryIntervalSeconds: integer.min(1).max(2147483647), defaultRoutingMode: routingMode,
-  modelResponseWaitSeconds: integer.min(1).max(Number.MAX_SAFE_INTEGER),
+  modelResponseWaitSeconds: integer.min(1).max(86400),
   explorationEvery: integer.min(2).nullable(),
   maintenanceBuddyId: nonblankString.nullable().optional(), maintenanceIntervalSeconds: integer.positive().optional(),
   profileBuddyId: nonblankString.nullable(),
   profileUnavailableReason: reason.nullish().optional(),
-}).refine(config => !["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId", "routingBudget", "profileBudget", "routingBudgetLimits"].some(key => key in config));
+});
 export type Configuration = z.infer<typeof configurationSchema>;
 
 /** The complete published four-part identity of one listed buddy. */

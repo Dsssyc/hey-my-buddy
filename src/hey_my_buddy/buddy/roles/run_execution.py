@@ -6,7 +6,6 @@ service naming, provenance, storage and discovery come only from the registry.
 from __future__ import annotations
 
 import hashlib
-import math
 import os
 import shutil
 import secrets
@@ -73,7 +72,7 @@ def execution_live_server():
 class InlineRunHandle:
     """The held result and stop intent for a native run in this process."""
 
-    def __init__(self, control: dict, identity: RunIdentity, *, grace_seconds: float):
+    def __init__(self, control: dict, identity: RunIdentity):
         self.role_run_control = control
         self.role_run_identity = identity
         self.role_run_original_identity = identity
@@ -96,7 +95,6 @@ class InlineRunHandle:
         self.force_cancelled = threading.Event()
         self.done = threading.Event()
         self.error: BaseException | None = None
-        self.deadline = math.inf
         self.thread: threading.Thread | None = None
         self.live_endpoint = None
         self.model_responded = False
@@ -105,9 +103,10 @@ class InlineRunHandle:
     def observe(self, observer, facts):
         """Retain native model output before the role judges the same facts."""
         if facts.get("modelResponded") is True:
-            self.model_responded = True
             if self.model_response_wait is not None:
                 self.model_response_wait.responded(self)
+            else:
+                self.model_responded = True
         return observer(facts)
 
     @property
@@ -278,8 +277,6 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
                         "elapsedMs": verdict["elapsedMs"]}
     if tools is not None:
         payload["toolEvidence"] = tools
-    if result.end.reason_code == "observer-interrupt" and verdict.get("stopReason"):
-        payload.update(status="error", code=verdict["stopReason"], error="The structured call observer stopped the run")
     if payload["status"] == "ok":
         raw = (result.value.parsed.value if result.value.parsed is not None else result.value.raw
                ) if result.value is not None else None
@@ -548,12 +545,12 @@ def profile_request(control: dict, module, *, round_index: int = 0,
 
 
 def _launch(control: dict, context: ExecutionContext, *, environment: dict,
-            identity: RunIdentity, grace_seconds: float = 0) -> InlineRunHandle:
+            identity: RunIdentity) -> InlineRunHandle:
     ensure_private_dir(Path(control["privateRoot"]))
     control.update(stateDir=environment["HMB_STATE_DIR"], invocationId=identity.invocation_id,
                    taskId=identity.task_id, attemptId=identity.attempt_id,
                    generation=identity.generation)
-    handle = InlineRunHandle(control, identity, grace_seconds=grace_seconds)
+    handle = InlineRunHandle(control, identity)
     handle.model_response_wait = context.model_response_wait
     def run() -> None:
         from .inline_run import execute
@@ -620,7 +617,6 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> InlineR
         "sessionRecordPath": context.session_record_path,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "cwd": str(cwd.resolve()),
-        "timeoutSeconds": None,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "noToolRequest": request_values,
         "maintenance": (context.spec.get("decision") or {}).get("kind") == "maintain",
@@ -652,7 +648,7 @@ def start_review(name: str, context: ExecutionContext, request) -> InlineRunHand
         "directory": str(context.directory),
         "nativeRoot": str(ensure_private_dir(context_root(context, name) / "review-native")),
         "sessionRecordPath": context.session_record_path,
-        "cwd": request.cwd, "timeoutSeconds": None,
+        "cwd": request.cwd,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "canCorrect": adapter(name).native_resume,
@@ -661,7 +657,7 @@ def start_review(name: str, context: ExecutionContext, request) -> InlineRunHand
     }
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
-    return _launch(control, context, environment=environment, identity=identity, grace_seconds=10)
+    return _launch(control, context, environment=environment, identity=identity)
 
 
 def start_profile(name: str, context: ExecutionContext, request) -> InlineRunHandle:
@@ -673,14 +669,13 @@ def start_profile(name: str, context: ExecutionContext, request) -> InlineRunHan
         "directory": str(context.directory),
         "nativeRoot": str(ensure_private_dir(context_root(context, name) / "profile-native")),
         "sessionRecordPath": context.session_record_path, "cwd": request.cwd,
-        "timeoutSeconds": None,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "profileRequest": {"prompt": request.prompt, "outputSchema": request.output_schema},
     }
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
-    return _launch(control, context, environment=context.environment, identity=identity, grace_seconds=10)
+    return _launch(control, context, environment=context.environment, identity=identity)
 
 
 class WorkerRunExecutor:
@@ -723,7 +718,7 @@ class WorkerRunExecutor:
             "directory": str(resolved_path(context.directory)),
             "privateRoot": str(context_root(context, self.name)), "nativeRoot": str(root),
             "sessionRecordPath": context.session_record_path,
-            "cwd": str(Path(context.cwd).resolve()), "timeoutSeconds": None,
+            "cwd": str(Path(context.cwd).resolve()),
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
             "taskFile": str(context.task_file()),
             "inquiry": {key: inquiry[key] for key in ("resultsPath",)},

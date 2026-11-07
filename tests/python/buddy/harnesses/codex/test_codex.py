@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import tempfile
 import time
@@ -420,7 +419,6 @@ class CodexAdapterTests(unittest.TestCase):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
-        self.assertEqual(handle.deadline, math.inf)
         self.assertIsNotNone(handle.wait(180), "Codex fixture controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -432,7 +430,6 @@ class CodexAdapterTests(unittest.TestCase):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
-        self.assertEqual(handle.deadline, math.inf)
         started = self.wait_native_turn_start()
         self.assertEqual(set(started), {"threadId", "turnId"})
         time.sleep(1.2)

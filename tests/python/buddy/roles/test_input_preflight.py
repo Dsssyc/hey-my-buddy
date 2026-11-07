@@ -88,7 +88,7 @@ class InitialCheckTests(unittest.TestCase):
         self.control = {"operation": "worker", "harness": "codex", "privateRoot": str(self.root),
             "nativeRoot": str(self.root / "native"), "stateDir": str(self.root),
             "sessionRecordPath": str(self.root / "session.jsonl"), "directory": str(self.root),
-            "cwd": str(self.root), "invocationId": "invocation", "timeoutSeconds": None,
+            "cwd": str(self.root), "invocationId": "invocation",
             "inputFile": str(self.root / "input.json"), "taskFile": str(self.root / "task.txt"),
             "outputFile": str(self.root / "output.json"), "credentialFile": str(self.root / "credential.json"),
             "spec": {"provider": "fixture", "model": "fixture", "effort": "low"}}
@@ -120,7 +120,7 @@ class InitialCheckTests(unittest.TestCase):
             harness_version=native_version, native_request_sent=True, model_responded=False,
             native_admission_error=admission,
             stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone" if stopped else "unknown")))
-        handle = run_execution.InlineRunHandle(self.control, request.identity, grace_seconds=0)
+        handle = run_execution.InlineRunHandle(self.control, request.identity)
         select_limit = inline_run.select_input_limit
         with mock.patch.object(inline_run, "run_seam", return_value=self.module), \
              mock.patch.object(inline_run, "selected", return_value={"version": "0.164.0"}), \
@@ -221,7 +221,10 @@ class InitialCheckTests(unittest.TestCase):
                 payload = project(result, request, verdict)
                 self.assertEqual(payload["code"], INPUT_REJECTED)
                 self.assertNotIn("turn", payload)
-                self.assertIsNone(verdict["stopReason"])
+                if operation == "review":
+                    self.assertNotIn("stopReason", verdict)
+                else:
+                    self.assertIsNone(verdict["stopReason"])
 
 
 if __name__ == "__main__":

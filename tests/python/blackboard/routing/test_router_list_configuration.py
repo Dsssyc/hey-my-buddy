@@ -5,6 +5,7 @@ identity-complete buddies and nothing more: enabled, availability, health, quota
 mode eligibility stay resolver concerns.
 """
 from copy import deepcopy
+import sqlite3
 import unittest
 
 from support import BoardTestCase
@@ -12,6 +13,7 @@ from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.blackboard.store.schema_37_38 import MAX_MODEL_RESPONSE_WAIT_SECONDS
 from hey_my_buddy.errors import BoardError
 
 A = "dsh:fixture:alpha:max"
@@ -101,12 +103,27 @@ class RouterListConfigurationTests(BoardTestCase):
                       {"routerRetryIntervalSeconds": 0}, {"defaultRoutingMode": "auto"},
                       {"routingBudget": "brief"}, {"profileBudget": "deep"},
                       {"modelResponseWaitSeconds": 0}, {"modelResponseWaitSeconds": True},
+                      {"modelResponseWaitSeconds": MAX_MODEL_RESPONSE_WAIT_SECONDS + 1},
+                      {"modelResponseWaitSeconds": 2**100},
                       {"unknownField": 1}, {}, []):
             with self.subTest(value=value), self.assertRaises(BoardError) as caught:
                 self.publish(value)
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         # The rejected patches changed nothing.
         self.assertEqual(console_snapshot_projection(self.board_.service)[0]["configuration"]["routerBuddyIds"], [])
+
+    def test_model_response_wait_bounds_reach_storage_and_reject_overflow_before_write(self):
+        self.publish({"modelResponseWaitSeconds": MAX_MODEL_RESPONSE_WAIT_SECONDS})
+        self.assertEqual(self.stored()["settings"][1], MAX_MODEL_RESPONSE_WAIT_SECONDS)
+        before = self.stored()
+        with self.assertRaises(BoardError) as caught:
+            self.publish({"modelResponseWaitSeconds": 2**100})
+        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+        self.assertEqual(self.stored(), before)
+        with self.board_.store.db.write() as db:
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute("UPDATE router_settings SET model_response_wait_seconds=? WHERE id=1",
+                           (MAX_MODEL_RESPONSE_WAIT_SECONDS + 1,))
 
     def test_reorder_add_remove_and_scalar_settings_survive_real_save_and_read(self):
         self.publish({"routerBuddyIds": [A]})

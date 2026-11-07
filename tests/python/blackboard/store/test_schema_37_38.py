@@ -11,7 +11,9 @@ from hey_my_buddy.blackboard.store import (
     schema_30_31, schema_31_32, schema_32_33, schema_33_34,
     schema_34_35, schema_35_36, schema_36_37,
 )
-from hey_my_buddy.blackboard.store.schema_37_38 import upgrade as step_upgrade
+from hey_my_buddy.blackboard.store.schema_37_38 import (
+    DEFAULT_MODEL_RESPONSE_WAIT_SECONDS, MAX_MODEL_RESPONSE_WAIT_SECONDS, upgrade as step_upgrade,
+)
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 
 
@@ -74,7 +76,8 @@ class Schema37To38Tests(unittest.TestCase):
                 "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '38')
             settings = connection.execute('SELECT * FROM router_settings WHERE id=1').fetchone()
             self.assertEqual(dict(settings), {
-                'id': 1, 'default_mode': 'review', 'model_response_wait_seconds': 60,
+                'id': 1, 'default_mode': 'review',
+                'model_response_wait_seconds': DEFAULT_MODEL_RESPONSE_WAIT_SECONDS,
                 'retry_interval_seconds': 47, 'maintenance_buddy_id': settings['profile_buddy_id'],
                 'maintenance_interval_seconds': 7200, 'exploration_every': 7,
                 'profile_buddy_id': settings['profile_buddy_id'],
@@ -87,6 +90,12 @@ class Schema37To38Tests(unittest.TestCase):
             connection.rollback()
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute("UPDATE router_settings SET model_response_wait_seconds='invalid' WHERE id=1")
+            connection.rollback()
+            connection.execute('UPDATE router_settings SET model_response_wait_seconds=? WHERE id=1',
+                               (MAX_MODEL_RESPONSE_WAIT_SECONDS,))
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute('UPDATE router_settings SET model_response_wait_seconds=? WHERE id=1',
+                                   (MAX_MODEL_RESPONSE_WAIT_SECONDS + 1,))
             connection.rollback()
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute('DELETE FROM model_correspondences WHERE rowid=?', (earliest,))

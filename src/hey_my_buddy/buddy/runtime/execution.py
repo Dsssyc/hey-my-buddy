@@ -29,7 +29,6 @@ import c_two as cc
 
 from ...text import configure_utf8_output
 from ...paths import native_path
-from ...private_files import read_bytes
 from ...errors import BoardError
 from ...protocol.client import BoardClient
 from ...protocol import activity as activity_module
@@ -51,6 +50,7 @@ from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_dire
 
 fsync_json = execution_protocol.fsync_json
 BUDGET = execution_protocol.BUDGET
+TIMEOUT_GRACE_SECONDS = 10.0
 PREFLIGHT_RETRY_SECONDS = 15.0
 PREFLIGHT_MAX_RETRY_SECONDS = 180.0
 (
@@ -87,7 +87,7 @@ def random_person_name() -> str:
     return secrets.choice(_PERSON_NAMES)
 
 class ModelResponseWait:
-    """Execution-owned start wait shared by its supervisor and native observer."""
+    """Execution-owned start wait; the service's file deadline is a fallback."""
 
     def __init__(self, path: Path, binding: dict, seconds: int, *, notify=None):
         self.path = path
@@ -95,43 +95,56 @@ class ModelResponseWait:
         self.seconds = seconds
         self.notify = notify
         self.deadline = None
+        self.timed_out = False
         self.failure = None
         self.lock = threading.RLock()
 
     def begin(self):
         with self.lock:
-            if native_path(self.path).exists():
-                _check_budget_binding(self.path, self.binding)
             self.deadline = time.monotonic() + self.seconds
-            fsync_json(self.path, {"binding": self.binding, "deadline": self.deadline})
-            if self.notify is not None:
-                self.notify()
+            self.timed_out = False
+            deadline = self.deadline
+        fsync_json(self.path, {"binding": self.binding,
+                              "deadline": deadline + TIMEOUT_GRACE_SECONDS})
+        if self.notify is not None:
+            self.notify()
+
+    def raise_failure(self):
+        with self.lock:
+            if self.failure is not None:
+                raise self.failure
 
     def responded(self, handle):
         with self.lock:
-            # Native drivers may normalize an observer's I/O failure into a
-            # RunResult. Supervision must still see this execution-file failure.
-            if self.failure is not None:
-                raise self.failure
-            if self.deadline is not None and handle.model_responded:
+            # A driver may normalize this I/O failure; supervision retains it.
+            self.raise_failure()
+            if self.timed_out:
+                return
+            handle.model_responded = True
+            if self.deadline is not None:
                 try:
-                    _check_budget_binding(self.path, self.binding)
                     native_path(self.path).unlink()
                 except Exception as error:
                     self.failure = error
                     raise
                 self.deadline = None
 
+    def finished(self):
+        with self.lock:
+            self.raise_failure()
+            if self.deadline is not None:
+                native_path(self.path).unlink()
+                self.deadline = None
+
     def expired(self, handle):
         with self.lock:
-            self.responded(handle)
-            return self.deadline is not None and time.monotonic() >= self.deadline
-
-
-def _check_budget_binding(path: Path, binding: dict):
-    value = decode_strict_json(read_bytes(path))
-    if not isinstance(value, dict) or value.get("binding") != binding:
-        raise BoardError("INVALID_ARGUMENT", "The execution wait file belongs to another execution")
+            self.raise_failure()
+            if self.timed_out:
+                return True
+            if handle.model_responded:
+                self.responded(handle)
+            self.timed_out = self.deadline is not None and time.monotonic() >= self.deadline
+            return self.timed_out
 
 
 class LiveEndpointDescriptor(InternalModel):
@@ -484,12 +497,7 @@ class Execution:
                     delay = min(10.0, delay * 2)
         receipt = self.execute()
         if receipt["report"]["shutdownConfirmed"] is True:
-            budget_path = self.directory / BUDGET
-            if native_path(budget_path).exists():
-                _check_budget_binding(budget_path, {"taskId": self.claim["task"]["taskId"],
-                    "attemptId": self.claim["attempt"]["attemptId"],
-                    "generation": self.claim["attempt"]["generation"]})
-                native_path(budget_path).unlink()
+            native_path(self.directory / BUDGET).unlink(missing_ok=True)
         self.control.raise_fatal()
         return deliver_receipt(self.client, receipt, self.directory, nonce=self.nonce, log=self.log,
                                flush_hints=self._flush_delivery_hints)
@@ -784,14 +792,15 @@ class Execution:
         while True:
             control.raise_fatal()
             finished = handle.wait(timeout=0.25) is not None
+            if finished:
+                if model_wait is not None:
+                    model_wait.finished()
+                break
             if model_wait is not None and model_wait.expired(handle):
                 timed_out = True
                 self.log("Router model did not start responding; cancelling this owned process session")
-                if not finished:
-                    role_seam.worker_cancel(implementation, handle)
-                    handle.wait(timeout=None)
-                break
-            if finished:
+                role_seam.worker_cancel(implementation, handle)
+                handle.wait(timeout=None)
                 break
             if (handle.grace_deadline is not None and time.monotonic() >= handle.grace_deadline
                     and not handle.force_stop_requested):
@@ -829,7 +838,7 @@ class Execution:
             outcome.status = "failed"
             outcome.error = f"the Router model did not start responding within {wait_seconds}s"
             outcome.result = {**outcome.result, "status": "error", "code": "router-not-responding",
-                              "seconds": wait_seconds}
+                              "modelResponded": False}
         # The genuine reason this attempt stopped. It is recorded with the receipt,
         # so a cancelled task, an expired deadline, a harness failure and a completed
         # turn stay distinguishable even after a transport outage.

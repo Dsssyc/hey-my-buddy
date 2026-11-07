@@ -89,7 +89,7 @@ def _freeze_review_run(harness, context, request, *, mutation, stopped, shutdown
         "executionLiveFile": str(context.directory / "execution-live.json"),
         "nativeRoot": str(ensure_private_dir(context_root(context, harness) / "review-native")),
         "sessionRecordPath": context.session_record_path,
-        "cwd": request.cwd, "timeoutSeconds": None,
+        "cwd": request.cwd,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         # 生产 start_review 走注册表读本类属性；不用探针可被测试替换的 adapter_for。
@@ -145,14 +145,14 @@ def _freeze_review_run(harness, context, request, *, mutation, stopped, shutdown
     verdict = {"stopReason": None, "elapsedMs": elapsed_ms}
     projected = run_execution._review_result(result, built_request, verdict)
     native_path(Path(context.log_paths()["stdout"])).write_text(canonical_json(projected) + "\n", encoding="utf-8", newline="\n")
-    handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
+    handle = run_execution.InlineRunHandle(control, identity)
     handle.result = result
     handle.request = built_request
     handle.verdict = verdict
     handle.exit_code = 0
     handle.done.set()
     handle.model_responded = model_responded
-    handle.wait = Mock(side_effect=handle.wait)
+    handle.wait = Mock(side_effect=handle.wait if model_responded else [None, 0])
     handle.shutdown_confirmed = Mock(return_value=stopped and shutdown)
     handle.terminate = Mock(side_effect=handle.terminate)
     return handle
@@ -342,7 +342,7 @@ class RouterProbeTests(unittest.TestCase):
             report, _, handle = self.mock_execute(model_responded=False)
         self.assertEqual(report["status"], "failed")
         self.assertEqual(report["reason"], {"code": "router-not-responding", "params": {"seconds": 60}})
-        handle.wait.assert_called_once_with(timeout=0.25)
+        self.assertEqual(handle.wait.call_args_list, [unittest.mock.call(timeout=0.25), unittest.mock.call(timeout=None)])
 
     def test_more_than_two_correction_turns_or_identity_mismatch_fails(self):
         report, _, _ = self.mock_execute(correction_count=2)

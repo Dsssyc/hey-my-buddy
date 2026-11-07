@@ -117,7 +117,7 @@ def start(harness, context, request, fixture, options):
                             "captureEvidence": request.capture_evidence},
     }
     built_request, *_ = run_execution.review_request(control, SimpleNamespace(prepare_run_services=None))
-    handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
+    handle = run_execution.InlineRunHandle(control, identity)
     handle.request = built_request
     handle.model_response_wait = context.model_response_wait
     mode = options.get("mode", "select_first")

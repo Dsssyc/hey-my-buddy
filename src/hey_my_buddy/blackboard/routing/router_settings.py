@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 
 from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
+from ..store.schema_37_38 import DEFAULT_MODEL_RESPONSE_WAIT_SECONDS, MAX_MODEL_RESPONSE_WAIT_SECONDS
 
 FIELDS = frozenset({"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "modelResponseWaitSeconds",
                     "maintenanceBuddyId", "maintenanceIntervalSeconds", "profileBuddyId", "explorationEvery"})
@@ -15,7 +16,7 @@ EXPLORATION_EVERY_MIN = 2
 
 
 DEFAULT_ROUTER_SETTINGS = {"routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
-                           "defaultRoutingMode": "fast", "modelResponseWaitSeconds": 60,
+                           "defaultRoutingMode": "fast", "modelResponseWaitSeconds": DEFAULT_MODEL_RESPONSE_WAIT_SECONDS,
                            "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600,
                            "profileBuddyId": None, "explorationEvery": 5}
 
@@ -79,8 +80,9 @@ def validate_router_settings_patch(value: object) -> dict:
         result["defaultRoutingMode"] = _choice(entry["defaultRoutingMode"], MODES, "defaultRoutingMode")
     if "modelResponseWaitSeconds" in entry:
         seconds = entry["modelResponseWaitSeconds"]
-        if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:
-            raise BoardError("INVALID_ARGUMENT", "modelResponseWaitSeconds must be a positive integer")
+        if isinstance(seconds, bool) or not isinstance(seconds, int) or not 1 <= seconds <= MAX_MODEL_RESPONSE_WAIT_SECONDS:
+            raise BoardError("INVALID_ARGUMENT",
+                             f"modelResponseWaitSeconds must be between 1 and {MAX_MODEL_RESPONSE_WAIT_SECONDS} seconds")
         result["modelResponseWaitSeconds"] = seconds
     if "maintenanceBuddyId" in entry:
         buddy_id = entry["maintenanceBuddyId"]

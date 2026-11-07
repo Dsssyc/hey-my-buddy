@@ -19,7 +19,7 @@ class ProfileRuntimeTests(unittest.TestCase):
             "operation": "profile", "harness": "codex", "privateRoot": str(root / "invocation"),
             "nativeRoot": str(root / "native"), "stateDir": str(root),
             "sessionRecordPath": None, "cwd": str(root / "cwd"),
-            "timeoutSeconds": None, "taskId": "task", "attemptId": "attempt", "generation": 1,
+            "taskId": "task", "attemptId": "attempt", "generation": 1,
             "spec": {"provider": "openai", "model": "gpt", "effort": "low"},
             "profileRequest": {"prompt": "Profile this model", "outputSchema": {"type": "object"}},
         }
@@ -32,7 +32,7 @@ class ProfileRuntimeTests(unittest.TestCase):
         publications = []
         handle = run_execution.InlineRunHandle(control, rc.RunIdentity(
             task_id=control["taskId"], attempt_id=control["attemptId"],
-            generation=control["generation"], invocation_id="profile-fixture"), grace_seconds=0)
+            generation=control["generation"], invocation_id="profile-fixture"))
 
         wait_path = Path(control["stateDir"]) / "execution-budget.json"
         handle.model_response_wait = execution_module.ModelResponseWait(wait_path,

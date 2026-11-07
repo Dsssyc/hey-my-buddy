@@ -323,9 +323,9 @@ def initialize_configuration(connection) -> dict:
     from .router_settings import DEFAULT_ROUTER_SETTINGS
     settings = {**DEFAULT_ROUTER_SETTINGS,
                 "routerBuddyIds": list(DEFAULT_ROUTER_SETTINGS["routerBuddyIds"])}
-    # Other settings take the current schema defaults.
-    connection.execute("INSERT INTO router_settings(id,default_mode,model_response_wait_seconds,retry_interval_seconds) VALUES(1,?,?,?)",
-                       (settings["defaultRoutingMode"], settings["modelResponseWaitSeconds"], settings["routerRetryIntervalSeconds"]))
+    # The model response wait and other omitted settings take the schema defaults.
+    connection.execute("INSERT INTO router_settings(id,default_mode,retry_interval_seconds) VALUES(1,?,?)",
+                       (settings["defaultRoutingMode"], settings["routerRetryIntervalSeconds"]))
     return settings
 
 
@@ -444,10 +444,12 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
     return RouterResolution(None, None, None, facts, tuple(inspections), problem)
 
 
-def routing_facts(request: dict, *, actor: dict | None = None) -> dict:
+def routing_facts(request: dict, *, actor: dict | None = None, include_wait: bool = True) -> dict:
     facts = {key: request.get(key) for key in
              ("routerBuddyIds", "routerIdentities", "routerBuddyId", "routerBuddy", "routerIndex",
-              "routingMode", "modelResponseWaitSeconds", "routerRetryIntervalSeconds", "routerProblem")}
+              "routingMode", "routerRetryIntervalSeconds", "routerProblem")}
+    if include_wait:
+        facts["modelResponseWaitSeconds"] = request.get("modelResponseWaitSeconds")
     if actor is not None:
         facts.update(routerBuddyId=actor["buddyId"], routerBuddy=actor["buddy"],
                      routerIndex=actor["routerIndex"])

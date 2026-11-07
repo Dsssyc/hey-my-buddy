@@ -54,7 +54,7 @@ export default {
   },
   responseWait: {
     name: "等待模型开始作答（秒）",
-    invalid: "需要不小于 1 的整数",
+    invalid: "需要 1 到 86400 的整数",
   },
   exploration: {
     name: "探索名额", on: "每 N 个给 1 个", off: "关闭", interval: "探索间隔微任务数",

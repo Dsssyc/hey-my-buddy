@@ -78,9 +78,9 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "input.json").write_text("{}", encoding="utf-8")
-            control = {"operation": "worker", "harness": "zcode", "timeoutSeconds": None,
+            control = {"operation": "worker", "harness": "zcode",
                        "inputFile": str(root / "input.json"), "nativeRoot": directory}
-            handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
+            handle = run_execution.InlineRunHandle(control, request.identity)
             with mock.patch.object(run_execution, "worker_request", return_value=(request, None, None, None, PromptText((("task", request.input_text),)).parts)), \
                  mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)), \
                  mock.patch.object(inline_run, "run_harness", return_value=result), \

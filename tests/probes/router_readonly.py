@@ -324,16 +324,17 @@ def run(args):
             no_response = False
             while True:
                 finished = handle.wait(timeout=0.25) is not None
+                if finished:
+                    model_wait.finished()
+                    break
                 if model_wait.expired(handle):
                     no_response = True
-                    if not finished:
-                        handle.terminate(grace_seconds=3)
-                        handle.wait(timeout=None)
-                    break
-                if finished:
-                    model_wait.responded(handle)
+                    handle.terminate(grace_seconds=3)
+                    handle.wait(timeout=None)
                     break
             result = read_only.collect(handle)
+            if no_response:
+                result.result["modelResponded"] = False
             report["controllerElapsedMs"] = round((time.monotonic() - started) * 1000)
             activity = context.directory / "activity.json"
             if activity.is_file() and not activity.is_symlink():

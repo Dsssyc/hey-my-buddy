@@ -1,9 +1,11 @@
 """Router list setting choices are independent of native availability and state."""
 from copy import deepcopy
 import unittest
+import threading
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router_settings import DEFAULT_ROUTER_SETTINGS, validate_router_settings_patch
+from hey_my_buddy.blackboard.store.schema_37_38 import MAX_MODEL_RESPONSE_WAIT_SECONDS
 
 BUDDY = "codex:openai:example:high"
 RETRY_MAX_SECONDS = 2147483647
@@ -15,6 +17,9 @@ class RouterSettingsTests(unittest.TestCase):
                                                   "defaultRoutingMode": "fast", "modelResponseWaitSeconds": 60,
                                                   "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600,
                                                   "profileBuddyId": None, "explorationEvery": 5})
+
+    def test_maximum_wait_leaves_room_for_condition_timeout_on_this_platform(self):
+        self.assertLess(MAX_MODEL_RESPONSE_WAIT_SECONDS + 10, threading.TIMEOUT_MAX)
 
     def test_patch_preserves_omissions_and_explicit_clear(self):
         self.assertEqual(validate_router_settings_patch({"modelResponseWaitSeconds": 45}),
@@ -32,6 +37,8 @@ class RouterSettingsTests(unittest.TestCase):
                       {"routingBudgetLimits": {}}, {"routingBudget": "brief"}, {"profileBudget": "deep"},
                       {"modelResponseWaitSeconds": None}, {"modelResponseWaitSeconds": True},
                       {"modelResponseWaitSeconds": 0}, {"modelResponseWaitSeconds": -1},
+                      {"modelResponseWaitSeconds": MAX_MODEL_RESPONSE_WAIT_SECONDS + 1},
+                      {"modelResponseWaitSeconds": 2**100},
                       {"modelResponseWaitSeconds": 1.5}, {"modelResponseWaitSeconds": "60"},
                       {"defaultRoutingMode": "auto"}, {"defaultRoutingMode": None},
                       {"routerBuddyIds": None}, {"routerBuddyIds": "solo"}, {"routerBuddyIds": (BUDDY,)},
@@ -49,6 +56,7 @@ class RouterSettingsTests(unittest.TestCase):
             with self.subTest(seconds=seconds):
                 self.assertEqual(validate_router_settings_patch({"routerRetryIntervalSeconds": seconds}),
                                  {"routerRetryIntervalSeconds": seconds})
+        for seconds in (1, MAX_MODEL_RESPONSE_WAIT_SECONDS):
             self.assertEqual(validate_router_settings_patch({"modelResponseWaitSeconds": seconds}),
                              {"modelResponseWaitSeconds": seconds})
 

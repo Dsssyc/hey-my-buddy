@@ -105,16 +105,17 @@ def run(args):
         no_response = False
         while True:
             finished = handle.wait(timeout=0.25) is not None
+            if finished:
+                model_wait.finished()
+                break
             if model_wait.expired(handle):
                 no_response = True
-                if not finished:
-                    implementation.cancel(handle)
-                    handle.wait(timeout=None)
-                break
-            if finished:
-                model_wait.responded(handle)
+                implementation.cancel(handle)
+                handle.wait(timeout=None)
                 break
         outcome = implementation.collect(handle, context)
+        if no_response:
+            outcome.result["modelResponded"] = False
         report.update(status='passed' if outcome.status == 'ok' and outcome.shutdown_confirmed else 'failed',
                       result=outcome.result, shutdownConfirmed=outcome.shutdown_confirmed, error=outcome.error)
         if no_response:

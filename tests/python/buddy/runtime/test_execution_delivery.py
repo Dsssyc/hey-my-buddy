@@ -583,18 +583,28 @@ class ExecutionDeliveryTests(unittest.TestCase):
         receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
         original = native_path(self.execution.directory / RECEIPT).read_bytes()
         budget = self.execution.directory / BUDGET
-        native_path(budget).write_text(json.dumps({"deadline": 1, "binding": {
-            "taskId": self.execution.claim["task"]["taskId"],
-            "attemptId": self.execution.claim["attempt"]["attemptId"],
-            "generation": self.execution.claim["attempt"]["generation"]}}), encoding="utf-8")
+        native_path(budget).write_text('{}', encoding="utf-8")
         unlink = Path.unlink
         def fail_budget(path, **kwargs):
             if path == native_path(budget):
                 raise OSError('budget cleanup failed')
             return unlink(path, **kwargs)
-        with mock.patch.object(self.execution, 'execute', return_value=receipt), \
+        with mock.patch('hey_my_buddy.protocol.process_identity._active_native_journal', None), \
+             mock.patch.object(self.execution, 'execute', return_value=receipt), \
              mock.patch.object(Path, 'unlink', autospec=True, side_effect=fail_budget):
             with self.assertRaisesRegex(OSError, 'budget cleanup failed'):
                 self.execution.run()
         self.assertEqual(native_path(self.execution.directory / RECEIPT).read_bytes(), original)
         self.execution.client.submit_result.assert_not_called()
+
+    def test_cleanup_does_not_read_the_private_wait_file_before_delivery(self):
+        from hey_my_buddy.protocol.execution import BUDGET
+        receipt = self.execution.receipt(CLAIM, {'status': 'ok', 'shutdownConfirmed': True}, self.execution.directory)
+        budget = self.execution.directory / BUDGET
+        native_path(budget).write_text('{"binding":"not-the-execution"}', encoding="utf-8")
+        with mock.patch('hey_my_buddy.protocol.process_identity._active_native_journal', None), \
+             mock.patch.object(self.execution, 'execute', return_value=receipt), \
+             mock.patch.object(entry, 'deliver_receipt', return_value=True) as deliver:
+            self.assertTrue(self.execution.run())
+        deliver.assert_called_once()
+        self.assertFalse(native_path(budget).exists())

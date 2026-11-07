@@ -136,6 +136,7 @@ describe("the Router list", () => {
     const f = fixture(snapshot({ routers: [MEDIUM_ID], extra: { decisions: Array.from({ length: 50 }, (_, i) => decision(`history-${i}`)) } as unknown as Partial<Snapshot> }));
     await openRoles(f);
     expect(responseWaitInput()).toHaveProperty("value", "60");
+    expect(responseWaitInput()).toHaveProperty("max", "86400");
     expect(screen.queryByRole("checkbox", { name: "自动采纳常规整理结果" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
     expect(screen.queryByRole("button", { name: "请求整理" })).toBeNull();
@@ -563,7 +564,7 @@ describe("the settings of the role", () => {
     expect(patchOf(f.published[0])).toEqual({ configuration: { modelResponseWaitSeconds: 30 } });
   });
 
-  it.each(["0", "9007199254740992", "2.5", ""])("keeps an invalid response wait %j in the draft and blocks publication", async value => {
+  it.each(["0", "86401", "2.5", ""])("keeps an invalid response wait %j in the draft and blocks publication", async value => {
     const f = fixture(snapshot());
     const user = userEvent.setup();
     await openRoles(f);

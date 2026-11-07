@@ -86,7 +86,6 @@ class ReviewObserver:
         self.correction = FastCorrection(
             output_schema, prompt,
             suffix=". Return exactly the supplied JSON Schema; do not repeat exploration.") if can_correct else None
-        self.stop_reason: str | None = None
 
     def observer(self, facts: Mapping) -> RunFeedback:
         if self.correction is not None and facts.get("settled"):

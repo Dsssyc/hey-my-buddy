@@ -1127,8 +1127,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
         error = receipt.get("error")
         span_routing = routing
         if isinstance(attempt_output, dict) and 'routingMode' in attempt_output:
-            span_routing = {**routing, **{key: value for key, value in router.routing_facts(attempt_output).items()
-                                          if key != "modelResponseWaitSeconds"}}
+            span_routing = {**routing, **router.routing_facts(attempt_output, include_wait=False)}
             if attempt_output.get('code') == 'router-review-unavailable':
                 span_routing.update(selectedBuddy=None,
                                     policyCheck=None, usage=None)

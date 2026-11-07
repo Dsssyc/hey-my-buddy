@@ -1293,7 +1293,7 @@ class WorkerSeamTests(CodexSeamCase):
                            "sessionRecordPath": request.session_record_path,
                            "inputFile": str(input_file), "outputFile": str(root / "turn-output.json")}
                 control.update(timeoutSeconds=30)
-                handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
+                handle = run_execution.InlineRunHandle(control, request.identity)
                 with mock.patch.object(run_execution, "worker_request", return_value=(
                         request, self.worker_services(), lambda _facts: FEEDBACK_CONTINUE, None,
                         PromptText((("task", request.input_text),)).parts)):

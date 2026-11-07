@@ -44,7 +44,7 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
         result = rc.RunResult(identity=request.identity, harness=request.harness,
                               end=rc.RunEnd(status=status, reason_code="native-refused" if status != "ok" else None),
                               stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
-        handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
+        handle = run_execution.InlineRunHandle(control, request.identity)
         with mock.patch.object(inline_run, "run_seam", return_value=object()), \
                 mock.patch.object(run_execution, "worker_request", return_value=(
                     request, None, None, None, PromptText((("task", request.input_text),)).parts)), \
