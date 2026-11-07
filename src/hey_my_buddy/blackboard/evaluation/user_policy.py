@@ -101,7 +101,8 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     annotations = params.get('modelNoteChanges', [])
     if not isinstance(annotations, list):
         raise BoardError('INVALID_ARGUMENT', 'modelNoteChanges must be a list')
-    correspondence_count = models.apply_user_changes(connection, params.get('modelCorrespondenceChanges', []), now)
+    correspondence_count, lost_references = models.apply_user_changes(
+        connection, params.get('modelCorrespondenceChanges', []), now)
     model_limits = _model_service_concurrency_changes(params)
     buddies = {}
     for entry in settings + preferences:
@@ -149,8 +150,13 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             raise BoardError('INVALID_ARGUMENT', 'text must be a string of at most 4000 characters')
         if not text:
             connection.execute('DELETE FROM model_notes WHERE model_id=?', (model_id,))
+            lost_references.add(model_id)
         else:
             connection.execute('INSERT INTO model_notes(model_id,text,updated_at) VALUES(?,?,?) ON CONFLICT(model_id) DO UPDATE SET text=excluded.text,updated_at=excluded.updated_at', (model_id, text, now))
+    if lost_references:
+        # One check after every change of the save, in whatever order they came:
+        # a model is deleted only once no reference remains for it.
+        models.delete_unreferenced(connection, lost_references)
     for entry in model_limits:
         if connection.execute(
             'SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? LIMIT 1',

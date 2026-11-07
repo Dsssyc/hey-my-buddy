@@ -232,7 +232,8 @@ class ProfileExecutionTests(BoardTestCase):
         self.assertEqual(correspondence['evidenceUrl'], 'https://example.org/map')
         self.assertEqual(correspondence['evidenceDate'], '2026-01-01')
         self.board_.console_call("user_policy_publish", {"commandId": "undo-profile-map",
-            "modelCorrespondenceChanges": [{**CANDIDATE_SERVICE, "action": "undo"}]})
+            "modelCorrespondenceChanges": [{**CANDIDATE_SERVICE, "action": "undo",
+                                            "correspondenceId": correspondence['correspondenceId']}]})
         with self.board_.store.db.read() as db:
             self.assertEqual(current_model(db, *CANDIDATE_SERVICE.values()), original)
             self.assertEqual(db.execute(

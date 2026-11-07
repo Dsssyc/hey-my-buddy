@@ -28,6 +28,11 @@ class ModelCorrespondenceTests(WorkflowTestCase):
         with self.board_.store.db.read() as db:
             return current_model(db, buddy["harness"], buddy["provider"], buddy["model"])
 
+    def shown_correspondence(self, service):
+        """The console's current view of a service's correspondence, as sent back on undo."""
+        return next(row for row in console_snapshot_projection(self.board_.service)[0]["modelCorrespondences"]
+                    if all(row[key] == service[key] for key in service))
+
     def test_exact_name_unifies_services_and_different_name_stays_separate(self):
         first = BUDDY
         same_name = {**first, "provider": "second-provider"}
@@ -45,7 +50,7 @@ class ModelCorrespondenceTests(WorkflowTestCase):
             for buddy in sorted((first, same_name), key=lambda value: value["provider"])
         ])
 
-    def test_new_same_name_service_follows_latest_correspondence_and_retains_old_names(self):
+    def test_new_same_name_service_follows_latest_correspondence_and_names_follow_evidence(self):
         first = BUDDY
         mirror = {**first, 'provider': 'mirror-provider'}
         for buddy in (first, mirror):
@@ -64,8 +69,13 @@ class ModelCorrespondenceTests(WorkflowTestCase):
             old_model = model_view(db, old_id)
             new_model = model_view(db, new_id)
         self.assertEqual(old_model['displayName'], new_model['displayName'])
-        self.assertIn(service, old_model['names'])
-        self.assertIn(service, new_model['names'])
+        # Names follow live evidence: the old generation keeps the services still
+        # corresponding to it, the new one those that moved with the change.
+        self.assertEqual(old_model['names'], [
+            {key: mirror[key] for key in ('harness', 'provider', 'model')}])
+        self.assertEqual(new_model['names'], [
+            {key: buddy[key] for key in ('harness', 'provider', 'model')}
+            for buddy in sorted((first, newcomer), key=lambda value: value['provider'])])
 
     def test_console_generation_undo_remap_and_model_notes(self):
         first = BUDDY
@@ -87,9 +97,11 @@ class ModelCorrespondenceTests(WorkflowTestCase):
         self.assertEqual([(note["modelId"], note["text"]) for note in snapshot["modelNotes"]],
                          [(generated, "New generation observed")])
         self.assertTrue(snapshot["modelNotes"][0]["updatedAt"])
-        self.assertEqual(next(correspondence for correspondence in snapshot["modelCorrespondences"] if correspondence["model"] == first["model"])["modelId"],
-                         generated)
-        self.publish("undo", modelCorrespondenceChanges=[{**service, "action": "undo"}])
+        shown = next(correspondence for correspondence in snapshot["modelCorrespondences"]
+                     if correspondence["model"] == first["model"])
+        self.assertEqual(shown["modelId"], generated)
+        self.publish("undo", modelCorrespondenceChanges=[{
+            **service, "action": "undo", "correspondenceId": shown["correspondenceId"]}])
         self.assertEqual(self.model_id(first), original)
         self.publish("remap", modelCorrespondenceChanges=[{**service, "action": "map", "modelId": other_id}])
         self.assertEqual(self.model_id(first), other_id)
@@ -116,18 +128,61 @@ class ModelCorrespondenceTests(WorkflowTestCase):
         self.publish("map-other", modelCorrespondenceChanges=[{**service, "action": "map", "modelId": other_id}])
         self.publish("map-back", modelCorrespondenceChanges=[{**service, "action": "map", "modelId": original}])
         self.assertEqual(self.model_id(first), original)
-        self.publish("undo-latest", modelCorrespondenceChanges=[{**service, "action": "undo"}])
+        self.publish("undo-latest", modelCorrespondenceChanges=[{
+            **service, "action": "undo", "correspondenceId": self.shown_correspondence(service)["correspondenceId"]}])
         self.assertEqual(self.model_id(first), other_id)
-        self.publish("undo-earlier", modelCorrespondenceChanges=[{**service, "action": "undo"}])
+        self.publish("undo-earlier", modelCorrespondenceChanges=[{
+            **service, "action": "undo", "correspondenceId": self.shown_correspondence(service)["correspondenceId"]}])
         self.assertEqual(self.model_id(first), original)
         with self.assertRaises(BoardError) as rejected:
-            self.publish("undo-first-row", modelCorrespondenceChanges=[{**service, "action": "undo"}])
-        self.assertEqual(rejected.exception.code, "INVALID_ARGUMENT")
+            self.publish("undo-first-row", modelCorrespondenceChanges=[{
+                **service, "action": "undo",
+                "correspondenceId": self.shown_correspondence(service)["correspondenceId"]}])
+        self.assertEqual(rejected.exception.code, "CONFLICT")
         with self.board_.store.db.read() as db:
             history = list(db.execute(
                 "SELECT model_id,source FROM model_correspondences WHERE harness=? AND provider=? AND model=? ORDER BY rowid",
                 tuple(service.values())))
         self.assertEqual([(row["model_id"], row["source"]) for row in history], [(original, "same-name")])
+
+    def test_stale_or_repeated_correspondence_id_is_rejected_without_deleting(self):
+        first = BUDDY
+        other = {**first, "provider": "another-provider", "model": "another-name"}
+        for buddy in (first, other):
+            enable_fixture_buddy(self.board_.store, buddy)
+        service = {key: first[key] for key in ("harness", "provider", "model")}
+        original = self.model_id(first)
+        other_id = self.model_id(other)
+        same_name_id = self.shown_correspondence(service)["correspondenceId"]
+        self.publish("map-other", modelCorrespondenceChanges=[{**service, "action": "map", "modelId": other_id}])
+        # A second console tab still shows the superseded same-name change.
+        with self.assertRaises(BoardError) as stale:
+            self.publish("undo-stale", modelCorrespondenceChanges=[{
+                **service, "action": "undo", "correspondenceId": same_name_id}])
+        self.assertEqual((stale.exception.code, str(stale.exception)),
+                         ("CONFLICT", "This correspondence is not the model service's latest change"))
+        self.assertEqual(self.model_id(first), other_id)
+        latest_id = self.shown_correspondence(service)["correspondenceId"]
+        self.publish("undo-latest", modelCorrespondenceChanges=[{
+            **service, "action": "undo", "correspondenceId": latest_id}])
+        # The same row asked for again is stale now; nothing further is deleted.
+        with self.assertRaises(BoardError) as repeated:
+            self.publish("undo-again", modelCorrespondenceChanges=[{
+                **service, "action": "undo", "correspondenceId": latest_id}])
+        self.assertEqual(repeated.exception.code, "CONFLICT")
+        self.assertEqual(self.model_id(first), original)
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM model_correspondences WHERE harness=? AND provider=? AND model=?",
+                tuple(service.values())).fetchone()[0], 1)
+            # The only remaining row is not undoable either, with its own id.
+            only_id = db.execute(
+                "SELECT correspondence_id FROM model_correspondences WHERE harness=? AND provider=? AND model=?",
+                tuple(service.values())).fetchone()[0]
+        with self.assertRaises(BoardError) as sole:
+            self.publish("undo-sole", modelCorrespondenceChanges=[{
+                **service, "action": "undo", "correspondenceId": only_id}])
+        self.assertEqual(sole.exception.code, "CONFLICT")
 
     def test_undo_of_a_generation_removes_the_model_nothing_references(self):
         first = BUDDY
@@ -139,8 +194,84 @@ class ModelCorrespondenceTests(WorkflowTestCase):
         }])
         generated = self.model_id(first)
         self.assertNotEqual(generated, original)
-        self.publish("undo", modelCorrespondenceChanges=[{**service, "action": "undo"}])
+        self.publish("undo", modelCorrespondenceChanges=[{
+            **service, "action": "undo", "correspondenceId": self.shown_correspondence(service)["correspondenceId"]}])
         self.assertEqual(self.model_id(first), original)
+        with self.board_.store.db.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
+        snapshot = console_snapshot_projection(self.board_.service)[0]
+        self.assertNotIn(generated, {model["modelId"] for model in snapshot["models"]})
+
+    def test_one_save_deletes_lost_models_after_all_changes_whatever_the_order(self):
+        first = BUDDY
+        other = {**first, "provider": "another-provider", "model": "another-name"}
+        enable_fixture_buddy(self.board_.store, other)
+        for order in (False, True):
+            with self.subTest(map_first=order):
+                fresh = {**first, "provider": f"order-{order}-provider"}
+                enable_fixture_buddy(self.board_.store, fresh)
+                fresh_service = {key: fresh[key] for key in ("harness", "provider", "model")}
+                original = self.model_id(fresh)
+                self.publish(f"generation-{order}", modelCorrespondenceChanges=[{
+                    **fresh_service, "action": "generation", "displayName": f"Generation {order}",
+                }])
+                generated = self.model_id(fresh)
+                undo = {**fresh_service, "action": "undo",
+                        "correspondenceId": self.shown_correspondence(fresh_service)["correspondenceId"]}
+                remap = {**{key: other[key] for key in ("harness", "provider", "model")},
+                         "action": "map", "modelId": generated}
+                changes = [remap, undo] if order else [undo, remap]
+                self.publish(f"mixed-{order}", modelCorrespondenceChanges=changes)
+                self.assertEqual(self.model_id(fresh), original)
+                self.assertEqual(self.model_id(other), generated)
+                with self.board_.store.db.read() as db:
+                    # The map in the same save keeps the model, in either order.
+                    self.assertIsNotNone(db.execute(
+                        "SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
+
+    def test_one_save_applies_undo_and_note_changes_in_one_deletion_check(self):
+        first = BUDDY
+        enable_fixture_buddy(self.board_.store, first)
+        service = {key: first[key] for key in ("harness", "provider", "model")}
+        original = self.model_id(first)
+        self.publish("generation", modelCorrespondenceChanges=[{
+            **service, "action": "generation", "displayName": "Noted generation",
+        }])
+        generated = self.model_id(first)
+        # A note written in the same save as the undo keeps the model: the
+        # deletion check runs only after every change of the save.
+        self.publish("undo-with-note", modelCorrespondenceChanges=[{
+            **service, "action": "undo", "correspondenceId": self.shown_correspondence(service)["correspondenceId"]}],
+            modelNoteChanges=[{"modelId": generated, "text": "Kept by the note"}])
+        self.assertEqual(self.model_id(first), original)
+        with self.board_.store.db.read() as db:
+            self.assertIsNotNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
+        # Remarking the generation and clearing the note in one save removes it.
+        self.publish("remap", modelCorrespondenceChanges=[{**service, "action": "map", "modelId": generated}])
+        self.publish("undo-with-cleared-note", modelCorrespondenceChanges=[{
+            **service, "action": "undo", "correspondenceId": self.shown_correspondence(service)["correspondenceId"]}],
+            modelNoteChanges=[{"modelId": generated, "text": ""}])
+        self.assertEqual(self.model_id(first), original)
+        with self.board_.store.db.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
+
+    def test_clearing_the_last_note_of_an_unreferenced_model_deletes_it(self):
+        first = BUDDY
+        enable_fixture_buddy(self.board_.store, first)
+        service = {key: first[key] for key in ("harness", "provider", "model")}
+        original = self.model_id(first)
+        self.publish("generation", modelCorrespondenceChanges=[{
+            **service, "action": "generation", "displayName": "Noted generation",
+        }])
+        generated = self.model_id(first)
+        self.publish("annotate", modelNoteChanges=[{"modelId": generated, "text": "Only reference left"}])
+        self.publish("undo", modelCorrespondenceChanges=[{
+            **service, "action": "undo", "correspondenceId": self.shown_correspondence(service)["correspondenceId"]}])
+        self.assertEqual(self.model_id(first), original)
+        with self.board_.store.db.read() as db:
+            self.assertIsNotNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
+        # A later save that only clears the note takes the last reference with it.
+        self.publish("clear-note", modelNoteChanges=[{"modelId": generated, "text": ""}])
         with self.board_.store.db.read() as db:
             self.assertIsNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
         snapshot = console_snapshot_projection(self.board_.service)[0]
@@ -164,6 +295,8 @@ class ModelCorrespondenceTests(WorkflowTestCase):
                                         (run["runId"],)).fetchone()[0], executed)
             self.assertEqual(db.execute("SELECT samples FROM kind_statistics WHERE model_id=?",
                                         (executed,)).fetchone()[0], 1)
+            # The executed service stays among the model's names after the undo.
+            self.assertIn(service, model_view(db, executed)["names"])
 
         self.publish("generation-again", modelCorrespondenceChanges=[{
             **service, "action": "generation", "displayName": "Counted generation",
@@ -176,20 +309,14 @@ class ModelCorrespondenceTests(WorkflowTestCase):
 
         for command, model in (("undo-executed", executed), ("undo-counted", counted)):
             with self.subTest(model=model):
-                self.publish(command, modelCorrespondenceChanges=[{**service, "action": "undo"}])
+                self.publish(command, modelCorrespondenceChanges=[{
+                    **service, "action": "undo",
+                    "correspondenceId": self.shown_correspondence(service)["correspondenceId"]}])
                 with self.board_.store.db.read() as db:
                     self.assertIsNotNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (model,)).fetchone())
         self.assertEqual(self.model_id(first), original)
-
-    def test_reference_column_list_matches_the_schema_foreign_keys(self):
-        from hey_my_buddy.blackboard.evaluation.models import MODEL_REFERENCE_COLUMNS
         with self.board_.store.db.read() as db:
-            schema_references = sorted(
-                (table, row[3])
-                for table in [row[0] for row in db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
-                for row in db.execute(f'PRAGMA foreign_key_list("{table}")') if row[2] == 'models')
-        self.assertEqual(schema_references, sorted(MODEL_REFERENCE_COLUMNS))
+            self.assertEqual(model_view(db, executed)["names"], [service])
 
     def test_invalid_correspondence_patch_rolls_back_every_entry(self):
         first = BUDDY

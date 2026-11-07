@@ -58,7 +58,7 @@ with their sample sizes as evidence strength, without a minimum-sample gate.
 The defects count is the number of deliveries that were delivered and accepted,
 then later named for correction by another micro task through its fixes field.
 Each candidate identifies its model with modelId, modelDisplayName and modelNames.
-User notes are keyed by modelId. Names retain the services recorded for that model, including former correspondences.
+User notes are keyed by modelId. Names list the services that currently correspond to the model and those its recorded executions used.
 A candidate's modelId states its current correspondence.
 Each candidate's modelProfile supplies public claims with sources and dates. User notes take precedence over the profile.
 For an unclassified task of type create, change or debug, favor models whose profiles indicate stronger overall ability.
@@ -108,7 +108,7 @@ with their sample sizes as evidence strength, without a minimum-sample gate.
 The defects count is the number of deliveries that were delivered and accepted,
 then later named for correction by another micro task through its fixes field.
 Each candidate identifies its model with modelId, modelDisplayName and modelNames.
-User notes are keyed by modelId. Names retain the services recorded for that model, including former correspondences.
+User notes are keyed by modelId. Names list the services that currently correspond to the model and those its recorded executions used.
 A candidate's modelId states its current correspondence.
 Each candidate's modelProfile supplies public claims with sources and dates. User notes take precedence over the profile.
 For an unclassified task of type create, change or debug, favor models whose profiles indicate stronger overall ability.

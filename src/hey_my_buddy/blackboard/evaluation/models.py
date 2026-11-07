@@ -11,23 +11,6 @@ CURRENT_CORRESPONDENCES = """SELECT m.rowid AS correspondence_order,m.* FROM mod
     SELECT MAX(h.rowid) FROM model_correspondences h
     WHERE h.harness=m.harness AND h.provider=m.provider AND h.model=m.model)"""
 
-#: Every column that can reference a model identity. Undo consults all of them
-#: before removing a model nothing uses any more; the schema's foreign keys on
-#: models(model_id) must stay equal to this list (a test enforces that).
-MODEL_REFERENCE_COLUMNS = (
-    ('model_correspondences', 'model_id'),
-    ('attempts', 'model_id'),
-    ('profile_runs', 'model_id'),
-    ('model_profiles', 'model_id'),
-    ('model_notes', 'model_id'),
-    ('kind_summaries', 'model_id'),
-    ('kind_summary_evidence', 'model_id'),
-    ('kind_statistics', 'model_id'),
-    ('kind_cell_statistics', 'model_id'),
-    ('kind_statistics_buckets', 'model_id'),
-    ('kind_cell_statistics_buckets', 'model_id'),
-)
-
 
 def current_model(connection, harness, provider, model):
     return connection.execute(
@@ -65,11 +48,14 @@ def ensure_model_service(connection, harness, provider, model, now):
 
 
 def model_view(connection, model_id):
-    """Retain recorded names even after a service moves to another generation."""
+    """Names come from live evidence: the services currently corresponding to the
+    model and those its recorded executions used, so a change undone after the
+    fact leaves the names its samples still rest on."""
     row = connection.execute('SELECT display_name FROM models WHERE model_id=?', (model_id,)).fetchone()
     names = [{field: value[field] for field in SERVICE_FIELDS} for value in connection.execute(
-        'SELECT DISTINCT harness,provider,model FROM model_correspondences WHERE model_id=?'
-        ' ORDER BY harness,provider,model', (model_id,))]
+        'SELECT harness,provider,model FROM (' + CURRENT_CORRESPONDENCES + ') WHERE model_id=?'
+        ' UNION SELECT model_harness,model_provider,model_model FROM attempts WHERE model_id=?'
+        ' ORDER BY harness,provider,model', (model_id, model_id))]
     return {'modelId': model_id, 'displayName': row[0], 'names': names}
 
 
@@ -98,15 +84,40 @@ def correspondence_view(connection, buddy_ids):
                 f' AND b.model=m.model AND b.buddy_id IN ({marks})) ORDER BY m.harness,m.provider,m.model', buddy_ids)]
 
 
+def _referencing_columns(connection):
+    """Every column the schema itself binds to models(model_id)."""
+    tables = [row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+    return [(table, row[3]) for table in tables
+            for row in connection.execute(f'PRAGMA foreign_key_list("{table}")') if row[2] == 'models']
+
+
+def delete_unreferenced(connection, model_ids):
+    """Remove models whose last reference this save removed.
+
+    Foreign keys on models(model_id) are all ON DELETE RESTRICT, so a missed
+    reference aborts the save instead of letting a used model disappear.
+    """
+    references = _referencing_columns(connection)
+    for model_id in model_ids:
+        if all(connection.execute(f'SELECT 1 FROM "{table}" WHERE {column}=? LIMIT 1',
+                                  (model_id,)).fetchone() is None
+               for table, column in references):
+            connection.execute('DELETE FROM models WHERE model_id=?', (model_id,))
+
+
 def apply_user_changes(connection, values, now):
+    """Apply one save's correspondence entries; report the count and the models
+    that lost a reference, for the caller's end-of-save deletion check."""
     if not isinstance(values, list):
         raise BoardError('INVALID_ARGUMENT', 'modelCorrespondenceChanges must be a list')
+    lost_references = set()
     seen = set()
     for value in values:
         if not isinstance(value, dict):
             raise BoardError('INVALID_ARGUMENT', 'modelCorrespondenceChanges entries must be objects')
         action = value.get('action')
-        fields = {'map': {'modelId'}, 'undo': set(), 'generation': {'displayName'}}
+        fields = {'map': {'modelId'}, 'undo': {'correspondenceId'}, 'generation': {'displayName'}}
         if not isinstance(action, str) or action not in fields:
             raise BoardError('INVALID_ARGUMENT', 'action must be map, undo or generation')
         schemas.reject_unknown(value, {*SERVICE_FIELDS, 'action', *fields[action]}, 'modelCorrespondenceChanges')
@@ -122,21 +133,21 @@ def apply_user_changes(connection, values, now):
                 raise BoardError('NOT_FOUND', 'Unknown modelId')
             append_correspondence(connection, service, model_id, now, 'user')
         elif action == 'undo':
+            correspondence_id = schemas.required_string(value, 'correspondenceId', max_length=128,
+                                                        pattern=schemas.IDENTIFIER_PATTERN)
             latest = connection.execute(
-                'SELECT rowid,model_id FROM model_correspondences WHERE harness=? AND provider=? AND model=?'
+                'SELECT rowid,correspondence_id,model_id FROM model_correspondences WHERE harness=? AND provider=? AND model=?'
                 ' ORDER BY rowid DESC LIMIT 1', service).fetchone()
-            if latest is None or connection.execute(
+            if latest is None or latest['correspondence_id'] != correspondence_id:
+                raise BoardError('CONFLICT', 'This correspondence is not the model service\'s latest change')
+            if connection.execute(
                     'SELECT 1 FROM model_correspondences WHERE harness=? AND provider=? AND model=?'
                     ' AND rowid<? LIMIT 1', (*service, latest['rowid'])).fetchone() is None:
-                raise BoardError('INVALID_ARGUMENT', 'This model service has no previous correspondence')
+                raise BoardError('CONFLICT', 'This model service has no previous correspondence')
             connection.execute('DELETE FROM model_correspondences WHERE rowid=?', (latest['rowid'],))
-            # A model nothing references any more goes with the undone change.
-            if all(connection.execute(f'SELECT 1 FROM "{table}" WHERE {column}=? LIMIT 1',
-                                      (latest['model_id'],)).fetchone() is None
-                   for table, column in MODEL_REFERENCE_COLUMNS):
-                connection.execute('DELETE FROM models WHERE model_id=?', (latest['model_id'],))
+            lost_references.add(latest['model_id'])
         else:
             display_name = schemas.required_string(value, 'displayName', max_length=256)
             model_id = create_model(connection, display_name)
             append_correspondence(connection, service, model_id, now, 'user')
-    return len(values)
+    return len(values), lost_references
