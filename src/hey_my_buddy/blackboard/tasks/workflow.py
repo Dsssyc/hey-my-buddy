@@ -1451,7 +1451,7 @@ class WorkflowCoordinator:
             "requiredCapabilities": requested.get("requiredCapabilities", []),
             "source": selection_source(routing_request),
             **{key: current[key] for key in (
-                "routerBuddyIds", "routerIdentities", "routingMode", "routingBudget", "budget",
+                "routerBuddyIds", "routerIdentities", "routingMode", "modelResponseWaitSeconds",
                 "routerRetryIntervalSeconds", "routerProblem",
                 "routerBuddyId", "routerBuddy", "routerIndex", "decisionModel", "routerTrials",
             ) if key in current},

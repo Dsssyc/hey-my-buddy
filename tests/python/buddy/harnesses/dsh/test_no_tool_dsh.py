@@ -83,10 +83,10 @@ class FastRegisteredSeamTests(DshNoToolTests):
 
     def invoke(self, *, capture=False, timeout=3):
         context = ExecutionContext("task", "attempt-1", 1, {**SPEC, "cwd": str(self.cwd),
-                                  "routerBudgetSeconds": timeout}, self.root / "attempt-1", {},
+                                  "modelResponseWaitSeconds": timeout}, self.root / "attempt-1", {},
             self.environment, session_record_path=str(self.root / "session-attempt-1.jsonl"))
         request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA,
-                                          timeout_seconds=timeout, capture_evidence=capture)
+                                          capture_evidence=capture)
         handle = start_router_preparation(
             FastPreparation("dsh",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)

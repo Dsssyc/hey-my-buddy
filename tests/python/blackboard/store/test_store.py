@@ -289,9 +289,9 @@ class ExpectedDurationTests(BoardTestCase):
         self.assertEqual(default["expectedSeconds"], 1800)
         self.assertEqual(explicit["expectedSeconds"], 1)
         self.assertNotIn("timeoutSeconds", default)
-        self.assertNotIn("routerBudgetSeconds", explicit)
+        self.assertNotIn("modelResponseWaitSeconds", explicit)
         with board.store.db.read() as connection:
-            rows = connection.execute("SELECT json_extract(spec_json,'$.expectedSeconds'),json_extract(spec_json,'$.routerBudgetSeconds') FROM tasks ORDER BY request_id").fetchall()
+            rows = connection.execute("SELECT json_extract(spec_json,'$.expectedSeconds'),json_extract(spec_json,'$.modelResponseWaitSeconds') FROM tasks ORDER BY request_id").fetchall()
             self.assertEqual([tuple(row) for row in rows], [(1800, None), (1, None)])
         self.assertEqual(board.call("task_get", {"runId": explicit["runId"]})["task"]["expectedSeconds"], 1)
 
@@ -325,7 +325,7 @@ class ExpectedDurationTests(BoardTestCase):
         response = client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, {"status": "failed", "shutdownConfirmed": True, "terminationReason": "deadline"})
         rejection = response["attempt"]["result"]["result"]["microTaskError"]
         self.assertEqual(rejection["code"], "INVALID_ARGUMENT")
-        self.assertIn("Router budget", rejection["message"])
+        self.assertIn("Router model response wait", rejection["message"])
         self.assertNotIn("receiptRejection", response["attempt"]["result"]["result"])
         self.assertTrue(client.get(runId=task["runId"])["shutdownConfirmed"])
 

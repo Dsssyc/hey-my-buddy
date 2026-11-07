@@ -15,7 +15,7 @@ from hey_my_buddy.buddy.harnesses.codex.tool_evidence import CodexToolEventProje
 from hey_my_buddy.buddy.roles.controller import ReviewPreparation, start_router_preparation
 from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.routing.router import answer_schema, budget
+from hey_my_buddy.blackboard.routing.router import answer_schema
 from hey_my_buddy.protocol import tool_evidence
 from buddy.harnesses.codex.fixtures.protocol_items import PROTOCOL_ITEMS, FUTURE_ITEMS, item_frames
 
@@ -466,16 +466,16 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         select_fixture(environment, self.root, "codex", FIXTURE)
         context = ExecutionContext(task_id=task, attempt_id=attempt, generation=generation,
                                   session_record_path=str(self.root / f"session-{attempt}.jsonl"),
-                                  spec={"cwd": str(self.cwd), "task": "Select", "routerBudgetSeconds": 8,
+                                  spec={"cwd": str(self.cwd), "task": "Select", "modelResponseWaitSeconds": 8,
                                         "provider": "openai", "model": "fixture-model", "effort": "low"},
                                   directory=self.root / f"attempt-{index}", runtime={}, environment=environment,
                                   turn=None)
         return context
 
-    def run_review(self, case, *, index, **request_options):
+    def run_review(self, case, *, index):
         context = self.context(case, index=index)
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet",
-                                            answer_schema(["legal"]), {**budget(), **request_options},
+                                            answer_schema(["legal"]),
                                             capture_evidence=True)
         handle = start_router_preparation(ReviewPreparation("codex", self.adapter, request, context,
                                                             (None, self.cwd, "fixture-digest")))
@@ -543,7 +543,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["toolCalls"], 2)
 
     def test_stream_above_old_bound_keeps_all_judgeable_calls(self):
-        outcome, context = self.run_review("readonly-truncated", index=4, toolCalls=500)
+        outcome, context = self.run_review("readonly-truncated", index=4)
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
         self.assertEqual(len(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"]))), 130)
@@ -580,15 +580,6 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["nativeIdentity"], [])
         self.assertFalse(evidence["streamComplete"])
         self.assertEqual(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])), [])
-
-    def test_budget_interrupt_leaves_the_open_call_unsettled_in_the_package(self):
-        outcome, context = self.run_review("readonly-budget", index=7, toolCalls=0)
-        self.assertEqual(outcome.result["code"], "readonly-budget-exhausted")
-        evidence = outcome.result["toolEvidence"]
-        self.assertEqual(evidence["toolCalls"], 1)
-        self.assertEqual(evidence["unsettledToolCalls"], 1)
-        self.assertFalse(evidence["streamComplete"])
-        self.assertEqual(outcome.result["usage"]["toolCalls"], 1)
 
 
 if __name__ == "__main__":

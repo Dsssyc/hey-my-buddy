@@ -14,7 +14,6 @@ export default {
   "modelCorrespondence": "模型的对应关系",
   "routerList": "Router 列表",
   "defaultRoutingMode": "默认路由模式",
-  "routingBudget": "路由预算",
   "retryInterval": "重试间隔",
   "concurrencyLimit": "并发上限",
   "routerListForBuddy": "Router 列表（{{v0}}）",

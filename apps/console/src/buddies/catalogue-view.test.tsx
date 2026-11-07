@@ -32,7 +32,7 @@ function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: Harnes
   const state: Snapshot & { harnesses: HarnessHealth[] } = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" },
+    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: [buddy(sonnet, "medium", { enabled: true }), buddy(sonnet, "high"), buddy(sol, "medium"), buddy(sol, "low")],
     preferences: [], models: [], modelNotes: [], modelCorrespondences: [], decisions: [],
  modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],

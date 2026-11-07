@@ -5,7 +5,7 @@ import { macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
 
 describe("L4 ordered Router list configuration", () => {
   const current = { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600,
-    defaultRoutingMode: "fast", routingBudget: "brief", profileBuddyId: null, profileBudget: "deep" };
+    defaultRoutingMode: "fast", modelResponseWaitSeconds: 30, profileBuddyId: null };
   it("accepts the list settings and rejects retired slots, selectors or intervals", () => {
     expect(validRoutingConfiguration(current)).toBe(true);
     for (const explorationEvery of [null, 2, 5]) expect(validRoutingConfiguration({ ...current, explorationEvery })).toBe(true);
@@ -19,7 +19,8 @@ describe("L4 ordered Router list configuration", () => {
       { fastRouterBuddyId: null, reviewRouterBuddyId: null }]) {
       expect(validRoutingConfiguration({ ...current, ...retired })).toBe(false);
     }
-    expect(validRoutingConfiguration({ ...current, routingBudget: "quick" })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, modelResponseWaitSeconds: 0 })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, modelResponseWaitSeconds: 1 })).toBe(true);
     expect(validRoutingConfiguration({ ...current, defaultRoutingMode: "other" })).toBe(false);
     expect(validRoutingConfiguration({ ...current, routerBuddyIds: undefined })).toBe(false);
     expect(validRoutingConfiguration({ ...current, routerBuddyIds: [""] })).toBe(false);
@@ -33,14 +34,14 @@ describe("L4 ordered Router list configuration", () => {
 });
 
 describe("snapshot upgrade boundary and routing health", () => {
-  const configuration = { explorationEvery: 5, routerBuddyIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" };
+  const configuration = { explorationEvery: 5, routerBuddyIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", modelResponseWaitSeconds: 60, profileBuddyId: null };
   const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration, buddies: [],
     preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [],
     tasks: { pendingCount: 0 } };
   const health = { available: false, reason: { code: "router-consecutive-failures", params: {} }, windowSize: 20, sampleCount: 3,
     failureCount: 3, consecutiveFailures: 3, abstentionCount: 0, cancelledCount: 0,
     lastSuccessAt: null, lastSuccessDecisionId: null,
-    recentFailures: [{ decisionId: "timeout", runId: "run", at: "2026-10-02T00:00:00Z", code: "router-timeout" }] };
+    recentFailures: [{ decisionId: "timeout", runId: "run", at: "2026-10-02T00:00:00Z", code: "router-not-responding" }] };
   function apiFor(body: unknown) {
     return createApi("", vi.fn(async () => new Response(JSON.stringify(body))) as typeof fetch);
   }
@@ -96,7 +97,7 @@ describe("snapshot upgrade boundary and routing health", () => {
       eligible: true, code: null, inSkipWindow: false, skipUntil: null, retryAt: null, retryInProgress: false,
       answeredCount: 2, noAnswerCount: 4, lastAnsweredAt: "2026-10-02T00:00:00Z", lastNoAnswerAt: "2026-10-02T01:00:00Z",
       consecutiveNoAnswers: 4, windowSize: 20, windowEntries: 6, windowAnsweredCount: 2, windowFailureCount: 4,
-      windowBudgetExhaustedCount: 4, windowBoundsRejectedCount: 0, windowAttemptCount: 4,
+      windowNotRespondingCount: 4, windowBoundsRejectedCount: 0, windowAttemptCount: 4,
       lastError: { code: "timeout", at: "2026-10-02T01:00:00Z", phase: "runtime" },
     }, { buddyId: "tail", index: 1, identity: null, eligible: false, code: "router-skip-window" }];
     const listHealth = { ...health, available: false, reason: { code: "router-skip-window", params: {} },
@@ -233,7 +234,7 @@ describe("local read verification evidence", () => {
 });
 
 describe("conditional reads (ETag / If-None-Match / 304)", () => {
-  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief", profileBuddyId: null, profileBudget: "deep" },
+  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", modelResponseWaitSeconds: 30, profileBuddyId: null },
     buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
   function jsonResponse(value: unknown, etag?: string) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };

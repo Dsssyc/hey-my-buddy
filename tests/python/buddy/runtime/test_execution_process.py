@@ -14,7 +14,7 @@ from unittest import mock
 
 from process_observation import wait_for_unreaped_child
 
-from hey_my_buddy.buddy.runtime.execution import Execution, _ExecutionLive, validate_claim_turn
+from hey_my_buddy.buddy.runtime.execution import Execution, ModelResponseWait, _ExecutionLive, validate_claim_turn
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, AdapterOutcome
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
@@ -75,15 +75,14 @@ class ExecutionEndpointTests(unittest.TestCase):
 
     def test_review_unavailable_result_uses_frozen_request_without_copying_budget(self):
         execution = object.__new__(Execution)
-        claim = {'decisionInput': {'routingMode': 'review', 'budget': {'preset': 'deep', 'timeoutSeconds': 600,
-                                                                     'toolCalls': 64, 'bytesRead': 2097152}}}
+        claim = {'decisionInput': {'routingMode': 'review', 'modelResponseWaitSeconds': 600}}
         execution.receipt = mock.Mock(side_effect=lambda claim, report, directory: report)
         report = execution._review_unavailable(claim, None, [], 'router-unavailable')
         self.assertNotIn('budget', report['result'])
         self.assertEqual(report['result']['routingMode'], 'review')
         self.assertEqual(report['result']['code'], 'router-review-unavailable')
         self.assertTrue(report['shutdownConfirmed'])
-        self.assertEqual(claim['decisionInput']['budget']['bytesRead'], 2097152)
+        self.assertEqual(claim['decisionInput']['modelResponseWaitSeconds'], 600)
 
     def test_absent_registered_server_credential_fails_without_polling(self):
         live = _ExecutionLive(SimpleNamespace(claim={
@@ -136,19 +135,18 @@ class ExecutionEndpointTests(unittest.TestCase):
                     "version": 5, "executionWorkspace": invalid}}})
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
-    def test_decision_claim_requires_explicit_mode_buddy_and_budget(self):
-        base = {"task": {"taskId": "task", "spec": {"adapter": "decision"}},
+    def test_decision_claim_requires_explicit_mode_buddy_and_wait(self):
+        base = {"task": {"taskId": "task", "spec": {"adapter": "decision", "modelResponseWaitSeconds": 60}},
                 "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
-        decision = {"routingMode": "review", "buddy": {"harness": "codex"}, "budget": {"timeoutSeconds": 60}}
+        decision = {"routingMode": "review", "buddy": {"harness": "codex"}}
         validate_claim_turn({**base, "decisionInput": decision})
-        for bad in (None, {}, {**decision, "routingMode": None}, {**decision, "buddy": {}},
-                    {**decision, "budget": []}):
+        for bad in (None, {}, {**decision, "routingMode": None}, {**decision, "buddy": {}}):
             with self.subTest(decision=bad), self.assertRaises(BoardError) as caught:
                 validate_claim_turn({**base, "decisionInput": bad})
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
     def test_maintenance_claim_has_no_budget_and_keeps_its_identity_checks(self):
-        base = {"task": {"taskId": "task", "spec": {"adapter": "decision",
+        base = {"task": {"taskId": "task", "spec": {"adapter": "decision", "modelResponseWaitSeconds": 60,
                 "decision": {"decisionId": "maint-1", "kind": "maintain"}}},
                 "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
         document = {"kind": "maintain", "maintenanceRunId": "maint-1", "routingMode": "fast",
@@ -158,52 +156,101 @@ class ExecutionEndpointTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(BoardError):
                 validate_claim_turn({**base, "decisionInput": {**document, **change}})
 
-    def test_virtual_slow_maintenance_finishes_while_fast_and_review_keep_their_deadlines(self):
+    def test_all_router_planes_cancel_only_before_the_model_responds(self):
         from hey_my_buddy.buddy.runtime import execution as module
         from hey_my_buddy.buddy.roles import controller
         from hey_my_buddy.install import runtime
-        for kind, timeout in (("maintain", None), ("select-fast", 70), ("select-review", 310)):
-            with self.subTest(kind=kind), tempfile.TemporaryDirectory(prefix='virtual-router-') as directory:
-                state = Path(directory)
-                spec = {"adapter": "decision", "cwd": directory,
-                        "decision": {"kind": "maintain" if kind == "maintain" else "select"}}
-                if timeout is not None:
-                    spec['routerBudgetSeconds'] = timeout
-                claim = {"task": {"taskId": "task", "spec": spec},
-                         "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
-                         "decisionInput": {"kind": spec['decision']['kind'], "buddy": {"harness": "dsh"}}}
-                execution = Execution(claim, state, 'n' * 32, client=mock.Mock())
-                execution.directory.mkdir(parents=True, mode=0o700)
-                execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
-                clock = [0.0]
-                waits = []
-                def wait(timeout):
-                    waits.append(timeout)
-                    clock[0] = 10_000.0  # Past every routing preset, without sleeping.
-                    return None if len(waits) == 1 else 0
-                handle = SimpleNamespace(wait=wait, grace_deadline=None, force_stop_requested=False,
-                                         cancel_requested=False, stop_initiator=None, grace_expired=False,
-                                         result=None)
-                outcome = AdapterOutcome(status='ok', shutdown_confirmed=True)
-                with mock.patch.object(runtime, 'resolve_runtime', return_value={}), \
-                     mock.patch.object(controller, 'worker_executor', return_value=object()), \
-                     mock.patch.object(controller, 'prepare_worker_run', return_value=controller.WorkerPreparation(True)), \
-                     mock.patch.object(controller, 'worker_start', return_value=handle), \
-                     mock.patch.object(controller, 'worker_collect', return_value=outcome), \
-                     mock.patch.object(controller, 'worker_cancel') as cancel, \
-                     mock.patch.object(module, 'time', SimpleNamespace(monotonic=lambda: clock[0])):
-                    receipt = execution._execute_selected(claim, claim['task'], spec, claim['attempt'],
-                                                          execution.directory, {'preflightControl': mock.Mock()})
-                report = receipt['report']
-                self.assertEqual(report['elapsedSeconds'], 10_000)
-                self.assertEqual((execution.directory / module.BUDGET).exists(), timeout is not None)
-                if timeout is None:
-                    cancel.assert_not_called()
-                    self.assertEqual((report['status'], report['terminationReason']), ('ok', 'completed'))
-                else:
-                    cancel.assert_called_once()
-                    self.assertEqual(report['terminationReason'], 'deadline')
-                    self.assertEqual(report['result']['code'], 'router-budget-exhausted')
+        for kind in ("maintain", "select-fast", "select-review", "profile"):
+            for responded in (False, True):
+                with self.subTest(kind=kind, responded=responded), tempfile.TemporaryDirectory() as directory:
+                    state = Path(directory)
+                    spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                            "decision": {"kind": kind}}
+                    claim = {"task": {"taskId": "task", "spec": spec},
+                             "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                             "decisionInput": {"kind": kind, "buddy": {"harness": "dsh"}}}
+                    execution = Execution(claim, state, 'n' * 32, client=mock.Mock())
+                    execution.directory.mkdir(parents=True, mode=0o700)
+                    execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+                    clock = [0.0]
+                    waits = []
+                    def wait(timeout):
+                        waits.append(timeout)
+                        handle.model_responded = responded
+                        clock[0] = 10_000.0
+                        return None if len(waits) == 1 else 0
+                    handle = SimpleNamespace(wait=wait, grace_deadline=None, force_stop_requested=False,
+                                             cancel_requested=False, stop_initiator=None, grace_expired=False,
+                                             result=None, model_responded=False)
+                    outcome = AdapterOutcome(status='ok', shutdown_confirmed=True)
+                    with mock.patch.object(runtime, 'resolve_runtime', return_value={}), \
+                         mock.patch.object(controller, 'worker_executor', return_value=object()), \
+                         mock.patch.object(controller, 'prepare_worker_run', return_value=controller.WorkerPreparation(True)), \
+                         mock.patch.object(controller, 'worker_start', return_value=handle), \
+                         mock.patch.object(controller, 'worker_collect', return_value=outcome), \
+                         mock.patch.object(controller, 'worker_cancel') as cancel, \
+                         mock.patch.object(module, 'time', SimpleNamespace(monotonic=lambda: clock[0])):
+                        receipt = execution._execute_selected(claim, claim['task'], spec, claim['attempt'],
+                                                              execution.directory, {'preflightControl': mock.Mock()})
+                    report = receipt['report']
+                    self.assertEqual(report['elapsedSeconds'], 10_000)
+                    self.assertEqual((execution.directory / module.BUDGET).exists(), not responded)
+                    if responded:
+                        cancel.assert_not_called()
+                        self.assertEqual((report['status'], report['terminationReason']), ('ok', 'completed'))
+                    else:
+                        cancel.assert_called_once()
+                        self.assertEqual(report['terminationReason'], 'deadline')
+                        self.assertEqual(report['result']['code'], 'router-not-responding')
+                        self.assertEqual(report['result']['seconds'], 60)
+
+    def test_model_response_removes_only_its_bound_wait_file_and_rearms_each_session(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
+        binding = {"taskId": "task", "attemptId": "attempt", "generation": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / module.BUDGET
+            clock = [10.0]
+            notified = mock.Mock()
+            wait = ModelResponseWait(path, binding, 60, notify=notified)
+            handle = SimpleNamespace(model_responded=False)
+            scheduler_handle = SimpleNamespace(budget_path=path, execution_binding=binding)
+            with mock.patch.object(module, 'time', SimpleNamespace(monotonic=lambda: clock[0])):
+                wait.begin()
+                self.assertEqual(ExecutionScheduler._budget_deadline(scheduler_handle), 70)
+                clock[0] = 30
+                handle.model_responded = True
+                wait.responded(handle)
+                self.assertFalse(path.exists())
+                self.assertIsNone(ExecutionScheduler._budget_deadline(scheduler_handle))
+                clock[0] = 10_000
+                self.assertFalse(wait.expired(handle))
+                handle.model_responded = False
+                wait.begin()
+                self.assertEqual(ExecutionScheduler._budget_deadline(scheduler_handle), 10_060)
+                clock[0] = 10_059
+                self.assertFalse(wait.expired(handle))
+                clock[0] = 10_060
+                self.assertTrue(wait.expired(handle))
+                self.assertEqual(notified.call_count, 2)
+                module.fsync_json(path, {"binding": {**binding, "attemptId": "other"}, "deadline": 10_060})
+                handle.model_responded = True
+                with self.assertRaises(BoardError):
+                    wait.responded(handle)
+                self.assertTrue(path.exists())
+
+    def test_model_response_wait_file_removal_failure_is_not_swallowed(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        binding = {"taskId": "task", "attemptId": "attempt", "generation": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / module.BUDGET
+            wait = ModelResponseWait(path, binding, 60)
+            wait.begin()
+            with mock.patch.object(type(path), 'unlink', side_effect=PermissionError('refused')):
+                with self.assertRaises(PermissionError):
+                    wait.responded(SimpleNamespace(model_responded=True))
+            self.assertTrue(path.exists())
+            self.assertIsNotNone(wait.deadline)
 
     def test_endpoint_connection_and_call_errors_retain_structured_cause(self):
         identity = launch_protocol.RunIdentity(task_id="task", attempt_id="attempt", generation=1,

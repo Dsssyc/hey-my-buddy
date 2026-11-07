@@ -62,7 +62,7 @@ class ZcodeFixtureCase(unittest.TestCase):
         return ExecutionContext(task_id="micro-task-1", attempt_id=attempt_id, generation=index,
                                 session_record_path=str(self.root / f"session-{attempt_id}.jsonl"),
                                 spec={"adapter": "zcode", "cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": 1,
-                                      **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
+                                      **({"modelResponseWaitSeconds": timeout} if timeout is not None else {}),
                                       "provider": "fixture-api", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_ZCODE_TEST_CASE": case},
@@ -72,7 +72,7 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait((context.timeout_seconds or 10) + 10), "controller did not exit within its deadline and shutdown grace")
+        self.assertIsNotNone(handle.wait(20), "controller did not exit within its shutdown grace")
         outcome = self.adapter.collect(handle, context)
         return handle, outcome
 

@@ -80,22 +80,15 @@ class FastCorrection:
 
 
 class ReviewObserver:
-    """Count actual calls against the frozen review budget; optionally correct once."""
+    """Optionally correct a settled review answer once."""
 
-    def __init__(self, tool_budget: int, output_schema: dict, prompt: str, *, can_correct: bool):
-        self.tool_budget = tool_budget
+    def __init__(self, output_schema: dict, prompt: str, *, can_correct: bool):
         self.correction = FastCorrection(
             output_schema, prompt,
             suffix=". Return exactly the supplied JSON Schema; do not repeat exploration.") if can_correct else None
         self.stop_reason: str | None = None
 
     def observer(self, facts: Mapping) -> RunFeedback:
-        # A budget of N permits N calls. Unknown events and denied native
-        # interactions were not early-stop rules in the existing review role.
-        calls = facts.get("toolCalls")
-        if type(calls) is int and calls > self.tool_budget:
-            self.stop_reason = "readonly-budget-exhausted"
-            return FEEDBACK_STOP
         if self.correction is not None and facts.get("settled"):
             # Only reuse the format-correction rule, not the fast role's
             # prohibition on tools. It sees the settled answer alone.
@@ -108,7 +101,7 @@ class MaintenanceCorrection(FastCorrection):
 
     The publisher belongs to the execution process, never the native harness.
     It sends a private file reference to the service, where semantic validation
-    and every write occur. Corrections stay in the native run's total budget.
+    and every write occur. Corrections stay in the same native session.
     """
 
     def __init__(self, output_schema, base_prompt, publisher):

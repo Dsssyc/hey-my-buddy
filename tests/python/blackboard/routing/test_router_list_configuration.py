@@ -4,7 +4,6 @@ Only private boards are used. The list save path requires published,
 identity-complete buddies and nothing more: enabled, availability, health, quota and
 mode eligibility stay resolver concerns.
 """
-import json
 from copy import deepcopy
 import unittest
 
@@ -39,7 +38,7 @@ class RouterListConfigurationTests(BoardTestCase):
     def stored(self):
         with self.board_.store.db.read() as db:
             return {
-                "settings": tuple(db.execute("SELECT default_mode,budget_preset,retry_interval_seconds FROM router_settings WHERE id=1").fetchone()),
+                "settings": tuple(db.execute("SELECT default_mode,model_response_wait_seconds,retry_interval_seconds FROM router_settings WHERE id=1").fetchone()),
                 "buddies": [tuple(row) for row in db.execute("SELECT position,buddy_id FROM router_buddies ORDER BY position")],
                 "meta": {row[0]: row[1] for row in db.execute("SELECT key,value FROM meta")},
             }
@@ -60,44 +59,39 @@ class RouterListConfigurationTests(BoardTestCase):
         snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(snapshot["configuration"], {
             "routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
-            "defaultRoutingMode": "fast", "routingBudget": "standard",
-            "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600, "profileBuddyId": None, "profileBudget": "deep", "explorationEvery": 5,
-            "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24},
+            "defaultRoutingMode": "fast", "modelResponseWaitSeconds": 60,
+            "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600, "profileBuddyId": None, "explorationEvery": 5,
             "profileUnavailableReason": {"code": "profile-not-configured", "params": {}},
         })
         self.assertNotIn("configurationError", snapshot)
         stored = self.stored()
-        self.assertEqual(stored["settings"], ("fast", "standard", 600))
+        self.assertEqual(stored["settings"], ("fast", 60, 600))
         self.assertEqual(stored["buddies"], [])
         self.assertEqual(set(stored["meta"]), {"schema_version", "capability_secret"})
 
     def test_publish_writes_list_settings_and_projection(self):
         result = self.publish({"routerBuddyIds": [A, B], "routerRetryIntervalSeconds": 30,
-                               "defaultRoutingMode": "review", "routingBudget": "deep"})
+                               "defaultRoutingMode": "review", "modelResponseWaitSeconds": 75})
         self.assertTrue(result["published"])
         snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [A, B])
         self.assertEqual(snapshot["configuration"]["routerRetryIntervalSeconds"], 30)
         self.assertEqual(snapshot["configuration"]["defaultRoutingMode"], "review")
-        self.assertEqual(snapshot["configuration"]["routingBudget"], "deep")
+        self.assertEqual(snapshot["configuration"]["modelResponseWaitSeconds"], 75)
         self.assertNotIn("revision", snapshot["configuration"])
         stored = self.stored()
         self.assertEqual(stored["buddies"], [(0, A), (1, B)])
-        self.assertEqual(stored["settings"], ("review", "deep", 30))
-        with self.board_.store.db.read() as db:
-            events = db.execute("SELECT kind,payload_json FROM events WHERE kind='evaluation.routing_budget_changed'").fetchall()
-        self.assertEqual(len(events), 1)
-        self.assertEqual(json.loads(events[0]["payload_json"])["preset"], "deep")
+        self.assertEqual(stored["settings"], ("review", 75, 30))
         # Both configured buddies stay visible in the published buddy view.
         self.assertEqual({buddy["buddyId"] for buddy in snapshot["buddies"]}, {A, B})
 
     def test_strict_patch_semantics_over_the_publish_path(self):
         self.publish({"routerBuddyIds": [A, B], "routerRetryIntervalSeconds": 600})
         # Omitted fields preserve their stored values.
-        self.publish({"routingBudget": "brief"})
+        self.publish({"modelResponseWaitSeconds": 1})
         snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [A, B])
-        self.assertEqual(snapshot["configuration"]["routingBudget"], "brief")
+        self.assertEqual(snapshot["configuration"]["modelResponseWaitSeconds"], 1)
         # The explicit clear is an empty array.
         self.publish({"routerBuddyIds": []})
         self.assertEqual(console_snapshot_projection(self.board_.service)[0]["configuration"]["routerBuddyIds"], [])
@@ -105,7 +99,9 @@ class RouterListConfigurationTests(BoardTestCase):
                       {"routerBuddyId": A}, {"fastRouterBuddyId": A}, {"reviewRouterBuddyId": B},
                       {"routerBuddyIds": "solo"}, {"routerRetryIntervalSeconds": True},
                       {"routerRetryIntervalSeconds": 0}, {"defaultRoutingMode": "auto"},
-                      {"routingBudget": "quick"}, {"unknownField": 1}, {}, []):
+                      {"routingBudget": "brief"}, {"profileBudget": "deep"},
+                      {"modelResponseWaitSeconds": 0}, {"modelResponseWaitSeconds": True},
+                      {"unknownField": 1}, {}, []):
             with self.subTest(value=value), self.assertRaises(BoardError) as caught:
                 self.publish(value)
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
@@ -123,8 +119,8 @@ class RouterListConfigurationTests(BoardTestCase):
         with self.board_.store.db.read() as db:
             self.assertEqual(router.configuration(db), {
                 "routerBuddyIds": [B], "defaultRoutingMode": "review",
-                "routingBudget": "standard", "routerRetryIntervalSeconds": 47,
-                "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600, "profileBuddyId": None, "profileBudget": "deep", "explorationEvery": 5})
+                "modelResponseWaitSeconds": 60, "routerRetryIntervalSeconds": 47,
+                "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600, "profileBuddyId": None, "explorationEvery": 5})
         self.assertEqual(console_snapshot_projection(self.board_.service)[0]["configuration"]["routerBuddyIds"], [B])
 
     def test_list_items_need_published_complete_identity_and_nothing_more(self):
@@ -157,7 +153,7 @@ class RouterListConfigurationTests(BoardTestCase):
         self.assertEqual(console_snapshot_projection(self.board_.service)[0]["configuration"]["routerBuddyIds"],
                          [A, "disabled", "offline", "reviewonly"])
 
-    def test_interval_and_budget_patches_do_not_require_availability(self):
+    def test_interval_and_wait_patches_do_not_require_availability(self):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
@@ -166,7 +162,7 @@ class RouterListConfigurationTests(BoardTestCase):
                         canonical_json([])))
             ensure_model_service(db, "dsh", "fixture", "offline", self.board_.store.now())
         self.publish({"routerBuddyIds": ["offline"]})
-        self.publish({"routerRetryIntervalSeconds": 1, "routingBudget": "brief", "defaultRoutingMode": "review"})
+        self.publish({"routerRetryIntervalSeconds": 1, "modelResponseWaitSeconds": 30, "defaultRoutingMode": "review"})
         configuration = console_snapshot_projection(self.board_.service)[0]["configuration"]
         self.assertEqual(configuration["routerBuddyIds"], ["offline"])
         self.assertEqual(configuration["routerRetryIntervalSeconds"], 1)

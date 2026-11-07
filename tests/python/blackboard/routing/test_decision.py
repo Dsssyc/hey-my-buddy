@@ -395,7 +395,7 @@ class SelectionRequestTests(DecisionTestCase):
                     request = board.store.decisions._create(
                         request_id=f"freeze-{name}", request={"kind": "select", "task": "bounded selection",
                             "constraints": constraints, "requiredCapabilities": [],
-                            "budget": router.budget("brief")})
+                            "modelResponseWaitSeconds": 60})
                 else:
                     request = board.store.decisions.request_select({"requestId": f"freeze-{name}",
                                          "task": "bounded selection", **constraints})
@@ -651,7 +651,7 @@ class DecisionFailureTests(DecisionTestCase):
         clock = FakeClock()
         board = self.board(clock=clock)
         self.seed(board)
-        for mode, code in (("budget", "router-budget-exhausted"), ("deadline", "router-budget-exhausted"),
+        for mode, code in (("budget", "router-not-responding"), ("deadline", "router-not-responding"),
                            ("input_changed", "router-input-changed")):
             clock.advance(601)
             decision = self.outcome(board, mode, request_id=mode)
@@ -664,7 +664,7 @@ class DecisionFailureTests(DecisionTestCase):
         _, changed_root, _ = self.input_verify.call_args.args
         self.assertTrue(Path(changed_root).exists())
         report = board.call("health", {})["routingHealth"]
-        self.assertEqual(report["budgetExhaustedCount"], 2)
+        self.assertEqual(report["notRespondingCount"], 2)
         self.assertEqual(report["inputChangedCount"], 1)
         self.assertEqual(report["boundsRejectedCount"], 0)
         self.assertEqual(report["failureCount"], 2)
@@ -754,8 +754,9 @@ class DecisionFailureTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         self.use_helper(mode="sleep", sleep="40")
-        with patch.dict(router.BUDGETS["standard"], {"timeoutSeconds": 5}):
-            request = board.store.decisions.request_select({"requestId": "pick-deadline", "task": "slow"})
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE router_settings SET model_response_wait_seconds=5 WHERE id=1")
+        request = board.store.decisions.request_select({"requestId": "pick-deadline", "task": "slow"})
         started = time.monotonic()
         self.run_worker(board, worker_id="w-deadline")
         self.assertLess(time.monotonic() - started, 30)
@@ -926,12 +927,12 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "reason", "note",
                 "evidence",
                 "policyCheck",
-                "budget",
+                "modelResponseWaitSeconds",
                 "routingBasis",
                 "constraints", "requiredCapabilities",
                 "routerCalled",
                 "routingMode", "routerBuddyId", "routerBuddy", "routerProblem",
-                "routerBuddyIds", "routerIdentities", "routerRetryIntervalSeconds", "routingBudget", "routerIndex", "routerTrials",
+                "routerBuddyIds", "routerIdentities", "routerRetryIntervalSeconds", "routerIndex", "routerTrials",
                 "usage",
                 "nativeIdentity",
                 "stopEvidence",

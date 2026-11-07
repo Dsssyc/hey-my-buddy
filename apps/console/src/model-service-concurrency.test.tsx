@@ -42,7 +42,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
 
     models: [], modelNotes: [], modelCorrespondences: [], preferences: [], decisions: [],

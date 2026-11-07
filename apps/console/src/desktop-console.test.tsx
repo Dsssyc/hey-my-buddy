@@ -53,7 +53,7 @@ function fixture(records: Task[] = []) {
   const snapshot: Snapshot = { csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [buddies[0].buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [buddies[0].buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
     preferences: [], ...modelFacts(buddies), modelNotes: [], decisions: [],
     modelServiceConcurrency: [],

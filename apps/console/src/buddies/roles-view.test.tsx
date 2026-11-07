@@ -7,7 +7,7 @@ import type { Snapshot } from "../types";
 import { levelPreference, modelButton, selectModel } from "./page.testing";
 import {
   FLASH, FLASH_ID, GLM, GLM_ID, HIGH, HIGH_ID, MEDIUM, MEDIUM_ID, PENDING, PENDING_ID, SOL, SOL_ID,
-  addButton, addDialog, addRouter, budgetOption, choice, choices, fixture, health, intervalInput, line, listed, modeOption, moveDown, moveUp,
+  addButton, addDialog, addRouter, responseWaitInput, choice, choices, fixture, health, intervalInput, line, listed, modeOption, moveDown, moveUp,
   openRoles, queryAddDialog, queryDraftBar, queryRouterList, remove, rolesRegion, saveButton, section, snapshot, unsavedIn,
 } from "./roles.testing";
 
@@ -135,7 +135,7 @@ describe("the Router list", () => {
     });
     const f = fixture(snapshot({ routers: [MEDIUM_ID], extra: { decisions: Array.from({ length: 50 }, (_, i) => decision(`history-${i}`)) } as unknown as Partial<Snapshot> }));
     await openRoles(f);
-    expect(budgetOption("标准").getAttribute("aria-checked")).toBe("true");
+    expect(responseWaitInput()).toHaveProperty("value", "60");
     expect(screen.queryByRole("checkbox", { name: "自动采纳常规整理结果" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
     expect(screen.queryByRole("button", { name: "请求整理" })).toBeNull();
@@ -482,17 +482,16 @@ describe("what leaves the roles view out of use", () => {
     const user = userEvent.setup();
     await openRoles(f);
     const reason = "浏览器授权已失效，重新授权后可以修改";
-    for (const control of [addButton(), moveDown(MEDIUM), moveUp(FLASH), remove(MEDIUM), intervalInput()]) {
+    for (const control of [addButton(), moveDown(MEDIUM), moveUp(FLASH), remove(MEDIUM), intervalInput(), responseWaitInput()]) {
       expect(control.getAttribute("aria-disabled")).toBe("true");
       expect(control.getAttribute("aria-description")).toBe(reason);
     }
-    expect(budgetOption("简要").getAttribute("aria-disabled")).toBe("true");
     expect(modeOption("快速").getAttribute("aria-description")).toContain(reason);
     await user.click(addButton());
     await user.click(remove(MEDIUM));
     await user.click(moveDown(MEDIUM));
     await user.click(modeOption("快速"));
-    await user.click(budgetOption("简要"));
+    await user.click(responseWaitInput());
     expect(queryAddDialog()).toBeNull();
     expect(listed()).toEqual([MEDIUM, FLASH]);
     expect(modeOption("审阅").getAttribute("aria-checked")).toBe("true");
@@ -550,29 +549,30 @@ describe("the settings of the role", () => {
     expect(patchOf(f.published[0])).toEqual({ configuration: { defaultRoutingMode: "fast" } });
   });
 
-  it("chooses the review budget, writes the limits recorded for the level and publishes the one setting", async () => {
-    const f = fixture(snapshot({ configuration: { routingBudgetLimits: { preset: "standard", timeoutSeconds: 300, toolCalls: 24 } } }));
+  it("sets the model response wait and publishes the one setting", async () => {
+    const f = fixture(snapshot());
     const user = userEvent.setup();
     await openRoles(f);
-    expect(["简要", "标准", "深入"].map(name => budgetOption(name).getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
-    const budget = within(section("审阅预算"));
-    expect(budget.getByText("5 分")).toBeTruthy();
-    expect(budget.getByText("24 次工具调用")).toBeTruthy();
-    expect(budget.getByText("审阅预算").getAttribute("aria-description")).toBeNull();
-    // Limits are recorded for one level only; another level has none to show.
-    await user.click(budgetOption("简要"));
-    expect(budgetOption("简要").getAttribute("aria-checked")).toBe("true");
-    expect(budget.queryByText("5 分")).toBeNull();
-    expect(unsavedIn("审阅预算")).toHaveLength(1);
+    expect(responseWaitInput()).toHaveProperty("value", "60");
+    await user.clear(responseWaitInput());
+    await user.type(responseWaitInput(), "30");
+    expect(responseWaitInput()).toHaveProperty("value", "30");
+    expect(unsavedIn("等待模型开始作答（秒）")).toHaveLength(1);
     await user.click(saveButton());
     await screen.findByText("设置已保存");
-    expect(patchOf(f.published[0])).toEqual({ configuration: { routingBudget: "brief" } });
+    expect(patchOf(f.published[0])).toEqual({ configuration: { modelResponseWaitSeconds: 30 } });
   });
 
-  it("writes no limits when none are recorded", async () => {
+  it.each(["0", "9007199254740992", "2.5", ""])("keeps an invalid response wait %j in the draft and blocks publication", async value => {
     const f = fixture(snapshot());
+    const user = userEvent.setup();
     await openRoles(f);
-    expect(within(section("审阅预算")).queryByText(/\d+ (?:时|分|秒)|工具调用/)).toBeNull();
+    await user.clear(responseWaitInput());
+    if (value) await user.type(responseWaitInput(), value);
+    expect(responseWaitInput()).toHaveProperty("value", value);
+    expect(responseWaitInput().getAttribute("aria-invalid")).toBe("true");
+    await user.click(saveButton());
+    expect(f.published).toHaveLength(0);
   });
 
   it("sets the retry interval in seconds and publishes the one setting", async () => {
@@ -621,14 +621,15 @@ describe("the settings of the role", () => {
     const user = userEvent.setup();
     await openRoles(f);
     await user.click(modeOption("快速"));
-    await user.click(budgetOption("深入"));
+    await user.clear(responseWaitInput());
+    await user.type(responseWaitInput(), "120");
     await user.click(remove(MEDIUM));
-    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("审阅预算").length, unsavedIn("重试间隔").length]).toEqual([1, 1, 1, 0]);
+    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("等待模型开始作答（秒）").length, unsavedIn("重试间隔").length]).toEqual([1, 1, 1, 0]);
     await user.click(modeOption("审阅"));
-    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("审阅预算").length]).toEqual([1, 0, 1]);
+    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("等待模型开始作答（秒）").length]).toEqual([1, 0, 1]);
     await user.click(saveButton());
     await screen.findByText("设置已保存");
-    expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [], routingBudget: "deep" } });
+    expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [], modelResponseWaitSeconds: 120 } });
   });
 });
 
@@ -657,7 +658,7 @@ describe("the records of routing", () => {
   it("writes the window's counts as names with numbers, leaves out what is zero, and does not work out successes", async () => {
     const f = fixture(snapshot({ routingHealth: health({
       sampleCount: 18, failureCount: 4, consecutiveFailures: 2, abstentionCount: 3, cancelledCount: 1,
-      budgetExhaustedCount: 0, boundsRejectedCount: 2,
+      notRespondingCount: 0, boundsRejectedCount: 2,
       lastSuccessAt: "2026-09-25T08:02:00.000Z", lastSuccessDecisionId: "dec-41",
     }) }));
     await openRoles(f);
@@ -668,19 +669,19 @@ describe("the records of routing", () => {
     expect(fact("越界")).toBe("越界2");
     expect(fact("最近成功")).toBe(`最近成功${time("2026-09-25T08:02:00.000Z")}`);
     // A zero, and a count the service does not carry, are not written; nor is a success rate.
-    expect(records().queryByText("超出时限或工具调用上限")).toBeNull();
+    expect(records().queryByText("模型未开始作答")).toBeNull();
     expect(records().queryByText("输入变化")).toBeNull();
     expect(records().queryByText(/成功 \d/)).toBeNull();
     expect(records().getByText("失败").getAttribute("aria-description")).toBeNull();
   });
 
-  it("writes the recorded outcomes of the Router beside the failures: budget, bounds and changed input", async () => {
+  it("writes the recorded outcomes of the Router beside the failures: no response, bounds and changed input", async () => {
     const f = fixture(snapshot({ routingHealth: health({
-      sampleCount: 12, failureCount: 2, budgetExhaustedCount: 3, boundsRejectedCount: 2, inputChangedCount: 1, lastSuccessAt: null,
+      sampleCount: 12, failureCount: 2, notRespondingCount: 3, boundsRejectedCount: 2, inputChangedCount: 1, lastSuccessAt: null,
     }) }));
     await openRoles(f);
     expect(fact("失败")).toBe("失败2 / 12");
-    expect(fact("超出时限或工具调用上限")).toBe("超出时限或工具调用上限3");
+    expect(fact("模型未开始作答")).toBe("模型未开始作答3");
     expect(fact("越界")).toBe("越界2");
     expect(fact("输入变化")).toBe("输入变化1");
     expect(fact("最近成功")).toBe("最近成功无");
@@ -818,16 +819,6 @@ describe("profile plane", () => {
     await user.click(saveButton());
     await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { profileBuddyId: MEDIUM_ID } });
-  });
-
-  it("publishes the profile budget independently", async () => {
-    const f = fixture(snapshot());
-    const user = userEvent.setup();
-    await openRoles(f);
-    await user.click(within(section("画像预算")).getByRole("radio", { name: "标准" }));
-    await user.click(saveButton());
-    await screen.findByText("设置已保存");
-    expect(patchOf(f.published[0])).toEqual({ configuration: { profileBudget: "standard" } });
   });
 
   it("shows a service readiness reason only while one is recorded", async () => {

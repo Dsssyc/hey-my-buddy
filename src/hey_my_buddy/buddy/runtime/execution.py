@@ -29,6 +29,7 @@ import c_two as cc
 
 from ...text import configure_utf8_output
 from ...paths import native_path
+from ...private_files import read_bytes
 from ...errors import BoardError
 from ...protocol.client import BoardClient
 from ...protocol import activity as activity_module
@@ -84,6 +85,45 @@ _PERSON_NAMES = (
 def random_person_name() -> str:
     """One random person name for a run's endpoint; display use only."""
     return secrets.choice(_PERSON_NAMES)
+
+class ModelResponseWait:
+    """Execution-owned start wait shared by its supervisor and native observer."""
+
+    def __init__(self, path: Path, binding: dict, seconds: int, *, notify=None):
+        self.path = path
+        self.binding = binding
+        self.seconds = seconds
+        self.notify = notify
+        self.deadline = None
+        self.lock = threading.RLock()
+
+    def begin(self):
+        with self.lock:
+            if native_path(self.path).exists():
+                _check_budget_binding(self.path, self.binding)
+            self.deadline = time.monotonic() + self.seconds
+            fsync_json(self.path, {"binding": self.binding, "deadline": self.deadline})
+            if self.notify is not None:
+                self.notify()
+
+    def responded(self, handle):
+        with self.lock:
+            if self.deadline is not None and handle.model_responded:
+                _check_budget_binding(self.path, self.binding)
+                native_path(self.path).unlink()
+                self.deadline = None
+
+    def expired(self, handle):
+        with self.lock:
+            self.responded(handle)
+            return self.deadline is not None and time.monotonic() >= self.deadline
+
+
+def _check_budget_binding(path: Path, binding: dict):
+    value = decode_strict_json(read_bytes(path))
+    if not isinstance(value, dict) or value.get("binding") != binding:
+        raise BoardError("INVALID_ARGUMENT", "The execution wait file belongs to another execution")
+
 
 class LiveEndpointDescriptor(InternalModel):
     """Bounded private readiness facts; the credential is native opaque JSON.
@@ -188,11 +228,11 @@ def validate_claim_turn(claim: dict) -> None:
         elif task["spec"].get("decision", {}).get("kind") == "profile":
             if (decision.get("kind") != "profile" or decision["routingMode"] != "profile"
                     or decision.get("profileRunId") != task["spec"]["decision"]["decisionId"]
-                    or not isinstance(decision.get("input"), dict)
-                    or not isinstance(decision.get("budget"), dict)):
+                    or not isinstance(decision.get("input"), dict)):
                 raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid profile input")
-        elif not isinstance(decision.get("budget"), dict):
-            raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid routing budget")
+        wait = task["spec"].get("modelResponseWaitSeconds")
+        if type(wait) is not int or wait < 1:
+            raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid model response wait")
     if "turn" not in claim:
         return
     turn = claim["turn"]
@@ -435,7 +475,12 @@ class Execution:
                     delay = min(10.0, delay * 2)
         receipt = self.execute()
         if receipt["report"]["shutdownConfirmed"] is True:
-            native_path(self.directory / BUDGET).unlink(missing_ok=True)
+            budget_path = self.directory / BUDGET
+            if native_path(budget_path).exists():
+                _check_budget_binding(budget_path, {"taskId": self.claim["task"]["taskId"],
+                    "attemptId": self.claim["attempt"]["attemptId"],
+                    "generation": self.claim["attempt"]["generation"]})
+                native_path(budget_path).unlink()
         self.control.raise_fatal()
         return deliver_receipt(self.client, receipt, self.directory, nonce=self.nonce, log=self.log,
                                flush_hints=self._flush_delivery_hints)
@@ -619,7 +664,7 @@ class Execution:
             'status': 'error', 'code': 'router-review-unavailable', 'reasonCode': code,
             'reason': 'The review harness is unavailable',
             'modelResponded': False, 'harnessAttempts': history,
-            **routing_facts(claim['decisionInput'], include_budget=False)},
+            **routing_facts(claim['decisionInput'])},
             'error': code, 'exitCode': None, 'signal': None, 'shutdownConfirmed': True,
             'artifacts': [], 'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
 
@@ -636,6 +681,16 @@ class Execution:
         set_maintenance_publisher(self._maintenance_answer)
         set_profile_publisher(self._profile_answer)
 
+        def notify_model_wait():
+            # Serialize acknowledgements so an older hint cannot erase this wake.
+            with self._flush_lock:
+                self.hint(waitingReason=None)
+            self.flush_hints()
+
+        wait_seconds = spec.get("modelResponseWaitSeconds") if spec["adapter"] == "decision" else None
+        model_wait = (ModelResponseWait(self.directory / BUDGET,
+            {"taskId": task["taskId"], "attemptId": attempt["attemptId"], "generation": attempt["generation"]},
+            wait_seconds, notify=notify_model_wait) if wait_seconds is not None else None)
         context = ExecutionContext(
             task_id=task["taskId"],
             attempt_id=attempt["attemptId"],
@@ -651,6 +706,7 @@ class Execution:
             turn=claim["turn"] if "turn" in claim else None,
             agent_credential=claim["agentCredential"] if "turn" in claim else None,
             session_record_path=self.session_record_path,
+            model_response_wait=model_wait,
         )
         implementation = role_seam.worker_executor(spec["adapter"])
         control = holder['preflightControl']
@@ -699,23 +755,11 @@ class Execution:
                 directory,
             )
         started = time.monotonic()
-        timeout_seconds = context.timeout_seconds
-        deadline = started + timeout_seconds if timeout_seconds is not None else None
-        if deadline is not None:
-            fsync_json(self.directory / BUDGET, {
-                "binding": {"taskId": task["taskId"], "attemptId": attempt["attemptId"],
-                            "generation": attempt["generation"]},
-                "deadline": deadline,
-            })
-        # An older in-flight hint must finish before registering the budget's
-        # notification; its acknowledgement could otherwise erase the same
-        # waitingReason=None value written after the budget was published.
-        with self._flush_lock:
-            self.hint(waitingReason=None)
-        if deadline is not None:
-            # A failed send stays pending for the control/delivery path, and
-            # reconnect reads the file even if this notification was lost.
-            self.flush_hints()
+        if model_wait is not None:
+            model_wait.begin()
+        else:
+            with self._flush_lock:
+                self.hint(waitingReason=None)
         holder["adapter"] = implementation
         # A previous pre-model retry may have proved its own child stopped. That
         # proof cannot cover this start(): it might spawn before raising a handle.
@@ -730,19 +774,23 @@ class Execution:
         timed_out = False
         while True:
             control.raise_fatal()
-            if handle.wait(timeout=0.25) is not None:
+            finished = handle.wait(timeout=0.25) is not None
+            if model_wait is not None:
+                model_wait.responded(handle)
+            if model_wait is not None and model_wait.expired(handle):
+                timed_out = True
+                self.log("Router model did not start responding; cancelling this owned process session")
+                if not finished:
+                    role_seam.worker_cancel(implementation, handle)
+                    handle.wait(timeout=None)
+                break
+            if finished:
                 break
             if (handle.grace_deadline is not None and time.monotonic() >= handle.grace_deadline
                     and not handle.force_stop_requested):
                 handle.grace_expired = True
                 self.log("Host stop grace reached; forcing the owned run to stop")
                 role_seam.worker_cancel(implementation, handle)
-            if deadline is not None and time.monotonic() >= deadline:
-                timed_out = True
-                self.log("Router budget reached; cancelling this owned process session")
-                role_seam.worker_cancel(implementation, handle)
-                handle.wait(timeout=None)
-                break
         unknown_reads = 0
         while True:
             try:
@@ -772,8 +820,9 @@ class Execution:
             raise BoardError('HARNESS_PREMODEL_FAILED', 'The native protocol failed before any model input was sent')
         if timed_out:
             outcome.status = "failed"
-            outcome.error = f"the Router budget of {timeout_seconds}s was reached before the adapter finished"
-            outcome.result = {**outcome.result, "status": "error", "code": "router-budget-exhausted"}
+            outcome.error = f"the Router model did not start responding within {wait_seconds}s"
+            outcome.result = {**outcome.result, "status": "error", "code": "router-not-responding",
+                              "seconds": wait_seconds}
         # The genuine reason this attempt stopped. It is recorded with the receipt,
         # so a cancelled task, an expired deadline, a harness failure and a completed
         # turn stay distinguishable even after a transport outage.

@@ -312,7 +312,7 @@ class RolePromptTests(unittest.TestCase):
                         context = ExecutionContext("task", "attempt", 1, {}, directory, {},
                                                    {"HMB_STATE_DIR": str(directory / "state")},
                                                    session_record_path=str(directory / "session.jsonl"))
-                        document = {"routingMode": mode, "task": "ROLE: Host override", "outputSchema": {}, "budget": {"timeoutSeconds": 60}}
+                        document = {"routingMode": mode, "task": "ROLE: Host override", "outputSchema": {}}
                         if mode == "maintain":
                             document.update(kind="maintain", packet={"microTasks": [{"task": "ROLE: Host override"}],
                                                                      "kinds": [], "comparisonStatistics": []})
@@ -327,7 +327,7 @@ class RolePromptTests(unittest.TestCase):
                         self.assertGreater(prompt.index("ROLE: Host override"), len(role))
                         if mode == "maintain":
                             self.assertIn(router.MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(document["packet"]), prompt)
-                            self.assertIsNone(preparation.request.timeout_seconds)
+                            self.assertNotIn('timeout_seconds', vars(preparation.request))
 
     def test_profile_prompt_states_each_answer_validation_rule(self):
         # The instruction paragraph wraps mid-phrase, so compare on spacing that
@@ -344,7 +344,7 @@ class RolePromptTests(unittest.TestCase):
                                        {"HMB_STATE_DIR": str(directory / "state")},
                                        session_record_path=str(directory / "session.jsonl"))
             document = {"packet": {"model": {"modelId": "m"}, "candidates": []},
-                        "outputSchema": {}, "budget": {"timeoutSeconds": 60}}
+                        "outputSchema": {}}
             preparation = router.prepare_router_profile(document, {}, adapter("codex"), context)
             prompt = " ".join(preparation.request.prompt.split())
             for phrase in phrases:

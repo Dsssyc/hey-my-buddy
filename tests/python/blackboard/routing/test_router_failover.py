@@ -18,7 +18,7 @@ class RouterFailoverTests(unittest.TestCase):
             "runtime": ("timeout", "provider-error", "native-error", "empty-answer",
                         "answer-invalid-json", "answer-shape", "readonly-budget-exhausted"),
             "publication": ("router-tools-forbidden", "router-tool-evidence-unverified",
-                            "router-budget-exhausted", "router-evidence-out-of-bounds", "router-out-of-bounds"),
+                            "router-not-responding", "router-evidence-out-of-bounds", "router-out-of-bounds"),
         }
         for stage, codes in cases.items():
             for code in codes:

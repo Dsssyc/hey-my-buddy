@@ -65,12 +65,12 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
         self.index += 1
         context = ExecutionContext("task", f"attempt-{self.index}", self.index,
             {"adapter": "codex", "harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
-             "cwd": str(self.cwd), "routerBudgetSeconds": 3},
+             "cwd": str(self.cwd), "modelResponseWaitSeconds": 3},
             self.root / "state" / "attempts" / "task" / f"attempt-{self.index}", {},
             {"HMB_STATE_DIR": str(self.root / "state"), "HMB_RUNTIME_ROOT": str(self.root / "runtime"),
              "HMB_DEV_SOURCE": "1"},
             session_record_path=str(self.root / f"session-{self.index}.jsonl"))
-        request = NoToolStructuredRequest(str(self.cwd), "frozen original prompt", {"type": "object"}, 3)
+        request = NoToolStructuredRequest(str(self.cwd), "frozen original prompt", {"type": "object"})
         module = SimpleNamespace(check_preparation=lambda *_args: None, prepare_run_services=None,
                                  native_evidence=lambda _result: {})
         self.enterContext(mock.patch.dict(RUN_SEAMS, {"codex": module}))
@@ -203,9 +203,9 @@ class PrivateAdapterInvariants(unittest.TestCase):
         evidence = state / "attempts/task/attempt-1"
         context = ExecutionContext("task", "attempt-1", 1,
             {"adapter": "dsh", "harness": "dsh", **dsh_tests.SPEC,
-             "cwd": str(fixture.cwd), "routerBudgetSeconds": 3}, evidence, {}, fixture.environment,
+             "cwd": str(fixture.cwd), "modelResponseWaitSeconds": 3}, evidence, {}, fixture.environment,
             session_record_path=str(fixture.root / "session-attempt-1.jsonl"))
-        request = NoToolStructuredRequest(str(fixture.cwd), "Choose a buddy", dsh_tests.SCHEMA, 3)
+        request = NoToolStructuredRequest(str(fixture.cwd), "Choose a buddy", dsh_tests.SCHEMA)
         handle = start_router_preparation(FastPreparation("dsh",  request, context, fixture.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
         self.assertEqual(handle.wait(8), 0)
@@ -245,11 +245,11 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     spec = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
                 evidence = Path(environment["HMB_STATE_DIR"]) / "attempts/task/attempt"
                 context = ExecutionContext("task", "attempt", 1,
-                    {"adapter": adapter.name, "harness": adapter.name, **spec, "cwd": str(fixture.cwd), "routerBudgetSeconds": 3},
+                    {"adapter": adapter.name, "harness": adapter.name, **spec, "cwd": str(fixture.cwd), "modelResponseWaitSeconds": 3},
                     evidence, {}, environment,
                     session_record_path=str(fixture.root / "session-attempt.jsonl"))
                 native = adapter()
-                request = NoToolStructuredRequest(str(fixture.cwd), "Pick a buddy", codex_fast_tests.SCHEMA, 3)
+                request = NoToolStructuredRequest(str(fixture.cwd), "Pick a buddy", codex_fast_tests.SCHEMA)
                 handle = start_router_preparation(FastPreparation(native.name,  request, context, fixture.cwd))
                 self.addCleanup(lambda h=handle: (h.terminate(grace_seconds=0.1), h.wait(15)) if not h.finished else None)
                 self.assertEqual(handle.wait(8), 0)
@@ -275,7 +275,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         # A review-mode call is a read-only structured invocation of the native
         # adapter; the private-root and partition invariants live on that path.
         request = ReadOnlyStructuredRequest(str(fixture.cwd), "Select from the frozen packet",
-                                             router.answer_schema(["legal"]), router.budget())
+                                             router.answer_schema(["legal"]))
         handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
                                                             (None, fixture.cwd, "fixture-digest")))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
@@ -312,13 +312,12 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     select_fixture(env, fixture.root, "codex", codex_fast_tests.FIXTURE)
                     spec = {"provider": "openai", "model": "fixture-model", "effort": "low"}
                 context = ExecutionContext("task", "attempt", 1,
-                    {"adapter": "decision", "cwd": str(fixture.cwd), "routerBudgetSeconds": 60},
+                    {"adapter": "decision", "cwd": str(fixture.cwd), "modelResponseWaitSeconds": 60},
                     Path(env["HMB_STATE_DIR"]) / "attempts/task/attempt", {}, env,
                     session_record_path=str(fixture.root / "session-attempt.jsonl"),
                     decision_input={"domainNodes": [], "buddy": {"harness": name, **spec},
                         "buddies": [router_candidate()], "routingMode": "fast",
-                        "task": "Select", "outputSchema": router.answer_schema(["legal"]),
-                        "budget": {"timeoutSeconds": 60}})
+                        "task": "Select", "outputSchema": router.answer_schema(["legal"])})
                 decision_adapter = DecisionAdapter()
                 decision_adapter.prepare(context)
                 handle = decision_adapter.start(context)
@@ -363,12 +362,11 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 evidence = state / "attempts" / task_id / attempt_id
                 evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
                 claim = {"task": {"taskId": task_id, "spec": {
-                    "adapter": "decision", "cwd": str(fixture.cwd), "routerBudgetSeconds": 5}},
+                    "adapter": "decision", "cwd": str(fixture.cwd), "modelResponseWaitSeconds": 5}},
                     "attempt": {"taskId": task_id, "attemptId": attempt_id, "generation": 1},
                     "decisionInput": {"domainNodes": [], "buddy": buddy, "buddies": [router_candidate()],
                         "routingMode": "fast", "task": "Select", "requestId": task_id,
-                        "outputSchema": router.answer_schema(["legal"]),
-                        "budget": {"timeoutSeconds": 5}}}
+                        "outputSchema": router.answer_schema(["legal"])}}
                 startup = receipt_directory(state, harness, task_id, attempt_id) / "execution-start.json"
                 native_path(startup.parent).mkdir(mode=0o700, parents=True, exist_ok=True)
                 job_name = f"Local\\HeyMyBuddy-{uuid.uuid4()}" if os.name == "nt" else None

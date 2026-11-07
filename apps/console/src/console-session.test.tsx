@@ -66,7 +66,7 @@ function fixture(options: {
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: session(),
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
     unavailableBuddyCount: 1,
 
@@ -174,7 +174,7 @@ afterEach(() => {
 function envelope(consoleSession: unknown, include = true) {
   return {
     configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "fast", routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" },
+      defaultRoutingMode: "fast", modelResponseWaitSeconds: 60, profileBuddyId: null },
 
     buddies: [], models: [], modelNotes: [], modelCorrespondences: [], preferences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     csrfToken: "csrf", eventCursor: 0,

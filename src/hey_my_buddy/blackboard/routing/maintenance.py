@@ -101,8 +101,8 @@ class Maintenance:
         return response, delay
 
     def _admit(self, connection, *, settings, buddy, packet, trigger_type):
-        current = connection.execute("SELECT maintenance_buddy_id,maintenance_interval_seconds FROM router_settings WHERE id=1").fetchone()
-        if tuple(current) != (settings["maintenance_buddy_id"], settings["maintenance_interval_seconds"]):
+        current = connection.execute("SELECT maintenance_buddy_id,maintenance_interval_seconds,model_response_wait_seconds FROM router_settings WHERE id=1").fetchone()
+        if tuple(current[:2]) != (settings["maintenance_buddy_id"], settings["maintenance_interval_seconds"]):
             return {"status": "settings-changed"}, 0
         active = self._active(connection, self._latest(connection))
         if active is not None:
@@ -115,10 +115,11 @@ class Maintenance:
             "packet": packet, "outputSchema": maintenance_data.answer_schema(packet)})
         identity = {key: buddy[key] for key in schemas.BUDDY_FIELDS}
         document = {"kind": "maintain", "maintenanceRunId": run_id, "buddyId": buddy_id,
-                    "buddy": identity, "routingMode": "fast", "input": reference}
+                    "buddy": identity, "routingMode": "fast", "modelResponseWaitSeconds": current["model_response_wait_seconds"],
+                    "input": reference}
         task_id = self.store.decisions._create_task(
             connection, decision_id=run_id, request_id=run_id,
-            router_budget_seconds=None, now=now,
+            model_response_wait_seconds=document["modelResponseWaitSeconds"], now=now,
             kind="maintain", document=document)
         connection.execute("INSERT INTO maintenance_runs(maintenance_run_id,trigger_type,buddy_id,task_id,state,started_at)"
                            " VALUES(?,?,?,?,'running',?)", (run_id, trigger_type, buddy_id, task_id, now))
@@ -262,7 +263,9 @@ class Maintenance:
                  "decision_generation": attempt["generation"]}, document, output)
             if problem:
                 code = problem["code"]
-        return self.finish(connection, task_id=task["task_id"], now=now, code=code)
+        params = ({"seconds": json.loads(task["spec_json"])["modelResponseWaitSeconds"]}
+                  if code == "router-not-responding" else None)
+        return self.finish(connection, task_id=task["task_id"], now=now, code=code, params=params)
 
 
 class Scheduler:

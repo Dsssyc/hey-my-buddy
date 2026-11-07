@@ -295,7 +295,7 @@ class RouterProbeTests(unittest.TestCase):
             self.assertIsNone(context.agent_credential)
             self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)
             self.assertEqual(context.attempt_id, report["identity"]["attemptId"])
-            self.assertEqual(context.spec["routerBudgetSeconds"], request.budget["timeoutSeconds"])
+            self.assertEqual(context.spec["modelResponseWaitSeconds"], request.budget["timeoutSeconds"])
             self.assertEqual(report["nativeEvidence"]["identity"]["sessionId"], "mock-session")
 
     def test_mutated_input_and_external_sentinel_fail(self):

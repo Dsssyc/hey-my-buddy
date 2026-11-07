@@ -57,10 +57,6 @@ ANSWER_VALIDATION_CODES = frozenset({
     "answer-empty", "answer-not-json", "answer-invalid-json", "answer-shape",
     "answer-unexpected-field",
 })
-#: Extra room after the helper's own bound: the worker deadline must not fire while
-#: the helper is still shutting its detached child down.
-TIMEOUT_GRACE_SECONDS = 10
-
 #: The exploration counter, derived from the recorded routes and served by the
 #: ``workflow_routes(exploration)`` index: the greatest route row carrying a
 #: quota, then the ``counted`` routes after it. Every step is an index seek on
@@ -343,14 +339,14 @@ class DecisionCoordinator:
             task_text = request.get("task") or ""
             sole_candidate: sqlite3.Row | None = None
             resolution = None
-            facts = {"routerBuddyId": None, "routingMode": None, "budget": None, "routerCalled": False}
+            facts = {"routerBuddyId": None, "routingMode": None, "modelResponseWaitSeconds": None, "routerCalled": False}
             expected_seconds = request.get("expectedSeconds", schemas.DEFAULT_EXPECTED_SECONDS)
             snapshot: dict = {"facts": facts, "baseInput": {"task": task_text,
                                                               "expectedSeconds": expected_seconds}, "inspections": []}
             if len(candidates) == 1:
                 # One frozen legal candidate leaves the Router nothing to compare,
                 # so the program selects it directly: no Router task is created and
-                # no Router configuration or model-input byte budget is needed.
+                # no Router configuration or model-input byte limit is needed.
                 sole_candidate = candidates[0]
                 status, reason = "completed", make_reason("single-candidate")
             elif not candidates:
@@ -365,10 +361,6 @@ class DecisionCoordinator:
                 facts = resolution.facts
                 if resolution.problem is not None:
                     request["routerProblem"] = resolution.problem
-                if facts["routingMode"] is not None:
-                    router_budget_seconds = (60 if facts["routingMode"] == "fast" else
-                                             facts["budget"]["timeoutSeconds"])
-                    facts["budget"] = {**facts["budget"], "timeoutSeconds": router_budget_seconds}
                 base_input = self._select_input(
                     connection, request_id=request_id,
                     task_text=task_text, candidates=candidates,
@@ -506,7 +498,7 @@ class DecisionCoordinator:
         }
         return self._create(request_id, request, connection=connection, request_form=request_form)
 
-    def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, router_budget_seconds: int | None, now: str, request_key: str | None = None, kind: str = "select", document: dict | None = None) -> str:
+    def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, model_response_wait_seconds: int, now: str, request_key: str | None = None, kind: str = "select", document: dict | None = None) -> str:
         """Admit one ordinary selection task, using the real queue and capacity.
 
         Each dispatched Router item owns its own internal task; ``request_key``
@@ -527,9 +519,8 @@ class DecisionCoordinator:
             "decision": {"decisionId": decision_id, "kind": kind,
                          **({"document": document} if kind in ("maintain", "profile") else {})},
         }
-        if router_budget_seconds is not None:
-            spec["routerBudgetSeconds"] = router_budget_seconds + TIMEOUT_GRACE_SECONDS
-            spec["decision"]["routerBudgetSeconds"] = router_budget_seconds
+        spec["modelResponseWaitSeconds"] = model_response_wait_seconds
+        spec["decision"]["modelResponseWaitSeconds"] = model_response_wait_seconds
         fingerprint = schemas.spec_fingerprint(spec)
         blocker = self.board._admission_blocker(connection, spec)
         connection.execute(
@@ -600,7 +591,7 @@ class DecisionCoordinator:
         Reused at request creation, at pre-claim advancement and (once the
         confirmed-stop failover consumes it) after a completed item: it always
         copies the frozen base input, grafts only this item's actor identity and
-        same-tier budget, records the immutable dispatch under the new internal
+        response wait, records the immutable dispatch under the new internal
         task, and re-points the request — and its pending workflow route — at that
         task while clearing the previous attempt and output bindings. The
         micro task keeps waiting for routing; no business Worker turn opens.
@@ -611,12 +602,12 @@ class DecisionCoordinator:
         identity_map = {key: resolution.buddy[key] for key in schemas.BUDDY_FIELDS}
         request = json.loads(row["requested_json"])
         facts = router_sequence.request_snapshot(connection, decision_id)["facts"]
-        router_budget_seconds = int(facts["budget"]["timeoutSeconds"])
+        model_response_wait_seconds = facts["modelResponseWaitSeconds"]
         task_id = self._create_task(
             connection,
             decision_id=decision_id,
             request_id=row["request_id"],
-            router_budget_seconds=router_budget_seconds,
+            model_response_wait_seconds=model_response_wait_seconds,
             now=now,
             request_key=f"decision:{row['request_id']}:{int(bool(request.get('selectionRetry')))}:{resolution.router_index}",
         )
@@ -871,7 +862,8 @@ class DecisionCoordinator:
         dispatch = router_sequence.dispatch(connection, task["task_id"])
         checked = {"answer_valid": False, "abstained": False, "changed": False,
                    "code": output["code"] if released else "router-no-answer",
-                   "params": {}, "note": None,
+                   "params": ({"seconds": json.loads(task["spec_json"])["modelResponseWaitSeconds"]}
+                              if released and output["code"] == "router-not-responding" else {}), "note": None,
                    "output": output, "buddy_id": None, "selected": None, "evidence": []}
         completion_event = connection.execute(
             "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='task.completed'"
@@ -992,7 +984,7 @@ class DecisionCoordinator:
                                             (row["decision_id"],)).fetchone()[0]
             router_sequence.freeze_request(connection, row["decision_id"],
                                            snapshot={"facts": {"routerBuddyId": None, "routingMode": None,
-                                                               "budget": None, "routerCalled": False},
+                                                               "modelResponseWaitSeconds": None, "routerCalled": False},
                                                      "baseInput": {"task": request["task"]}, "inspections": []},
                                            now=now, round=next_round)
             connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
@@ -1015,10 +1007,6 @@ class DecisionCoordinator:
             request["routerProblem"] = resolution.problem
         else:
             request.pop("routerProblem", None)
-        if resolution.facts["routingMode"] is not None:
-            router_budget_seconds = (60 if resolution.facts["routingMode"] == "fast"
-                                     else resolution.facts["budget"]["timeoutSeconds"])
-            resolution.facts["budget"] = {**resolution.facts["budget"], "timeoutSeconds": router_budget_seconds}
         document = self._select_input(
             connection, request_id=row["request_id"], task_text=request["task"],
             candidates=candidates, now=now,
@@ -1152,7 +1140,9 @@ class DecisionCoordinator:
             code = output.get("code")
             code = code if (isinstance(code, str) and code.strip() and len(code) <= 128
                             and not any(ord(c) < 32 or ord(c) == 127 for c in code)) else "router-no-answer"
-            return refuse(code, **({"bound": "not-a-candidate"} if code == "router-out-of-bounds" else {}))
+            params = ({"seconds": document["modelResponseWaitSeconds"]} if code == "router-not-responding"
+                      else {"bound": "not-a-candidate"} if code == "router-out-of-bounds" else {})
+            return refuse(code, **params)
         if review and (not isinstance(verification, dict) or verification.get("unchanged") is not True
                        or not isinstance(verification.get("snapshotSha256"), str) or not verification["snapshotSha256"]
                        or "manifestSha256" not in verification):
@@ -1162,13 +1152,9 @@ class DecisionCoordinator:
         if output.get("operation") != "select":
             return refuse("answer-shape")
         usage = output.get("usage")
-        budget = document.get("budget") or {}
         if (not isinstance(usage, dict) or type(usage.get("elapsedMs")) is not int
                 or usage["elapsedMs"] < 0 or type(usage.get("toolCalls")) is not int or usage["toolCalls"] < 0):
             return refuse("router-tool-evidence-unverified")
-        if (usage["elapsedMs"] > budget["timeoutSeconds"] * 1000
-                or (document.get("routingMode") == "review" and usage["toolCalls"] > budget["toolCalls"])):
-            return refuse("router-budget-exhausted")
         problem = self._tool_evidence_problem(row, document, output)
         if problem is None and usage["toolCalls"] != output["toolEvidence"]["toolCalls"]:
             problem = {"code": "router-tool-evidence-unverified"}
@@ -1349,7 +1335,7 @@ class DecisionCoordinator:
             streak = 0
             still_failing = True
             abstentions = cancellations = 0
-            special_counts = {"router-budget-exhausted": 0, "router-out-of-bounds": 0, "router-input-changed": 0}
+            special_counts = {"router-not-responding": 0, "router-out-of-bounds": 0, "router-input-changed": 0}
             for row in rows:
                 code = row["reason_code"]
                 abstained = code == "router-abstained"
@@ -1372,7 +1358,6 @@ class DecisionCoordinator:
             ids = facts.get("routerBuddyIds") or []
             identities = facts.get("routerIdentities") or []
             inspected = {entry["index"]: entry for entry in resolution.inspections}
-            budget_codes = frozenset({"router-budget-exhausted"})
             routers = []
             for index, buddy_id in enumerate(ids):
                 # A nonempty list always carries validated settings, so the
@@ -1401,8 +1386,8 @@ class DecisionCoordinator:
                     "windowSize": limit, "windowEntries": len(window),
                     "windowAnsweredCount": sum(entry["outcome"] == "answered" for entry in window),
                     "windowFailureCount": sum(entry["outcome"] == "no_answer" for entry in window),
-                    "windowBudgetExhaustedCount": sum(entry["outcome"] == "no_answer"
-                                                      and entry.get("code") in budget_codes for entry in window),
+                    "windowNotRespondingCount": sum(entry["outcome"] == "no_answer"
+                                                    and entry.get("code") == "router-not-responding" for entry in window),
                     "windowBoundsRejectedCount": sum(entry["outcome"] == "no_answer"
                                                      and entry.get("code") == "router-out-of-bounds"
                                                      for entry in window),
@@ -1416,7 +1401,7 @@ class DecisionCoordinator:
                 "routers":routers,
                 "windowSize":limit, "sampleCount":len(rows), "failureCount":len(failed),
                 "attemptCount":sum(bool(row["has_attempt"]) for row in rows),
-                "budgetExhaustedCount":special_counts["router-budget-exhausted"],
+                "notRespondingCount":special_counts["router-not-responding"],
                 "boundsRejectedCount":special_counts["router-out-of-bounds"],
                 "inputChangedCount":special_counts["router-input-changed"],
                 "consecutiveFailures":streak, "abstentionCount":abstentions,

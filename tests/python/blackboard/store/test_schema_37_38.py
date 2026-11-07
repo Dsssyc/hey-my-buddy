@@ -1,4 +1,4 @@
-"""Schema 38 opens deletion only to a service's latest correspondence change."""
+"""Schema 38 replaces Router budgets and opens the latest correspondence undo."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -36,6 +36,13 @@ class Schema37To38Tests(unittest.TestCase):
                             / 'fixtures/upgrade-floor/schema-31-stock.sql').read_text(encoding='utf-8'))
                 load_schema36_model_stock(connection)
                 schema_36_37.upgrade(connection)
+                buddy_id = connection.execute('SELECT buddy_id FROM buddies LIMIT 1').fetchone()[0]
+                connection.execute(
+                    'UPDATE router_settings SET default_mode=?,retry_interval_seconds=?,'
+                    'maintenance_buddy_id=?,maintenance_interval_seconds=?,exploration_every=?,'
+                    'profile_buddy_id=? WHERE id=1',
+                    ('review', 47, buddy_id, 7200, 7, buddy_id),
+                )
                 # The form only a schema-37 writer makes: one service with a
                 # user-set change on top of its same-name row.
                 row = connection.execute(
@@ -57,12 +64,30 @@ class Schema37To38Tests(unittest.TestCase):
                 'SELECT rowid FROM model_correspondences WHERE harness=? AND provider=? AND model=?'
                 ' ORDER BY rowid DESC LIMIT 1',
                 (first['harness'], first['provider'], first['model'])).fetchone()[0]
+            router_buddies = [tuple(row) for row in connection.execute(
+                'SELECT position,buddy_id FROM router_buddies ORDER BY position')]
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute('DELETE FROM model_correspondences WHERE rowid=?', (latest,))
             step_upgrade(connection)
             connection.commit()
             self.assertEqual(connection.execute(
                 "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '38')
+            settings = connection.execute('SELECT * FROM router_settings WHERE id=1').fetchone()
+            self.assertEqual(dict(settings), {
+                'id': 1, 'default_mode': 'review', 'model_response_wait_seconds': 60,
+                'retry_interval_seconds': 47, 'maintenance_buddy_id': settings['profile_buddy_id'],
+                'maintenance_interval_seconds': 7200, 'exploration_every': 7,
+                'profile_buddy_id': settings['profile_buddy_id'],
+            })
+            self.assertIsNotNone(settings['profile_buddy_id'])
+            self.assertEqual([tuple(row) for row in connection.execute(
+                'SELECT position,buddy_id FROM router_buddies ORDER BY position')], router_buddies)
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute('UPDATE router_settings SET model_response_wait_seconds=0 WHERE id=1')
+            connection.rollback()
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute("UPDATE router_settings SET model_response_wait_seconds='60' WHERE id=1")
+            connection.rollback()
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute('DELETE FROM model_correspondences WHERE rowid=?', (earliest,))
             connection.rollback()

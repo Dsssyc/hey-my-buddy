@@ -6,13 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Segmented, SegmentedItem } from "@/components/ui/segmented";
 import { reasonText } from "../i18n/reason";
-import type { Configuration, RoutingBudget, Snapshot } from "../types";
+import type { Configuration, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { buddyQuad, withConfiguration } from "./roles";
 
-const BUDGETS = ["brief", "standard", "deep"] as const satisfies readonly RoutingBudget[];
 
 /** Settings for the user-selected buddy that builds public model profiles. */
 export function ProfileSettingsView({ snapshot, editor }: { snapshot: Snapshot; editor: Editor }) {
@@ -27,7 +25,6 @@ export function ProfileSettingsView({ snapshot, editor }: { snapshot: Snapshot; 
   const candidates = editor.view.buddies.filter(buddy => buddy.enabled && buddy.available &&
     snapshot.harnesses?.some(harness => harness.harness === buddy.harness && harness.permissions?.web === "enforced"));
   const dirtyBuddy = !!config && !!snapshot.configuration && config.profileBuddyId !== snapshot.configuration.profileBuddyId;
-  const dirtyBudget = !!config && !!snapshot.configuration && config.profileBudget !== snapshot.configuration.profileBudget;
 
   function change(patch: Partial<Configuration>) {
     if (!locked) editor.update(draft => withConfiguration(draft, patch));
@@ -42,14 +39,6 @@ export function ProfileSettingsView({ snapshot, editor }: { snapshot: Snapshot; 
       </div>
       {snapshot.configuration?.profileUnavailableReason && <p role="status" className="mt-2 text-xs text-ink2">{reasonText(snapshot.configuration.profileUnavailableReason)}</p>}
       <p data-slot="profile-consequence" className="mt-2 text-xs text-ink3">{t("profile.dataFlow")}</p>
-    </Section>
-    <Section name={t("profile.budget")} unsaved={dirtyBudget ? t("unsaved") : undefined}>
-      <Segmented aria-label={t("profile.budget")} value={config?.profileBudget ?? ""}
-        onValueChange={value => change({ profileBudget: value as RoutingBudget })}>
-        {BUDGETS.map(budget => <Hint key={budget} text={locked}>
-          <SegmentedItem value={budget} aria-disabled={!!locked || undefined}>{t(`roles.budget.${budget}`)}</SegmentedItem>
-        </Hint>)}
-      </Segmented>
     </Section>
     <Dialog open={choosing} onOpenChange={setChoosing}><DialogContent aria-describedby={undefined} className="sm:max-w-xl">
       <DialogTitle>{t("profile.choose")}</DialogTitle>

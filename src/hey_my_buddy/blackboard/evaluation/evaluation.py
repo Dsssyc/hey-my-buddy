@@ -27,7 +27,6 @@ class EvaluationStore:
         with self.board.db.read() as connection:
             from ..routing import router
             settings = router.configuration(connection)
-            routing_budget = router.configured_budget(connection)
             _profile_buddy, profile_problem = self.board.profile.readiness(connection)
             configured_ids = settings["routerBuddyIds"]
             configured_marks = ",".join("?" for _ in configured_ids) or "NULL"
@@ -84,7 +83,6 @@ class EvaluationStore:
             "eventCursor": event_cursor,
             "configuration": {
                 **settings,
-                "routingBudgetLimits": routing_budget,
                 "profileUnavailableReason": profile_problem,
             },
             "buddies": buddies,

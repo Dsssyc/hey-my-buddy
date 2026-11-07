@@ -69,7 +69,7 @@ class SingleRouterClaimTests(DecisionTestCase):
 
     def test_settings_edits_do_not_replace_the_queued_claim_input(self):
         for settings in ({'routerBuddyIds': [SECOND_BUDDY_ID]}, {'defaultRoutingMode': 'fast'},
-                         {'routingBudget': 'brief'}):
+                         {'modelResponseWaitSeconds': 30}):
             with self.subTest(settings=settings):
                 board = self.case_board()
                 self.seed(board)
@@ -181,8 +181,6 @@ class SingleRouterClaimTests(DecisionTestCase):
                 ('usage', None, 'router-tool-evidence-unverified'),
                 ('usage', {'elapsedMs': 1, 'toolCalls': False}, 'router-tool-evidence-unverified'),
                 ('usage', {'elapsedMs': 1, 'toolCalls': -1}, 'router-tool-evidence-unverified'),
-                ('usage', {'elapsedMs': 300001, 'toolCalls': 0}, 'router-budget-exhausted'),
-                ('usage', {'elapsedMs': 1, 'toolCalls': 25}, 'router-budget-exhausted'),
                 ('inputVerification', None, 'router-input-changed'),
                 ('inputVerification', {'unchanged': True, 'manifestSha256': None}, 'router-input-changed'),
                 ('inputVerification', {'unchanged': False, 'snapshotSha256': 'changed'}, 'router-input-changed')):

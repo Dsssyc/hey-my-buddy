@@ -136,7 +136,7 @@ export function routerNote(source: Pick<Draft, "configuration" | "buddies">, hea
 }
 
 /** The counts of the window that are written out as names with a number; a count of nothing is left out. */
-const RECORD_COUNTS = ["consecutiveFailures", "abstention", "cancelled", "budgetExhausted", "boundsRejected", "inputChanged"] as const;
+const RECORD_COUNTS = ["consecutiveFailures", "abstention", "cancelled", "notResponding", "boundsRejected", "inputChanged"] as const;
 type RecordCount = (typeof RECORD_COUNTS)[number];
 
 export function recordCounts(health: RoutingHealth): { name: RecordCount; n: number }[] {
@@ -144,7 +144,7 @@ export function recordCounts(health: RoutingHealth): { name: RecordCount; n: num
     consecutiveFailures: health.consecutiveFailures,
     abstention: health.abstentionCount,
     cancelled: health.cancelledCount,
-    budgetExhausted: health.budgetExhaustedCount,
+    notResponding: health.notRespondingCount,
     boundsRejected: health.boundsRejectedCount,
     inputChanged: health.inputChangedCount,
   };

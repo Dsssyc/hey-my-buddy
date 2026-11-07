@@ -7,11 +7,9 @@ import { Section } from "@/components/section";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Segmented, SegmentedItem } from "@/components/ui/segmented";
-import { ROUTER_RETRY_INTERVAL_MAX, ROUTER_RETRY_INTERVAL_MIN, retryIntervalSeconds, validExplorationEvery } from "../console-data";
+import { ROUTER_RETRY_INTERVAL_MAX, ROUTER_RETRY_INTERVAL_MIN, modelResponseWaitSeconds, retryIntervalSeconds, validExplorationEvery } from "../console-data";
 import { routerListEqual } from "../draft";
-import { locale } from "../i18n";
-import { formatDuration } from "../i18n/format";
-import type { Configuration, Buddy, RoutingBudget, RoutingMode, Snapshot } from "../types";
+import type { Configuration, Buddy, RoutingMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import type { ConsoleApi } from "../api";
 import { MaintenanceView } from "./MaintenanceView";
@@ -23,7 +21,6 @@ import { addRouter, buddyQuad, moveRouter, removeRouter, routerLines, routerNote
 import type { RouterNote } from "./roles";
 
 const MODES = ["fast", "review"] as const satisfies readonly RoutingMode[];
-const BUDGETS = ["brief", "standard", "deep"] as const satisfies readonly RoutingBudget[];
 
 /** The sections an address can land on. */
 const LIST_ID = "router-list";
@@ -69,12 +66,13 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
   const unsaved = {
     list: changed && !routerListEqual(recorded.routerBuddyIds, configuration.routerBuddyIds),
     mode: changed && recorded.defaultRoutingMode !== configuration.defaultRoutingMode,
-    budget: changed && recorded.routingBudget !== configuration.routingBudget,
+    responseWait: changed && recorded.modelResponseWaitSeconds !== configuration.modelResponseWaitSeconds,
     exploration: changed && recorded.explorationEvery !== configuration.explorationEvery,
     interval: changed && recorded.routerRetryIntervalSeconds !== configuration.routerRetryIntervalSeconds,
   };
   const mark = (is: boolean) => is ? t("unsaved") : undefined;
-  const limits = recorded?.routingBudgetLimits;
+  const responseWait = configuration?.modelResponseWaitSeconds;
+  const responseWaitInvalid = !!configuration && modelResponseWaitSeconds(responseWait) === null;
   const interval = configuration?.routerRetryIntervalSeconds;
   const intervalInvalid = !!configuration && retryIntervalSeconds(interval) === null;
 
@@ -119,19 +117,17 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
         {configuration && <p data-slot="routing-mode-consequence" className="mt-2 text-xs text-ink3">{t(`roles.mode.${configuration.defaultRoutingMode}Consequence`)}</p>}
       </Section>
 
-      <Section name={t("roles.budget.name")} unsaved={mark(unsaved.budget)}>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-          <Segmented aria-label={t("roles.budget.label")} value={configuration?.routingBudget ?? ""}
-            onValueChange={value => change({ routingBudget: value as RoutingBudget })}>
-            {BUDGETS.map(budget => <Hint key={budget} text={locked}>
-              <SegmentedItem value={budget} aria-disabled={!!locked || undefined}>{t(`roles.budget.${budget}`)}</SegmentedItem>
-            </Hint>)}
-          </Segmented>
-          {/* The limits are recorded for one level only; another level chosen in the draft has none to show. */}
-          {limits && limits.preset === configuration?.routingBudget && <span className="flex flex-wrap gap-x-3 text-xs text-ink2 tabular-nums">
-            <span>{formatDuration(limits.timeoutSeconds * 1000)}</span>
-            <span>{t("roles.budget.toolCalls", { n: limits.toolCalls.toLocaleString(locale) })}</span>
-          </span>}
+      <Section name={t("roles.responseWait.name")} unsaved={mark(unsaved.responseWait)}>
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          <Hint text={locked}>
+            <Input type="number" inputMode="numeric" className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
+              min={1} max={Number.MAX_SAFE_INTEGER} step={1}
+              value={responseWait === undefined || Number.isNaN(responseWait) ? "" : responseWait}
+              readOnly={!!locked} aria-disabled={!!locked || undefined}
+              aria-label={t("roles.responseWait.name")} aria-invalid={responseWaitInvalid || undefined}
+              onChange={event => change({ modelResponseWaitSeconds: event.target.value === "" ? NaN : Number(event.target.value) })} />
+          </Hint>
+          <span className="text-xs text-fail" aria-live="polite">{responseWaitInvalid && t("roles.responseWait.invalid")}</span>
         </div>
       </Section>
 

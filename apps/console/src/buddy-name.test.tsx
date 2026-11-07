@@ -44,7 +44,7 @@ function catalogSnapshot(): Snapshot {
     csrfToken: "fixture-csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [proMaxId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep",
+    configuration: { explorationEvery: 5, routerBuddyIds: [proMaxId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null,
     },
     buddies: [flashOff, proMax],
     preferences: [],

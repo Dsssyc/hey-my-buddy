@@ -27,7 +27,7 @@ class LeadStopPreviewTests(unittest.TestCase):
     def test_model_profile_preview_uses_current_snapshot_and_command_shapes(self):
         snapshot = preview.console_snapshot('normal', True)
         self.assertNotIn('modelServiceNotes', snapshot)
-        self.assertEqual(snapshot['configuration']['profileBudget'], 'deep')
+        self.assertEqual(snapshot['configuration']['modelResponseWaitSeconds'], 60)
         self.assertIn(snapshot['configuration']['profileBuddyId'],
                       {buddy['buddyId'] for buddy in snapshot['buddies']})
         self.assertEqual(snapshot['configuration']['profileUnavailableReason'],

@@ -4,21 +4,15 @@
     "routerBuddyIds": [],
     "routerRetryIntervalSeconds": 600,
     "defaultRoutingMode": "fast",
-    "routingBudget": "standard",
     "maintenanceBuddyId": null,
     "maintenanceIntervalSeconds": 3600,
     "explorationEvery": 5,
     "profileBuddyId": null,
-    "profileBudget": "deep",
-    "routingBudgetLimits": {
-      "preset": "standard",
-      "timeoutSeconds": 300,
-      "toolCalls": 24
-    },
     "profileUnavailableReason": {
       "code": "profile-not-configured",
       "params": {}
-    }
+    },
+    "modelResponseWaitSeconds": 60
   },
   "tasks": {
     "pendingCount": 0

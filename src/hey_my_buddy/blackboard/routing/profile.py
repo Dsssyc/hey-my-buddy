@@ -41,17 +41,17 @@ class Profile:
             if active is not None:
                 return {"status": "running", "profileRunId": active['profile_run_id'], "runId": active['task_id'],
                         "buddyId": active['buddy_id']}
-            settings = connection.execute('SELECT profile_buddy_id,profile_budget FROM router_settings WHERE id=1').fetchone()
+            settings = connection.execute('SELECT profile_buddy_id,model_response_wait_seconds FROM router_settings WHERE id=1').fetchone()
             run_id = 'profile-' + str(uuid.uuid4())
             self.store.db.after_rollback(connection, lambda: self._discard_inputs(run_id))
             packet = profile_data.build_packet(connection, model_id)
             reference = files.publish(self.store.directory, run_id, {"packet": packet, "outputSchema": profile_data.answer_schema()})
             document = {"kind": "profile", "profileRunId": run_id, "buddyId": settings['profile_buddy_id'],
                         "buddy": {key: buddy[key] for key in schemas.BUDDY_FIELDS}, "routingMode": "profile",
-                        "budget": {"preset": settings['profile_budget'], **router.BUDGETS[settings['profile_budget']]}, "input": reference}
+                        "modelResponseWaitSeconds": settings['model_response_wait_seconds'], "input": reference}
             now = self.store.now()
             task_id = self.store.decisions._create_task(connection, decision_id=run_id, request_id=run_id,
-                router_budget_seconds=document['budget']['timeoutSeconds'], now=now, kind='profile', document=document)
+                model_response_wait_seconds=document['modelResponseWaitSeconds'], now=now, kind='profile', document=document)
             connection.execute('INSERT INTO profile_runs(profile_run_id,model_id,buddy_id,task_id,state,started_at) VALUES(?,?,?,?,\'running\',?)',
                                (run_id, model_id, settings['profile_buddy_id'], task_id, now))
             self.store._append_event(connection, 'profile.started', task_id=task_id,
@@ -171,7 +171,8 @@ class Profile:
             code = code or 'router-no-answer'
         if not shutdown_confirmed or attempt['shutdown_confirmed'] != 1:
             code = 'router-stop-unconfirmed'
-        params = {}
+        params = ({'seconds': json.loads(task['spec_json'])['modelResponseWaitSeconds']}
+                  if code == 'router-not-responding' else {})
         checked = None
         if code in (None, 'profile-answer-invalid', 'router-no-answer'):
             event = connection.execute(

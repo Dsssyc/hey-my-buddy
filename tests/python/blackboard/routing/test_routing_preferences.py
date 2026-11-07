@@ -140,7 +140,7 @@ class DecisionCapabilityTests(unittest.TestCase):
                                      "statistics": {"overall": stats, "byDomain": {}, "byDomainTaskType": {}}}],
                         "task": "bounded read"}
             context = ExecutionContext(task_id="microTask", attempt_id="attempt", generation=1,
-                                       spec={"cwd": root, "routerBudgetSeconds": 60}, directory=directory,
+                                       spec={"cwd": root, "modelResponseWaitSeconds": 60}, directory=directory,
                                        runtime={}, environment={"HMB_STATE_DIR": str(Path(root) / "state"),
                                            "HMB_RUNTIME_ROOT": str(Path(root) / "runtime"), "HMB_DEV_SOURCE": "1"}, decision_input=document,
                                        turn={"input": {}}, agent_credential="must-not-pass", session_record_path=None)

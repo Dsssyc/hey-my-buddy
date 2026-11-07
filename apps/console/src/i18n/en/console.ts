@@ -16,7 +16,6 @@ export default {
   "modelCorrespondence": "Model correspondence",
   "routerList": "Router list",
   "defaultRoutingMode": "Default routing mode",
-  "routingBudget": "Routing budget",
   "retryInterval": "Retry interval",
   "concurrencyLimit": "Concurrency limit",
   "routerListForBuddy": "Router list ({{v0}})",

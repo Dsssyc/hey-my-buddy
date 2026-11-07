@@ -70,7 +70,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies: live,
     // `unavailableBuddyCount` counts every unavailable row in the table,
     // including a listed one such as the retained decision buddy; the console

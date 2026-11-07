@@ -52,13 +52,9 @@ export default {
     fastConsequence: "When a Router has to decide, the text of the task is sent to the Router's model provider",
     reviewConsequence: "When a Router has to decide, the text of the task is sent to the Router's model provider, and so is a frozen copy of the code; DSH and ZCode have no system sandbox, so reads and transfers outside the copy cannot be ruled out",
   },
-  budget: {
-    name: "Review budget",
-    label: "Review budget",
-    brief: "Brief",
-    standard: "Standard",
-    deep: "Deep",
-    toolCalls: "{{n}} tool calls",
+  responseWait: {
+    name: "Wait for the model to start responding (seconds)",
+    invalid: "Enter an integer of at least 1",
   },
   exploration: {
     name: "Exploration quota", on: "One in every N", off: "Off", interval: "Micro tasks per exploration quota",
@@ -80,7 +76,7 @@ export default {
     consecutiveFailures: "Failed in a row",
     abstention: "Abstained",
     cancelled: "Cancelled",
-    budgetExhausted: "Time or tool-call limit exceeded",
+    notResponding: "Model did not start responding",
     boundsRejected: "Out of bounds",
     inputChanged: "Input changed",
     lastSuccess: "Last success",

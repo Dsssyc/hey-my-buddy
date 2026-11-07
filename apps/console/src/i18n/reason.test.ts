@@ -15,22 +15,20 @@ const samples: Record<string, unknown> = {
   missingCapabilities: ["decision"], operation: "probe", recordId: "record-1",
   processes: [{ pid: 321, startedAt: 456, executable: "python" }],
   unreadableProcesses: [{ pid: 654, startedAt: 789, executable: "python" }],
-  requiredCapability: "decision", retryAt: "2026-10-18T01:02:03Z", shape: "object", total: 12,
+  requiredCapability: "decision", retryAt: "2026-10-18T01:02:03Z", seconds: 60, shape: "object", total: 12,
   unfinished: [{ runId: "micro-1", state: "executing" }], utf16Units: 32768, version: "0.2.2-rc.1",
 };
 
 afterEach(() => setLanguageChoice("browser"));
 
 describe("the program reason catalog", () => {
-  for (const [language, router, tools, deadline, count] of [
-    ["zh", "Router 超出了这次调用的时限或工具调用上限。", "只读调用超出了工具调用上限。", "Router 超出时限", "超出时限或工具调用上限"],
-    ["en", "The Router exceeded this call's time limit or tool-call limit.", "The read-only call exceeded its tool-call limit.", "Router exceeded its time limit", "Time or tool-call limit exceeded"],
-  ] as const) it(`names the actual execution limits in ${language}`, () => {
+  for (const [language, router, count] of [
+    ["zh", "Router 的模型在 60 秒内没有开始作答。", "模型未开始作答"],
+    ["en", "The Router's model did not start responding within 60 seconds.", "Model did not start responding"],
+  ] as const) it(`names the model response wait in ${language}`, () => {
     setLanguageChoice(language);
-    expect(reasonText({ code: "router-budget-exhausted", params: {} })).toBe(router);
-    expect(reasonText({ code: "readonly-budget-exhausted", params: {} })).toBe(tools);
-    expect(i18n.t("taskDetail:termination.deadline")).toBe(deadline);
-    expect(i18n.t("buddies:roles.records.budgetExhausted")).toBe(count);
+    expect(reasonText({ code: "router-not-responding", params: { seconds: 60 } })).toBe(router);
+    expect(i18n.t("buddies:roles.records.notResponding")).toBe(count);
   });
   it("has exactly the protocol's codes as its Chinese leaves", () => {
     expect(Object.values(zh).every(value => typeof value === "string")).toBe(true);

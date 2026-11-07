@@ -57,7 +57,7 @@ function snapshot(buddies: Buddy[] = [worker], extra: Partial<Snapshot> = {}): S
     csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [worker.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [worker.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
     preferences: [],
 
@@ -243,7 +243,7 @@ describe("blocking new changes", () => {
   it("saves review mode when the first item is fast-only and the next item supports review", () => {
     const first = { ...coder, capabilities: ["routing:fast"] };
     const baseline = makeDraft(snapshot([first, worker], { configuration: { explorationEvery: 5, routerBuddyIds: [first.buddyId, worker.buddyId], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "fast", routingBudget: "standard", profileBuddyId: null, profileBudget: "deep",
+      defaultRoutingMode: "fast", modelResponseWaitSeconds: 60, profileBuddyId: null,
     } }));
     const changed = { ...baseline, configuration: { ...baseline.configuration!, defaultRoutingMode: "review" as const } };
     expect(blockingIssues(baseline, changed)).toEqual([]);
@@ -254,7 +254,7 @@ describe("blocking new changes", () => {
 describe("stale settings needing attention", () => {
   it("reports a stale Router with its resolving action without blocking an unrelated note", () => {
     const baseline = makeDraft(snapshot([worker, retired], {
-      configuration: { explorationEvery: 5, routerBuddyIds: [retired.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
+      configuration: { explorationEvery: 5, routerBuddyIds: [retired.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     }));
     const attention = decisionAttention(baseline)!;
     expect(attention.router).toBe(true);
@@ -289,7 +289,7 @@ describe("stale settings needing attention", () => {
 
   it("treats a missing decision buddy as needing attention, not as an error", () => {
     const baseline = makeDraft(snapshot([worker], {
-      configuration: { explorationEvery: 5, routerBuddyIds: ["gone:model:off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
+      configuration: { explorationEvery: 5, routerBuddyIds: ["gone:model:off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     }));
     expect(decisionAttention(baseline)?.message).toContain("已不在目录中");
     expect(blockingIssues(baseline, baseline)).toEqual([]);

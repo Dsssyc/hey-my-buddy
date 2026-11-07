@@ -59,11 +59,11 @@ test.describe("necessary hover hints and visible consequences", () => {
     await expect(consequence).toContainText("DSH 与 ZCode 没有系统沙盒");
     await consequenceLine(consequence);
     await capture(page, "router-review");
-    const budget = page.getByRole("group", { name: "审阅预算", exact: true });
+    const responseWait = page.getByRole("group", { name: "等待模型开始作答（秒）", exact: true });
     const retry = page.getByRole("group", { name: "重试间隔", exact: true });
     const list = page.getByRole("list", { name: "Router 列表" });
     await quiet(page, [mode.getByText("默认模式", { exact: true }), fast, review,
-      budget.getByText("审阅预算", { exact: true }), retry.getByText("重试间隔", { exact: true }),
+      responseWait.getByText("等待模型开始作答（秒）", { exact: true }), retry.getByText("重试间隔", { exact: true }),
       list.getByRole("button").nth(1), list.getByRole("button").nth(2)]);
     const maintenance = page.locator('[data-slot="maintenance-consequence"]');
     await maintenance.scrollIntoViewIfNeeded();
@@ -85,8 +85,8 @@ test.describe("necessary hover hints and visible consequences", () => {
     await page.getByRole("radio", { name: "审阅", exact: true }).click();
     await page.getByRole("button", { name: "保存", exact: true }).click();
     for (const target of [page.getByRole("radio", { name: "快速", exact: true }),
-      page.getByRole("group", { name: "审阅预算", exact: true }).getByRole("radio", { name: "标准", exact: true }),
-      page.getByRole("group", { name: "画像预算", exact: true }).getByRole("radio", { name: "标准", exact: true }), page.getByRole("spinbutton", { name: "重试间隔秒数" })]) {
+      page.getByRole("spinbutton", { name: "等待模型开始作答（秒）" }),
+      page.getByRole("spinbutton", { name: "重试间隔秒数" })]) {
       await target.hover();
       await expect(page.getByRole("tooltip")).toHaveText("浏览器授权已失效，重新授权后可以修改");
       await page.mouse.move(0, 0);

@@ -1,13 +1,14 @@
 """Adapter contract: how one attempt becomes real external work.
 
 Adapters never receive database handles and never write authoritative state. They
-receive an execution context, own the child process handle, enforce a hard
-deadline when one is supplied, and return a structured result the worker submits through C-Two.
+receive an execution context, own the child process handle, and return a
+structured result the execution process submits through C-Two.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from ...errors import BoardError
 from ...protocol.process_identity import COMMAND_STOP_GRACE_SECONDS
@@ -37,6 +38,8 @@ class ExecutionContext:
     #: file (never into the model-visible turn input) and exported by path.
     agent_credential: str | None = None
     session_record_path: str | None = None
+    #: Execution-local supervision, never serialized or passed to a harness.
+    model_response_wait: Any = None
     effective_workspace: dict | None = field(default=None, init=False)
 
     @property
@@ -49,10 +52,6 @@ class ExecutionContext:
                 self.effective_workspace = turn_manifest(Path(self.environment["HMB_STATE_DIR"]), turn_input)
             return self.effective_workspace["path"]
         return self.spec["cwd"]
-
-    @property
-    def timeout_seconds(self) -> int | None:
-        return self.spec.get("routerBudgetSeconds")
 
     @property
     def turn_input(self) -> dict | None:
@@ -113,7 +112,6 @@ class ReadOnlyStructuredRequest:
     cwd: str
     prompt: str
     output_schema: dict
-    budget: dict
     capture_evidence: bool = False
 
 
@@ -124,7 +122,6 @@ class NoToolStructuredRequest:
     cwd: str
     prompt: str
     output_schema: dict
-    timeout_seconds: int | None = 60
     capture_evidence: bool = False
 
 

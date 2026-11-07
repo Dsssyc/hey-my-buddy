@@ -65,7 +65,7 @@ function fixture() {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" },
+      defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: live,
     unavailableBuddyCount: buddies.filter(p => !p.available).length,
  models: [], modelNotes: [], modelCorrespondences: [], preferences: [],  decisions: [],

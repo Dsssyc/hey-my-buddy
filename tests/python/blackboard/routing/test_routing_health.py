@@ -48,11 +48,11 @@ class RoutingHealthTests(BoardTestCase):
                 " VALUES(?,'running',?)", (decision_id, now))
             if invoked:
                 spec = {"adapter": "decision", "task": "fixture selection",
-                        "decision": {"decisionId": decision_id, "kind": "select", "routerBudgetSeconds": 60}}
+                        "decision": {"decisionId": decision_id, "kind": "select", "modelResponseWaitSeconds": 60}}
                 encoded = canonical_json(spec)
                 task_state = "completed" if receipt_status == "ok" else receipt_status
                 connection.execute(
-                    "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set(?,'$.routerBudgetSeconds',60),?,1,'decision','<private-cwd>',?,1,?,?)",
+                    "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set(?,'$.modelResponseWaitSeconds',60),?,1,'decision','<private-cwd>',?,1,?,?)",
                     (task_id, task_id, encoded, sha256_text(encoded), task_state, now, now))
                 connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,result_form,shutdown_confirmed,finished_at,created_at,updated_at) VALUES(?,?,1,'fixture-nonce','finished','decision',?,'archived-report-v1',1,?,?,?)", (attempt_id, task_id, canonical_json(receipt), now, now, now))
             connection.execute(
@@ -81,7 +81,7 @@ class RoutingHealthTests(BoardTestCase):
         return decision_id, now
 
     def timeout(self):
-        return self.settle(code="router-budget-exhausted", termination="deadline")
+        return self.settle(code="router-not-responding", termination="deadline")
 
     def test_four_timeouts_count_as_failures_while_availability_uses_current_router(self):
         for count in range(1, 5):
@@ -89,26 +89,26 @@ class RoutingHealthTests(BoardTestCase):
             with self.subTest(count=count):
                 health = self.coordinator.health_summary()
                 self.assertIsNone(health["currentRouterBuddyId"])
-                self.assertEqual(health["budgetExhaustedCount"], count)
+                self.assertEqual(health["notRespondingCount"], count)
                 self.assertEqual(health["failureCount"], count)
                 self.assertEqual(health["consecutiveFailures"], count)
                 self.assertFalse(health["available"])
                 self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
                 self.assertEqual(health["recentFailures"][0], {
                     "decisionId": decision_id, "runId": f"task-health-{count}",
-                    "at": now, "code": "router-budget-exhausted"})
+                    "at": now, "code": "router-not-responding"})
 
     def test_cancel_and_program_selection_cannot_restore_health(self):
         for _ in range(3):
             self.timeout()
-            self.settle("cancelled", code="router-budget-exhausted")
+            self.settle("cancelled", code="router-not-responding")
         self.settle("completed", invoked=False, output={
             "programSelection": {"code": "single-candidate", "buddyId": "worker-fixture", "candidateCount": 1}})
         health = self.coordinator.health_summary()
         self.assertFalse(health["available"])
         self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
         self.assertEqual(health["failureCount"], 3)
-        self.assertEqual(health["budgetExhaustedCount"], 3)
+        self.assertEqual(health["notRespondingCount"], 3)
         self.assertEqual(health["consecutiveFailures"], 3)
         self.assertEqual(health["cancelledCount"], 3)
         self.assertIsNone(health["lastSuccessAt"])
@@ -134,7 +134,7 @@ class RoutingHealthTests(BoardTestCase):
         self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
         self.assertEqual(health["failureCount"], 3)
         self.assertEqual(health["consecutiveFailures"], 3)
-        self.assertEqual(health["budgetExhaustedCount"], 1)
+        self.assertEqual(health["notRespondingCount"], 1)
 
     def test_bounds_input_and_abstention_keep_independent_counts_without_recovery(self):
         for _ in range(3):
@@ -147,16 +147,16 @@ class RoutingHealthTests(BoardTestCase):
         self.assertFalse(health["available"])
         self.assertEqual(health["consecutiveFailures"], 3)
         self.assertEqual(health["failureCount"], 3)
-        self.assertEqual(health["budgetExhaustedCount"], 3)
+        self.assertEqual(health["notRespondingCount"], 3)
         self.assertEqual(health["boundsRejectedCount"], 3)
         self.assertEqual(health["inputChangedCount"], 3)
         self.assertEqual(health["abstentionCount"], 3)
 
     def test_budget_without_timeout_evidence_is_failure_not_invented_timeout(self):
         for _ in range(3):
-            self.settle(code="router-budget-exhausted", error="provider says timeout deadline")
+            self.settle(code="router-not-responding", error="provider says timeout deadline")
         health = self.coordinator.health_summary()
-        self.assertEqual(health["budgetExhaustedCount"], 3)
+        self.assertEqual(health["notRespondingCount"], 3)
         self.assertEqual(health["failureCount"], 3)
         self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
 
@@ -172,7 +172,7 @@ class RoutingHealthTests(BoardTestCase):
             self.settle("failed", code=code)
         health = self.coordinator.health_summary()
         self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
-        self.assertEqual(health["budgetExhaustedCount"], 0)
+        self.assertEqual(health["notRespondingCount"], 0)
 
     def test_decision_event_has_no_reason_or_error_copies(self):
         decision_id, _ = self.settle("failed", code="timeout", error="provider diagnostic")
@@ -193,7 +193,7 @@ class RoutingHealthTests(BoardTestCase):
             connection.execute("UPDATE decision_requests SET output_json=? WHERE decision_id=?",
                                (canonical_json({"status": "error", "code": "timeout"}), success_id))
         health = self.coordinator.health_summary()
-        self.assertEqual(health["budgetExhaustedCount"], 1)
+        self.assertEqual(health["notRespondingCount"], 1)
         self.assertEqual(health["failureCount"], 1)
         self.assertEqual(health["lastSuccessAt"], success_at)
         self.assertEqual(health["lastSuccessDecisionId"], success_id)
@@ -206,7 +206,7 @@ class RoutingHealthTests(BoardTestCase):
         self.assertEqual(health["windowSize"], 20)
         self.assertEqual(health["sampleCount"], 20)
         self.assertEqual(health["failureCount"], 20)
-        self.assertEqual(health["budgetExhaustedCount"], 20)
+        self.assertEqual(health["notRespondingCount"], 20)
         self.assertEqual(health["consecutiveFailures"], 20)
         self.assertEqual(len(health["recentFailures"]), 5)
         self.assertEqual(health["lastSuccessAt"], success_at)

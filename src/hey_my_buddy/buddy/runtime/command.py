@@ -70,8 +70,7 @@ class CommandAdapter(Adapter):
             os.close(stdout)
             os.close(stderr)
         handle = ProcessHandle(process, stop_channel="signal", log_paths=log_paths)
-        handle.deadline = (math.inf if context.timeout_seconds is None
-                           else time.monotonic() + context.timeout_seconds)
+        handle.deadline = math.inf
         return handle
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:

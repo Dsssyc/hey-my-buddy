@@ -132,7 +132,7 @@ def _loads(store, connection, services, *, now):
     remaining = defaultdict(list)
     for row in connection.execute(
         "SELECT a.model_harness,a.model_provider,a.model_model,a.started_at,a.created_at,"
-        " COALESCE(w.expected_seconds,json_extract(t.spec_json,'$.expectedSeconds'),json_extract(t.spec_json,'$.routerBudgetSeconds')) AS duration"
+        " COALESCE(w.expected_seconds,json_extract(t.spec_json,'$.expectedSeconds')) AS duration"
         " FROM (SELECT * FROM attempts WHERE " + store.UNRESOLVED_SQL + ") a"
         " JOIN tasks t ON t.task_id=a.task_id"
         " LEFT JOIN workflow_turns w ON w.attempt_id=a.attempt_id WHERE a.model_model IS NOT NULL"
@@ -147,7 +147,7 @@ def _loads(store, connection, services, *, now):
         " COALESCE(d.harness,json_extract(t.spec_json,'$.decision.document.buddy.harness')) AS router_harness,"
         " COALESCE(d.provider,json_extract(t.spec_json,'$.decision.document.buddy.provider')) AS router_provider,"
         " COALESCE(d.model,json_extract(t.spec_json,'$.decision.document.buddy.model')) AS router_model,"
-        " COALESCE(json_extract(t.spec_json,'$.expectedSeconds'),json_extract(t.spec_json,'$.routerBudgetSeconds')) AS duration"
+        " json_extract(t.spec_json,'$.expectedSeconds') AS duration"
         " FROM tasks t LEFT JOIN workflow_runs r ON r.run_id=t.task_id"
         " LEFT JOIN router_dispatches d ON d.task_id=t.task_id WHERE t.state='queued'"
         " ORDER BY t.created_at,t.task_id"

@@ -42,7 +42,7 @@ class CurrentRouterTestCase(BoardTestCase):
                         available, enabled, canonical_json([])))
             ensure_model_service(db, harness, provider, model or buddy_id, self.board_.store.now())
 
-    def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
+    def set_settings(self, *, ids=None, mode=None, wait=None, interval=None):
         """Patch the shared version-3 settings the way a publication would."""
         with self.board_.store.db.write() as db:
             merged = {**router.configuration(db)}
@@ -50,8 +50,8 @@ class CurrentRouterTestCase(BoardTestCase):
                 merged["routerBuddyIds"] = list(ids)
             if mode is not None:
                 merged["defaultRoutingMode"] = mode
-            if budget is not None:
-                merged["routingBudget"] = budget
+            if wait is not None:
+                merged["modelResponseWaitSeconds"] = wait
             if interval is not None:
                 merged["routerRetryIntervalSeconds"] = interval
             router._write_settings(db, merged)
@@ -72,7 +72,7 @@ class CurrentRouterTestCase(BoardTestCase):
     def add_task(self, task_id, *, at=T0, state="completed"):
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','/work',?,1,?,?)",
+                "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set('{}','$.modelResponseWaitSeconds',60),'digest',1,'decision','/work',?,1,?,?)",
                 (task_id, f"task-request-{task_id}", state, at, at))
 
     def add_attempt(self, attempt_id, task_id, *, at=T0, state="finished", receipt=None):
@@ -136,7 +136,7 @@ class ResolutionTests(CurrentRouterTestCase):
     def test_selects_first_eligible_and_snapshots_complete_facts(self):
         self.add_buddy(A, model="alpha")
         self.add_buddy(B, model="bravo")
-        self.set_settings(ids=[A, B], interval=45, budget="deep")
+        self.set_settings(ids=[A, B], interval=45, wait=90)
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
         self.assertEqual(resolution.buddy_id, A)
@@ -146,8 +146,7 @@ class ResolutionTests(CurrentRouterTestCase):
             "routerBuddyIds": [A, B],
             "routerIdentities": [{"harness": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"},
                                  {"harness": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"}],
-            "routingMode": "fast", "routingBudget": "deep", "routerRetryIntervalSeconds": 45,
-            "budget": {"timeoutSeconds": 60},
+            "routingMode": "fast", "modelResponseWaitSeconds": 90, "routerRetryIntervalSeconds": 45,
         })
         self.assertEqual(resolution.inspections[-1]["selected"], True)
         # The buddy is a copy of the published row; mutating it touches nothing.
@@ -155,13 +154,11 @@ class ResolutionTests(CurrentRouterTestCase):
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT model FROM buddies WHERE buddy_id=?",
                                         (A,)).fetchone()[0], "alpha")
-        # Review mode expands the preset budget instead of the fixed fast budget.
-        self.set_settings(mode="review", budget="brief")
+        self.set_settings(mode="review", wait=30)
         with self.board_.store.db.read() as db:
             review = router.current_router(db, now=T0)
         self.assertEqual(review.buddy_id, A)
-        self.assertEqual(review.facts["budget"],
-                         {"preset": "brief", "timeoutSeconds": 60, "toolCalls": 8})
+        self.assertEqual(review.facts["modelResponseWaitSeconds"], 30)
 
     def test_ineligible_items_are_skipped_in_order_with_reasons(self):
         self.add_buddy(A, enabled=0)
@@ -332,18 +329,18 @@ class FrozenContinuationTests(CurrentRouterTestCase):
         self.assertEqual(resolution.buddy_id, B)
         self.assertEqual(resolution.buddy["model"], "bravo")
 
-    def test_frozen_review_deadline_override_survives_next_router_resolution(self):
+    def test_frozen_response_wait_survives_next_router_resolution(self):
         facts = self.prepare()
         self.set_settings(mode="review")
         with self.board_.store.db.read() as db:
             facts = router.current_router(db, now=T0).facts
-        facts["budget"]["timeoutSeconds"] = 77
+        facts["modelResponseWaitSeconds"] = 77
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, frozen=facts, after_index=0, now=T0)
         self.assertEqual(resolution.buddy_id, B)
-        self.assertEqual(resolution.facts["budget"], facts["budget"])
-        resolution.facts["budget"]["timeoutSeconds"] = 88
-        self.assertEqual(facts["budget"]["timeoutSeconds"], 77)
+        self.assertEqual(resolution.facts["modelResponseWaitSeconds"], 77)
+        resolution.facts["modelResponseWaitSeconds"] = 88
+        self.assertEqual(facts["modelResponseWaitSeconds"], 77)
 
 
 class OutcomeFactTests(CurrentRouterTestCase):

@@ -51,15 +51,15 @@ class RouterDispatchTestCase(BoardTestCase):
                         canonical_json([])))
             ensure_model_service(db, "dsh", "fixture", model, self.board_.store.now())
 
-    def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
+    def set_settings(self, *, ids=None, mode=None, wait=None, interval=None):
         with self.board_.store.db.write() as db:
             merged = {**router.configuration(db)}
             if ids is not None:
                 merged["routerBuddyIds"] = list(ids)
             if mode is not None:
                 merged["defaultRoutingMode"] = mode
-            if budget is not None:
-                merged["routingBudget"] = budget
+            if wait is not None:
+                merged["modelResponseWaitSeconds"] = wait
             if interval is not None:
                 merged["routerRetryIntervalSeconds"] = interval
             router._write_settings(db, merged)
@@ -549,7 +549,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual(self.attempts(), [])
 
-    def test_request_snapshot_and_dispatch_preserve_the_settings_budget(self):
+    def test_request_snapshot_and_dispatch_preserve_the_response_wait(self):
         self.set_settings(mode="review")
         with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             response = self.board_.store.decisions.request_select({"requestId": "deadline", "task": "choose"})
@@ -557,9 +557,9 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
             requested = json.loads(self.board_.store.decisions._row(db, response["decisionId"])["requested_json"])
         snapshot = self.snapshot_of(response["decisionId"])
         dispatch = self.dispatch_of(response["runId"])
-        self.assertNotIn("budget", requested)
-        self.assertEqual(dispatch["document"]["budget"], snapshot["facts"]["budget"])
-        self.assertEqual(snapshot["facts"]["budget"]["timeoutSeconds"], 300)
+        self.assertNotIn("modelResponseWaitSeconds", requested)
+        self.assertEqual(dispatch["document"]["modelResponseWaitSeconds"], snapshot["facts"]["modelResponseWaitSeconds"])
+        self.assertEqual(snapshot["facts"]["modelResponseWaitSeconds"], 60)
 
 
 if __name__ == "__main__":

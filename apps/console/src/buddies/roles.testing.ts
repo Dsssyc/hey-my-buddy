@@ -76,7 +76,7 @@ export function snapshot({ routers = [], configuration = {}, routingHealth, sess
     csrfToken: "csrf", eventCursor: 0, consoleSession: sessionPresent ? { id: "fixture-session" } : undefined as unknown as ConsoleSession,
 
     configuration: configuration === null ? null
-      : { explorationEvery: 5, routerBuddyIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", profileBuddyId: null, profileBudget: "deep", profileUnavailableReason: { code: "profile-not-configured", params: {} }, ...configuration },
+      : { explorationEvery: 5, routerBuddyIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", modelResponseWaitSeconds: 60, profileBuddyId: null, profileUnavailableReason: { code: "profile-not-configured", params: {} }, ...configuration },
     buddies: buddies(),
     ...modelFacts(buddies()), modelNotes: [], preferences: [],
  decisions: [],
@@ -140,7 +140,7 @@ export const queryAddDialog = () => screen.queryByRole("dialog", { name: "添加
 export const choices = () => within(addDialog()).getAllByRole("button").filter(button => button.textContent !== "取消");
 export const choice = (quad: string) => within(addDialog()).getByRole("button", { name: new RegExp(`^${quad.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}`) });
 export const modeOption = (name: string) => within(section("默认模式")).getByRole("radio", { name });
-export const budgetOption = (name: string) => within(section("审阅预算")).getByRole("radio", { name });
+export const responseWaitInput = () => within(section("等待模型开始作答（秒）")).getByRole("spinbutton", { name: "等待模型开始作答（秒）" });
 export const intervalInput = () => within(section("重试间隔")).getByRole("spinbutton", { name: "重试间隔秒数" });
 export const saveButton = () => within(screen.getByRole("region", { name: "未保存的修改" })).getByRole("button", { name: /^(保存|重试同一保存)$/ });
 export const queryDraftBar = () => screen.queryByRole("region", { name: "未保存的修改" });

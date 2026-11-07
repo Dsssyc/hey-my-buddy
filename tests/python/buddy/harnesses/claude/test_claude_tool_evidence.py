@@ -546,14 +546,14 @@ class RunnerReceiptTests(unittest.TestCase):
     def context(self, case):
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}", generation=1,
                                 session_record_path=str(self.root / f"session-{uuid.uuid4().hex}.jsonl"),
-                                spec={"cwd": str(self.cwd), "task": "Review the frozen copy", "routerBudgetSeconds": 20,
+                                spec={"cwd": str(self.cwd), "task": "Review the frozen copy", "modelResponseWaitSeconds": 20,
                                       "provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "low"},
                                 directory=self.root / "attempt-1", runtime={},
                                 environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case}, turn=None)
 
-    def run_read_only(self, case, *, tool_calls=8):
+    def run_read_only(self, case):
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]),
-                                            {"timeoutSeconds": 20, "toolCalls": tool_calls})
+                                            capture_evidence=False)
         context = self.context(case)
         handle = start_review("claude", context, request)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
@@ -581,7 +581,7 @@ class RunnerReceiptTests(unittest.TestCase):
     def test_replayed_and_stream_projected_calls_count_once_in_the_receipt(self):
         # A limit of one allows the one real call: the old per-frame block count
         # would have seen three projections and interrupted the turn instead.
-        context, outcome = self.run_read_only("replay", tool_calls=1)
+        context, outcome = self.run_read_only("replay")
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
         self.assertEqual((evidence["toolCalls"], len(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])))), (1, 1))
@@ -618,18 +618,6 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertFalse(evidence["streamComplete"])
         self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read", state_dir=Path(context.environment["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
-
-    def test_budget_exhaustion_reports_the_unified_count_and_an_unfinished_stream(self):
-        context, outcome = self.run_read_only("budget", tool_calls=1)
-        self.assertEqual(outcome.status, "failed", outcome.result)
-        receipt = outcome.result
-        self.assertEqual(receipt["code"], "readonly-budget-exhausted")
-        self.assertEqual(receipt["usage"]["toolCalls"], 2)
-        evidence = receipt["toolEvidence"]
-        self.assertEqual((evidence["toolCalls"], len(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])))), (2, 2))
-        self.assertFalse(evidence["streamComplete"])
-        self.assertTrue(json.loads((self.root / "fixture.json").read_text(encoding="utf-8"))["interrupted"],
-                        "the N+1 call must be interrupted through the native control request")
 
     def test_premature_tool_output_is_collected_before_the_boundary_rejection(self):
         context, outcome = self.run_read_only("premature")

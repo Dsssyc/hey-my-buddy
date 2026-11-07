@@ -84,7 +84,7 @@ function snapshot(routerBuddyId: string | null = solMediumId): SnapshotWithHarne
     consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: routerBuddyId ? [routerBuddyId] : [], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" },
+      defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: buddies(),
     preferences: [], models: [], modelNotes: [], modelCorrespondences: [],
     decisions: [],
@@ -153,7 +153,7 @@ describe("the Buddy page's sections and tables", () => {
     expect(window.location.hash).toBe("#buddies/roles");
     await screen.findByRole("region", { name: "角色" });
     expect(modelsRegion()).toBeNull(); expect(current(sectionsNav())).toEqual(["角色"]);
-    expect(screen.getByRole("radiogroup", { name: "审阅预算" })).toBeTruthy();
+    expect(screen.getByRole("spinbutton", { name: "等待模型开始作答（秒）" })).toBeTruthy();
     await user.click(sectionLink(/^目录/));
     expect(window.location.hash).toBe("#buddies/catalog");
     await waitFor(() => expect(modelsRegion()).toBeTruthy());

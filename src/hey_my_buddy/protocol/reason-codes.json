@@ -191,10 +191,9 @@
   "native-metadata-wait-expired": [],
   "no-legal-candidate": [],
   "not-enabled": [],
-  "readonly-budget-exhausted": [],
   "router-abstained": [],
   "router-all-unavailable": [],
-  "router-budget-exhausted": [],
+  "router-not-responding": ["seconds"],
   "router-catalog-unavailable": [
     "cause"
   ],
@@ -236,7 +235,6 @@
     "retryAt"
   ],
   "router-stop-unconfirmed": [],
-  "router-timeout": [],
   "router-tool-evidence-unverified": [],
   "router-tools-forbidden": [],
   "routing-taken-over": [],

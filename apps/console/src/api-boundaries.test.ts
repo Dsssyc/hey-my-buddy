@@ -10,7 +10,7 @@ import type { Snapshot } from "./types";
 const unsafe = Number.MAX_SAFE_INTEGER + 1;
 const date = "Fri, 09 Oct 2026 18:05:00 GMT"; // Date.parse, rather than ISO-only validation.
 const configuration = { explorationEvery: 5, routerBuddyIds: [" head ", "head"], routerRetryIntervalSeconds: 1,
-  defaultRoutingMode: "fast", routingBudget: "brief", profileBuddyId: null, profileBudget: "deep" };
+  defaultRoutingMode: "fast", modelResponseWaitSeconds: 30, profileBuddyId: null };
 const snapshot = { csrfToken: "", eventCursor: 0, consoleSession: { id: " session " }, configuration,
   buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 } };
 
@@ -34,7 +34,7 @@ describe("authenticated snapshot read boundaries", () => {
   it("preserves unknown fields and the untrimmed session id", async () => {
     const consoleSession = { id: " session ", extra: { retained: true } };
     const value = { ...snapshot, consoleSession, extra: true,
-      configuration: { ...configuration, extra: true, routingBudgetLimits: "unchecked" } };
+      configuration: { ...configuration, extra: true } };
     const parsed = await apiFor(value).snapshot();
     expect(parsed).toMatchObject(value);
     expect(parsed.consoleSession).toBe(consoleSession);
@@ -129,18 +129,19 @@ describe("access, reminders and policy settings", () => {
       ...["", "not-a-date", 0, null].map(updatedAt => ({ ...reminders, updatedAt }))]) invalid(() => parseReminderSettings(value), "reminders");
   });
   it("allows unknown configuration data and distinct whitespace ids, but rejects retired keys even when undefined", () => {
-    expect(validRoutingConfiguration({ ...configuration, extra: true, routingBudgetLimits: null })).toBe(true);
-    for (const key of ["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId"]) {
+    expect(validRoutingConfiguration({ ...configuration, extra: true })).toBe(true);
+    for (const key of ["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId", "routingBudget", "profileBudget", "routingBudgetLimits"]) {
       expect(validRoutingConfiguration({ ...configuration, [key]: undefined })).toBe(false);
     }
     for (const [key, values] of Object.entries({ routerBuddyIds: [null, undefined, [" "], ["a", "a"], [1]],
       routerRetryIntervalSeconds: [null, undefined, 0, 1.5, 2147483648, "1"],
-      defaultRoutingMode: [null, undefined, "other"], routingBudget: [null, undefined, "quick"] })) {
+      defaultRoutingMode: [null, undefined, "other"],
+      modelResponseWaitSeconds: [null, undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "60"] })) {
       for (const value of values) expect(validRoutingConfiguration({ ...configuration, [key]: value })).toBe(false);
     }
-    for (const mode of ["fast", "review"]) for (const budget of ["brief", "standard", "deep"]) {
+    for (const mode of ["fast", "review"]) for (const seconds of [1, 60, 2147483648, Number.MAX_SAFE_INTEGER]) {
       expect(validRoutingConfiguration({ ...configuration, routerRetryIntervalSeconds: 2147483647,
-        defaultRoutingMode: mode, routingBudget: budget })).toBe(true);
+        defaultRoutingMode: mode, modelResponseWaitSeconds: seconds })).toBe(true);
     }
   });
   it("requires exactly three preference keys, including a present nullable note", () => {
@@ -174,11 +175,11 @@ describe("optional Router observations", () => {
       { ...health, recentFailures: [{ decisionId: "d", at: "", code: "c" }] },
       { ...health, unattributed: [{ decisionId: "d", at: "", outcome: "x" }] }];
     for (const key of ["windowSize", "sampleCount", "failureCount", "consecutiveFailures", "abstentionCount", "cancelledCount",
-      "budgetExhaustedCount", "boundsRejectedCount", "inputChangedCount", "attemptCount", "unattributedCount"]) {
+      "notRespondingCount", "boundsRejectedCount", "inputChangedCount", "attemptCount", "unattributedCount"]) {
       for (const count of [null, -1, 0.5, unsafe, "0"]) broken.push({ ...health, [key]: count });
     }
     for (const key of ["index", "consecutiveNoAnswers", "answeredCount", "noAnswerCount", "windowSize", "windowEntries",
-      "windowAnsweredCount", "windowFailureCount", "windowBudgetExhaustedCount", "windowBoundsRejectedCount", "windowAttemptCount"]) {
+      "windowAnsweredCount", "windowFailureCount", "windowNotRespondingCount", "windowBoundsRejectedCount", "windowAttemptCount"]) {
       for (const count of [null, -1, unsafe, 0.5]) broken.push({ ...health, routers: [{ ...router, [key]: count }] });
     }
     for (const extra of [{ buddyId: " " }, { eligible: null }, { identity: [] }, { identity: {} },

@@ -49,7 +49,7 @@ class RouterListHealthTestCase(BoardTestCase):
                 merged["routerRetryIntervalSeconds"] = interval
             router._write_settings(db, merged)
 
-    def record(self, buddy_id, *, outcome="no_answer", request=None, code="router-budget-exhausted", index=0,
+    def record(self, buddy_id, *, outcome="no_answer", request=None, code="router-not-responding", index=0,
                phase="runtime", now=None, task=None, attempt=None):
         """One real R2 fact with its idempotent receipt, through the recording entry.
 
@@ -78,7 +78,7 @@ class RouterListHealthTestCase(BoardTestCase):
                 "SELECT COUNT(*) FROM router_outcomes").fetchone()[0])
             return events, receipts
 
-    def add_legacy_record(self, decision, *, buddy_id=None, kind="decision.failed", code="router-budget-exhausted",
+    def add_legacy_record(self, decision, *, buddy_id=None, kind="decision.failed", code="router-not-responding",
                           at=T0, receipt=None, output=None, candidates=3, dispatched=False):
         """One pre-list routing record: its own frozen input, terminal event and receipt."""
         task_id = attempt_id = None
@@ -87,7 +87,7 @@ class RouterListHealthTestCase(BoardTestCase):
             task_id, attempt_id = f"legacy-task-{self.sequence}", f"legacy-attempt-{self.sequence}"
             with self.db.write() as db:
                 db.execute(
-                    "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','<private>','completed',1,?,?)",
+                    "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set('{}','$.modelResponseWaitSeconds',60),'digest',1,'decision','<private>','completed',1,?,?)",
                     (task_id, task_id, at, at))
                 db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,result_form,shutdown_confirmed,started_at,created_at,updated_at) VALUES(?,?,0,'nonce','finished','decision',?,'archived-report-v1',1,?,?,?)", (attempt_id, task_id, canonical_json(receipt), at, at, at))
         requested = {"kind": "select", "routerBuddyId": buddy_id,
@@ -130,7 +130,7 @@ class OverviewTests(RouterListHealthTestCase):
         self.add_buddy(B)
         self.set_settings(ids=[A, B])
         for _ in range(5):
-            self.record(A, code="router-budget-exhausted", index=0)
+            self.record(A, code="router-not-responding", index=0)
         summary = self.state()
         # A is inside its skip window, so B holds the role even with A's streak.
         self.assertTrue(summary["available"])
@@ -141,9 +141,9 @@ class OverviewTests(RouterListHealthTestCase):
         self.add_buddy(A)
         self.set_settings(ids=[A])
         self.record(A, code="router-out-of-bounds", now=T0)
-        self.record(A, code="router-budget-exhausted", now=self.clock.advance(1))
+        self.record(A, code="router-not-responding", now=self.clock.advance(1))
         entry = self.entry(self.state(), A)
-        self.assertEqual(entry["lastError"], {"code": "router-budget-exhausted", "at": entry["lastError"]["at"],
+        self.assertEqual(entry["lastError"], {"code": "router-not-responding", "at": entry["lastError"]["at"],
                                               "phase": "runtime"})
         self.assertEqual(entry["lastNoAnswerAt"], entry["lastError"]["at"])
 
@@ -151,11 +151,11 @@ class OverviewTests(RouterListHealthTestCase):
         self.add_buddy(A)
         self.set_settings(ids=[A])
         # Two settled business requests, each with a bound attempt.
-        self.add_legacy_record("dec-r1", buddy_id=A, kind="decision.failed", code="router-budget-exhausted",
-                               receipt={"status": "failed", "result": {"status": "error", "code": "router-budget-exhausted"},
+        self.add_legacy_record("dec-r1", buddy_id=A, kind="decision.failed", code="router-not-responding",
+                               receipt={"status": "failed", "result": {"status": "error", "code": "router-not-responding"},
                                         "shutdownConfirmed": True}, dispatched=True)
-        self.add_legacy_record("dec-r2", buddy_id=A, kind="decision.failed", code="router-budget-exhausted",
-                               receipt={"status": "failed", "result": {"status": "error", "code": "router-budget-exhausted"},
+        self.add_legacy_record("dec-r2", buddy_id=A, kind="decision.failed", code="router-not-responding",
+                               receipt={"status": "failed", "result": {"status": "error", "code": "router-not-responding"},
                                         "shutdownConfirmed": True}, dispatched=True)
         summary = self.state()
         self.assertEqual(summary["sampleCount"], 2)
@@ -165,13 +165,13 @@ class OverviewTests(RouterListHealthTestCase):
     def test_normalized_budget_failures_and_bounds_are_counted_separately(self):
         self.add_buddy(A)
         self.set_settings(ids=[A])
-        self.record(A, code="router-budget-exhausted")
-        self.record(A, code="router-budget-exhausted")
-        self.record(A, code="router-budget-exhausted")
+        self.record(A, code="router-not-responding")
+        self.record(A, code="router-not-responding")
+        self.record(A, code="router-not-responding")
         self.record(A, code="router-out-of-bounds")
         entry = self.entry(self.state(), A)
         self.assertEqual(entry["windowFailureCount"], 4)
-        self.assertEqual(entry["windowBudgetExhaustedCount"], 3)
+        self.assertEqual(entry["windowNotRespondingCount"], 3)
         self.assertEqual(entry["windowBoundsRejectedCount"], 1)
         self.assertEqual(entry["consecutiveNoAnswers"], 4)
 
@@ -182,11 +182,11 @@ class PerRouterTests(RouterListHealthTestCase):
         self.add_buddy(B)
         self.set_settings(ids=[A, B])
         for index in range(4):
-            self.record(A, code="router-budget-exhausted", index=0, now=self.clock.advance(60))
+            self.record(A, code="router-not-responding", index=0, now=self.clock.advance(60))
         summary = self.state()
         entry = self.entry(summary, A)
         self.assertEqual(entry["windowFailureCount"], 4)
-        self.assertEqual(entry["windowBudgetExhaustedCount"], 4)
+        self.assertEqual(entry["windowNotRespondingCount"], 4)
         self.assertEqual(entry["consecutiveNoAnswers"], 4)
         self.assertEqual(entry["noAnswerCount"], 4)
         self.assertEqual(entry["answeredCount"], 0)
@@ -200,8 +200,8 @@ class PerRouterTests(RouterListHealthTestCase):
         self.add_buddy(B)
         self.set_settings(ids=[A, B])
         for _ in range(3):
-            self.record(A, code="router-budget-exhausted", index=0)
-            self.record(B, code="router-budget-exhausted", index=1)
+            self.record(A, code="router-not-responding", index=0)
+            self.record(B, code="router-not-responding", index=1)
         self.record(A, outcome="answered", code=None, index=0)
         summary = self.state()
         self.assertEqual(self.entry(summary, A)["consecutiveNoAnswers"], 0)
@@ -213,7 +213,7 @@ class PerRouterTests(RouterListHealthTestCase):
     def test_valid_abstention_is_an_answer_and_recovers(self):
         self.add_buddy(A)
         self.set_settings(ids=[A])
-        self.record(A, code="router-budget-exhausted", index=0)
+        self.record(A, code="router-not-responding", index=0)
         # A valid abstention is recorded as answered by the publication layer.
         self.record(A, outcome="answered", code=None, index=0)
         summary = self.state()
@@ -222,13 +222,13 @@ class PerRouterTests(RouterListHealthTestCase):
         self.assertEqual(entry["answeredCount"], 1)
         self.assertIsNone(entry["skipUntil"])
         # The earlier no-answer stays history; recovery only resets the streak.
-        self.assertEqual(entry["lastError"]["code"], "router-budget-exhausted")
+        self.assertEqual(entry["lastError"]["code"], "router-not-responding")
 
     def test_consecutive_count_ignores_the_window_but_window_counts_do_not(self):
         self.add_buddy(A)
         self.set_settings(ids=[A])
         for index in range(25):
-            self.record(A, code="router-budget-exhausted", index=0, now=self.clock.advance(1))
+            self.record(A, code="router-not-responding", index=0, now=self.clock.advance(1))
         summary = self.state()
         entry = self.entry(summary, A)
         self.assertEqual(entry["consecutiveNoAnswers"], 25)
@@ -236,7 +236,7 @@ class PerRouterTests(RouterListHealthTestCase):
         self.assertEqual(entry["windowSize"], 20)
         self.assertEqual(entry["windowEntries"], 20)
         self.assertEqual(entry["windowFailureCount"], 20)
-        self.assertEqual(entry["windowBudgetExhaustedCount"], 20)
+        self.assertEqual(entry["windowNotRespondingCount"], 20)
 
     def test_window_entries_count_only_recorded_outcomes(self):
         self.add_buddy(A)
@@ -245,7 +245,7 @@ class PerRouterTests(RouterListHealthTestCase):
         self.add_legacy_record("dec-unknown", buddy_id=A, kind="decision.completed",
                                receipt={"status": "failed", "result": {"status": "error"},
                                         "shutdownConfirmed": True})
-        self.record(A, code="router-budget-exhausted", index=0)
+        self.record(A, code="router-not-responding", index=0)
         entry = self.entry(self.state(), A)
         self.assertEqual(entry["windowEntries"], 1)
         self.assertEqual(entry["windowFailureCount"], 1)
@@ -258,7 +258,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
         self.add_buddy(A)
         self.add_buddy(B)
         self.set_settings(ids=[A, B], interval=600)
-        self.record(A, code="router-budget-exhausted", index=0, now=T0)
+        self.record(A, code="router-not-responding", index=0, now=T0)
         self.clock.advance(1)
         summary = self.state()
         self.assertEqual(summary["currentRouterBuddyId"], B)
@@ -274,7 +274,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
         self.add_buddy(A)
         self.add_buddy(B)
         self.set_settings(ids=[A, B], interval=600)
-        self.record(A, code="router-budget-exhausted", index=0, now=T0)
+        self.record(A, code="router-not-responding", index=0, now=T0)
         self.clock.advance(601)
         summary = self.state()
         self.assertEqual(summary["currentRouterBuddyId"], A)
@@ -290,7 +290,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
         self.set_settings(ids=[A], interval=600)
         with self.db.write() as db:
             db.execute(
-                "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES('task-live','req-live',json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','<private>','running',1,?,?)", (T0, T0))
+                "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES('task-live','req-live',json_set('{}','$.modelResponseWaitSeconds',60),'digest',1,'decision','<private>','running',1,?,?)", (T0, T0))
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,created_at,updated_at) VALUES('attempt-live','task-live',1,'nonce','executing','decision',NULL,0,?,?)", (T0, T0))
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES('dec-live','running',?)", (T0,))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,requested_json,updated_at) VALUES('dec-live','req-live','live','{}',?)", (T0,))
@@ -300,7 +300,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
                 buddy={"buddyId": A, **{key: buddy[key] for key in ("harness", "provider", "model", "effort")}},
                 now=T0)
             router_sequence.record_claim(db, task_id='task-live', attempt_id='attempt-live', generation=1, now=T0)
-        self.record(A, code="router-budget-exhausted", index=0, now=T0, task="task-live", attempt="attempt-live")
+        self.record(A, code="router-not-responding", index=0, now=T0, task="task-live", attempt="attempt-live")
         summary = self.state()
         entry = self.entry(summary, A)
         self.assertTrue(entry["retryInProgress"])
@@ -333,8 +333,8 @@ class AttributionTests(RouterListHealthTestCase):
         self.add_buddy(B)
         self.set_settings(ids=[A, B])
         # An old decision record is not a Router outcome receipt.
-        self.add_legacy_record("dec-old", buddy_id=B, kind="decision.failed", code="router-budget-exhausted",
-                               receipt={"status": "failed", "result": {"status": "error", "code": "router-budget-exhausted"},
+        self.add_legacy_record("dec-old", buddy_id=B, kind="decision.failed", code="router-not-responding",
+                               receipt={"status": "failed", "result": {"status": "error", "code": "router-not-responding"},
                                         "shutdownConfirmed": True})
         summary = self.state()
         self.assertEqual(self.entry(summary, B)["noAnswerCount"], 0)
@@ -346,10 +346,10 @@ class AttributionTests(RouterListHealthTestCase):
         self.add_buddy(A)
         self.set_settings(ids=[A])
         # No frozen routerBuddyId although a model ran: attribution is unprovable.
-        self.add_legacy_record("dec-mystery", buddy_id=None, kind="decision.failed", code="router-budget-exhausted",
-                               receipt={"status": "failed", "result": {"status": "error", "code": "router-budget-exhausted"},
+        self.add_legacy_record("dec-mystery", buddy_id=None, kind="decision.failed", code="router-not-responding",
+                               receipt={"status": "failed", "result": {"status": "error", "code": "router-not-responding"},
                                         "shutdownConfirmed": True})
-        self.record(A, code="router-budget-exhausted", index=0)
+        self.record(A, code="router-not-responding", index=0)
         summary = self.state()
         self.assertNotIn("unattributedCount", summary)
         # Neither the buddy's counts nor the total claim it.
@@ -360,7 +360,7 @@ class AttributionTests(RouterListHealthTestCase):
         self.add_buddy(A)
         self.add_buddy(B)
         self.set_settings(ids=[A, B])
-        self.record(B, code="router-budget-exhausted", index=1)
+        self.record(B, code="router-not-responding", index=1)
         self.add_legacy_record("dec-abstain", buddy_id=A, kind="decision.needs_host", code=None,
                                output={"status": "ok", "decision": {"buddyId": None,
                                                                     "reason": "insufficient evidence",
@@ -376,7 +376,7 @@ class NoWriteTests(RouterListHealthTestCase):
         self.add_buddy(A)
         self.add_buddy(B)
         self.set_settings(ids=[A, B], interval=600)
-        self.record(A, code="router-budget-exhausted", index=0, now=T0)
+        self.record(A, code="router-not-responding", index=0, now=T0)
         first = self.state()
         before = self.counts()
         for _ in range(3):

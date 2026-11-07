@@ -106,7 +106,6 @@ def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
     prompt = (MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(document["packet"]) if maintain
               else router.render_prompt(document))
     request = NoToolStructuredRequest(str(root), router_prompt(prompt), document["outputSchema"],
-                                      timeout_seconds=None if maintain else 60,
                                       capture_evidence=document.get("captureEvidence") is True)
     child_context = replace(context, spec={**context.spec, **buddy, "cwd": str(root)}, turn=None, agent_credential=None)
     return role_seam.FastPreparation(harness=native.name, request=request, context=child_context,
@@ -123,11 +122,10 @@ def prepare_router_review(document: dict, buddy: dict, native: Adapter,
     manifest = _review_manifest(document, Path(context.environment["HMB_STATE_DIR"]))
     root, digest = router_input.prepare(
         manifest, ensure_private_dir(context_root(context, native.name)),
-        state_dir=Path(context.environment["HMB_STATE_DIR"]),
-        deadline=time.monotonic() + document["budget"]["timeoutSeconds"])
+        state_dir=Path(context.environment["HMB_STATE_DIR"]))
     try:
         request = ReadOnlyStructuredRequest(str(root), router_prompt(router.render_prompt(document)), document["outputSchema"],
-                                            document["budget"], capture_evidence=document.get("captureEvidence") is True)
+                                            capture_evidence=document.get("captureEvidence") is True)
         child_context = replace(context, spec={**context.spec, **buddy, "cwd": str(root)}, turn=None, agent_credential=None)
         return role_seam.ReviewPreparation(harness=native.name, native=native, request=request, context=child_context,
                                            mirror=(manifest, root, digest))
@@ -142,7 +140,7 @@ def prepare_router_profile(document: dict, buddy: dict, native: Adapter,
     if any(native_path(root).iterdir()):
         raise BoardError("CONFLICT", "The private profile cwd already contains files")
     prompt = router_prompt(PROFILE_INSTRUCTIONS + "\n\n" + canonical_json(document["packet"]))
-    request = ReadOnlyStructuredRequest(str(root), prompt, document["outputSchema"], document["budget"])
+    request = ReadOnlyStructuredRequest(str(root), prompt, document["outputSchema"])
     child_context = replace(context, spec={**context.spec, **buddy, "cwd": str(root)}, turn=None,
                             agent_credential=None)
     return role_seam.ProfilePreparation(native.name, request, child_context, root)
@@ -237,8 +235,7 @@ class DecisionAdapter(Adapter):
                                 "manifestSha256": (document.get("executionWorkspace") or {}).get("manifestSha256")}
             else:
                 verification = router_input.verify(
-                    *handle.router_input, state_dir=state_dir,
-                    deadline=time.monotonic() + document["budget"]["timeoutSeconds"])
+                    *handle.router_input, state_dir=state_dir)
             if verification["unchanged"] is None:
                 raise BoardError("router-input-unknown", "The frozen Router input could not yet be verified")
             # The mirror is a full copy of the frozen input. Once the native group is
@@ -269,15 +266,13 @@ class DecisionAdapter(Adapter):
             **({"profileFeedback": native_result.get("profileFeedback")}
                if document.get("kind") == "profile" else {}),
             "inputVerification": verification,
-            **(router.routing_facts(document, include_budget=False) if document.get("kind", "select") == "select" else {}),
+            **(router.routing_facts(document) if document.get("kind", "select") == "select" else {}),
             "stopEvidence": {"shutdownConfirmed": outcome.shutdown_confirmed,
                              "native": native_result.get("processState"),
                              "nativeInterruptRequested": native_result.get("nativeInterruptRequested"),
                              "nativeInterruptAcknowledged": native_result.get("nativeInterruptAcknowledged")},
         }
         code = native_result.get("code")
-        if code in ("deadline", "timeout", "readonly-budget-exhausted"):
-            code = "router-budget-exhausted"
         if code == "no-tool-violation":
             code = "router-tools-forbidden"
         if code == "readonly-policy-unverified":

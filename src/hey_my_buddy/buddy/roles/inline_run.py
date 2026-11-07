@@ -31,15 +31,12 @@ from .prompts import wrap_up_prompt
 
 
 def _profile_execute(control, handle, module, started):
-    """Correct a profile in fresh native sessions under one web budget."""
+    """Correct a profile in fresh native sessions, each with its own start wait."""
     from ...protocol.capabilities import select_input_limit
     from ...protocol.input_limit import check_prompt_input
     from ..harnesses.runtime_selection import environment_for, selected
     from ...protocol import tool_evidence, usage
 
-    budget = control["profileRequest"]["budget"]
-    deadline = started + budget["timeoutSeconds"]
-    remaining_calls = budget["toolCalls"]
     total_calls = 0
     usage_readings = []
     evidences = []
@@ -53,16 +50,18 @@ def _profile_execute(control, handle, module, started):
     round_index = 0
     stop_reason = None
     while round_index <= 2:
-        remaining_seconds = math.ceil(deadline - time.monotonic())
-        if remaining_seconds <= 0 or (round_index and remaining_calls <= 0):
-            stop_reason = "profile-budget-exhausted"
+        if round_index:
+            handle.model_responded = False
+            if handle.model_response_wait is not None:
+                handle.model_response_wait.begin()
+        if handle.cancelled.is_set():
             break
         invocation_root = ensure_private_dir(Path(control["privateRoot"]) / f"call-{round_index + 1}")
         next_control = {**control, "invocationId": uuid.uuid4().hex,
                         "privateRoot": str(invocation_root)}
         request, services, observing, observer, parts = run_execution.profile_request(
             next_control, module, round_index=round_index, previous_raw=previous_raw,
-            errors=errors, remaining_seconds=remaining_seconds, remaining_calls=remaining_calls)
+            errors=errors)
         handle.request = request
         handle.role_run_active_control = next_control
         handle.role_run_active_identity = request.identity
@@ -77,7 +76,7 @@ def _profile_execute(control, handle, module, started):
             break
         with _inline_live(request, services, handle) as live_services:
             result = run_harness(module, request, observer=partial(handle.observe, observing), services=live_services,
-                                 cancelled=lambda: handle.cancelled.is_set() or time.monotonic() >= deadline)
+                                 cancelled=handle.cancelled.is_set)
         model_responded.append(result.model_responded)
         request_sent.append(result.native_request_sent)
         tools = result.tool_evidence.value if result.tool_evidence is not None else {}
@@ -88,12 +87,8 @@ def _profile_execute(control, handle, module, started):
         if type(calls) is not int:
             calls = 0
         total_calls += calls
-        remaining_calls -= calls
         usage_readings.append(usage.normalize_token_usage(result.usage.value)
                               if result.usage is not None else None)
-        if observer.stop_reason is not None or total_calls > budget["toolCalls"]:
-            stop_reason = "profile-budget-exhausted"
-            break
         if result.end.status != "ok":
             break
         if result.stop_evidence.native.group_state != "gone":
@@ -112,7 +107,7 @@ def _profile_execute(control, handle, module, started):
         previous_raw, errors = raw, feedback["errors"]
         round_index += 1
     if result is None or request is None:
-        raise BoardError("INVALID_ARGUMENT", "The profile budget expired before a native call")
+        raise BoardError("INVALID_ARGUMENT", "The profile was stopped before a native call")
     token_usage = None
     if usage_readings:
         totals = {"version": 1, "source": "profile/native-sessions", "scope": "attempt",

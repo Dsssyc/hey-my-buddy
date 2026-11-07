@@ -64,7 +64,7 @@ class CodexAdapterTests(unittest.TestCase):
                       "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
         return ExecutionContext(session_record_path=str(self.root / f"session-{index}.jsonl"), task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"adapter": "codex", "cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
-                                      **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
+                                      **({"modelResponseWaitSeconds": timeout} if timeout is not None else {}),
                                       "provider": "openai", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_CODEX_FIXTURE_CASE": case},
@@ -99,14 +99,14 @@ class CodexAdapterTests(unittest.TestCase):
             time.sleep(0.05)
         self.fail("the fixture never recorded a started native turn before the cancel")
 
-    def review(self, case, *, index, budget_options=None, capture=True):
+    def review(self, case, *, index, capture=True):
         from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
+        from hey_my_buddy.blackboard.routing.router import answer_schema
         context = self.context(case, index=index)
         context.turn = None
         context.agent_credential = None
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]),
-                                            {**budget(), **(budget_options or {})}, capture_evidence=capture)
+                                            capture_evidence=capture)
         handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
                                                             (None, self.cwd, "fixture-digest")))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
@@ -555,8 +555,8 @@ class CodexAdapterTests(unittest.TestCase):
         context.turn = None
         context.environment['CODEX_HOME'] = str(account_home)
         from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
-        request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']), budget())
+        from hey_my_buddy.blackboard.routing.router import answer_schema
+        request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']))
         handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
                                                             (None, self.cwd, "fixture-digest")))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
@@ -570,24 +570,6 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(thread["home"], context.environment["HOME"])
         self.assertFalse(list(native_path(Path(context.environment["HMB_STATE_DIR"])).rglob("codex-home")))
         self.assertEqual(source_auth.read_text(encoding="utf-8"), 'private fixture auth')
-
-    def test_read_only_budget_interrupts_the_native_turn_and_keeps_unknown_read_bytes(self):
-        result, _context = self.review('readonly-budget', index=45, budget_options={'toolCalls': 0})
-        self.assertEqual(result.status, 'failed', result.result)
-        self.assertEqual(result.result['code'], 'readonly-budget-exhausted')
-        self.assertTrue(result.shutdown_confirmed)
-        # The interrupt facts are the run's own: the request happened and the
-        # native side acknowledged it — never inferred from the confirmed stop.
-        self.assertIs(result.result['nativeInterruptRequested'], True)
-        self.assertTrue(result.result['nativeInterruptAcknowledged'])
-        self.assertEqual(result.result['usage']['toolCalls'], 1)
-
-    def test_denied_raw_tool_call_still_consumes_router_budget(self):
-        result, _context = self.review('readonly-denied-budget', index=46, budget_options={'toolCalls': 0})
-        self.assertEqual(result.result['code'], 'readonly-budget-exhausted')
-        self.assertEqual(result.result['usage']['toolCalls'], 1)
-        self.assertTrue(result.shutdown_confirmed)
-        self.assertEqual(result.result['nativeRawToolEvents'][0]['params']['item']['call_id'], 'denied-1')
 
     def test_readonly_repairs_format_once_in_same_thread_but_not_bounds(self):
         for index, (case, calls) in enumerate((('readonly-repair', 2), ('readonly-outside', 1)), 47):

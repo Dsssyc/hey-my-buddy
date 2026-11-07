@@ -505,7 +505,7 @@ class BoardStore:
             "cwd": row["cwd"],
             "task": spec.get("task"),
             "spec": spec,
-            **({"routerBudgetSeconds": spec.get("routerBudgetSeconds")} if row["adapter"] == "decision"
+            **({"modelResponseWaitSeconds": spec.get("modelResponseWaitSeconds")} if row["adapter"] == "decision"
                else {"expectedSeconds": spec["expectedSeconds"]}),
             "inputFingerprint": row["input_fingerprint"],
             "fingerprintVersion": row["fingerprint_version"],
@@ -2143,7 +2143,7 @@ class BoardStore:
             if attempt["execution_state"] == "finished" and attempt["result_json"] is None:
                 raise BoardError("ATTEMPT_FINISHED", "This execution was released before process creation")
             if termination_reason == "deadline" and attempt["adapter"] != "decision":
-                raise BoardError("INVALID_ARGUMENT", "deadline is reserved for an exhausted Router budget", field="terminationReason")
+                raise BoardError("INVALID_ARGUMENT", "deadline is reserved for a Router model response wait", field="terminationReason")
             if termination_reason in ("wrap-up", "grace-expired") and attempt["grace_deadline"] is None:
                 raise BoardError("INVALID_ARGUMENT", "Wrap-up requires a durable grace deadline",
                                  field="terminationReason")

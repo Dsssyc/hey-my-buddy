@@ -42,7 +42,7 @@ class ProfileExecutionTests(BoardTestCase):
 
     def configure(self):
         self.board_.console_call("user_policy_publish", {"commandId": "profile-settings", "configuration": {
-            "profileBuddyId": PROFILE_BUDDY, "profileBudget": "deep"}})
+            "profileBuddyId": PROFILE_BUDDY, "modelResponseWaitSeconds": 60}})
 
     def start(self):
         return self.board_.console_call("profile_start", {"modelId": self.model_id})
@@ -115,7 +115,7 @@ class ProfileExecutionTests(BoardTestCase):
         self.assertEqual(self.start()["profileRunId"], started["profileRunId"])
         claim = self.claim(started)
         self.assertEqual(claim["decisionInput"]["routingMode"], "profile")
-        self.assertEqual(claim['decisionInput']['budget'], {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64})
+        self.assertEqual(claim['decisionInput']['modelResponseWaitSeconds'], 60)
         self.assertEqual(claim["decisionInput"]["buddy"]["model"], "profile")
         self.assertEqual(self.packet(claim)["model"]["modelId"], self.model_id)
         self.assertIn(CANDIDATE_SERVICE, [{key: item[key] for key in CANDIDATE_SERVICE}

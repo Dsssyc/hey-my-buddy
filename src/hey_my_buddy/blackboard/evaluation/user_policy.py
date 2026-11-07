@@ -204,9 +204,6 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             if connection.execute('SELECT 1 FROM buddies WHERE buddy_id=?', (buddy_id,)).fetchone() is None:
                 raise BoardError('NOT_FOUND', 'Unknown profile buddyId', buddyId=buddy_id)
         router._write_settings(connection, configuration)
-        if 'routingBudget' in configuration:
-            evaluation.board._append_event(connection, 'evaluation.routing_budget_changed',
-                                           payload={'preset': configuration['routingBudget']})
     counts = {
         'buddySettings': len(settings),
         'preferenceChanges': len(preferences),

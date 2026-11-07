@@ -72,10 +72,11 @@ class SelectionPublicationTests(RouterDispatchTestCase):
             requested = json.loads(db.execute("SELECT requested_json FROM decision_requests WHERE decision_id=?",
                                              (request["decisionId"],)).fetchone()[0])
             for key in ("routerBuddyIds", "routerIdentities", "routerBuddyId", "routingMode",
-                        "routingBudget", "routerRetryIntervalSeconds", "budget", "routerBudgetSeconds",
+                        "routerRetryIntervalSeconds", "modelResponseWaitSeconds",
                         "selectionRetryInspections", "routerCalled"):
                 self.assertNotIn(key, requested)
-            self.assertEqual(current_snapshot["facts"]["budget"], current_snapshot["baseInput"]["budget"])
+            self.assertEqual(current_snapshot["facts"]["modelResponseWaitSeconds"],
+                             current_snapshot["baseInput"]["modelResponseWaitSeconds"])
         second = self.next_claim(request)
         self.assertEqual([p["buddyId"] for p in second["decisionInput"]["buddies"]], [A, C])
         self.assertNotEqual(second["task"]["taskId"], first["task"]["taskId"])
@@ -175,7 +176,7 @@ class SelectionPublicationTests(RouterDispatchTestCase):
 
     def test_router_list_and_mode_change_during_call_apply_to_next_route(self):
         request, first = self.start(three=True)
-        self.set_settings(ids=[C], mode="review", budget="deep")
+        self.set_settings(ids=[C], mode="review", wait=90)
         self.report(first, self.answer(first, buddy_id=B))
         view = self.decision_row(request["decisionId"])
         self.assertEqual(view["status"], "completed")

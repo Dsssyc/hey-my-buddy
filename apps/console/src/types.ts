@@ -352,20 +352,17 @@ export type ModelServiceConcurrencySetting = ModelService & { limit: number };
  */
 export type ModelServiceConcurrencyEntry = ModelServiceConcurrencySetting & { active: number };
 const routingMode = z.enum(["fast", "review"]);
-const routingBudget = z.enum(["brief", "standard", "deep"]);
 export type RoutingMode = z.infer<typeof routingMode>;
-export type RoutingBudget = z.infer<typeof routingBudget>;
-type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; toolCalls: number };
 /** The ordered Router list; retired single/dual slot keys are refused even when undefined. */
 export const configurationSchema = z.looseObject({
   routerBuddyIds: z.array(nonblankString).refine(ids => new Set(ids).size === ids.length),
-  routerRetryIntervalSeconds: integer.min(1).max(2147483647), defaultRoutingMode: routingMode, routingBudget,
+  routerRetryIntervalSeconds: integer.min(1).max(2147483647), defaultRoutingMode: routingMode,
+  modelResponseWaitSeconds: integer.min(1).max(Number.MAX_SAFE_INTEGER),
   explorationEvery: integer.min(2).nullable(),
-  routingBudgetLimits: z.custom<RoutingBudgetLimits>().optional(),
   maintenanceBuddyId: nonblankString.nullable().optional(), maintenanceIntervalSeconds: integer.positive().optional(),
-  profileBuddyId: nonblankString.nullable(), profileBudget: routingBudget,
+  profileBuddyId: nonblankString.nullable(),
   profileUnavailableReason: reason.nullish().optional(),
-}).refine(config => !["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId"].some(key => key in config));
+}).refine(config => !["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId", "routingBudget", "profileBudget", "routingBudgetLimits"].some(key => key in config));
 export type Configuration = z.infer<typeof configurationSchema>;
 
 /** The complete published four-part identity of one listed buddy. */
@@ -378,7 +375,7 @@ const routerHealthEntry = z.looseObject({
   retryAt: z.string().nullish(), retryInProgress: z.boolean().optional(), answeredCount: safeCount.optional(),
   noAnswerCount: safeCount.optional(), lastAnsweredAt: z.string().nullish(), lastNoAnswerAt: z.string().nullish(),
   consecutiveNoAnswers: safeCount.optional(), windowSize: safeCount.optional(), windowEntries: safeCount.optional(),
-  windowAnsweredCount: safeCount.optional(), windowFailureCount: safeCount.optional(), windowBudgetExhaustedCount: safeCount.optional(),
+  windowAnsweredCount: safeCount.optional(), windowFailureCount: safeCount.optional(), windowNotRespondingCount: safeCount.optional(),
   windowBoundsRejectedCount: safeCount.optional(), windowAttemptCount: safeCount.optional(),
   lastError: z.looseObject({ code: z.string().nullable(), at: z.string(), phase: z.string().nullish() }).nullish(),
 });
@@ -388,7 +385,7 @@ export const routingHealthSchema = z.looseObject({
   routers: z.array(routerHealthEntry).optional(), unattributedCount: safeCount.optional(),
   unattributed: z.array(z.looseObject({ decisionId: z.string(), at: z.string(), outcome: z.string(), code: z.string().nullable() })).optional(),
   windowSize: safeCount, sampleCount: safeCount, failureCount: safeCount, consecutiveFailures: safeCount,
-  abstentionCount: safeCount, cancelledCount: safeCount, budgetExhaustedCount: safeCount.optional(),
+  abstentionCount: safeCount, cancelledCount: safeCount, notRespondingCount: safeCount.optional(),
   boundsRejectedCount: safeCount.optional(), inputChangedCount: safeCount.optional(), attemptCount: safeCount.optional(),
   lastSuccessAt: z.string().nullable(), lastSuccessDecisionId: z.string().nullable(),
   recentFailures: z.array(z.looseObject({ decisionId: z.string(), runId: z.string().nullable(), at: z.string(), code: z.string() })),

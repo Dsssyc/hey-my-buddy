@@ -214,8 +214,7 @@ class InitialCheckTests(unittest.TestCase):
                 self.control.update(operation=operation, maintenance=maintenance,
                     taskId="task", attemptId="attempt", generation=1, canCorrect=False,
                     noToolRequest={"prompt": prompts.router_prompt("Choose"), "outputSchema": {"type": "object"}},
-                    readOnlyRequest={"prompt": prompts.router_prompt("Choose"), "outputSchema": {"type": "object"},
-                                     "budget": {"toolCalls": 0}})
+                    readOnlyRequest={"prompt": prompts.router_prompt("Choose"), "outputSchema": {"type": "object"}})
                 result, request, verdict, code, calls, _live = self.execute(known(1))
                 self.assertEqual((calls, code), (0, 1))
                 project = run_execution._review_result if operation == "review" else run_execution._fast_result

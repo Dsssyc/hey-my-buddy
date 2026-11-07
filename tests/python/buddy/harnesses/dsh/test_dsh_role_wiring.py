@@ -94,7 +94,7 @@ class DshRoleCase(unittest.TestCase):
             task_id="task", attempt_id=attempt, generation=index,
             session_record_path=str(self.root / f"session-{attempt}.jsonl"),
             spec={**SPEC, "cwd": str(self.cwd), "task": "fixture micro task task",
-                  "expectedSeconds": 1, **({"routerBudgetSeconds": timeout} if timeout is not None else {})},
+                  "expectedSeconds": 1, **({"modelResponseWaitSeconds": timeout} if timeout is not None else {})},
             directory=self.root / "attempts" / attempt, runtime={}, environment=dict(self.environment),
             turn={"turnId": f"turn-{index}", "input": identity})
 
@@ -114,8 +114,8 @@ class DshRoleCase(unittest.TestCase):
         executor.prepare(context)
         handle = executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait((context.timeout_seconds or 15) + 15),
-                             "the role controller did not settle within its deadline")
+        self.assertIsNotNone(handle.wait(35),
+                             "the role controller did not settle")
         return handle, executor.collect(handle, context)
 
 
@@ -293,7 +293,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertEqual(reply.status, "queued", (reply.status, reply.reason_code, reply.error_code))
         thread.join(timeout=60)
         handle = holder[0]
-        self.assertIsNotNone(handle.wait(context.timeout_seconds + 15))
+        self.assertIsNotNone(handle.wait(30))
         outcome = executor.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed",

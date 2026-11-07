@@ -188,14 +188,14 @@ class RouterPublicationTests(WorkflowTestCase):
         self.assertEqual(decision['evidence'], [{'kind': 'annotation', 'ref': 'not-supplied'}])
 
     def test_boundary_and_budget_counters_are_separate(self):
-        for code, counter in [('router-budget-exhausted', 'budgetExhaustedCount'),
+        for code, counter in [('router-not-responding', 'notRespondingCount'),
                               ('router-input-changed', 'inputChangedCount')]:
             with self.subTest(code=code):
                 board, decision = self.settle(None, code=code)
                 self.assertEqual(decision['status'], 'needs-host')
                 health = board.store.decisions.health_summary()
                 self.assertEqual(health[counter], 1)
-                self.assertEqual(health['failureCount'], 1 if code == 'router-budget-exhausted' else 0)
+                self.assertEqual(health['failureCount'], 1 if code == 'router-not-responding' else 0)
                 board.close()
                 self._stack.remove(board)
 
@@ -240,38 +240,38 @@ class RouterPublicationTests(WorkflowTestCase):
         self.assertIsNotNone(claimed)
         self.assertEqual(claimed['decisionInput']['task'], frozen['task'])
 
-    def test_budget_publication_preserves_model_and_schema(self):
+    def test_response_wait_publication_preserves_model_and_schema(self):
         from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
         board = self.board()
         self.seed(board)
         board.console_call('user_policy_publish', {
-            'commandId': 'budget-change',
-            'configuration': {'routingBudget': 'deep'}})
+            'commandId': 'response-wait-change',
+            'configuration': {'modelResponseWaitSeconds': 90}})
         configured = console_snapshot_projection(board.service)[0]['configuration']
-        self.assertEqual(configured['routingBudget'], 'deep')
+        self.assertEqual(configured['modelResponseWaitSeconds'], 90)
         self.assertEqual(configured['routerBuddyIds'], [BUDDY_ID])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
 
-    def test_budget_update_does_not_change_direct_selection_replay(self):
+    def test_response_wait_update_does_not_change_direct_selection_replay(self):
         board = self.board()
         self.seed(board)
-        params = {'requestId': 'stable-budget-request', 'task': 'choose'}
+        params = {'requestId': 'stable-response-wait-request', 'task': 'choose'}
         original = board.store.decisions.request_select(params)
         with board.store.db.write() as connection:
-            connection.execute("UPDATE router_settings SET budget_preset='deep' WHERE id=1")
+            connection.execute("UPDATE router_settings SET model_response_wait_seconds=90 WHERE id=1")
         replay = board.store.decisions.request_select(params)
         self.assertTrue(replay['duplicate'])
         self.assertEqual(replay['decisionId'], original['decisionId'])
         view = board.call('selection_get', {'decisionId': original['decisionId']})['decision']
-        self.assertEqual(view['budget']['preset'], 'standard')
+        self.assertEqual(view['modelResponseWaitSeconds'], 60)
 
     def test_cancellation_keeps_budget_code_out_of_budget_count(self):
-        board, decision = self.settle(None, code='router-budget-exhausted', result_status='cancelled')
+        board, decision = self.settle(None, code='router-not-responding', result_status='cancelled')
         health = board.store.decisions.health_summary()
         self.assertEqual(decision['status'], 'cancelled')
         self.assertEqual(health['cancelledCount'], 1)
-        self.assertEqual(health['budgetExhaustedCount'], 0)
+        self.assertEqual(health['notRespondingCount'], 0)
 
     def test_review_capability_is_derived_from_the_current_declaration(self):
         board = self.board()

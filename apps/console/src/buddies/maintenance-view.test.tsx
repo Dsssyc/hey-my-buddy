@@ -23,7 +23,7 @@ function maintenanceRun(state: "running" | "failed"): Maintenance["runs"][number
   return { maintenanceRunId: "m1", taskId: "maintain-1", triggerType: "manual", buddyId: MEDIUM_ID,
     buddy: { harness: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "medium" }, state,
     startedAt: "2026-10-28T00:00:00Z", finishedAt: state === "failed" ? "2026-10-28T00:05:01Z" : null,
-    reason: state === "failed" ? { code: "router-budget-exhausted", params: {} } : null,
+    reason: state === "failed" ? { code: "router-not-responding", params: { seconds: 60 } } : null,
     usage: { attempts: [{ attemptId: "a1", elapsedMs: null, toolCalls: null,
       tokenUsage: state === "failed" ? { inputTokens: 120, cachedInputTokens: null, outputTokens: 7, source: "native", scope: "attempt" } : null }] } };
 }

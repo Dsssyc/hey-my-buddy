@@ -214,7 +214,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
             "generation": attempt.get("generation"),
         },
         **({"expectedSeconds": view["expectedSeconds"]} if view["adapter"] != "decision"
-           else {"routerBudgetSeconds": view["routerBudgetSeconds"]}),
+           else {"modelResponseWaitSeconds": view["modelResponseWaitSeconds"]}),
         "bridge": bridge,
         "live": live,
         "inquiry": _inquiry_view(message, duplicate) if message else None,

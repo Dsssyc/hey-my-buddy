@@ -628,8 +628,13 @@ class UpgradeFixtureTests(unittest.TestCase):
                     del expected['catalog'], expected['buddies']
                     self.assertEqual(json.loads(new[3]), expected)
             elif name == 'router_settings':
-                self.assertEqual([row[:len(original[0])] for row in actual], original)
-                self.assertEqual(actual[0][-4:], (3600, 5, None, 'deep'))
+                current_columns = ['rowid', *(row[1] for row in connection.execute('PRAGMA table_info(router_settings)'))]
+                keep = [column for column in old_columns[name] if column in current_columns]
+                self.assertEqual([tuple(row[current_columns.index(column)] for column in keep) for row in actual],
+                                 [tuple(row[old_columns[name].index(column)] for column in keep) for row in original])
+                self.assertEqual(actual[0][current_columns.index('model_response_wait_seconds')], 60)
+                self.assertEqual(actual[0][current_columns.index('maintenance_interval_seconds')], 3600)
+                self.assertEqual(actual[0][current_columns.index('exploration_every')], 5)
             elif name in ('decision_requests', 'router_requests'):
                 columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
                 self.assertEqual([tuple(row[columns.index(column)] for column in old_columns[name])

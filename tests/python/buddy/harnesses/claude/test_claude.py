@@ -103,7 +103,7 @@ class ClaudeFixtureCase(unittest.TestCase):
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 session_record_path=str(self.root / f"session-attempt-{index}.jsonl"),
                                 spec={"adapter": "claude", "cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
-                                      **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
+                                      **({"modelResponseWaitSeconds": timeout} if timeout is not None else {}),
                                       "provider": "anthropic", "model": model, "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case},
@@ -656,12 +656,12 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
         from hey_my_buddy.buddy.roles.run_execution import start_review
         from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
+        from hey_my_buddy.blackboard.routing.router import answer_schema
         context = self.context()
         context.turn = None
         context.agent_credential = "must-not-reach-native"
         context.environment["HMB_AGENT_CREDENTIAL_FILE"] = "/private/must-not-reach-native.json"
-        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]), budget())
+        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]))
         handle = start_review("claude", context, request)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(20))

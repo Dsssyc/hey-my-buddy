@@ -37,11 +37,11 @@ class RoutingModesTests(BoardTestCase):
         self.assertEqual(fresh['routerBuddyIds'], [])
         self.seed(board)
         self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode='fast')
-        self.configure(board, routingBudget='brief')
+        self.configure(board, modelResponseWaitSeconds=30)
         settings = self.configuration(board)
         self.assertEqual(settings['routerBuddyIds'], [SECOND_BUDDY_ID])
         self.assertEqual(settings['defaultRoutingMode'], 'fast')
-        self.assertEqual(settings['routingBudget'], 'brief')
+        self.assertEqual(settings['modelResponseWaitSeconds'], 30)
         from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
@@ -56,7 +56,7 @@ class RoutingModesTests(BoardTestCase):
         result = board.store.decisions.request_select({'requestId': 'fast', 'task': 'choose a tiny edit'})
         view = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
         self.assertEqual(view['routingMode'], 'fast')
-        self.assertEqual(view['budget'], {'timeoutSeconds': 60})
+        self.assertEqual(view['modelResponseWaitSeconds'], 60)
         self.assertNotIn('executionWorkspace', view['input'])
         self.assertNotIn('evidence', view['input'])
         self.assertNotIn('file', view['input']['outputSchema']['properties']['evidence']['items']['properties']['kind']['enum'])
@@ -183,5 +183,3 @@ class RoutingModesTests(BoardTestCase):
                 parse_request("submit", {**valid, **payload}, audience="service")
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
             self.assertEqual(raised.exception.details["field"], next(iter(payload)))
-        with self.assertRaises(BoardError):
-            router.budget("quick")

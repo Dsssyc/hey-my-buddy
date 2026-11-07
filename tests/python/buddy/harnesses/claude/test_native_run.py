@@ -1462,31 +1462,30 @@ class StructuredDeliveryTests(NativeRunCase):
         # counted tool fact under its own native call id.
         self.assertEqual([call["callId"] for call in tool_evidence.read_tool_calls(package, state_dir=Path(self.base / "state"))], ["toolu_so_1"])
 
-    def shared_review_observer(self, budget: int):
+    def shared_review_observer(self):
         try:
             from hey_my_buddy.buddy.roles.run_observers import ReviewObserver
         except ImportError:
             self.skipTest("the shared ReviewObserver is not in this baseline; its "
                           "authoritative run is the 3-C validation copy")
-        return ReviewObserver(budget, READ_SCHEMA, "review the frozen packet", can_correct=False)
+        return ReviewObserver(READ_SCHEMA, "review the frozen packet", can_correct=False)
 
-    def test_the_shared_review_observer_stops_an_unqualified_zero_budget_delivery(self):
+    def test_the_shared_review_observer_keeps_an_unqualified_delivery_as_tool_evidence(self):
         self.use_fixture(STREAM_FIXTURE)
         self.fixture_case("structured-unverified")
-        review = self.shared_review_observer(0)
+        review = self.shared_review_observer()
         result = self.execute(self.review_request(), observer=review.observer)
-        self.assertEqual(result.end.status, "cancelled")
-        self.assertEqual(result.end.reason_code, "observer-interrupt")
-        self.assertEqual(review.stop_reason, "readonly-budget-exhausted")
+        self.assertEqual(result.end.status, "ok")
+        self.assertIsNone(review.stop_reason)
         package = result.tool_evidence.value
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(self.base / "state")),
                          tool_evidence.TOOLS_FORBIDDEN)
 
-    def test_the_shared_review_observer_accepts_a_legal_zero_budget_delivery(self):
+    def test_the_shared_review_observer_accepts_a_legal_delivery(self):
         self.use_fixture(STREAM_FIXTURE)
         self.fixture_case("structured-only")
-        review = self.shared_review_observer(0)
+        review = self.shared_review_observer()
         result = self.execute(self.review_request(), observer=review.observer)
         package = self.package_of(result)
         self.assertIsNone(review.stop_reason)

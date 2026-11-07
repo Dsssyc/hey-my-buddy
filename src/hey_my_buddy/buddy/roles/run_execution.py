@@ -96,16 +96,18 @@ class InlineRunHandle:
         self.force_cancelled = threading.Event()
         self.done = threading.Event()
         self.error: BaseException | None = None
-        self.deadline = (time.monotonic() + control["timeoutSeconds"] + grace_seconds
-                         if control["timeoutSeconds"] is not None else math.inf)
+        self.deadline = math.inf
         self.thread: threading.Thread | None = None
         self.live_endpoint = None
         self.model_responded = False
+        self.model_response_wait = None
 
     def observe(self, observer, facts):
         """Retain native model output before the role judges the same facts."""
         if facts.get("modelResponded") is True:
             self.model_responded = True
+            if self.model_response_wait is not None:
+                self.model_response_wait.responded(self)
         return observer(facts)
 
     @property
@@ -277,7 +279,7 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
     if tools is not None:
         payload["toolEvidence"] = tools
     if result.end.reason_code == "observer-interrupt" and verdict.get("stopReason"):
-        payload.update(status="error", code=verdict["stopReason"], error="Read-only tool budget exhausted")
+        payload.update(status="error", code=verdict["stopReason"], error="The structured call observer stopped the run")
     if payload["status"] == "ok":
         raw = (result.value.parsed.value if result.value.parsed is not None else result.value.raw
                ) if result.value is not None else None
@@ -304,9 +306,7 @@ def _profile_result(result, request: RunRequest, verdict: dict) -> dict:
     payload["nativeRequestSent"] = verdict["nativeRequestSent"]
     if verdict.get("tokenUsage") is not None:
         payload["tokenUsage"] = verdict["tokenUsage"]
-    if verdict.get("stopReason") == "profile-budget-exhausted":
-        payload.update(status="error", code="router-budget-exhausted")
-    elif result.end.status == "ok" and verdict.get("profileFeedback") and not verdict["profileFeedback"]["accepted"]:
+    if result.end.status == "ok" and verdict.get("profileFeedback") and not verdict["profileFeedback"]["accepted"]:
         payload.update(status="error", code="profile-answer-invalid")
     return payload
 
@@ -463,7 +463,7 @@ def worker_request(control: dict, module):
                                         native_root=control["nativeRoot"]),
         input_text=prompt, permission=permission,
         output_schema=schema,
-        budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
+        budget=RunBudget(timeout_seconds=None),
         continuation=continuation,
         session_services=descriptions,
     )
@@ -496,7 +496,7 @@ def fast_request(control: dict, module):
                                         native_root=control["nativeRoot"]),
         input_text=base_prompt, permission="none",
         output_schema=request_values["outputSchema"], capture_evidence=request_values.get("captureEvidence") is True,
-        budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
+        budget=RunBudget(timeout_seconds=None),
     )
     if control.get("maintenance"):
         correction = MaintenanceCorrection(request_values["outputSchema"], base_prompt, _maintenance_publisher.get())
@@ -517,16 +517,15 @@ def review_request(control: dict, module):
         private_state=PrivateStatePaths(state_dir=control["stateDir"], invocation_root=control["privateRoot"],
                                         native_root=control["nativeRoot"]),
         input_text=prompt, output_schema=values["outputSchema"], permission="read",
-        budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
+        budget=RunBudget(timeout_seconds=None),
         capture_evidence=values.get("captureEvidence") is True)
-    observer = ReviewObserver(values["budget"]["toolCalls"], values["outputSchema"], prompt,
+    observer = ReviewObserver(values["outputSchema"], prompt,
                               can_correct=control["canCorrect"])
     return request, _native_services(module), observer.observer, observer, prompt.parts
 
 
 def profile_request(control: dict, module, *, round_index: int = 0,
-                    previous_raw=None, errors=None, remaining_seconds: int | None = None,
-                    remaining_calls: int | None = None):
+                    previous_raw=None, errors=None):
     values = control["profileRequest"]
     prompt = structured_prompt(values["prompt"], values["outputSchema"])
     if round_index:
@@ -542,10 +541,9 @@ def profile_request(control: dict, module, *, round_index: int = 0,
         private_state=PrivateStatePaths(state_dir=control["stateDir"],
             invocation_root=control["privateRoot"], native_root=control["nativeRoot"]),
         input_text=prompt, output_schema=values["outputSchema"], permission="web",
-        budget=RunBudget(timeout_seconds=remaining_seconds if remaining_seconds is not None else control["timeoutSeconds"]),
+        budget=RunBudget(timeout_seconds=None),
     )
-    observer = ReviewObserver(remaining_calls if remaining_calls is not None else values["budget"]["toolCalls"],
-                              values["outputSchema"], prompt, can_correct=False)
+    observer = ReviewObserver(values["outputSchema"], prompt, can_correct=False)
     return request, _native_services(module), observer.observer, observer, prompt.parts
 
 
@@ -556,6 +554,7 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
                    taskId=identity.task_id, attemptId=identity.attempt_id,
                    generation=identity.generation)
     handle = InlineRunHandle(control, identity, grace_seconds=grace_seconds)
+    handle.model_response_wait = context.model_response_wait
     def run() -> None:
         from .inline_run import execute
         try:
@@ -621,7 +620,7 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> InlineR
         "sessionRecordPath": context.session_record_path,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "cwd": str(cwd.resolve()),
-        "timeoutSeconds": request.timeout_seconds,
+        "timeoutSeconds": None,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "noToolRequest": request_values,
         "maintenance": (context.spec.get("decision") or {}).get("kind") == "maintain",
@@ -653,12 +652,12 @@ def start_review(name: str, context: ExecutionContext, request) -> InlineRunHand
         "directory": str(context.directory),
         "nativeRoot": str(ensure_private_dir(context_root(context, name) / "review-native")),
         "sessionRecordPath": context.session_record_path,
-        "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
+        "cwd": request.cwd, "timeoutSeconds": None,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "canCorrect": adapter(name).native_resume,
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
-                            "budget": request.budget, "captureEvidence": request.capture_evidence},
+                            "captureEvidence": request.capture_evidence},
     }
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
@@ -674,11 +673,10 @@ def start_profile(name: str, context: ExecutionContext, request) -> InlineRunHan
         "directory": str(context.directory),
         "nativeRoot": str(ensure_private_dir(context_root(context, name) / "profile-native")),
         "sessionRecordPath": context.session_record_path, "cwd": request.cwd,
-        "timeoutSeconds": request.budget["timeoutSeconds"],
+        "timeoutSeconds": None,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
-        "profileRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
-                           "budget": request.budget},
+        "profileRequest": {"prompt": request.prompt, "outputSchema": request.output_schema},
     }
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
@@ -725,7 +723,7 @@ class WorkerRunExecutor:
             "directory": str(resolved_path(context.directory)),
             "privateRoot": str(context_root(context, self.name)), "nativeRoot": str(root),
             "sessionRecordPath": context.session_record_path,
-            "cwd": str(Path(context.cwd).resolve()), "timeoutSeconds": context.timeout_seconds,
+            "cwd": str(Path(context.cwd).resolve()), "timeoutSeconds": None,
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
             "taskFile": str(context.task_file()),
             "inquiry": {key: inquiry[key] for key in ("resultsPath",)},

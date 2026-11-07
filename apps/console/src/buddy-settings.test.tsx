@@ -86,7 +86,7 @@ function snapshot(options: Options = {}): HarnessSnapshot {
     consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: options.routerBuddyId === undefined ? [mediumId] : options.routerBuddyId === null ? [] : [options.routerBuddyId],
-      routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" },
+      routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: buddies(),
     preferences: options.preferences ?? [],
 

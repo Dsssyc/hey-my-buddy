@@ -1162,14 +1162,13 @@ ROUTER_MAINTENANCE_COLUMNS = (
 ROUTER_EXPLORATION_COLUMN = "exploration_every INTEGER DEFAULT 5 CHECK (exploration_every IS NULL OR exploration_every >= 2)"
 ROUTER_PROFILE_COLUMNS = (
     "profile_buddy_id TEXT REFERENCES buddies(buddy_id) ON DELETE RESTRICT",
-    "profile_budget TEXT NOT NULL DEFAULT 'deep' CHECK (profile_budget IN ('brief','standard','deep'))",
 )
 
 ROUTER_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS router_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
-    budget_preset TEXT NOT NULL CHECK (budget_preset IN ('brief','standard','deep')),
+    model_response_wait_seconds INTEGER NOT NULL DEFAULT 60 CHECK (typeof(model_response_wait_seconds)='integer' AND model_response_wait_seconds >= 1),
     retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
 , {', '.join(ROUTER_MAINTENANCE_COLUMNS)}
 , {ROUTER_EXPLORATION_COLUMN}

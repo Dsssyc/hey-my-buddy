@@ -1,4 +1,4 @@
-"""Profile corrections use fresh web sessions under one execution budget."""
+"""Profile corrections use fresh web sessions with independent model start waits."""
 from __future__ import annotations
 
 import tempfile
@@ -14,24 +14,29 @@ from hey_my_buddy.protocol import tool_evidence
 
 
 class ProfileRuntimeTests(unittest.TestCase):
-    def _control(self, root: Path, *, tool_calls=3):
+    def _control(self, root: Path):
         return {
             "operation": "profile", "harness": "codex", "privateRoot": str(root / "invocation"),
             "nativeRoot": str(root / "native"), "stateDir": str(root),
             "sessionRecordPath": None, "cwd": str(root / "cwd"),
-            "timeoutSeconds": 120, "taskId": "task", "attemptId": "attempt", "generation": 1,
+            "timeoutSeconds": None, "taskId": "task", "attemptId": "attempt", "generation": 1,
             "spec": {"provider": "openai", "model": "gpt", "effort": "low"},
-            "profileRequest": {"prompt": "Profile this model", "outputSchema": {"type": "object"},
-                               "budget": {"preset": "brief", "timeoutSeconds": 120,
-                                          "toolCalls": tool_calls}},
+            "profileRequest": {"prompt": "Profile this model", "outputSchema": {"type": "object"}},
         }
 
-    def _run(self, control, responses, *, outcomes=None):
+    def _run(self, control, responses, *, outcomes=None, silent_round=None):
+        from hey_my_buddy.buddy.runtime import execution as execution_module
         seen = []
+        clock = [0.0]
+        self.round_starts = []
         publications = []
         handle = run_execution.InlineRunHandle(control, rc.RunIdentity(
             task_id=control["taskId"], attempt_id=control["attemptId"],
             generation=control["generation"], invocation_id="profile-fixture"), grace_seconds=0)
+
+        wait_path = Path(control["stateDir"]) / "execution-budget.json"
+        handle.model_response_wait = execution_module.ModelResponseWait(wait_path,
+            {"taskId": "task", "attemptId": "attempt", "generation": 1}, 60)
 
         @contextmanager
         def live(_request, _services, _handle):
@@ -42,6 +47,17 @@ class ProfileRuntimeTests(unittest.TestCase):
             self.assertEqual(request.permission, "web")
             self.assertIsNone(request.continuation)
             raw, calls = responses[len(seen) - 1]
+            self.round_starts.append((wait_path.exists(), handle.model_responded))
+            silent = len(seen) == silent_round
+            if silent:
+                clock[0] += 60
+                self.assertTrue(handle.model_response_wait.expired(handle))
+                handle.cancelled.set()
+            else:
+                self.assertEqual(observer({"modelResponded": True, "toolCalls": calls}).action, "continue")
+                self.assertFalse(wait_path.exists())
+                clock[0] += 10_000
+                self.assertFalse(handle.model_response_wait.expired(handle))
             identity = {"sessionId": f"session-{len(seen)}"}
             evidence = tool_evidence.ToolEventEvidence({"harness": "codex", "taskId": "task",
                 "attemptId": "attempt", "generation": 1}, state_dir=Path(control["stateDir"]))
@@ -53,8 +69,8 @@ class ProfileRuntimeTests(unittest.TestCase):
                                   "outcome": outcomes[len(seen) - 1][index] if outcomes else "unknown"})
             result = rc.RunResult(
                 identity=request.identity, harness=request.harness,
-                end=rc.RunEnd(status="ok", native_exit_code=0),
-                model_responded=True, native_request_sent=True,
+                end=rc.RunEnd(status="cancelled" if silent else "ok", native_exit_code=0),
+                model_responded=not silent, native_request_sent=True,
                 buddy=rc.ResultBuddy(requested=request.buddy),
                 native_identity=rc.NativeIdentity(**{"session_id": identity["sessionId"]}),
                 value=rc.RunValue(schema_status="invalid", raw=raw),
@@ -72,11 +88,13 @@ class ProfileRuntimeTests(unittest.TestCase):
 
         token = run_execution._profile_publisher.set(publish)
         try:
-            with mock.patch.object(inline_run, "_inline_live", live), \
+            with mock.patch.object(execution_module, "time", SimpleNamespace(monotonic=lambda: clock[0])), \
+                 mock.patch.object(inline_run, "_inline_live", live), \
                  mock.patch.object(inline_run, "run_harness", side_effect=run), \
                  mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value=None), \
                  mock.patch("hey_my_buddy.protocol.input_limit.check_prompt_input", return_value=SimpleNamespace(blocked=False)), \
                  mock.patch("hey_my_buddy.protocol.capabilities.select_input_limit", return_value=None):
+                handle.model_response_wait.begin()
                 result, request, verdict, code = inline_run._profile_execute(
                     control, handle, SimpleNamespace(prepare_run_services=None),
                                                                                inline_run.time.monotonic())
@@ -93,7 +111,8 @@ class ProfileRuntimeTests(unittest.TestCase):
             self.assertEqual(len(verdict['nativeIdentity']), 3)
         self.assertEqual(code, 0)
         self.assertEqual(len({request.identity.invocation_id for request in seen}), 3)
-        self.assertEqual([request.budget.timeout_seconds for request in seen][0], 120)
+        self.assertEqual([request.budget.timeout_seconds for request in seen], [None, None, None])
+        self.assertEqual(self.round_starts, [(True, False)] * 3)
         self.assertIn('bad one', seen[1].input_text)
         self.assertIn('sourceDate', seen[1].input_text)
         self.assertIn('bad two', seen[2].input_text)
@@ -122,11 +141,21 @@ class ProfileRuntimeTests(unittest.TestCase):
             self.assertIsNone(tool_evidence.judge_tool_evidence(package, 'web', state_dir=Path(directory)))
         self.assertEqual(code, 0)
 
-    def test_rejected_answer_cannot_start_another_session_after_tool_budget(self):
+    def test_rejected_answer_can_start_another_session_after_many_tool_calls(self):
         with tempfile.TemporaryDirectory() as directory:
-            seen, publications, verdict, code = self._run(self._control(Path(directory), tool_calls=1),
-                [('bad one', 1), ('unused', 0)])
-        self.assertEqual(len(seen), 1)
+            seen, publications, verdict, code = self._run(self._control(Path(directory)),
+                [('bad one', 65), ('good', 65)])
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(code, 0)
+        self.assertEqual(verdict['toolCalls'], 130)
+        self.assertIsNone(verdict['stopReason'])
+        self.assertEqual(self.round_starts, [(True, False), (True, False)])
+
+    def test_a_correction_waits_again_and_can_time_out_after_a_responding_round(self):
+        with tempfile.TemporaryDirectory() as directory:
+            seen, publications, verdict, code = self._run(self._control(Path(directory)),
+                [('bad one', 1), ('silent', 0)], silent_round=2)
+        self.assertEqual(len(seen), 2)
         self.assertEqual(code, 1)
-        self.assertEqual(verdict['toolCalls'], 1)
-        self.assertEqual(verdict['stopReason'], 'profile-budget-exhausted')
+        self.assertEqual(len(publications), 1)
+        self.assertEqual(self.round_starts, [(True, False), (True, False)])

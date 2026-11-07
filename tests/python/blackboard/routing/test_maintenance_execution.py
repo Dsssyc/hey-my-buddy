@@ -75,11 +75,11 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                        (BUDDY_ID, "Maintenance", "dsh", "fixture", "maintenance", "off", canonical_json([])))
             ensure_model_service(db, "dsh", "fixture", "maintenance", self.board_.store.now())
 
-    def configure(self, *, buddy_id=BUDDY_ID, interval=3600, preset="standard"):
+    def configure(self, *, buddy_id=BUDDY_ID, interval=3600, wait=60):
         with self.board_.store.db.write() as db:
             router._write_settings(db, {"maintenanceBuddyId": buddy_id,
                                          "maintenanceIntervalSeconds": interval,
-                                         "routingBudget": preset})
+                                         "modelResponseWaitSeconds": wait})
 
     def admission_input(self):
         from hey_my_buddy.blackboard.routing.maintenance_data import build_packet
@@ -184,8 +184,8 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual((queued['active'], queued['queued']), (0, 1))
         self.assertEqual(queued['wait'], {'seconds': 0, 'atLeast': True, 'overdue': 0})
         task = self.board_.call('task_get', {'runId': started['runId']})['task']
-        self.assertIsNone(task['routerBudgetSeconds'])
-        self.assertIsNone(self.board_.call('inquiry_observe', {'runId': started['runId']})['routerBudgetSeconds'])
+        self.assertEqual(task['modelResponseWaitSeconds'], 60)
+        self.assertEqual(self.board_.call('inquiry_observe', {'runId': started['runId']})['modelResponseWaitSeconds'], 60)
         self.claim_maintenance(started['runId'])
         self.clock.advance(10_000)
         running = load()
@@ -269,17 +269,17 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                          {"pendingMicroTaskCount": 3})
 
     def test_start_claim_unlimited_frozen_packet_and_no_router_table_pollution(self):
-        self.configure(preset="deep")
+        self.configure(wait=90)
         started = self.start()
         self.assertEqual(started["status"], "running")
         self.assertEqual(self.start()["maintenanceRunId"], started["maintenanceRunId"])
         claim = self.claim_maintenance(started["runId"])
         document = claim["decisionInput"]
         self.assertEqual(document["routingMode"], "fast")
-        self.assertNotIn("budget", document)
-        self.assertNotIn("routerBudgetSeconds", claim["task"]["spec"])
-        self.assertNotIn("routerBudgetSeconds", claim["task"]["spec"]["decision"])
-        self.assertIsNone(self.board_.call("task_get", {"runId": started["runId"]})["task"]["routerBudgetSeconds"])
+        self.assertEqual(document["modelResponseWaitSeconds"], 90)
+        self.assertEqual(claim["task"]["spec"]["modelResponseWaitSeconds"], 90)
+        self.assertEqual(claim["task"]["spec"]["decision"]["modelResponseWaitSeconds"], 90)
+        self.assertEqual(self.board_.call("task_get", {"runId": started["runId"]})["task"]["modelResponseWaitSeconds"], 90)
         self.assertEqual(self.packet(claim)["classificationRunIds"], [self.evidence_id])
         self.assertEqual(self.packet(claim)["microTasks"][0]["classification"], None)
         self.assertEqual(self.packet(claim)["kinds"][0]["unreadRunIds"], [self.evidence_id])
@@ -488,7 +488,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                         execution.run()
                 run = browser.bootstrap()["maintenance"]["runs"][0]
                 self.assertEqual(run["state"], "failed", logs)
-                self.assertEqual(run["reason"]["code"], "router-budget-exhausted")
+                self.assertEqual(run["reason"]["code"], "router-not-responding")
                 actual = run["usage"]["attempts"][0]["tokenUsage"]
                 if usage is None:
                     self.assertIsNone(actual)

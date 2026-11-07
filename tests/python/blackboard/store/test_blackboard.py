@@ -213,7 +213,7 @@ class TestCrashWindows(BoardTestCase):
         )
         claim = {
             "task": {"taskId": task_id, "spec": {
-                "adapter": adapter, "task": "inspect stop evidence", "cwd": str(self.workdir()), **({"routerBudgetSeconds": 60} if adapter == "decision" else {"expectedSeconds": 60}),
+                "adapter": adapter, "task": "inspect stop evidence", "cwd": str(self.workdir()), **({"modelResponseWaitSeconds": 60} if adapter == "decision" else {"expectedSeconds": 60}),
             }},
             "attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": 1},
             "decisionInput": {"routingMode": "fast", "buddy": {"harness": "codex"}}

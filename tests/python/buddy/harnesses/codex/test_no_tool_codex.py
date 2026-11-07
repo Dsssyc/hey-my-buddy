@@ -68,9 +68,9 @@ class NoToolCodexTests(unittest.TestCase):
         select_fixture(environment, self.root, "codex", FIXTURE)
         context = ExecutionContext("router-task", "router-attempt", 7,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
-                                    "cwd": str(self.cwd), "routerBudgetSeconds": timeout}, directory, {}, environment,
+                                    "cwd": str(self.cwd), "modelResponseWaitSeconds": timeout}, directory, {}, environment,
                                    session_record_path=str(directory / "session.jsonl"))
-        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, timeout_seconds=timeout)
+        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(timeout + 9), "the fast role controller did not exit")
@@ -139,9 +139,9 @@ class NoToolCodexTests(unittest.TestCase):
         select_fixture(environment, self.root, "codex", FIXTURE)
         context = ExecutionContext("task", "attempt", 1,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
-                                    "cwd": str(self.cwd), "routerBudgetSeconds": 30}, directory, {}, environment,
+                                    "cwd": str(self.cwd), "modelResponseWaitSeconds": 30}, directory, {}, environment,
                                    session_record_path=str(directory / "session.jsonl"))
-        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, 30)
+        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
         # The same roomy budget run_case gives its success cases, and the same

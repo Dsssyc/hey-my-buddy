@@ -611,10 +611,10 @@ class FakeAppServerTests(unittest.TestCase):
         previous_input = ready.read_text(encoding="utf-8") if ready.exists() else ""
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low", "cwd": str(self.cwd),
-             "routerBudgetSeconds": timeout}, self.root / "attempt", {},
+             "modelResponseWaitSeconds": timeout}, self.root / "attempt", {},
             {**self.environment, "HMB_ZCODE_TEST_CASE": case},
             session_record_path=str(self.root / "session-attempt.jsonl"))
-        request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, timeout_seconds=timeout)
+        request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
         if cancel:

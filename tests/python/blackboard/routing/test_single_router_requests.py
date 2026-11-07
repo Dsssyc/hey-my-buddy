@@ -38,7 +38,7 @@ class SingleRouterRequestTests(BoardTestCase):
     def test_multi_candidate_freezes_complete_router_and_input_hash(self):
         board = self.board()
         self.seed(board)
-        self.configure(board, routingBudget="deep")
+        self.configure(board, modelResponseWaitSeconds=90)
         response = self.request(board)
         view = self.audit(board, response)
         self.assertEqual(response["status"], "queued")
@@ -47,12 +47,12 @@ class SingleRouterRequestTests(BoardTestCase):
             self.assertEqual(document["routerBuddyIds"], [BUDDY_ID])
             self.assertEqual(document["routerIdentities"], [identity])
             self.assertEqual(document["routingMode"], "review")
-            self.assertEqual(document["budget"], router.budget("deep"))
+            self.assertEqual(document["modelResponseWaitSeconds"], 90)
             self.assertNotIn("fallback", document)
             self.assertNotIn("requestedRoutingMode", document)
         self.assertEqual(view["input"]["buddy"], identity)
         self.assertNotIn("routerBuddyIds", view["requested"])
-        self.assertNotIn("budget", view["requested"])
+        self.assertNotIn("modelResponseWaitSeconds", view["requested"])
         self.assertEqual(view["routerBuddyId"], BUDDY_ID)
         self.assertEqual(view["routerBuddy"], identity)
         self.assertNotIn("inputSha256", view)
@@ -62,18 +62,18 @@ class SingleRouterRequestTests(BoardTestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
             event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='decision.requested'").fetchone()[0])
         self.assertEqual(event["routerIdentities"], [identity])
-        self.assertEqual(event["budget"], router.budget("deep"))
+        self.assertEqual(event["modelResponseWaitSeconds"], 90)
 
     def test_fast_uses_same_router_and_sixty_second_repo_free_input(self):
         board = self.board()
         self.seed(board)
-        self.configure(board, defaultRoutingMode="fast", routingBudget="deep")
+        self.configure(board, defaultRoutingMode="fast", modelResponseWaitSeconds=90)
         view = self.audit(board, self.request(board))
         self.assertEqual(view["routerBuddyId"], BUDDY_ID)
         self.assertEqual(view["routingMode"], "fast")
-        self.assertEqual(view["budget"], router.FAST_BUDGET)
-        self.assertNotIn("routerBudgetSeconds", view["requested"])
-        self.assertEqual(view["input"]["budget"]["timeoutSeconds"], 60)
+        self.assertEqual(view["modelResponseWaitSeconds"], 90)
+        self.assertNotIn("modelResponseWaitSeconds", view["requested"])
+        self.assertEqual(view["input"]["modelResponseWaitSeconds"], 90)
         self.assertNotIn("executionWorkspace", view["input"])
         self.assertNotIn("evidence", view["input"])
         self.assertNotIn("file", view["input"]["outputSchema"]["properties"]["evidence"]["items"]["properties"]["kind"]["enum"])
@@ -88,25 +88,25 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertEqual(view["routerBuddy"]["effort"], "off")
         self.assertEqual({item["buddyId"] for item in view["input"]["buddies"]}, {SECOND_BUDDY_ID, THIRD_BUDDY_ID})
 
-    def test_review_settings_budget_is_frozen_and_can_be_rechecked(self):
+    def test_review_response_wait_is_frozen_and_can_be_rechecked(self):
         board = self.board()
         self.seed(board)
         view = self.audit(board, self.request(board))
-        self.assertEqual(view["budget"], router.budget())
+        self.assertEqual(view["modelResponseWaitSeconds"], 60)
         with board.store.db.read() as connection:
             snapshot = router_sequence.request_snapshot(connection, view["decisionId"])["facts"]
             resolution = router.current_router(connection, frozen=snapshot)
         self.assertEqual(resolution.buddy_id, BUDDY_ID)
         self.assertIsNone(resolution.problem)
-        self.assertEqual(resolution.facts["budget"]["timeoutSeconds"], 300)
-        self.assertEqual(view["input"]["budget"]["timeoutSeconds"], 300)
+        self.assertEqual(resolution.facts["modelResponseWaitSeconds"], 60)
+        self.assertEqual(view["input"]["modelResponseWaitSeconds"], 60)
 
     def test_replay_after_setting_and_candidate_changes_keeps_every_snapshot(self):
         board = self.board()
         self.seed(board)
         first = self.request(board)
         original = self.audit(board, first)
-        self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", routingBudget="brief")
+        self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", modelResponseWaitSeconds=30)
         self.publish_user_patch(board, request_id="exclude", command_id="exclude",
                                 preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "exclude", "note": "later bound"}])
         with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("replay must not resolve")):
@@ -214,15 +214,15 @@ class SingleRouterRequestTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         decision = self.audit(board, self.request(board))
-        self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", routingBudget="brief")
+        self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", modelResponseWaitSeconds=30)
         with board.store.db.read() as connection:
             snapshot = router_sequence.request_snapshot(connection, decision["decisionId"])["facts"]
             resolution = router.current_router(connection, frozen=snapshot)
         self.assertEqual(resolution.buddy_id, BUDDY_ID)
         self.assertIsNone(resolution.problem)
         self.assertEqual(resolution.facts, {key: snapshot[key] for key in (
-            "routerBuddyIds", "routerIdentities", "routingMode", "routingBudget",
-            "routerRetryIntervalSeconds", "budget")})
+            "routerBuddyIds", "routerIdentities", "routingMode", "modelResponseWaitSeconds",
+            "routerRetryIntervalSeconds")})
         # The claim layer, covered by the settings-drift claim test, refuses
         # execution after this change. The shared resolver reads frozen facts.
 
@@ -340,13 +340,13 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.seed(board)
         original = self.routed(board)
         self.publish_user_patch(board, request_id="new-router", command_id="new-router",
-                                configuration={"routerBuddyIds": [SECOND_BUDDY_ID], "defaultRoutingMode": "fast", "routingBudget": "brief"})
+                                configuration={"routerBuddyIds": [SECOND_BUDDY_ID], "defaultRoutingMode": "fast", "modelResponseWaitSeconds": 30})
         replay = self.routed(board)
         self.assertEqual(replay["routing"], original["routing"])
         history = board.call("workflow_get", {"runId": original["runId"], "routingHistory": {"limit": 10}})["routingHistory"]
         self.assertEqual(history["total"], 1)
         entry = history["entries"][0]
-        for key in ("routerBuddyId", "routerBuddy", "routingMode", "budget"):
+        for key in ("routerBuddyId", "routerBuddy", "routingMode", "modelResponseWaitSeconds"):
             self.assertEqual(entry[key], original["routing"][key])
         self.assertNotIn("fallback", entry)
 

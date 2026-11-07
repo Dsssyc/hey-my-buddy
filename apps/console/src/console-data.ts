@@ -66,6 +66,10 @@ export function retryIntervalSeconds(value: unknown): number | null {
     ? value
     : null;
 }
+/** A model call may wait any positive, safely representable whole number of seconds. */
+export function modelResponseWaitSeconds(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : null;
+}
 /** Null disables exploration; otherwise one eligible micro task in N gets a quota. */
 export function validExplorationEvery(value: unknown): value is number | null {
   return value === null || typeof value === "number" && Number.isInteger(value) && value >= 2;

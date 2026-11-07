@@ -15,7 +15,6 @@ export default {
     search: "Search buddies",
     none: "Not set",
     noCandidates: "No enabled, available buddy has an enforced web only level",
-    budget: "Profile budget",
     dataFlow: "Building a profile sends model names and correspondence candidates to the profile buddy's model provider; the buddy can search public web sources.",
   },
   sections: {

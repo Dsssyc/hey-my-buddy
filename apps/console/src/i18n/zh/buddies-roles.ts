@@ -52,13 +52,9 @@ export default {
     fastConsequence: "需要 Router 判断时，任务的文字会发给 Router 的模型提供方",
     reviewConsequence: "需要 Router 判断时，任务的文字会发给 Router 的模型提供方，还会发送一份冻结的代码副本；DSH 与 ZCode 没有系统沙盒，不能保证阻止副本以外的读取或外传",
   },
-  budget: {
-    name: "审阅预算",
-    label: "审阅预算",
-    brief: "简要",
-    standard: "标准",
-    deep: "深入",
-    toolCalls: "{{n}} 次工具调用",
+  responseWait: {
+    name: "等待模型开始作答（秒）",
+    invalid: "需要不小于 1 的整数",
   },
   exploration: {
     name: "探索名额", on: "每 N 个给 1 个", off: "关闭", interval: "探索间隔微任务数",
@@ -80,7 +76,7 @@ export default {
     consecutiveFailures: "连续失败",
     abstention: "弃权",
     cancelled: "取消",
-    budgetExhausted: "超出时限或工具调用上限",
+    notResponding: "模型未开始作答",
     boundsRejected: "越界",
     inputChanged: "输入变化",
     lastSuccess: "最近成功",

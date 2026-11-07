@@ -118,13 +118,13 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertEqual(self.outcomes(), [])
         return response
 
-    def test_worker_stops_router_at_its_budget_and_dispatches_the_next_router(self):
-        self._router_budget_stop(stop_delay=0)
+    def test_worker_stops_router_before_model_response_and_dispatches_next_router(self):
+        self._router_response_wait_stop(stop_delay=0)
 
     def test_execution_waits_for_native_cleanup_beyond_ten_seconds(self):
-        self._router_budget_stop(stop_delay=11)
+        self._router_response_wait_stop(stop_delay=11)
 
-    def _router_budget_stop(self, *, stop_delay):
+    def _router_response_wait_stop(self, *, stop_delay):
         stopped = self.directory / f"native-stop-{stop_delay}"
 
         class SleepingRouter(CommandAdapter):
@@ -149,10 +149,12 @@ class FailoverTests(RouterDispatchTestCase):
             def start(self, context):
                 from hey_my_buddy.protocol.process_controller import launch_controller
                 self.prepare(context)
-                return launch_controller(
+                handle = launch_controller(
                     prepare=lambda: (self.argv(), context.cwd, context.environment),
-                    log_paths=context.log_paths(), timeout_seconds=context.timeout_seconds,
+                    log_paths=context.log_paths(), timeout_seconds=None,
                     stop_channel="stdin")
+                handle.model_responded = False
+                return handle
 
             def cancel(self, handle):
                 # This fixture's native driver needs eleven seconds to finish its
@@ -161,16 +163,16 @@ class FailoverTests(RouterDispatchTestCase):
 
             def collect(self, handle, context):
                 outcome = super().collect(handle, context)
-                outcome.result = {"status": "error", "operation": "select", "code": "router-budget-exhausted",
+                outcome.result = {"status": "error", "operation": "select", "code": "router-not-responding",
                                   "stopEvidence": {"shutdownConfirmed": outcome.shutdown_confirmed,
                                                    "native": {"shutdownConfirmed": outcome.shutdown_confirmed}}}
                 return outcome
 
-        with patch.dict(router.BUDGETS["standard"], {"timeoutSeconds": 1}), \
-             patch.object(decision, "TIMEOUT_GRACE_SECONDS", 0):
+        self.set_settings(wait=1)
+        with self.subTest(stop_delay=stop_delay):
             request, first = self.start(review=True)
             spec = first["task"]["spec"]
-            self.assertEqual(spec["routerBudgetSeconds"], 1)
+            self.assertEqual(spec["modelResponseWaitSeconds"], 1)
             self.assertNotIn("expectedSeconds", spec)
             execution = Execution(first, self.directory, first["nonce"], client=self.client)
             directory = execution.directory
@@ -196,24 +198,26 @@ class FailoverTests(RouterDispatchTestCase):
             self.assertEqual(self.dispatch_of(next_task)["buddyId"], B)
             second = self.next_claim(request)
             self.assertEqual(second["decisionInput"]["routerBuddyId"], B)
-            self.assertEqual(self.outcomes()[0][1]["code"], "router-budget-exhausted")
+            self.assertEqual(self.outcomes()[0][1]["code"], "router-not-responding")
 
-    def test_unknown_input_preparation_retries_the_same_router_before_its_budget_starts(self):
+    def test_unknown_input_preparation_retries_before_model_response_wait_starts(self):
         class PreparingRouter(CommandAdapter):
             def __init__(self):
                 self.calls = 0
-                self.budgets = []
+                self.waits = []
             def available(self):
                 return True, None
             def prepare(self, context):
                 self.calls += 1
-                self.budgets.append(context.timeout_seconds)
+                self.waits.append(context.spec['modelResponseWaitSeconds'])
                 if self.calls == 1:
                     raise BoardError('router-input-unknown', 'frozen input is still being observed')
                 from pathlib import Path
                 Path(context.cwd).mkdir(parents=True, exist_ok=True)
             def start(self, context):
-                return CommandAdapter().start(replace(context, spec={**context.spec, 'argv': [sys.executable, '-c', 'print("done")']}))
+                handle = CommandAdapter().start(replace(context, spec={**context.spec, 'argv': [sys.executable, '-c', 'print("done")']}))
+                handle.model_responded = True
+                return handle
         request, first = self.start(review=True)
         execution = Execution(first, self.directory, first['nonce'], client=self.client)
         native_path(execution.directory).mkdir(parents=True)
@@ -226,7 +230,7 @@ class FailoverTests(RouterDispatchTestCase):
             receipt = execution._execute_selected(first, first['task'], first['task']['spec'], first['attempt'],
                                                   execution.directory, {'preflightControl': execution.control})
         wait.assert_called_once_with(15)
-        self.assertEqual(executor.budgets, [first['task']['spec']['routerBudgetSeconds']] * 2)
+        self.assertEqual(executor.waits, [first['task']['spec']['modelResponseWaitSeconds']] * 2)
         self.assertEqual(receipt['report']['status'], 'ok')
         self.assertTrue(receipt['report']['shutdownConfirmed'])
         self.assertEqual(self.current_task(request['decisionId']), request['runId'])
@@ -705,7 +709,7 @@ def install_no_answer_case(name, mutate, code, *, review=False, outer="ok"):
 
 
 for name, code in (("timeout", "timeout"), ("provider", "provider-error"), ("native", "native-error"),
-                   ("empty", "answer-empty"), ("bad_json", "answer-invalid-json"), ("budget_runtime", "router-budget-exhausted")):
+                   ("empty", "answer-empty"), ("bad_json", "answer-invalid-json"), ("budget_runtime", "router-not-responding")):
     install_no_answer_case(name, lambda self, claim, output, code=code: self.failure(claim, code), code, outer="failed")
 install_no_answer_case("no_choice", lambda self, claim, o: {**o, "decision": None}, "answer-shape")
 install_no_answer_case("json_string", lambda self, claim, o: {**o, "decision": "{bad"}, "answer-invalid-json")
@@ -714,7 +718,6 @@ install_no_answer_case("wrong_enum", lambda self, claim, o: {**o, "decision": {*
 install_no_answer_case("outside_id", lambda self, claim, o: {**o, "decision": {**o["decision"], "buddyId": "outside"}}, "router-out-of-bounds")
 install_no_answer_case("illegal_evidence", lambda self, claim, o: {**o, "decision": {**o["decision"], "evidence": [{"kind": "file", "ref": "../secret"}]}}, "answer-shape", review=True)
 install_no_answer_case("fast_file_evidence", lambda self, claim, o: {**o, "decision": {**o["decision"], "evidence": [{"kind": "file", "ref": "src/foo"}]}}, "router-evidence-out-of-bounds")
-install_no_answer_case("elapsed_budget", lambda self, claim, o: {**o, "usage": {"elapsedMs": 60001, "toolCalls": 0}}, "router-budget-exhausted")
 install_no_answer_case("missing_counter", lambda self, claim, o: {**o, "usage": {"elapsedMs": 100}}, "router-tool-evidence-unverified")
 install_no_answer_case("missing_evidence", lambda self, claim, o: {**o, "toolEvidence": None}, "router-tool-evidence-unverified")
 install_no_answer_case("incomplete", lambda self, claim, o: self.answer(claim, stream_complete=False), "router-tool-evidence-unverified")
@@ -736,10 +739,6 @@ install_no_answer_case("foreign_binding", lambda self, claim, o: {**o, "toolEvid
                       "binding": {**o["toolEvidence"]["binding"], "attemptId": "foreign-attempt"}}}, "router-tool-evidence-unverified")
 install_no_answer_case("root_mismatch", lambda self, claim, o: {**o, "nativeIdentity": {"sessionId": "foreign-root"}}, "router-tool-evidence-unverified")
 install_no_answer_case("counter_mismatch", lambda self, claim, o: {**o, "usage": {"elapsedMs": 100, "toolCalls": 1}}, "router-tool-evidence-unverified")
-install_no_answer_case("review_tool_budget", lambda self, claim, o: self.answer(claim, tools=claim["decisionInput"]["budget"]["toolCalls"] + 1),
-                      "router-budget-exhausted", review=True)
-install_no_answer_case("review_time_budget", lambda self, claim, o: {**o, "usage": {"elapsedMs": claim["decisionInput"]["budget"]["timeoutSeconds"] * 1000 + 1, "toolCalls": 0}},
-                      "router-budget-exhausted", review=True)
 
 
 def install_change_case(name, mutate, *, review=False, micro_task=False, outcome="changed"):
@@ -767,7 +766,7 @@ def install_unfenced_edit_case(name, mutate):
 
 
 for name, kwargs in (("list", {"ids": [B, A]}), ("mode", {"mode": "review"}),
-                     ("preset", {"budget": "brief"}), ("interval", {"interval": 30})):
+                     ("response_wait", {"wait": 30}), ("interval", {"interval": 30})):
     install_unfenced_edit_case(name, lambda self, request, claim, output, kwargs=kwargs: self.set_settings(**kwargs))
 def replace_model_identity(self, request, claim, output):
     with self.board_.store.db.write() as db:

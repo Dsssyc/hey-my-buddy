@@ -126,7 +126,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         snapshot = self.snapshot(board)
         self.assertNotIn("tableRevision", snapshot)
         self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [])
-        self.assertEqual(snapshot["configuration"]["routingBudget"], "standard")
+        self.assertEqual(snapshot["configuration"]["modelResponseWaitSeconds"], 60)
         self.assertEqual(snapshot["buddies"], [])
         self.assertEqual(snapshot["preferences"], [])
         self.assertEqual(snapshot["modelNotes"], [])
@@ -208,7 +208,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.publish(board, request_id="w2", command_id="c2",
                      configuration={"routerBuddyIds": [BUDDY_ID]})
         self.assertEqual(self.snapshot(board)["configuration"]["routerBuddyIds"], [BUDDY_ID])
-        self.assertEqual(self.snapshot(board)["configuration"]["routingBudget"], "standard")
+        self.assertEqual(self.snapshot(board)["configuration"]["modelResponseWaitSeconds"], 60)
         self.refused_publish(board, "INVALID_ARGUMENT", request_id="w3", command_id="c3",
                              configuration={"routerBuddyIds": [BUDDY_ID], "autoMaintain": True})
         self.refused_publish(board, "NOT_FOUND", request_id="w4", command_id="c4",

@@ -25,9 +25,7 @@ from buddy.harnesses.fixture_selection import select_fixture
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, SCHEMA
 from buddy.harnesses.test_run_contract import full_request
 
-#: One wiring run that is not the subject of a deadline test still needs a
-#: budget the machine's load cannot decide; the deadline subjects keep their
-#: own short values in the zcode suite.
+#: A bounded test wait, independent of the role's native deadline.
 WIRING_TIMEOUT = 30
 
 
@@ -37,9 +35,8 @@ class InlineModelStartTests(unittest.TestCase):
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 request = full_request(root)
-                control = {"harness": request.harness, "operation": operation, "timeoutSeconds": 30,
-                           "privateRoot": str(root / "run"),
-                           "profileRequest": {"budget": {"timeoutSeconds": 30, "toolCalls": 10}}}
+                control = {"harness": request.harness, "operation": operation, "timeoutSeconds": None,
+                           "privateRoot": str(root / "run")}
                 handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
                 entered = threading.Event()
                 release = threading.Event()
@@ -207,7 +204,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
     def invoke(self, case="ok", *, capture_evidence=False):
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low",
-             "cwd": str(self.cwd), "routerBudgetSeconds": WIRING_TIMEOUT}, self.root / "attempt", {},
+             "cwd": str(self.cwd), "modelResponseWaitSeconds": WIRING_TIMEOUT}, self.root / "attempt", {},
             {**self.environment, "HMB_ZCODE_TEST_CASE": case},
             session_record_path=str(self.root / "session.jsonl"))
         request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, WIRING_TIMEOUT,
@@ -317,7 +314,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(context.timeout_seconds + 10))
+        self.assertIsNotNone(handle.wait(WIRING_TIMEOUT + 10))
         result = handle.result
         self.assertIsNotNone(result.usage)
         self.assertIsNotNone(result.last_assistant_message)

@@ -4,13 +4,13 @@ import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApar
 // The roles section of the Buddy page on the synthetic preview: a Router list of
 // three, one serving, one waiting to be tried again and one that cannot serve.
 const languages = [
-  { locale: "zh-CN", view: "角色", list: "Router 列表", sections: ["列表", "默认模式", "审阅预算", "重试间隔", "画像 buddy", "画像预算", "记录"], profile: "画像 buddy", profileBudget: "画像预算", chooseProfile: "选择 buddy", add: "添加", addTitle: "添加 Router",
+  { locale: "zh-CN", view: "角色", list: "Router 列表", sections: ["列表", "默认模式", "等待模型开始作答（秒）", "重试间隔", "画像 buddy", "记录"], profile: "画像 buddy", wait: "等待模型开始作答（秒）", chooseProfile: "选择 buddy", add: "添加", addTitle: "添加 Router",
     routers: "各 Router 的记录", failures: "最近的失败", standing: ["当前", "等待重试", "不可用"] },
-  { locale: "en-US", view: "Roles", list: "Router list", sections: ["List", "Default mode", "Review budget", "Retry interval", "Profile buddy", "Profile budget", "Records"], profile: "Profile buddy", profileBudget: "Profile budget", chooseProfile: "Choose buddy", add: "Add", addTitle: "Add a Router",
+  { locale: "en-US", view: "Roles", list: "Router list", sections: ["List", "Default mode", "Wait for the model to start responding (seconds)", "Retry interval", "Profile buddy", "Records"], profile: "Profile buddy", wait: "Wait for the model to start responding (seconds)", chooseProfile: "Choose buddy", add: "Add", addTitle: "Add a Router",
     routers: "Records of each Router", failures: "Recent failures", standing: ["Current", "Waiting to retry", "Unavailable"] },
 ];
 
-for (const { locale, view, list, sections, profile, profileBudget, chooseProfile, add, addTitle, routers, failures, standing } of languages) {
+for (const { locale, view, list, sections, profile, wait, chooseProfile, add, addTitle, routers, failures, standing } of languages) {
   test.describe(`the roles section in ${locale} at 1440px`, () => {
     test.use({ locale, viewport: { width: 1440, height: 900 } });
 
@@ -22,6 +22,8 @@ for (const { locale, view, list, sections, profile, profileBudget, chooseProfile
         await expect(section).toBeVisible();
         await expectWholeAndApart(section, section.locator(":scope > *"));
       }
+      await expect(region.getByRole("spinbutton", { name: wait })).toHaveValue("60");
+      await expect(region.getByRole("group", { name: locale === "zh-CN" ? "画像预算" : "Profile budget" })).toHaveCount(0);
       const lines = region.getByRole("list", { name: list }).getByRole("listitem");
       await expect(lines).toHaveCount(3);
       for (const [index, line] of (await lines.all()).entries()) {
@@ -101,10 +103,10 @@ for (const { locale, view, list, sections, profile, profileBudget, chooseProfile
       await open(page, "#buddies/roles");
       const region = page.getByRole("region", { name: view });
       const buddy = region.getByRole("group", { name: profile, exact: true });
-      const budget = region.getByRole("group", { name: profileBudget, exact: true });
       await buddy.scrollIntoViewIfNeeded();
       await expectTextUncut(buddy.locator("p, button, span"));
-      await expectWholeAndApart(budget, budget.locator(":scope > *"));
+      const responseWait = region.getByRole("group", { name: wait, exact: true });
+      await expectWholeAndApart(responseWait, responseWait.locator(":scope > *"));
       await expectNoSidewaysScroll(page);
       await buddy.getByRole("button", { name: chooseProfile }).click();
       const dialog = page.getByRole("dialog", { name: chooseProfile });

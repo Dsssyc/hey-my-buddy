@@ -200,7 +200,7 @@ export type UserPolicyPublication = {
   modelNoteChanges?: ModelNoteChangePatch[];
   modelCorrespondenceChanges?: ModelCorrespondenceChange[];
   configuration?: Partial<Pick<Configuration,
-    "routerBuddyIds" | "routerRetryIntervalSeconds" | "explorationEvery" | "defaultRoutingMode" | "routingBudget" | "maintenanceBuddyId" | "maintenanceIntervalSeconds" | "profileBuddyId" | "profileBudget">>;
+    "routerBuddyIds" | "routerRetryIntervalSeconds" | "explorationEvery" | "defaultRoutingMode" | "modelResponseWaitSeconds" | "maintenanceBuddyId" | "maintenanceIntervalSeconds" | "profileBuddyId">>;
   /** Limit patches per model service; the board refuses any `active` occupancy here. */
   modelServiceConcurrency?: ModelServiceConcurrencySetting[];
 };
@@ -262,7 +262,7 @@ export function routerListEqual(a: string[] | undefined, b: string[] | undefined
   return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
 }
 
-const ROUTER_FIELDS = ["routerBuddyIds", "defaultRoutingMode", "routerRetryIntervalSeconds", "explorationEvery", "maintenanceBuddyId", "maintenanceIntervalSeconds", "profileBuddyId", "profileBudget"] as const;
+const ROUTER_FIELDS = ["routerBuddyIds", "defaultRoutingMode", "modelResponseWaitSeconds", "routerRetryIntervalSeconds", "explorationEvery", "maintenanceBuddyId", "maintenanceIntervalSeconds", "profileBuddyId"] as const;
 
 export function routerFieldChanged(baseline: Draft, draft: Draft, field: typeof ROUTER_FIELDS[number]): boolean {
   if (!baseline.configuration || !draft.configuration) return false;
@@ -271,12 +271,8 @@ export function routerFieldChanged(baseline: Draft, draft: Draft, field: typeof 
   return field === "routerBuddyIds" ? !routerListEqual(before as string[], after as string[]) : before !== after;
 }
 
-function routingBudgetChanged(baseline: Draft, draft: Draft): boolean {
-  return !!baseline.configuration && !!draft.configuration && baseline.configuration.routingBudget !== draft.configuration.routingBudget;
-}
-
 export function configurationChanged(baseline: Draft, draft: Draft): boolean {
-  return ROUTER_FIELDS.some(field => routerFieldChanged(baseline, draft, field)) || routingBudgetChanged(baseline, draft);
+  return ROUTER_FIELDS.some(field => routerFieldChanged(baseline, draft, field));
 }
 
 /**
@@ -315,8 +311,7 @@ export function publication(
           ...(routerFieldChanged(baseline, draft, "maintenanceBuddyId") ? { maintenanceBuddyId: draft.configuration!.maintenanceBuddyId } : {}),
           ...(routerFieldChanged(baseline, draft, "maintenanceIntervalSeconds") ? { maintenanceIntervalSeconds: draft.configuration!.maintenanceIntervalSeconds } : {}),
           ...(routerFieldChanged(baseline, draft, "profileBuddyId") ? { profileBuddyId: draft.configuration!.profileBuddyId } : {}),
-          ...(routerFieldChanged(baseline, draft, "profileBudget") ? { profileBudget: draft.configuration!.profileBudget } : {}),
-          ...(routingBudgetChanged(baseline, draft) ? { routingBudget: draft.configuration!.routingBudget ?? "standard" } : {}),
+          ...(routerFieldChanged(baseline, draft, "modelResponseWaitSeconds") ? { modelResponseWaitSeconds: draft.configuration!.modelResponseWaitSeconds } : {}),
         } }
       : {}),
   };
@@ -344,11 +339,10 @@ function fingerprint(draft: UserEditable): string {
       routerRetryIntervalSeconds: draft.configuration.routerRetryIntervalSeconds,
       explorationEvery: Number.isNaN(draft.configuration.explorationEvery) ? "invalid" : draft.configuration.explorationEvery,
       defaultRoutingMode: draft.configuration.defaultRoutingMode,
-      routingBudget: draft.configuration.routingBudget,
+      modelResponseWaitSeconds: Number.isNaN(draft.configuration.modelResponseWaitSeconds) ? "invalid" : draft.configuration.modelResponseWaitSeconds,
       maintenanceBuddyId: draft.configuration.maintenanceBuddyId,
       maintenanceIntervalSeconds: draft.configuration.maintenanceIntervalSeconds,
       profileBuddyId: draft.configuration.profileBuddyId,
-      profileBudget: draft.configuration.profileBudget,
     } : null,
     modelServiceConcurrency: [...draft.modelServiceConcurrency]
       .map(({ harness, provider, model, limit }) => ({ key: modelServiceKey({ harness, provider, model }), limit }))
@@ -376,8 +370,7 @@ export function changeCount(baseline: Draft, draft: Draft): number {
     + modelNoteChanges(baseline, draft).length
     + draft.modelCorrespondenceChanges.length
     + concurrency
-    + ROUTER_FIELDS.filter(field => routerFieldChanged(baseline, draft, field)).length
-    + (routingBudgetChanged(baseline, draft) ? 1 : 0);
+    + ROUTER_FIELDS.filter(field => routerFieldChanged(baseline, draft, field)).length;
 }
 
 /**
@@ -389,7 +382,7 @@ export function changeCount(baseline: Draft, draft: Draft): number {
 type RebaseConflictKind = "changed" | "unread";
 type RebaseConflict = {
   kind: RebaseConflictKind;
-  field: "enabled" | "preference" | "modelNote" | "modelCorrespondence" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "explorationEvery" | "modelServiceConcurrency" | "maintenanceBuddyId" | "maintenanceIntervalSeconds" | "profileBuddyId" | "profileBudget";
+  field: "enabled" | "preference" | "modelNote" | "modelCorrespondence" | "configuration" | "defaultRoutingMode" | "modelResponseWaitSeconds" | "routerRetryIntervalSeconds" | "explorationEvery" | "modelServiceConcurrency" | "maintenanceBuddyId" | "maintenanceIntervalSeconds" | "profileBuddyId";
   /** The buddy id, or the `harness/provider/model` of a model service field. */
   buddyId: string;
   message: string;
@@ -405,14 +398,13 @@ const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   get maintenanceBuddyId() { return i18n.t("buddies:maintenance.buddy"); },
   get maintenanceIntervalSeconds() { return i18n.t("buddies:maintenance.interval"); },
   get profileBuddyId() { return i18n.t("buddies:profile.buddy"); },
-  get profileBudget() { return i18n.t("buddies:profile.budget"); },
   get enabled() { return i18n.t("console:enabledState"); },
   get preference() { return i18n.t("console:reasoningEffortPreference"); },
   get modelNote() { return i18n.t("console:modelNote"); },
   get modelCorrespondence() { return i18n.t("console:modelCorrespondence"); },
   get configuration() { return i18n.t("console:routerList"); },
   get defaultRoutingMode() { return i18n.t("console:defaultRoutingMode"); },
-  get routingBudget() { return i18n.t("console:routingBudget"); },
+  get modelResponseWaitSeconds() { return i18n.t("buddies:roles.responseWait.name"); },
   get explorationEvery() { return i18n.t("buddies:roles.exploration.name"); },
   get routerRetryIntervalSeconds() { return i18n.t("console:retryInterval"); },
   get modelServiceConcurrency() { return i18n.t("console:concurrencyLimit"); },
@@ -422,9 +414,9 @@ const modelServiceText = (modelService: ModelService) => `${modelService.harness
 
 function conflictSubject(field: RebaseConflict["field"], buddyId: string): string {
   if (field === "configuration") return buddyId ? i18n.t("console:routerListForBuddy", { v0: buddyId }) : i18n.t("console:routerList");
-  if (field === "maintenanceBuddyId" || field === "maintenanceIntervalSeconds" || field === "profileBuddyId" || field === "profileBudget") return FIELD_NAMES[field];
+  if (field === "maintenanceBuddyId" || field === "maintenanceIntervalSeconds" || field === "profileBuddyId") return FIELD_NAMES[field];
   if (field === "defaultRoutingMode") return i18n.t("console:defaultRoutingMode");
-  if (field === "routingBudget") return i18n.t("console:routingBudget");
+  if (field === "modelResponseWaitSeconds") return FIELD_NAMES[field];
   if (field === "explorationEvery") return FIELD_NAMES[field];
   if (field === "routerRetryIntervalSeconds") return i18n.t("console:retryInterval");
   if (field === "modelCorrespondence" || field === "modelServiceConcurrency") {
@@ -531,7 +523,7 @@ export function rebaseDraft(
   let mergedRouting = nextBaseline.configuration;
   if (baseline.configuration && draft.configuration && nextBaseline.configuration) {
     mergedRouting = { ...nextBaseline.configuration };
-    for (const field of [...ROUTER_FIELDS, "routingBudget"] as const) {
+    for (const field of ROUTER_FIELDS) {
       const changed = field === "routerBuddyIds"
         ? !routerListEqual(baseline.configuration.routerBuddyIds, draft.configuration.routerBuddyIds)
         : baseline.configuration[field] !== draft.configuration[field];

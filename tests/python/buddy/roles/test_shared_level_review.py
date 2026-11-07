@@ -43,7 +43,7 @@ class _ReviewCases:
         return ExecutionContext(
             task_id="task", attempt_id="attempt", generation=1,
             spec={"provider": self.provider, "model": self.model,
-                  "effort": self.effort, "cwd": str(cwd), "routerBudgetSeconds": 10},
+                  "effort": self.effort, "cwd": str(cwd), "modelResponseWaitSeconds": 10},
             directory=self.base / ("router-attempt-" + uuid.uuid4().hex),
             runtime={}, environment=dict(os.environ),
             decision_input=document,
@@ -52,8 +52,7 @@ class _ReviewCases:
     def document(self) -> dict:
         return {"domainNodes": [], "routingMode": "review", "task": "Choose the legal buddy",
                 "buddy": {"harness": self.harness},
-                "buddies": [router_candidate()], "outputSchema": SCHEMA,
-                "budget": {"timeoutSeconds": 10, "toolCalls": 0}}
+                "buddies": [router_candidate()], "outputSchema": SCHEMA}
 
     def test_inline_review_returns_a_structured_answer_under_read(self):
         self.prepare_fixture()
@@ -68,9 +67,9 @@ class _ReviewCases:
             "stateDir": str(self.base / "state"),
             "directory": str(root), "nativeRoot": str(root / "native"),
             "sessionRecordPath": str(root / "session.jsonl"), "cwd": str(cwd),
-            "timeoutSeconds": 10, "canCorrect": False,
+            "timeoutSeconds": None, "canCorrect": False,
             "readOnlyRequest": {"prompt": "Choose the legal buddy",
-                                "outputSchema": SCHEMA, "budget": {"toolCalls": 0},
+                                "outputSchema": SCHEMA,
                                 "captureEvidence": False},
         }
         identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
@@ -86,7 +85,6 @@ class _ReviewCases:
         self.assertEqual(json.loads(payload["rawAnswer"]),
                          {"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "fixture", "evidence": []})
         self.assertEqual(payload["usage"]["toolCalls"], 0)
-        self.assertLessEqual(payload["usage"]["toolCalls"], control["readOnlyRequest"]["budget"]["toolCalls"])
         self.assertIsNone(judge_tool_evidence(payload["toolEvidence"], "read",
                                                state_dir=Path(control["stateDir"])))
         self.assertEqual(result.effective_policy.tools.requested.value, self.native_policy)
@@ -112,7 +110,7 @@ class _ReviewCases:
             self.assertEqual(json.loads(supplied), SCHEMA)
         self.assertTrue(prompts[1].startswith(prompts[0] + "\n\nFormat correction:"))
 
-    def test_router_accepts_an_unchanged_frozen_copy_within_budget(self):
+    def test_router_accepts_an_unchanged_frozen_copy(self):
         self.prepare_fixture()
         document = self.document()
         context = self.review_context(document)
@@ -129,7 +127,6 @@ class _ReviewCases:
                          {"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "fixture", "evidence": []})
         self.assertTrue(outcome.result["inputVerification"]["unchanged"])
         self.assertNotIn("budget", outcome.result)
-        self.assertLessEqual(outcome.result["usage"]["toolCalls"], document["budget"]["toolCalls"])
         self.assertIsNone(judge_tool_evidence(outcome.result["toolEvidence"], "read",
                                                state_dir=Path(context.environment["HMB_STATE_DIR"])))
         self.assertFalse(frozen.exists(), "a verified private copy is discarded")

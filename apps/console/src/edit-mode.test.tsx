@@ -35,7 +35,7 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
 
     models: ["deepseek-flash", "deepseek-v4-pro"].map(model => ({ modelId: model, displayName: model, names: [{ harness: "dsh", provider: "deepseek-official", model }], profile: null, latestProfileRun: null })),

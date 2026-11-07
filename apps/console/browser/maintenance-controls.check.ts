@@ -19,7 +19,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
         const snapshot = await response.json();
         snapshot.maintenance.runs = [{ ...snapshot.maintenance.runs[0], state,
           finishedAt: state === "failed" ? finished : null,
-          reason: state === "failed" ? { code: "router-budget-exhausted", params: {} } : null,
+          reason: state === "failed" ? { code: "router-not-responding", params: { seconds: 60 } } : null,
           usage: { attempts: [{ attemptId: "maintenance-attempt", elapsedMs: state === "failed" ? 301000 : null, toolCalls: null,
             tokenUsage: state === "failed" ? { inputTokens: 120, cachedInputTokens: null, outputTokens: 7, source: "synthetic-preview", scope: "attempt" } : null }] },
         }];
@@ -87,7 +87,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
         const latest = snapshot.maintenance.runs[0];
         snapshot.maintenance.runs = [latest, { ...latest, maintenanceRunId: "maintenance-old-failure",
           taskId: "maintenance-old-task", state: "failed",
-          reason: { code: "router-budget-exhausted", params: {} },
+          reason: { code: "router-not-responding", params: { seconds: 60 } },
           startedAt: "2026-09-26T06:00:00Z", finishedAt: "2026-09-26T06:05:01Z",
         }];
         await route.fulfill({ response, json: snapshot });

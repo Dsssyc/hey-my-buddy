@@ -53,7 +53,7 @@ const snapshot = {
   preferences: [],
   models: [{ modelId: flash.model, displayName: flash.model, names: [flashModelService], profile: null, latestProfileRun: null }],
   modelNotes: [], modelCorrespondences: [],
-  configuration: { explorationEvery: 5, routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" as const,
+  configuration: { explorationEvery: 5, routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null,
   },
 
   modelServiceConcurrency: [
@@ -144,7 +144,7 @@ describe("editing a published snapshot", () => {
       ...snapshot,
       buddies: [flash, retired],
       preferences: [{ buddyId: "retired", mode: "pin", note: "以前固定" }],
-      configuration: { explorationEvery: 5, routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" as const},
+      configuration: { explorationEvery: 5, routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     } as Snapshot);
     const draft = { ...baseline };
     expect(publication(baseline, draft, "c")).not.toHaveProperty("preferenceChanges");
@@ -449,13 +449,11 @@ describe("private same-origin API", () => {
   });
 });
 
-describe("independent Router and budget fields", () => {
-  it("publishes profile buddy and budget separately", () => {
+describe("independent Router settings", () => {
+  it("publishes the profile buddy separately", () => {
     const baseline = makeDraft(snapshot);
     const buddy = { ...baseline, configuration: { ...baseline.configuration!, profileBuddyId: flash.buddyId } };
     expect(publication(baseline, buddy, "profile-buddy").configuration).toEqual({ profileBuddyId: flash.buddyId });
-    const budget = { ...baseline, configuration: { ...baseline.configuration!, profileBudget: "brief" as const } };
-    expect(publication(baseline, budget, "profile-budget").configuration).toEqual({ profileBudget: "brief" });
   });
 
   it("keeps an empty exploration input dirty when exploration was off", () => {
@@ -487,35 +485,35 @@ describe("independent Router and budget fields", () => {
     expect(configurationChanged(baseline, draft)).toBe(true);
     expect(publication(baseline, draft, "interval").configuration).toEqual({ routerRetryIntervalSeconds: 300 });
   });
-  it("publishes only the changed Router, default mode and review budget", () => {
+  it("publishes only the changed Router, default mode and response wait", () => {
     const baseline = makeDraft(snapshot);
     const draft = { ...baseline, configuration: { ...baseline.configuration!,
       routerBuddyIds: ["review"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast" as const,
-      routingBudget: "brief" as const, profileBuddyId: null, profileBudget: "deep" as const } };
+      modelResponseWaitSeconds: 30, profileBuddyId: null } };
     expect(publication(baseline, draft, "dual").configuration).toEqual({
-      routerBuddyIds: ["review"], defaultRoutingMode: "fast", routingBudget: "brief",
+      routerBuddyIds: ["review"], defaultRoutingMode: "fast", modelResponseWaitSeconds: 30,
     });
     expect(changeCount(baseline, draft) - changeCount(baseline, baseline)).toBe(3);
   });
-  it("keeps an unchanged standard budget and publishes budget alone with a stale Router", () => {
-    const baseline = makeDraft({ ...snapshot, buddies: [], configuration: { explorationEvery: 5, routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard", profileBuddyId: null, profileBudget: "deep" as const} } as Snapshot);
-    const equivalent = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "standard" as const, profileBuddyId: null, profileBudget: "deep" as const } };
+  it("keeps an unchanged response wait and publishes it alone with a stale Router", () => {
+    const baseline = makeDraft({ ...snapshot, buddies: [], configuration: { explorationEvery: 5, routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null} } as Snapshot);
+    const equivalent = { ...baseline, configuration: { ...baseline.configuration!, modelResponseWaitSeconds: 60, profileBuddyId: null } };
     expect(draftDiffers(baseline, equivalent)).toBe(false);
-    const draft = { ...equivalent, configuration: { ...equivalent.configuration!, routingBudget: "brief" as const, profileBuddyId: null, profileBudget: "deep" as const } };
+    const draft = { ...equivalent, configuration: { ...equivalent.configuration!, modelResponseWaitSeconds: 30, profileBuddyId: null } };
     expect(draftDiffers(baseline, draft)).toBe(true);
     expect(configurationChanged(baseline, draft)).toBe(true);
-    expect(publication(baseline, draft, "budget").configuration).toEqual({ routingBudget: "brief" });
+    expect(publication(baseline, draft, "response-wait").configuration).toEqual({ modelResponseWaitSeconds: 30 });
     expect(blockingIssues(baseline, draft)).toEqual([]);
   });
 
-  it("replays Router and budget fields independently over fresh settings", () => {
+  it("replays Router and response wait fields independently over fresh settings", () => {
     const baseline = makeDraft(snapshot);
-    const draft = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "brief" as const, profileBuddyId: null, profileBudget: "deep" as const } };
-    const fresh = { ...snapshot, configuration: { ...snapshot.configuration!, routerBuddyIds: ["new-model"], routingBudget: "deep" as const, profileBuddyId: null, profileBudget: "deep" as const } };
+    const draft = { ...baseline, configuration: { ...baseline.configuration!, modelResponseWaitSeconds: 30, profileBuddyId: null } };
+    const fresh = { ...snapshot, configuration: { ...snapshot.configuration!, routerBuddyIds: ["new-model"], modelResponseWaitSeconds: 120, profileBuddyId: null } };
     const adopted = rebaseDraft(draft, baseline, fresh);
     expect(adopted.conflicts).toEqual([]);
-    expect(adopted.draft.configuration).toMatchObject({ routerBuddyIds: ["new-model"], routingBudget: "brief", profileBuddyId: null, profileBudget: "deep" as const });
-    expect(publication(adopted.baseline, adopted.draft, "save").configuration).toEqual({ routingBudget: "brief" });
+    expect(adopted.draft.configuration).toMatchObject({ routerBuddyIds: ["new-model"], modelResponseWaitSeconds: 30, profileBuddyId: null });
+    expect(publication(adopted.baseline, adopted.draft, "save").configuration).toEqual({ modelResponseWaitSeconds: 30 });
   });
 });
 
@@ -533,20 +531,20 @@ describe("unavailable Router settings in the editor", () => {
   });
   it("keeps a dirty Router intent as a conflict when refreshed settings need upgrade", () => {
     const baseline = makeDraft(snapshot);
-    const draft = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "brief" as const, profileBuddyId: null, profileBudget: "deep" as const } };
+    const draft = { ...baseline, configuration: { ...baseline.configuration!, modelResponseWaitSeconds: 30, profileBuddyId: null } };
     const merged = rebaseDraft(draft, baseline, unavailable);
     expect(merged.conflicts).toMatchObject([{ field: "configuration", kind: "changed" }]);
     expect(merged.draft).toBe(draft);
   });
-  it("sends only the single Router, mode and budget through the form publication request", async () => {
+  it("sends only the single Router, mode and response wait through the form publication request", async () => {
     const baseline = makeDraft(snapshot);
     const draft = { ...baseline, configuration: { ...baseline.configuration!, routerBuddyIds: ["chosen"], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "fast" as const, routingBudget: "deep" as const, profileBuddyId: null, profileBudget: "deep" as const } };
+      defaultRoutingMode: "fast" as const, modelResponseWaitSeconds: 120, profileBuddyId: null } };
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
     const patch = publication(baseline, draft, "single-router");
     await createApi("", fetcher as typeof fetch).command("user_policy_publish", patch, "csrf");
     const body = JSON.parse(fetcher.mock.calls[0][1]!.body as string);
-    expect(body.params.configuration).toEqual({ routerBuddyIds: ["chosen"], defaultRoutingMode: "fast", routingBudget: "deep" });
+    expect(body.params.configuration).toEqual({ routerBuddyIds: ["chosen"], defaultRoutingMode: "fast", modelResponseWaitSeconds: 120 });
     expect(body.params.configuration).not.toHaveProperty("fastRouterBuddyId");
     expect(body.params.configuration).not.toHaveProperty("reviewRouterBuddyId");
   });

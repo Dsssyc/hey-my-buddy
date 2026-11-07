@@ -15,7 +15,6 @@ export default {
     search: "搜索 buddy",
     none: "未指定",
     noCandidates: "没有已启用、可用且具备强制只联网档位的 buddy",
-    budget: "画像预算",
     dataFlow: "构建画像时，模型名称与对应关系候选会发给画像 buddy 的模型提供方；画像 buddy 可以联网查找公开资料。",
   },
   sections: {
