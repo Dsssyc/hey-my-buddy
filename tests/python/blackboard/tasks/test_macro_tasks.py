@@ -1048,7 +1048,7 @@ class RoutingSpanTests(WorkflowTestCase):
         self.finish_turn(board, claim, runner_status=result_status, shutdown=shutdown)
         return board, run['runId']
 
-    def decision(self, board, task_id, *, output=None, status='completed', selected=None, buddy_id='frozen-buddy', budget=None):
+    def decision(self, board, task_id, *, output=None, status='completed', selected=None, buddy_id='frozen-buddy', wait=None):
         with board.store.db.write() as db:
             note = (output or {}).get('decision', {}).get('note')
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,buddy_id,note,created_at)"
@@ -1059,7 +1059,7 @@ class RoutingSpanTests(WorkflowTestCase):
                         json.dumps({})))
             now = '2026-01-01T00:00:00Z'
             router_sequence.freeze_request(db, 'recorded-decision',
-                                           snapshot={'facts': {'budget': budget},
+                                           snapshot={'facts': {'modelResponseWaitSeconds': wait},
                                                      'baseInput': {'task': 'task'}, 'inspections': []}, now=now)
             router_sequence.reserve_dispatch(db, decision_id='recorded-decision', task_id=task_id, router_index=0,
                                              buddy={'buddyId': 'frozen-router', 'harness': 'dsh', 'provider': 'fixture',
@@ -1078,15 +1078,14 @@ class RoutingSpanTests(WorkflowTestCase):
                   'policyCheck': {'taskPreference': {'ruleIndex': 2, 'outcome': 'matched'}, 'userPreference': 'alternative'},
                   'usage': {'elapsedMs': 120, 'toolCalls': 3},
                   'stopEvidence': {'shutdownConfirmed': True}}
-        budget = {'preset': 'brief', 'toolCalls': 8}
-        self.decision(board, task_id, output=output, selected=selected, budget=budget)
+        self.decision(board, task_id, output=output, selected=selected, wait=60)
         before = self.spans(board, task_id)[0]
         self.assertEqual(before['decisionId'], 'recorded-decision')
         self.assertEqual(before['routing'], {'routerBuddyIds': None, 'routerIdentities': None, 'routerIndex': None,
-                         'routerRetryIntervalSeconds': None, 'routingBudget': None,
+                         'routerRetryIntervalSeconds': None, 'modelResponseWaitSeconds': 60,
                          'routerBuddyId': None, 'routerBuddy': None, 'routerProblem': None, 'routingMode': None,
                          'selectedBuddy': selected, 'reason': None, 'note': 'frozen note',
-                         'policyCheck': output['policyCheck'], 'budget': budget, 'usage': output['usage']})
+                         'policyCheck': output['policyCheck'], 'usage': output['usage']})
         # Changing the owner's current execution buddy cannot rewrite this history.
         with board.store.db.write() as db:
             db.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.model','current-model') WHERE task_id=?", (task_id,))
@@ -1094,7 +1093,7 @@ class RoutingSpanTests(WorkflowTestCase):
                        " VALUES('current-decision','completed','current-buddy','2026-01-02T00:00:00Z')")
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,selected_json,output_json,updated_at)"
                        " VALUES('current-decision','current-request','other-fingerprint','other-calculation',?,?,'2026-01-02T00:00:00Z')",
-                       (json.dumps({**selected, 'model': 'current-model'}), json.dumps({'budget': {'preset': 'deep'}})))
+                       (json.dumps({**selected, 'model': 'current-model'}), json.dumps({'modelResponseWaitSeconds': 90})))
             router_sequence.freeze_request(db, 'current-decision',
                                            snapshot={'facts': {}, 'baseInput': {'task': 'current task'},
                                                      'inspections': []}, now='2026-01-02T00:00:00Z')
@@ -1123,19 +1122,18 @@ class RoutingSpanTests(WorkflowTestCase):
         self.assertEqual(span['tokenUsage'], usage)
         self.assertEqual(span['routing']['usage'], {'elapsedMs': 120, 'toolCalls': 0})
 
-    def test_review_unavailability_keeps_its_own_round_budget_without_a_result_copy(self):
+    def test_review_unavailability_keeps_its_own_round_wait_without_a_result_copy(self):
         board, task_id = self.recorded_task()
-        budget = {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64, 'bytesRead': 2097152}
-        self.decision(board, task_id, status='needs-host', budget=budget)
+        self.decision(board, task_id, status='needs-host', wait=90)
         with board.store.db.write() as db:
             db.execute("UPDATE attempts SET result_json=json_set(result_json,'$.result.routingMode','review',"
                        "'$.result.code','router-review-unavailable') WHERE task_id=?", (task_id,))
             router_sequence.freeze_request(db, 'recorded-decision', round=2,
-                                           snapshot={'facts': {'budget': None, 'routerCalled': False},
+                                           snapshot={'facts': {'modelResponseWaitSeconds': None, 'routerCalled': False},
                                                      'baseInput': {'task': 'current task'}, 'inspections': []},
                                            now='2026-01-02T00:00:00Z')
         span = self.spans(board, task_id)[0]
-        self.assertEqual(span['routing']['budget'], {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64})
+        self.assertEqual(span['routing']['modelResponseWaitSeconds'], 90)
         self.assertEqual(span['routing']['routingMode'], 'review')
         self.assertIsNone(span['routing']['usage'])
         self.assertIsNone(span['routing']['policyCheck'])
@@ -1146,14 +1144,14 @@ class RoutingSpanTests(WorkflowTestCase):
         before = self.spans(board, task_id)[0]
         self.assertIsNone(before['decisionId'])
         self.assertEqual(before['routing'], {'routerBuddyIds': None, 'routerIdentities': None, 'routerIndex': None,
-                         'routerRetryIntervalSeconds': None, 'routingBudget': None,
+                         'routerRetryIntervalSeconds': None, 'modelResponseWaitSeconds': None,
                          'routerBuddyId': None, 'routerBuddy': None, 'routerProblem': None, 'routingMode': None,
                          'selectedBuddy': None, 'reason': None, 'note': None, 'policyCheck': None,
-                         'budget': None, 'usage': {'elapsedMs': None, 'toolCalls': None}})
+                         'usage': {'elapsedMs': None, 'toolCalls': None}})
         self.decision(board, task_id)
         span = self.spans(board, task_id)[0]
         self.assertEqual(span['decisionId'], 'recorded-decision')
-        for field in ('selectedBuddy', 'policyCheck', 'budget'):
+        for field in ('selectedBuddy', 'policyCheck', 'modelResponseWaitSeconds'):
             self.assertIsNone(span['routing'][field])
         with board.store.db.read() as db:
             self.assertIsNone(db.execute("SELECT output_json FROM decision_requests").fetchone()[0])

@@ -29,7 +29,7 @@ class FastRouterProbeTests(unittest.TestCase):
         document = probe.packet(self.args)
         self.assertNotIn('executionWorkspace', document)
         self.assertNotIn('evidence', document)
-        self.assertEqual(document['budget'], {'timeoutSeconds': 60})
+        self.assertEqual(document['modelResponseWaitSeconds'], 60)
         prompt = probe.router.render_prompt(document)
         self.assertIn('"firstPassRateInterval":null', prompt)
         self.assertIn('"failureRateInterval":null', prompt)

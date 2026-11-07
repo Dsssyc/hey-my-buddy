@@ -148,7 +148,7 @@ class ProfileRuntimeTests(unittest.TestCase):
         self.assertEqual(len(seen), 2)
         self.assertEqual(code, 0)
         self.assertEqual(verdict['toolCalls'], 130)
-        self.assertIsNone(verdict['stopReason'])
+        self.assertNotIn('stopReason', verdict)
         self.assertEqual(self.round_starts, [(True, False), (True, False)])
 
     def test_a_correction_waits_again_and_can_time_out_after_a_responding_round(self):

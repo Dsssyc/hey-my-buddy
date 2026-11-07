@@ -323,8 +323,7 @@ def initialize_configuration(connection) -> dict:
     from .router_settings import DEFAULT_ROUTER_SETTINGS
     settings = {**DEFAULT_ROUTER_SETTINGS,
                 "routerBuddyIds": list(DEFAULT_ROUTER_SETTINGS["routerBuddyIds"])}
-    # Later columns carry their own defaults, so a source board recreated at an
-    # older schema seeds exactly the columns that schema knows.
+    # Other settings take the current schema defaults.
     connection.execute("INSERT INTO router_settings(id,default_mode,model_response_wait_seconds,retry_interval_seconds) VALUES(1,?,?,?)",
                        (settings["defaultRoutingMode"], settings["modelResponseWaitSeconds"], settings["routerRetryIntervalSeconds"]))
     return settings

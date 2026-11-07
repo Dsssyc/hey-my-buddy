@@ -95,6 +95,7 @@ class ModelResponseWait:
         self.seconds = seconds
         self.notify = notify
         self.deadline = None
+        self.failure = None
         self.lock = threading.RLock()
 
     def begin(self):
@@ -108,9 +109,17 @@ class ModelResponseWait:
 
     def responded(self, handle):
         with self.lock:
+            # Native drivers may normalize an observer's I/O failure into a
+            # RunResult. Supervision must still see this execution-file failure.
+            if self.failure is not None:
+                raise self.failure
             if self.deadline is not None and handle.model_responded:
-                _check_budget_binding(self.path, self.binding)
-                native_path(self.path).unlink()
+                try:
+                    _check_budget_binding(self.path, self.binding)
+                    native_path(self.path).unlink()
+                except Exception as error:
+                    self.failure = error
+                    raise
                 self.deadline = None
 
     def expired(self, handle):
@@ -687,7 +696,7 @@ class Execution:
                 self.hint(waitingReason=None)
             self.flush_hints()
 
-        wait_seconds = spec.get("modelResponseWaitSeconds") if spec["adapter"] == "decision" else None
+        wait_seconds = spec["modelResponseWaitSeconds"] if spec["adapter"] == "decision" else None
         model_wait = (ModelResponseWait(self.directory / BUDGET,
             {"taskId": task["taskId"], "attemptId": attempt["attemptId"], "generation": attempt["generation"]},
             wait_seconds, notify=notify_model_wait) if wait_seconds is not None else None)
@@ -775,8 +784,6 @@ class Execution:
         while True:
             control.raise_fatal()
             finished = handle.wait(timeout=0.25) is not None
-            if model_wait is not None:
-                model_wait.responded(handle)
             if model_wait is not None and model_wait.expired(handle):
                 timed_out = True
                 self.log("Router model did not start responding; cancelling this owned process session")

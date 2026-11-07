@@ -14,16 +14,16 @@ from hey_my_buddy.buddy.roles.router_input import verify as verify_frozen_input
 from hey_my_buddy.paths import native_path
 
 
-def prepare_input(manifest, directory, *, state_dir, deadline):
+def prepare_input(manifest, directory, *, state_dir):
     from hey_my_buddy.buddy.roles.router_input import digest
     root = directory / "mock-frozen-input"
     native_path(root).mkdir(mode=0o700, parents=True)
     native_path(root / "input.txt").write_text("private service-protocol fixture\n", encoding="utf-8", newline="\n")
-    return root, digest(root, deadline=deadline)
+    return root, digest(root)
 
 
-def verify_input(manifest, root, expected, *, state_dir, deadline):
-    result = verify_frozen_input(None, root, expected, state_dir=state_dir, deadline=deadline)
+def verify_input(manifest, root, expected, *, state_dir):
+    result = verify_frozen_input(None, root, expected, state_dir=state_dir)
     result["manifestSha256"] = (manifest or {}).get("manifestSha256")
     return result
 
@@ -84,7 +84,7 @@ def _answer(document, options, mode):
 
 
 _END = {"error": ("call-timeout", 1), "protocol_error": ("invalid-native-result", 1),
-        "budget": ("observer-interrupt", 1), "deadline": ("deadline", 1)}
+        "not_responding": ("router-not-responding", 1)}
 
 
 def start(harness, context, request, fixture, options):
@@ -99,7 +99,6 @@ def start(harness, context, request, fixture, options):
     assert set(request.output_schema["properties"]) in (
         {"buddyId", "domainNodeId", "taskType", "note", "evidence"},
         {"buddyId", "domainNodeId", "taskType", "note", "evidence", "preferredBuddyId", "reselected"})
-    assert request.budget == context.decision_input["budget"]
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
     private = ensure_private_dir(context_root(context, harness) / ("review-" + identity.invocation_id))
@@ -109,17 +108,18 @@ def start(harness, context, request, fixture, options):
         "sessionRecordPath": context.session_record_path,
         "directory": str(context.directory), "executionLiveFile": str(context.directory / "execution-live.json"),
         "nativeRoot": str(ensure_private_dir(context_root(context, harness) / "review-native")),
-        "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
+        "cwd": request.cwd, "timeoutSeconds": None,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "invocationId": identity.invocation_id,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "canCorrect": False,
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
-                            "budget": request.budget, "captureEvidence": request.capture_evidence},
+                            "captureEvidence": request.capture_evidence},
     }
     built_request, *_ = run_execution.review_request(control, SimpleNamespace(prepare_run_services=None))
     handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
     handle.request = built_request
+    handle.model_response_wait = context.model_response_wait
     mode = options.get("mode", "select_first")
     if mode == "sleep":
         def wait_for_stop():
@@ -147,7 +147,7 @@ def start(harness, context, request, fixture, options):
         handle.result = RunResult(
             identity=built_request.identity, harness=harness,
             end=RunEnd(status="error" if mode in _END else "ok", reason_code=reason_code,
-                       native_exit_code=exit_code), model_responded=True,
+                       native_exit_code=exit_code), model_responded=mode != "not_responding",
             buddy=ResultBuddy(requested=built_request.buddy, checked=CheckedBuddy(
                 provider=CheckedValue(value=context.spec["provider"]),
                 model=CheckedValue(value=context.spec["model"]), effort=CheckedValue(value=context.spec["effort"]))),
@@ -157,10 +157,12 @@ def start(harness, context, request, fixture, options):
             stop_evidence=StopEvidence(native=StopLayer(
                 group_state="unknown" if mode == "no_shutdown" else "gone")),
         )
-        handle.verdict = {"stopReason": "readonly-budget-exhausted" if mode == "budget" else None,
+        handle.verdict = {"stopReason": None,
                           "elapsedMs": 200}
         handle.exit_code = exit_code
     else:
         handle.exit_code = 0
+    if handle.result is not None:
+        handle.model_responded = handle.result.model_responded is True
     handle.done.set()
     return handle

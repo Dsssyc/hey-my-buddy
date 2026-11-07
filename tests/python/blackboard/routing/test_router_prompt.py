@@ -97,7 +97,7 @@ class RouterPromptTests(unittest.TestCase):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 document = {"routingMode": mode, "task": "choose", "buddies": [candidate()],
-                            "outputSchema": {"type": "object"}, "budget": {"timeoutSeconds": 60}}
+                            "outputSchema": {"type": "object"}}
                 before = deepcopy(document)
                 context = ExecutionContext("task", "attempt", 1, {}, root, {},
                                            {"HMB_STATE_DIR": str(root / "state")})

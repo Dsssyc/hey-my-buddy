@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import importlib.util
 import os
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 import uuid
@@ -65,23 +64,9 @@ class _UnconfirmedExit:
         return self.returncode
 
 
-class _UnreapedProcess:
-    """wait 永远超时、leader 永不被 reap 的替身：外层停止观察只能停在未停。"""
-    def __init__(self):
-        self.pid = None
-        self.returncode = None
-        self._buddy_job = _UnstoppedGroup()
-
-    def poll(self):
-        return None
-
-    def wait(self, timeout=None):
-        raise subprocess.TimeoutExpired(cmd="mock-native", timeout=timeout)
-
-
-def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped, shutdown,
+def _freeze_review_run(harness, context, request, *, mutation, stopped, shutdown,
                        tool_calls, correction_count, checked_model, answer, native_receipt,
-                       elapsed_ms):
+                       elapsed_ms, model_responded):
     """以真实请求和结果对象模拟一次进程内 review，不启动模型或网络。"""
     from hey_my_buddy.buddy.harnesses.run_contract import (
         CheckedBuddy, CheckedValue, EvidenceRef, NativeIdentity, ResultBuddy,
@@ -104,15 +89,15 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
         "executionLiveFile": str(context.directory / "execution-live.json"),
         "nativeRoot": str(ensure_private_dir(context_root(context, harness) / "review-native")),
         "sessionRecordPath": context.session_record_path,
-        "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
+        "cwd": request.cwd, "timeoutSeconds": None,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         # 生产 start_review 走注册表读本类属性；不用探针可被测试替换的 adapter_for。
         "canCorrect": registry_adapter(harness).native_resume,
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
-                            "budget": request.budget, "captureEvidence": request.capture_evidence},
+                            "captureEvidence": request.capture_evidence},
         # 生产控制文件没有的替身材料：与 5-D1 相同，绝不进入角色读者的键。
-        "fixture": {"timeout": timeout, "stopped": stopped, "shutdown": shutdown,
+        "fixture": {"stopped": stopped, "shutdown": shutdown,
                     "toolCalls": tool_calls, "correctionCount": correction_count,
                     "checkedModel": checked_model, "answer": answer,
                     "nativeReceipt": native_receipt, "elapsedMs": elapsed_ms},
@@ -143,7 +128,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     result = RunResult(
         identity=built_request.identity, harness=harness,
         end=RunEnd(status="ok", native_exit_code=0),
-        model_responded=True,
+        model_responded=model_responded,
         buddy=ResultBuddy(requested=built_request.buddy, checked=CheckedBuddy(
             provider=CheckedValue(value=context.spec["provider"]),
             model=CheckedValue(value=checked_model or context.spec["model"]),
@@ -166,10 +151,8 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     handle.verdict = verdict
     handle.exit_code = 0
     handle.done.set()
-    if timeout:
-        handle.wait = Mock(return_value=None)
-    else:
-        handle.wait = Mock(side_effect=handle.wait)
+    handle.model_responded = model_responded
+    handle.wait = Mock(side_effect=handle.wait)
     handle.shutdown_confirmed = Mock(return_value=stopped and shutdown)
     handle.terminate = Mock(side_effect=handle.terminate)
     return handle
@@ -193,16 +176,17 @@ class RouterProbeTests(unittest.TestCase):
                 directory.chmod(0o700)
         self.temporary.cleanup()
 
-    def args(self, harness="codex", execute=False, preset="brief"):
+    def args(self, harness="codex", execute=False):
         return probe.parser().parse_args([
             "--harness", harness, "--provider", "openai" if harness == "codex" else "anthropic",
-            "--model", "mock-native-model", "--effort", "medium", "--preset", preset,
+            "--model", "mock-native-model", "--effort", "medium",
             "--output-root", str(self.root), *(["--execute"] if execute else []),
         ])
 
-    def mock_execute(self, *, harness="codex", mutation=None, timeout=False, stopped=True,
+    def mock_execute(self, *, harness="codex", mutation=None, stopped=True,
                      shutdown=True, tool_calls=5, correction_count=0, checked_model=None,
-                     answer=None, start_error=None, native_receipt=None, elapsed_ms=100):
+                     answer=None, start_error=None, native_receipt=None, elapsed_ms=100,
+                     model_responded=True):
         """旧 payload 形参逐项映射：rawAnswer→answer，usage.toolCalls→tool_calls，
         usage.elapsedMs→verdict 的 elapsedMs，correctionCount→correction_count，
         resolved 覆写→checked_model，native 账号/凭据/调试/嵌套 JSON→native_receipt
@@ -215,10 +199,10 @@ class RouterProbeTests(unittest.TestCase):
             if start_error:
                 raise start_error
             self.executed = _freeze_review_run(
-                harness, context, request, mutation=mutation, timeout=timeout,
+                harness, context, request, mutation=mutation,
                 stopped=stopped, shutdown=shutdown, tool_calls=tool_calls,
                 correction_count=correction_count, checked_model=checked_model, answer=answer,
-                native_receipt=native_receipt, elapsed_ms=elapsed_ms)
+                native_receipt=native_receipt, elapsed_ms=elapsed_ms, model_responded=model_responded)
             return self.executed
 
         native.registered_start.side_effect = start
@@ -251,8 +235,7 @@ class RouterProbeTests(unittest.TestCase):
                 self.assertEqual(report["modelCalls"], 0)
                 self.assertFalse(report["probeChecksPassed"])
                 self.assertEqual(report["status"], "prepared")
-                self.assertEqual(report["request"]["budget"],
-                                 {"preset": "brief", "timeoutSeconds": 60, "toolCalls": 8})
+                self.assertNotIn("budget", report["request"])
                 self.assertEqual(report["inputHashesBefore"], report["inputHashesAfter"])
                 self.assertEqual(report["sentinelBefore"], report["sentinelAfter"])
                 assert_private_path(self, self.root, 0o700)
@@ -280,11 +263,11 @@ class RouterProbeTests(unittest.TestCase):
             self.root = Path(self.temporary.name) / harness
             report, native, handle = self.mock_execute(harness=harness)
             native.registered_start.assert_called_once()
-            handle.wait.assert_called_once_with(70)
+            handle.wait.assert_called_once_with(timeout=0.25)
             handle.terminate.assert_not_called()
             self.assertEqual(report["status"], "unverified")
             self.assertFalse(report["probeChecksPassed"])
-            for name in ("nativePolicy", "forbiddenTools", "writeDenials", "budgetConsistent"):
+            for name in ("nativePolicy", "forbiddenTools", "writeDenials", "correctionConsistent"):
                 self.assertEqual(report["checks"][name]["status"], "unverified")
             for name in ("internalRead", "inputUnchanged", "sentinelUnchanged", "shutdownConfirmed"):
                 self.assertEqual(report["checks"][name]["status"], "passed")
@@ -295,7 +278,7 @@ class RouterProbeTests(unittest.TestCase):
             self.assertIsNone(context.agent_credential)
             self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)
             self.assertEqual(context.attempt_id, report["identity"]["attemptId"])
-            self.assertEqual(context.spec["modelResponseWaitSeconds"], request.budget["timeoutSeconds"])
+            self.assertNotIn("routerBudgetSeconds", context.spec)
             self.assertEqual(report["nativeEvidence"]["identity"]["sessionId"], "mock-session")
 
     def test_mutated_input_and_external_sentinel_fail(self):
@@ -316,10 +299,10 @@ class RouterProbeTests(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertEqual(report["checks"]["shutdownConfirmed"]["status"], "failed")
 
-    def test_timeout_and_finally_only_terminate_the_owned_handle(self):
-        report, native, handle = self.mock_execute(timeout=True, stopped=False)
+    def test_finally_only_terminates_the_owned_handle(self):
+        report, native, handle = self.mock_execute(stopped=False)
         self.assertEqual(report["status"], "failed")
-        self.assertGreaterEqual(handle.terminate.call_count, 2)
+        handle.terminate.assert_called_once_with(grace_seconds=3)
         native.cancel.assert_not_called()
         native.registered_start.assert_called_once()
         self.assertFalse(report["finalStopEvidence"]["ownedGroupShutdownConfirmed"])
@@ -348,14 +331,22 @@ class RouterProbeTests(unittest.TestCase):
             self.assertEqual(report["status"], "failed")
             self.assertEqual(report["checks"]["internalRead"]["status"], "failed")
 
-    def test_observed_budget_overrun_fails(self):
+    def test_elapsed_time_and_tool_count_are_observations(self):
         report, _, _ = self.mock_execute(tool_calls=9, elapsed_ms=61000)
+        self.assertEqual(report["status"], "unverified")
+        self.assertEqual(report["checks"]["correctionConsistent"]["status"], "unverified")
+
+    def test_no_model_response_is_recorded_as_failed_wait(self):
+        with patch.object(probe, "ModelResponseWait") as wait:
+            wait.return_value.expired.return_value = True
+            report, _, handle = self.mock_execute(model_responded=False)
         self.assertEqual(report["status"], "failed")
-        self.assertEqual(report["checks"]["budgetConsistent"]["status"], "failed")
+        self.assertEqual(report["reason"], {"code": "router-not-responding", "params": {"seconds": 60}})
+        handle.wait.assert_called_once_with(timeout=0.25)
 
     def test_more_than_two_correction_turns_or_identity_mismatch_fails(self):
         report, _, _ = self.mock_execute(correction_count=2)
-        self.assertEqual(report["checks"]["budgetConsistent"]["status"], "failed")
+        self.assertEqual(report["checks"]["correctionConsistent"]["status"], "failed")
         self.root = Path(self.temporary.name) / "identity"
         report, _, _ = self.mock_execute(checked_model="wrong")
         self.assertEqual(report["checks"]["requestIdentity"]["status"], "failed")
@@ -404,14 +395,11 @@ class RouterProbeTests(unittest.TestCase):
             self.assertIn("[REDACTED]", raw)
         self.assertEqual(report["result"]["result"]["nativePolicy"]["account"], "[REDACTED]")
 
-    def test_presets_follow_router_contract_and_root_cannot_be_reused(self):
-        for preset, expected in (("standard", (300, 24)), ("deep", (600, 64))):
-            self.root = Path(self.temporary.name) / preset
-            report = probe.run(self.args(preset=preset))
-            limits = report["request"]["budget"]
-            self.assertEqual(tuple(limits[key] for key in ("timeoutSeconds", "toolCalls")), expected)
-            with self.assertRaises(ValueError):
-                probe.run(self.args())
+    def test_root_cannot_be_reused(self):
+        report = probe.run(self.args())
+        self.assertNotIn("budget", report["request"])
+        with self.assertRaises(ValueError):
+            probe.run(self.args())
 
     def test_execute_and_prepare_only_are_mutually_exclusive(self):
         with self.assertRaises(SystemExit) as error:

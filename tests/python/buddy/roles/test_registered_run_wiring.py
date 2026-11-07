@@ -207,7 +207,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
              "cwd": str(self.cwd), "modelResponseWaitSeconds": WIRING_TIMEOUT}, self.root / "attempt", {},
             {**self.environment, "HMB_ZCODE_TEST_CASE": case},
             session_record_path=str(self.root / "session.jsonl"))
-        request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, WIRING_TIMEOUT,
+        request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA,
                                           capture_evidence=capture_evidence)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if not handle.finished else None)

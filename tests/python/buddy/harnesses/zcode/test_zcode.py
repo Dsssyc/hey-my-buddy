@@ -386,11 +386,6 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
 
-    def test_deadline_stops_owned_native_process_group(self):
-        _, outcome = self.execute(self.context("hang", timeout=1))
-        self.assertEqual(outcome.status, "failed")
-        self.assertEqual(outcome.result.get("code"), "timeout")
-        self.assertTrue(outcome.shutdown_confirmed)
 
     def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
         context = self.context("ok", timeout=None)
@@ -414,20 +409,22 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
 
-    def test_positive_timeout_keeps_a_finite_stamped_deadline(self):
-        context = self.context(timeout=10)
+
+    def test_blocked_native_stdin_still_honors_cancellation(self):
+        context = self.context("blocked-input", timeout=None)
+        context.spec["task"] = "x" * 262144
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertGreater(handle.deadline, time.monotonic())
-        self.assertFalse(math.isinf(handle.deadline))
-
-    def test_blocked_native_stdin_does_not_disable_the_deadline(self):
-        context = self.context("blocked-input", timeout=1)
-        context.spec["task"] = "x" * 262144
-        _, outcome = self.execute(context)
-        self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.result.get("code"), "timeout")
+        self.own_handle(handle)
+        deadline = time.monotonic() + 20
+        while "session/subscribe" not in self.native_log(context, "methods.jsonl").split():
+            self.assertLess(time.monotonic(), deadline, "fixture never blocked its native input")
+            time.sleep(0.05)
+        self.assertIsNone(handle.wait(0.1))
+        self.adapter.cancel(handle)
+        self.assertIsNotNone(handle.wait(15))
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
 
     def test_oauth_provider_is_not_rejected_during_preparation(self):

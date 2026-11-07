@@ -278,7 +278,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(document["routingMode"], "fast")
         self.assertEqual(document["modelResponseWaitSeconds"], 90)
         self.assertEqual(claim["task"]["spec"]["modelResponseWaitSeconds"], 90)
-        self.assertEqual(claim["task"]["spec"]["decision"]["modelResponseWaitSeconds"], 90)
+        self.assertNotIn("modelResponseWaitSeconds", claim["task"]["spec"]["decision"])
         self.assertEqual(self.board_.call("task_get", {"runId": started["runId"]})["task"]["modelResponseWaitSeconds"], 90)
         self.assertEqual(self.packet(claim)["classificationRunIds"], [self.evidence_id])
         self.assertEqual(self.packet(claim)["microTasks"][0]["classification"], None)
@@ -470,7 +470,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
 
                 def fake_run(request, *, observer, services, cancelled):
                     return RunResult(identity=request.identity, harness=request.harness,
-                        end=RunEnd(status="error", reason_code="deadline", native_exit_code=1),
+                        end=RunEnd(status="error", reason_code="native-error", native_exit_code=1),
                         model_responded=True, usage=usage,
                         stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
 
@@ -488,7 +488,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                         execution.run()
                 run = browser.bootstrap()["maintenance"]["runs"][0]
                 self.assertEqual(run["state"], "failed", logs)
-                self.assertEqual(run["reason"]["code"], "router-not-responding")
+                self.assertEqual(run["reason"]["code"], "native-error")
                 actual = run["usage"]["attempts"][0]["tokenUsage"]
                 if usage is None:
                     self.assertIsNone(actual)

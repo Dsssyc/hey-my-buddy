@@ -32,7 +32,7 @@ class UpgradeServiceTests(BoardTestCase):
         self.assertIsNone(resolution.problem)
         self.assertEqual([item["code"] for item in resolution.inspections], [None])
         self.assertEqual(resolution.facts["routingMode"], "review")
-        self.assertEqual(resolution.facts["routingBudget"], "deep")
+        self.assertEqual(resolution.facts["modelResponseWaitSeconds"], 60)
         self.assertEqual(resolution.facts["routerRetryIntervalSeconds"], 47)
 
         def call(operation, params):

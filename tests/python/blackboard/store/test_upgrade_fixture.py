@@ -740,7 +740,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             assert_current_form(json.loads(raw))
         self.assertEqual(catalog.identities_from_payload(rows[legacy_id], 'codex'), {('openai', 'fixture-alpha', 'high')})
 
-    def test_routing_budget_views_match_for_pre_upgrade_and_new_micro_tasks(self):
+    def test_legacy_budget_stays_frozen_while_current_views_project_response_wait(self):
         from support import FakeClock, InProcessBoard
 
         fixture, connection = self.restored('budget-projections', migrate=False)
@@ -759,22 +759,23 @@ class UpgradeFixtureTests(unittest.TestCase):
         # The floor pins alpha, which would select it without calling a Router.
         with board.store.db.write() as db:
             db.execute("DELETE FROM evaluation_preferences WHERE mode='pin'")
-        submission = {'macroTaskId': 'standalone', 'title': 'Budget after upgrade',
-                      'task': 'Compare current routing budget views', 'buddy': 'route',
+        submission = {'macroTaskId': 'standalone', 'title': 'Wait after upgrade',
+                      'task': 'Compare current routing wait views', 'buddy': 'route',
                       'cwd': str(fixture['fixtureRoot'] / 'repository'), 'checkout': 'worktree',
                       'access': 'write', 'writeScope': ['.'], 'inputs': [], 'expectedSeconds': 1800}
         new = board.call('workflow_submit', {**submission})
         new = board.call('workflow_get', {'runId': new['runId'], 'routingHistory': {}})
-        expected = {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64}
-        for view in (old, new):
-            self.assertEqual(view['routing']['budget'], expected, view['routing'])
-            self.assertEqual(view['routingHistory']['entries'][0]['budget'], expected)
+        for view, expected_wait in ((old, None), (new, 60)):
+            self.assertEqual(view['routing']['modelResponseWaitSeconds'], expected_wait, view['routing'])
+            self.assertEqual(view['routingHistory']['entries'][0]['modelResponseWaitSeconds'], expected_wait)
             decision = board.call('selection_get', {'decisionId': view['routing']['decisionId']})['decision']
-            self.assertEqual(decision['budget'], expected)
+            self.assertEqual(decision['modelResponseWaitSeconds'], expected_wait)
+            self.assertNotIn('budget', view['routing'])
+            self.assertNotIn('budget', decision)
         timeline = board.call('macro_task_timeline', {'macroTaskId': old['macroTaskId']})
         spans = [span for span in timeline['spans'] if span['kind'] == 'routing' and span['decisionId'] == decision_id]
         self.assertTrue(spans)
-        self.assertTrue(all(span['routing']['budget'] == expected for span in spans))
+        self.assertTrue(all(span['routing']['modelResponseWaitSeconds'] is None for span in spans))
         self.assertEqual([tuple(row) for row in connection.execute(
             'SELECT rowid,decision_id,round,snapshot_json,frozen_at FROM router_requests ORDER BY rowid')
                           if row['decision_id'] != new['routing']['decisionId']], frozen)

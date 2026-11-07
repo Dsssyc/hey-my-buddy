@@ -16,7 +16,7 @@ class RouterFailoverTests(unittest.TestCase):
                           "router-quota-exhausted", "router-review-unsupported",
                           "router-no-tool-unsupported"),
             "runtime": ("timeout", "provider-error", "native-error", "empty-answer",
-                        "answer-invalid-json", "answer-shape", "readonly-budget-exhausted"),
+                        "answer-invalid-json", "answer-shape", "router-not-responding"),
             "publication": ("router-tools-forbidden", "router-tool-evidence-unverified",
                             "router-not-responding", "router-evidence-out-of-bounds", "router-out-of-bounds"),
         }

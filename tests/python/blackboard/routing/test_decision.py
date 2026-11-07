@@ -13,7 +13,7 @@ import json
 import threading
 import time
 import unittest
-from unittest.mock import ANY, patch
+from unittest.mock import patch
 from pathlib import Path
 
 from support import BoardTestCase, FakeClock, wait_for
@@ -647,11 +647,11 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(decision["usage"], {"elapsedMs": 200, "toolCalls": 1})
         self.assertEqual(decision["nativeIdentity"]["sessionId"], "mock-native")
 
-    def test_budget_and_input_changed_are_separate_from_failures_and_abstentions(self):
+    def test_no_response_and_input_changed_are_recorded_separately(self):
         clock = FakeClock()
         board = self.board(clock=clock)
         self.seed(board)
-        for mode, code in (("budget", "router-not-responding"), ("deadline", "router-not-responding"),
+        for mode, code in (("not_responding", "router-not-responding"),
                            ("input_changed", "router-input-changed")):
             clock.advance(601)
             decision = self.outcome(board, mode, request_id=mode)
@@ -664,12 +664,12 @@ class DecisionFailureTests(DecisionTestCase):
         _, changed_root, _ = self.input_verify.call_args.args
         self.assertTrue(Path(changed_root).exists())
         report = board.call("health", {})["routingHealth"]
-        self.assertEqual(report["notRespondingCount"], 2)
+        self.assertEqual(report["notRespondingCount"], 1)
         self.assertEqual(report["inputChangedCount"], 1)
         self.assertEqual(report["boundsRejectedCount"], 0)
-        self.assertEqual(report["failureCount"], 2)
+        self.assertEqual(report["failureCount"], 1)
         self.assertEqual(report["abstentionCount"], 0)
-        self.assertEqual(report["consecutiveFailures"], 2)
+        self.assertEqual(report["consecutiveFailures"], 1)
 
     def test_missing_native_result_keeps_infrastructure_failure_semantics(self):
         board = self.board()
@@ -997,12 +997,12 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         from hey_my_buddy.private_dirs import context_root
         private_root = context_root(context, harness)
         self.input_prepare.assert_called_once_with(manifest, private_root,
-                                                   state_dir=Path(context.environment["HMB_STATE_DIR"]), deadline=ANY)
+                                                   state_dir=Path(context.environment["HMB_STATE_DIR"]))
         self.assertTrue(Path(frozen_root).is_relative_to(private_root))
         self.assertFalse(private_root.is_relative_to(context.directory))
         self.assertFalse((context.directory / "frozen-input").exists())
         self.input_verify.assert_called_once_with(manifest, frozen_root, expected_digest,
-                                                  state_dir=Path(context.environment["HMB_STATE_DIR"]), deadline=ANY)
+                                                  state_dir=Path(context.environment["HMB_STATE_DIR"]))
         # A verified, stopped Router leaves only digests behind, not a repository copy.
         self.assertFalse(Path(frozen_root).exists())
         snapshot = console_snapshot_projection(board.service)[0]

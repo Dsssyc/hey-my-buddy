@@ -46,13 +46,15 @@ class ExecutionEndpointTests(unittest.TestCase):
             with self.subTest(nativeRequestSent=sent, modelResponded=started), \
                  tempfile.TemporaryDirectory(prefix="premodel-retry-") as directory:
                 state = Path(directory)
-                spec = {"adapter": "decision", "cwd": directory, "decision": {"kind": "maintain"}}
+                spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60, "decision": {"kind": "maintain"}}
                 claim = {"task": {"taskId": "task", "spec": spec},
                          "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
                          "decisionInput": {"kind": "maintain", "buddy": {"harness": "dsh"}}}
                 execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+                execution.directory.mkdir(parents=True, mode=0o700)
+                execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
                 execution.receipt = lambda claim, report, directory: report
-                handle = SimpleNamespace(wait=lambda timeout: 0, cancel_requested=False, result=None,
+                handle = SimpleNamespace(wait=lambda timeout: 0, cancel_requested=False, result=None, model_responded=False,
                                          stop_initiator=None, grace_expired=False)
                 holder = {"preflightControl": mock.Mock(), "harnessHistory": [{"harness": "dsh"}]}
                 outcome = AdapterOutcome(status="failed", shutdown_confirmed=True,
@@ -251,6 +253,62 @@ class ExecutionEndpointTests(unittest.TestCase):
                     wait.responded(SimpleNamespace(model_responded=True))
             self.assertTrue(path.exists())
             self.assertIsNotNone(wait.deadline)
+
+    def test_normalized_native_observer_error_stays_an_execution_failure(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        from hey_my_buddy.buddy.roles import controller, run_execution
+        from hey_my_buddy.buddy.harnesses import run_contract as rc
+        from hey_my_buddy.install import runtime
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                    "decision": {"kind": "maintain"}}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                     "decisionInput": {"kind": "maintain", "buddy": {"harness": "codex"}}}
+            execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            identity = rc.RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="call")
+            handle = run_execution.InlineRunHandle({"timeoutSeconds": None}, identity, grace_seconds=0)
+            budget_path = execution.directory / module.BUDGET
+            original_unlink = type(budget_path).unlink
+            removals = []
+            def unlink(path, *args, **kwargs):
+                if path == budget_path:
+                    removals.append(path)
+                    if len(removals) == 1:
+                        raise PermissionError("wait file removal refused")
+                return original_unlink(path, *args, **kwargs)
+            def start(_implementation, context):
+                handle.model_response_wait = context.model_response_wait
+                try:
+                    handle.observe(lambda facts: rc.FEEDBACK_CONTINUE, {"modelResponded": True})
+                except OSError:
+                    # A native driver's normal error mapping loses the exception.
+                    handle.result = rc.RunResult(identity=identity, harness="codex",
+                        end=rc.RunEnd(status="error", reason_code="invalid-native-result"),
+                        stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+                handle.exit_code = 1
+                handle.done.set()
+                return handle
+            def selected(claim, task, spec, attempt, directory, holder):
+                holder["preflightControl"] = mock.Mock()
+                return execution._execute_selected(claim, task, spec, attempt, directory, holder)
+            with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
+                 mock.patch.object(controller, "worker_executor", return_value=object()), \
+                 mock.patch.object(controller, "prepare_worker_run", return_value=controller.WorkerPreparation(True)), \
+                 mock.patch.object(controller, "worker_start", side_effect=start), \
+                 mock.patch.object(controller, "worker_cancel"), \
+                 mock.patch.object(execution, "_execute_guarded", side_effect=selected), \
+                 mock.patch.object(type(budget_path), "unlink", new=unlink):
+                receipt = execution.execute()
+            self.assertEqual(receipt["report"]["status"], "failed")
+            self.assertIn("execution failure", receipt["report"]["error"])
+            self.assertIn("wait file removal refused", receipt["report"]["error"])
+            self.assertTrue(receipt["report"]["shutdownConfirmed"])
+            self.assertEqual(len(removals), 1, "a transient deletion failure must remain an execution failure")
+            self.assertTrue(budget_path.exists())
 
     def test_endpoint_connection_and_call_errors_retain_structured_cause(self):
         identity = launch_protocol.RunIdentity(task_id="task", attempt_id="attempt", generation=1,

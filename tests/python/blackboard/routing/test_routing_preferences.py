@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from unittest.mock import ANY
 
 from hey_my_buddy.protocol.requests import parse_request
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext, ReadOnlyStructuredRequest
@@ -131,11 +130,10 @@ class DecisionCapabilityTests(unittest.TestCase):
             frozen = Path(root) / "frozen"
             frozen.mkdir()
             manifest = {"inputTree": "frozen-tree", "manifestSha256": "manifest"}
-            budget = router.budget("brief")
             stats = {"samples": 0, "firstPasses": 0, "failures": 0, "medianDeliverySeconds": None}
             document = {"domainNodes": [], "buddy": {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"},
                         "executionWorkspace": manifest, "executionWorkspaceForm": "archived-inline-v1",
-                        "budget": budget, "outputSchema": router.answer_schema([BUDDY_ID]),
+                        "outputSchema": router.answer_schema([BUDDY_ID]),
                         "buddies": [{"buddyId": BUDDY_ID, "load": {"wait": {"seconds": 0, "atLeast": False}},
                                      "statistics": {"overall": stats, "byDomain": {}, "byDomainTaskType": {}}}],
                         "task": "bounded read"}
@@ -152,7 +150,7 @@ class DecisionCapabilityTests(unittest.TestCase):
                 handle = native_adapter.start(context)
             from hey_my_buddy.private_dirs import context_root
             private_root = context_root(context, "codex")
-            prepare.assert_called_once_with(manifest, private_root, state_dir=Path(root) / "state", deadline=ANY)
+            prepare.assert_called_once_with(manifest, private_root, state_dir=Path(root) / "state")
             self.assertFalse(private_root.is_relative_to(directory))
             child, request = calls[0]
             self.assertIsInstance(request, ReadOnlyStructuredRequest)
@@ -163,7 +161,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             self.assertTrue(request.prompt.startswith(role + "\n"))
             self.assertEqual(request.prompt[len(role) + 1:], body)
             self.assertEqual(request.output_schema, document["outputSchema"])
-            self.assertEqual(request.budget, budget)
+            self.assertEqual(child.spec["modelResponseWaitSeconds"], 60)
             self.assertIsNone(child.turn)
             self.assertIsNone(child.agent_credential)
             self.assertEqual(child.spec["model"], "fixture-model")

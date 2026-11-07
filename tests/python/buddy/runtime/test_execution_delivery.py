@@ -46,17 +46,17 @@ class ExecutionDeliveryTests(unittest.TestCase):
     def budget_execution(self, client, suffix=""):
         task_id, attempt_id = "router-task" + suffix, "router-attempt" + suffix
         claim = {"task": {"taskId": task_id, "spec": {
-            "adapter": "decision", "routerBudgetSeconds": 60, "cwd": str(self.state)}},
+            "adapter": "decision", "modelResponseWaitSeconds": 60, "cwd": str(self.state)}},
             "attempt": {"taskId": task_id, "attemptId": attempt_id, "generation": 1},
             "decisionInput": {"buddy": {"harness": "codex"}, "routingMode": "fast",
-                              "budget": {"timeoutSeconds": 60}}}
+                              "modelResponseWaitSeconds": 60}}
         execution = entry.Execution(claim, self.state, "n" * 64, client=client)
         native_path(execution.directory).mkdir(parents=True, mode=0o700)
         return execution, claim
 
     def execute_budget(self, execution, claim, on_start):
         handle = mock.Mock(cancel_requested=False, stop_initiator=None, grace_expired=False,
-                           result=None, evidence_retention_failure=None)
+                           result=None, evidence_retention_failure=None, model_responded=False)
         handle.wait.return_value = 0
         def start(*_args):
             on_start()
@@ -583,7 +583,10 @@ class ExecutionDeliveryTests(unittest.TestCase):
         receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
         original = native_path(self.execution.directory / RECEIPT).read_bytes()
         budget = self.execution.directory / BUDGET
-        native_path(budget).write_text('{}')
+        native_path(budget).write_text(json.dumps({"deadline": 1, "binding": {
+            "taskId": self.execution.claim["task"]["taskId"],
+            "attemptId": self.execution.claim["attempt"]["attemptId"],
+            "generation": self.execution.claim["attempt"]["generation"]}}), encoding="utf-8")
         unlink = Path.unlink
         def fail_budget(path, **kwargs):
             if path == native_path(budget):

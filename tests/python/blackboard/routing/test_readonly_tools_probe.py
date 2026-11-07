@@ -47,7 +47,8 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
             self.assertEqual(probe.run(self.args)['packetSha256'], report['packetSha256'])
         packet = json.loads(Path(report['packet']).read_text(encoding="utf-8"))
         self.assertNotIn(packet['expected']['marker'], packet['request']['prompt'])
-        self.assertEqual(packet['request']['budget']['toolCalls'], 8)
+        self.assertNotIn('budget', packet['request'])
+        self.assertEqual(packet['request']['modelResponseWaitSeconds'], 60)
 
     def test_only_one_execution_is_possible_for_the_prepared_packet(self):
         packet = self.prepared()
@@ -55,6 +56,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         native.registered_start.return_value = handle
         handle.wait.return_value = 0
         handle.shutdown_confirmed.return_value = True
+        handle.model_responded = True
         self.args.execute = True
         with patch.object(probe, 'adapter_for', return_value=native), \
              patch.object(probe, 'start_review', native.registered_start), \
@@ -67,11 +69,32 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         _harness, context, request = native.registered_start.call_args.args
         self.assertIsNone(context.agent_credential)
         self.assertIsNone(context.turn)
-        self.assertEqual(request.budget['timeoutSeconds'], 60)
+        self.assertFalse(request.capture_evidence)
+        self.assertEqual(context.spec['modelResponseWaitSeconds'], 60)
+        handle.wait.assert_called_once_with(timeout=0.25)
         self.assertTrue(Path(context.environment['HMB_STATE_DIR']).parent.name.startswith('hey-my-buddy-checks-'))
         self.assertEqual(Path(context.environment['HMB_RUNTIME_ROOT']).parent,
                          Path(context.environment['HMB_STATE_DIR']).parent)
         self.assertFalse(Path(context.environment['HMB_STATE_DIR']).parent.exists())
+
+    def test_no_model_response_is_recorded_as_failed_wait(self):
+        packet = self.prepared()
+        native, handle = Mock(), Mock()
+        native.registered_start.return_value = handle
+        handle.wait.return_value = 0
+        handle.shutdown_confirmed.return_value = True
+        handle.model_responded = False
+        self.args.execute = True
+        with patch.object(probe, 'adapter_for', return_value=native), \
+             patch.object(probe, 'start_review', native.registered_start), \
+             patch.object(probe, 'ModelResponseWait') as wait, \
+             patch.object(probe.read_only, 'collect', side_effect=lambda _handle: self.outcome(
+                 packet, state_dir=Path(native.registered_start.call_args.args[1].environment['HMB_STATE_DIR']))):
+            wait.return_value.expired.return_value = True
+            report = probe.run(self.args)
+        self.assertEqual(report['status'], 'failed')
+        self.assertEqual(report['reason'], {'code': 'router-not-responding', 'params': {'seconds': 60}})
+        handle.wait.assert_called_once_with(timeout=0.25)
 
     def test_changed_input_or_buddy_cannot_reuse_approval(self):
         self.prepared()
@@ -92,7 +115,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'exact prepared packet digest'):
                 probe.run(self.args)
 
-    def test_a_final_answer_cannot_replace_tool_identity_budget_or_stop_proof(self):
+    def test_a_final_answer_cannot_replace_tool_identity_count_or_stop_proof(self):
         packet = self.prepared()
         good = self.outcome(packet, state_dir=self.state_dir)
         self.assertEqual(probe.evaluate(packet, good, elapsed_ms=100, unchanged=True,
@@ -112,7 +135,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
             self.assertEqual(probe.evaluate(packet, bad, elapsed_ms=100, unchanged=True,
                                             state_dir=self.state_dir)['status'], 'failed')
         self.assertEqual(probe.evaluate(packet, good, elapsed_ms=60001, unchanged=True,
-                                        state_dir=self.state_dir)['status'], 'failed')
+                                        state_dir=self.state_dir)['status'], 'passed')
         self.assertEqual(probe.evaluate(packet, good, elapsed_ms=100, unchanged=False,
                                         state_dir=self.state_dir)['status'], 'failed')
 

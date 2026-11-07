@@ -179,7 +179,7 @@ class PreviewFixtureTest(unittest.TestCase):
         normal = outcomes["normal/console.json"]["facts"]
         configuration = normal["configuration"]
         self.assertNotIn("decisionBuddyId", configuration)
-        for key in ("routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget"):
+        for key in ("routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "modelResponseWaitSeconds"):
             self.assertIn(key, configuration)
         # The slim snapshot carries the server's board-wide pending count; the
         # full execution records stay on the paginated tasks read.

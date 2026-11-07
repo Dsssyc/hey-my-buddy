@@ -48,14 +48,13 @@ def _profile_execute(control, handle, module, started):
     errors = None
     result = request = observer = None
     round_index = 0
-    stop_reason = None
     while round_index <= 2:
+        if handle.cancelled.is_set():
+            break
         if round_index:
             handle.model_responded = False
             if handle.model_response_wait is not None:
                 handle.model_response_wait.begin()
-        if handle.cancelled.is_set():
-            break
         invocation_root = ensure_private_dir(Path(control["privateRoot"]) / f"call-{round_index + 1}")
         next_control = {**control, "invocationId": uuid.uuid4().hex,
                         "privateRoot": str(invocation_root)}
@@ -143,11 +142,11 @@ def _profile_execute(control, handle, module, started):
     def any_fact(values):
         return True if True in values else None if None in values else False
     verdict = {"modelResponded": any_fact(model_responded), "nativeRequestSent": any_fact(request_sent),
-               "stopReason": stop_reason, "elapsedMs": round((time.monotonic() - started) * 1000),
+               "elapsedMs": round((time.monotonic() - started) * 1000),
                "toolCalls": total_calls, "correctionCount": round_index,
                "profileFeedback": feedback, "tokenUsage": token_usage,
                "toolEvidence": aggregate_evidence, "nativeIdentity": native_identities}
-    code = 0 if result.end.status == "ok" and stop_reason is None and feedback and feedback["accepted"] else 1
+    code = 0 if result.end.status == "ok" and feedback and feedback["accepted"] else 1
     return result, request, verdict, code
 
 

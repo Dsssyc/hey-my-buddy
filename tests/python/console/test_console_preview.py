@@ -28,6 +28,8 @@ class LeadStopPreviewTests(unittest.TestCase):
         snapshot = preview.console_snapshot('normal', True)
         self.assertNotIn('modelServiceNotes', snapshot)
         self.assertEqual(snapshot['configuration']['modelResponseWaitSeconds'], 60)
+        self.assertFalse({'routingBudget', 'profileBudget', 'routingBudgetLimits'}
+                         & snapshot['configuration'].keys())
         self.assertIn(snapshot['configuration']['profileBuddyId'],
                       {buddy['buddyId'] for buddy in snapshot['buddies']})
         self.assertEqual(snapshot['configuration']['profileUnavailableReason'],
@@ -94,6 +96,15 @@ class LeadStopPreviewTests(unittest.TestCase):
         empty = next(row for row in rows if row['modelId'] == preview.MODEL_IDS['gpt-5-mini'])
         self.assertEqual(empty['statistics']['overall']['samples'], 0)
         self.assertIsNone(empty['summary'])
+
+    def test_router_preview_records_response_wait_without_a_total_budget(self):
+        route = preview.ROUTING_A1
+        self.assertEqual(route['modelResponseWaitSeconds'], 60)
+        self.assertNotIn('budget', route)
+        task = preview.task_view(preview.FIXTURES['runs']['preview-run-a1-router'])
+        self.assertEqual(task['spec']['modelResponseWaitSeconds'], 60)
+        self.assertNotIn('routerBudgetSeconds', task['spec'])
+        self.assertNotIn('modelResponseWaitSeconds', task['spec']['decision'])
 
     def test_unconcluded_failures_and_cancellations_wait_for_host(self):
         page = preview.macro_task_page({'filter': 'host'})

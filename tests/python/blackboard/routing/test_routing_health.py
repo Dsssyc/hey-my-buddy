@@ -48,7 +48,7 @@ class RoutingHealthTests(BoardTestCase):
                 " VALUES(?,'running',?)", (decision_id, now))
             if invoked:
                 spec = {"adapter": "decision", "task": "fixture selection",
-                        "decision": {"decisionId": decision_id, "kind": "select", "modelResponseWaitSeconds": 60}}
+                        "decision": {"decisionId": decision_id, "kind": "select"}}
                 encoded = canonical_json(spec)
                 task_state = "completed" if receipt_status == "ok" else receipt_status
                 connection.execute(

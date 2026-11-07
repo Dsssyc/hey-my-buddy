@@ -14,7 +14,7 @@ while the Worker turn keeps working and retains refused interactions for Host
 attention. Both keep unknown events as facts. The correction rule preserves
 the fast call's existing loop: at most one correction, never for an enum violation,
 with the same bounded correction text appended to the same base prompt, on
-the same native process and total deadline.
+the same native session.
 """
 from __future__ import annotations
 

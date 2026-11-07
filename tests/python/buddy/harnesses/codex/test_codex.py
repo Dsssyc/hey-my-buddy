@@ -414,11 +414,6 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertNotIn("turn", outcome.result)
 
-    def test_deadline_ends_native_process_group(self):
-        outcome = self.execute(self.context("hang", timeout=1))
-        self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.result["code"], "deadline")
-        self.assertTrue(outcome.shutdown_confirmed)
 
     def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
         context = self.context("ok", timeout=None)
@@ -451,13 +446,6 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
 
-    def test_positive_timeout_keeps_a_finite_stamped_deadline(self):
-        context = self.context(timeout=8)
-        self.adapter.prepare(context)
-        handle = self.adapter.start(context)
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
-        self.assertGreater(handle.deadline, time.monotonic())
-        self.assertFalse(math.isinf(handle.deadline))
 
     def test_user_cancel_interrupts_the_owned_native_turn(self):
         context = self.context("hang-unbounded", timeout=180)

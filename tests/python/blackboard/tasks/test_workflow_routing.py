@@ -477,7 +477,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(fixture_request.prompt, expected_prompt)
         self.assertEqual(held[0].request.input_text, structured_prompt(expected_prompt, audit["input"]["outputSchema"]))
         self.assertEqual(fixture_request.output_schema, audit["input"]["outputSchema"])
-        self.assertEqual(fixture_request.budget, audit["input"]["budget"])
+        self.assertEqual(context.spec["modelResponseWaitSeconds"], audit["input"]["modelResponseWaitSeconds"])
         self.assertTrue(audit["inputVerification"]["unchanged"])
         self.assertTrue(audit["stopEvidence"]["shutdownConfirmed"])
         self.assertTrue(self.routed(board)["alreadyExists"])

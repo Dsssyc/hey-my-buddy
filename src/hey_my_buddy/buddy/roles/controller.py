@@ -194,7 +194,7 @@ class ReviewPreparation:
 
 @dataclass(frozen=True)
 class ProfilePreparation:
-    """A web call in an empty private directory, with one total budget."""
+    """A web call in an empty private directory, with fresh correction sessions."""
 
     harness: str
     request: ReadOnlyStructuredRequest

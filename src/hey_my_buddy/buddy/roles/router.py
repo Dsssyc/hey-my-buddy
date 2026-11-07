@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-import time
 
 from ...errors import BoardError
 from ...protocol.capabilities import PERMISSION_LEVELS, adapter_capabilities

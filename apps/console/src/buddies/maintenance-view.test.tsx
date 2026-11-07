@@ -55,7 +55,7 @@ describe("maintenance controls", () => {
     expect(within(row).getByText("120")).toBeTruthy();
     expect(within(row).getByText("7")).toBeTruthy();
     expect(within(row).getByText("未记录")).toBeTruthy();
-    expect(within(row).getByText("Router 超出了这次调用的时限或工具调用上限。")).toBeTruthy();
+    expect(within(row).getByText("Router 的模型在 60 秒内没有开始作答。")).toBeTruthy();
     await userEvent.click(within(row).getByRole("button", { name: "立即运行" }));
     expect(f.command).toHaveBeenCalledWith("maintenance_start", {}, "csrf");
   });
@@ -67,7 +67,7 @@ describe("maintenance controls", () => {
     data.maintenance!.runs = [completed, failed];
     await openRoles(fixture(data));
     const older = within(document.querySelectorAll('[data-slot="maintenance-record"]')[1] as HTMLElement);
-    expect(older.getByText("Router 超出了这次调用的时限或工具调用上限。")).toBeTruthy();
+    expect(older.getByText("Router 的模型在 60 秒内没有开始作答。")).toBeTruthy();
     expect(older.getByText("120")).toBeTruthy();
     expect(older.queryByText(/下次自动运行/)).toBeNull();
     expect(older.queryByRole("button", { name: "立即运行" })).toBeNull();

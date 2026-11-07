@@ -23,6 +23,7 @@ from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.registry import adapter as adapter_for
 from hey_my_buddy.buddy.roles import structured_call as read_only
 from hey_my_buddy.buddy.roles.run_execution import start_review
+from hey_my_buddy.buddy.runtime.execution import BUDGET, ModelResponseWait
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.roles.turn_io import private_json
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
@@ -53,11 +54,9 @@ def _prepare(root, buddy):
     path = root / 'prepared.json'
     if path.exists():
         packet = json.loads(path.read_text(encoding='utf-8'))
-        deadline = time.monotonic() + packet['request']['budget']['timeoutSeconds']
-        if packet['buddy'] != buddy or router_input.digest(root / 'frozen', deadline=deadline) != packet['inputDigest']:
+        if packet['buddy'] != buddy or router_input.digest(root / 'frozen') != packet['inputDigest']:
             raise ValueError('the prepared buddy or input changed; use a new packet')
         return packet
-    budget = router.budget('brief')
     frozen = root / 'frozen'
     frozen.mkdir(mode=directory_mode())
     marker = uuid.uuid4().hex
@@ -70,12 +69,12 @@ def _prepare(root, buddy):
         'binding': {'harness': buddy['harness'], 'taskId': 'probe-' + uuid.uuid4().hex,
                     'attemptId': str(uuid.uuid4()), 'generation': 1},
         'expected': {'buddyId': CANDIDATES[1], 'marker': marker},
-        'inputDigest': router_input.digest(frozen, deadline=time.monotonic() + budget['timeoutSeconds']),
+        'inputDigest': router_input.digest(frozen),
         'request': {'prompt': ('Read selection-guide.txt using one native sandboxed command. ' if buddy['harness'] == 'codex'
                               else 'Read selection-guide.txt using the native read tool. ') + 'Follow its choice and marker instructions. '
                               'Return one Router selection and cite selection-guide.txt. Do not modify files or request other tools.',
                     'outputSchema': router.answer_schema(list(CANDIDATES), 'review'),
-                    'budget': budget},
+                    'modelResponseWaitSeconds': 60},
     }
     private_json(path, packet)
     return packet
@@ -88,7 +87,6 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged, state_dir: Path):
     reported = result.get('nativeIdentity')
     reported = reported if isinstance(reported, list) else [reported]
     usage = result.get('usage') or {}
-    limits = packet['request']['budget']
     try:
         answer = router.validate_answer(result.get('rawAnswer'), list(CANDIDATES), 'review')
     except Exception:
@@ -109,8 +107,7 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged, state_dir: Path):
         'readCompleted': tool_problem is None and any(
             set(call['categories']) & {'read', 'execute'} and 'end' in call['phases']
             for call in tool_evidence.read_tool_calls(evidence, state_dir=state_dir)),
-        'toolBudget': counts_match and 0 < usage['toolCalls'] <= limits['toolCalls'],
-        'deadline': 0 <= elapsed_ms <= limits['timeoutSeconds'] * 1000,
+        'toolCount': counts_match and usage['toolCalls'] > 0,
         'correctionBudget': type(result.get('correctionCount')) is int and 0 <= result['correctionCount'] <= 1,
         'inputUnchanged': unchanged,
         'readResult': answer is not None and answer['buddyId'] == packet['expected']['buddyId']
@@ -131,7 +128,7 @@ def run(args):
     digest = sha256_text(canonical_json(packet))
     if not args.execute:
         return {'status': 'prepared', 'modelCalls': 0, 'packetSha256': digest,
-                'packet': str(root / 'prepared.json'), 'budget': packet['request']['budget'],
+                'packet': str(root / 'prepared.json'),
                 'maxAnswerRounds': 1 if buddy['harness'] == 'claude' else 2,
                 'permission': 'read'}
     if getattr(args, 'expected_packet_sha256', None) != digest:
@@ -148,27 +145,43 @@ def run(args):
     environment.update(HMB_DEV_SOURCE='1', HMB_STATE_DIR=str(private / 'state'),
                        HMB_RUNTIME_ROOT=str(private / 'runtime'), TMPDIR=str(private / 'tmp'))
     context = ExecutionContext(task_id=packet['binding']['taskId'], attempt_id=packet['binding']['attemptId'],
-        generation=packet['binding']['generation'], spec={**buddy, 'cwd': str(root / 'frozen')},
+        generation=packet['binding']['generation'], spec={**buddy, 'cwd': str(root / 'frozen'),
+                                                         'modelResponseWaitSeconds': packet['request']['modelResponseWaitSeconds']},
         directory=private / 'attempt', runtime={}, environment=environment, session_record_path=None)
     request = ReadOnlyStructuredRequest(str(root / 'frozen'), **{
         'prompt': packet['request']['prompt'], 'output_schema': packet['request']['outputSchema'],
-        'budget': packet['request']['budget'], 'capture_evidence': False})
+        'capture_evidence': False})
     native = adapter_for(buddy['harness'])
     handle = None
     started = time.monotonic()
     report = {'status': 'failed', 'packetSha256': digest, 'buddy': buddy,
               'modelCalls': None, 'permission': 'read'}
     try:
+        context.directory.mkdir(mode=directory_mode())
+        model_wait = ModelResponseWait(context.directory / BUDGET, packet['binding'],
+                                       packet['request']['modelResponseWaitSeconds'])
+        context.model_response_wait = model_wait
+        model_wait.begin()
         handle = start_review(buddy['harness'], context, request)
-        if handle.wait(timeout=request.budget['timeoutSeconds'] + 10) is None:
-            native.cancel(handle)
-            handle.wait(timeout=15)
+        no_response = False
+        while True:
+            finished = handle.wait(timeout=0.25) is not None
+            if model_wait.expired(handle):
+                no_response = True
+                if not finished:
+                    native.cancel(handle)
+                    handle.wait(timeout=None)
+                break
+            if finished:
+                model_wait.responded(handle)
+                break
         outcome = read_only.collect(handle)
         report.update(evaluate(packet, outcome, elapsed_ms=round((time.monotonic() - started) * 1000),
-                               unchanged=router_input.digest(
-                                   root / 'frozen', deadline=time.monotonic() + request.budget['timeoutSeconds'])
-                               == packet['inputDigest'],
+                               unchanged=router_input.digest(root / 'frozen') == packet['inputDigest'],
                                state_dir=Path(context.environment['HMB_STATE_DIR'])))
+        if no_response:
+            report.update(status='failed', reason={'code': 'router-not-responding',
+                                                    'params': {'seconds': packet['request']['modelResponseWaitSeconds']}})
     except (Exception, KeyboardInterrupt) as error:
         report.update(error=type(error).__name__, reason='The probe failed; no automatic retry is authorized')
     finally:

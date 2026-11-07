@@ -520,7 +520,6 @@ class DecisionCoordinator:
                          **({"document": document} if kind in ("maintain", "profile") else {})},
         }
         spec["modelResponseWaitSeconds"] = model_response_wait_seconds
-        spec["decision"]["modelResponseWaitSeconds"] = model_response_wait_seconds
         fingerprint = schemas.spec_fingerprint(spec)
         blocker = self.board._admission_blocker(connection, spec)
         connection.execute(

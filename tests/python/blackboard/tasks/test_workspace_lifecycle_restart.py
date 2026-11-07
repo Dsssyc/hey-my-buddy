@@ -10,7 +10,6 @@ from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref
 from unittest.mock import patch as defer_reclaim
 import json
 import shutil
-import time
 import unittest
 from pathlib import Path
 from blackboard.tasks.test_workflow_real import BUDDY
@@ -48,9 +47,9 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertEqual(replay_seal, first_seal)
         router_directory = self.directory / "router-seam"
         router_directory.mkdir()
-        frozen, digest = router_input.prepare(original, router_directory, deadline=time.monotonic() + 120, state_dir=self.directory)
+        frozen, digest = router_input.prepare(original, router_directory, state_dir=self.directory)
         self.assertEqual((frozen / "tracked.txt").read_text(encoding="utf-8"), "base\n")
-        self.assertTrue(router_input.verify(original, frozen, digest, deadline=time.monotonic() + 120, state_dir=self.directory)["unchanged"])
+        self.assertTrue(router_input.verify(original, frozen, digest, state_dir=self.directory)["unchanged"])
         self.assertEqual(self.fixed_files(), initial_files)
         run_id = submitted["runId"]
         continued = self.continue_run(board, {'runId': run_id, 'input': "finish after the simulated restart"})

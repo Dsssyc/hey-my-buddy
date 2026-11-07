@@ -664,7 +664,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
     def test_tool_call_receipt_keeps_the_fact_and_fails_the_judge(self):
         outcome = self.execute("tool")
         self.assertEqual(outcome.status, "failed")
-        self.assertEqual(outcome.result["code"], "no-tool-violation")
+        self.assertEqual(outcome.result["code"], "no-tool-violation", outcome.to_report())
         package = outcome.result["toolEvidence"]
         # The fixture's frame carries no toolCallId: the fact is kept unnamed
         # and the observed count stays unknown rather than inventing one call.
@@ -682,9 +682,11 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
 
     def test_foreign_child_call_is_a_kept_foreign_fact(self):
         outcome = self.execute("tool-foreign")
-        # The lifecycle observer rejects a foreign session before the role's
-        # no-tool judgment; projection still retains its native call below.
-        self.assertEqual(outcome.result["code"], "invalid-protocol")
+        # The no-tool protocol refuses a foreign session before observer judgment;
+        # the foreign tool fact remains evidence, without root model output.
+        self.assertEqual(outcome.result["code"], "invalid-protocol", outcome.to_report())
+        self.assertEqual(outcome.result["error"], "foreign session event in a no-tool call")
+        self.assertIs(outcome.result["modelResponded"], False)
         package = outcome.result["toolEvidence"]
         call = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))[0]
         self.assertEqual(call["nativeIdentity"], {"sessionId": "s-child", "turnId": "t-child"})
@@ -697,7 +699,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
     def test_a_late_frame_after_the_close_is_recorded_and_incomplete(self):
         outcome = self.execute("post-close-tool")
         self.assertEqual(outcome.status, "failed")
-        self.assertEqual(outcome.result["code"], "no-tool-violation")
+        self.assertEqual(outcome.result["code"], "no-tool-violation", outcome.to_report())
         package = outcome.result["toolEvidence"]
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(len(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))), 1)

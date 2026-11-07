@@ -56,7 +56,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
         await stop.focus();
         await expect(stop).toBeFocused();
       } else {
-        await expect(row).toContainText("Router 超出了这次调用的时限或工具调用上限。");
+        await expect(row).toContainText("Router 的模型在 60 秒内没有开始作答。");
         const retry = row.locator('[data-slot="maintenance-retry"]');
         const next = await page.evaluate(value => new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "medium", hourCycle: "h23" }).format(Date.parse(value) + 3600000), finished);
         await expect(retry).toContainText(`下次自动运行 ${next}`);
@@ -97,7 +97,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
       await expect(records).toHaveCount(2);
       const older = records.nth(1);
       await older.scrollIntoViewIfNeeded();
-      await expect(older).toContainText("Router 超出了这次调用的时限或工具调用上限。");
+      await expect(older).toContainText("Router 的模型在 60 秒内没有开始作答。");
       await expect(older.getByRole("definition")).toHaveCount(3);
       await expect(older.locator('[data-slot="maintenance-retry"]')).toHaveCount(0);
       await expect(older.getByRole("button", { name: "立即运行" })).toHaveCount(0);

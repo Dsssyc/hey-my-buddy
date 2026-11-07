@@ -179,7 +179,7 @@ PROFILE_UNAVAILABLE_REASON = {"code": "profile-web-unsupported", "params": {}}
 ROUTER_BUDDY = CFG_CODEX
 ROUTER_BUDDY_ID = ":".join(ROUTER_BUDDY[key] for key in ("harness", "provider", "model", "effort"))
 ROUTING_FACT_KEYS = ("routerBuddyIds", "routerIdentities", "routerBuddyId", "routerBuddy", "routerIndex",
-                     "routingMode", "routingBudget", "routerRetryIntervalSeconds", "budget", "routerProblem", "exploration")
+                     "routingMode", "modelResponseWaitSeconds", "routerRetryIntervalSeconds", "routerProblem", "exploration")
 #: The synthetic model catalogue: every model with its reasoning-effort levels,
 #: and the levels that are enabled. The four buddies above, which the runs use,
 #: are among them. The other rows only fill the catalogue, so that the models
@@ -469,15 +469,12 @@ def routing(decision_id: str, task_id: str, status: str, selected: dict | None, 
             "routerBuddyIds": [ROUTER_BUDDY_ID], "routerIdentities": [ROUTER_BUDDY],
             "routerBuddyId": ROUTER_BUDDY_ID, "routerBuddy": ROUTER_BUDDY, "routerIndex": 0,
             "exploration": {"quota": False, "reselected": False, "preferredBuddyId": None},
-            "routingMode": mode, "routingBudget": "standard", "routerRetryIntervalSeconds": 600, "routerProblem": None,
+            "routingMode": mode, "modelResponseWaitSeconds": 60, "routerRetryIntervalSeconds": 600, "routerProblem": None,
             "constraints": constraints,
             "requiredCapabilities": [], "routingBasis": None,
             "source": "model-selection" if decision_id else None,
             "policyCheck": {"hardConstraints": constraints,
                             "userPreference": user_outcome},
-            # Illustrative fixture values only; these are not runtime defaults.
-            "budget": ({"timeoutSeconds": 60} if mode == "fast" else
-                       {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24}),
             "usage": {"elapsedMs": elapsed_ms, "toolCalls": tool_calls}}
 
 
@@ -507,7 +504,7 @@ ROUTING_A4 = routing("preview-decision-a4", "preview-run-a4-router", "needs-host
                      attempt_id="att-router-a4", program_reason=reason("all-candidates-cooling",
                                                                retryAt=COOLING_UNTIL))
 ROUTING_A4.update(taskId=None, attemptId=None, generation=None, routerBuddyId=None, routerBuddy=None,
-                  routerIndex=None, routerIdentities=[], routingMode=None, usage=None, budget=None,
+                  routerIndex=None, routerIdentities=[], routingMode=None, modelResponseWaitSeconds=None, usage=None,
                   source="no-candidate")
 ROUTING_A4["routingBasis"] = {
     "candidateCount": 0, "excludedBuddies": [], "overloadedModelServices": [], "coolingBuddies": [
@@ -531,7 +528,7 @@ def decision_result(record: dict) -> dict:
         "modelStarted": True, "nativeIdentity": None,
         "usage": record["usage"], "toolEvidence": [], "harnessVersion": "synthetic-preview",
         "nativeEvidence": None, "nativeFailure": None, "correctionCount": 0,
-        "budget": record["budget"], "inputVerification": None,
+        "inputVerification": None,
         **{key: record[key] for key in ROUTING_FACT_KEYS},
         "stopEvidence": {"shutdownConfirmed": True, "native": "stopped",
                          "nativeInterruptRequested": False, "nativeInterruptAcknowledged": False},
@@ -552,7 +549,7 @@ def run(run_id: str, *, project: str | None, title: str | None, title_source: st
         markers: list[dict] | None = None, attempts: list[dict] | None = None,
         shutdown_confirmed: bool = True, micro_task: bool = True, adapter: str | None = None,
         continuation_count: int = 0, expected_seconds: int = 1800,
-        router_budget_seconds: int | None = None, revision: int = 3,
+        model_response_wait_seconds: int | None = None, revision: int = 3,
         delegation_authority: bool = False,
         conclusion: dict | None = None, messages: list[dict] | None = None,
         continuations: list[dict] | None = None, activity: dict | None = None,
@@ -568,7 +565,7 @@ def run(run_id: str, *, project: str | None, title: str | None, title_source: st
         "activeRequest": active_request, "spans": spans or [], "markers": markers or [],
         "attempts": attempts or [], "shutdownConfirmed": shutdown_confirmed,
         "adapter": adapter, "continuationCount": continuation_count,
-        **({"routerBudgetSeconds": router_budget_seconds} if adapter == "decision"
+        **({"modelResponseWaitSeconds": model_response_wait_seconds} if adapter == "decision"
            else {"expectedSeconds": expected_seconds}),
         "revision": revision,
         "delegationAuthority": delegation_authority,
@@ -1339,7 +1336,7 @@ def build_runs() -> dict[str, dict]:
                         status=record["status"] if record["status"] in ("failed", "cancelled") else "completed",
                         category="ended", buddy=CFG_FLASH if record is ROUTING_A1 else CFG_CODEX,
                         micro_task=False, routing=record,
-                        adapter="decision", router_budget_seconds=record["budget"]["timeoutSeconds"] + 10,
+                        adapter="decision", model_response_wait_seconds=record["modelResponseWaitSeconds"],
                         accepted=recorded_span["endAt"], result=True,
                         attempts=[attempt(record["attemptId"], 1, "finished", True,
                                           recorded_span["startAt"], recorded_span["endAt"],
@@ -2015,7 +2012,7 @@ def task_view(entry: dict) -> dict:
     selected = entry["attempts"][-1] if entry["attempts"] else None
     receipt = selected["result"] if selected is not None and entry["resultAvailable"] else None
     adapter = entry["adapter"] or (entry["buddy"] or {}).get("harness", "dsh")
-    duration = ({"routerBudgetSeconds": entry["routerBudgetSeconds"]} if adapter == "decision"
+    duration = ({"modelResponseWaitSeconds": entry["modelResponseWaitSeconds"]} if adapter == "decision"
                 else {"expectedSeconds": entry["expectedSeconds"]})
     spec: dict[str, Any] = {"task": entry["task"], "adapter": adapter, "cwd": entry["cwd"],
                             "workspace": entry["checkout"] != "none", **duration}
@@ -2024,8 +2021,7 @@ def task_view(entry: dict) -> dict:
     if entry["group"]:
         spec["macroTaskId"] = entry["group"]
     if entry["adapter"] == "decision" and entry.get("decisionId"):
-        spec["decision"] = {"decisionId": entry["decisionId"], "kind": "select",
-                            "routerBudgetSeconds": entry["routing"]["budget"]["timeoutSeconds"]}
+        spec["decision"] = {"decisionId": entry["decisionId"], "kind": "select"}
     view: dict[str, Any] = {
         "runId": entry["runId"], "requestId": entry["requestId"],
         "owner": None if entry["kind"] in ("micro-task", "helper") else "synthetic-worker-1", "adapter": adapter, "cwd": entry["cwd"], "task": entry["task"],
@@ -2840,14 +2836,12 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
         "consoleSession": {"id": SYNTHETIC_SESSION_ID},
         "configuration": {"routerBuddyIds": [entry["buddyId"] for entry in routers],
                           "routerRetryIntervalSeconds": 600, "explorationEvery": 5,
-                          "defaultRoutingMode": "fast", "routingBudget": "standard",
+                          "defaultRoutingMode": "fast", "modelResponseWaitSeconds": 60,
                           "maintenanceBuddyId": "dsh:deepseek-official:deepseek-flash:max",
                           "maintenanceIntervalSeconds": 3600,
                           "profileBuddyId": "dsh:deepseek-partner:deepseek-flash:max",
-                          "profileBudget": "deep",
                           "profileUnavailableReason": PROFILE_UNAVAILABLE_REASON,
-                          "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
-                                                  "toolCalls": 24}},
+                          },
         "buddies": buddies,
         "modelServiceConcurrency": concurrency_rows(),
         "harnesses": harness_rows(state),
@@ -2879,7 +2873,7 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
         "kindEvaluations": kind_evaluation_views(domains),
         "routingHealth": {"windowSize": 20, "sampleCount": 6, "failureCount": 1,
                           "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1,
-                          "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
+                          "notRespondingCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
                           "lastSuccessAt": instant(6, 5), "lastSuccessDecisionId": ROUTING_A1["decisionId"],
                           "available": True, "reason": None, "currentRouterBuddyId": routers[0]["buddyId"],
                           "routers": routers,
@@ -3528,8 +3522,8 @@ def validate_fixtures() -> list[str]:
     listed = [item for group in page["groups"] for item in group["macroTasks"]]
     timeline = macro_task_timeline({"macroTaskId": MACRO_A}, "normal")
     configuration = console_snapshot("normal", True)["configuration"]
-    if not {"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget",
-            "routingBudgetLimits"} <= set(configuration) or "decisionBuddyId" in configuration:
+    if not {"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode",
+            "modelResponseWaitSeconds"} <= set(configuration) or "decisionBuddyId" in configuration:
         problems.append("snapshot must use the ADR-021 ordered Router configuration")
     for name, value, keys in (
             ("MacroTaskPage", page, REQUIRED_KEYS["MacroTaskPage"]),
@@ -3778,13 +3772,11 @@ def validate_fixtures() -> list[str]:
         policy = projection["policyCheck"]
         if set(policy) != {"hardConstraints", "userPreference"}:
             problems.append(f"{item['spanId']}: policyCheck differs from Python selection policy shape")
-        limits = {**projection["budget"], "elapsedMs": projection["budget"]["timeoutSeconds"] * 1000}
-        if any(value is not None and (type(value) is not int or value < 0 or
-               key in limits and value > limits[key]) for key, value in projection["usage"].items()):
-            problems.append(f"{item['spanId']}: synthetic usage exceeds its budget")
-        if projection["routingMode"] == "fast" and (projection["usage"]["toolCalls"] != 0 or
-                                                    set(projection["budget"]) != {"timeoutSeconds"}):
-            problems.append(f"{item['spanId']}: fast routing must have zero tool calls and only a deadline")
+        if any(value is not None and (type(value) is not int or value < 0)
+               for value in projection["usage"].values()):
+            problems.append(f"{item['spanId']}: synthetic usage must be nonnegative")
+        if projection["routingMode"] == "fast" and projection["usage"]["toolCalls"] != 0:
+            problems.append(f"{item['spanId']}: fast routing must have zero tool calls")
         entries = workflow_get({"runId": item["runId"], "routingHistory": {}})["routingHistory"]["entries"]
         if not any(entry["decisionId"] == item["decisionId"] and entry["status"] == decision["status"]
                    for entry in entries):
@@ -3841,8 +3833,8 @@ def validate_fixtures() -> list[str]:
                                 for item in routing_spans):
             problems.append(f"routingHealth.{field} differs from synthetic decisions")
     if any(not isinstance(health.get(key), int) or health[key] < 0 for key in
-           ("budgetExhaustedCount", "boundsRejectedCount", "inputChangedCount")):
-        problems.append("routing health must expose nonnegative synthetic budget/bounds/input statistics")
+           ("notRespondingCount", "boundsRejectedCount", "inputChangedCount")):
+        problems.append("routing health must expose nonnegative synthetic wait/bounds/input statistics")
 
     # -- ADR-018 schema-15 fixture data ------------------------------------- #
     conclusions, partials, patched, host_paths_seen = 0, 0, False, False

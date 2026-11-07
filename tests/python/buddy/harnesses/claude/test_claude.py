@@ -351,12 +351,6 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def test_console_stop_forces_native_shutdown(self):
         self._force_stop_hanging_role(initiator="console")
 
-    def test_deadline_ends_the_native_process_group(self):
-        outcome = self.execute(self.context("hang", timeout=1))
-        self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.result["code"], "deadline")
-        self.assertTrue(outcome.shutdown_confirmed)
-        self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), True)
 
     def test_quota_event_while_interrupting_does_not_lose_the_stop_receipt(self):
         context = self.context("interrupt-quota", timeout=12)

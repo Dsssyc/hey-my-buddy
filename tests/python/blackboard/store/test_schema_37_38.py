@@ -86,7 +86,7 @@ class Schema37To38Tests(unittest.TestCase):
                 connection.execute('UPDATE router_settings SET model_response_wait_seconds=0 WHERE id=1')
             connection.rollback()
             with self.assertRaises(sqlite3.IntegrityError):
-                connection.execute("UPDATE router_settings SET model_response_wait_seconds='60' WHERE id=1")
+                connection.execute("UPDATE router_settings SET model_response_wait_seconds='invalid' WHERE id=1")
             connection.rollback()
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute('DELETE FROM model_correspondences WHERE rowid=?', (earliest,))

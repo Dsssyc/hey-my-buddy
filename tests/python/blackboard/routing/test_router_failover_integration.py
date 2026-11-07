@@ -331,6 +331,19 @@ class FailoverTests(RouterDispatchTestCase):
             "completeness": "unknown", "nativeRecords": 1})
         self.assertEqual({**output, "tokenUsage": receipt["result"]["tokenUsage"]}, receipt["result"])
 
+    def test_coherent_review_evidence_can_exceed_former_elapsed_and_call_caps(self):
+        request, first = self.start(review=True)
+        output = self.answer(first, buddy_id=B, tools=65)
+        output["usage"]["elapsedMs"] = 600000
+        done = self.report(first, output)
+        self.assertEqual(done["decision"]["status"], "completed")
+        self.assertEqual(self.outcomes()[0][0], "router.answered")
+        self.assertEqual(len(self.tasks()), 1)
+        with self.board_.store.db.read() as db:
+            receipt = json.loads(db.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                            (first["attempt"]["attemptId"],)).fetchone()[0])
+        self.assertEqual(receipt["result"]["usage"], {"elapsedMs": 600000, "toolCalls": 65})
+
     def test_invalid_null_buddy_does_not_count_as_abstention(self):
         request, first = self.start()
         output = self.answer(first, buddy_id=None)

@@ -48,15 +48,9 @@ class NoToolCodexTests(unittest.TestCase):
         self.cwd = self.root / "empty"
         self.cwd.mkdir(mode=0o700)
 
-    def run_case(self, case="ok", timeout=30):
+    def run_case(self, case="ok"):
         """One fast call through the registered role controller; returns the outcome and its directory."""
-        # Cases that expect a normal answer share this budget. It must cover
-        # the spawned fixture process's whole preparation and turn: a slow
-        # Windows CI runner needed over 3 seconds before the request was even
-        # sent (the old 3-second budget cut config-mismatch off at deadline),
-        # against roughly 0.3-0.5 seconds locally, so the default keeps an
-        # order of magnitude of room. The deadline case below passes its own
-        # explicitly short budget.
+        # Bound the test fixture's completion, allowing slow process startup on CI.
         directory = self.root / ("run-" + case)
         directory.mkdir(mode=0o700)
         environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
@@ -68,12 +62,12 @@ class NoToolCodexTests(unittest.TestCase):
         select_fixture(environment, self.root, "codex", FIXTURE)
         context = ExecutionContext("router-task", "router-attempt", 7,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
-                                    "cwd": str(self.cwd), "modelResponseWaitSeconds": timeout}, directory, {}, environment,
+                                    "cwd": str(self.cwd)}, directory, {}, environment,
                                    session_record_path=str(directory / "session.jsonl"))
         request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(timeout + 9), "the fast role controller did not exit")
+        self.assertIsNotNone(handle.wait(39), "the fast role controller did not exit")
         return collect(handle), handle.role_run_control, directory
 
     def test_capability_inherits_user_configuration_and_observes_zero_tools(self):
@@ -236,7 +230,7 @@ class NoToolCodexTests(unittest.TestCase):
                    "properties": {"reason": {"type": "string", "maxLength": 2}}}
         self.assertEqual(correction_code('{"reason":"too long"}', bounded), 'answer-shape')
 
-    def test_policy_readback_differences_and_deadline(self):
+    def test_policy_readback_differences(self):
         outcome, _control, directory = self.run_case("config-mismatch")
         self.assertEqual(outcome.status, 'ok', outcome.result)
         self.assertIs(outcome.result["modelResponded"], True)
@@ -249,12 +243,6 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertIs(outcome.result["modelResponded"], False)
         self.assertEqual(outcome.result["nativeThreadReceipt"]["model"], "other")
         self.assertNotIn("turns", json.loads((directory / "trace.json").read_text(encoding="utf-8")))
-        outcome, control, _directory = self.run_case("hang", timeout=1)
-        self.assertEqual(outcome.status, 'failed', outcome.result)
-        self.assertEqual(outcome.result["code"], "deadline")
-        self.assertIs(outcome.result["nativeInterruptRequested"], True)
-        self.assertTrue(outcome.result["processState"]["shutdownConfirmed"])
-        self.assertFalse(list(native_path(Path(control["nativeRoot"])).rglob("codex-home")))
 
     def test_absent_user_model_cache_does_not_refuse_a_native_catalog(self):
         (self.home / 'models_cache.json').unlink()

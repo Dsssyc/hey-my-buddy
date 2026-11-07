@@ -354,6 +354,7 @@ class TestCrashWindows(BoardTestCase):
 
         worker, claim = self._isolated_worker_claim("decision")
         handle = self._finished_fake_handle()
+        handle.model_responded = True
         private_root = attempt_root(self.directory, "codex", claim["task"]["taskId"], claim["attempt"]["attemptId"])
         diagnostic = {"status": "failed", "privateRoot": str(private_root / "no-tool-fixture"),
                       "evidenceRoot": str(self.directory / "attempts" / claim["task"]["taskId"] /
