@@ -84,6 +84,8 @@
 
 ## 0.65.1（2026-11-07 安装 0.65.0 前的核实里发现）
 
+同日装上（[安装记录](../../acceptance/installs/0.65.1.md)）。
+
 0.65.0 的 DSH 只联网核实里，探针的五项都过，服务的判定却是 `router-tools-forbidden`（[待办](../backlog.md)“DSH 担任画像 buddy 时，服务把它的联网调用判为越权”）。这一处与 0.65.0 验收时记下的几处顺带项做成补丁版本，不改契约与存储。
 
 - **DSH 的联网调用按 `fetch` 判定**：工具的归类表里 DSH 加上 web_search、web_fetch（`fetch`）与 working_directory（`read`，它读的是本机的状态）；只联网一档的白名单只留 `tool-web` 与 `tool-executor-native`，按 ADR-023 第 10 条只留这一档需要的；联网核实的探针把服务的判定也算作一项。
