@@ -420,8 +420,11 @@ class ReclamationTests(LifecycleTestCase):
                 self.assertFalse(root.exists())
                 with board.store.db.read() as connection:
                     row = connection.execute('SELECT state FROM workflow_runs WHERE run_id=?', (child_id,)).fetchone()
-                    self.assertIn(row['state'], ('failed', 'cancelled'))
-                    self.assertIsNone(connection.execute('SELECT 1 FROM workflow_host_conclusions WHERE run_id=?', (child_id,)).fetchone())
+                    self.assertEqual(row['state'], 'concluded')
+                    conclusion = connection.execute(
+                        'SELECT execution_status FROM workflow_host_conclusions WHERE run_id=?', (child_id,),
+                    ).fetchone()
+                    self.assertIn(conclusion['execution_status'], ('failed', 'cancelled'))
 
     def test_shell_with_a_live_request_is_retained_until_its_task_has_gone(self):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation

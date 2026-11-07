@@ -72,6 +72,23 @@ class HelpTests(unittest.TestCase):
         self.assertNotIn("creationKey", help_text("role", "submit"))
         self.assertNotIn("import ast", Path(cli_help.__file__).read_text())
         self.assertIn("current stopped turn's fixed result",help_text("conclude"))
+        conclude = help_text("conclude")
+        self.assertIn("cancelling active work", conclude)
+        self.assertIn('"minimum":1', conclude)
+        self.assertIn('"maximum":86400', conclude)
+        self.assertIn('"default":86400', conclude)
+        self.assertIn("cancellation is recorded but no conclusion is recorded", conclude)
+
+    def test_conclude_wait_window_has_the_same_strict_bounds_as_await(self):
+        for method, packet in (("await", {"runId": "run-1"}),
+                               ("conclude", {"runId": "run-1", "note": "Finish"})):
+            with self.subTest(method=method):
+                self.assertEqual(parse_request(method, packet).waitSeconds, 86400)
+                for seconds in (1, 86400):
+                    self.assertEqual(parse_request(method, {**packet, "waitSeconds": seconds}).waitSeconds, seconds)
+                for seconds in (None, True, 0, -1, 86401, 1.5, "1"):
+                    with self.subTest(seconds=seconds), self.assertRaises(BoardError):
+                        parse_request(method, {**packet, "waitSeconds": seconds})
 
     def test_help_argument_grammar_comes_from_local_request_model(self):
         for arguments in (["operations", "submit"], ["submit", "extra"], ["unknown"]):

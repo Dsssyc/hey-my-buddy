@@ -27,7 +27,7 @@ class HostAttentionTests(WorkflowTestCase):
         concluded = self.returned("concluded")
         self.assertEqual(attention["state"], "awaiting-host")
         self.assertTrue(attention["activeRequest"]["requestId"])
-        self.assertEqual(attention["actions"], ["continue", "cancel", "get"])
+        self.assertEqual(attention["actions"], ["continue", "cancel", "conclude", "get"])
         self.assertEqual(delivered["state"], "delivered")
         self.assertTrue(delivered["finalArtifactId"])
         self.assertEqual(delivered["actions"], ["accept", "continue", "conclude", "get"])

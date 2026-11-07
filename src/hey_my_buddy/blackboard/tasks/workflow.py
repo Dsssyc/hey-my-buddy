@@ -1858,16 +1858,16 @@ class WorkflowCoordinator:
         if state in ("accepted", "concluded"):
             return ["get"]
         if self.shutdown_summary(connection, run["run_id"])["unconfirmedCount"]:
-            return ["await", "inquire", "cancel", "get"]
+            return ["await", "inquire", "cancel", "conclude", "get"]
         if self._open_boundary(connection, run) is not None:
-            return ["continue", "cancel", "get"]
+            return ["continue", "cancel", "conclude", "get"]
         if self._queued_lead_wakeup(connection,run):
-            return ["continue", "await", "inquire", "cancel", "get"]
+            return ["continue", "await", "inquire", "cancel", "conclude", "get"]
         if state == "delivered":
             return ["accept", "continue", "conclude", "get"]
         if state in ("failed", "cancelled"):
             return (["continue"] if run["current_turn_id"] is not None else []) + ["conclude", "get"]
-        return ["await", "inquire", "cancel", "get"]
+        return ["await", "inquire", "cancel", "conclude", "get"]
 
     @staticmethod
     def _queued_lead_wakeup(connection,run):
@@ -3806,7 +3806,7 @@ class WorkflowCoordinator:
             if replay is not None:
                 return replay
             self._conclude_artifact(connection,target,params.get("artifactId"))
-        descendants=self._stop_lead_for_conclusion(owner_id,target_id,params,console_authority)
+        descendants=self._stop_for_conclusion(owner_id,target_id,params,console_authority)
         with self.db.read() as connection:
             owner=self._run_row(connection,owner_id)
             self._authorize(connection,owner,params,console_authority=console_authority,action="A conclusion")
@@ -3820,8 +3820,9 @@ class WorkflowCoordinator:
             for child_id in descendants:
                 child=self._run_row(connection,child_id)
                 child_task=self._conclude_precheck(connection,child,None)
-                work.append({"snapshot":child,"work":self._conclude_seal_work(connection,child,child_task),"note":None,
-                             "reason":make_reason("lead.owned-concluded",leadRunId=target_id)})
+                work.append({"snapshot":child,"work":self._conclude_seal_work(connection,child,child_task),
+                             "note":None if target["delegation_authority"] else params["note"],
+                             "reason":make_reason("lead.owned-concluded",leadRunId=target_id) if target["delegation_authority"] else None})
         for item in work:
             item["sealed"]=self._seal_conclusion(item["snapshot"]["run_id"],item["work"])
         now=self.now()
@@ -3884,39 +3885,42 @@ class WorkflowCoordinator:
             raise BoardError("CONFLICT","This artifact was already answered or replaced; get again")
         return row
 
-    def _stop_lead_for_conclusion(self, owner_run_id, target_id, params, console_authority) -> list[str]:
-        """Stop the complete graph before preparing its atomic Host conclusions."""
+    def _stop_for_conclusion(self, owner_run_id, target_id, params, console_authority) -> list[str]:
+        """Fence every owned run using cancellation before sealing any conclusion."""
+        from .cancellation import for_run
+
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
             actor, initiator = self._authorize(connection, owner, params, console_authority=console_authority,
                                                 action="A Host conclusion")
-            lead = self._target_run(connection, owner, target_id)
-            self._conclude_artifact(connection,lead,params.get("artifactId"))
-            if not lead["delegation_authority"] or lead["state"] == "accepted":
+            target = self._target_run(connection, owner, target_id)
+            self._conclude_artifact(connection, target, params.get("artifactId"))
+            if target["state"] in ("accepted", "concluded"):
                 return []
-            if lead["state"] == "concluded":
-                # A replay may retry the cascade's blocked checkout removals;
-                # it never records another conclusion or broadens public targets.
-                return [row["child_task_id"] for row in reversed(self._owned_children(connection, target_id, include_lead=True))
-                        if self._run_row(connection, row["child_task_id"])["state"] == "concluded"]
+            reject_deleting_run(connection, target_id)
             conflict = self._open_conflict(connection, target_id)
             if conflict is not None:
-                raise BoardError("CONFLICT", "Resolve the Lead workspace conflict before concluding its owned work",
+                raise BoardError("CONFLICT", "Resolve the workspace conflict before concluding its owned work",
                                  conflictId=conflict["conflict_id"], paths=json.loads(conflict["evidence_json"])["blockingPaths"])
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (target_id,)).fetchone()
-            if lead["state"] not in ("failed", "cancelled", "delivered") or not self._stop_proven(connection, task):
-                self._cancel_in_transaction(connection, lead, task, None, actor, initiator, self.now(),
-                                            stop_facts={"leadRunId": target_id})
+            stop_facts = {"leadRunId": target_id} if target["delegation_authority"] else None
+            if target["state"] not in ("failed", "cancelled", "delivered") or not self._stop_proven(connection, task):
+                # A retry observes the original cancellation, including its
+                # initiator and grace deadline, just as cancel does.
+                if for_run(connection, target_id) is None:
+                    self._cancel_in_transaction(connection, target, task, params["note"], actor, initiator, self.now(),
+                                                stop_facts=stop_facts)
             else:
-                self._cancel_children(connection, target_id, None, self.now(), actor=actor, initiator=initiator, include_lead=True,
-                                      stop_facts={"leadRunId": target_id})
+                self._cancel_children(connection, target_id, params["note"], self.now(), actor=actor, initiator=initiator,
+                                      include_lead=True, stop_facts=stop_facts)
             descendants = [row["child_task_id"] for row in reversed(self._owned_children(connection, target_id, include_lead=True))
                            if self._run_row(connection, row["child_task_id"])["state"] not in ("accepted", "concluded")]
             summary = self.shutdown_summary(connection, target_id)
             head = self.board._head_of(connection)
         self.board._notify(head)
         if not summary["selfConfirmed"] or not summary["descendantsConfirmed"]:
-            raise BoardError("SHUTDOWN_UNCONFIRMED", "The Lead and its owned work are stopping; retry the conclusion after every stop is confirmed",
+            raise BoardError("SHUTDOWN_UNCONFIRMED", "Cancellation is recorded; shutdown is not confirmed and no conclusion has been recorded",
+                             cancellationRecorded=True, conclusionRecorded=False,
                              unconfirmedRunIds=summary["unconfirmedRunIds"], unconfirmedCount=summary["unconfirmedCount"])
         return descendants
 
@@ -3952,14 +3956,6 @@ class WorkflowCoordinator:
         reject_deleting_run(connection, run_id)
         if run_row["state"] in ("accepted", "concluded"):
             raise BoardError("CONFLICT", "A finished micro task cannot receive another conclusion", runId=run_id)
-        if run_row["state"] not in ("failed", "cancelled", "delivered"):
-            raise BoardError(
-                "NOT_READY",
-                "Only a failed, cancelled or delivered micro task can be concluded; a running turn or a Host decision "
-                "boundary is not an execution result",
-                runId=run_id,
-                state=run_row["state"],
-            )
         task = task or connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
         self._require_routing_stopped(connection, run_id)
         self._lineage_stop_evidence(connection, run_row, "A Host conclusion")

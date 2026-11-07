@@ -406,7 +406,9 @@ class MacroTaskReadTests(WorkflowTestCase):
             self.assertEqual(timeline['macroTask']['counts']['failed'], int(terminal == 'concluded'))
             self.assertEqual(timeline['macroTask']['counts']['accepted'], int(terminal == 'accepted'))
             self.assertEqual(timeline['macroTask']['counts']['ended'], 2)
-            self.assertEqual(next(row for row in timeline['rows'] if row['runId'] == helper)['state'], 'failed')
+            helper_row = next(row for row in timeline['rows'] if row['runId'] == helper)
+            self.assertEqual(helper_row['state'], 'concluded' if terminal == 'concluded' else 'failed')
+            self.assertEqual(helper_row['conclusionStatus'], 'failed' if terminal == 'concluded' else None)
             self.assertEqual(pending_root_count(board.store), 0)
 
     def test_fix_target_title_uses_target_presentation_across_macro_tasks(self):

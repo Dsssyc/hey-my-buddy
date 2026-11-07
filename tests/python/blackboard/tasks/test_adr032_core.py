@@ -72,7 +72,7 @@ class CoreContractTests(WorkflowTestCase):
         packet = {"runId":view["runId"],"artifactId":artifact_id,"input":"Continue after the recorded review"}
         first = board.call("workflow_continue",packet)
         self.assertEqual(first["state"],"executing")
-        self.assertEqual(first["actions"],["await","inquire","cancel","get"])
+        self.assertEqual(first["actions"],["await","inquire","cancel","conclude","get"])
         self.assertNotIn("requestId",first)
         with board.store.db.read() as connection:
             request = connection.execute("SELECT * FROM workflow_requests WHERE request_id=?",(request_id,)).fetchone()
@@ -94,7 +94,7 @@ class CoreContractTests(WorkflowTestCase):
         lead,claim = LeadOwnedTests.lead(self,board)
         child = LeadOwnedTests.owned(self,board,claim)
         before = board.store.head()
-        with mock.patch.object(board.store.workflow,"_stop_lead_for_conclusion",side_effect=AssertionError("validation must precede stop")):
+        with mock.patch.object(board.store.workflow,"_stop_for_conclusion",side_effect=AssertionError("validation must precede stop")):
             with self.assertRaises(BoardError) as refused:
                 board.call("workflow_conclude",{"runId":lead["runId"],"artifactId":"missing","note":"Invalid result identity"})
         self.assertEqual(refused.exception.code,"NOT_FOUND")
@@ -118,7 +118,7 @@ class CoreContractTests(WorkflowTestCase):
         packet = {"runId":submitted["runId"],"turnId":view["currentTurn"]["turnId"],"input":"Use this smaller input"}
         first = board.call("workflow_continue",packet)
         self.assertEqual(first["state"],"executing")
-        self.assertEqual(first["actions"],["await","inquire","cancel","get"])
+        self.assertEqual(first["actions"],["await","inquire","cancel","conclude","get"])
         with self.assertRaises(BoardError) as refused:
             board.call("workflow_continue",{"runId":submitted["runId"],"requestId":request_id,"input":"Second answer"})
         self.assertEqual(refused.exception.code,"CONFLICT")

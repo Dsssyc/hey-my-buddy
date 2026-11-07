@@ -374,18 +374,21 @@ class AcceptRequest(Request):
 
 
 class ConcludeRequest(Request):
-    """Conclude a stopped failed, cancelled or delivered micro task."""
+    """End a micro task, cancelling active work and waiting for confirmed shutdown first."""
     rules: ClassVar[tuple[str, ...]] = (
         "artifactId answers the delivered or current stopped turn's fixed result; runId alone concludes when no result is being answered",
+        "active work and owned descendants are cancelled first; the CLI waits up to waitSeconds for confirmed shutdown",
+        "if shutdown remains unconfirmed, cancellation is recorded but no conclusion is recorded; call conclude again to retry",
     )
     runId: RunId
     targetRunId: RunId | None = None
     artifactId: RunId | None = None
     note: Note
+    waitSeconds: Annotated[int, Field(strict=True, ge=1, le=86400)] = 86400
 
 
 class CancelRequest(Request):
-    """Request ordered cancellation of a micro task and its owned children."""
+    """Stop a micro task and its owned children for another buddy to take over."""
     runId: RunId
     targetRunId: RunId | None = None
     note: Note | None = None
