@@ -33,7 +33,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hey_my_buddy import private_dirs
-from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, initialize_defaults
+from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, initialize_defaults, utc_now
 from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA, upgrade_state
 from hey_my_buddy.blackboard.routing.statistics import backfill
 from hey_my_buddy.blackboard.tasks.macro_tasks import RUN_GROUPS_SQL
@@ -216,7 +216,18 @@ def _create_schema(connection, version: str, definitions: list[tuple[str, str]])
         connection.execute(ddl)
     connection.execute("INSERT INTO meta(key,value) VALUES('schema_version',?)", (version,))
     connection.execute("INSERT INTO meta(key,value) VALUES(?,?)", (SECRET_KEY, secrets.token_hex(32)))
-    initialize_defaults(connection)
+    if int(version) >= 38:
+        initialize_defaults(connection)
+    else:
+        # The sample keeps the source schema. Its pre-38 Router defaults need
+        # the retired preset column; the current configuration writer cannot
+        # initialize that stored form.
+        connection.execute(
+            "INSERT INTO router_settings(id,default_mode,budget_preset,retry_interval_seconds) "
+            "VALUES(1,'fast','standard',600)")
+        connection.execute(
+            "INSERT INTO reminder_settings(id,silence_seconds,updated_at,revision) "
+            "VALUES(1,900,?,1)", (utc_now(),))
 
 
 _PRIVATE_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')

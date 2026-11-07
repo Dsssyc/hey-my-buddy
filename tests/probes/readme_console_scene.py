@@ -193,7 +193,7 @@ def configure(p: ModuleType, language: str) -> None:
         title_source="title", task_text=decision["note"], created=p.instant(9, 6), updated=p.instant(9, 7),
         state="finished", status="completed", category="ended", buddy=codex,
         parent=schema["runId"], group=p.MACRO_A, micro_task=False, adapter="decision", routing=decision,
-        router_budget_seconds=60, attempts=[p.attempt("att-readme-router", 1, "finished", True,
+        model_response_wait_seconds=60, attempts=[p.attempt("att-readme-router", 1, "finished", True,
             p.instant(9, 6), p.instant(9, 7), codex, result=p.decision_result(decision))])
     rows.append(router)
     for group, en, zh, state, status, category, hour in [

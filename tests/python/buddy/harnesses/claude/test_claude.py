@@ -10,7 +10,6 @@ all — which is exactly what the wiring microtask delivers.
 from __future__ import annotations
 
 import json
-import math
 import os
 import sys
 import tempfile
@@ -367,12 +366,11 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), False,
                       "a quota frame that interrupts the acknowledgement wait is not an acknowledgement")
 
-    def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
+    def test_absent_timeout_allows_native_completion(self):
         context = self.context(timeout=None)
         self.executor.prepare(context)
         handle = self.executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertEqual(handle.deadline, math.inf)
         self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
         outcome = self.executor.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())

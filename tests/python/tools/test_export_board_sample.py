@@ -543,6 +543,32 @@ class ExportBoardSampleTests(WorkflowTestCase):
                              statistics)
         self.assert_only_upgrade_project_marker_changed(before, files(fixture['state']), fixture, project_id)
 
+    def test_schema37_sample_keeps_router_presets_until_upgrade(self):
+        from hey_my_buddy.blackboard.store.upgrade import STEPS
+        source = load_fixture(self.directory / 'source37')['state']
+        with closing(sqlite3.connect(source / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            with connection:
+                for version in range(UPGRADE_FLOOR_SCHEMA, 37):
+                    STEPS[version](connection)
+                connection.execute("UPDATE attempts SET execution_state='finished',shutdown_confirmed=1,cleanup_pending=0")
+                connection.execute("UPDATE tasks SET state='completed',active_attempt_id=NULL")
+        sample = export_sample(source, self.directory / 'sample37')
+        with closing(sqlite3.connect(sample / DB_FILE)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '37')
+            self.assertEqual(connection.execute(
+                "SELECT budget_preset,profile_budget FROM router_settings").fetchone(), ('standard', 'deep'))
+            columns = {row[1] for row in connection.execute('PRAGMA table_info(router_settings)')}
+            self.assertNotIn('model_response_wait_seconds', columns)
+        self.assertEqual(upgrade_state(sample), {'sourceSchema': 37, 'targetSchema': SCHEMA_VERSION})
+        with closing(sqlite3.connect(sample / DB_FILE)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT model_response_wait_seconds FROM router_settings").fetchone()[0], 60)
+            columns = {row[1] for row in connection.execute('PRAGMA table_info(router_settings)')}
+            self.assertNotIn('budget_preset', columns)
+            self.assertNotIn('profile_budget', columns)
+
     def test_current_schema_sample_recounts_retained_fix_relations(self):
         board = self.source_board()
         root = self.workdir('sample-fix-project')

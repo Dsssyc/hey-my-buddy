@@ -43,7 +43,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.assertIsNone(decision["input"])
         self.assertIsNone(decision["runId"])
         self.assertEqual(decision["evidence"], [])
-        for absent in ("usage", "stopEvidence", "nativeIdentity", "inputVerification", "budget"):
+        for absent in ("usage", "stopEvidence", "nativeIdentity", "inputVerification", "modelResponseWaitSeconds"):
             self.assertIsNone(decision[absent], absent)
         self.assertIs(decision["routerCalled"], False)
         self.assertEqual(decision["routingBasis"],
