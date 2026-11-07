@@ -1,5 +1,6 @@
 import type zh from "../zh/model-profile";
 export default {
+  toolFailed: "Failed", toolUnknown: "Unknown", unknownTool: "Unknown tool", toolOutcomesUnknown: "Tool call outcomes are unknown",
   duration: "Duration", toolCalls: "Tool calls",
   title: "Model profile", strength: "Strengths", weakness: "Weaknesses", notBuilt: "No profile built yet", build: "Build profile", rebuild: "Rebuild profile",
   quota: "{{name}} will browse the web to build this profile, using its quota.", noBuddy: "Choose a profile buddy on the Roles tab first.", saveFirst: "Save or discard changes before building a profile.",

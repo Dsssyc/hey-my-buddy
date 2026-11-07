@@ -1,4 +1,5 @@
 export default {
+  toolFailed: "失败", toolUnknown: "未知", unknownTool: "未知工具", toolOutcomesUnknown: "工具调用的成败未知",
   duration: "时长", toolCalls: "工具调用",
   title: "模型画像", strength: "擅长", weakness: "不擅长", notBuilt: "尚未构建画像", build: "构建画像", rebuild: "重建画像",
   quota: "{{name}} 将联网构建画像，会使用它的额度。", noBuddy: "请先在角色页选择画像 buddy。", saveFirst: "先保存或放弃修改，再构建画像。",

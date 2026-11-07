@@ -139,7 +139,7 @@ export type ModelCorrespondence = ModelService & {
 };
 export type ModelCorrespondenceChange = ModelService & (
   | { action: "map"; modelId: string }
-  | { action: "undo" }
+  | { action: "undo"; correspondenceId: string }
   | { action: "generation"; displayName: string }
 );
 export type ModelProfileClaim = {
@@ -155,6 +155,12 @@ export type ModelProfile = {
   profileRunId: string;
   claims: ModelProfileClaim[];
 };
+export type ProfileToolSummary = {
+  toolName: string | null;
+  calls: number;
+  failed: number;
+  unknown: number;
+};
 export type ProfileRun = {
   profileRunId: string;
   taskId: string;
@@ -165,6 +171,7 @@ export type ProfileRun = {
   startedAt: string;
   finishedAt: string | null;
   correctionRounds: number;
+  toolSummary: ProfileToolSummary[] | null;
   usage: { attempts: { attemptId: string; elapsedMs: number | null; toolCalls: number | null; tokenUsage: TokenUsage | null }[] } | null;
 };
 export type Model = {
@@ -199,6 +206,9 @@ export const profileRunSchema = z.looseObject({
   buddy: z.looseObject({ harness: nonblankString, provider: nonblankString, model: nonblankString, effort: nonblankString }),
   state: z.enum(["running", "completed", "failed"]), reason: reason.nullable(),
   startedAt: dateString, finishedAt: dateString.nullable(), correctionRounds: safeCount,
+  toolSummary: z.array(z.looseObject({
+    toolName: nonblankString.nullable(), calls: safeCount, failed: safeCount, unknown: safeCount,
+  })).nullable(),
   usage: z.looseObject({ attempts: z.array(z.looseObject({
     attemptId: nonblankString, elapsedMs: safeCount.nullable(), toolCalls: safeCount.nullable(),
     tokenUsage: recordedTokenUsageSchema.nullable(),

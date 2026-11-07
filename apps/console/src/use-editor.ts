@@ -213,7 +213,9 @@ export function useEditor(
       saveDispatched.current = false;
       saveAmbiguous.current = false;
       setConfirming(false); setUncertain(false);
-      setError(() => errorText(failure));
+      setError(() => failure instanceof ApiError && failure.code === "CONFLICT"
+        && payload.modelCorrespondenceChanges?.some(change => change.action === "undo")
+        ? i18n.t("console:correspondenceChanged") : errorText(failure));
     }
   }
 

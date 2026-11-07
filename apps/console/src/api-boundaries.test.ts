@@ -94,14 +94,36 @@ describe("authenticated snapshot read boundaries", () => {
     await expect(apiFor({ ...value, models: [{ ...model, latestProfileRun: {
       profileRunId: "run", taskId: "task", buddyId: "buddy", buddy: { ...service, effort: "high" },
       state: "success", reason: null, startedAt: "2026-11-01T00:00:00Z", finishedAt: null,
-      correctionRounds: 0, usage: null,
+      correctionRounds: 0, toolSummary: null, usage: null,
     } }] }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     await expect(apiFor({ ...value, models: [{ ...model, latestProfileRun: {
       profileRunId: "run", taskId: "task", buddyId: "buddy", buddy: { ...service, effort: "high" },
       state: "completed", reason: null, startedAt: "2026-11-01T00:00:00Z", finishedAt: null,
-      correctionRounds: 0, usage: { attempts: [{ attemptId: "attempt", elapsedMs: 10, toolCalls: 1,
+      correctionRounds: 0, toolSummary: null, usage: { attempts: [{ attemptId: "attempt", elapsedMs: 10, toolCalls: 1,
         tokenUsage: { inputTokens: {}, cachedInputTokens: null, outputTokens: 1, source: "native", scope: "attempt" } }] },
     } }] }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  });
+});
+
+describe("profile tool summary boundary", () => {
+  const run = { profileRunId: "run", taskId: "task", buddyId: "buddy",
+    buddy: { harness: "dsh", provider: "fixture", model: "alpha", effort: "high" },
+    state: "completed", reason: null, startedAt: "2026-11-01T00:00:00Z", finishedAt: null,
+    correctionRounds: 0, usage: null };
+  const tool = { toolName: "web_fetch", calls: 2, failed: 2, unknown: 0 };
+  const withSummary = (toolSummary: unknown) => ({ ...snapshot, models: [{ modelId: "alpha",
+    displayName: "Alpha", names: [], profile: null, latestProfileRun: { ...run, toolSummary } }] });
+  it("retains unknown evidence, no calls and named or unnamed tool outcomes", async () => {
+    for (const summary of [null, [], [tool, { ...tool, toolName: null }]]) {
+      const value = withSummary(summary);
+      await expect(apiFor(value).snapshot()).resolves.toMatchObject(value);
+    }
+  });
+  it("rejects missing summaries, malformed names and unsafe outcome counts", async () => {
+    for (const summary of [undefined, {}, [{ ...tool, toolName: 1 }], [{ ...tool, toolName: "" }],
+      ...["calls", "failed", "unknown"].flatMap(field => [-1, 1.5, unsafe, "2", null].map(value => [{ ...tool, [field]: value }]))]) {
+      await expect(apiFor(withSummary(summary)).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    }
   });
 });
 

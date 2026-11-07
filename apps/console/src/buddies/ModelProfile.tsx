@@ -55,7 +55,7 @@ function Correspondence({ entry, data, editor }: { entry: ModelCorrespondence; d
         className="col-span-2 h-8 min-w-0 w-full max-w-full bg-card sm:w-auto sm:flex-1 sm:max-w-72" onChange={event => setGeneration(event.target.value)} />}
       <Button variant="outline" size="sm" className="col-span-2 h-8 min-w-0 sm:col-span-1" disabled={locked || mode === "generation" && !generation.trim()}
         onClick={() => stage(mode === "map" ? { ...service, action: "map", modelId: target } : { ...service, action: "generation", displayName: generation.trim() })}>{t("modelProfile.apply")}</Button>
-      <Button variant="outline" size="sm" className="col-span-2 h-8 min-w-0 sm:col-span-1" disabled={locked || !entry.canUndo} onClick={() => stage({ ...service, action: "undo" })}>{t("modelProfile.undo")}</Button>
+      <Button variant="outline" size="sm" className="col-span-2 h-8 min-w-0 sm:col-span-1" disabled={locked || !entry.canUndo} onClick={() => stage({ ...service, action: "undo", correspondenceId: entry.correspondenceId })}>{t("modelProfile.undo")}</Button>
     </div>
     {pending && <p role="status" className="flex flex-wrap items-center gap-2 text-ink2"><UnsavedMark label={t("unsaved")} />
       {pending.action === "undo" ? t("modelProfile.pendingUndo") : pending.action === "generation" ? t("modelProfile.pendingGeneration", { name: pending.displayName })
@@ -125,6 +125,17 @@ export function ModelProfile({ modelId, snapshot, data, editor, api, refresh, mu
         {([["input", attempt.tokenUsage?.inputTokens], ["cached", attempt.tokenUsage?.cachedInputTokens], ["output", attempt.tokenUsage?.outputTokens]] as const).map(([key, value]) => <div key={key} className="flex gap-2"><dt>{t(`maintenance.${key}`)}</dt><dd>{value == null ? t("maintenance.unknown") : formatNumber(value)}</dd></div>)}
       </dl>)}
       {!run.usage && <p className="text-ink3">{t("modelProfile.usage")} · {t("maintenance.unknown")}</p>}
+      {run.toolSummary === null ? <p data-slot="profile-tool-summary" className="text-ink3">{t("modelProfile.toolOutcomesUnknown")}</p>
+        : run.toolSummary.length > 0 && <ul data-slot="profile-tool-summary" className="space-y-1 text-ink2 tabular-nums">
+          {run.toolSummary.map(tool => <li key={tool.toolName} className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
+            <span className="min-w-0 font-mono wrap-anywhere">{tool.toolName ?? t("modelProfile.unknownTool")}</span>
+            <dl className="flex flex-wrap gap-x-5 gap-y-1">
+              <div className="flex gap-2"><dt>{t("modelProfile.toolCalls")}</dt><dd>{formatNumber(tool.calls)}</dd></div>
+              <div className="flex gap-2"><dt>{t("modelProfile.toolFailed")}</dt><dd className={tool.calls > 0 && tool.failed === tool.calls ? "text-fail" : undefined}>{formatNumber(tool.failed)}</dd></div>
+              <div className="flex gap-2"><dt>{t("modelProfile.toolUnknown")}</dt><dd>{formatNumber(tool.unknown)}</dd></div>
+            </dl>
+          </li>)}
+        </ul>}
     </div>}
     <div className="space-y-2">
       <label htmlFor={`${id}-note`} className="flex items-center gap-2 font-medium text-ink2">{t("modelProfile.note")}{text !== modelNoteText(snapshot, modelId) && <UnsavedMark label={t("unsaved")} />}</label>

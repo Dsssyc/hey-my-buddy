@@ -2589,6 +2589,9 @@ def model_views() -> dict:
                    "buddyId": ROUTER_BUDDY_ID, "buddy": ROUTER_BUDDY,
                    "state": "completed", "reason": None, "startedAt": instant(8, 10),
                    "finishedAt": instant(8, 12), "correctionRounds": 0,
+                   "toolSummary": [{"toolName": "web_search", "calls": 2, "failed": 0, "unknown": 1},
+                                   {"toolName": "web_fetch", "calls": 2, "failed": 2, "unknown": 0},
+                                   {"toolName": None, "calls": 1, "failed": 0, "unknown": 1}],
                    "usage": {"attempts": [{"attemptId": "synthetic-profile-attempt-completed",
                                            "elapsedMs": 120000, "toolCalls": 5,
                                            "tokenUsage": {"inputTokens": 4200, "cachedInputTokens": 900,
@@ -2599,7 +2602,7 @@ def model_views() -> dict:
                   "state": "failed", "reason": {"code": "profile-answer-invalid",
                                                   "params": {"errors": ["answer.claims[0].sourceUrl: required"]}},
                   "startedAt": instant(8, 20), "finishedAt": instant(8, 21),
-                  "correctionRounds": 2,
+                  "correctionRounds": 2, "toolSummary": None,
                   "usage": {"attempts": [{"attemptId": "synthetic-profile-attempt-failed",
                                           "elapsedMs": 60000, "toolCalls": 2, "tokenUsage": None}]}}
     models = []

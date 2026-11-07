@@ -262,6 +262,22 @@ describe("replaying a draft on refreshed content", () => {
     ]);
   });
 
+  it("preserves the displayed correspondence id through undo staging, refresh and publication", () => {
+    const mapped = { ...flashModelService, correspondenceId: "displayed-row", modelId: flash.model,
+      createdAt: "2026-11-01T00:00:00Z", source: "user" as const,
+      evidenceUrl: null, evidenceDate: null, canUndo: true };
+    const current = { ...snapshot, modelCorrespondences: [mapped] } as Snapshot;
+    const baseline = makeDraft(current);
+    const undo = { ...flashModelService, action: "undo" as const, correspondenceId: mapped.correspondenceId };
+    const draft = stageModelCorrespondence(baseline, undo);
+    const rebased = rebaseDraft(draft, baseline, current);
+    expect(publication(rebased.baseline, rebased.draft, "undo").modelCorrespondenceChanges).toEqual([undo]);
+    const refreshed = { ...current, modelCorrespondences: [{ ...mapped, correspondenceId: "new-row" }] };
+    const conflict = rebaseDraft(draft, baseline, refreshed);
+    expect(conflict.conflicts).toMatchObject([{ kind: "changed", field: "modelCorrespondence" }]);
+    expect(conflict.draft.modelCorrespondenceChanges).toEqual([undo]);
+  });
+
   it("keeps the local note when another writer changed the same field", () => {
     const baseline = { ...makeDraft(snapshot), modelNotes: [note(flashModelService, "A")] };
     const draft = setModelNote(baseline, flash.model, "B");

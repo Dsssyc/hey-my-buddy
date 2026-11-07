@@ -1,4 +1,5 @@
 export default {
+  correspondenceChanged: "这条对应关系已经变了，请刷新后再撤回。",
   "waitingForLead": "等待 Lead",
   "waitingForHost": "等待 Host",
   "stopUnconfirmed": "结束未确认",

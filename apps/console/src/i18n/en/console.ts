@@ -1,6 +1,7 @@
 import type zh from "../zh/console";
 
 export default {
+  correspondenceChanged: "This correspondence has changed; refresh and undo again.",
   "waitingForLead": "Waiting for Lead",
   "waitingForHost": "Waiting for Host",
   "stopUnconfirmed": "Stop unconfirmed",
