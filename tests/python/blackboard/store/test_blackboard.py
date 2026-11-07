@@ -398,7 +398,7 @@ class TestCrashWindows(BoardTestCase):
             available=lambda: (True, None), prepare=lambda _context: None,
             start=start,
             collect=lambda _handle, _context: AdapterOutcome(
-                status="failed", result={"modelStarted": False, "code": "native-exit"},
+                status="failed", result={"nativeRequestSent": False, "modelResponded": False, "code": "native-exit"},
                 shutdown_confirmed=True,
             ),
             cancel=lambda _handle: self.fail("the prior stopped handle is no longer current"),
@@ -464,7 +464,7 @@ class TestCrashWindows(BoardTestCase):
             name=claim["task"]["spec"]["adapter"],
             available=lambda: (True, None), prepare=prepare, start=start,
             collect=lambda _handle, _context: AdapterOutcome(
-                status="failed", result={"modelStarted": False, "code": "native-exit"},
+                status="failed", result={"nativeRequestSent": False, "modelResponded": False, "code": "native-exit"},
                 shutdown_confirmed=True,
             ),
             cancel=lambda _handle: self.fail("the prior handle already stopped"),
