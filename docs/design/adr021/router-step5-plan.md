@@ -81,3 +81,17 @@
 - 安装前：完整检查与浏览器全量各一次；在从日常黑板导出的样本上像用户那样升级演练，基线是装着的 0.64.1，候选是 0.65.0，并做启动失败与篡改两处故障注入；升级前在日常黑板上只读预数要转换的行。
 - 真实调用：每个担任过 Router 的 harness 跑一次真实的路由调用，看运行中报出的“模型开始”；DSH 跑一次只联网的启动，看工具行的检查。这些是付费调用，逐次请开发者批准。
 - 契约与存储都变，安装要等黑板空闲，开始前告诉开发者。
+
+## 0.65.1（2026-11-07 安装 0.65.0 前的核实里发现）
+
+0.65.0 的 DSH 只联网核实里，探针的五项都过，服务的判定却是 `router-tools-forbidden`（[待办](../backlog.md)“DSH 担任画像 buddy 时，服务把它的联网调用判为越权”）。这一处与 0.65.0 验收时记下的几处顺带项做成补丁版本，不改契约与存储。
+
+- **DSH 的联网调用按 `fetch` 判定**：工具的归类表里 DSH 加上 web_search、web_fetch（`fetch`）与 working_directory（`read`，它读的是本机的状态）；只联网一档的白名单只留 `tool-web` 与 `tool-executor-native`，按 ADR-023 第 10 条只留这一档需要的；联网核实的探针把服务的判定也算作一项。
+- **顺带项**：Claude Code 不带 `is_error` 的 `tool_result` 记成功；导入执行结果的两处校验只接受第 2 版 `inputFailure`；检查入口按 `apps/console/package.json` 的 `engines` 核对 Node。
+
+微任务：
+
+1. **DSH 的联网调用按 fetch 判定**：`protocol/tool_evidence.py` 的归类表、`buddy/harnesses/dsh/native_run.py` 的保留清单、`tests/probes/web_permission_native.py` 的判定项与相应测试。
+2. **0.65.0 留下的三处小毛病**：`buddy/harnesses/claude/tool_evidence.py`、两处导入边界、`cli/checks.py`。
+
+两个的写入范围不重叠，同时开工。验收读差异、跑受影响的测试；安装前完整检查一次；DSH 只联网一档做一次逐次批准的原生核实，这一次连服务的判定一起看。补丁版本，安装不要求黑板空闲。文档（harness 参考页里 DSH 只联网一档留的行）由 Host 改。
