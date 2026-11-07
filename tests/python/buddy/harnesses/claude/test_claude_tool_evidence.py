@@ -62,14 +62,18 @@ def block_stop(session="session-root"):
             "event": {"type": "content_block_stop", "index": 1}}
 
 
-def tool_result(call_id, session="session-root", parent=None, is_error=None):
+#: Passed to ``tool_result`` to leave ``is_error`` out of the block entirely.
+FLAG_ABSENT = object()
+
+
+def tool_result(call_id, session="session-root", parent=None, is_error=FLAG_ABSENT):
     fields = {}
     if session is not None:
         fields["session_id"] = session
     if parent is not None:
         fields["parent_tool_use_id"] = parent
     block = {"type": "tool_result", "tool_use_id": call_id, "content": "ok"}
-    if is_error is not None:
+    if is_error is not FLAG_ABSENT:
         block["is_error"] = is_error
     return {"type": "user", "message": {"role": "user", "content": [block]}, **fields}
 
@@ -115,8 +119,9 @@ def settled_stream():
 
 
 class ProjectionTests(unittest.TestCase):
-    def test_tool_result_error_flag_sets_only_explicit_outcomes(self):
-        for error, expected in ((False, "success"), (True, "failure"), (None, "unknown")):
+    def test_tool_result_error_flag_is_set_only_on_failure(self):
+        for error, expected in ((FLAG_ABSENT, "success"), (False, "success"), (True, "failure"),
+                                (None, "unknown"), (0, "unknown"), (1, "unknown"), ("yes", "unknown")):
             with self.subTest(error=error):
                 _, package = project([init_frame(), assistant_tool("Read", "toolu_1"),
                                       tool_result("toolu_1", is_error=error)])

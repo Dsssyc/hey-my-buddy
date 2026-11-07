@@ -289,9 +289,14 @@ class ReadOnlyToolEvidence:
         elif frame_type == "user":
             for block in _content(frame):
                 if isinstance(block, dict) and block.get("type") == "tool_result":
+                    # The API defines ``is_error`` as set only when the tool
+                    # execution failed: an absent flag is a success (observed on
+                    # Claude Code CLI 2.1.312), and a non-boolean value is no
+                    # fact either way.
                     error = block.get("is_error")
-                    outcome = ("failure" if error is True else "success" if error is False
-                               else "unknown")
+                    outcome = ("failure" if error is True
+                               else "unknown" if "is_error" in block and error is not False
+                               else "success")
                     yield _native_id(block.get("tool_use_id")), None, "end", None, outcome
         elif frame_type == "stream_event":
             event = frame.get("event")
