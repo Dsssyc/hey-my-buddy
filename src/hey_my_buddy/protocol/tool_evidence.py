@@ -152,6 +152,22 @@ def _classify(table: dict[str, str], name: Any, native_type: Any) -> str | None:
     return first if first == second else "other"
 
 
+def classify_tool_name(harness: Any, name: Any) -> str:
+    """Classify one native display name with the harness's fixed table.
+
+    Session-content projections classify display titles, which the session
+    record keeps without size limits; a name of any length therefore classifies
+    here, and an unrecognized one stays ``other``. Evidence normalization keeps
+    its own bounded identity and is not this function's concern.
+    """
+    table = NATIVE_TOOL_CATEGORIES.get(harness) if isinstance(harness, str) else None
+    if table is None:
+        raise BoardError("UNSUPPORTED_HARNESS", f"No fixed tool classification for harness {harness!r}")
+    if not isinstance(name, str) or not name:
+        raise BoardError("INVALID_ARGUMENT", "a native tool name must be a nonempty string")
+    return table.get(name, "other")
+
+
 def normalize_tool_event(harness: Any, native_event: Any) -> dict | None:
     """Classify one controller-extracted native tool fact into the ACP vocabulary.
 
@@ -611,6 +627,6 @@ __all__ = [
     "ACP_CATEGORIES", "BINDING_FIELDS", "CALL_FIELDS", "CALL_FILE_FIELDS", "EVENT_FIELDS", "MAX_CALL_BYTES",
     "NATIVE_TOOL_CATEGORIES", "NON_TOOL_NAMES", "PACKAGE_FIELDS", "PERMISSION_TOOL_CATEGORIES",
     "TOOL_EVIDENCE_UNVERIFIED", "TOOL_EVIDENCE_VERSION", "TOOL_OUTCOMES", "TOOLS_FORBIDDEN", "ToolEventEvidence",
-    "merge_tool_summaries", "summarize_tool_calls",
+    "classify_tool_name", "merge_tool_summaries", "summarize_tool_calls",
     "judge_tool_evidence", "normalize_tool_event", "read_tool_calls", "validate_tool_evidence_package",
 ]

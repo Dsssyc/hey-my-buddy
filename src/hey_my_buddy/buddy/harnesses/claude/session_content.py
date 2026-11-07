@@ -10,7 +10,7 @@ from __future__ import annotations
 from ....protocol.session_content import (
     MessageChunk, NativeMeta, TextContent, ToolCall, ToolCallUpdate, ToolContent,
 )
-from ....protocol.tool_evidence import normalize_tool_event
+from ....protocol.tool_evidence import classify_tool_name
 from ..session_record import SessionRecord
 
 
@@ -152,10 +152,8 @@ class ClaudeSessionProjector:
             self._marker(item, segment, "unidentified-tool-call")
             return
         self._start()
-        event = normalize_tool_event("claude", {"nativeIdentity": {"sessionId": self.session_id},
-            "callId": call_id, "toolName": name, "phase": "start"})
         before = self.tools.get(call_id, {})
-        payload = {"title": name, "kind": event["category"],
+        payload = {"title": name, "kind": classify_tool_name("claude", name),
                    "status": before.get("status", "in_progress")}
         if "input" in block:
             payload["raw_input"] = block["input"]

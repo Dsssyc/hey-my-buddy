@@ -10,7 +10,7 @@ from ....protocol.session_content import (
     MessageChunk, NativeMeta, TextContent,
     ToolCall, ToolCallUpdate, ToolContent,
 )
-from ....protocol.tool_evidence import normalize_tool_event
+from ....protocol.tool_evidence import classify_tool_name
 from ..session_record import SessionRecord
 from .tool_evidence import (RAW_TOOL_OUTPUTS, RAW_TOOL_STARTS, TYPED_TOOL_ITEMS,
                             TYPED_TOOL_OUTPUTS, native_identity)
@@ -193,10 +193,8 @@ class CodexSessionProjector:
         if kind in RAW_TOOL_STARTS:
             self.flush()
             name = item.get("name") or kind
-            event = normalize_tool_event("codex", {"nativeIdentity": identity, "callId": call_id,
-                                                  "toolName": name, "phase": "start"})
             raw_input = {field: item[field] for field in ("arguments", "input", "action") if field in item}
-            payload = {"title": name, "kind": event["category"], "status": "in_progress",
+            payload = {"title": name, "kind": classify_tool_name("codex", name), "status": "in_progress",
                        **({"rawInput": raw_input} if raw_input else {})}
             previous = self.tools.get(key)
             if previous is None:
@@ -220,8 +218,6 @@ class CodexSessionProjector:
         self.flush()
         call_id, kind = item["id"], item["type"]
         details = self.items[key]
-        event = normalize_tool_event("codex", {"nativeIdentity": identity, "callId": call_id,
-                                    "toolName": kind, "phase": "end" if method == "item/completed" else "start"})
         status = {"inProgress": "in_progress", "completed": "completed", "failed": "failed",
                   "declined": "failed", "interrupted": "failed", "cancelled": "failed"}.get(item.get("status"))
         if status is None and "status" not in item:
@@ -232,7 +228,8 @@ class CodexSessionProjector:
                                                 "query", "path") if name in details}
         raw_output = {name: details[name] for name in ("aggregatedOutput", "output", "result", "error", "exitCode", "changes", "durationMs")
                       if name in details}
-        payload = {"title": details.get("command") or details.get("tool") or kind, "kind": event["category"],
+        payload = {"title": details.get("command") or details.get("tool") or kind,
+                   "kind": classify_tool_name("codex", kind),
                    **({"status": status} if status is not None else {}),
                    **({"rawInput": raw_input} if raw_input else {}),
                    **({"rawOutput": raw_output} if raw_output else {})}

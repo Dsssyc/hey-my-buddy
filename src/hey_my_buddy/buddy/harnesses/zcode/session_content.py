@@ -17,7 +17,7 @@ from __future__ import annotations
 from ....protocol.session_content import (
     MessageChunk, NativeMeta, TextContent, ToolCall, ToolCallUpdate, ToolContent,
 )
-from ....protocol.tool_evidence import normalize_tool_event
+from ....protocol.tool_evidence import classify_tool_name
 from ..session_record import SessionRecord
 
 _CHILD_FIELDS = ("source", "parentToolCallId", "childSessionId", "childToolCallId", "agentId", "background")
@@ -133,9 +133,7 @@ class ZcodeSessionProjector:
         payload = {}
         name = data.get("toolName") if phase in ("tool_call", "scheduled") else before.get("title")
         if isinstance(name, str) and name:
-            event = normalize_tool_event("zcode", {"nativeIdentity": {"sessionId": root[0], "turnId": root[1]},
-                "callId": call_id, "toolName": name, "phase": "start"})
-            payload.update(title=name, kind=event["category"])
+            payload.update(title=name, kind=classify_tool_name("zcode", name))
         statuses = {"tool_call": "pending", "scheduled": "pending", "started": "in_progress", "progress": "in_progress",
                     "result": "completed", "error": "failed"}
         if not isinstance(phase, str) or phase not in statuses:

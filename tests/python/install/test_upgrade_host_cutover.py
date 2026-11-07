@@ -54,7 +54,7 @@ class HostCutoverTests(WorkflowTestCase):
                                            if not line.startswith("command =")) + "\n", encoding="utf-8", newline="\n")
         site = (environment / "Lib" / "site-packages" if os.name == "nt" else
                 environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
-        dependencies = ("c_two", "portalocker", "pydantic", "pydantic_core", "zstandard",
+        dependencies = ("c_two", "portalocker", "pydantic", "pydantic_core", "pyyaml", "zstandard",
                         "typing_extensions", "typing_inspection", "annotated_types", "psutil")
         if os.name == "nt":
             dependencies += ("pywin32",)

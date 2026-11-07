@@ -116,7 +116,15 @@ class NativeRunCase(unittest.TestCase):
     def fixture_state(self) -> dict:
         return json.loads(self.state_path.read_text(encoding="utf-8"))
 
-    def test_model_start_reaches_the_observer_before_the_root_turn_ends(self):
+
+class ModelRespondedTests(NativeRunCase):
+    """Model-response facts of the shared fake-CLI harness.
+
+    ``NativeRunCase`` is imported as the fixture base by other test modules,
+    so it carries no tests of its own; its tests live in concrete cases here.
+    """
+
+    def test_model_response_reaches_the_observer_before_the_root_turn_ends(self):
         seen = []
 
         def observe(facts):
@@ -131,7 +139,7 @@ class NativeRunCase(unittest.TestCase):
         self.assertEqual([facts["modelResponded"] for facts in seen],
                          sorted(facts["modelResponded"] for facts in seen))
 
-    def test_successful_terminal_without_root_model_output_does_not_start_model(self):
+    def test_successful_terminal_without_root_model_output_never_responds(self):
         self.fixture_case("terminal-only")
         seen = []
         result = self.execute(self.request(), observer=lambda facts: (seen.append(dict(facts)) or FEEDBACK_CONTINUE))

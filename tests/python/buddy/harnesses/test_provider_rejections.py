@@ -152,7 +152,9 @@ class NativeProviderRejectionTests(unittest.TestCase):
                 evidence.completed = {"status": "failed", "error": {"codexErrorInfo": native}}
                 evidence.event_seq = 1
                 evidence.started = True
-                chain = SimpleNamespace(projector=None, session=Mock(), bind=Mock())
+                facts = native_run._RunFacts()
+                chain = native_run._EventChain(facts, native_run._Classifier(facts), state,
+                                               None, Mock(), overflow_raises=False)
                 with patch.object(native_run, "_admit_turn", return_value={"turn": {"id": "turn"}}), \
                      patch.object(native_run, "TurnEvidence", return_value=evidence), \
                      patch.object(native_run, "_checkpoint", return_value=None), \
@@ -187,11 +189,14 @@ class NativeProviderRejectionTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.dsh import native_run
         for native, expected in (("QUOTA", "quota-exceeded"), ("RATE_LIMIT", "rate-limited"), ("CONTEXT", None)):
             with self.subTest(native=native):
+                # The record is retained immutably, so each classification needs
+                # its own invocation root, as separate runs have.
+                invocation_root = Path(tempfile.mkdtemp(prefix="invocation-", dir=self.root))
                 with patch.object(native_run, "_provider_rejection_package", wraps=native_run._provider_rejection_package) as package:
                     result = native_run._build_result(self.request("dsh"), state=native_run._RunState(),
                         tools=None, activity=SimpleNamespace(payload=lambda: None, counts={"modelTurns": 0}),
                         client=None, sessions=[], evidence=None, raw_answer=None, correction_count=0,
-                        drained=None, invocation_root=self.root, record={"failure": {"code": native}})
+                        drained=None, invocation_root=invocation_root, record={"failure": {"code": native}})
                 if expected is None:
                     package.assert_not_called()
                     self.assertIsNone(result.provider_rejection)
