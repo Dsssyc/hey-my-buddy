@@ -143,7 +143,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     result = RunResult(
         identity=built_request.identity, harness=harness,
         end=RunEnd(status="ok", native_exit_code=0),
-        model_started=True,
+        model_responded=True,
         buddy=ResultBuddy(requested=built_request.buddy, checked=CheckedBuddy(
             provider=CheckedValue(value=context.spec["provider"]),
             model=CheckedValue(value=checked_model or context.spec["model"]),

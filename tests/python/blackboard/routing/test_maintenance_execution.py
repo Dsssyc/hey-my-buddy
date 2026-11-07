@@ -471,7 +471,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                 def fake_run(request, *, observer, services, cancelled):
                     return RunResult(identity=request.identity, harness=request.harness,
                         end=RunEnd(status="error", reason_code="deadline", native_exit_code=1),
-                        model_started=True, usage=usage,
+                        model_responded=True, usage=usage,
                         stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
 
                 module = run_seam("dsh")
@@ -884,7 +884,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                                          state_dir=self.board_.directory,
                                          native_identity={"sessionId": "fake-maintenance-native"})
             return RunResult(identity=request.identity, harness=request.harness,
-                             end=RunEnd(status="ok", native_exit_code=0), model_started=True,
+                             end=RunEnd(status="ok", native_exit_code=0), model_responded=True,
                              native_identity=NativeIdentity(session_id="fake-maintenance-native"),
                              native_event_count=3,
                              value=RunValue(schema_status="valid", raw=canonical_json(good),

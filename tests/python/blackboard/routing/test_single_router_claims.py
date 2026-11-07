@@ -218,7 +218,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.seed(board)
         request = self.request(board)
         claim = self.claim_route(board, request)['claim']
-        self.report(board, claim, {'status': 'error', 'code': 'router-review-unavailable', 'modelStarted': False},
+        self.report(board, claim, {'status': 'error', 'code': 'router-review-unavailable', 'modelResponded': False},
                     status='failed', shutdown=False)
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'running')

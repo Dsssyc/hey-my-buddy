@@ -484,7 +484,7 @@ class FailoverTests(RouterDispatchTestCase):
                 self.assert_full_prompt(native_request.input_text)
                 return RunResult(identity=native_request.identity, harness=native_request.harness,
                                  end=RunEnd(status="error", reason_code="native-prompt-too-large",
-                                            message="native prompt limit"), model_started=False,
+                                            message="native prompt limit"), model_responded=False,
                                  buddy=ResultBuddy(requested=native_request.buddy),
                                  stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
 
@@ -599,7 +599,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_model_started_false_does_not_substitute_for_spawn_or_native_stop_proof(self):
         request, first = self.start()
-        output = {"status": "error", "code": "router-no-answer", "modelStarted": False}
+        output = {"status": "error", "code": "router-no-answer", "modelResponded": False}
         self.assert_boundary(request, first, output, outcome="stop-unconfirmed", status="failed")
 
     def test_release_cancelled_parent_never_advances_despite_never_spawned_proof(self):

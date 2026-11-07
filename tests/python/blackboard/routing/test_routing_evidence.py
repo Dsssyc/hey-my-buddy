@@ -73,7 +73,7 @@ class RoutingEvidenceTests(WorkflowTestCase):
 
         def mutate(result):
             # Explicit false must not erase ability evidence under the revised rule.
-            result["modelStarted"] = False
+            result["modelResponded"] = False
             if usage is not None:
                 result["tokenUsage"] = usage
             if code is not None:

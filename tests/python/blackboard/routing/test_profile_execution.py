@@ -284,7 +284,7 @@ class ProfileExecutionTests(BoardTestCase):
             receipt = claim_tool_receipt(claim, state_dir=self.board_.directory,
                                          native_identity=native_identity)
             return RunResult(identity=request.identity, harness=request.harness,
-                end=RunEnd(status='ok', native_exit_code=0), model_started=True,
+                end=RunEnd(status='ok', native_exit_code=0), model_responded=True,
                 native_identity=NativeIdentity(session_id=native_identity['sessionId']),
                 value=RunValue(schema_status='valid', raw=json.dumps(answers[index])),
                 tool_evidence=receipt['toolEvidence'],

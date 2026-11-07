@@ -125,7 +125,7 @@ class RoutingModesTests(BoardTestCase):
         pass  # Admission is owned by the service.
         nonce = 'nonce-abcdefghijklmnop'
         first = admit_execution(board.client(), nonce, task_id=result['runId'])['claim']
-        response = board.call('execution_result', {'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'], 'nonce': nonce, 'status': 'failed', 'shutdownConfirmed': True, 'result': {'status': 'error', 'code': 'router-review-unavailable', 'modelStarted': False}})
+        response = board.call('execution_result', {'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'], 'nonce': nonce, 'status': 'failed', 'shutdownConfirmed': True, 'result': {'status': 'error', 'code': 'router-review-unavailable', 'modelResponded': False}})
         self.assertEqual(response['taskState'], 'failed')
         self.assertIsNone(admit_execution(board.client(), nonce, task_id=result['runId'])['claim'])
         decision = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']

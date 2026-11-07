@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import tempfile
-import threading
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,9 +29,9 @@ class ProfileRuntimeTests(unittest.TestCase):
     def _run(self, control, responses):
         seen = []
         publications = []
-        handle = SimpleNamespace(cancelled=threading.Event(), request=None,
-                                 role_run_active_control=None, role_run_active_identity=None,
-                                 live_endpoint=None)
+        handle = run_execution.InlineRunHandle(control, rc.RunIdentity(
+            task_id=control["taskId"], attempt_id=control["attemptId"],
+            generation=control["generation"], invocation_id="profile-fixture"), grace_seconds=0)
 
         @contextmanager
         def live(_request, _services, _handle):
