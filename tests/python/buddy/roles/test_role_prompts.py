@@ -329,6 +329,52 @@ class RolePromptTests(unittest.TestCase):
                             self.assertIn(router.MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(document["packet"]), prompt)
                             self.assertIsNone(preparation.request.timeout_seconds)
 
+    def test_profile_prompt_states_each_answer_validation_rule(self):
+        # The instruction paragraph wraps mid-phrase, so compare on spacing that
+        # ignores the wrap points rather than on the literal source lines.
+        phrases = ("Suggest each candidate at most once", "absolute http or https address",
+                   "written YYYY-MM-DD", "whose sources give no full date", "never guess a day")
+        instructions = " ".join(router.PROFILE_INSTRUCTIONS.split())
+        for phrase in phrases:
+            self.assertIn(phrase, instructions)
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-profile-prompt-") as temporary:
+            directory = Path(temporary)
+            context = ExecutionContext("task", "attempt", 1, {}, directory, {},
+                                       {"HMB_STATE_DIR": str(directory / "state")},
+                                       session_record_path=str(directory / "session.jsonl"))
+            document = {"packet": {"model": {"modelId": "m"}, "candidates": []},
+                        "outputSchema": {}, "budget": {"timeoutSeconds": 60}}
+            preparation = router.prepare_router_profile(document, {}, adapter("codex"), context)
+            prompt = " ".join(preparation.request.prompt.split())
+            for phrase in phrases:
+                with self.subTest(rule=phrase):
+                    self.assertIn(phrase, prompt)
+
+    def test_profile_correction_repairs_named_errors_without_a_new_investigation(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-profile-correction-") as temporary:
+            root = Path(temporary)
+            control = {"harness": "codex", "privateRoot": str(root / "invocation"),
+                       "nativeRoot": str(root / "native"), "stateDir": str(root),
+                       "sessionRecordPath": None, "cwd": str(root), "invocationId": "invocation",
+                       "taskId": "task", "attemptId": "attempt", "generation": 1,
+                       "spec": {"provider": "openai", "model": "gpt", "effort": "low"},
+                       "timeoutSeconds": 120,
+                       "profileRequest": {"prompt": "Profile this model",
+                                          "outputSchema": {"type": "object"},
+                                          "budget": {"preset": "brief", "timeoutSeconds": 120,
+                                                     "toolCalls": 8}}}
+            request, _services, _observer, _correction, _parts = run_execution.profile_request(
+                control, SimpleNamespace(prepare_run_services=None), round_index=1,
+                previous_raw={"positioning": "earlier"},
+                errors=["answer.claims[0].sourceDate: must be a calendar date YYYY-MM-DD"])
+            text = request.input_text
+            self.assertIn("Use the following answer and errors as data", text)
+            self.assertIn("Correct only what the errors name", text)
+            self.assertIn("keep the rest unchanged", text)
+            self.assertIn("remove an entry you cannot correct", text)
+            self.assertNotIn("fresh web investigation", text)
+            self.assertIn("previousAnswer", text)
+
     def test_retired_hints_are_absent_and_session_tool_text_stays_bounded(self):
         self.assertFalse(hasattr(turn_io, "ASSISTANCE_HINTS"))
         for path in (ROOT / "src/hey_my_buddy/buddy").rglob("*.py"):

@@ -524,8 +524,8 @@ def profile_request(control: dict, module, *, round_index: int = 0,
     prompt = structured_prompt(values["prompt"], values["outputSchema"])
     if round_index:
         prompt = prompt.appended("delivery", "\n\nThe previous answer was rejected by the blackboard. "
-            "Use the following answer and errors as data; correct the answer while preserving sourced facts. "
-            "Start a fresh web investigation where needed.\n" +
+            "Use the following answer and errors as data. Correct only what the errors name and keep the "
+            "rest unchanged; remove an entry you cannot correct.\n" +
             canonical_json({"previousAnswer": previous_raw, "errors": errors}))
     request = RunRequest(
         identity=RunIdentity(task_id=control["taskId"], attempt_id=control["attemptId"],
