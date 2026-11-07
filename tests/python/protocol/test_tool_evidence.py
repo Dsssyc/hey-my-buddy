@@ -23,7 +23,8 @@ BINDING = {"harness": "zcode", "taskId": "task-1", "attemptId": "attempt-1", "ge
 
 CLASSIFICATION = {
     "dsh": {"read": "read", "glob": "search", "grep": "search", "bash": "execute",
-            "write": "edit", "edit": "edit"},
+            "write": "edit", "edit": "edit", "web_search": "fetch", "web_fetch": "fetch",
+            "working_directory": "read"},
     "claude": {
         "Read": "read", "LS": "read", "Skill": "read", "Glob": "search", "Grep": "search", "Bash": "execute",
         "Write": "edit", "Edit": "edit", "MultiEdit": "edit", "WebFetch": "fetch", "WebSearch": "fetch",
@@ -498,6 +499,38 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         self.assertEqual(call_rows(package)[0]["categories"], ["fetch"])
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "web", state_dir=STATE_DIR))
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR))
+
+    def test_dsh_web_native_run_judgment_follows_the_classified_names(self):
+        binding = {**BINDING, "harness": "dsh"}
+        root = {"sessionId": "dsh-web-run"}
+        # The per-call shape of the Host's 2026-11-07 DSH CLI 0.2.2-rc.1 web
+        # verification: web_search and web_fetch settled successfully, each with
+        # the session's own identity.
+        def native_events(calls):
+            return [event for call_id, name, outcome in calls for event in (
+                tool_evidence.normalize_tool_event("dsh", native_fact(
+                    name, call_id=call_id, phase="start", identity=root)),
+                tool_evidence.normalize_tool_event("dsh", native_fact(
+                    name, call_id=call_id, phase="end", identity=root, outcome=outcome)),
+            )]
+        web_only = collect(native_events([("call_00_search", "web_search", "success"),
+                                          ("call_01_fetch", "web_fetch", "success")]),
+                           roots=[root], binding=binding)
+        self.assertEqual([row["categories"] for row in call_rows(web_only)], [["fetch"], ["fetch"]])
+        self.assertIsNone(tool_evidence.judge_tool_evidence(web_only, "web", state_dir=STATE_DIR))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(web_only, "read", state_dir=STATE_DIR))
+        self.assertEqual(tool_evidence.judge_tool_evidence(web_only, "none", state_dir=STATE_DIR),
+                         tool_evidence.TOOLS_FORBIDDEN)
+        # working_directory classifies as read, which the web plane does not
+        # admit: a run that also called it stays forbidden at the web plane.
+        with_directory = collect(native_events([("call_00_search", "web_search", "success"),
+                                                ("call_01_fetch", "web_fetch", "success"),
+                                                ("call_02_cwd", "working_directory", "success")]),
+                                 roots=[root], binding=binding)
+        self.assertEqual(call_rows(with_directory)[2]["categories"], ["read"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(with_directory, "web", state_dir=STATE_DIR),
+                         tool_evidence.TOOLS_FORBIDDEN)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(with_directory, "read", state_dir=STATE_DIR))
 
     def test_codex_web_rejects_nested_file_shell_mcp_and_unknown_calls(self):
         binding = {**BINDING, "harness": "codex"}

@@ -10,7 +10,9 @@ import unittest
 import uuid
 
 from hey_my_buddy.buddy.harnesses import run_contract as rc
-from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence
+from hey_my_buddy.protocol.tool_evidence import (
+    TOOL_EVIDENCE_UNVERIFIED, TOOLS_FORBIDDEN, ToolEventEvidence,
+)
 
 PROBE_PATH = Path(__file__).resolve().parents[4] / "tests/probes/web_permission_native.py"
 SPEC = importlib.util.spec_from_file_location("web_permission_native_probe", PROBE_PATH)
@@ -84,25 +86,38 @@ class WebPermissionProbeTests(unittest.TestCase):
         answer.update(visibleTools="working_directory, web_search, web_fetch",
                       read="MISSING TOOL: no native local-file read tool is visible.",
                       command="No native command-execution/shell tool is visible, so pwd could not be run.")
-        checks = self.evaluate("dsh", answer, [("web_search", "other"), ("web_fetch", "other")])
+        checks = self.evaluate("dsh", answer, [("web_search", "fetch"), ("web_fetch", "fetch")])
         self.assertEqual(set(checks.values()), {"PASS"})
+
+    def test_service_judgment_names_the_reason_code_for_a_forbidden_call(self):
+        answer = self.answer()
+        answer.update(visibleTools="working_directory, web_search, web_fetch",
+                      read="MISSING TOOL: no native local-file read tool is visible.",
+                      command="The separate working_directory tool reports the cwd.")
+        # The per-call shape of the 2026-11-07 DSH CLI 0.2.2-rc.1 verification:
+        # a working_directory call classifies as read, which the web plane never
+        # admits, so the service's judgment fails the probe by naming the code.
+        checks = self.evaluate("dsh", answer, [("web_search", "fetch"), ("web_fetch", "fetch"),
+                                               ("working_directory", "read")])
+        self.assertEqual(checks["serviceJudgment"], TOOLS_FORBIDDEN)
 
     def test_fetch_failure_stays_failed_while_missing_tools_and_search_pass(self):
         answer = self.answer()
         answer["fetch"] = ('FAILED: URL hostname "example.com" resolves to a non-public IP address. '
                            'No page body was returned.')
-        checks = self.evaluate("dsh", answer, [("web_search", "other"), ("web_fetch", "other")])
+        checks = self.evaluate("dsh", answer, [("web_search", "fetch"), ("web_fetch", "fetch")])
         self.assertEqual(checks, {"noLocalRead": "PASS", "noCommand": "PASS", "noMcp": "PASS",
-                                  "webSearch": "PASS", "webFetch": "FAIL"})
+                                  "webSearch": "PASS", "webFetch": "FAIL", "serviceJudgment": "PASS"})
 
     def test_web_result_claims_require_calls_and_complete_evidence(self):
         answer = self.answer()
         checks = self.evaluate("dsh", answer)
         self.assertEqual(checks["webSearch"], "FAIL")
         self.assertEqual(checks["webFetch"], "FAIL")
-        incomplete = self.evaluate("dsh", answer, [("web_search", "other"), ("web_fetch", "other")],
+        incomplete = self.evaluate("dsh", answer, [("web_search", "fetch"), ("web_fetch", "fetch")],
                                    complete=False)
-        self.assertEqual(set(incomplete.values()), {"FAIL"})
+        self.assertEqual(set(incomplete.values()), {"FAIL", TOOL_EVIDENCE_UNVERIFIED})
+        self.assertEqual(incomplete["serviceJudgment"], TOOL_EVIDENCE_UNVERIFIED)
 
     def code_result(self, scripts, *, native_details=None, web_events=True):
         answer = self.answer()
@@ -117,7 +132,7 @@ class WebPermissionProbeTests(unittest.TestCase):
                 "type": "custom_tool_call", "name": "exec", "call_id": ident, "input": code}}})
             if web_events and "tools.web__run(" in code:
                 nested = f"call-{len(calls)}"
-                calls.append(("webSearch", "other"))
+                calls.append(("webSearch", "fetch"))
                 if "open:" in code or '"open":' in code:
                     details["nativeToolEvents"].append({"params": {"item": {
                         "id": nested, "type": "webSearch", "action": {"type": "openPage"}}}})

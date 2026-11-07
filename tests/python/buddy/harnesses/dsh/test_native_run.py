@@ -558,7 +558,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(policy.requested.value["disabledRows"],
                          [row["id"] for row in rows[2:]])
 
-    def test_web_scope_retains_only_the_three_verified_native_rows(self):
+    def test_web_scope_retains_the_web_and_executor_rows_only(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
         request = self.fast_request("prompt", scope="web")
@@ -569,7 +569,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.value.raw, '{"choice":"a"}')
         rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
         disabled = [row["id"] for row in rows[2:]]
-        self.assertEqual(disabled, [*(row for row in CONFIRMED_NONE_ROWS if row not in {"tool-web", "tool-working-directory", "tool-executor-native"}),
+        self.assertEqual(disabled, [*(row for row in CONFIRMED_NONE_ROWS if row not in {"tool-web", "tool-executor-native"}),
                                     native_run.PLAN_MODE_ROW])
         self.assertTrue(all(row["disabled"] is True for row in rows[2:]))
         self.assertEqual(result.effective_policy.tools.requested.value, {"disabledRows": disabled})
@@ -578,7 +578,7 @@ class FastSeamTests(NativeRunCase):
 
     def test_unknown_tool_row_is_disabled_and_each_scope_keeps_only_its_allowlist(self):
         inventory = (*TOOL_ROWS, "tool-new-plugin")
-        for scope, retained in (("web", {"tool-web", "tool-working-directory", "tool-executor-native"}),
+        for scope, retained in (("web", {"tool-web", "tool-executor-native"}),
                                 ("none", set())):
             with self.subTest(scope=scope):
                 self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
@@ -920,7 +920,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
         rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
         self.assertEqual([row["id"] for row in rows[2:]],
-                         [*(row for row in CONFIRMED_NONE_ROWS if row not in {"tool-web", "tool-working-directory", "tool-executor-native"}),
+                         [*(row for row in CONFIRMED_NONE_ROWS if row not in {"tool-web", "tool-executor-native"}),
                           native_run.PLAN_MODE_ROW])
         self.assertEqual(result.effective_policy.tools.requested.value,
                          {"disabledRows": [row["id"] for row in rows[2:]]})

@@ -26,7 +26,7 @@ sys.path.insert(0, str(CHECKOUT / "src"))
 from hey_my_buddy.buddy.harnesses.run_contract import (  # noqa: E402
     FEEDBACK_CONTINUE, PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
 )
-from hey_my_buddy.protocol.tool_evidence import read_tool_calls  # noqa: E402
+from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence, read_tool_calls  # noqa: E402
 
 PAGE = "https://example.com/"
 SEARCH = "IANA example domains example.com reserved documentation"
@@ -264,10 +264,14 @@ def evaluate(harness: str, result, state_dir: Path, init_frames: list[dict],
     fetch_claim = isinstance(answer.get("fetch"), str) and bool(re.search(
         r"example domain|illustrative examples|this domain is for use in documentation examples without needing permission",
         answer["fetch"], re.I))
+    # The service's own publication matrix over this run's digest-bound tool
+    # evidence: no problem passes, any reason code fails the check by naming it.
+    verdict = judge_tool_evidence(package, "web", state_dir=state_dir)
     checks = {"noLocalRead": _status(read_ok), "noCommand": _status(command_ok),
               "noMcp": _status(mcp_ok),
               "webSearch": _status(search_call and search_claim if settled else None),
-              "webFetch": _status(fetch_call and fetch_claim if settled else None)}
+              "webFetch": _status(fetch_call and fetch_claim if settled else None),
+              "serviceJudgment": "PASS" if verdict is None else verdict}
     return {"checks": checks, "settled": settled, "nativeListings": listings,
             "configuredMcpServers": configured_mcp, "nativeEvidence": native_details,
             "modelReportedTools": answer.get("visibleTools"), "nativePolicyRequested": requested,
@@ -366,7 +370,7 @@ def main(harness: str) -> int:
                           session_record_path=record)
     except Exception as error:
         report = {"checks": {name: "FAIL" for name in
-                  ("noLocalRead", "noCommand", "noMcp", "webSearch", "webFetch")},
+                  ("noLocalRead", "noCommand", "noMcp", "webSearch", "webFetch", "serviceJudgment")},
                   "error": f"{type(error).__name__}: {error}"}
     report.update(harness=harness, outputRoot=str(root), modelCalls="one native root turn requested")
     (root / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

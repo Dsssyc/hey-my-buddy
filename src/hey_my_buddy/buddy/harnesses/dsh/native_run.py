@@ -120,9 +120,12 @@ PERMISSION_MODES = {"read": READ_ONLY_MODE, "write": "workspace-write",
 #: The mode-control tool row the none-scope probe disables together with the
 #: tool rows, so no plan-mode tool survives either.
 PLAN_MODE_ROW = "plan-mode"
-#: Retained rows match the Host's DSH CLI 0.2.2-rc.1 native verification
-#: (2026-11-07). Newly discovered rows are disabled, including disabled defaults.
-WEB_SCOPE_RETAINED_ROWS = frozenset({"tool-web", "tool-working-directory", "tool-executor-native"})
+#: The web scope keeps the web tools and the native executor row; DSH CLI
+#: 0.2.2-rc.1's working_directory also changes the session's working directory,
+#: which this plane never needs. This exact combination is not yet natively
+#: verified; the Host verifies it after installing this change. Newly discovered
+#: rows are disabled, including disabled defaults.
+WEB_SCOPE_RETAINED_ROWS = frozenset({"tool-web", "tool-executor-native"})
 NONE_SCOPE_RETAINED_ROWS: frozenset[str] = frozenset()
 _INVENTORY_REASONS = {UNREADABLE: "dsh-tool-inventory-unreadable",
                       UNRECOGNIZED: "dsh-tool-inventory-format-unrecognized"}

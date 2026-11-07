@@ -63,7 +63,10 @@ CALL_FILE_FIELDS = frozenset({"path", "sha256", "bytes"})
 #: stays ``other``; it is never promoted to a legal category.
 NATIVE_TOOL_CATEGORIES: dict[str, dict[str, str]] = {
     "dsh": {"read": "read", "glob": "search", "grep": "search", "bash": "execute",
-            "write": "edit", "edit": "edit"},
+            "write": "edit", "edit": "edit", "web_search": "fetch", "web_fetch": "fetch",
+            # working_directory reads or changes the session's working directory
+            # without touching file contents (DSH CLI 0.2.2-rc.1).
+            "working_directory": "read"},
     "claude": {
         "Read": "read", "LS": "read", "Skill": "read",
         "Glob": "search", "Grep": "search",
