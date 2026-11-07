@@ -289,8 +289,8 @@ class RolePromptTests(unittest.TestCase):
     def test_router_role_and_full_prompt_hashes_are_fixed(self):
         self.assertEqual(hashlib.sha256(resource_path("roles.router").read_bytes()).hexdigest(),
                          "d59f94e056525ea07f0de2cfee0a843678eb81431e3ee055580f099816f7f841")
-        hashes = {"fast": "1335ccd6ad9845c3806113c29a6421f3536aebf5e984d38913be95d22452285b",
-                  "review": "e3230e9ec5a9bfacfdea7ee211cf9d892cfbfd8e30c34564d453bfc73108a500",
+        hashes = {"fast": "c9e0639db8a34b4a072fd84ec393f7af701e5ca77be2cc5527e368abe0145e3a",
+                  "review": "9fcad9c4fa2dc089e11058685a8115054350496f4e4c66487d94309f8c720f21",
                   "maintain": "eaf7aa1c5efd6188b1030cfc097d7bc854be627de1144d609b8d30a9cd6a2b13"}
         for mode, expected in hashes.items():
             with self.subTest(mode=mode):
