@@ -208,41 +208,42 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 
 ## Buddy 页与 Router 的重做：待开发者确认
 
-2026-11-08 第二轮，按提交 `1af41755` 中的[修订计划](../adr029/buddy-router-redo-plan.md)更新。开发者已认可第一轮的方向；本轮恢复目录既有的视觉元素，并按 ADR-021 把评价放回选中 buddy 的设置展开里。仍为 8 个画面、中英文各一份 HTML、每份深浅色整页截图；只核对静态渲染，不是控制台实现或实现验收。只画 1440px，不含窄屏稿或窄屏样式，窄屏没有核对。
+2026-11-08 第三轮，按提交 `61710ec0` 中的[修订计划](../adr029/buddy-router-redo-plan.md)绘制。本轮的当前画面是下表 9 个，中英文各一份 HTML、各有深浅色整页 PNG，宽 1440、高随内容。这里只核对静态渲染，不是控制台实现或实现验收；按开发者安排没有窄屏稿与窄屏样式，窄屏未核对。
 
 | 画面 | 中文 HTML | English HTML | 深色（中文 / English） | 浅色（中文 / English） |
 | --- | --- | --- | --- | --- |
-| 目录：提供方分组与状态 | [打开](buddy-redo-catalog.html) | [Open](buddy-redo-catalog.en.html) | [中文](buddy-redo-catalog-dark.png) / [English](buddy-redo-catalog.en-dark.png) | [中文](buddy-redo-catalog-light.png) / [English](buddy-redo-catalog.en-light.png) |
-| 目录：模型服务、选中 buddy 与评价 | [打开](buddy-redo-service.html) | [Open](buddy-redo-service.en.html) | [中文](buddy-redo-service-dark.png) / [English](buddy-redo-service.en-dark.png) | [中文](buddy-redo-service-light.png) / [English](buddy-redo-service.en-light.png) |
-| 目录：位置、账户、额度与收起的节 | [打开](buddy-redo-harness.html) | [Open](buddy-redo-harness.en.html) | [中文](buddy-redo-harness-dark.png) / [English](buddy-redo-harness.en-dark.png) | [中文](buddy-redo-harness-light.png) / [English](buddy-redo-harness.en-light.png) |
-| 模型：已有画像与三个名字 | [打开](buddy-redo-models.html) | [Open](buddy-redo-models.en.html) | [中文](buddy-redo-models-dark.png) / [English](buddy-redo-models.en-dark.png) | [中文](buddy-redo-models-light.png) / [English](buddy-redo-models.en-light.png) |
-| 模型：无画像与失败运行 | [打开](buddy-redo-model-failed.html) | [Open](buddy-redo-model-failed.en.html) | [中文](buddy-redo-model-failed-dark.png) / [English](buddy-redo-model-failed.en-dark.png) | [中文](buddy-redo-model-failed-light.png) / [English](buddy-redo-model-failed.en-light.png) |
-| Router：路由面 | [打开](buddy-redo-routing.html) | [Open](buddy-redo-routing.en.html) | [中文](buddy-redo-routing-dark.png) / [English](buddy-redo-routing.en-dark.png) | [中文](buddy-redo-routing-light.png) / [English](buddy-redo-routing.en-light.png) |
-| Router：维护面与领域树 | [打开](buddy-redo-maintenance.html) | [Open](buddy-redo-maintenance.en.html) | [中文](buddy-redo-maintenance-dark.png) / [English](buddy-redo-maintenance.en-dark.png) | [中文](buddy-redo-maintenance-light.png) / [English](buddy-redo-maintenance.en-light.png) |
-| Router：画像面 | [打开](buddy-redo-profile-plane.html) | [Open](buddy-redo-profile-plane.en.html) | [中文](buddy-redo-profile-plane-dark.png) / [English](buddy-redo-profile-plane.en-dark.png) | [中文](buddy-redo-profile-plane-light.png) / [English](buddy-redo-profile-plane.en-light.png) |
+| 目录 | [打开](buddy-redo-catalog.html) | [Open](buddy-redo-catalog.en.html) | [中文](buddy-redo-catalog-dark.png) / [English](buddy-redo-catalog.en-dark.png) | [中文](buddy-redo-catalog-light.png) / [English](buddy-redo-catalog.en-light.png) |
+| 目录：模型服务抽屉 | [打开](buddy-redo-service.html) | [Open](buddy-redo-service.en.html) | [中文](buddy-redo-service-dark.png) / [English](buddy-redo-service.en-dark.png) | [中文](buddy-redo-service-light.png) / [English](buddy-redo-service.en-light.png) |
+| 目录：位置、账户与冷却 | [打开](buddy-redo-harness.html) | [Open](buddy-redo-harness.en.html) | [中文](buddy-redo-harness-dark.png) / [English](buddy-redo-harness.en-dark.png) | [中文](buddy-redo-harness-light.png) / [English](buddy-redo-harness.en-light.png) |
+| Router：路由 | [打开](buddy-redo-routing.html) | [Open](buddy-redo-routing.en.html) | [中文](buddy-redo-routing-dark.png) / [English](buddy-redo-routing.en-dark.png) | [中文](buddy-redo-routing-light.png) / [English](buddy-redo-routing.en-light.png) |
+| Router：维护 | [打开](buddy-redo-maintenance.html) | [Open](buddy-redo-maintenance.en.html) | [中文](buddy-redo-maintenance-dark.png) / [English](buddy-redo-maintenance.en-dark.png) | [中文](buddy-redo-maintenance-light.png) / [English](buddy-redo-maintenance.en-light.png) |
+| Router：画像 | [打开](buddy-redo-profile-plane.html) | [Open](buddy-redo-profile-plane.en.html) | [中文](buddy-redo-profile-plane-dark.png) / [English](buddy-redo-profile-plane.en-dark.png) | [中文](buddy-redo-profile-plane-light.png) / [English](buddy-redo-profile-plane.en-light.png) |
+| 评价：已建画像 | [打开](buddy-redo-evaluation.html) | [Open](buddy-redo-evaluation.en.html) | [中文](buddy-redo-evaluation-dark.png) / [English](buddy-redo-evaluation.en-dark.png) | [中文](buddy-redo-evaluation-light.png) / [English](buddy-redo-evaluation.en-light.png) |
+| 评价：未建画像与短提示 | [打开](buddy-redo-evaluation-model.html) | [Open](buddy-redo-evaluation-model.en.html) | [中文](buddy-redo-evaluation-model-dark.png) / [English](buddy-redo-evaluation-model.en-dark.png) | [中文](buddy-redo-evaluation-model-light.png) / [English](buddy-redo-evaluation-model.en-light.png) |
+| 评价：菜单与换代说明 | [打开](buddy-redo-evaluation-generation.html) | [Open](buddy-redo-evaluation-generation.en.html) | [中文](buddy-redo-evaluation-generation-dark.png) / [English](buddy-redo-evaluation-generation.en-dark.png) | [中文](buddy-redo-evaluation-generation-light.png) / [English](buddy-redo-evaluation-generation.en-light.png) |
 
-样式由 `base.css` 与 [buddy-redo.css](buddy-redo.css)组成，界面颜色只引用 base.css 的变量。harness 标志是 `HarnessLogo.tsx` 引用的 `@lobehub/icons-static-svg` 四个原始 SVG：`codex-color.svg`、`claudecode-color.svg`、`deepseek-color.svg`、`zai.svg`，以原图内联；彩色保留原值，单色 Z.ai 随文字颜色。这些标志自带的颜色依照控制台设计的例外保留。标志为 24px；节头、模型行、评价与领域开合使用当前 Lucide 的 16px、2px 线宽箭头。节头箭头只表示本节模型开合，账户摘要的展开是另一个入口。
+分区只有一份，顺序为目录、Router、评价（Catalog、Router、Evaluation）。目录与 Router 放设置，评价放参考及构建／维护动作。Router 的左列、标题、说明、提示与链接称“路由／维护／画像”（Routing／Maintenance／Profiles），不把设计用语“面”放到界面；评价列表与详情不显示“同型”二字。
 
-目录恢复单行：圆点只表示有 buddy 在用，未启用的名字用次要文字色；推理强度与生效偏好写成字，行尾是并发；不写“已找到”、逐行“可用”、第二行启用计数或每组列头。提供方分组、分区页签一份、异名模型链接、无画像提示与“这次没读到”按计划改。节头账户摘要显示最紧窗口与重置时间，按量计费显示余额，不再有“账户与位置”按钮。位置、账户、额度在节头自己的底色内展开，竖线分栏、较重底线收住。
+样式仍由 `base.css` 与 [buddy-redo.css](buddy-redo.css)组成，新增排版只引用 base.css 的颜色变量；在 `<html>` 上设置 `data-theme="dark"` 或 `light` 切换主题。四个 harness 标志内联自 `HarnessLogo.tsx` 使用的 `codex-color.svg`、`claudecode-color.svg`、`deepseek-color.svg`、`zai.svg`，彩色原样、单色随文字；标志自带颜色沿既有例外保留。折叠采用 Lucide ChevronRight 的 16px、1.5 线宽、展开转 90°；颜色／选中为 120ms，尖角与内容开合为 180ms，减少动态效果时关闭过渡。模型名旁“…”是菜单入口，沿计划保留该图形。已完成与已建画像改为对勾，运行中为实心圆，未建画像为空心圆，失败为叉；新发现与这次没读到都是无框文字。
 
-所有模型、对应关系、画像来源、归纳、微任务引用、用量、账户状态、路径、版本、额度和余额均为编造数据，不是对真实账户、模型或 harness 的核实。共 4 个 harness、8 个模型服务、9 / 40 个 buddy 启用；Codex 的 openai 与 relay-lab 分组，relay-lab 冷却到约 2026-11-08 16:49。openai 的 gpt-6.1-sol 从 16:05 起这次没读到，行与抽屉的提示包含起始时间、一小时后复查以及用户无需操作。gpt-6.1-terra 已启用但未建画像，以空心圆提示。ZCode 的 glm-5 新发现且未启用：画面 1、2 为查看新发现而展开，画面 3 显示无启用 buddy 时默认收起的样子与“1 个模型 · 启用 0 / 5”。
+目录的编造事实：4 个 harness、8 个模型服务、9 / 40 个 buddy 启用。Codex 有 openai 与 relay-lab 两个提供方，后者冷却到约 16:49，冷却和开放重试紧跟它的名字；每个 Codex 模型行用次要文字写提供方。其他 harness 只有一个提供方，模型行不重复写它。openai 的 gpt-6.1-sol 从 2026-11-08 16:05 起这次没读到，悬停或聚焦读到一小时复查及无需操作的完整含义。gpt-6.1-terra 已启用但无画像。ZCode 的 glm-5 是新发现、未启用；前两张为查看新发现而展开，第三张按无启用 buddy 的默认形态收起。
 
-账户摘要的编造事实：Codex 每周已用 68%，2026-11-12 09:00 重置，比其 5 小时窗口已用 42% 更紧；Claude Code 的 5 小时窗口已用 37%，2026-11-08 19:00 重置；DSH 余额 CNY 128.60，ZCode 余额 CNY 56.40。Codex CLI 的安装版本 0.134.0、核实版本 0.133.0、占位路径 `~/.local/bin/codex` 与 ChatGPT 账户也是样例，不含真实账户标识。Codex 的只联网示例按当前声明写强制限制；ZCode 的未声明强制限制不得被解释为画像资格，本批未另展开 ZCode 的位置块。
+目录抽屉只放模型服务与一个选中 buddy：`codex / openai / gpt-6.1-sol / high` 已启用、优先，理由是跨模块改造，计入评价 30 次、基础设施失败 2 次。30 次链接到评价中的三段标题；目录不放评价或模型跳转行。harness 展开是位置、账户、冷却：示例安装版本 0.134.0、核实版本 0.133.0、占位路径 `~/.local/bin/codex`，账户显示 openai 订阅、relay-lab 按量；不显示额度百分比、重置时间或余额。并发提醒沿用现有文案，不是额度读数。
 
-画面 2 选中 `codex / openai / gpt-6.1-sol / high`：启用、优先、理由、计入评价 30 次和基础设施失败 2 次属于这个 buddy。下面评价的标题是 `codex / gpt-6.1-sol / high`，去掉提供方；46 个样本来自 `gpt-6.1-sol` 的 30 次和 `sol-latest` 的 16 次，换提供方仍看这一份同型 buddy 的评价。累计成功 41、一次通过 34（74%）、返工 9 轮、失败 5；维护面的归纳带两项编造微任务引用。评价与领域表各有一层可收起内容，领域树的“软件工程”节点还可折叠子节点。没有样本的格子留空。最后用次要层级显示换代前的 `codex / sol-previous / high` 及其 sol-latest 来源的 12 个旧样本，不把它们加到当前的 46 个样本里。父领域含子领域，不把父子样本相加。
+评价的默认列表只看在用，按目录中的 harness 顺序分组：Codex、Claude Code、DSH；ZCode 没有在用的 buddy，故不出现空组。共 6 个同型 buddy 行，提供方变化不重复列同一份。gpt-6.1-sol 的 high 有 46 个样本、medium 有 12 个样本；terra high 8、Sonnet high 21、Flash max 18、Pro high 6。terra 与 Pro 未建画像；Sonnet 正在构建且尚无画像，三行均带空心圆。已建画像是 2 / 5，另有 7 个微任务待维护；批量构建的静态确认针对未建且未运行的 terra 与 Pro，共 2 次，写明由 `dsh / deepseek-official / deepseek-v4-flash / max` 联网构建并使用它的额度。
 
-模型分区只放模型的对应关系、画像、最近画像运行和用户写给模型的备注，不显示评价或列表样本。gpt-6.1-sol 对应 3 个模型服务名字：openai 的 gpt-6.1-sol、relay-lab 的 gpt-6.1-sol 与 sol-latest；每行自己的“改对应／标出换代／撤回”紧跟该行服务，服务链接指向目录中的对应行。S1／S2／S3 为编造来源标号，来源明细可展开，没有外部网址或请求。模型列表 5 项中 2 项已建、1 项运行中、2 项无画像且未运行；批量构建示例勾选 terra 与 pro，共 2 次，左栏静态确认内容写明模型、次数和画像 buddy 的额度。
+评价主图选中 `codex / gpt-6.1-sol / high`，旁边写 openai、relay-lab 共用。46 个样本中成功 41、一次通过 34（74%）、返工 9 轮、失败 5；归纳带两项微任务引用。领域表和树节点可收起，零样本格留空；表后只有一行“证据来自 gpt-6.1-sol（30）、sol-latest（16）”。换代前 `codex / sol-previous / high` 的 12 个旧样本排在后面，作为次一级证据，不计入当前 46。领域父级包含子级，不把父子样本相加。历史微任务的用量中位数属于评价统计，画像运行的逐轮用量不在这里。
 
-gpt-6.1-terra 未建画像，最近运行打回 1 轮后失败：原因是缺少可核查来源，网页搜索 6 次成功，网页抓取 8 次全部失败，两轮用量分列。构建按钮已恢复为“构建画像”，没有残留“画像已在运行”的点击回复。claude-sonnet-4-6 的画像从 16:25 起运行中。这些都是固定视觉状态，未验证真实状态同步。
+评价的模型一块放在评价之后，只有模型名与菜单、画像及构建／重建按钮、用户可编辑的模型备注；每条画像内容都有编造的来源标号与日期。选中 terra 的画面显示无画像、构建按钮和它自己的 8 个样本评价；另一个模型 Pro 的失败通过通知显示：“deepseek-v4-pro 的画像没有建成：网页抓取全部失败”，附实际用量样例（输入 21,680、缓存 6,144、输出 2,460 tokens）与“查看记录”。通知出现约 6 秒后隐藏，截图固定在它刚出现的一刻。画像运行的打回、错误和用量保存在 Router 的画像中。
 
-Router 路由面列表依次为 `codex / openai / gpt-6.1-sol / high`、`claude / anthropic / claude-sonnet-4-6 / high`、`codex / relay-lab / gpt-6.1-sol / high`；第三项等待重试。到头的上下移按钮保留完整箭头，用较弱的图形区分，聚焦可读原因。默认快速、等待 60 秒、重试间隔草稿 30 秒，探索为“每 [5] 个里给 1 个”并附简短说明。失败 2 / 28，原因用文字，微任务有标题、编号、跳转与复制入口。维护 buddy 为 Claude 四元组，间隔 3600 秒、待处理 7 个微任务；最新一轮已完成，历史一轮无合格答案时写明输出结构未通过并保留上一版。画像 buddy 为 DSH 四元组，候选的搜索词是 deepseek，因此只展示两个具备强制只联网声明的 DSH 示例。
+三个评价画面是独立的设置状态示例：主图未指定维护 buddy，立即维护不可用，聚焦或悬停提示先在 Router 的维护里指定；未建画像图的两项工作均已配置；菜单图未指定画像 buddy，批量构建与重建画像不可用，提示先在 Router 的画像里指定。已有评价与画像在这些设置状态下继续可读。它们不代表同一份真实黑板在同一时刻的状态。任一 Router 工作未指定 buddy 时，摘要写“未设置 / Not set”，详情写“此项工作不运行，请指定 buddy。 / This work does not run. Set a buddy.”，保留添加／选择入口与已有记录，不借用其他工作的 buddy；本批不另出该画面。
 
-任一面没有指定 buddy 时，左侧摘要写“未设置 / Not set”，右侧“谁担任”写“本面不运行，请设置 buddy。 / This plane does not run. Set a buddy.”，并保留“添加”或“选择 buddy”入口；记录保留已有历史，不借用另一个面的 buddy。本批不另出这个状态的画面。
+对应关系不单列；模型名旁菜单只放标出换代、归到另一个模型、撤回。主图模型名字只有同名归一事实，撤回不可用并带原因；terra 示例有用户改过的对应，菜单中撤回可用。第 9 张把菜单与随后的说明对话框并置供看稿，不表示产品必须同时保持两层打开。说明中 42 个样本是该名字的编造计数（high 30、medium 12）；从现在起新结果算新一代，之前样本留旧一代作次级证据；不改名字显示，不动目录。按钮为标出换代与取消，没有改名输入框，也不执行对应关系变更。
 
-HTML 只在部分分区与模型服务之间做静态文件导航；原生 details 可查看确认、来源、候选与评价的开合，复选框也只是本地表单视觉。按钮、复制、账户、发现、保存、模型构建、领域改名合并、旧深链接迁移和真实服务均未实现或验证；原生 details 是静态稿的可查看内容，实施继续用现有组件。
+Router 的路由示例依次是 Codex/openai Sol high、Claude/anthropic Sonnet high、Codex/relay-lab Sol high，第三项等待重试且时刻同行；快速模式、等待开始 60 秒、重试草稿 30 秒、探索每 5 个里给 1 个，失败 2 / 28。维护示例是 Claude buddy、间隔 3600 秒、两轮记录与 5 个领域节点，不含立即维护或待处理计数。画像示例是 DSH buddy，候选用 deepseek 搜索，只显示声明强制只联网的两项；记录里 Pro 在 16:26 开始，打回 1 轮、搜索成功 6 次、抓取 8 次全部失败，两轮用量分列；Sol 成功记录可展开查看，Sonnet 正在构建。当前画面中 Sol／terra 的跨文件链接可以定位所画内容，未另画的模型记录使用拟议的评价地址，不代表真实路由已实现。
 
-第二轮先按盘点脚本的方法，以仓库已提交的资产启动独立的合成预览，仅接受 `X-Hey-My-Buddy-Preview: synthetic-fixture-data`，无头截取 1440px 深浅色目录与抽屉 4 张现状图，核对标志、箭头与坐标后已停止该预览并释放端口；未连接日常服务或黑板。现状图及读数在 `tmp/redo-drafts/current-*.png`、`current-preview.json`。
+所有名字、提供方状态、模型事实、S1／S2 来源、日期、账户、版本、归纳、微任务、计数和用量都是设计数据；没有查询真实账户、安装包或模型。页面不联网、不连接服务或黑板、不调用模型。静态文件中的部分导航与原生 details／表单可查看局部状态，按钮、保存、复制、真实过滤、构建、维护、对应关系变更、旧地址迁移和权限执行均没有实现。
 
-最终 32 张主截图由指定 Node.js v24.21.0、仓库 Playwright 1.64.0 与 headless Chromium 156.0.8078.4 经 file: 离线生成，宽 1440、deviceScaleFactor 1、高随内容。字体只有 12／14／16／18px；普通控件 32px、小控件 28px，目录节头与模型行按现有导航行分别为 48px、至少 40px。文字色与实际底色采样 3388 对，最低 4.91:1。32 帧的页面错误、外部请求、横向滚动、文字越界／裁切、主要同级区域相交与英文页中文残留均为 0；刻度格等宽。明暗、中英文主图均经联系表目视核对，代表性原图另看。
+最终以 Node.js v24.21.0、仓库 Playwright 1.64.0 和 headless Chromium 156.0.8078.4 经 file: 离线渲染 36 帧，宽 1440、deviceScaleFactor 1。字号仅 12／14／16／18px，普通控件 32px、小控件 28px；现有目录导航行维持 48px 节头、至少 40px 模型行。文本与实际底色采样 3696 对，最低 4.91:1；页面错误、外部请求、横向溢出、文字越界／裁切、主要同级区域相交与英文页中文残留均为 0，刻度格等宽。浮动菜单、说明与通知有意覆盖背景，其文字本身没有裁切；36 张主图经 9 张联系表目视核对，代表性原图另看。
 
-`verify-round2.cjs` 另核对四个标志的 SVG 子内容与依赖包一致、24px 标志、16px／2px 箭头及当前目录的相对坐标、缺席提示起始时间、两层评价和领域节点的原生开合、两项来源与旧组、模型页无评价／样本、逐行操作与目录定位、完整的不可用箭头。脚本、原始读数和第二轮对照表留在忽略目录 `tmp/redo-drafts/`。这些均为静态事实；没有改动控制台实现、计划或 ADR，没有调用模型或核实原生权限，也未做产品功能、窄屏或实际过渡验收。
+专项核对还覆盖菜单撤回条件、Router 未配置的提示、备注本地编辑、领域与节点开合、通知出现及 6.3 秒后隐藏、声明的过渡值与旧模型稿文件未变。脚本和读数在忽略目录 `tmp/redo-drafts/`：`generate-round3.py`、`capture-round3.cjs`、`verify-round3.cjs`、`round3-render-report.json`、`round3-verification.json`、`obsolete-round2-sha256.json`；报告的“第三轮”含逐项对照。没有运行产品前端／Python 全量，也未验证真实状态同步、原生权限、焦点管理、菜单关闭时序或实际组件过渡；实施时仍须按计划验证。
