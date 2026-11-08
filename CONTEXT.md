@@ -70,14 +70,14 @@ A buddy acting with Router authority in one of the three planes (三个面 / thr
 _Avoid_: Router agent, decision Buddy, selector (for the buddy)
 
 **路由面 / routing plane**:
-The Router's plane that chooses the Worker buddy for one micro task within its routing bounds, in fast or review mode; each choice is one routing calculation.
+The Router's plane that chooses the Worker buddy for one micro task within its routing bounds, in fast or review mode; each choice is one routing calculation. The console names it by its work alone, 路由 / Routing, without the word plane.
 _Avoid_: 工作面 / work plane (it reads as a name for all three planes), 执行面
 
 **维护面 / maintenance plane**:
-The Router's plane that classifies finished micro tasks into the domain tree and the task types and writes each buddy kind's evaluation from the recorded outcomes.
+The Router's plane that classifies finished micro tasks into the domain tree and the task types and writes each buddy kind's evaluation from the recorded outcomes. The console names it by its work alone, 维护 / Maintenance, without the word plane.
 
 **画像面 / profile plane**:
-The Router's plane that builds model profiles from public sources.
+The Router's plane that builds model profiles from public sources. The console names it by its work alone, 画像 / Profiles, without the word plane.
 
 **路由边界 / routing bounds**:
 The legal candidates a Router may choose from: the published, enabled and available buddies that satisfy the micro task's required capabilities and the user's pins and exclusions. The blackboard checks a Router's choice against these bounds only, never its judgment.
