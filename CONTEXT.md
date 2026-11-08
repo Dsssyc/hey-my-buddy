@@ -36,7 +36,7 @@ A participant, normally an agent, that acts on the blackboard in the Host, Worke
 _Avoid_: Buddy (for the product or the blackboard), peer Buddy; configuration, profile, model or template (for a buddy); 伙伴 (Chinese text keeps the word buddy, as it keeps Host, Worker, Router and harness)
 
 **同型 buddy / buddy kind**:
-The harness, model and reasoning effort of a buddy, without its provider. Buddies of one kind share one evaluation, so a change of provider keeps it and a change of harness does not. Developers use the word more than users do.
+The harness, model and reasoning effort of a buddy, without its provider. Buddies of one kind share one evaluation, so a change of provider keeps it and a change of harness does not. The console does not show the word: it names a buddy kind by its harness, model and reasoning effort.
 _Avoid_: buddy model, 型号 (for the kind; 型号 reads as a model)
 
 **推理强度 / reasoning effort**:
