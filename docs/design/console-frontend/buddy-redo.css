@@ -175,3 +175,69 @@ body{width:1440px;height:auto;min-height:1000px;overflow:visible;display:block;f
 .round4 .name-option .num{margin-left:auto}
 .round4 .name-option input{appearance:none;margin:0;width:14px;height:14px;border:1px solid var(--ink3);border-radius:50%;background:var(--surface)}
 .round4 .name-option input:checked{background:var(--ink);box-shadow:inset 0 0 0 3px var(--surface)}
+/* Fifth-round comparison graphics; all additions apply only to revised sheets. */
+.round5 .quant-bar{display:block;flex:none;overflow:visible}
+.round5 .quant-bar rect{stroke:none;rx:0;ry:0}
+.round5 .bar-track{fill:var(--line)}
+.round5 .bar-part.tone1{fill:var(--ink)}
+.round5 .bar-part.tone2{fill:var(--ink2)}
+.round5 .bar-part.tone3{fill:var(--ink3)}
+.round5 .bar-part.fail-part{fill:var(--fail)}
+.round5 .muted-bar .bar-part{fill:var(--line2)}
+.round5 .usage-plot,.round5 .answer-plot,.round5 .tool-plot,.round5 .concurrency-plot{display:flex;align-items:center;gap:12px}
+.round5 .usage-values{font-size:12px;white-space:nowrap;color:var(--ink2)}
+.round5 .concurrency-plot .control{width:64px}
+.round5 .compact-summary{display:flex;align-items:center;gap:28px;margin-bottom:16px}
+.round5 .compact-summary>span{display:inline-flex;align-items:center;gap:7px}
+.round5 .compact-summary b{font-size:12px;font-weight:500}
+.round5 .visual-records td{vertical-align:middle;padding-top:16px;padding-bottom:16px}
+.round5 .router-records th:nth-child(1){width:36%}
+.round5 .router-records th:nth-child(2){width:26%}
+.round5 .router-records th:nth-child(3){width:18%}
+.round5 .router-records th:nth-child(4){width:20%}
+.round5 .maintenance-records th:nth-child(1),.round5 .profile-records th:nth-child(1){width:28px}
+.round5 .maintenance-records th:nth-child(2){width:210px}
+.round5 .maintenance-records th:nth-child(3){width:100px}
+.round5 .profile-records th:nth-child(2){width:250px}
+.round5 .profile-records th:nth-child(3){width:190px}
+.round5 .time-range{display:flex;flex-direction:column;gap:4px}
+.round5 .record-error{font-size:12px;color:var(--fail);margin-top:10px}
+.round5 .usage-attempts th:nth-child(1){width:100px}
+.round5 .usage-attempts th:nth-child(2){width:100px}
+.round5 .tool-outcomes th:nth-child(1){width:260px}
+.round5 .tree li .actions{opacity:0;pointer-events:none}
+.round5 .tree li:hover>.actions,.round5 .tree li:focus-within>.actions,.round5 .tree li.preview-hover>.actions{opacity:1;pointer-events:auto}
+.round5 .tree li:hover,.round5 .tree li:focus-within,.round5 .tree li.preview-hover{background:var(--sunk)}
+.round5 .tree li{padding-right:12px}
+.round5 .tally-heading{display:flex;align-items:baseline;gap:12px;margin-bottom:16px}
+.round5 .tally-heading strong{font-size:18px;font-weight:500}
+.round5 .tally-row{display:flex;align-items:center;gap:24px;flex-wrap:wrap}
+.round5 .tally-labels{display:flex;align-items:center;gap:20px;font-size:12px}
+.round5 .tally-labels>span{display:inline-flex;align-items:center;gap:6px}
+.round5 .tally-labels b{font-weight:500;font-size:14px}
+.round5 .median-line{display:flex;align-items:center;gap:24px;margin:20px 0 28px}
+.round5 .median-line b{color:var(--ink2);font-size:12px;font-weight:400}
+.round5 .reference-evaluation .kind-summary{margin:0 0 28px}
+.round5 .rate-cell{display:flex;align-items:center;gap:8px}
+.round5 .evaluation-table td .rate-cell small{font-size:12px;color:var(--ink3);margin:0}
+.round5 .evaluation-table th:first-child{width:190px}
+.round5 .evaluation-table td{padding-top:18px;padding-bottom:18px}
+.round5 .evidence-inline{gap:16px;margin-top:8px;padding-top:24px;border-top:1px solid var(--line)}
+.round5 .evidence-inline b{font-weight:400}
+.round5 .prior-evidence{padding-top:20px;border-top:1px solid var(--line)}
+.round5 .prior-evidence h4{font-size:12px;color:var(--ink3);font-weight:400}
+.round5 .old-evidence-line{display:flex;align-items:center;gap:16px;margin:12px 0 8px}
+.round5 .old-evidence-line b{font-weight:400}
+.round5 .profile-position{font-size:16px;line-height:1.7;margin:28px 0 36px}
+.round5 .source-ref{font-size:12px;color:var(--ink3);border:0;margin-left:6px;white-space:nowrap}
+.round5 .profile-columns{display:grid;grid-template-columns:1fr 1fr;gap:48px;margin-bottom:40px}
+.round5 .profile-columns>section+section{border-left:1px solid var(--line);padding-left:32px}
+.round5 .profile-columns h3{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+.round5 .profile-sign{font-size:18px;font-weight:400;color:var(--ink2)}
+.round5 .profile-columns ul{list-style:none;padding:0}
+.round5 .profile-columns li{margin-bottom:20px;line-height:1.7}
+.round5 .profile-sources{display:flex;gap:24px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:20px}
+.round5 .evaluation-table .tip-anchor>.tip{left:auto;right:0}
+.round5 .tree:has(li:hover) li.preview-hover:not(:hover)>.actions,.round5 .tree:has(li:focus-within) li.preview-hover:not(:focus-within)>.actions{opacity:0;pointer-events:none}
+.round5 .tree:has(li:hover) li.preview-hover:not(:hover),.round5 .tree:has(li:focus-within) li.preview-hover:not(:focus-within){background:transparent}
+.round5 details:has(.quant-bar)::details-content{overflow:visible}
