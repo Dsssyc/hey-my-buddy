@@ -408,7 +408,8 @@ export const evaluationStatisticsSchema = z.object({
 export type EvaluationStatistics = z.infer<typeof evaluationStatisticsSchema>;
 export const kindEvaluationSchema = z.object({ harness: nonblankString, modelId: nonblankString,
   modelDisplayName: nonblankString, modelNames: z.array(modelServiceSchema), effort: nonblankString,
-  previousGroups: z.array(modelServiceSchema.extend({ modelId: nonblankString, modelDisplayName: nonblankString, since: dateString })),
+  previousGroups: z.array(z.object({ modelId: nonblankString, modelDisplayName: nonblankString,
+    names: z.array(modelServiceSchema.extend({ since: dateString })).min(1) })),
   summary: z.object({ text: z.string(), citations: z.array(z.object({ runId: nonblankString, title: z.string().nullable(), macroTaskId: z.string().nullable() })) }).nullable(),
   statistics: z.object({ overall: evaluationStatisticsSchema, byDomain: z.record(z.string(), evaluationStatisticsSchema),
     byDomainTaskType: z.record(z.string(), z.partialRecord(z.enum(TASK_TYPES), evaluationStatisticsSchema)),

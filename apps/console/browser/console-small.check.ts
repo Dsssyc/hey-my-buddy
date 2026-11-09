@@ -116,7 +116,7 @@ async function saveOnce(page: Page) {
   await open(page, "#buddies/catalog");
   await page.getByRole("button", { name: MODEL, exact: true }).click();
   const drawer = page.getByRole("region", { name: MODEL, exact: true });
-  await drawer.locator("[data-slot=model-profile]").getByRole("textbox", { name: /^模型备注/ }).fill("合成备注，保存后看提示怎样离开。");
+  await drawer.getByRole("spinbutton", { name: "并发上限", exact: true }).fill("3");
   const saveBar = page.getByRole("region", { name: "未保存的修改" });
   await saveBar.getByRole("button", { name: /^保存$/ }).click();
   await expect(notice(page)).toBeVisible();
@@ -156,7 +156,7 @@ for (const motion of ["no-preference", "reduce"] as const) test.describe(`succes
     await saveOnce(page);
     await page.waitForTimeout(1000);
     const drawer = page.getByRole("region", { name: MODEL, exact: true });
-    await drawer.locator("[data-slot=model-profile]").getByRole("textbox", { name: /^模型备注/ }).fill("再改一下，提示应收起。");
+    await drawer.getByRole("spinbutton", { name: "并发上限", exact: true }).fill("4");
     await expect(notice(page)).toHaveCount(0);
     await page.waitForTimeout(4500);
     await expect(notice(page)).toHaveCount(0);

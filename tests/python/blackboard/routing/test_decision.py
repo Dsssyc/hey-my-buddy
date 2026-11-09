@@ -599,7 +599,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertNotIn("policyCheck", decision["output"]["decision"])
         self.assertEqual(decision["policyCheck"], check)
 
-    def test_alternative_without_model_notes_completes_and_is_audited(self):
+    def test_alternative_completes_and_is_audited(self):
         board = self.board()
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY),
                   preferences=[{"buddyId": THIRD_BUDDY_ID, "mode": "prefer", "note": "prefer high"}])

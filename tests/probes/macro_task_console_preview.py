@@ -2757,11 +2757,14 @@ def kind_evaluation_views(domains: list[dict]) -> list[dict]:
         facts = model_views()
         connection.executemany("INSERT INTO models(model_id,display_name) VALUES(?,?)",
                                [(row["modelId"], row["displayName"]) for row in facts["models"]])
-        # One service used to point to a distinct model group that already has
-        # high-effort evidence. Its current correspondence below stays newer.
+        # A retired identity with no current service retains high-effort evidence.
+        # The current correspondence below stays newer.
+        previous_model_id = "synthetic-previous-codex"
+        connection.execute("INSERT INTO models(model_id,display_name) VALUES(?,?)",
+                           (previous_model_id, "Earlier Codex"))
         connection.execute("INSERT INTO model_correspondences VALUES(?,?,?,?,?,?,?,?,?)",
                            ("synthetic-earlier-codex", "codex", "openai", "gpt-5-codex",
-                            MODEL_IDS["gpt-5-mini"], instant(0, 0), "user", None, None))
+                            previous_model_id, instant(0, 0), "user", None, None))
         connection.executemany(
             "INSERT INTO model_correspondences VALUES(?,?,?,?,?,?,?,?,?)",
             [(row["correspondenceId"], row["harness"], row["provider"], row["model"], row["modelId"],
@@ -2810,7 +2813,7 @@ def kind_evaluation_views(domains: list[dict]) -> list[dict]:
                           "durations": [540], "usage": (2400, 600, 360)}
                 _add_sample(connection, kind, sample, None)
                 _add_sample(connection, kind, sample, cell)
-        _add_sample(connection, ("codex", MODEL_IDS["gpt-5-mini"], "high"),
+        _add_sample(connection, ("codex", previous_model_id, "high"),
                     {"success": True, "first_pass": True, "rework": 0,
                      "durations": [720], "usage": (3000, 400, 500)}, None)
         connection.execute("INSERT INTO buddy_infrastructure_failures VALUES('dsh','deepseek-official',"

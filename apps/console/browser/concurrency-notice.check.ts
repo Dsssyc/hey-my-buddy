@@ -5,18 +5,18 @@ import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApar
 
 const MODEL = "codex / openai / gpt-5-codex";
 const languages = [
-  { locale: "zh-CN", copy: zhCommon.concurrencyNotice, limit: "并发上限", note: "模型备注" },
-  { locale: "en-US", copy: enCommon.concurrencyNotice, limit: "Concurrency limit", note: "Model note" },
+  { locale: "zh-CN", copy: zhCommon.concurrencyNotice, limit: "并发上限" },
+  { locale: "en-US", copy: enCommon.concurrencyNotice, limit: "Concurrency limit" },
 ];
 
-for (const { locale, copy, limit, note } of languages) for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
+for (const { locale, copy, limit } of languages) for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
   test.describe(`concurrency notice in ${locale} at ${width}px in ${theme}`, () => {
     test.use({ locale, viewport: { width, height: 900 }, reducedMotion: "reduce" });
     test.beforeEach(async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     });
 
-    test("keeps the full notice readable below its input and before the note", async ({ page }) => {
+    test("keeps the full notice readable below its input and before the profile", async ({ page }) => {
       await open(page, "#buddies/catalog");
       await page.getByRole("button", { name: MODEL, exact: true }).click();
       const drawer = page.getByRole("region", { name: MODEL, exact: true });
@@ -25,8 +25,8 @@ for (const { locale, copy, limit, note } of languages) for (const width of [1280
       const body = notice.getByText(copy.body, { exact: true });
       const input = drawer.getByRole("spinbutton", { name: limit });
       const occupancy = drawer.locator('[id$="-occupancy"]');
-      const noteInput = drawer.locator("[data-slot=model-profile]").getByRole("textbox", { name: note, exact: true });
-      // A valid edit already shows the model's save-before-building line. Invalidity alone must not move the controls or note.
+      const profile = drawer.locator("[data-slot=model-profile]");
+      // A valid edit already shows the model's save-before-building line. Invalidity alone must not move the controls or profile.
       await input.fill("3");
       await notice.scrollIntoViewIfNeeded();
       await expect(heading).toBeVisible();
@@ -36,15 +36,15 @@ for (const { locale, copy, limit, note } of languages) for (const width of [1280
       await expect(input).toHaveAccessibleDescription(new RegExp(copy.title));
       await expectWholeAndApart(notice, notice.locator("h4, p"));
       await expectTextUncut(notice.locator("h4, p"));
-      const [inputBox, occupancyBox, noticeBox, noteBox] = await Promise.all([input.boundingBox(), occupancy.boundingBox(), notice.boundingBox(), noteInput.boundingBox()]);
+      const [inputBox, occupancyBox, noticeBox, profileBox] = await Promise.all([input.boundingBox(), occupancy.boundingBox(), notice.boundingBox(), profile.boundingBox()]);
       expect(inputBox!.y + inputBox!.height).toBeLessThanOrEqual(noticeBox!.y);
-      expect(noticeBox!.y + noticeBox!.height).toBeLessThanOrEqual(noteBox!.y);
+      expect(noticeBox!.y + noticeBox!.height).toBeLessThanOrEqual(profileBox!.y);
       await input.fill("0");
       await expect(input).toHaveAttribute("aria-invalid", "true");
       const error = occupancy.getByRole("alert");
       await expect(error).toBeVisible();
-      const [invalidInput, invalidOccupancy, invalidNotice, invalidNote] = await Promise.all([input.boundingBox(), occupancy.boundingBox(), notice.boundingBox(), noteInput.boundingBox()]);
-      for (const [before, after] of [[inputBox, invalidInput], [occupancyBox, invalidOccupancy], [noticeBox, invalidNotice], [noteBox, invalidNote]]) {
+      const [invalidInput, invalidOccupancy, invalidNotice, invalidProfile] = await Promise.all([input.boundingBox(), occupancy.boundingBox(), notice.boundingBox(), profile.boundingBox()]);
+      for (const [before, after] of [[inputBox, invalidInput], [occupancyBox, invalidOccupancy], [noticeBox, invalidNotice], [profileBox, invalidProfile]]) {
         expect(Math.abs(after!.x - before!.x)).toBeLessThanOrEqual(0.5);
         expect(Math.abs(after!.y - before!.y)).toBeLessThanOrEqual(0.5);
       }

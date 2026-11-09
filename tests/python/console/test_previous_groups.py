@@ -37,6 +37,7 @@ class PreviousGroupsTests(BoardTestCase):
                                  (self.unsampled, '2026-11-01T04:00:00Z'),
                                  (self.current, '2026-11-01T05:00:00Z')):
                 append_correspondence(db, self.first, model, since, 'user')
+            append_correspondence(db, self.second, self.first_old, '2026-11-01T05:30:00Z', 'user')
             append_correspondence(db, self.second, self.current, '2026-11-01T06:00:00Z', 'user')
             append_correspondence(db, self.other_harness, self.current, '2026-11-01T07:00:00Z', 'user')
 
@@ -61,26 +62,49 @@ class PreviousGroupsTests(BoardTestCase):
         return row
 
     @staticmethod
-    def expected(service, model, display_name, since):
+    def name(service, since):
         return dict(zip(('harness', 'provider', 'model'), service)) | {
-            'modelId': model, 'modelDisplayName': display_name, 'since': since,
+            'since': since,
         }
+
+    @staticmethod
+    def expected(model, display_name, names):
+        return {'modelId': model, 'modelDisplayName': display_name, 'names': names}
 
     def test_current_names_show_sampled_old_targets_once_and_keep_statistics_separate(self):
         current_off = self.groups('dsh', self.current, 'off')
         self.assertEqual(current_off['previousGroups'], [
-            self.expected(self.second, self.second_old, 'second-name', '2026-11-01T06:00:00Z'),
-            self.expected(self.first, self.first_old, 'first-name', '2026-11-01T05:00:00Z'),
-            self.expected(self.first, self.middle, 'Middle generation', '2026-11-01T05:00:00Z'),
+            self.expected(self.first_old, 'first-name', [
+                self.name(self.second, '2026-11-01T06:00:00Z'),
+                self.name(self.first, '2026-11-01T05:00:00Z'),
+            ]),
+            self.expected(self.second_old, 'second-name', [
+                self.name(self.second, '2026-11-01T06:00:00Z'),
+            ]),
+            self.expected(self.middle, 'Middle generation', [
+                self.name(self.first, '2026-11-01T05:00:00Z'),
+            ]),
         ])
         self.assertEqual(current_off['statistics']['overall']['samples'], 0)
         self.assertEqual(self.groups('dsh', self.first_old, 'off')['statistics']['overall']['samples'], 1)
         self.assertEqual(self.groups('dsh', self.current, 'low')['previousGroups'], [
-            self.expected(self.first, self.middle, 'Middle generation', '2026-11-01T05:00:00Z'),
+            self.expected(self.middle, 'Middle generation', [
+                self.name(self.first, '2026-11-01T05:00:00Z'),
+            ]),
         ])
         self.assertEqual(self.groups('codex', self.current, 'off')['previousGroups'], [
-            self.expected(self.other_harness, self.other_old, 'third-name', '2026-11-01T07:00:00Z'),
+            self.expected(self.other_old, 'third-name', [
+                self.name(self.other_harness, '2026-11-01T07:00:00Z'),
+            ]),
         ])
+
+    def test_models_still_current_under_other_names_are_not_previous(self):
+        with self.board_.store.db.write() as db:
+            append_correspondence(db, self.second, self.first_old, '2026-11-01T08:00:00Z', 'user')
+            append_correspondence(db, self.other_harness, self.middle,
+                                  '2026-11-01T09:00:00Z', 'user')
+        self.assertEqual(self.groups('dsh', self.current, 'off')['previousGroups'], [])
+        self.assertEqual(self.groups('dsh', self.current, 'low')['previousGroups'], [])
 
     def test_undo_changes_current_names_and_excludes_deleted_history(self):
         with self.board_.store.db.write() as db:
@@ -90,9 +114,18 @@ class PreviousGroupsTests(BoardTestCase):
                 self.first,
             )
         self.assertEqual(self.groups('dsh', self.current, 'off')['previousGroups'], [
-            self.expected(self.second, self.second_old, 'second-name', '2026-11-01T06:00:00Z'),
+            self.expected(self.first_old, 'first-name', [
+                self.name(self.second, '2026-11-01T06:00:00Z'),
+            ]),
+            self.expected(self.second_old, 'second-name', [
+                self.name(self.second, '2026-11-01T06:00:00Z'),
+            ]),
         ])
         self.assertEqual(self.groups('dsh', self.unsampled, 'off')['previousGroups'], [
-            self.expected(self.first, self.first_old, 'first-name', '2026-11-01T04:00:00Z'),
-            self.expected(self.first, self.middle, 'Middle generation', '2026-11-01T04:00:00Z'),
+            self.expected(self.first_old, 'first-name', [
+                self.name(self.first, '2026-11-01T04:00:00Z'),
+            ]),
+            self.expected(self.middle, 'Middle generation', [
+                self.name(self.first, '2026-11-01T04:00:00Z'),
+            ]),
         ])

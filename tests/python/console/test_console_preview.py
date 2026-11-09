@@ -102,9 +102,9 @@ class LeadStopPreviewTests(unittest.TestCase):
                             if (row['harness'], row['provider'], row['model'])
                             == ('codex', 'openai', 'gpt-5-codex'))
         self.assertEqual(codex['previousGroups'], [{
-            'harness': 'codex', 'provider': 'openai', 'model': 'gpt-5-codex',
-            'modelId': preview.MODEL_IDS['gpt-5-mini'], 'modelDisplayName': 'gpt-5-mini',
-            'since': current_name['createdAt'],
+            'modelId': 'synthetic-previous-codex', 'modelDisplayName': 'Earlier Codex',
+            'names': [{'harness': 'codex', 'provider': 'openai', 'model': 'gpt-5-codex',
+                       'since': current_name['createdAt']}],
         }])
         # Kinds without samples still use the service's empty-statistics projection.
         empty = next(row for row in rows if row['modelId'] == preview.MODEL_IDS['gpt-5-mini']

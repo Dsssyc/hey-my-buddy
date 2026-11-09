@@ -62,30 +62,34 @@ def _previous_groups(connection) -> dict[tuple[str, str, str], list[dict]]:
     groups = {}
     seen = set()
     for row in connection.execute(
+        'WITH current AS (' + CURRENT_CORRESPONDENCES + ') '
         'SELECT current.harness,current.provider,current.model,'
         ' current.model_id AS current_model_id,current.created_at AS since,'
         ' earlier.model_id,models.display_name,statistics.effort'
-        ' FROM (' + CURRENT_CORRESPONDENCES + ') current'
+        ' FROM current'
         ' JOIN model_correspondences earlier ON earlier.harness=current.harness'
         ' AND earlier.provider=current.provider AND earlier.model=current.model'
         ' AND earlier.rowid<current.correspondence_order AND earlier.model_id<>current.model_id'
         ' JOIN kind_statistics statistics ON statistics.harness=current.harness'
         ' AND statistics.model_id=earlier.model_id AND statistics.samples>0'
         ' JOIN models ON models.model_id=earlier.model_id'
+        ' WHERE NOT EXISTS (SELECT 1 FROM current active WHERE active.model_id=earlier.model_id)'
         ' ORDER BY current.created_at DESC,current.correspondence_order DESC,earlier.rowid DESC'
     ):
-        name_and_old_model = (row['harness'], row['provider'], row['model'],
-                              row['model_id'], row['effort'])
+        kind = (row['harness'], row['current_model_id'], row['effort'])
+        name_and_old_model = (kind, row['provider'], row['model'], row['model_id'])
         if name_and_old_model in seen:
             continue
         seen.add(name_and_old_model)
-        kind = (row['harness'], row['current_model_id'], row['effort'])
-        groups.setdefault(kind, []).append({
+        old_models = groups.setdefault(kind, {})
+        group = old_models.setdefault(row['model_id'], {
+            'modelId': row['model_id'], 'modelDisplayName': row['display_name'], 'names': [],
+        })
+        group['names'].append({
             'harness': row['harness'], 'provider': row['provider'], 'model': row['model'],
-            'modelId': row['model_id'], 'modelDisplayName': row['display_name'],
             'since': row['since'],
         })
-    return groups
+    return {kind: list(old_models.values()) for kind, old_models in groups.items()}
 
 
 def _kind_evaluations(connection) -> list[dict]:

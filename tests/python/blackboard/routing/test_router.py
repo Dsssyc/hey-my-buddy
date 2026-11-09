@@ -116,13 +116,14 @@ class RouterContractTests(unittest.TestCase):
         for key in facts:
             self.assertIn('"' + key + '":', prompt)
         self.assertIn('"usage":', prompt)
-        self.assertIn("Router protocol version 18", prompt)
+        self.assertIn("Router protocol version 19", prompt)
 
     def test_both_instruction_modes_name_usage_cost_and_effort_cost(self):
         for mode in ("fast", "review"):
             with self.subTest(mode=mode):
                 prompt = router.render_prompt({"routingMode": mode, "task": "fix parser", "buddies": []})
                 text = " ".join(prompt.split())
+                self.assertIn("Router protocol version 19", text)
                 self.assertIn("Token usage statistics are cost evidence.", text)
                 self.assertIn("Higher reasoning effort spends more quota and is slower;", text)
 

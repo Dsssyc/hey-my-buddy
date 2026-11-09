@@ -287,11 +287,12 @@ class RolePromptTests(unittest.TestCase):
         self.assertNotIn("hostId", role)
 
     def test_router_role_and_full_prompt_hashes_are_fixed(self):
+        self.assertNotIn("model notes", resource_path("roles.router").read_text(encoding="utf-8").lower())
         self.assertEqual(hashlib.sha256(resource_path("roles.router").read_bytes()).hexdigest(),
-                         "d59f94e056525ea07f0de2cfee0a843678eb81431e3ee055580f099816f7f841")
-        hashes = {"fast": "c9e0639db8a34b4a072fd84ec393f7af701e5ca77be2cc5527e368abe0145e3a",
-                  "review": "9fcad9c4fa2dc089e11058685a8115054350496f4e4c66487d94309f8c720f21",
-                  "maintain": "eaf7aa1c5efd6188b1030cfc097d7bc854be627de1144d609b8d30a9cd6a2b13"}
+                         "441c0ed9ba58ed0c714f9674832e7c98a93160a6d065787f87ed19e5481a1279")
+        hashes = {"fast": "470ed4644d0dc5143a555a20ed9e3a9d8b34dd0fd871b5df8fdad86a4dbfb233",
+                  "review": "5c21638653f7604d4e50a46ac6e05693ab56e309740cb031ca00c1c41c6499b7",
+                  "maintain": "954b11c665c9b82fdf40fe1755d9d4c37740f61c79a5bc92d39a3bd22942fbc1"}
         for mode, expected in hashes.items():
             with self.subTest(mode=mode):
                 text = (router.MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(

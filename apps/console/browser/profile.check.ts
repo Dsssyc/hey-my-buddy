@@ -62,7 +62,7 @@ for (const locale of ["en-US", "zh-CN"]) for (const width of [1440, 390]) for (c
 
 test.describe("model profile edits", () => {
   test.use({ locale: "en-US", viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
-  test("publishes notes by model and stages map, undo and generation with their distinct payloads", async ({ page }) => {
+  test("stages map, undo and generation with their distinct payloads", async ({ page }) => {
     const publications: Record<string, unknown>[] = [];
     let undoId = "";
     await page.route("**/api/console", async route => {
@@ -80,7 +80,6 @@ test.describe("model profile edits", () => {
     await open(page, "#buddies/catalog");
     await page.getByRole("button", { name: CODEX, exact: true }).click();
     const profile = page.locator("[data-slot=model-profile]");
-    await profile.getByRole("textbox", { name: "Model note", exact: true }).fill("A shared model note");
     const correspondence = profile.locator("[data-slot=model-correspondence]").first();
     const target = correspondence.getByRole("combobox", { name: /^Model for/ });
     const options = await target.locator("option").evaluateAll(nodes => nodes.map(node => ({ value: (node as HTMLOptionElement).value, text: node.textContent })));
@@ -90,8 +89,7 @@ test.describe("model profile edits", () => {
     await expect(correspondence).toContainText("Will map to gpt-5-mini when saved");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect.poll(() => publications.length).toBe(1);
-    expect(publications[0]).toMatchObject({ modelNoteChanges: [{ modelId: expect.any(String), text: "A shared model note" }], modelCorrespondenceChanges: [{ harness: "codex", provider: "openai", model: "gpt-5-codex", action: "map", modelId: other.value }] });
-    expect(publications[0]).not.toHaveProperty("modelServiceNoteChanges");
+    expect(publications[0]).toMatchObject({ modelCorrespondenceChanges: [{ harness: "codex", provider: "openai", model: "gpt-5-codex", action: "map", modelId: other.value }] });
     // Reload discards the deliberately refused synthetic save and starts another draft.
     await page.reload();
     await expect(profile).toBeVisible();

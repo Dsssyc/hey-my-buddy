@@ -110,17 +110,18 @@ describe("kind evaluation history boundary", () => {
   const usage = { samples: 0, medianInputTokens: null, medianCachedInputTokens: null, medianOutputTokens: null };
   const statistics = { samples: 0, successes: 0, failures: 0, firstPasses: 0, reworkRounds: 0,
     firstPassRate: null, failureRate: null, medianDeliverySeconds: null, usage };
-  const group = { harness: "codex", provider: "openai", model: "sol", modelId: "older-group",
-    modelDisplayName: "Earlier Sol", since: "2026-10-20T10:00:00Z" };
+  const group = { modelId: "older-group", modelDisplayName: "Earlier Sol",
+    names: [{ harness: "codex", provider: "openai", model: "sol", since: "2026-10-20T10:00:00Z" }] };
   const evaluation = { harness: "codex", modelId: "current-group", modelDisplayName: "Current Sol",
     modelNames: [{ harness: "codex", provider: "openai", model: "sol" }], effort: "high",
     previousGroups: [group], summary: null,
     statistics: { overall: statistics, byDomain: {}, byDomainTaskType: {}, infrastructureFailures: [] } };
-  it("keeps the earlier group and requires its flat identity and timestamp", () => {
+  it("keeps the earlier group and requires its model identity and connecting names", () => {
     expect(kindEvaluationSchema.parse(evaluation).previousGroups).toEqual([group]);
     expect(kindEvaluationSchema.parse({ ...evaluation, previousGroups: [] }).previousGroups).toEqual([]);
     for (const bad of [undefined, null, {}, [{ ...group, modelId: "" }],
-      [{ ...group, since: "not-a-date" }], [{ ...group, modelDisplayName: null }]]) {
+      [{ ...group, names: [] }], [{ ...group, names: [{ ...group.names[0], since: "not-a-date" }] }],
+      [{ ...group, names: [{ ...group.names[0], provider: "" }] }], [{ ...group, modelDisplayName: null }]]) {
       expect(kindEvaluationSchema.safeParse({ ...evaluation, previousGroups: bad }).success).toBe(false);
     }
   });
