@@ -6,6 +6,7 @@ import { App } from "../App";
 import { useEditor } from "../use-editor";
 import { useProfileActions } from "./use-profile-actions";
 import { ApiError, errorText } from "../api";
+import { setLanguageChoice } from "../i18n";
 import type { ProfileRun } from "../types";
 import { fixture, snapshot, MEDIUM_ID } from "./roles.testing";
 
@@ -195,6 +196,28 @@ describe("evaluation correspondence drafts", () => {
     await userEvent.click(within(detail()).getByRole("link", { name: "领域评价" }));
     await userEvent.click(within(detail()).getByRole("button", { name: "模型操作" }));
     expect(screen.getAllByRole("menuitem").every(item => item.getAttribute("data-disabled") !== null)).toBe(true);
+    expect(f.operations).toEqual([]);
+  });
+});
+
+describe("the language's list separators in the evaluation detail", () => {
+  afterEach(() => setLanguageChoice("zh"));
+  it("joins the names row and the providers with the language's own list form", async () => {
+    const data = state();
+    const source = data.modelCorrespondences.find(row => row.modelId === identity.modelId)!;
+    const alias = { ...source, model: "sonnet-latest", correspondenceId: "alias-current", source: "user" as const };
+    const other = { ...source, provider: "bedrock", model: "sonnet-bedrock", correspondenceId: "alias-bedrock", source: "user" as const };
+    data.modelCorrespondences.push(alias, other);
+    data.models.find(row => row.modelId === identity.modelId)!.names.push(alias, other);
+    data.kindEvaluations![0].modelNames.push(alias, other);
+    data.buddies.push({ ...data.buddies.find(buddy => buddy.buddyId === MEDIUM_ID)!, buddyId: "claude:bedrock:sonnet-bedrock:medium", label: "sonnet-bedrock · medium", provider: "bedrock", model: "sonnet-bedrock" });
+    const f = fixture(data); await open(f);
+    const names = () => document.querySelector<HTMLElement>('[data-slot="evaluation-names"]')!;
+    expect(names().textContent).toContain("claude-sonnet-5、sonnet-latest、sonnet-bedrock");
+    expect(detail().textContent).toContain("anthropic、bedrock 共用");
+    act(() => setLanguageChoice("en"));
+    expect(names().textContent).toContain("claude-sonnet-5, sonnet-latest, and sonnet-bedrock");
+    expect(detail().textContent).toContain("Shared by anthropic and bedrock");
     expect(f.operations).toEqual([]);
   });
 });

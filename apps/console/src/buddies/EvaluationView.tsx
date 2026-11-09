@@ -10,7 +10,7 @@ import { StateMark } from "@/components/ui/state-mark";
 import type { ConsoleApi } from "../api";
 import { harnessName } from "../buddy-display";
 import { modelServiceKey, modelServices } from "../console-data";
-import { formatNumber } from "../i18n/format";
+import { formatList, formatNumber } from "../i18n/format";
 import { reasonText } from "../i18n/reason";
 import type { EvaluationStatistics, KindEvaluation, Model, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
@@ -103,7 +103,7 @@ export function EvaluationView({ snapshot, editor, api, refresh, mutationsAvaila
     </aside>
     <ScrollArea className="min-h-0 min-w-0 flex-1"><div data-slot="evaluation-detail" className="min-w-0 px-8 pt-6 pb-10">
       {selected && selectedModel ? <>
-        <header className="flex flex-wrap items-baseline gap-x-5 gap-y-2"><h2 className="text-lg font-semibold">{selected.harness} / {selected.modelDisplayName} / {selected.effort}</h2>{providers.length > 0 && <span className="text-xs text-ink3">{t("evaluation.providers", { names: providers.join(", ") })}</span>}</header>
+        <header className="flex flex-wrap items-baseline gap-x-5 gap-y-2"><h2 className="text-lg font-semibold">{selected.harness} / {selected.modelDisplayName} / {selected.effort}</h2>{providers.length > 0 && <span className="text-xs text-ink3">{t("evaluation.providers", { names: formatList(providers) })}</span>}</header>
         <nav aria-label={t("evaluation.detailTabs")} className="mb-6 mt-5 flex gap-6 border-b text-sm">{[false, true].map(profile => <a key={String(profile)} href={buddyHash({ view: "evaluation", evaluation: selected, ...(profile ? { profile: true } : {}) })} aria-current={!!inProfile === profile ? "page" : undefined} className="relative pb-3 text-ink2 outline-none aria-[current=page]:text-foreground aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-0 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-foreground focus-visible:ring-2 focus-visible:ring-ring" onClick={event => { event.preventDefault(); select(selected, profile); }}>{t(profile ? "modelProfile.title" : "evaluation.domains")}</a>)}</nav>
         {inProfile ? <ModelPortrait model={selectedModel}>
           <ActionButton lock={actions.profileLock} disabled={selectedModel.latestProfileRun?.state === "running"} onClick={() => setConfirmation([selectedModel])}>{t(selectedModel.latestProfileRun?.state === "running" ? "modelProfile.state.running" : selectedModel.profile ? "modelProfile.rebuild" : "modelProfile.build")}</ActionButton>

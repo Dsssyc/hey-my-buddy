@@ -7,6 +7,7 @@ import { Hint } from "@/components/hint";
 import { UnsavedMark } from "@/components/ui/state-mark";
 import { modelServiceKey } from "../console-data";
 import { stageModelCorrespondence } from "../draft";
+import { formatList } from "../i18n/format";
 import type { ConsoleView, KindEvaluation, ModelCorrespondenceChange } from "../types";
 import type { Editor } from "../use-editor";
 
@@ -40,7 +41,7 @@ export function EvaluationNames({ evaluation, data, editor }: { evaluation: Kind
     setIntent(null);
   }
   return <div data-slot="evaluation-names" className="border-t py-4 text-xs">
-    <div className="flex items-center gap-3"><span className="text-ink3">{t("evaluation.names")}</span><span className="min-w-0 flex-1 wrap-anywhere">{names.join(", ")}</span>
+    <div className="flex items-center gap-3"><span className="text-ink3">{t("evaluation.names")}</span><span className="min-w-0 flex-1 wrap-anywhere">{formatList(names)}</span>
       {pending.length > 0 && <UnsavedMark label={t("unsaved")} />}
       <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="sm" className="text-lg" aria-label={t("evaluation.modelActions")}>…</Button></DropdownMenuTrigger>
         <DropdownMenuContent>{(["generation", "map", "undo"] as const).map(action => <DropdownMenuItem key={action} disabled={!!lock || !entries.length || action === "undo" && !entries.some(row => row.canUndo)} onSelect={() => begin(action)}>{actionLabel(action)}</DropdownMenuItem>)}</DropdownMenuContent>
