@@ -268,3 +268,10 @@ body{width:1440px;height:auto;min-height:1000px;overflow:visible;display:block;f
 .round6 .profile-records th:nth-child(3){width:230px}
 .round6 .copy-id{border:0;color:var(--ink3);border-radius:4px}
 .round6 .copy-id:hover,.round6 .copy-id:focus-visible{background:var(--past-wash);color:var(--ink)}
+/* Round-seven geometry and baseline corrections; the domain palette stays unchanged. */
+.round7 .branch-node{width:max-content}
+.round7 .branch-more:empty{display:none}
+.round7 .recent-failures td{vertical-align:baseline}
+.round7 .recent-failures .state{align-items:baseline}
+.round7 .failure-task-cell{display:inline-flex;align-items:baseline;gap:8px;vertical-align:baseline}
+.round7 .answer-plot>.num,.round7 .tool-plot>.num{color:var(--ink2)}

@@ -1,5 +1,5 @@
 /* Local interaction study for the static maintenance draft; no service or model calls. */
-(() => {
+(async () => {
   const stage = document.querySelector('.branch-stage');
   if (!stage) return;
   const {nodes, labels} = JSON.parse(document.getElementById('branch-data').textContent);
@@ -22,7 +22,7 @@
   const collapsed = new Set(nodes.filter(n => n.collapsed).map(n => n.id));
   const ns = 'http://www.w3.org/2000/svg';
   const controls = new Map(), strokes = new Map(), links = new Map();
-  let active = stage.dataset.preview, current, frame, timer;
+  let active = null, current, frame, timer;
   function svg(tag, cls, node) {
     const e = document.createElementNS(ns, tag);
     e.setAttribute('class', `${cls} branch-group-${node.group < 0 ? 'root' : node.group + 1}`);
@@ -56,23 +56,37 @@
   function layout() {
     let leaf = 0;
     const result = new Map();
+    // Measure the actual label and count, including a collapsed child-count suffix.
+    const lengths = new Map();
+    for (const node of byId.values()) {
+      const button = controls.get(node.id);
+      button.querySelector('.branch-more').textContent = collapsed.has(node.id) && node.children.length ? `＋${node.children.length}` : '';
+      lengths.set(node.id, Math.ceil(button.getBoundingClientRect().width + 24));
+    }
     function visit(node) {
       const children = collapsed.has(node.id) ? [] : node.children;
       const ys = children.map(id => visit(byId.get(id)));
-      const y = ys.length ? (ys[0] + ys[ys.length - 1]) / 2 : 64 + leaf++ * 88;
-      result.set(node.id, {x:16 + node.depth * 240, y, opacity:1});
+      const y = ys.length ? (ys[0] + ys[ys.length - 1]) / 2 : 48 + leaf++ * 44;
+      // Forks need more room than a one-child continuation. Large fans grow locally.
+      const gap = ys.length > 1 ? Math.max(144, (ys[ys.length - 1] - ys[0]) * .45) : 72;
+      result.set(node.id, {x:0, y, length:lengths.get(node.id), gap, opacity:1});
       return y;
     }
     visit(root);
-    // Hidden descendants converge on the closest visible ancestor during a fold.
+    function position(node, x) {
+      const point = result.get(node.id); point.x=x;
+      if(!collapsed.has(node.id)) node.children.forEach(id => position(byId.get(id),x+point.length+point.gap));
+    }
+    position(root,16);
+    // Hidden descendants converge on the parent's right-hand junction during a fold.
     function hide(node, ancestor) {
-      const point = result.get(node.id) ?? {...ancestor, opacity:0};
+      const point = result.get(node.id) ?? {x:ancestor.x+ancestor.length,y:ancestor.y,length:0,gap:72,opacity:0};
       if (!result.has(node.id)) result.set(node.id, point);
       node.children.forEach(id => hide(byId.get(id), point));
     }
     hide(root, result.get(root.id));
-    result.height = Math.max(200, 64 + Math.max(0, leaf - 1) * 88 + 80);
-    result.width = 32 + Math.max(...[...byId.values()].map(n => n.depth)) * 240 + 200;
+    result.height = Math.max(160, 48 + Math.max(0, leaf - 1) * 44 + 48);
+    result.width = 16 + Math.max(...[...result.values()].filter(p=>p.opacity===1).map(p=>p.x+p.length));
     return result;
   }
   function paint(points, complete = true) {
@@ -88,11 +102,11 @@
       button.querySelector('.branch-more').textContent = collapsed.has(node.id) && node.children.length ? `＋${node.children.length}` : '';
       if (node.children.length) button.setAttribute('aria-expanded', !collapsed.has(node.id));
       button.setAttribute('aria-label', `${node.name}, ${node.count} ${labels.tasks}${node.children.length ? ', ' + (collapsed.has(node.id) ? labels.expand : labels.collapse) : ''}`);
-      for (const [key,value] of Object.entries({x1:point.x,y1:point.y,x2:point.x+200,y2:point.y,opacity:point.opacity})) branch.setAttribute(key,value);
+      for (const [key,value] of Object.entries({x1:point.x,y1:point.y,x2:point.x+point.length,y2:point.y,opacity:point.opacity})) branch.setAttribute(key,value);
       if (node.parent !== null) {
-        const parent = points.get(node.parent), from = parent.x + 200, middle = (from + point.x) / 2;
+        const parent = points.get(node.parent), from = parent.x + parent.length, gap = point.x - from;
         const path = links.get(node.id);
-        path.setAttribute('d', `M${from} ${parent.y} C${middle} ${parent.y},${middle} ${point.y},${point.x} ${point.y}`);
+        path.setAttribute('d', `M${from} ${parent.y} C${from+gap*.38} ${parent.y+(point.y-parent.y)*.28},${point.x-gap*.35} ${point.y},${point.x} ${point.y}`);
         path.setAttribute('opacity',point.opacity);
       }
     }
@@ -110,9 +124,9 @@
       const eased = progress * progress * (3 - 2 * progress), points = new Map();
       for (const node of byId.values()) {
         const a=from.get(node.id), b=target.get(node.id);
-        points.set(node.id,{x:a.x+(b.x-a.x)*eased,y:a.y+(b.y-a.y)*eased,opacity:a.opacity+(b.opacity-a.opacity)*eased});
+        points.set(node.id,{x:a.x+(b.x-a.x)*eased,y:a.y+(b.y-a.y)*eased,length:a.length+(b.length-a.length)*eased,opacity:a.opacity+(b.opacity-a.opacity)*eased});
       }
-      points.height=from.height+(target.height-from.height)*eased;points.width=target.width;
+      points.height=from.height+(target.height-from.height)*eased;points.width=from.width+(target.width-from.width)*eased;
       current=points;paint(points,progress===1);
       if(progress<1) frame=requestAnimationFrame(step);
     }
@@ -143,7 +157,7 @@
   function placePopover() {
     if(!active || popover.hidden || !current) return;
     const point=current.get(active), width=popover.offsetWidth, height=popover.offsetHeight;
-    popover.style.left=`${Math.max(8,Math.min(point.x+216-viewport.scrollLeft,stage.clientWidth-width-8))}px`;
+    popover.style.left=`${Math.max(8,Math.min(point.x+point.length+16-viewport.scrollLeft,stage.clientWidth-width-8))}px`;
     popover.style.top=`${Math.max(8,Math.min(point.y+18,current.height-height-8))}px`;
   }
   function clear() {
@@ -170,5 +184,6 @@
     }
   });
   viewport.addEventListener('scroll',placePopover);window.addEventListener('resize',()=>{paint(current);placePopover()});
-  current=layout();paint(current);activate(active);stage.dataset.ready='true';
+  await document.fonts.ready;
+  current=layout();paint(current);clear();stage.dataset.ready='true';
 })();
