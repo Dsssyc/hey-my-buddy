@@ -138,6 +138,10 @@ export default {
     lost: "连接中断",
     retry: "重试连接",
   },
+  runtimeUpdated: {
+    message: "控制台已更新，刷新后使用新版本",
+    refresh: "刷新",
+  },
   reminders: {
     overdue: "已超过预期",
     possiblyStuck: "可能卡住",

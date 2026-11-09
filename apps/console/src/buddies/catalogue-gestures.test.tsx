@@ -137,10 +137,10 @@ describe("what opens and closes", () => {
     await user.click(effortCell("medium"));
     const row = modelButton(identity);
     expect(row.getAttribute("aria-expanded")).toBe("true");
-    expect(row.querySelector("[data-slot=disclosure]")!.getAttribute("data-state")).toBe("open");
+    expect(row.querySelector("[data-slot=disclosure]")).toBeNull();
     await user.click(row);
     expect(row.getAttribute("aria-expanded")).toBe("false");
-    expect(row.querySelector("[data-slot=disclosure]")!.getAttribute("data-state")).toBe("closed");
+    expect(row.querySelector("[data-slot=disclosure]")).toBeNull();
     expect(catalogue().querySelector("[data-slot=model-drawer]")).toBeNull();
   });
 });

@@ -2896,6 +2896,7 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
     routers = router_records(buddies)
     return {
         "csrfToken": SYNTHETIC_CSRF,
+        "runtimeContentId": "synthetic-preview-runtime",
         "eventCursor": state.cursor if state is not None else FIXTURES["head"],
         "consoleAccess": {"requireLogin": False, "revision": 0, "sessions": []},
         "reminderSettings": {"silenceSeconds": 900, "revision": 1, "updatedAt": instant(0, 0)},

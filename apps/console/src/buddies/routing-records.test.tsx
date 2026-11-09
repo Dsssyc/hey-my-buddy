@@ -57,5 +57,14 @@ describe("routing records", () => {
     expect(screen.getByRole("link").getAttribute("href")).toBe("#tasks/run%3Aroot/child");
     await user.click(screen.getByRole("button", { name: "复制编号" })); expect(screen.getByRole("status").textContent).toBe("复制失败");
   });
+  it("keeps every recent failure in a focusable newest-first scroll region", () => {
+    const recentFailures = Array.from({ length: 9 }, (_, index) => ({ decisionId: `d${index}`, runId: `run-${index}`, macroTaskId: "macro", title: `Failure ${index}`,
+      at: `2026-11-09T${String(index).padStart(2, "0")}:00:00Z`, code: "router-no-answer" }));
+    render(<RoutingRecords health={health({ recentFailures })} />);
+    const region = document.querySelector<HTMLElement>('[data-slot="routing-failures-region"]')!;
+    expect(region.tabIndex).toBe(0);
+    expect(region.classList.contains("record-region--routing")).toBe(true);
+    expect(within(region).getAllByRole("link").map(link => link.textContent)).toEqual(recentFailures.map(row => row.title).reverse());
+  });
   it("does not invent text for an unknown code", () => { expect(() => routingCodeText("unknown-native-code")).toThrow("Unrecognized routing error code"); });
 });

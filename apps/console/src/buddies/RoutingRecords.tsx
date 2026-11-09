@@ -11,6 +11,7 @@ import { tasksHash } from "../task-detail/location";
 import { buddyQuad, recordCounts } from "./roles";
 import { QuantBarDisclosure } from "./QuantBar";
 import { routingCodeText } from "./routing-code";
+import "./RecordRegion.css";
 
 const head = "border-b py-3 pr-4 text-left text-xs font-normal text-ink3";
 const cell = "border-b py-3 pr-4 align-top text-xs";
@@ -36,6 +37,7 @@ export function RoutingRecords({ health }: { health?: RoutingHealth }) {
   const { t } = useTranslation("buddies");
   if (!health) return <p className="text-xs text-ink3">{t("roles.records.unknown")}</p>;
   const maximum = Math.max(0, ...(health.routers ?? []).map(row => (row.answeredCount ?? 0) + (row.noAnswerCount ?? 0)));
+  const failures = [...health.recentFailures].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   return <div className="space-y-5">
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-ink2" data-slot="routing-summary">
       {health.available === false && <span>{t("roles.records.unavailable")} · {health.reason ? reasonText(health.reason) : t("roles.records.unknown")}</span>}
@@ -58,14 +60,17 @@ export function RoutingRecords({ health }: { health?: RoutingHealth }) {
         <td className={`${cell} wrap-anywhere`}>{row.lastError?.code ? routingCodeText(row.lastError.code) : t("roles.records.unknown")}</td>
       </tr>)}</tbody>
     </table>}
-    {!!health.recentFailures.length && <table className="w-full table-fixed border-collapse" aria-label={t("roles.records.failures.label")}>
-      <caption className="pb-2 text-left text-sm font-medium">{t("roles.records.failures.label")}</caption>
+    {!!failures.length && <div>
+      <h4 className="pb-2 text-sm font-medium">{t("roles.records.failures.label")}</h4>
+      <div className="record-region record-region--routing" role="region" tabIndex={0} aria-label={t("roles.records.failures.label")} data-slot="routing-failures-region">
+      <table className="w-full table-fixed border-collapse" aria-label={t("roles.records.failures.label")}>
       <thead><tr><th className={`${head} w-[20%]`}>{t("roles.records.failures.at")}</th><th className={`${head} w-[30%]`}>{t("roles.records.failures.code")}</th><th className={head}>{t("roles.records.failures.run")}</th></tr></thead>
-      <tbody>{health.recentFailures.map(row => <tr key={row.decisionId}>
+      <tbody>{failures.map(row => <tr key={row.decisionId}>
         <td className={cell}><Moment at={row.at} /></td>
         <td className={cell}><span className="inline-flex items-start gap-2"><StateMark kind="fail" className="mt-0.5" />{routingCodeText(row.code)}</span></td>
         <td className={cell}>{row.runId && row.macroTaskId ? <span className="inline-flex max-w-full items-center gap-1"><a className="min-w-0 wrap-anywhere underline decoration-line2 underline-offset-2 transition-colors duration-150 motion-reduce:transition-none hover:decoration-foreground" href={tasksHash({ macroTaskId: row.macroTaskId, runId: row.runId, step: null })}>{row.title}</a><CopyId value={row.runId} /></span> : t("roles.records.failures.unrecorded")}</td>
       </tr>)}</tbody>
-    </table>}
+      </table></div>
+    </div>}
   </div>;
 }

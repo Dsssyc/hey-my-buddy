@@ -19,6 +19,7 @@ import { DomainTree } from "./DomainTree";
 import { MaintenanceActivity } from "./MaintenanceActivity";
 import { RouterSection, RouterField } from "./RouterSection";
 import { RouterTimeRange, RouterUsage, sumRouterUsage, routerUsageTotal } from "./RouterUsage";
+import "./RecordRegion.css";
 
 const liveT = i18n.getFixedT(null, "buddies");
 
@@ -86,9 +87,9 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
     <RouterSection name={t("roles.records.name")}>
       {feedbackScope === "maintenance" && note && <p role="status" className="mb-3 text-xs">{note}</p>}
       {feedbackScope === "maintenance" && error && <p role="alert" className="mb-3 text-xs text-fail">{error}</p>}
-      {!runs.length ? <p className="text-xs text-ink3">{t("maintenance.noRecords")}</p> : <table className="w-full table-fixed text-xs" aria-label={t("maintenance.records")}>
+      {!runs.length ? <p className="text-xs text-ink3">{t("maintenance.noRecords")}</p> : <div className="record-region record-region--maintenance" role="region" tabIndex={0} aria-label={t("maintenance.records")} data-slot="maintenance-records-region"><table className="w-full table-fixed text-xs" aria-label={t("maintenance.records")}>
         <thead><tr className="border-b text-left text-ink3"><th className="w-7 py-3 font-normal" aria-label={t("maintenance.result")} /><th className="w-[31%] py-3 font-normal">{t("routerWork.timeRange")}</th><th className="w-[10%] py-3 font-normal">{t("maintenance.trigger")}</th><th className="py-3 font-normal">{t("routerWork.usage")}</th><th className="w-20" /></tr></thead>
-        <tbody>{runs.map(run => <tr key={run.maintenanceRunId} className="border-b align-top" data-slot="maintenance-record">
+        <tbody>{runs.map(run => <tr key={run.maintenanceRunId} className={`border-b align-top ${run.state === "running" ? "record-region__running" : ""}`} data-slot="maintenance-record">
           <td className="py-4"><span aria-label={t(`maintenance.${run.state}`)}><StateMark kind={run.state === "running" ? "live" : run.state === "failed" ? "fail" : "done"} /></span></td>
           <td className="py-4 pr-3"><RouterTimeRange startedAt={run.startedAt} finishedAt={run.finishedAt} />
             {run.state === "running" && active && <div className="mt-2"><MaintenanceActivity taskId={run.taskId} api={api} /></div>}
@@ -101,7 +102,7 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
           <td className="py-3 text-right">{run.state === "running" && <Button variant="ghost" size="sm" disabled={actionLocked || stopping === run.taskId}
             onClick={() => void stop(run.taskId)}>{stopping === run.taskId ? detailT("state.stopping") : t("maintenance.stop")}</Button>}</td>
         </tr>)}</tbody>
-      </table>}
+      </table></div>}
       <div className="pt-6"><h4 className="mb-4 text-sm font-medium">{t("maintenance.domains")}</h4>
         <DomainTree nodes={snapshot.domainNodes ?? []} locked={actionLocked} command={command} error={feedbackScope === "domain" ? error : ""} note={feedbackScope === "domain" ? note : ""} clearFeedback={() => { setError(""); setNote(""); }} />
       </div>

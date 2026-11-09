@@ -41,15 +41,15 @@ export function RouterView({ snapshot, editor, location, onNavigate, hidden, act
   const work = (location.view === "router" ? location.target ?? "routing" : "routing") as Work;
   const status = workStatus(work, snapshot, editor);
   return <section hidden={hidden} aria-label={t("sections.router")} className="flex min-h-0 min-w-0 flex-1 bg-card">
-    <nav aria-label={t("routerWork.jobs")} className="w-[260px] shrink-0 border-r py-3">
+    <nav aria-label={t("routerWork.jobs")} className="w-max shrink-0 border-r py-3">
       {ROUTER_WORK.map(job => {
         const state = workStatus(job, snapshot, editor);
         const mark = state === "unset" || state === "unknown" ? "idle" : state === "completed" ? "done" : state === "running" ? "live" : "fail";
         return <a key={job} href={buddyHash({ view: "router", target: job })} aria-current={work === job ? "page" : undefined}
-          className="block border-b px-6 py-5 outline-none transition-colors duration-150 hover:bg-sunk aria-[current=page]:bg-past-wash focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+          className="block border-b px-5 py-3 outline-none transition-colors duration-150 hover:bg-sunk aria-[current=page]:bg-past-wash focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
           onClick={event => { event.preventDefault(); onNavigate({ view: "router", target: job }); }}>
-          <strong className="text-base font-medium">{t(`routerWork.${job}`)}</strong>
-          <span className="mt-2 flex items-center gap-2 text-xs text-ink2"><StateMark kind={mark} />{state === "completed" && job === "maintenance" ? t("routerWork.status.completed_maintenance") : state === "failed" && job === "maintenance" ? t("routerWork.status.failed_maintenance") : t(`routerWork.status.${state}`)}</span>
+          <strong className="text-sm font-medium">{t(`routerWork.${job}`)}</strong>
+          <span className="mt-1 flex items-center gap-2 whitespace-nowrap text-xs text-ink2"><StateMark kind={mark} />{state === "completed" && job === "maintenance" ? t("routerWork.status.completed_maintenance") : state === "failed" && job === "maintenance" ? t("routerWork.status.failed_maintenance") : t(`routerWork.status.${state}`)}</span>
         </a>;
       })}
     </nav>

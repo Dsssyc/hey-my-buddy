@@ -59,7 +59,7 @@ function ConsoleApp({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
   const { t } = useTranslation(["shell", "common"]);
   const [api] = useState(() => suppliedApi || createApi(window.location.pathname));
   const state = useConsole(api);
-  return state.snapshot ? <Connected api={api} snapshot={state.snapshot} verifiedAt={state.verifiedAtMs} refresh={state.refresh} connectionError={state.error} /> :
+  return state.snapshot ? <Connected api={api} snapshot={state.snapshot} verifiedAt={state.verifiedAtMs} refresh={state.refresh} connectionError={state.error} runtimeUpdated={state.runtimeUpdated} /> :
     <main className="flex min-h-dvh flex-col items-center justify-center gap-5 p-6 text-center">
       <img src={buddyIcon} alt="" width="32" height="32" className="size-8" />
       <h1 className="text-lg font-semibold">{state.error ? t("startup.failed") : t("startup.connecting")}</h1>
@@ -102,8 +102,8 @@ function Notice({ tone, role, fading = false, children }: { tone: "fail" | "hand
   </div>;
 }
 
-function Connected({ api, snapshot, refresh, connectionError, verifiedAt }: {
-  api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; connectionError: string; verifiedAt: number | null;
+function Connected({ api, snapshot, refresh, connectionError, verifiedAt, runtimeUpdated }: {
+  api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; connectionError: string; verifiedAt: number | null; runtimeUpdated: boolean;
 }) {
   const { t } = useTranslation(["shell", "common"]);
   const [tab, setTab] = useState<Tab>(currentTab);
@@ -184,6 +184,10 @@ function Connected({ api, snapshot, refresh, connectionError, verifiedAt }: {
       <h1 className="sr-only">{t(`nav.${tab}`)}</h1>
       {/* What is said above a page: the lost connection and the state of a draft. */}
       <div className="flex shrink-0 flex-col empty:hidden">
+        {runtimeUpdated && <Notice tone="hand" role="status">
+          <span>{t("runtimeUpdated.message")}</span>
+          <Button variant="outline" size="sm" onClick={() => window.location.reload()}>{t("runtimeUpdated.refresh")}</Button>
+        </Notice>}
         {connectionError && tab !== "tasks" && <Notice tone="fail" role="alert">
           <span className="min-w-0 wrap-anywhere">{connectionError}</span>
           <Button variant="outline" size="sm" onClick={() => void refresh()}>{t("connection.retry")}</Button>

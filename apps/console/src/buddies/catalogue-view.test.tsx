@@ -30,7 +30,7 @@ function buddy(modelService: typeof sonnet, effort: string, extra: Partial<Buddy
 
 function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: HarnessHealth[] } {
   const state: Snapshot & { harnesses: HarnessHealth[] } = {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
+    csrfToken: "csrf", runtimeContentId: "fixture-runtime", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: [buddy(sonnet, "medium", { enabled: true }), buddy(sonnet, "high"), buddy(sol, "medium"), buddy(sol, "low")],
@@ -154,6 +154,10 @@ describe("the selected model", () => {
     await listed(1, 4);
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     await selectModel(user, SOL, "Codex");
+    expect(modelRow(SOL).querySelector("[data-slot=disclosure]")).toBeNull();
+    const controls = modelButton(SOL).getAttribute("aria-controls");
+    expect(controls).toBeTruthy();
+    expect(document.getElementById(controls!)?.getAttribute("data-slot")).toBe("collapsible-content");
     await user.type(search(), "claude");
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     await user.clear(search());

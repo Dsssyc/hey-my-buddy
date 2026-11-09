@@ -16,7 +16,7 @@ import type { MacroTaskSummary, MacroTaskTimeline } from "./macro-task-types";
 import type { DeletionBlocker, DeletionBlockerKind, MacroTaskDeletionPreview } from "./macro-task-deletion";
 
 function snapshotFixture(): Snapshot {
-  return { csrfToken: "synthetic-csrf", eventCursor: 0, consoleSession: { id: "session-fixture" },
+  return { csrfToken: "synthetic-csrf", runtimeContentId: "fixture-runtime", eventCursor: 0, consoleSession: { id: "session-fixture" },
     configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: [], preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [], decisions: [], tasks: { pendingCount: 0 }, capabilities: {} };
 }

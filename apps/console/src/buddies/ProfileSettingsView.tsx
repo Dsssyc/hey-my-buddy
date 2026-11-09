@@ -15,6 +15,7 @@ import { buddyQuad, withConfiguration } from "./roles";
 import { QuantBarDisclosure } from "./QuantBar";
 import { RouterSection } from "./RouterSection";
 import { RouterTimeRange, RouterUsage, routerUsageTotal, sumRouterUsage } from "./RouterUsage";
+import "./RecordRegion.css";
 
 function RunMark({ state }: { state: ProfileRun["state"] }) {
   const { t } = useTranslation("buddies");
@@ -76,7 +77,7 @@ function ProfileRecords({ models, profileRunId }: { models: Model[]; profileRunI
   if (!runs.length) return <p className="text-sm text-ink3">{t("routerProfiles.noRuns")}</p>;
   const newestFailure = runs.find(model => model.latestProfileRun!.state === "failed")?.latestProfileRun?.profileRunId;
   const maximum = Math.max(1, ...runs.map(model => routerUsageTotal(sumRouterUsage(model.latestProfileRun!.usage?.attempts ?? [])) ?? 0));
-  return <div data-slot="profile-records" className="overflow-x-auto"><table className="w-full min-w-[640px] border-collapse text-left text-xs">
+  return <div data-slot="profile-records" className="record-region record-region--profile" role="region" tabIndex={0} aria-label={t("routerProfiles.records")}><table className="w-full min-w-[640px] border-collapse text-left text-xs">
       <thead className="border-b text-ink3"><tr><th className="w-8 py-2 font-normal"><span className="sr-only">{t("routerProfiles.records")}</span></th><th className="py-2 font-normal">{t("routerProfiles.model")}</th><th className="py-2 font-normal">{t("routerProfiles.period")}</th><th className="py-2 font-normal">{t("routerProfiles.tokens")}</th></tr></thead>
       <tbody className="divide-y divide-line">{runs.map(model => <RunRow key={model.latestProfileRun!.profileRunId} model={model}
         initiallyOpen={model.latestProfileRun!.profileRunId === newestFailure} selected={model.latestProfileRun!.profileRunId === profileRunId} maximum={maximum} />)}</tbody>

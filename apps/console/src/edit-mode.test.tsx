@@ -31,7 +31,7 @@ type Script = { publish?: ("network" | "forbidden")[] };
 function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) {
   const buddies = catalog();
   let state: Snapshot = {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
+    csrfToken: "csrf", runtimeContentId: "fixture-runtime", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,

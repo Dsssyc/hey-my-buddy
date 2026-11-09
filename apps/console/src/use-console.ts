@@ -15,6 +15,8 @@ export function useConsole(api: ConsoleApi) {
   const mounted = useRef(false),
     sequence = useRef(0);
   const initialRead = useRef(true);
+  const initialRuntimeContentId = useRef<string | null>(null);
+  const [runtimeUpdated, setRuntimeUpdated] = useState(false);
   const visible = useDocumentVisible();
   const refresh = useCallback(
     async (signal?: AbortSignal, strict = false, background = false) => {
@@ -24,6 +26,8 @@ export function useConsole(api: ConsoleApi) {
       try {
         const next = await api.snapshot(signal);
         if (mounted.current && request === sequence.current) {
+          if (initialRuntimeContentId.current === null) initialRuntimeContentId.current = next.runtimeContentId;
+          else setRuntimeUpdated(next.runtimeContentId !== initialRuntimeContentId.current);
           setSnapshot(previous => previous ? retainEqual(previous, next) : next);
           setVerifiedAtMs(api.readVerifiedAt?.(next) ?? null);
           setError("");
@@ -80,5 +84,5 @@ export function useConsole(api: ConsoleApi) {
       clearTimeout(timer);
     };
   }, [refresh, visible]);
-  return { snapshot, error, updatedAt, verifiedAtMs, refresh };
+  return { snapshot, error, updatedAt, verifiedAtMs, runtimeUpdated, refresh };
 }

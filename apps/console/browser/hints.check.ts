@@ -47,17 +47,20 @@ test.describe("necessary hover hints and visible consequences", () => {
   test("changes the mode consequence, keeps section names and arrows quiet and writes maintenance data flow below its setting", async ({ page }) => {
     await open(page, "#buddies/router");
     const mode = page.getByRole("group", { name: "默认模式", exact: true });
-    const consequence = mode.locator('[data-slot="routing-mode-consequence"]');
+    const modeHelp = mode.locator('[data-slot="router-setting-help"]');
     const fast = mode.getByRole("radio", { name: "快速", exact: true });
     const review = mode.getByRole("radio", { name: "审阅", exact: true });
     await fast.click();
-    await expect(consequence).toHaveText("需要 Router 判断时，任务的文字会发给 Router 的模型提供方");
-    await consequenceLine(consequence, false);
+    await expect(mode.locator('[data-slot="routing-mode-consequence"]')).toHaveCount(0);
+    await modeHelp.click();
+    await expect(page.getByRole("dialog", { name: "关于默认模式" })).toContainText("需要 Router 判断时，任务的文字会发给 Router 的模型提供方");
+    await modeHelp.click();
     await capture(page, "router-fast");
     await review.click();
-    await expect(consequence).toContainText("还会发送一份冻结的代码副本");
-    await expect(consequence).toContainText("DSH 与 ZCode 没有系统沙盒");
-    await consequenceLine(consequence, false);
+    await modeHelp.click();
+    await expect(page.getByRole("dialog", { name: "关于默认模式" })).toContainText("还会发送一份冻结的代码副本");
+    await expect(page.getByRole("dialog", { name: "关于默认模式" })).toContainText("DSH 与 ZCode 没有系统沙盒");
+    await modeHelp.click();
     await capture(page, "router-review");
     const responseWait = page.getByRole("group", { name: "等待模型开始作答", exact: true });
     const retry = page.getByRole("group", { name: "重试间隔", exact: true });
@@ -190,7 +193,7 @@ test.describe("necessary hover hints and visible consequences", () => {
 
 for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) test.describe(`Router setting help ${locale} ${theme}`, () => {
   test.use({ locale, viewport: { width: 1440, height: 1100 }, reducedMotion: "reduce" });
-  test("opens an explanation from each question button and keeps the data consequence visible", async ({ page }) => {
+  test("opens each explanation without covering inputs and closes by keyboard or outside click", async ({ page }) => {
     const zh = locale === "zh-CN";
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await open(page, "#buddies/router/routing");
@@ -200,27 +203,57 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
       : ["frozen code copy", "no time limit", "after the interval", "fewer samples"];
     for (const [index, meaning] of meanings.entries()) {
       await expect(buttons.nth(index)).toHaveAttribute("data-size", "icon-sm");
-      await buttons.nth(index).hover();
-      await expect(page.getByRole("tooltip")).toContainText(meaning);
+      await expect(buttons.nth(index)).toHaveAttribute("aria-expanded", "false");
+      await buttons.nth(index).click();
+      const dialog = page.getByRole("dialog", { name: new RegExp(zh ? "关于" : "About") });
+      await expect(dialog).toContainText(meaning);
+      await expect(buttons.nth(index)).toHaveAttribute("aria-expanded", "true");
+      const overlay = await dialog.boundingBox();
+      for (const input of await page.locator('[data-slot="routing-work"] input, [data-slot="routing-work"] [role="radio"]').all()) {
+        const box = await input.boundingBox();
+        if (overlay && box) expect(overlay.x + overlay.width <= box.x || box.x + box.width <= overlay.x || overlay.y + overlay.height <= box.y || box.y + box.height <= overlay.y).toBe(true);
+      }
+      if (zh && index === 1) {
+        const destination = fileURLToPath(new URL("../../../tmp/router-ui/", import.meta.url));
+        await mkdir(destination, { recursive: true });
+        await page.screenshot({ path: `${destination}router-help-${theme}-1440.png` });
+      }
+      await buttons.nth(index).click();
+      await expect(dialog).toHaveCount(0);
+      await buttons.nth(index).click();
       await page.keyboard.press("Escape");
-      await page.mouse.move(0, 0);
-      await expect(page.getByRole("tooltip")).toHaveCount(0);
+      await expect(buttons.nth(index)).toHaveAttribute("aria-expanded", "false");
+      await expect(buttons.nth(index)).toBeFocused();
     }
     const wait = page.getByRole("spinbutton", { name: zh ? "等待模型开始作答" : "Wait for the model to start responding" });
     await wait.focus();
     await page.keyboard.press("Shift+Tab");
     await expect(buttons.nth(1)).toBeFocused();
-    await expect(page.getByRole("tooltip")).toContainText(zh ? "维护这一轮算失败" : "maintenance batch fails");
-    await expect(page.getByRole("tooltip")).toContainText(zh ? "画像构建算失败" : "profile building fails");
-    await expect(page.getByRole("tooltip")).toContainText(zh ? "看不到模型何时开始作答的 harness（例如 DSH）" : "Harnesses that cannot observe when the model starts responding (such as DSH)");
-    await expect(page.getByRole("tooltip")).toContainText(zh ? "由它自己的空闲超时兜底" : "their own idle timeout");
+    await page.keyboard.press("Enter");
+    const waitDialog = page.getByRole("dialog", { name: new RegExp(zh ? "关于等待模型开始作答" : "About Wait for the model to start responding") });
+    await expect(waitDialog).toContainText(zh ? "维护这一轮算失败" : "maintenance batch fails");
+    await expect(waitDialog).toContainText(zh ? "画像构建算失败" : "profile building fails");
+    await expect(waitDialog).toContainText(zh ? "看不到模型何时开始作答的 harness（例如 DSH）" : "Harnesses that cannot observe when the model starts responding (such as DSH)");
+    await expect(waitDialog).toContainText(zh ? "由它自己的空闲超时兜底" : "their own idle timeout");
+    await buttons.nth(1).focus();
+    await page.keyboard.press("Enter");
+    await expect(waitDialog).toHaveCount(0);
+    await expect(buttons.nth(1)).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(waitDialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(buttons.nth(1)).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(waitDialog).toBeVisible();
+    await buttons.nth(1).focus();
+    await page.keyboard.press("Space");
+    await expect(waitDialog).toHaveCount(0);
+    await page.keyboard.press("Space");
+    await expect(waitDialog).toBeVisible();
+    await wait.click();
+    await expect(waitDialog).toHaveCount(0);
 
-    await expect(page.locator('[data-slot="routing-mode-consequence"]')).toBeVisible();
+    await expect(page.locator('[data-slot="routing-mode-consequence"]')).toHaveCount(0);
     await expectNoSidewaysScroll(page);
-    if (zh) {
-      const destination = fileURLToPath(new URL("../../../tmp/buddy-fix/", import.meta.url));
-      await mkdir(destination, { recursive: true });
-      await page.screenshot({ path: `${destination}router-settings-help-${theme}-1440.png`, fullPage: true });
-    }
   });
 });

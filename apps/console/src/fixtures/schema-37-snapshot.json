@@ -1,5 +1,6 @@
 {
   "eventCursor": 9,
+  "runtimeContentId": "schema-37-projection",
   "configuration": {
     "routerBuddyIds": [],
     "routerRetryIntervalSeconds": 600,

@@ -45,7 +45,10 @@ for (const w of words) for (const theme of ["dark", "light"] as const) {
       await expect(lines.nth(2)).toContainText("3");
       await expect(detail.getByRole("spinbutton", { name: w.wait })).toHaveValue("60");
       await expect(detail.locator("[data-slot=router-setting-help]")).toHaveCount(4);
-      await expect(detail.getByRole("group", { name: w.wait, exact: true }).getByRole("button")).toHaveAttribute("aria-description", /不限时|no time limit/);
+      const waitHelp = detail.getByRole("group", { name: w.wait, exact: true }).locator("[data-slot=router-setting-help]");
+      await waitHelp.click();
+      await expect(page.getByRole("dialog", { name: new RegExp(w.wait) })).toContainText(/不限时|no time limit/);
+      await waitHelp.click();
       const plots = detail.getByRole("table", { name: w.locale === "zh-CN" ? "各 Router 的记录" : "Records of each Router" }).locator('[data-slot="quant-bar"]');
       await expect(plots).toHaveCount(3);
       await expect(plots.first().locator('rect[data-tone="green"]')).toHaveCount(1);
@@ -72,7 +75,11 @@ for (const w of words) for (const theme of ["dark", "light"] as const) {
       const detail = page.locator('[data-slot="router-detail"]');
       const settings = detail.getByRole("group", { name: w.settings, exact: true });
       await expect(settings.getByRole("spinbutton", { name: w.wait })).toHaveValue("60");
-      await expect(settings.getByRole("group", { name: w.wait, exact: true }).getByRole("button")).toHaveAttribute("aria-description", /不限时|no time limit/);
+      const waitHelp = settings.getByRole("group", { name: w.wait, exact: true }).locator("[data-slot=router-setting-help]");
+      await waitHelp.click();
+      await expect(page.getByRole("dialog", { name: new RegExp(w.wait) })).toContainText(/不限时|no time limit/);
+      await page.keyboard.press("Escape");
+      await expect(waitHelp).toHaveAttribute("aria-expanded", "false");
       await page.getByRole("navigation", { name: w.jobs }).getByRole("link", { name: new RegExp(w.profiles) }).click();
       await expect(detail.getByRole("spinbutton", { name: w.wait })).toHaveCount(0);
       const failureButton = detail.locator('[data-slot="profile-records"] tr button').filter({ hasText: "glm-5" });

@@ -89,6 +89,22 @@ describe("maintenance controls", () => {
     expect(older.queryByText(/下次自动运行/)).toBeNull();
     expect(older.queryByRole("button", { name: "立即运行" })).toBeNull();
   });
+  it("keeps a running round pinned ahead of all historical rounds", async () => {
+    const data = state();
+    const running = { ...maintenanceRun("running"), maintenanceRunId: "live", taskId: "live-task", startedAt: "2026-10-27T23:00:00Z" };
+    const history = Array.from({ length: 8 }, (_, index) => ({ ...maintenanceRun("failed"), maintenanceRunId: `past-${index}`, taskId: `past-task-${index}`,
+      startedAt: `2026-10-28T${String(index).padStart(2, "0")}:00:00Z` }));
+    data.maintenance!.runs = [...history, running];
+    await openRoles(fixture(data));
+    const region = document.querySelector<HTMLElement>('[data-slot="maintenance-records-region"]')!;
+    expect(region.tabIndex).toBe(0);
+    const rows = within(region).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(9);
+    expect(rows[0].classList.contains("record-region__running")).toBe(true);
+    expect(within(rows[0]).getByRole("button", { name: "停止" })).toBeTruthy();
+    expect(rows.slice(1).map(row => row.getAttribute("data-slot"))).toEqual(Array(8).fill("maintenance-record"));
+    expect(rows[1].querySelector('time[datetime="2026-10-28T07:00:00Z"]')).toBeTruthy();
+  });
   it("keeps progress unknown when only the phase has been reported", async () => {
     const data = state(); data.maintenance!.runs = [maintenanceRun("running")];
     const f = fixture(data);

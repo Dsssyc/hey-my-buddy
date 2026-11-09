@@ -195,7 +195,6 @@ for (const { locale, account, settings, fold } of languages) {
 
     test("changes every colour on a transition of 100 to 150ms", async ({ page }) => {
       await open(page, "#buddies/catalog");
-      await expectColourTransition(page.locator("[data-slot=model-row]").first(), "a model row");
       await expectColourTransition(page.locator("[data-slot=model-row] > button").first(), "a model row's button");
       await expectColourTransition(page.locator("[data-slot=fold-handle]").first(), "a chevron");
       await expectColourTransition(page.locator("[data-slot=account-summary]").first(), "a head's row");
@@ -227,7 +226,6 @@ for (const { locale, account, settings, fold } of languages) {
     test("makes no transition and opens and closes at once", async ({ page }) => {
       await open(page, "#buddies/catalog");
       for (const [label, target] of [
-        ["a model row", page.locator("[data-slot=model-row]").first()],
         ["a model row's button", page.locator("[data-slot=model-row] > button").first()],
         ["a chevron", page.locator("[data-slot=fold-handle]").first()],
         ["a head's row", page.locator("[data-slot=account-summary]").first()],
@@ -263,7 +261,7 @@ for (const { locale, account, settings, fold } of languages) {
         await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       });
 
-      test("keeps an open model row and the selected cell of its scale as they are while hovered, and only deepens them", async ({ page }) => {
+      test("keeps an open model row selected under the pointer and preserves the scale selection", async ({ page }) => {
         await open(page, "#buddies/catalog");
         await page.getByRole("button", { name: CODEX, exact: true }).click();
         const row = page.locator("[data-slot=model-row]").filter({ has: page.getByRole("button", { name: CODEX, exact: true }) });
@@ -284,18 +282,20 @@ for (const { locale, account, settings, fold } of languages) {
         const otherAt = await settled(otherButton);
         await button.hover();
         const rowHover = await settled(row), buttonHover = await settled(button);
-        // The open row keeps its tint and its green edge, and the pointer over it makes it deeper.
+        // The row button carries selection; its wrapper keeps the common row divider.
         expect(rowHover.background).toBe(rowAt.background);
         expect(rowHover.border).toBe(rowAt.border);
-        expect(rowHover.background).not.toBe("rgba(0, 0, 0, 0)");
-        expect(buttonHover.background).not.toBe(buttonAt.background);
+        expect(buttonAt.background).not.toBe("rgba(0, 0, 0, 0)");
+        await expect(button).toHaveAttribute("aria-expanded", "true");
+        expect(buttonHover.background).toBe(buttonAt.background);
         expect(buttonHover.background).not.toBe("rgba(0, 0, 0, 0)");
         // And it is not what a row that is not open becomes under the pointer.
         await otherButton.hover();
         const otherHover = await settled(otherButton);
         expect(otherHover.background).not.toBe(otherAt.background);
         expect(otherHover.background).not.toBe(buttonHover.background);
-        expect((await settled(other)).border).not.toBe(rowAt.border);
+        expect((await settled(other)).border).toBe(rowAt.border);
+        expect((await settled(button)).background).toBe(buttonAt.background);
         // The same for the scale: the selected cell keeps its outline and its pointer under the pointer.
         const drawer = page.getByRole("region", { name: CODEX, exact: true });
         const selected = drawer.locator("[data-slot=buddy-stop][aria-pressed=true]");

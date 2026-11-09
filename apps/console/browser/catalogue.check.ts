@@ -18,6 +18,38 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
         await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       });
 
+      test("uses the whole model row as its disclosure handle", async ({ page }) => {
+        await open(page, "#buddies/catalog");
+        const row = page.getByRole("button", { name: CODEX, exact: true });
+        const resting = await row.evaluate(node => getComputedStyle(node).backgroundColor);
+        await expect(row).toHaveAttribute("aria-expanded", "false");
+        await expect(row.locator("[data-slot=disclosure]")).toHaveCount(0);
+        await expect(page.locator("[data-slot=fold-handle] [data-slot=disclosure]").first()).toBeVisible();
+        await row.hover();
+        await expect(row).toHaveCSS("cursor", "pointer");
+        expect(await row.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe(resting);
+        await row.focus();
+        await page.keyboard.press("Shift+Tab");
+        await page.keyboard.press("Tab");
+        await expect(row).toBeFocused();
+        expect(await row.evaluate(node => getComputedStyle(node).boxShadow)).not.toBe("none");
+        await row.press("Enter");
+        await page.mouse.move(0, 0);
+        await expect(row).toHaveAttribute("aria-expanded", "true");
+        const contentId = await row.getAttribute("aria-controls");
+        expect(contentId).toBeTruthy();
+        await expect(page.locator(`[id="${contentId}"]`)).toContainText("gpt-5-codex");
+        const selected = await row.evaluate(node => {
+          const reference = document.createElement("div");
+          reference.style.backgroundColor = "var(--past-wash)";
+          document.body.append(reference);
+          const color = getComputedStyle(reference).backgroundColor;
+          reference.remove();
+          return { row: getComputedStyle(node).backgroundColor, color };
+        });
+        expect(selected.row).toBe(selected.color);
+      });
+
       test("keeps harness summaries on one line and model rows inside the page", async ({ page }) => {
         await open(page, "#buddies/catalog");
         const directory = page.getByRole("region", { name: catalog, exact: true });

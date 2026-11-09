@@ -1,0 +1,33 @@
+.record-region {
+  height: 26.5rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.record-region--routing {
+  height: 22.5rem;
+}
+
+.record-region--maintenance {
+  height: 25rem;
+}
+
+.record-region:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.record-region > table > thead > tr > th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+}
+
+.record-region--maintenance .record-region__running {
+  position: sticky;
+  top: 2.5rem;
+  z-index: 1;
+  background: var(--surface);
+}

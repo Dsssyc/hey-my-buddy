@@ -78,6 +78,18 @@ describe("Router profile records", () => {
     expect(f.published[0].configuration).toEqual({ profileBuddyId: MEDIUM_ID });
   });
 
+  it("keeps all profile runs in a focusable newest-first scroll region", async () => {
+    const data = snapshot();
+    data.models = Array.from({ length: 8 }, (_, index) => ({ ...data.models[0], modelId: `model-${index}`, displayName: `Profile model ${index}`,
+      latestProfileRun: { ...run("completed", `2026-11-08T${String(index).padStart(2, "0")}:00:00Z`), profileRunId: `profile-${index}` } }));
+    await openRoles(fixture(data), "#buddies/router/profiles");
+    const region = document.querySelector<HTMLElement>('[data-slot="profile-records"]')!;
+    expect(region.tabIndex).toBe(0);
+    expect(region.classList.contains("record-region--profile")).toBe(true);
+    expect(Array.from(region.querySelectorAll<HTMLButtonElement>("tbody > tr > td:nth-child(2) > button")).map(button => button.textContent)).toEqual(
+      Array.from({ length: 8 }, (_, index) => `Profile model ${7 - index}`));
+  });
+
   it("shows a recorded readiness reason and locks assignment when configuration is unavailable", async () => {
     const configured = snapshot({ configuration: { profileBuddyId: MEDIUM_ID, profileUnavailableReason: { code: "profile-web-unsupported", params: {} } } });
     await openRoles(fixture(configured), "#buddies/router/profiles");

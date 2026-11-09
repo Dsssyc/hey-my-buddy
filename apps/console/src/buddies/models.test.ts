@@ -34,7 +34,7 @@ function buddies(): Buddy[] {
 
 function snapshot(list: Buddy[] = buddies()): Snapshot {
   return {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "s" },
+    csrfToken: "csrf", runtimeContentId: "fixture-runtime", eventCursor: 0, consoleSession: { id: "s" },
 
     configuration: null, buddies: list, preferences: [],  models: [], modelCorrespondences: [], decisions: [],
     modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "flash", limit: 3, active: 1 }],

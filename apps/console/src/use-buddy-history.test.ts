@@ -74,7 +74,7 @@ describe("bounded retained model history", () => {
 
 
   it("does not render an old retained page during the cursor-change render", () => {
-    const visible = { eventCursor: 8, csrfToken: "csrf", consoleSession: { id: "session" },
+    const visible = { eventCursor: 8, csrfToken: "csrf", runtimeContentId: "fixture-runtime", consoleSession: { id: "session" },
       buddies: [], preferences: [], models: [], modelCorrespondences: [],
       modelServiceConcurrency: [], configuration: null, decisions: [], tasks: { pendingCount: 0 }, capabilities: {} } as Snapshot;
     const { api } = fakeApi(() => page([]));

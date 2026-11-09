@@ -138,6 +138,10 @@ export default {
     lost: "Connection lost",
     retry: "Retry",
   },
+  runtimeUpdated: {
+    message: "The console has been updated. Refresh to use the new version.",
+    refresh: "Refresh",
+  },
   reminders: {
     overdue: "Overdue",
     possiblyStuck: "Possibly stuck",
