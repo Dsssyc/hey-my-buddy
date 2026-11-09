@@ -106,8 +106,7 @@ class LeadStopPreviewTests(unittest.TestCase):
         self.assertEqual(flash['statistics']['overall']['samples'], 4)
         self.assertEqual(flash['statistics']['byDomain']['preview-domain-ui']['samples'], 4)
         self.assertEqual(flash['statistics']['byDomainTaskType']['preview-domain-routing']['verify']['samples'], 1)
-        self.assertEqual(flash['summary']['citations'], [{'runId': 'preview-run-a1',
-                         'title': '合成预览任务 A1', 'macroTaskId': preview.MACRO_A}])
+        self.assertEqual(flash['summary'], {'text': '合成样例：界面改造有过一次返工，路由验证一次通过。'})
         self.assertEqual(flash['statistics']['infrastructureFailures'][0]['provider'], 'deepseek-official')
         codex = next(row for row in rows if (row['harness'], row['modelId'], row['effort'])
                      == ('codex', preview.MODEL_IDS['gpt-5-codex'], 'high'))

@@ -238,7 +238,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
                   {block.models.map(row => <Collapsible key={row.key} open={selected === row.key}>
                     <ModelLine showProvider={block.providers.length > 1} row={row} harnessState={block.state} recorded={recorded} data={data} expanded={selected === row.key} onSelect={() => selectModel(row)} />
                     <CollapsibleContent>
-                      {active && <ModelDrawer row={row} data={data} recorded={recorded} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable}
+                      {active && <ModelDrawer row={row} data={data} recorded={recorded} editor={editor} onNavigate={onNavigate}
                         harnessState={block.state ? `${block.name} ${harnessStateText(block.state, t)}` : undefined}
                         selectedBuddyId={chosen[row.key]!} onSelectBuddy={buddyId => selectBuddy(row.key, buddyId)} />}
                     </CollapsibleContent>

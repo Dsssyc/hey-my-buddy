@@ -17,11 +17,10 @@ import { setConcurrencyLimit, setPreference } from "../draft";
 import { formatDateTime } from "../i18n/format";
 import type { ConsoleView, PreferenceMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
-import type { ConsoleApi } from "../api";
 import { modelServiceKey } from "../console-data";
-import { ModelProfile } from "./ModelProfile";
+import { buddyHash } from "./navigation";
+import type { BuddyLocation } from "./navigation";
 import { ConcurrencyNotice } from "./ConcurrencyNotice";
-import { KindEvaluation } from "./KindEvaluation";
 import { modelIdentity, reasonTexts, pendingHint } from "./models";
 import type { BuddyChip, ModelRow } from "./models";
 
@@ -33,8 +32,8 @@ export function buddyRowId(buddyId: string): string {
   return `buddy-${buddyId}`;
 }
 
-function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
-  chip: BuddyChip; data: ConsoleView; recorded: Snapshot; editor: Editor; modelAvailable: boolean;
+function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigate }: {
+  chip: BuddyChip; data: ConsoleView; recorded: Snapshot; editor: Editor; modelAvailable: boolean; onNavigate: (location: BuddyLocation) => void;
 }) {
   const { t } = useTranslation("buddies");
   const editing = editor.editing;
@@ -103,18 +102,17 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
             }} />
         </Hint>
       </div>
-      <span className="text-xs text-ink3">{t("pane.samples")}</span><span data-slot="buddy-samples" className="text-sm tabular-nums">{evaluation ? evaluation.statistics.overall.samples : "—"}</span>
+      <span className="text-xs text-ink3">{t("pane.samples")}</span><span data-slot="buddy-samples" className="text-sm tabular-nums">{modelId ? <a className="underline decoration-line2 underline-offset-4 hover:decoration-foreground" href={buddyHash({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } })} onClick={event => { event.preventDefault(); onNavigate({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } }); }}>{evaluation ? evaluation.statistics.overall.samples : 0}</a> : "—"}</span>
       <span className="text-xs text-ink3">{t("pane.infrastructureFailures")}</span><span data-slot="buddy-infrastructure-failures" className="text-sm tabular-nums">{evaluation ? evaluation.statistics.infrastructureFailures.reduce((sum, entry) => sum + entry.count, 0) : "—"}</span>
     </div>
   </div>;
 }
 
 /** A model's shared settings and one selected buddy, unfolded below its row. */
-export function ModelDrawer({ row, harnessState, data, recorded, editor, selectedBuddyId, onSelectBuddy, onOpenTask, api, refresh, mutationsAvailable }: {
+export function ModelDrawer({ row, harnessState, data, recorded, editor, selectedBuddyId, onSelectBuddy, onNavigate }: {
   row: ModelRow; harnessState?: string; data: ConsoleView; recorded: Snapshot; editor: Editor;
   selectedBuddyId: string; onSelectBuddy: (id: string) => void;
-  onOpenTask?: (macroTaskId: string, runId: string) => void;
-  api?: ConsoleApi; refresh?: () => Promise<Snapshot | null>; mutationsAvailable?: boolean;
+  onNavigate: (location: BuddyLocation) => void;
 }) {
   const { t } = useTranslation("buddies");
   const editing = editor.editing;
@@ -122,7 +120,6 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
   const { modelService, key } = row;
   const member = modelService.buddies[0];
   const selected = row.chips.find(chip => chip.buddy.buddyId === selectedBuddyId)!;
-  const modelId = data.modelCorrespondences.find(entry => modelServiceKey(entry) === key)?.modelId;
   const publishedLimit = concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT;
   const raised = row.limit > publishedLimit;
   const limitInvalid = concurrencyLimit(row.limit) === null;
@@ -194,12 +191,9 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
               className="pointer-events-none absolute -bottom-1.5 left-1/2 z-10 size-2.5 -translate-x-1/2 rotate-45 border-r border-b border-foreground bg-card opacity-0 transition-opacity duration-150 peer-aria-pressed:opacity-100 motion-reduce:transition-none max-[600px]:hidden" />
           </div>)}
         </div>
-        <BuddySettings chip={selected} data={data} recorded={recorded} editor={editor} modelAvailable={row.available} />
+        <BuddySettings chip={selected} data={data} recorded={recorded} editor={editor} modelAvailable={row.available} onNavigate={onNavigate} />
       </div>
     </div>
-    {modelId && <ModelProfile key={modelId} modelId={modelId} snapshot={recorded} data={data} editor={editor} api={api} refresh={refresh} mutationsAvailable={!!mutationsAvailable} />}
-    <KindEvaluation key={selected.buddy.buddyId}
-      evaluation={data.kindEvaluations?.find(item => item.harness === selected.buddy.harness && item.modelId === modelId && item.effort === selected.buddy.effort)}
-      domains={data.domainNodes ?? []} onOpenTask={onOpenTask} />
+
   </section>;
 }

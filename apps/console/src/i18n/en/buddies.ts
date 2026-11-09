@@ -21,6 +21,7 @@ export default {
     dataFlow: "Building a profile sends model names and correspondence candidates to the profile buddy's model provider; the buddy can search public web sources.",
   },
   sections: {
+    evaluation: "Evaluation",
     label: "Sections of the Buddies page",
     catalog: "Catalog",
     router: "Router",

@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
@@ -68,7 +68,7 @@ function RunDetail({ run }: { run: ProfileRun }) {
   </div>;
 }
 
-function ProfileRecords({ models }: { models: Model[] }) {
+function ProfileRecords({ models, profileRunId }: { models: Model[]; profileRunId?: string }) {
   const { t } = useTranslation("buddies");
   const runs = models.filter(model => model.latestProfileRun !== null).sort((a, b) => Date.parse(b.latestProfileRun!.startedAt) - Date.parse(a.latestProfileRun!.startedAt));
   if (!runs.length) return <p className="text-sm text-ink3">{t("routerProfiles.noRuns")}</p>;
@@ -77,19 +77,21 @@ function ProfileRecords({ models }: { models: Model[] }) {
   return <div data-slot="profile-records" className="overflow-x-auto"><table className="w-full min-w-[640px] border-collapse text-left text-xs">
       <thead className="border-b text-ink3"><tr><th className="w-8 py-2 font-normal"><span className="sr-only">{t("routerProfiles.records")}</span></th><th className="py-2 font-normal">{t("routerProfiles.model")}</th><th className="py-2 font-normal">{t("routerProfiles.period")}</th><th className="py-2 font-normal">{t("routerProfiles.tokens")}</th></tr></thead>
       <tbody className="divide-y divide-line">{runs.map(model => <RunRow key={model.latestProfileRun!.profileRunId} model={model}
-        initiallyOpen={model.latestProfileRun!.profileRunId === newestFailure} maximum={maximum} />)}</tbody>
+        initiallyOpen={model.latestProfileRun!.profileRunId === newestFailure} selected={model.latestProfileRun!.profileRunId === profileRunId} maximum={maximum} />)}</tbody>
     </table></div>;
 }
 
-function RunRow({ model, initiallyOpen, maximum }: { model: Model; initiallyOpen: boolean; maximum: number }) {
+function RunRow({ model, initiallyOpen, selected, maximum }: { model: Model; initiallyOpen: boolean; selected: boolean; maximum: number }) {
   const { t } = useTranslation("buddies");
   const detailId = useId();
   const run = model.latestProfileRun!;
-  const [open, setOpen] = useState(initiallyOpen);
+  const [open, setOpen] = useState(initiallyOpen || selected);
+  const handle = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (selected) { setOpen(true); handle.current?.focus(); handle.current?.scrollIntoView?.({ block: "nearest" }); } }, [selected]);
   return <>
     <tr>
       <td className="py-3 align-top"><RunMark state={run.state} /></td>
-      <td className="py-3 pr-4 align-top"><button type="button" aria-expanded={open} aria-controls={detailId}
+      <td className="py-3 pr-4 align-top"><button ref={handle} type="button" aria-expanded={open} aria-controls={detailId}
         className="inline-flex items-center gap-2 text-left hover:underline focus-visible:underline"
         onClick={() => setOpen(value => !value)}><ChevronRight aria-hidden="true" size={16} strokeWidth={1.5} className={`shrink-0 transition-transform duration-150 motion-reduce:transition-none ${open ? "rotate-90" : ""}`} />{model.displayName}</button>
         <span className="mt-1 block text-ink3">{t("routerProfiles.corrections", { n: run.correctionRounds })}</span></td>
@@ -101,7 +103,7 @@ function RunRow({ model, initiallyOpen, maximum }: { model: Model; initiallyOpen
 }
 
 /** The selected Profiles work: assignment and observed profile runs. */
-export function ProfileSettingsView({ snapshot, editor }: { snapshot: Snapshot; editor: Editor }) {
+export function ProfileSettingsView({ snapshot, editor, profileRunId }: { snapshot: Snapshot; editor: Editor; profileRunId?: string }) {
   const { t } = useTranslation("buddies");
   const [choosing, setChoosing] = useState(false);
   const [query, setQuery] = useState("");
@@ -121,7 +123,7 @@ export function ProfileSettingsView({ snapshot, editor }: { snapshot: Snapshot; 
       {snapshot.configuration?.profileUnavailableReason && config?.profileBuddyId && config.profileBuddyId === snapshot.configuration.profileBuddyId && <p role="status" className="mt-2 text-xs text-ink2">{reasonText(snapshot.configuration.profileUnavailableReason)}</p>}
       <p data-slot="profile-consequence" className="mt-2 max-w-3xl text-xs leading-relaxed text-ink2">{t("profile.dataFlow")}</p>
     </RouterSection>
-    <RouterSection name={t("routerProfiles.records")}><ProfileRecords models={models} /></RouterSection>
+    <RouterSection name={t("routerProfiles.records")}><ProfileRecords models={models} profileRunId={profileRunId} /></RouterSection>
     <Dialog open={choosing && !locked} onOpenChange={setChoosing}><DialogContent aria-describedby={undefined} className="sm:max-w-xl">
       <DialogTitle>{t("profile.choose")}</DialogTitle>
       <Input type="search" aria-label={t("profile.search")} value={query} onChange={event => setQuery(event.target.value)} />

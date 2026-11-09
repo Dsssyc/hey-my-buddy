@@ -189,7 +189,7 @@ export const modelCorrespondenceSchema = modelServiceSchema.extend({
 });
 export const modelProfileClaimSchema = z.looseObject({
   polarity: z.enum(["strength", "weakness"]), claim: nonblankString,
-  sourceUrl: z.url(), sourceDate: z.iso.date(), sourceKind: z.enum(["vendor", "third-party"]),
+  sourceUrl: z.url({ protocol: /^https?$/ }), sourceDate: z.iso.date(), sourceKind: z.enum(["vendor", "third-party"]),
 });
 export const modelProfileSchema = z.looseObject({
   positioning: nonblankString, builtAt: dateString, profileRunId: nonblankString,
@@ -410,7 +410,7 @@ export const kindEvaluationSchema = z.object({ harness: nonblankString, modelId:
   modelDisplayName: nonblankString, modelNames: z.array(modelServiceSchema), effort: nonblankString,
   previousGroups: z.array(z.object({ modelId: nonblankString, modelDisplayName: nonblankString,
     names: z.array(modelServiceSchema.extend({ since: dateString })).min(1) })),
-  summary: z.object({ text: z.string(), citations: z.array(z.object({ runId: nonblankString, title: z.string().nullable(), macroTaskId: z.string().nullable() })) }).nullable(),
+  summary: z.object({ text: z.string() }).nullable(),
   statistics: z.object({ overall: evaluationStatisticsSchema, byDomain: z.record(z.string(), evaluationStatisticsSchema),
     byDomainTaskType: z.record(z.string(), z.partialRecord(z.enum(TASK_TYPES), evaluationStatisticsSchema)),
     infrastructureFailures: z.array(z.object({ provider: z.string(), count: safeCount, lastAt: z.string().nullable() })) }),

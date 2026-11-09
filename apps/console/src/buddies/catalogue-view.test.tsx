@@ -395,7 +395,7 @@ describe("keyboard catalogue handles", () => {
   });
 });
 
-describe("model-keyed kind evaluations", () => {
+describe("model-keyed evaluation links", () => {
   const statistics = {
     overall: { samples: 4, successes: 3, failures: 1, firstPasses: 2, reworkRounds: 1,
       firstPassRate: 0.5, failureRate: 0.25, medianDeliverySeconds: null,
@@ -414,15 +414,15 @@ describe("model-keyed kind evaluations", () => {
     // current correspondence decides which kind the catalogue displays.
     state.kindEvaluations = [
       { harness: "codex", modelId: sol.model, effort: "medium", modelDisplayName: "Old generation",
-        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Old evaluation", citations: [] } },
+        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Old evaluation" } },
       { harness: "claude", modelId: "current-generation", effort: "medium", modelDisplayName: "Other harness",
-        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Wrong harness", citations: [] } },
+        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Wrong harness" } },
       { harness: "codex", modelId: "current-generation", effort: "high", modelDisplayName: "Other effort",
-        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Wrong effort", citations: [] } },
+        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Wrong effort" } },
       { harness: "codex", modelId: "current-generation", effort: "medium", modelDisplayName: "Current model",
-        modelNames: [{ ...sol, model: "upstream-alias" }], previousGroups: [], statistics: { ...statistics, overall: { ...statistics.overall, samples: 30 }, infrastructureFailures: [{ provider: "openai", count: 2, lastAt: null }] }, summary: { text: "Current evaluation", citations: [] } },
+        modelNames: [{ ...sol, model: "upstream-alias" }], previousGroups: [], statistics: { ...statistics, overall: { ...statistics.overall, samples: 30 }, infrastructureFailures: [{ provider: "openai", count: 2, lastAt: null }] }, summary: { text: "Current evaluation" } },
       { harness: "codex", modelId: "partner-generation", effort: "medium", modelDisplayName: "Partner model",
-        modelNames: [partner], previousGroups: [], statistics, summary: { text: "Partner evaluation", citations: [] } },
+        modelNames: [partner], previousGroups: [], statistics, summary: { text: "Partner evaluation" } },
     ];
     const user = userEvent.setup();
     open(fixture(state));
@@ -430,18 +430,25 @@ describe("model-keyed kind evaluations", () => {
     await selectModel(user, SOL, "Codex");
     expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("30");
     expect(pane().querySelector("[data-slot=buddy-infrastructure-failures]")!.textContent).toBe("2");
-    await user.click(within(pane()).getByRole("button", { name: /评价与领域经验/ }));
-    expect(within(pane()).getByText("Current evaluation")).toBeTruthy();
-    expect(within(pane()).getByText("Current model")).toBeTruthy();
+    const currentLink = within(pane()).getByRole("link", { name: "30" });
+    expect(currentLink.getAttribute("href")).toBe("#buddies/evaluation/codex/current-generation/medium");
+    await user.click(currentLink);
+    expect(window.location.hash).toBe(currentLink.getAttribute("href"));
+    const detail = document.querySelector<HTMLElement>("[data-slot=evaluation-detail]")!;
+    expect(within(detail).getByText("Current evaluation")).toBeTruthy();
+    expect(within(detail).getByRole("heading", { name: "codex / Current model / medium" })).toBeTruthy();
     for (const text of ["Old evaluation", "Wrong harness", "Wrong effort", "Partner evaluation"]) {
-      expect(within(pane()).queryByText(text)).toBeNull();
+      expect(within(detail).queryByText(text)).toBeNull();
     }
+    await user.click(screen.getByRole("link", { name: "目录" }));
     await selectModel(user, "codex / partner / gpt-6-sol", "Codex");
-    await user.click(within(pane()).getByRole("button", { name: /评价与领域经验/ }));
     expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("4");
     expect(pane().querySelector("[data-slot=buddy-infrastructure-failures]")!.textContent).toBe("0");
-    expect(within(pane()).getByText("Partner evaluation")).toBeTruthy();
-    expect(within(pane()).queryByText("Current evaluation")).toBeNull();
+    const partnerLink = within(pane()).getByRole("link", { name: "4" });
+    expect(partnerLink.getAttribute("href")).toBe("#buddies/evaluation/codex/partner-generation/medium");
+    await user.click(partnerLink);
+    expect(within(document.querySelector<HTMLElement>("[data-slot=evaluation-detail]")!).getByText("Partner evaluation")).toBeTruthy();
+    expect(within(document.querySelector<HTMLElement>("[data-slot=evaluation-detail]")!).queryByText("Current evaluation")).toBeNull();
   });
 
   it("shows no evaluation when a service has no current correspondence", async () => {
@@ -449,13 +456,14 @@ describe("model-keyed kind evaluations", () => {
     state.modelCorrespondences = [];
     state.kindEvaluations = [{ harness: "codex", modelId: sol.model, effort: "medium",
       modelDisplayName: "Previously mapped model", modelNames: [sol], previousGroups: [], statistics,
-      summary: { text: "Previous evaluation", citations: [] } }];
+      summary: { text: "Previous evaluation" } }];
     const user = userEvent.setup();
     open(fixture(state));
     await listed(1, 1);
     await selectModel(user, SOL, "Codex");
-    await user.click(within(pane()).getByRole("button", { name: /评价与领域经验/ }));
-    expect(within(pane()).getByText("还没有这个同型 buddy 的评价数据。")).toBeTruthy();
-    expect(within(pane()).queryByText("Previous evaluation")).toBeNull();
+    expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("—");
+    expect(within(pane()).queryByRole("link", { name: "0" })).toBeNull();
+    await user.click(screen.getByRole("link", { name: "评价" }));
+    expect(within(document.querySelector<HTMLElement>("[data-slot=evaluation-detail]")!).queryByText("Previous evaluation")).toBeNull();
   });
 });

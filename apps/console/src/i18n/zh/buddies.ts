@@ -21,6 +21,7 @@ export default {
     dataFlow: "构建画像时，模型名称与对应关系候选会发给画像 buddy 的模型提供方；画像 buddy 可以联网查找公开资料。",
   },
   sections: {
+    evaluation: "评价",
     label: "Buddy 的分区",
     catalog: "目录",
     router: "Router",

@@ -175,10 +175,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         evaluation = next(item for item in snapshot["kindEvaluations"]
                           if (item["harness"], item["modelId"], item["effort"])
                           == ("dsh", model_id, "off"))
-        self.assertEqual(evaluation["summary"], {
-            "text": "Careful parser repairs",
-            "citations": [{"runId": run["runId"], "title": run["title"], "macroTaskId": None}],
-        })
+        self.assertEqual(evaluation["summary"], {"text": "Careful parser repairs"})
         self.assertEqual(evaluation["statistics"]["overall"]["samples"], 2)
         self.assertEqual(evaluation["statistics"]["byDomainTaskType"]["software"]["debug"]["samples"], 1)
         with board.store.db.write() as db:

@@ -2823,9 +2823,11 @@ def kind_evaluation_views(domains: list[dict]) -> list[dict]:
                           "durations": [540], "usage": (2400, 600, 360)}
                 _add_sample(connection, kind, sample, None)
                 _add_sample(connection, kind, sample, cell)
-        _add_sample(connection, ("codex", previous_model_id, "high"),
-                    {"success": True, "first_pass": True, "rework": 0,
-                     "durations": [720], "usage": (3000, 400, 500)}, None)
+        previous_kind = ("codex", previous_model_id, "high")
+        previous_sample = {"success": True, "first_pass": True, "rework": 0,
+                           "durations": [720], "usage": (3000, 400, 500)}
+        _add_sample(connection, previous_kind, previous_sample, None)
+        _add_sample(connection, previous_kind, previous_sample, ("preview-domain-ui", "change"))
         connection.execute("INSERT INTO buddy_infrastructure_failures VALUES('dsh','deepseek-official',"
                            "'deepseek-flash','max',1,?)", (instant(8, 36),))
         return _kind_evaluations(connection)

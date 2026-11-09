@@ -2,8 +2,8 @@ import { expect } from "@playwright/test";
 import { TOOLBAR_ITEMS, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
 
 const languages = [
-  { locale: "zh-CN", sections: ["目录", "Router"], enabled: "启用" },
-  { locale: "en-US", sections: ["Catalog", "Router"], enabled: "Enabled" },
+  { locale: "zh-CN", sections: ["目录", "Router", "评价"], enabled: "启用" },
+  { locale: "en-US", sections: ["Catalog", "Router", "Evaluation"], enabled: "Enabled" },
 ];
 
 for (const { locale, sections, enabled } of languages) {
@@ -18,7 +18,7 @@ for (const { locale, sections, enabled } of languages) {
       const links = navigation.getByRole("link");
       const summary = header.getByRole("status");
       await expect(navigation).toHaveCount(1);
-      await expect(links).toHaveCount(2);
+      await expect(links).toHaveCount(3);
       for (const [index, name] of sections.entries()) await expect(links.nth(index)).toContainText(name);
       await expect(summary).toContainText(enabled);
       await expectWholeAndApart(header, header.locator('nav > a, :scope > [role="status"]'));
@@ -42,6 +42,11 @@ for (const { locale, sections, enabled } of languages) {
       expect(routerHeader.y).toBe(catalogHeader.y);
       expect(routerHeader.height).toBe(catalogHeader.height);
       expect(routerHeader.width).toBe(catalogHeader.width);
+
+      await links.nth(2).click();
+      await expect(page).toHaveURL(/#buddies\/evaluation$/);
+      await expect(main.locator('[data-slot="evaluation-list"]')).toBeVisible();
+      expect((await header.boundingBox())!.height).toBe(catalogHeader.height);
 
       await links.nth(0).click();
       await expect(page).toHaveURL(/#buddies\/catalog$/);

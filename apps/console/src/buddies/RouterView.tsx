@@ -61,7 +61,7 @@ export function RouterView({ snapshot, editor, location, onNavigate, hidden, act
         </header>
         {work === "routing" ? <RoutingView snapshot={snapshot} editor={editor} onNavigate={onNavigate} />
           : work === "maintenance" ? <MaintenanceView snapshot={snapshot} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && !hidden} />
-            : <ProfileSettingsView snapshot={snapshot} editor={editor} />}
+            : <ProfileSettingsView snapshot={snapshot} editor={editor} profileRunId={location.profileRunId} />}
       </div>
     </ScrollArea>
   </section>;

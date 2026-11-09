@@ -205,29 +205,3 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 2026-11-05 在 macOS 上使用任务指定的本地 Playwright 依赖及其 Chromium 156.0.8078.4，只读使用依赖，页面以 `file:` 打开；没有安装依赖或联网。截图和检查脚本保留在忽略目录 `tmp/adr032-p6a/`（`generate.py`、`capture.cjs`、`verify.py`），不进提交。`render-report.json` 记录逐帧排版读数，`browser.json` 记录浏览器版本。
 
 本轮共 18 份 HTML、46 张截图：中英文各 8 页及各 1 份独立对比稿的深浅主题，加第 1 页中英文窄容器、中英文目标展开的深浅主题，以及 none 写入值中英文的深色悬停与浅色键盘聚焦提示。已核对静态页面的加载错误、外部请求、横向溢出和主要标签／值／标题／页签区域的文字相交；本轮均为 0。采样文字色与底色的 940 对组合最低对比度为 4.93:1，删除遮罩下的背景不纳入这个数；对话框与代表性的明暗画面另经目视检查。英文 HTML 无中文，提交和树用 40 位、摘要用 64 位的编造十六进制值，none 页面无 Git 产物区块。脚本只检查这些静态事实；未检查真实服务、查询、分页、删除、原生权限、文件封存、整合核验、键盘焦点管理或实际过渡，也没有运行模型。
-
-## Buddy 页与 Router 的重做：待开发者确认
-
-目录与 Router 的稿已随对应实现移除。下表保留评价分区的 3 个画面，中英文各一份 HTML、各有深浅色整页 PNG，宽 1440、高随内容。这些稿只核对过静态渲染，不是控制台实现或实现验收；按开发者安排没有窄屏稿与窄屏样式，窄屏未核对。
-
-| 画面 | 中文 HTML | English HTML | 深色（中文 / English） | 浅色（中文 / English） |
-| --- | --- | --- | --- | --- |
-| 评价：领域评价 | [打开](buddy-redo-evaluation.html) | [Open](buddy-redo-evaluation.en.html) | [中文](buddy-redo-evaluation-dark.png) / [English](buddy-redo-evaluation.en-dark.png) | [中文](buddy-redo-evaluation-light.png) / [English](buddy-redo-evaluation.en-light.png) |
-| 评价：模型画像与短提示 | [打开](buddy-redo-evaluation-model.html) | [Open](buddy-redo-evaluation-model.en.html) | [中文](buddy-redo-evaluation-model-dark.png) / [English](buddy-redo-evaluation-model.en-dark.png) | [中文](buddy-redo-evaluation-model-light.png) / [English](buddy-redo-evaluation-model.en-light.png) |
-| 评价：选名字与换代说明 | [打开](buddy-redo-evaluation-generation.html) | [Open](buddy-redo-evaluation-generation.en.html) | [中文](buddy-redo-evaluation-generation-dark.png) / [English](buddy-redo-evaluation-generation.en-dark.png) | [中文](buddy-redo-evaluation-generation-light.png) / [English](buddy-redo-evaluation-generation.en-light.png) |
-
-评价只保留领域评价与模型画像两个页签，默认领域评价。用户备注已从当前画面去掉。样式仍由 `base.css` 与 [buddy-redo.css](buddy-redo.css) 组成；一般颜色引用 base.css。图标和状态记号沿用：完成为对勾、失败为叉、运行中为实心圆、未建画像为空心圆。所有展开处仍为 Lucide ChevronRight，16px、线宽 1.5，展开转 90°。
-
-比较的数画在高 8px 的细条中：直角端点沿时间轴执行条的矩形画法，段间为 2px 底色间隙，无边框，轨道用最淡的线色。图形内无文字，确切数值在旁边，悬停或键盘聚焦给出数值与含义；一般量用墨色与灰，失败段用红并在相邻读数或名称带叉。用量各段从左到右为缓存输入、其余输入、输出；总输入已减去缓存后才画第二段，避免重复计量。同组记录共用长度基准：维护 35,120 tokens、画像总记录 24,140、失败运行每轮 14,100；Router 应答共用 21 次、工具成败共用 8 次；领域表每格固定 100%。基准是这一组最大已知值，没有新阈值或路由规则。
-
-目录的编造事实沿用：4 个 harness、8 个模型服务、9 / 40 个 buddy 启用。Codex 有 openai、relay-lab 两个提供方，后者冷却到约 16:49；openai 的 Sol 从 2026-11-08 16:05 起这次没读到。terra 已启用但无画像，ZCode 的 glm-5 新发现且未启用。第 2 张抽屉选中 `codex / openai / gpt-6.1-sol / high`，占用 1、并发上限 2，改为小计量条与可本地修改的上限输入，启用、优先、理由跨模块改造、计入评价 30 次、基础设施失败 2 次。并发提醒只在把上限调高时出现，这张画平时没有提醒的状态；提醒触发和保存没有实现。harness 展开仍是位置、账户、冷却，示例版本 0.134.0／0.133.0、占位路径 `~/.local/bin/codex`，openai 订阅、relay-lab 按量，不显示额度百分比、重置时间或余额。
-
-评价列表按 Codex、Claude Code、DSH 分组，只看在用；六行样本数依次为 Sol high 46、Sol medium 12、terra high 8、Sonnet high 21、Flash max 18、Pro high 6。已建画像 2 / 5，terra、Pro 没有画像，Sonnet 正在构建且尚无画像；另有 7 个微任务待维护。三张评价详情均选 `codex / gpt-6.1-sol / high`，openai、relay-lab 共用。当前 46 个样本改为一条 34 一次通过／7 返工后成功／5 失败的细条，成功合计仍为 41，返工 9 轮。中位数只一行：交付 8m 20s、输入 24k、缓存 12k、输出 3.2k tokens。归纳与微任务引用保留。领域表每个有样本的格子是一条一次通过率短条与样本数，百分比和返工轮数只在提示中，无样本格留空；领域父级包含子级，不把父子样本相加。
-
-“证据来自”一行改为 30／16 两段，名字和数写在旁边：gpt-6.1-sol 30、sol-latest 16；行尾仍为“…”菜单。换代之前的 `codex / sol-previous / high` 12 个样本用更淡的单条（与当前 46 共用基准）排在后面作次一级证据，不计入当前 46。第 9 张的选名字与说明对话框没有改：gpt-6.1-sol（30）、sol-latest（16），选后者，它之后的新结果算新一代，之前的 16 个样本留旧一代，不改名字显示、不动目录，取消／标出换代。三个对应动作都先选名字，单名字自动选好；撤回只对画像或用户改过的名字可用，本例 sol-latest 有用户改过的对应。按钮和名字切换后的说明联动未实现。
-
-模型画像只剩一句定位，擅长与不擅长以加号／减号记号分两列，条目后的 S1／S2 对应页尾各列一次的来源和日期（编造的厂商自述／第三方，2026-11-06）；已建画像日期 2026-11-07，保留重建按钮。Pro 构建失败的通知保留原因、输入 21,680／缓存 6,144／输出 2,460 tokens 与“查看记录”，约 6 秒后隐藏，截图取刚出现的时刻；画像运行的打回、错误和工具成败只在 Router 的画像记录中。
-
-批量构建没有常驻确认区；拟议为点按钮后弹出确认框，由 DSH Flash max buddy 使用它的额度，为 terra、Pro 各一次，共 2 次，列明模型与取消／确认按钮，本轮不另画。领域评价图的维护未配置，立即维护不可用；换代图的画像未配置，批量构建不可用，提示先在对应 Router 工作里指定 buddy；模型画像图两项均已配置。Router 左栏每项只有工作名与一行状态：路由为“✓ 最近一次 · 成功 / Latest run · succeeded”，维护为“✓ 最近一轮 · 已完成 / Latest run · completed”，画像为“✕ 最近一次 · 失败 / Latest run · failed”；路由结果与右边记录的连续失败 0、最近成功 16:28 一致。任一 Router 工作未指定 buddy 时，左栏状态行写“○ 未设置 / Not set”，详情写“此项工作不运行，请指定 buddy。 / This work does not run. Set a buddy.”，保留选择入口与记录；本批不另画。
-
-所有模型事实、名字、账户、状态、来源、日期、版本、归纳、微任务、计数与用量均为设计数据。页面不联网、不接服务或黑板、不调用模型。部分导航、原生折叠、提示、枝条树的折叠／悬停／键盘示意和并发输入可查看本地状态；真实过滤、提醒触发、保存、构建、维护、对应关系变更、弹框流程、原生权限和状态同步没有实现。

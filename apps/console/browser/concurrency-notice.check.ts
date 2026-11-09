@@ -16,7 +16,7 @@ for (const { locale, copy, limit } of languages) for (const width of [1440]) for
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     });
 
-    test("keeps the full notice readable below its input and before the profile", async ({ page }) => {
+    test("keeps the full notice readable below its input", async ({ page }) => {
       await open(page, "#buddies/catalog");
       await page.getByRole("button", { name: MODEL, exact: true }).click();
       const drawer = page.getByRole("region", { name: MODEL, exact: true });
@@ -25,9 +25,9 @@ for (const { locale, copy, limit } of languages) for (const width of [1440]) for
       const body = notice.getByText(copy.body, { exact: true });
       const input = drawer.getByRole("spinbutton", { name: limit });
       const occupancy = drawer.locator('[id$="-occupancy"]');
-      const profile = drawer.locator("[data-slot=model-profile]");
+      await expect(drawer.locator("[data-slot=model-profile], [data-slot=kind-evaluation]")).toHaveCount(0);
       await expect(notice).toHaveCount(0);
-      // A valid edit already shows the model's save-before-building line. Invalidity alone must not move the controls or profile.
+      // The notice belongs to the service controls and does not move the inputs.
       await input.fill("3");
       await notice.scrollIntoViewIfNeeded();
       await expect(heading).toBeVisible();
@@ -37,9 +37,9 @@ for (const { locale, copy, limit } of languages) for (const width of [1440]) for
       await expect(input).toHaveAccessibleDescription(new RegExp(copy.title));
       await expectWholeAndApart(notice, notice.locator("h4, p"));
       await expectTextUncut(notice.locator("h4, p"));
-      const [inputBox, occupancyBox, noticeBox, profileBox] = await Promise.all([input.boundingBox(), occupancy.boundingBox(), notice.boundingBox(), profile.boundingBox()]);
+      const [inputBox, occupancyBox, noticeBox] = await Promise.all([input.boundingBox(), occupancy.boundingBox(), notice.boundingBox()]);
       expect(inputBox!.y + inputBox!.height).toBeLessThanOrEqual(noticeBox!.y);
-      expect(noticeBox!.y + noticeBox!.height).toBeLessThanOrEqual(profileBox!.y);
+      expect(occupancyBox!.y).toBeGreaterThanOrEqual(inputBox!.y);
       for (const text of [heading, body]) {
         expect(await contrastOf(text)).toBeGreaterThanOrEqual(4.5);
         await expectTextUncut(text);

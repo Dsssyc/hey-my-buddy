@@ -88,6 +88,9 @@ describe("authenticated snapshot read boundaries", () => {
     await expect(apiFor({ ...value, models: [{ ...model, profile: { ...model.profile,
       claims: [{ ...model.profile.claims[0], polarity: "unknown" }] } }] }).snapshot())
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(apiFor({ ...value, models: [{ ...model, profile: { ...model.profile,
+      claims: [{ ...model.profile.claims[0], sourceUrl: "javascript:alert(1)" }] } }] }).snapshot())
+      .rejects.toHaveProperty("code", "INVALID_RESPONSE");
     await expect(apiFor({ ...value, modelCorrespondences: [{ ...correspondence, canUndo: "yes" }] }).snapshot())
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
     await expect(apiFor({ ...value, modelCorrespondences: [{ ...correspondence, source: "guess" }] }).snapshot())

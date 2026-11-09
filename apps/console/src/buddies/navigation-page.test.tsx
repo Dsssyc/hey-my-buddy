@@ -9,7 +9,7 @@ import { choosePreference, effortCell, level, levelPreference, listed, modelButt
 import { modelServiceKey } from "../console-data";
 
 /**
- * The Buddy page's own navigation: two sections, 目录 and Router, and inside the
+ * The Buddy page's own navigation: 目录, Router and 评价, and inside the
  * catalogue one directory in which a harness, a model or a buddy can be
  * selected. Every selection has an address; deep links, hashchange and the
  * browser's back action land in the same state, and a deep link cuts through
@@ -147,6 +147,8 @@ describe("the Buddy page's sections and tables", () => {
     const navigation = sectionsNav();
     const catalogLink = sectionLink(/^目录/);
     const routerLink = sectionLink(/^Router/);
+    const evaluationLink = sectionLink("评价");
+    expect(within(navigation).getAllByRole("link")).toHaveLength(3);
     const summary = document.querySelector('[data-slot="buddy-header"] [role="status"]')!;
     expect(summary.textContent).toBe("4 个 harness · 启用 3 / 5");
 
@@ -164,6 +166,13 @@ describe("the Buddy page's sections and tables", () => {
     expect(sectionLink(/^Router/)).toBe(routerLink);
     expect(summary.textContent).toBe("4 个 harness · 启用 3 / 5");
 
+    evaluationLink.focus();
+    await user.keyboard("{Enter}");
+    expect(window.location.hash).toBe("#buddies/evaluation");
+    expect(document.activeElement).toBe(evaluationLink);
+    expect(sectionsNav()).toBe(navigation);
+    expect(summary.textContent).toBe("4 个 harness · 启用 3 / 5");
+
     catalogLink.focus();
     await user.keyboard("{Enter}");
     expect(window.location.hash).toBe("#buddies/catalog");
@@ -172,7 +181,7 @@ describe("the Buddy page's sections and tables", () => {
     expect(summary.textContent).toBe("4 个 harness · 启用 3 / 5");
   });
 
-  it("opens one directory by default and moves between directory and Router", async () => {
+  it("opens one directory by default and moves among directory, Router and evaluation", async () => {
     const f = fixture(); const user = userEvent.setup();
     renderBuddy("#buddies", f); await listed(3, 4);
     expect(current(sectionsNav())).toEqual(["目录"]);
@@ -185,6 +194,10 @@ describe("the Buddy page's sections and tables", () => {
     await screen.findByRole("region", { name: "Router" });
     expect(modelsRegion()).toBeNull(); expect(current(sectionsNav())).toEqual(["Router"]);
     expect(screen.getByRole("spinbutton", { name: "等待模型开始作答" })).toBeTruthy();
+    await user.click(sectionLink("评价"));
+    expect(window.location.hash).toBe("#buddies/evaluation");
+    expect(current(sectionsNav())).toEqual(["评价"]);
+    expect(screen.getByRole("navigation", { name: "评价列表" })).toBeTruthy();
     await user.click(sectionLink(/^目录/));
     expect(window.location.hash).toBe("#buddies/catalog");
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
@@ -366,7 +379,7 @@ describe("a narrow viewport", () => {
     await listed(3, 4);
     await selectModel(user, SONNET, "Claude Code");
     await choosePreference(user, "medium", "优先");
-    expect(within(sectionsNav()).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["目录", "Router"]);
+    expect(within(sectionsNav()).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["目录", "Router", "评价"]);
     await user.click(sectionLink(/^Router/));
     await screen.findByRole("region", { name: "Router" });
     await user.click(sectionLink(/^目录/));

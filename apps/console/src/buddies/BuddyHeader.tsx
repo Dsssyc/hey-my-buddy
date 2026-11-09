@@ -27,16 +27,17 @@ function ViewLink({ view, label, current, className, hint, onNavigate }: {
   return hint ? <Tooltip><TooltipTrigger asChild>{anchor}</TooltipTrigger><TooltipContent>{hint}</TooltipContent></Tooltip> : anchor;
 }
 
-/** The Buddy page's two sections: the catalogue and the Router. */
+/** The Buddy page's directory, Router and evaluation sections. */
 export function BuddyHeader({ location, attention, onNavigate, harnessCount, enabled, total }: {
   harnessCount: number; enabled: number; total: number; location: BuddyLocation; attention: BuddyAttention; onNavigate: (next: BuddyLocation) => void;
 }) {
   const { t } = useTranslation("buddies");
   const hints = attentionHints(attention, t);
-  const inCatalog = location.view !== "router";
+  const inCatalog = location.view === "models";
   return <div data-slot="buddy-header" className="flex h-12 shrink-0 items-center justify-between gap-6 border-b bg-card px-6"><nav aria-label={t("sections.label")} className="flex shrink-0 items-center gap-[22px] self-start bg-card">
-    <ViewLink view={inCatalog ? location.view : "models"} label={t("sections.catalog")} current={inCatalog} className={sectionClass}
+    <ViewLink view="models" label={t("sections.catalog")} current={inCatalog} className={sectionClass}
       onNavigate={onNavigate} />
-    <ViewLink view="router" label={t("sections.router")} current={!inCatalog} className={sectionClass} hint={hints.roles} onNavigate={onNavigate} />
+    <ViewLink view="router" label={t("sections.router")} current={location.view === "router"} className={sectionClass} hint={hints.roles} onNavigate={onNavigate} />
+    <ViewLink view="evaluation" label={t("sections.evaluation")} current={location.view === "evaluation"} className={sectionClass} onNavigate={onNavigate} />
   </nav><span className="whitespace-nowrap text-xs text-ink2 tabular-nums" role="status">{t("sections.summary", { n: harnessCount, enabled, total })}</span></div>;
 }

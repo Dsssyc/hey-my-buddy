@@ -175,7 +175,7 @@ for (const { locale, account, settings, fold } of languages) {
       expect(seconds(turn.duration)[0]).toBe(0.2);
     });
 
-    test("keeps the model profile below the buddy panel and every control at least 28px tall", async ({ page }) => {
+    test("keeps the service drawer scoped to service and buddy settings with usable controls", async ({ page }) => {
       await open(page, "#buddies/catalog");
       for (const summary of await page.locator("[data-slot=account-summary]").all()) await summary.click();
       await page.getByRole("button", { name: CODEX, exact: true }).click();
@@ -183,15 +183,7 @@ for (const { locale, account, settings, fold } of languages) {
       await expect(drawer).toBeVisible();
       // The sections above are still opening: measure when everything has stopped moving.
       await settle(page);
-      // The model profile follows the service/buddy settings and spans the drawer's content width.
-      const profile = drawer.locator("[data-slot=model-profile]");
-      const [model, panel, content] = await Promise.all([
-        box(profile), box(drawer.locator("[data-slot=buddy-panel]")),
-        box(drawer.locator(":scope > div.grid")),
-      ]);
-      expect(model.y).toBeGreaterThanOrEqual(panel.y + panel.height);
-      expect(Math.abs(model.x - content.x)).toBeLessThanOrEqual(0.5);
-      expect(Math.abs(model.x + model.width - (content.x + content.width))).toBeLessThanOrEqual(0.5);
+      await expect(drawer.locator("[data-slot=model-profile], [data-slot=kind-evaluation], [data-slot=model-correspondence]")).toHaveCount(0);
       // Controls are 32px, the small ones 28px; nothing a pointer must hit is smaller. A checkbox is a mark inside its label.
       const buttons = page.getByRole("main").locator("button:not([role=checkbox]), [role=switch], [role=radio], input:not([type=checkbox]), select");
       for (const control of await buttons.all()) {

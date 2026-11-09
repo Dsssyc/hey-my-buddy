@@ -101,16 +101,8 @@ def _kind_evaluations(connection) -> list[dict]:
         ' UNION SELECT harness,model_id,effort FROM kind_summaries ORDER BY harness,model_id,effort')]
     statistics = kind_domain_statistics(connection, kinds)
     previous_groups = _previous_groups(connection)
-    summaries = {(row['harness'], row['model_id'], row['effort']):
-                 {'text': row['text'], 'citations': []}
+    summaries = {(row['harness'], row['model_id'], row['effort']): {'text': row['text']}
                  for row in connection.execute('SELECT harness,model_id,effort,text FROM kind_summaries')}
-    for row in connection.execute(
-        'SELECT e.harness,e.model_id,e.effort,e.run_id,r.title,r.macro_task_id'
-        ' FROM kind_summary_evidence e JOIN workflow_runs r ON r.run_id=e.run_id'
-        ' WHERE e.cited=1 ORDER BY e.harness,e.model_id,e.effort,e.run_id'):
-        summaries[row['harness'], row['model_id'], row['effort']]['citations'].append({
-            'runId': row['run_id'], 'title': row['title'], 'macroTaskId': row['macro_task_id'],
-        })
     result = []
     for kind in kinds:
         model = model_view(connection, kind['model_id'])

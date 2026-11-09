@@ -5,30 +5,33 @@ import type { Snapshot } from "./types";
 import { buddyAttention } from "./buddies/attention";
 import { BuddyHeader } from "./buddies/BuddyHeader";
 import { CatalogView } from "./buddies/CatalogView";
+import { EvaluationView } from "./buddies/EvaluationView";
 import { RouterView } from "./buddies/RouterView";
 import { buddyHash, buddyLocation } from "./buddies/navigation";
 import type { BuddyLocation } from "./buddies/navigation";
 
 /**
- * The Buddy page: one catalogue and the Router.
- * Both views stay mounted, so
- * that what is selected and what is typed survive a change of view.
+ * The Buddy page: directory, Router and evaluation.
+ * Visited evaluation content stays mounted so selections and profile notifications
+ * survive a change of section.
  */
 export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mutationsAvailable = true }: {
   snapshot: Snapshot; editor: Editor; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
   active?: boolean; mutationsAvailable?: boolean;
 }) {
   const [location, setLocation] = useState<BuddyLocation>(() => buddyLocation(window.location.hash) ?? { view: "models" });
+  const [evaluationVisited, setEvaluationVisited] = useState(location.view === "evaluation");
   const attention = buddyAttention(editor.view, snapshot);
   useEffect(() => {
     const changed = () => {
       const next = buddyLocation(window.location.hash);
-      if (next) setLocation(next);
+      if (next) { setLocation(next); if (next.view === "evaluation") setEvaluationVisited(true); }
     };
     window.addEventListener("hashchange", changed);
     return () => window.removeEventListener("hashchange", changed);
   }, []);
   function navigate(next: BuddyLocation) {
+    if (next.view === "evaluation") setEvaluationVisited(true);
     setLocation(next);
     window.location.hash = buddyHash(next);
   }
@@ -40,5 +43,6 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
     <CatalogView {...shared} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable}
       active={active && location.view === "models"} hidden={location.view !== "models"} />
     <RouterView {...shared} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && location.view === "router"} hidden={location.view !== "router"} />
+    {evaluationVisited && <EvaluationView {...shared} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} hidden={location.view !== "evaluation"} />}
   </div>;
 }

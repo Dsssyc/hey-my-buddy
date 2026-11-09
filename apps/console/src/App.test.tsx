@@ -106,7 +106,7 @@ describe("console interactions", () => {
     expect(api.command).not.toHaveBeenCalled();
   });
 
-  it("keeps evaluation read-only in the buddy drawer", async () => {
+  it("opens evaluation from the buddy's sample count without a write", async () => {
     const state = initial();
     const command = vi.fn(async (operation: string) => {
       throw new Error(`Unexpected command: ${operation}`);
@@ -125,9 +125,14 @@ describe("console interactions", () => {
     await selectModel(user, FLASH, "DSH");
     expect(screen.queryByRole("button", { name: "记录待整理观察" })).toBeNull();
     expect(screen.queryByRole("button", { name: "评价维护" })).toBeNull();
-    // The native effort selector and evaluation fold send no request.
+    // The effort selector stays local; the sample count carries a stable evaluation address.
     expect(within(pane()).getAllByRole("button").filter(button => button.getAttribute("aria-label") !== null).map(button => button.getAttribute("aria-label"))).toEqual(["off"]);
-    await user.click(screen.getByRole("button", { name: /评价与领域经验/ }));
+    expect(within(pane()).queryByRole("button", { name: /评价与领域经验/ })).toBeNull();
+    const samples = within(pane()).getByRole("link", { name: "0" });
+    expect(samples.getAttribute("href")).toBe("#buddies/evaluation/dsh/deepseek-flash/off");
+    await user.click(samples);
+    expect(window.location.hash).toBe(samples.getAttribute("href"));
+    expect(screen.getByRole("region", { name: "评价" })).toBeTruthy();
     expect(command).not.toHaveBeenCalled();
   });
 

@@ -57,7 +57,7 @@ export default {
   exploration: {
     name: "Exploration quota", on: "On", off: "Off", interval: "Micro tasks per exploration quota",
     disabled: "Exploration is off", invalid: "Enter an integer of at least 2",
-    explanation: "Exploration occasionally picks a buddy kind with fewer samples (buddies with the same harness, model and reasoning effort are one kind), so it builds up evidence too.",
+    explanation: "Exploration occasionally picks a buddy with fewer samples, so it builds up evidence too.",
   },
   retry: {
     name: "Retry interval",
