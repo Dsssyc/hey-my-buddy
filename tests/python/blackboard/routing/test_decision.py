@@ -758,7 +758,12 @@ class DecisionFailureTests(DecisionTestCase):
             connection.execute("UPDATE router_settings SET model_response_wait_seconds=5 WHERE id=1")
         request = board.store.decisions.request_select({"requestId": "pick-deadline", "task": "slow"})
         started = time.monotonic()
-        self.run_worker(board, worker_id="w-deadline")
+        # This fixture's dsh Router stands for a harness whose protocol can show
+        # the model's start; the real DSH cannot (ADR-023 declaration) and never
+        # faces the start wait, so the wait's bounded cancel is pinned here with
+        # the declaration cleared.
+        with patch.dict('hey_my_buddy.protocol.capabilities.MODEL_START_UNSEEN', clear=True):
+            self.run_worker(board, worker_id="w-deadline")
         self.assertLess(time.monotonic() - started, 30)
         self.assertEqual(self.decision(board, request["decisionId"])["status"], "running")
         task = board.call("task_get", {"runId": request["runId"]})["task"]

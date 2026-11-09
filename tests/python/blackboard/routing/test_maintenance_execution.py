@@ -28,6 +28,8 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import maintenance as files
 from hey_my_buddy.protocol.reasons import REGISTERED_REASON_PARAMETERS
 
+from buddy.harnesses.dsh.acp.support import FAKE_AGENT
+
 
 BUDDY_ID = "dsh:fixture:maintenance:off"
 NONCE = "m" * 32
@@ -924,3 +926,73 @@ class MaintenanceExecutionTests(WorkflowTestCase):
             self.assertNotIn("prompt", json.loads(path.read_text(encoding="utf-8")))
         for path in native_path(audits).rglob("result.json"):
             self.assertNotIn("rawAnswer", json.loads(path.read_text(encoding="utf-8")))
+
+    def test_a_silent_native_call_past_the_start_wait_is_not_cancelled(self):
+        """DSH cannot show the model's start, so no maintenance call is judged by the wait.
+
+        The maintenance answer is one whole model step with no tools — exactly
+        the call the start wait misjudged on DSH's ACP channel, where nothing
+        goes out until the step ends. The fake agent stays completely silent
+        past the configured wait and only then answers; the declared harness
+        runs without the wait, so the answer settles the run instead of a
+        router-not-responding cancellation.
+        """
+        import os
+        import time
+
+        from fake_executable import make_fake_executable
+
+        self.configure(wait=1)
+        started = self.start()
+        claim = self.claim_maintenance(started["runId"])
+        answer = json.dumps(self.valid_answer(self.packet(claim)))
+        root = self.board_.directory
+        options = root / "maintenance-config-options.json"
+        options.write_text(json.dumps({"configOptions": [
+            {"id": "model", "name": "Model", "category": "model", "type": "select",
+             "currentValue": '["fixture","maintenance"]',
+             "options": [{"group": "fixture", "name": "Fixture", "options": [
+                 {"value": '["fixture","maintenance"]', "name": "Fixture maintenance"}]}]},
+            {"id": "reasoning_effort", "name": "Reasoning effort", "category": "thought_level",
+             "type": "select", "currentValue": "off",
+             "options": [{"value": "off", "name": "off"}]},
+        ]}), encoding="utf-8", newline="\n")
+        script = root / "maintenance-dsh.py"
+        script.write_text(
+            "import importlib.util, sys\n"
+            f"spec = importlib.util.spec_from_file_location('fake_agent', {str(FAKE_AGENT)!r})\n"
+            "module = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(module)\n"
+            f"sys.argv[1:1] = ['--log', {str(root / 'maintenance-agent.log')!r},\n"
+            f"                  '--fixture-root', {str(root)!r}, '--prompt-mode', 'final',\n"
+            f"                  '--config-options-fixture', {str(options)!r},\n"
+            f"                  '--delay', 'session/prompt:2.5', '--final-answer', {answer!r}]\n"
+            "raise SystemExit(module.main())\n", encoding="utf-8", newline="\n")
+        executable = make_fake_executable(root / "harness-bin", "dsh", source=script)
+        home = root / "maintenance-agent-home"
+        native_path(home / ".dsh").mkdir(parents=True, mode=0o700, exist_ok=True)
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith("HMB_")}
+        environment.update(HOME=str(home), USERPROFILE=str(home), DSH_HOME=str(home / ".dsh"),
+                           HMB_STATE_DIR=str(root), HMB_RUNTIME_ROOT=str(root / "runtime"),
+                           HMB_DEV_SOURCE="1", HMB_DSH_CLI=str(executable))
+        logs = []
+        with patch.object(process_identity, "_active_native_journal", None):
+            execution = Execution(claim, root, NONCE, client=self.board_.client(),
+                                  session_record_path=claim["sessionRecordPath"], log=logs.append)
+            native_path(execution.directory).mkdir(parents=True, mode=0o700, exist_ok=True)
+            native_path(execution.evidence_directory).mkdir(parents=True, mode=0o700, exist_ok=True)
+            began = time.monotonic()
+            with patch.dict(os.environ, environment), \
+                    patch.object(DecisionAdapter, "available", return_value=(True, None)), \
+                    patch.object(run_seam("dsh"), "check_preparation", return_value=None):
+                execution.run()
+            elapsed = time.monotonic() - began
+        self.assertGreater(elapsed, 2.5,
+                           f"the silent stretch never exceeded the configured wait: {logs}")
+        with self.board_.store.db.read() as db:
+            run = db.execute("SELECT state,reason_code FROM maintenance_runs").fetchone()
+            self.assertEqual((run["state"], run["reason_code"]), ("completed", None), logs)
+            attempts = db.execute("SELECT COUNT(*) FROM attempts WHERE task_id=?",
+                                  (started["runId"],)).fetchone()[0]
+        self.assertEqual(attempts, 1)

@@ -170,9 +170,11 @@ class ExecutionEndpointTests(unittest.TestCase):
                     state = Path(directory)
                     spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
                             "decision": {"kind": kind}}
+                    # Codex stands for a harness whose protocol can show the
+                    # model's start; DSH cannot and is covered by its own test.
                     claim = {"task": {"taskId": "task", "spec": spec},
                              "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
-                             "decisionInput": {"kind": kind, "buddy": {"harness": "dsh"}}}
+                             "decisionInput": {"kind": kind, "buddy": {"harness": "codex"}}}
                     execution = Execution(claim, state, 'n' * 32, client=mock.Mock())
                     execution.directory.mkdir(parents=True, mode=0o700)
                     execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -213,6 +215,50 @@ class ExecutionEndpointTests(unittest.TestCase):
                         self.assertEqual(report['result']['code'], 'router-not-responding')
                         self.assertNotIn('seconds', report['result'])
                         self.assertIs(report['result']['modelResponded'], False)
+
+    def test_a_declared_harness_runs_every_router_plane_without_the_start_wait(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.install import runtime
+        for kind in ("maintain", "select-fast", "select-review", "profile"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                state = Path(directory)
+                spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                        "decision": {"kind": kind}}
+                # DSH's ACP channel cannot show the model's start as it happens,
+                # so silence within the wait proves nothing: no wait is applied,
+                # no fallback budget file appears and a model that never reports
+                # activity still reaches its own end uncancelled.
+                claim = {"task": {"taskId": "task", "spec": spec},
+                         "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                         "decisionInput": {"kind": kind, "buddy": {"harness": "dsh"}}}
+                execution = Execution(claim, state, 'n' * 32, client=mock.Mock())
+                execution.directory.mkdir(parents=True, mode=0o700)
+                execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+                clock = [0.0]
+
+                def wait(timeout):
+                    clock[0] = 10_000.0
+                    return 0
+
+                handle = SimpleNamespace(wait=wait, grace_deadline=None, force_stop_requested=False,
+                                         cancel_requested=False, stop_initiator=None, grace_expired=False,
+                                         result=None, model_responded=False)
+                outcome = AdapterOutcome(status='ok', shutdown_confirmed=True, result={'modelResponded': False})
+                with mock.patch.object(runtime, 'resolve_runtime', return_value={}), \
+                        mock.patch.object(controller, 'worker_executor', return_value=object()), \
+                        mock.patch.object(controller, 'prepare_worker_run', return_value=controller.WorkerPreparation(True)), \
+                        mock.patch.object(controller, 'worker_start', return_value=handle), \
+                        mock.patch.object(controller, 'worker_collect', return_value=outcome), \
+                        mock.patch.object(controller, 'worker_cancel') as cancel, \
+                        mock.patch.object(module, 'time', SimpleNamespace(monotonic=lambda: clock[0])):
+                    receipt = execution._execute_selected(claim, claim['task'], spec, claim['attempt'],
+                                                          execution.directory, {'preflightControl': mock.Mock()})
+                report = receipt['report']
+                cancel.assert_not_called()
+                self.assertFalse((execution.directory / module.BUDGET).exists())
+                self.assertEqual((report['status'], report['terminationReason']), ('ok', 'completed'))
+                self.assertNotEqual(report['result'].get('code'), 'router-not-responding')
 
     def test_model_response_removes_wait_file_and_rearms_each_session(self):
         from hey_my_buddy.buddy.runtime import execution as module

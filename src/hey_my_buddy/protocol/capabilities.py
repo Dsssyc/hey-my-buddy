@@ -97,6 +97,42 @@ INPUT_LIMITS = {
         form="cli-app-server", scope="session-send-text", source="zcode-cli-docs"),
 }
 
+@dataclass(frozen=True)
+class ModelStartUnseen:
+    """One harness's declaration that its native protocol cannot show the
+    model's start in real time, written in code (ADR-023).
+
+    Like ``INPUT_LIMITS`` this is a harness capability, not a setting or a
+    health observation. The Router start wait judges silence within the wait
+    as a model that never began; on a protocol that cannot show the start as
+    it happens that judgment is false, so the execution process must not apply
+    the wait to a harness declared here and the harness's own stream idle
+    timeout bounds the call instead. A harness absent from the table is not
+    declared the opposite: it is simply not verified either way and keeps the
+    configured wait.
+    """
+
+    form: str
+    versions: tuple[str, ...]
+    basis: str
+
+
+#: The harnesses whose native protocol cannot show the model's start in real
+#: time. DSH CLI 0.2.2-rc.1 (CLI form, ACP channel) forwards only events
+#: already written to the session: one whole model step — reasoning, message
+#: and tool calls — streams into the session first and only then goes out
+#: block by block, with no handshake capability, settings entry or environment
+#: switch that changes it and no earlier notification at the turn's start; the
+#: harness's own stream idle timeout (no data at all, 300 seconds by default)
+#: is what bounds a silent call.
+MODEL_START_UNSEEN = {
+    "dsh": ModelStartUnseen(
+        form="cli-acp", versions=("0.2.2-rc.1",),
+        basis="the ACP server emits each block only after the model's whole step "
+              "is written to the session"),
+}
+
+
 #: One version-shaped token of a public ``--version`` line, with any
 #: pre-release or build suffix kept attached so it never equals the bare
 #: release, and a number glued to a word is not a token.
@@ -126,6 +162,11 @@ def version_matches(observed: str, versions: tuple[str, ...]) -> bool:
 def declared_input_limit(harness: str) -> InputLimit | None:
     """The declared input limit, or ``None`` where no native input channel exists."""
     return INPUT_LIMITS.get(harness)
+
+
+def model_start_unseen(harness: str) -> ModelStartUnseen | None:
+    """The declaration that this harness's protocol cannot show the model's start."""
+    return MODEL_START_UNSEEN.get(harness)
 
 
 def select_input_limit(harness: str, observed_version: str | None) -> InputLimit | None:

@@ -236,8 +236,10 @@ def evaluate(result, state_dir: Path, canary: str, listing: dict) -> dict:
     native_details = native_evidence(result) if callable(native_evidence) else None
     settled = bool(package and package.get("streamComplete") is True and result.end.status == "ok")
     reported = answer.get("visibleTools")
+    # The prompt's own empty marker: `none` means no visible tool, never a tool
+    # named "none"; every other string is the comma-separated name list.
     model_names = ({part.strip() for part in re.split(r"[,\n]", reported) if part.strip()}
-                   if isinstance(reported, str) else set())
+                   if isinstance(reported, str) and reported.strip().lower() != "none" else set())
     names = {fact["toolName"] for row in rows for fact in row.get("facts", [])
              if isinstance(fact.get("toolName"), str)}
     categories = {category for row in rows for category in row.get("categories", [])}

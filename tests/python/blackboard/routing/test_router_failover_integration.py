@@ -182,7 +182,12 @@ class FailoverTests(RouterDispatchTestCase):
             self.addCleanup(execution.control.join, 5)
             self.addCleanup(execution.control.stop)
             started = time.monotonic()
-            with patch("hey_my_buddy.buddy.roles.controller.worker_executor", return_value=SleepingRouter()):
+            # This fixture's dsh Router stands for a harness whose protocol can
+            # show the model's start; the real DSH cannot (ADR-023 declaration)
+            # and never faces the start wait, so the wait-cancel machinery is
+            # pinned here with the declaration cleared.
+            with patch("hey_my_buddy.buddy.roles.controller.worker_executor", return_value=SleepingRouter()), \
+                    patch.dict('hey_my_buddy.protocol.capabilities.MODEL_START_UNSEEN', clear=True):
                 receipt = execution._execute_selected(first, first["task"], spec, first["attempt"], directory, holder)
             elapsed = time.monotonic() - started
             self.assertTrue(stopped.exists(), "the native input stop was not delivered")

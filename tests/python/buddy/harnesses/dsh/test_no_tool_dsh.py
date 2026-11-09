@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -70,10 +71,12 @@ class DshNoToolTests(unittest.TestCase):
             "HOME": self.environment["HOME"], "USERPROFILE": self.environment["HOME"],
             "DSH_HOME": self.environment["DSH_HOME"]}))
 
-    def select(self, *answers: str) -> None:
+    def select(self, *answers: str, delay: tuple[str, float] | None = None) -> None:
         """Point the harness record at the fake agent with these final answers."""
         command = [sys.executable, str(FAKE_AGENT), "--log", str(self.log),
                    "--fixture-root", str(self.root), "--prompt-mode", "final"]
+        if delay is not None:
+            command += ["--delay", f"{delay[0]}:{delay[1]}"]
         command += [name for answer in answers for name in ("--final-answer", answer)]
         self.record.write_text(json.dumps({"dsh": {"status": "ready", "command": command}}), encoding="utf-8", newline="\n")
 
@@ -149,6 +152,71 @@ class FastRegisteredSeamTests(DshNoToolTests):
         refused = structured_call.collect(handle)
         self.assertFalse(refused.shutdown_confirmed)
         self.assertEqual(refused.status, "failed")
+
+
+class RouterStartWaitTests(DshNoToolTests):
+    """The start wait judgment over a real execution of the fake ACP agent.
+
+    DSH's ACP channel cannot show the model's start as it happens — each block
+    goes out only after the model's whole step is in the session — so the
+    harness is declared unable to see the start and the execution process runs
+    its Router calls without the configured wait.
+    """
+
+    def test_silence_past_the_start_wait_still_collects_the_routing_answer(self):
+        from hey_my_buddy.buddy.runtime.execution import BUDGET, Execution
+        from hey_my_buddy.buddy.roles.router import DecisionAdapter
+        from hey_my_buddy.blackboard.routing import router
+
+        candidates = ["dsh:fixture:alpha:max", "dsh:fixture:bravo:max"]
+
+        def candidate(buddy_id):
+            def statistics(samples, first_passes, failures, median):
+                return {"samples": samples, "successes": samples - failures, "firstPasses": first_passes,
+                        "failures": failures, "reworkRounds": 0, "defects": min(1, samples - failures),
+                        "firstPassRate": first_passes / samples if samples else None,
+                        "failureRate": failures / samples if samples else None,
+                        "medianDeliverySeconds": median}
+            return {"buddyId": buddy_id, "load": {"active": 0, "limit": 2, "queued": 0,
+                    "wait": {"seconds": 300, "atLeast": True, "overdue": 0}},
+                    "statistics": {"overall": statistics(20, 16, 4, 120),
+                                   "byDomain": {}, "byDomainTaskType": {}}}
+
+        answer = {"buddyId": candidates[1], "domainNodeId": None, "taskType": "change",
+                  "note": "the fixture choice", "evidence": []}
+        # The agent holds every session/update and the prompt answer until past
+        # the configured wait, exactly the shape a long first reasoning step
+        # produces on the real channel.
+        self.select(json.dumps(answer), delay=("session/prompt", 2.5))
+        spec = {"adapter": "decision", "cwd": str(self.cwd), "modelResponseWaitSeconds": 1}
+        document = {"routingMode": "fast",
+                    "buddy": {"harness": "dsh", **SPEC},
+                    "buddies": [candidate(buddy_id) for buddy_id in candidates],
+                    "domainNodes": [], "task": "fix the parser", "requestId": "pick-1",
+                    "outputSchema": router.answer_schema(candidates, "fast")}
+        claim = {"task": {"taskId": "router-task", "spec": spec},
+                 "attempt": {"taskId": "router-task", "attemptId": "attempt-1", "generation": 1},
+                 "decisionInput": document}
+        execution = Execution(claim, self.root / "state", "n" * 32, client=mock.Mock())
+        from hey_my_buddy.paths import native_path
+        native_path(execution.directory).mkdir(parents=True, mode=0o700)
+        native_path(execution.evidence_directory).mkdir(parents=True, mode=0o700, exist_ok=True)
+        started = time.monotonic()
+        with mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1",
+                                          "HMB_HARNESS_RECORD_FILE": str(self.record),
+                                          "HMB_STATE_DIR": str(self.root / "state"),
+                                          "HMB_RUNTIME_ROOT": str(self.root / "runtime")}), \
+                mock.patch.object(DecisionAdapter, "available", return_value=(True, None)):
+            receipt = execution._execute_selected(claim, claim["task"], spec, claim["attempt"],
+                                                  execution.directory, {"preflightControl": mock.Mock()})
+        report = receipt["report"]
+        self.assertGreater(time.monotonic() - started, 2.5,
+                           "the silent stretch never exceeded the configured wait")
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["terminationReason"], "completed")
+        self.assertEqual(report["result"]["decision"]["buddyId"], candidates[1])
+        self.assertFalse((execution.directory / BUDGET).exists(),
+                         "a declared harness never publishes the start-wait budget")
 
 
 if __name__ == "__main__":

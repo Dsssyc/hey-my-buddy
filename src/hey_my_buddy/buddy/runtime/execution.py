@@ -30,6 +30,7 @@ import c_two as cc
 from ...text import configure_utf8_output
 from ...paths import native_path
 from ...errors import BoardError
+from ...protocol.capabilities import model_start_unseen
 from ...protocol.client import BoardClient
 from ...protocol import activity as activity_module
 from ...protocol import execution as execution_protocol
@@ -704,7 +705,15 @@ class Execution:
                 self.hint(waitingReason=None)
             self.flush_hints()
 
-        wait_seconds = spec["modelResponseWaitSeconds"] if spec["adapter"] == "decision" else None
+        # The start wait judges only a protocol that can show the model's start
+        # as it happens. A harness declared unable to see it — DSH's ACP channel
+        # emits each block only after the model's whole step ends — runs without
+        # the wait, bounded by the harness's own stream idle timeout instead, so
+        # a silent first step is never read as a model that did not begin.
+        wait_seconds = None
+        if spec["adapter"] == "decision" and model_start_unseen(
+                claim["decisionInput"]["buddy"]["harness"]) is None:
+            wait_seconds = spec["modelResponseWaitSeconds"]
         model_wait = (ModelResponseWait(self.directory / BUDGET,
             {"taskId": task["taskId"], "attemptId": attempt["attemptId"], "generation": attempt["generation"]},
             wait_seconds, notify=notify_model_wait) if wait_seconds is not None else None)
