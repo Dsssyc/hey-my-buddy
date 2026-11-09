@@ -60,7 +60,10 @@ CARRIER_MODULE = "hey_my_buddy.buddy.roles.session_mcp"
 
 from buddy.harnesses.dsh.acp.fake_agent import TOOL_ROWS
 
-CONFIRMED_NONE_ROWS = TOOL_ROWS
+#: Every tool row the fake agent's ACP profile dump confirms, executor row
+#: included; the scope tests expect each level to disable all of these except
+#: the rows that level keeps.
+CONFIRMED_TOOL_ROWS = TOOL_ROWS
 
 SCHEMA = {"type": "object", "properties": {"choice": {"type": "string", "enum": ["a"]}},
           "required": ["choice"], "additionalProperties": False}
@@ -547,9 +550,12 @@ class FastSeamTests(NativeRunCase):
         observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
         self.assertIsNone(observed["permissionMode"])
         rows = json.loads(native_path(patch_path).read_text(encoding="utf-8"))
-        # The storage roots precede the disabled tool rows and plan-mode.
+        # The storage roots precede the disabled tool rows. The none scope keeps
+        # only the executor row DSH needs to open a turn; every other tool row
+        # and plan-mode are disabled, so the model receives no tool.
         self.assertEqual([row["id"] for row in rows],
-                         ["session-persistence-jsonl", "storage-json", *CONFIRMED_NONE_ROWS,
+                         ["session-persistence-jsonl", "storage-json",
+                          *(row for row in CONFIRMED_TOOL_ROWS if row != "tool-executor-native"),
                           native_run.PLAN_MODE_ROW])
         pin = rows[0]
         self.assertTrue(pin["config"]["root"].startswith(str(self.root)))
@@ -569,7 +575,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.value.raw, '{"choice":"a"}')
         rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
         disabled = [row["id"] for row in rows[2:]]
-        self.assertEqual(disabled, [*(row for row in CONFIRMED_NONE_ROWS if row not in {"tool-web", "tool-executor-native"}),
+        self.assertEqual(disabled, [*(row for row in CONFIRMED_TOOL_ROWS if row not in {"tool-web", "tool-executor-native"}),
                                     native_run.PLAN_MODE_ROW])
         self.assertTrue(all(row["disabled"] is True for row in rows[2:]))
         self.assertEqual(result.effective_policy.tools.requested.value, {"disabledRows": disabled})
@@ -579,7 +585,7 @@ class FastSeamTests(NativeRunCase):
     def test_unknown_tool_row_is_disabled_and_each_scope_keeps_only_its_allowlist(self):
         inventory = (*TOOL_ROWS, "tool-new-plugin")
         for scope, retained in (("web", {"tool-web", "tool-executor-native"}),
-                                ("none", set())):
+                                ("none", {"tool-executor-native"})):
             with self.subTest(scope=scope):
                 self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
                                          "--inventory-output", "\n".join("- id: " + row for row in inventory)]
@@ -920,7 +926,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
         rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
         self.assertEqual([row["id"] for row in rows[2:]],
-                         [*(row for row in CONFIRMED_NONE_ROWS if row not in {"tool-web", "tool-executor-native"}),
+                         [*(row for row in CONFIRMED_TOOL_ROWS if row not in {"tool-web", "tool-executor-native"}),
                           native_run.PLAN_MODE_ROW])
         self.assertEqual(result.effective_policy.tools.requested.value,
                          {"disabledRows": [row["id"] for row in rows[2:]]})
@@ -1790,7 +1796,9 @@ class NativeConfigurationTests(NativeRunCase):
                                   Path(request.private_state.invocation_root))
                     rows = json.loads(native_path(patch_root / "dsh-launch-patch.json").read_text(encoding="utf-8"))
                     expected = (["session-persistence-jsonl", "storage-json"]
-                                + ([*CONFIRMED_NONE_ROWS, "plan-mode"] if carrier == "fast" else []))
+                                + ([*(row for row in CONFIRMED_TOOL_ROWS
+                                      if row != "tool-executor-native"), "plan-mode"]
+                                   if carrier == "fast" else []))
                     self.assertEqual([row["id"] for row in rows], expected)
                     self.assertEqual({path: path.read_bytes() for path in materials}, before)
         self.assertFalse((source / "sessions").exists(), "native records remain private")

@@ -115,6 +115,10 @@ class FastRegisteredSeamTests(DshNoToolTests):
         evidence = outcome.result["nativeEvidence"]
         self.assertEqual(evidence["disabledRows"][0], "tool-bash")
         self.assertIn("plan-mode", evidence["disabledRows"])
+        # The none scope keeps only the executor row DSH needs to open a turn;
+        # every tool row stays disabled, so the model receives no tool.
+        self.assertNotIn("tool-executor-native", evidence["disabledRows"])
+        self.assertIn("tool-web", evidence["disabledRows"])
         self.assertTrue(evidence["streamEof"])
         self.assertGreaterEqual(evidence["eventCount"], 1)
 

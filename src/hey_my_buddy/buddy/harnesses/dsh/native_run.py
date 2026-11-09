@@ -120,13 +120,20 @@ PERMISSION_MODES = {"read": READ_ONLY_MODE, "write": "workspace-write",
 #: The mode-control tool row the none-scope probe disables together with the
 #: tool rows, so no plan-mode tool survives either.
 PLAN_MODE_ROW = "plan-mode"
+#: The executor row every no-preset scope keeps: DSH CLI 0.2.2-rc.1 refuses the
+#: turn before any model activity when no executor row remains ("The selected
+#: tool executor is unavailable. Load an executor in this composition before
+#: running the agent."; isolated reproduction 2026-11-09). The row is the CLI's
+#: internal tool-running component, not a model-facing tool, so keeping it
+#: leaves the none scope with every tool row still disabled.
+EXECUTOR_ROW = "tool-executor-native"
 #: The web scope keeps the web tools and the native executor row; DSH CLI
 #: 0.2.2-rc.1's working_directory also changes the session's working directory,
 #: which this plane never needs. This combination passed the native web probe,
 #: the board's judgment included, on DSH CLI 0.2.2-rc.1 (2026-11-07). Newly
 #: discovered rows are disabled, including disabled defaults.
-WEB_SCOPE_RETAINED_ROWS = frozenset({"tool-web", "tool-executor-native"})
-NONE_SCOPE_RETAINED_ROWS: frozenset[str] = frozenset()
+WEB_SCOPE_RETAINED_ROWS = frozenset({"tool-web", EXECUTOR_ROW})
+NONE_SCOPE_RETAINED_ROWS: frozenset[str] = frozenset({EXECUTOR_ROW})
 _INVENTORY_REASONS = {UNREADABLE: "dsh-tool-inventory-unreadable",
                       UNRECOGNIZED: "dsh-tool-inventory-format-unrecognized"}
 # -- the private session record's launch constants ------------------------------------
@@ -1838,7 +1845,7 @@ run_delete_sessions = None
 supported_request_controls = ()
 
 __all__ = [
-    "NONE_SCOPE_DISABLED_ROWS", "SessionServiceMount", "SessionServices",
+    "SessionServiceMount", "SessionServices",
     "check_preparation", "execution_deadline", "make_inquiry_bridge",
     "native_evidence", "prepare_run_services", "prepare_services", "prepare_session_service",
     "run", "run_delete_sessions", "run_discovery", "session_facts", "session_record_facts",
