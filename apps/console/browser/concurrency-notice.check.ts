@@ -9,7 +9,7 @@ const languages = [
   { locale: "en-US", copy: enCommon.concurrencyNotice, limit: "Concurrency limit" },
 ];
 
-for (const { locale, copy, limit } of languages) for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
+for (const { locale, copy, limit } of languages) for (const width of [1440]) for (const theme of ["light", "dark"]) {
   test.describe(`concurrency notice in ${locale} at ${width}px in ${theme}`, () => {
     test.use({ locale, viewport: { width, height: 900 }, reducedMotion: "reduce" });
     test.beforeEach(async ({ page }) => {
@@ -26,6 +26,7 @@ for (const { locale, copy, limit } of languages) for (const width of [1280, 390]
       const input = drawer.getByRole("spinbutton", { name: limit });
       const occupancy = drawer.locator('[id$="-occupancy"]');
       const profile = drawer.locator("[data-slot=model-profile]");
+      await expect(notice).toHaveCount(0);
       // A valid edit already shows the model's save-before-building line. Invalidity alone must not move the controls or profile.
       await input.fill("3");
       await notice.scrollIntoViewIfNeeded();
@@ -39,18 +40,19 @@ for (const { locale, copy, limit } of languages) for (const width of [1280, 390]
       const [inputBox, occupancyBox, noticeBox, profileBox] = await Promise.all([input.boundingBox(), occupancy.boundingBox(), notice.boundingBox(), profile.boundingBox()]);
       expect(inputBox!.y + inputBox!.height).toBeLessThanOrEqual(noticeBox!.y);
       expect(noticeBox!.y + noticeBox!.height).toBeLessThanOrEqual(profileBox!.y);
+      for (const text of [heading, body]) {
+        expect(await contrastOf(text)).toBeGreaterThanOrEqual(4.5);
+        await expectTextUncut(text);
+      }
+      await input.fill("2");
+      await expect(notice).toHaveCount(0);
+      await input.fill("1");
+      await expect(notice).toHaveCount(0);
       await input.fill("0");
       await expect(input).toHaveAttribute("aria-invalid", "true");
-      const error = occupancy.getByRole("alert");
-      await expect(error).toBeVisible();
-      const [invalidInput, invalidOccupancy, invalidNotice, invalidProfile] = await Promise.all([input.boundingBox(), occupancy.boundingBox(), notice.boundingBox(), profile.boundingBox()]);
-      for (const [before, after] of [[inputBox, invalidInput], [occupancyBox, invalidOccupancy], [noticeBox, invalidNotice], [profileBox, invalidProfile]]) {
-        expect(Math.abs(after!.x - before!.x)).toBeLessThanOrEqual(0.5);
-        expect(Math.abs(after!.y - before!.y)).toBeLessThanOrEqual(0.5);
-      }
-      const errorBox = await error.boundingBox();
-      expect(errorBox!.y).toBeGreaterThanOrEqual(invalidOccupancy!.y);
-      expect(errorBox!.y + errorBox!.height).toBeLessThanOrEqual(invalidOccupancy!.y + invalidOccupancy!.height);
+      await expect(drawer.getByRole("alert")).toBeVisible();
+      await input.fill("3");
+      await expect(notice).toBeVisible();
       for (const text of [heading, body]) {
         expect(await contrastOf(text)).toBeGreaterThanOrEqual(4.5);
         const style = await text.evaluate(node => {

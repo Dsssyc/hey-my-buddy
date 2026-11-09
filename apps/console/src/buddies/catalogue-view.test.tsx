@@ -176,7 +176,7 @@ describe("the selected model", () => {
     await selectModel(user, SOL, "Codex");
     // The board reported no entry for this model: the limit is the default, the occupancy unknown.
     expect(within(modelRow(SOL)).getByLabelText("占用未知").textContent).toBe("— / 2");
-    expect(within(pane()).getByText("占用未知")).toBeTruthy();
+    expect(within(pane()).getByLabelText("占用未知", { selector: "span[id]" })).toBeTruthy();
   });
 });
 
@@ -195,7 +195,7 @@ describe("a buddy's own preference", () => {
     await user.click(levelSwitch("medium"));
     expect(pin.hasAttribute("aria-disabled")).toBe(false);
     await user.click(within(levelPreference("medium")).getByRole("radio", { name: "优先" }));
-    await user.type(within(level("medium")).getByRole("textbox", { name: "medium 的偏好备注" }), "机械改动");
+    await user.type(within(level("medium")).getByRole("textbox", { name: "medium 的偏好理由" }), "机械改动");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published[0].preferenceChanges).toEqual([{ buddyId: "codex:openai:gpt-6-sol:medium", mode: "prefer", note: "机械改动" }]);
@@ -420,7 +420,7 @@ describe("model-keyed kind evaluations", () => {
       { harness: "codex", modelId: "current-generation", effort: "high", modelDisplayName: "Other effort",
         modelNames: [sol], previousGroups: [], statistics, summary: { text: "Wrong effort", citations: [] } },
       { harness: "codex", modelId: "current-generation", effort: "medium", modelDisplayName: "Current model",
-        modelNames: [{ ...sol, model: "upstream-alias" }], previousGroups: [], statistics, summary: { text: "Current evaluation", citations: [] } },
+        modelNames: [{ ...sol, model: "upstream-alias" }], previousGroups: [], statistics: { ...statistics, overall: { ...statistics.overall, samples: 30 }, infrastructureFailures: [{ provider: "openai", count: 2, lastAt: null }] }, summary: { text: "Current evaluation", citations: [] } },
       { harness: "codex", modelId: "partner-generation", effort: "medium", modelDisplayName: "Partner model",
         modelNames: [partner], previousGroups: [], statistics, summary: { text: "Partner evaluation", citations: [] } },
     ];
@@ -428,6 +428,8 @@ describe("model-keyed kind evaluations", () => {
     open(fixture(state));
     await listed(2, 2);
     await selectModel(user, SOL, "Codex");
+    expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("30");
+    expect(pane().querySelector("[data-slot=buddy-infrastructure-failures]")!.textContent).toBe("2");
     await user.click(within(pane()).getByRole("button", { name: /评价与领域经验/ }));
     expect(within(pane()).getByText("Current evaluation")).toBeTruthy();
     expect(within(pane()).getByText("Current model")).toBeTruthy();
@@ -436,6 +438,8 @@ describe("model-keyed kind evaluations", () => {
     }
     await selectModel(user, "codex / partner / gpt-6-sol", "Codex");
     await user.click(within(pane()).getByRole("button", { name: /评价与领域经验/ }));
+    expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("4");
+    expect(pane().querySelector("[data-slot=buddy-infrastructure-failures]")!.textContent).toBe("0");
     expect(within(pane()).getByText("Partner evaluation")).toBeTruthy();
     expect(within(pane()).queryByText("Current evaluation")).toBeNull();
   });

@@ -4,7 +4,7 @@ import { expectNoSidewaysScroll, open, settle, test } from "./preview";
 /**
  * How the catalogue moves and answers the pointer: what opens and closes runs on
  * the shared Collapsible, a colour never jumps, hover never takes the look of a
- * selection away, a harness's head is two buttons, and the controls band wraps
+ * selection away, a harness's head keeps its actions separate, and the controls band wraps
  * without leaving a button alone. Everything is read from computed style and from
  * boxes, never from waiting.
  */
@@ -46,12 +46,12 @@ for (const { locale, account, settings, fold } of languages) {
   test.describe(`the catalogue's gestures in ${locale} at 1280px`, () => {
     test.use({ locale, viewport: { width: 1280, height: 900 } });
 
-    test("gives each harness's head two buttons side by side: the chevron for the models, the row for the account", async ({ page }) => {
+    test("keeps the chevron and details button separate from provider retries", async ({ page }) => {
       await open(page, "#buddies/catalog");
       for (const section of await page.locator("[data-slot=harness-section]").all()) {
         const name = (await section.getAttribute("aria-label"))!;
         const header = head(page, name);
-        await expect(header.getByRole("button")).toHaveCount(2);
+        await expect(header.getByRole("button")).toHaveCount(name === "DSH" ? 3 : 2);
         const chevron = header.getByRole("button", { name: new RegExp(`${fold.source}${name}$`) });
         const row = header.getByRole("button", { name: `${name} ${account}`, exact: true });
         const [outer, small, wide] = [await box(header), await box(chevron), await box(row)];
@@ -63,9 +63,15 @@ for (const { locale, account, settings, fold } of languages) {
         expect(small.x + small.width, `${name}: the buttons do not overlap`).toBeLessThanOrEqual(wide.x + 0.5);
         expect(wide.x + wide.width, `${name}: the row reaches the right edge`).toBeGreaterThanOrEqual(outer.x + outer.width - 0.5);
         expect(wide.height, `${name}: the row is as tall as the head`).toBeGreaterThanOrEqual(outer.height - 0.5);
-        // Neither contains the other, and nothing else in the head takes a click.
+        // The provider action is a sibling of the settings button, never nested inside it.
         expect(await chevron.locator("button").count()).toBe(0);
         expect(await row.locator("button, a, [tabindex]").count()).toBe(0);
+        expect(await header.locator("button button").count()).toBe(0);
+        if (name === "DSH") {
+          const provider = header.locator("[data-slot=header-provider]").filter({ hasText: "deepseek-official" });
+          await expect(provider.locator("[data-slot=cooling-status]")).toHaveCount(1);
+          await expect(provider.getByRole("button", { name: locale === "zh-CN" ? "开放重试" : "Open retry" })).toHaveCount(1);
+        }
         // No second arrow at the right end: the head has one chevron.
         await expect(header.locator("[data-slot=disclosure]")).toHaveCount(1);
       }
@@ -80,12 +86,18 @@ for (const { locale, account, settings, fold } of languages) {
       const details = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
       await expect(chevron).toHaveAttribute("aria-expanded", "true");
       await expect(row).toHaveAttribute("aria-expanded", "false");
-      // The far end of the row opens the account and nothing else.
+      // The far end of the row opens details.
       const wide = await box(row);
       await row.click({ position: { x: wide.width - 8, y: wide.height / 2 } });
       await expect(row).toHaveAttribute("aria-expanded", "true");
       await expect(chevron).toHaveAttribute("aria-expanded", "true");
       await expect(details).toBeVisible();
+      const blocks = await details.locator(":scope > [role=group]").all();
+      expect(blocks).toHaveLength(3);
+      const columns = await Promise.all(blocks.map(box));
+      expect(columns[0].x).toBeLessThan(columns[1].x);
+      expect(columns[1].x).toBeLessThan(columns[2].x);
+      expect(Math.max(...columns.map(column => column.y)) - Math.min(...columns.map(column => column.y))).toBeLessThan(2);
       await expect(models.first()).toBeVisible();
       await chevron.click();
       await expect(chevron).toHaveAttribute("aria-expanded", "false");
@@ -135,7 +147,7 @@ for (const { locale, account, settings, fold } of languages) {
       await expect(section.locator("[data-slot=model-row]")).toHaveCount(0);
       const opened = await chevron.evaluate(motion, id) as { state: string; name: string; duration: string; running: string[] };
       expect(opened).toMatchObject({ state: "open", name: "disclosure-down", duration: "0.2s", running: ["disclosure-down"] });
-      // The account block and a model's drawer are the same Collapsible.
+      // The harness details and a model's drawer use the same Collapsible.
       await head(page, "Codex").getByRole("button", { name: `Codex ${account}`, exact: true }).click();
       const block = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
       await expect(block).toBeVisible();
@@ -321,14 +333,13 @@ for (const { locale, catalog } of languages) for (const width of [700, 800, 900,
   test.describe(`the controls band in ${locale} at ${width}px`, () => {
     test.use({ locale, viewport: { width, height: 900 } });
 
-    test("never leaves a button alone on its row: the search takes a row, the rest is one group", async ({ page }) => {
+    test("keeps the two toolbar actions together when controls wrap", async ({ page }) => {
       await open(page, "#buddies/catalog");
       const toolbar = page.locator("[data-slot=catalogue-toolbar]");
       const controls = toolbar.locator("[data-slot=catalogue-controls]");
       const items = [
         { name: "search", target: controls.getByRole("searchbox"), button: false },
         { name: "only enabled", target: controls.locator("[data-slot=catalogue-filters] label").first(), button: false },
-        { name: "count", target: controls.getByRole("status"), button: false },
         ...(await controls.locator("[data-slot=catalogue-actions] > button").all()).map((target, index) => ({ name: `button ${index}`, target, button: true })),
       ];
       const placed = await Promise.all(items.map(async item => ({ ...item, at: await box(item.target) })));
@@ -342,19 +353,17 @@ for (const { locale, catalog } of languages) for (const width of [700, 800, 900,
       // The two buttons are neighbours on one row.
       const buttons = placed.filter(item => item.button);
       expect(Math.abs(buttons[0].at.y - buttons[1].at.y)).toBeLessThan(2);
-      // When the controls need more than one row, the search has the first to itself.
-      if (rows.length > 1) expect(rows[0].map(item => item.name)).toEqual(["search"]);
       for (const item of placed) {
         expect(item.at.x, item.name).toBeGreaterThanOrEqual(0);
         expect(item.at.x + item.at.width, item.name).toBeLessThanOrEqual(width + 0.5);
       }
-      await expect(toolbar.getByRole("link").first()).toContainText(catalog);
+      await expect(page.locator("[data-slot=buddy-header]").getByRole("link").first()).toContainText(catalog);
       await expectNoSidewaysScroll(page);
     });
 
     test("keeps the current section's name with its underline, wherever the band wraps", async ({ page }) => {
       await open(page, "#buddies/catalog");
-      const current = page.locator("[data-slot=catalogue-toolbar] a[aria-current=page]");
+      const current = page.locator("[data-slot=buddy-header] a[aria-current=page]");
       await expect(current).toHaveAttribute("aria-current", "page");
       const gap = await current.evaluate(node => {
         // The underline is the link's ::after: 2px tall, with its bottom edge 1px below the link.
@@ -425,8 +434,8 @@ test.describe("the Buddy page in English", () => {
   });
 
   test("says nothing in Chinese in the roles and the dialog that adds a Router", async ({ page }) => {
-    await open(page, "#buddies/roles");
-    const roles = page.getByRole("region", { name: "Roles", exact: true });
+    await open(page, "#buddies/router");
+    const roles = page.getByRole("region", { name: "Router", exact: true });
     await expect(roles).toBeVisible();
     expect(await chinese(page)).toEqual([]);
     await roles.getByRole("button", { name: "Add", exact: true }).click();

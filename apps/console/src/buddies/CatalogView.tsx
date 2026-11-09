@@ -17,8 +17,6 @@ import type { Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { MAX_HISTORY_BUDDIES, BUDDY_PAGE_SIZE, historySourceKey, useBuddyHistory } from "../use-buddy-history";
 import { useViewPreference } from "../view-preferences";
-import type { BuddyAttention } from "./attention";
-import { BuddyHeader } from "./BuddyHeader";
 import { HarnessDetails } from "./HarnessDetails";
 import { HarnessHeader } from "./HarnessHeader";
 import { ModelDrawer, buddyRowId } from "./ModelDrawer";
@@ -34,11 +32,11 @@ const liveT = i18n.getFixedT(null, "buddies");
 /**
  * One directory, grouped by harness, with independent account expansions and one model drawer.
  */
-export function CatalogView({ snapshot, editor, api, refresh, active, mutationsAvailable, location, attention, onNavigate, hidden }: {
+export function CatalogView({ snapshot, editor, api, refresh, active, mutationsAvailable, location, onNavigate, hidden }: {
   snapshot: Snapshot; editor: Editor; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
   /** The page is in front and this is the view it shows. */
   active: boolean; mutationsAvailable: boolean;
-  location: BuddyLocation; attention: BuddyAttention; onNavigate: (next: BuddyLocation) => void; hidden: boolean;
+  location: BuddyLocation; onNavigate: (next: BuddyLocation) => void; hidden: boolean;
 }) {
   const { t } = useTranslation("buddies");
   const [selected, setSelected] = useState<string | null>(null);
@@ -74,7 +72,6 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     const state = health && health.status !== "ready" ? health.status : block.state;
     return { ...block, state };
   }).sort((a, b) => Number(!!a.state) - Number(!!b.state));
-  const buddies = blocks.flatMap(block => block.models).flatMap(model => model.chips);
   // The count on the filter is the table-wide number the board records, never
   // below what this view already holds; without the field it is the local count.
   const loadedUnavailable = data.buddies.filter(buddy => !buddy.available).length;
@@ -176,14 +173,12 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const guard = refused ? refusal : "";
   return <section hidden={hidden} aria-label={t("sections.catalog")}
     className="flex min-h-0 flex-1 flex-col bg-sunk">
-      <div data-slot="catalogue-toolbar" className="grid min-h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2 text-ink2 sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-x-6 sm:px-6">
-        <BuddyHeader location={location} attention={attention} onNavigate={onNavigate} />
-        {/* From 640px the controls wrap in two steps: the search takes a line of its own, and the rest is one group whose two buttons never part. */}
-        <div data-slot="catalogue-controls" className="contents sm:ml-auto sm:flex sm:min-w-0 sm:flex-wrap sm:items-center sm:justify-end sm:gap-x-5 sm:gap-y-2">
-          <Input type="search" className="col-span-3 row-start-2 h-8 w-full max-w-full bg-card text-sm text-foreground shadow-none sm:w-[200px]" aria-label={t("models.search")} placeholder={t("models.search")}
+      <div data-slot="catalogue-toolbar" className="min-h-12 shrink-0 border-b bg-card px-6 py-2 text-ink2">
+        <div data-slot="catalogue-controls" className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2">
+          <Input type="search" className="h-8 w-full max-w-full bg-card text-sm text-foreground shadow-none sm:w-[200px]" aria-label={t("models.search")} placeholder={t("models.search")}
             value={query} onChange={event => setQuery(event.target.value)} />
-          <div data-slot="catalogue-group" className="contents sm:flex sm:min-w-0 sm:flex-wrap sm:items-center sm:justify-end sm:gap-x-5 sm:gap-y-2">
-            <div data-slot="catalogue-filters" className="col-start-1 row-start-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 text-xs sm:gap-x-5 sm:text-sm">
+          <div data-slot="catalogue-group" className="flex min-w-0 flex-1 flex-wrap items-center gap-x-6 gap-y-2">
+            <div data-slot="catalogue-filters" className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 text-xs sm:gap-x-5 sm:text-sm">
               <label className="flex items-center gap-2 whitespace-nowrap">
                 <Checkbox checked={enabledOnly} onCheckedChange={checked => setEnabledOnly(checked === true)} />{t("models.enabledOnly")}
               </label>
@@ -193,13 +188,12 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
                 {t("models.showUnavailable")}<span className="text-ink3 tabular-nums">{unavailableCount}</span>
               </label>}
             </div>
-            <span className="col-span-2 col-start-2 row-start-1 justify-self-end whitespace-nowrap text-xs tabular-nums sm:text-sm" role="status">{t("models.enabled")} {buddies.filter(chip => chip.buddy.enabled).length} / {buddies.length}</span>
-            <div data-slot="catalogue-actions" className="contents sm:flex sm:items-center sm:gap-2">
+            <div data-slot="catalogue-actions" className="ml-auto flex items-center gap-2">
               <Hint text={actions.refusal || (actions.busy ? t("harness.checkAllBusy") : undefined)}>
-                <Button variant="outline" className="col-start-2 row-start-3 h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={actions.busy || !!actions.refusal || undefined} onClick={() => void actions.run({ kind: "check" })}>{t("harness.checkAll")}</Button>
+                <Button variant="outline" className="h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={actions.busy || !!actions.refusal || undefined} onClick={() => void actions.run({ kind: "check" })}>{t("harness.checkAll")}</Button>
               </Hint>
               <Hint text={refusal || (busy ? t("models.discoverBusy") : undefined)}>
-                <Button variant="outline" className="col-start-3 row-start-3 h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={busy || !!refusal || undefined} onClick={() => void discover()}>{t("models.discover")}</Button>
+                <Button variant="outline" className="h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={busy || !!refusal || undefined} onClick={() => void discover()}>{t("models.discover")}</Button>
               </Hint>
             </div>
           </div>
@@ -228,7 +222,9 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
               onOpenChange={open => setFolded(previous => ({ ...previous, [block.harness]: !open }))}>
               <section aria-label={block.name} data-slot="harness-section" className="border bg-card">
                 <HarnessHeader block={block} health={health} state={block.state} accountOpen={!!accounts[block.harness]}
-                  onToggleAccount={() => toggleAccount(block.harness)} />
+                  onToggleAccount={() => toggleAccount(block.harness)}
+                  gate={{ canWrite: !actions.refusal, refusal: actions.refusal, busy: actions.busy }}
+                  onRetry={provider => void actions.run({ kind: "retry", harness: block.harness, provider })} />
                 <Collapsible open={!!health && !!accounts[block.harness]}>
                   <CollapsibleContent>
                     {health && active && <HarnessDetails row={health} name={block.name}
@@ -240,7 +236,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
                 </Collapsible>
                 <CollapsibleContent>
                   {block.models.map(row => <Collapsible key={row.key} open={selected === row.key}>
-                    <ModelLine row={row} harnessState={block.state} recorded={recorded} data={data} expanded={selected === row.key} onSelect={() => selectModel(row)} />
+                    <ModelLine showProvider={block.providers.length > 1} row={row} harnessState={block.state} recorded={recorded} data={data} expanded={selected === row.key} onSelect={() => selectModel(row)} />
                     <CollapsibleContent>
                       {active && <ModelDrawer row={row} data={data} recorded={recorded} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable}
                         harnessState={block.state ? `${block.name} ${harnessStateText(block.state, t)}` : undefined}

@@ -45,7 +45,7 @@ test.describe("necessary hover hints and visible consequences", () => {
   });
 
   test("changes the mode consequence, keeps section names and arrows quiet and writes maintenance data flow below its setting", async ({ page }) => {
-    await open(page, "#buddies/roles");
+    await open(page, "#buddies/router");
     const mode = page.getByRole("group", { name: "默认模式", exact: true });
     const consequence = mode.locator('[data-slot="routing-mode-consequence"]');
     const fast = mode.getByRole("radio", { name: "快速", exact: true });
@@ -81,7 +81,7 @@ test.describe("necessary hover hints and visible consequences", () => {
       if (route.request().postDataJSON().operation !== "user_policy_publish") return route.fallback();
       await route.fulfill({ json: { ok: false, error: { code: "CONSOLE_SESSION_EXPIRED", message: "synthetic expired session" } } });
     });
-    await open(page, "#buddies/roles");
+    await open(page, "#buddies/router");
     await page.getByRole("radio", { name: "审阅", exact: true }).click();
     await page.getByRole("button", { name: "保存", exact: true }).click();
     for (const target of [page.getByRole("radio", { name: "快速", exact: true }),
@@ -93,12 +93,17 @@ test.describe("necessary hover hints and visible consequences", () => {
     }
   });
 
-  test("leaves model marks, folds and preferences quiet while keeping unavailable reasons", async ({ page }) => {
+  test("keeps ordinary marks, folds and preferences quiet and explains missing reads and unavailable reasons", async ({ page }) => {
     await open(page, "#buddies/catalog");
     await quiet(page, [page.locator('[data-slot="fold-handle"]').first(),
       page.getByRole("button", { name: "Codex 账户", exact: true }),
-      page.locator('[data-slot="model-row"] .rounded-full').first(),
-      page.locator('[data-slot="model-row"]').getByText("待确认", { exact: true })]);
+      page.locator('[data-slot="model-row"] .rounded-full').first()]);
+    const missing = page.locator('[data-slot="model-row"]').getByText("这次没读到", { exact: true });
+    await missing.hover();
+    await expect(page.getByRole("tooltip")).toContainText("首次缺席满一小时再读一次");
+    await expect(page.getByRole("tooltip")).toContainText("用户不用做什么");
+    await expect(page.getByRole("tooltip")).toContainText("2026");
+    await page.mouse.move(0, 0);
     await page.getByRole("button", { name: "codex / openai / gpt-5-codex", exact: true }).click();
     const drawer = page.locator('[data-slot="model-drawer"]');
     await quiet(page, [drawer.getByRole("radio", { name: "优先", exact: true }),

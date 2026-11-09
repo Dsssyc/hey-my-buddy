@@ -4,14 +4,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api";
 import { formatCoolingTime } from "../i18n/format";
 import type { ProviderCooling } from "../types";
-import { CoolingStatus, activeCooling } from "./cooling";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { CoolingHeaderProviders, activeCooling } from "./cooling";
 import { fixture, harness, openHarness } from "./harness.fixtures";
 import { harnessButton, paneBlock } from "./harness.testing";
 
 const deadline = new Date(Date.now() + 3600000).toISOString();
 const record = (extra: Partial<ProviderCooling> = {}): ProviderCooling => ({ provider: "zai", coolingUntil: deadline, consecutiveRejections: 2, ...extra });
 const rows = () => [harness({ harness: "dsh", status: "ready", providers: [record(), record({ provider: "deepseek", coolingUntil: null }), record({ provider: "expired", coolingUntil: "2020-01-01T00:00:00Z" })] })];
-const clear = () => within(paneBlock("冷却", "DSH")).getByRole("button", { name: "解除冷却" });
+const clear = () => within(paneBlock("冷却", "DSH")).getByRole("button", { name: "开放重试" });
 const reply = (cleared: boolean, duplicate = false) => ({ harness: "dsh", provider: "zai", cleared, duplicate });
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); sessionStorage.clear(); localStorage.clear(); window.location.hash = ""; });
@@ -23,7 +24,10 @@ describe("provider cooldown", () => {
     expect(within(block).getByText("zai")).toBeTruthy();
     expect(within(block).getByText(`冷却中 · 约 ${formatCoolingTime(Date.parse(deadline))} 可再试`).className).toContain("text-ink3");
     expect(within(block).getAllByRole("button")).toHaveLength(1);
-    expect(harnessButton("DSH").textContent).toContain("冷却中");
+    const header = harnessButton("DSH").closest("[data-slot=harness-header]")!;
+    expect(header.textContent).toContain("zai冷却中");
+    expect(within(header as HTMLElement).getByRole("button", { name: "开放重试" })).toBeTruthy();
+    expect(header.querySelector("button button")).toBeNull();
     expect(activeCooling(rows()[0].providers!).map(record => record.provider)).toEqual(["zai"]);
   });
 
@@ -36,6 +40,17 @@ describe("provider cooldown", () => {
     expect(f.command).toHaveBeenCalledWith("quota_redetect", expect.objectContaining({ harness: "dsh", provider: "zai", requestId: expect.any(String) }), "csrf");
     expect(f.snapshotMock.mock.calls.length).toBeGreaterThan(1);
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it("opens the same provider retry from the header without opening settings", async () => {
+    const user = userEvent.setup();
+    const f = fixture({ harnesses: rows(), replies: { quota_redetect: () => reply(true) } });
+    await openHarness(f, "#buddies", false);
+    const summary = harnessButton("DSH");
+    const header = summary.closest("[data-slot=harness-header]")!;
+    await user.click(within(header as HTMLElement).getByRole("button", { name: "开放重试" }));
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
+    expect(f.calls).toEqual([{ operation: "quota_redetect", params: expect.objectContaining({ harness: "dsh", provider: "zai" }) }]);
   });
 
   it("replays the same request after a lost or invalid reply, including duplicate receipt", async () => {
@@ -87,12 +102,15 @@ describe("provider cooldown", () => {
 
   it("expires without a snapshot refresh and shows a new deadline when it arrives", () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-19T10:00:00Z"));
-    const { container, rerender } = render(<CoolingStatus providers={[record({ coolingUntil: "2026-10-19T10:00:01Z" })]} />);
-    const slot = container.firstElementChild;
+    const header = (coolingUntil: string) => <TooltipProvider><CoolingHeaderProviders names={["zai"]} providers={[record({ coolingUntil })]}
+      gate={{ canWrite: true, refusal: "", busy: false }} onRetry={() => {}} /></TooltipProvider>;
+    const { container, rerender } = render(header("2026-10-19T10:00:01Z"));
+    const slot = container.querySelector("[data-slot=cooling-status]");
     expect(slot?.textContent).toContain("冷却中");
     act(() => vi.advanceTimersByTime(1000));
-    expect(container.textContent).toBe("");
-    rerender(<CoolingStatus providers={[record({ coolingUntil: "2026-10-19T10:01:00Z" })]} />);
+    expect(container.querySelector("[data-slot=cooling-status]")).toBeNull();
+    expect(container.textContent).toBe("zai");
+    rerender(header("2026-10-19T10:01:00Z"));
     expect(container.textContent).toContain("冷却中");
   });
 });

@@ -58,7 +58,7 @@ describe("a harness summary", () => {
     expect(statusText("ready", t)).toBe("已找到");
     expect(statusText("login-required", t)).toBe("未登录");
     expect(statusText("paused", t)).toBe("paused");
-    expect(harnessDetailsView(row(), t).account).toBeNull();
+    expect(harnessDetailsView(row(), t).account.state).toBe("未记录");
     expect(harnessDetailsView(row({ account }), t).account).toMatchObject({ state: "已配置" });
     expect(harnessDetailsView(row({ account: { ...account, status: "logged-out" } }), t).account)
       .toMatchObject({ state: "未登录" });
@@ -73,8 +73,8 @@ describe("harness details", () => {
     const view = harnessDetailsView(row({ executable: "/usr/local/bin/dsh", source: "PATH", checkedAt: "2026-09-28T09:30:00.000Z",
       permissions: { read: "enforced" } }), t);
     expect(view.location).toMatchObject({ path: "/usr/local/bin/dsh", source: "PATH", checked: clock("2026-09-28T09:30:00.000Z"), exception: null });
-    expect(view.location.review).toEqual({ text: "可用", reason: null,
-      note: "资格来自 harness 的只读档位声明，不代表原生调用已验证。" });
+    expect(view.location.review).toEqual({ text: "强制限制", reason: null,
+      note: "按 harness 的只读档位声明显示；此处不运行原生调用。" });
   });
 
   it("calls a manually chosen path manual and keeps what is not recorded unrecorded", () => {
@@ -85,7 +85,7 @@ describe("harness details", () => {
 
   it("shows unavailable for an absent read declaration and unknown without declarations", () => {
     expect(harnessDetailsView(row({ permissions: { write: "enforced" } }), t).location.review)
-      .toMatchObject({ text: "不可用", reason: null });
+      .toMatchObject({ text: "未声明", reason: null });
     expect(harnessDetailsView(row(), t).location.review.text).toBe("未知");
   });
 
@@ -111,7 +111,7 @@ describe("harness details", () => {
   });
 
   it("writes the account's status, type and check, the billing of each provider and the guidance", () => {
-    expect(harnessDetailsView(row(), t).account).toBeNull();
+    expect(harnessDetailsView(row(), t).account.state).toBe("未记录");
     const view = harnessDetailsView(row({ account: { ...account, status: "ready", accountType: "chatgpt", checkedAt: "2026-09-29T09:00:00.000Z" },
       billingByProvider: { openai: { kind: "subscription", source: "native", observedAt: "x" }, deepseek: { kind: "metered", source: "native", observedAt: "x" },
         other: { kind: "unknown", source: "native", observedAt: "x" } } }), t).account!;
@@ -119,6 +119,8 @@ describe("harness details", () => {
       billing: [{ provider: "openai", plan: "订阅" }, { provider: "deepseek", plan: "按量" }, { provider: "other", plan: "未知" }] });
     expect(harnessDetailsView(row({ account: { ...account, accountType: "mystery" } }), t).account?.state).toBe("已配置 · 未知");
     expect(harnessDetailsView(row({ account }), t).account?.billing).toEqual([]);
+    expect(harnessDetailsView(row({ billingByProvider: { openai: { kind: "subscription", source: "native", observedAt: "x" } } }), t).account)
+      .toMatchObject({ state: "未记录", billing: [{ provider: "openai", plan: "订阅" }] });
     const loggedOut = harnessDetailsView(row({ account: { ...account, status: "logged-out",
       reason: { code: "account.login-required", params: {} } } }), t).account!;
     expect(loggedOut.reason).toBe(reasonText({ code: "account.login-required", params: {} }));

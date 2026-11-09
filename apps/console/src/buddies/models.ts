@@ -1,3 +1,4 @@
+import { formatDateTime } from "../i18n/format";
 import type { Reason } from "../reason";
 import { reasonText } from "../i18n/reason";
 import type { TFunction } from "i18next";
@@ -145,4 +146,9 @@ export function reasonTexts(reasons: Reason[], _t: TFunction<"buddies">, harness
 /** The four parts of a buddy's identity without the last: `harness / provider / model`. */
 export function modelIdentity(modelService: { harness: string; provider: string; buddies: Buddy[] }): string {
   return `${modelService.harness} / ${modelService.provider} / ${modelService.buddies[0].model}`;
+}
+
+/** Missing from the latest read remains usable until the one-hour recheck. */
+export function pendingHint(row: ModelRow, t: TFunction<"buddies">): string {
+  return row.pendingSince ? t("models.pendingHint", { time: formatDateTime(Date.parse(row.pendingSince)) }) : t("models.pendingHintNoTime");
 }

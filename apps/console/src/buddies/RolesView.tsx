@@ -92,7 +92,7 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
   function change(patch: Partial<Configuration>) {
     if (!locked) editor.update(draft => withConfiguration(draft, patch));
   }
-  return <section hidden={hidden} aria-label={t("sections.roles")} className="flex min-h-0 flex-1 flex-col bg-card">
+  return <section hidden={hidden} aria-label={t("sections.router")} className="flex min-h-0 flex-1 flex-col bg-card">
     <ScrollArea className="min-h-0 flex-1">
       <h2 className="px-6 pt-5 pb-2 text-base font-semibold">{t("roles.heading")}</h2>
       {!configuration && <p className="mx-6 mb-3 border-l-2 border-fail pl-3 text-xs text-fail" role="alert">

@@ -4,9 +4,9 @@ import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApar
 // The roles section of the Buddy page on the synthetic preview: a Router list of
 // three, one serving, one waiting to be tried again and one that cannot serve.
 const languages = [
-  { locale: "zh-CN", view: "角色", list: "Router 列表", sections: ["列表", "默认模式", "等待模型开始作答（秒）", "重试间隔", "画像 buddy", "记录"], profile: "画像 buddy", wait: "等待模型开始作答（秒）", chooseProfile: "选择 buddy", add: "添加", addTitle: "添加 Router",
+  { locale: "zh-CN", view: "Router", list: "Router 列表", sections: ["列表", "默认模式", "等待模型开始作答（秒）", "重试间隔", "画像 buddy", "记录"], profile: "画像 buddy", wait: "等待模型开始作答（秒）", chooseProfile: "选择 buddy", add: "添加", addTitle: "添加 Router",
     routers: "各 Router 的记录", failures: "最近的失败", standing: ["当前", "等待重试", "不可用"] },
-  { locale: "en-US", view: "Roles", list: "Router list", sections: ["List", "Default mode", "Wait for the model to start responding (seconds)", "Retry interval", "Profile buddy", "Records"], profile: "Profile buddy", wait: "Wait for the model to start responding (seconds)", chooseProfile: "Choose buddy", add: "Add", addTitle: "Add a Router",
+  { locale: "en-US", view: "Router", list: "Router list", sections: ["List", "Default mode", "Wait for the model to start responding (seconds)", "Retry interval", "Profile buddy", "Records"], profile: "Profile buddy", wait: "Wait for the model to start responding (seconds)", chooseProfile: "Choose buddy", add: "Add", addTitle: "Add a Router",
     routers: "Records of each Router", failures: "Recent failures", standing: ["Current", "Waiting to retry", "Unavailable"] },
 ];
 
@@ -15,7 +15,7 @@ for (const { locale, view, list, sections, profile, wait, chooseProfile, add, ad
     test.use({ locale, viewport: { width: 1440, height: 900 } });
 
     test("sets every section's name beside its content, each part whole", async ({ page }) => {
-      await open(page, "#buddies/roles");
+      await open(page, "#buddies/router");
       const region = page.getByRole("region", { name: view });
       for (const name of sections) {
         const section = region.getByRole("group", { name, exact: true });
@@ -36,7 +36,7 @@ for (const { locale, view, list, sections, profile, wait, chooseProfile, add, ad
     });
 
     test("shows every column of the records without scrolling them sideways", async ({ page }) => {
-      await open(page, "#buddies/roles");
+      await open(page, "#buddies/router");
       for (const name of [routers, failures]) {
         const table = page.getByRole("table", { name });
         await table.scrollIntoViewIfNeeded();
@@ -50,7 +50,7 @@ for (const { locale, view, list, sections, profile, wait, chooseProfile, add, ad
     });
 
     test("writes the chosen mode's consequence below the choice and leaves its hover quiet", async ({ page }) => {
-      await open(page, "#buddies/roles");
+      await open(page, "#buddies/router");
       const consequence = page.locator('[data-slot="routing-mode-consequence"]');
       const fast = page.getByRole("radio", { name: locale === "zh-CN" ? "快速" : "Fast", exact: true });
       const review = page.getByRole("radio", { name: locale === "zh-CN" ? "审阅" : "Review", exact: true });
@@ -65,7 +65,7 @@ for (const { locale, view, list, sections, profile, wait, chooseProfile, add, ad
     });
 
     test("opens the add dialog by a click without a hint over it", async ({ page }) => {
-      await open(page, "#buddies/roles");
+      await open(page, "#buddies/router");
       await page.getByRole("region", { name: view }).getByRole("button", { name: add, exact: true }).click();
       const dialog = page.getByRole("dialog", { name: addTitle });
       await expect(dialog).toBeVisible();
@@ -79,7 +79,7 @@ for (const { locale, view, list, sections, profile, wait, chooseProfile, add, ad
     test.use({ locale, viewport: { width: 390, height: 844 } });
 
     test("breaks a buddy's four parts only between them and never scrolls the page sideways", async ({ page }) => {
-      await open(page, "#buddies/roles");
+      await open(page, "#buddies/router");
       const names = page.getByRole("region", { name: view }).getByRole("list", { name: list }).getByRole("link");
       await expect(names).toHaveCount(3);
       // A part is whole when all of its letters stand on one line.
@@ -100,7 +100,7 @@ for (const { locale, view, list, sections, profile, wait, chooseProfile, add, ad
 
     test("keeps profile settings and the buddy chooser within the narrow viewport", async ({ page }) => {
       await page.setViewportSize({ width: 390, height: 900 });
-      await open(page, "#buddies/roles");
+      await open(page, "#buddies/router");
       const region = page.getByRole("region", { name: view });
       const buddy = region.getByRole("group", { name: profile, exact: true });
       await buddy.scrollIntoViewIfNeeded();
@@ -122,9 +122,9 @@ test.describe("the roles section in the dark theme", () => {
 
   test("keeps every text readable against what is behind it", async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
-    await open(page, "#buddies/roles");
+    await open(page, "#buddies/router");
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    const region = page.getByRole("region", { name: "角色" });
+    const region = page.getByRole("region", { name: "Router" });
     for (const text of await region.locator("span, code, a, h2, button, time, th, td, caption, p").all()) {
       if (!(await text.innerText()).trim() || await text.locator("*").count()) continue;
       expect(await contrastOf(text), await text.innerText()).toBeGreaterThanOrEqual(4.5);

@@ -117,13 +117,13 @@ export function fixture(state: Snapshot = snapshot(), replies: Record<string, Re
 }
 
 /** Opens the page at an address and waits until the roles section is drawn. */
-export async function openRoles(f: ReturnType<typeof fixture>, hash = "#buddies/roles") {
+export async function openRoles(f: ReturnType<typeof fixture>, hash = "#buddies/router") {
   window.location.hash = hash;
   render(createElement(App, { suppliedApi: f.api }));
-  await screen.findByRole("region", { name: "角色" });
+  await screen.findByRole("region", { name: "Router" });
 }
 
-export const rolesRegion = () => screen.getByRole("region", { name: "角色" });
+export const rolesRegion = () => screen.getByRole("region", { name: "Router" });
 export const section = (name: string) => within(rolesRegion()).getByRole("group", { name });
 export const routerList = () => within(rolesRegion()).getByRole("list", { name: "Router 列表" });
 export const queryRouterList = () => within(rolesRegion()).queryByRole("list", { name: "Router 列表" });

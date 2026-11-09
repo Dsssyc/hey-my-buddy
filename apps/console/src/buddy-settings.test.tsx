@@ -245,7 +245,7 @@ describe("the harness directory", () => {
     // The summary names the recorded state without repeating it in a popup.
     const zcode = foldHandle("ZCode");
     expect(zcode.getAttribute("aria-expanded")).toBe("false");
-    const state = within(zcode.closest("[data-slot=harness-section]")!).getByRole("button", { name: "ZCode 账户" });
+    const state = zcode.closest("[data-slot=harness-section]")!.querySelector<HTMLElement>("[data-slot=harness-header]")!;
     expect(within(state).getByText("未找到")).toBeTruthy();
     expect(state.getAttribute("aria-description")).toBeNull();
     await user.hover(state);

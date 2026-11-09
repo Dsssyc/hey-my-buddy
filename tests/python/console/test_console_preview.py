@@ -24,6 +24,17 @@ SPEC.loader.exec_module(preview)
 
 
 class LeadStopPreviewTests(unittest.TestCase):
+    def test_catalogue_redo_examples_keep_missing_measurements_and_declared_versions(self):
+        snapshot = preview.console_snapshot('normal', True)
+        services = {(row['harness'], row['provider'], row['model']) for row in snapshot['modelServiceConcurrency']}
+        self.assertNotIn(('codex', 'openai', 'gpt-5-mini'), services)
+        self.assertIn(('codex', 'openai', 'gpt-5-mini'),
+                      {(row['harness'], row['provider'], row['model']) for row in snapshot['buddies']})
+        harnesses = {row['harness']: row for row in snapshot['harnesses']}
+        self.assertEqual(harnesses['dsh']['permissionsVerifiedVersion'], '0.2.2-rc.1')
+        self.assertIsNone(harnesses['zcode']['permissionsVerifiedVersion'])
+        self.assertNotIn('web', harnesses['zcode'].get('permissions', {}))
+
     def test_model_profile_preview_uses_current_snapshot_and_command_shapes(self):
         snapshot = preview.console_snapshot('normal', True)
         self.assertNotIn('modelServiceNotes', snapshot)

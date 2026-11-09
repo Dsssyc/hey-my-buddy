@@ -57,8 +57,10 @@ function LocationBlock({ row, name, view, gate, onCheck, onSavePath }: {
     <Hint text={location.exception?.reason ?? undefined}><span tabIndex={0} className={hintTarget}>{statusText(row.status, t)}</span></Hint>
   </>}>
     <div className={fields}>
-      {row.version && <><span className={label}>{t("harness.pane.version")}</span>
-        <span className="tabular-nums">{row.version}</span></>}
+      <span className={label}>{t("harness.pane.installedVersion")}</span>
+      <span className="tabular-nums">{row.version ?? t("harness.unrecorded")}</span>
+      <span className={label}>{t("harness.pane.verifiedVersion")}</span>
+      <span className="tabular-nums">{row.permissionsVerifiedVersion ?? t("harness.notVerified")}</span>
       <span className={label}>{t("harness.pane.path")}</span>
       <span className="font-mono text-xs break-all">{location.path ?? t("harness.unrecorded")}</span>
       <span className={label}>{t("harness.pane.source")}</span><span>{location.source}</span>
@@ -71,7 +73,7 @@ function LocationBlock({ row, name, view, gate, onCheck, onSavePath }: {
       <span className={label}>{t("harness.pane.web")}</span>
       <span>{t(row.permissions?.web === "enforced" ? "harness.web.eligible" : "harness.web.ineligible")}</span>
     </div>
-    <p className="mt-3 text-xs text-ink3">{t("harness.web.description")}</p>
+    <p className="mt-3 text-xs text-ink3">{t(row.permissions?.web === "enforced" ? "harness.web.enforcedDescription" : "harness.web.unenforcedDescription")}</p>
     {location.exception && <Exception exception={location.exception} />}
     <div className={buttons}>
       <Hint text={refusal}><Button variant="outline" aria-disabled={inert || undefined}
@@ -83,19 +85,18 @@ function LocationBlock({ row, name, view, gate, onCheck, onSavePath }: {
   </Block>;
 }
 
-function AccountBlock({ view, row, gate, onClear }: { view: HarnessDetailsView; row: HarnessHealth; gate: Gate; onClear: (provider: string) => void }) {
+function AccountBlock({ view }: { view: HarnessDetailsView }) {
   const { t } = useTranslation("buddies");
   const { account } = view;
   return <Block title={t("harness.account.name")}>
-    {account ? <div className={fields}>
+    <div className={fields}>
       <span className={label}>{t("harness.account.state")}</span>
       <Hint text={account.reason ?? undefined}><span tabIndex={0} className={hintTarget}>{account.state}</span></Hint>
       <span className={label}>{t("harness.account.billing")}</span>
       <span className="flex flex-col">{account.billing.length
         ? account.billing.map(entry => <span key={entry.provider}>{entry.provider} <span className="text-ink3">{entry.plan}</span></span>)
         : t("harness.account.plan.unknown")}</span>
-    </div> : <span className="text-xs text-ink3">{t("harness.unrecorded")}</span>}
-    <CoolingDetails providers={row.providers ?? []} gate={gate} onClear={onClear} />
+    </div>
   </Block>;
 }
 
@@ -108,8 +109,9 @@ export function HarnessDetails({ row, name, canWrite, refusal, busy, onCheck, on
   const view = harnessDetailsView(row, t);
   const gate = { canWrite, refusal, busy };
   return <div role="group" aria-label={t("harness.detailsLabel", { name })} data-slot="harness-details"
-    className="grid border-b-2 border-ink3 bg-card text-sm min-[900px]:pl-[38px] min-[900px]:grid-cols-2 min-[900px]:divide-x max-[899px]:divide-y">
+    className="grid border-b-2 border-ink3 bg-card text-sm min-[1100px]:pl-[38px] min-[1100px]:grid-cols-3 min-[1100px]:divide-x max-[1099px]:divide-y">
     <LocationBlock row={row} name={name} view={view} gate={gate} onCheck={onCheck} onSavePath={onSavePath} />
-    <AccountBlock view={view} row={row} gate={gate} onClear={onRetry} />
+    <AccountBlock view={view} />
+    <Block title={t("harness.cooling.name")}><CoolingDetails providers={row.providers ?? []} gate={gate} onClear={onRetry} /></Block>
   </div>;
 }

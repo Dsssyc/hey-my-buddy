@@ -6,8 +6,8 @@ import { expect } from "@playwright/test";
 const stage = process.env.HMB_EXPLORATION_STAGE;
 const directory = process.env.HMB_EXPLORATION_SCREENSHOTS;
 for (const words of [
-  { locale: "zh-CN", roles: "角色", mode: "默认模式", quota: "探索名额", interval: "探索间隔微任务数", off: "关闭", on: "每 N 个给 1 个", position: "第 1 个 Router", mark: "探索", preferred: "首选：" },
-  { locale: "en-US", roles: "Roles", mode: "Default mode", quota: "Exploration quota", interval: "Micro tasks per exploration quota", off: "Off", on: "One in every N", position: "Router #1", mark: "Exploration", preferred: "Preferred: " },
+  { locale: "zh-CN", roles: "Router", mode: "默认模式", quota: "探索名额", interval: "探索间隔微任务数", off: "关闭", on: "每 N 个给 1 个", position: "第 1 个 Router", mark: "探索", preferred: "首选：" },
+  { locale: "en-US", roles: "Router", mode: "Default mode", quota: "Exploration quota", interval: "Micro tasks per exploration quota", off: "Off", on: "One in every N", position: "Router #1", mark: "Exploration", preferred: "Preferred: " },
 ]) for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
   test.describe(`exploration ${words.locale} ${theme} ${width}px`, () => {
     test.use({ locale: words.locale, viewport: { width, height: width === 390 ? 844 : 900 } });
@@ -15,7 +15,7 @@ for (const words of [
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     });
     test("Router settings remain readable and steady", async ({ page }) => {
-      await open(page, "#buddies/roles");
+      await open(page, "#buddies/router");
       const region = page.getByRole("region", { name: words.roles });
       const section = region.getByRole("group", { name: stage === "before" ? words.mode : words.quota, exact: true });
       await section.evaluate(node => node.scrollIntoView({ block: "center" }));

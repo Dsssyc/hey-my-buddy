@@ -36,24 +36,39 @@ afterEach(async () => {
 
 describe("the concurrency notice in the model settings", () => {
   for (const copy of languages) for (const sessionPresent of [true, false]) {
-    it(`shows the full ${copy.language} copy and associates it with the limit with ${sessionPresent ? "a session" : "no session"}`, async () => {
+    it(`shows the full ${copy.language} copy only when raising the limit with ${sessionPresent ? "a session" : "no session"}`, async () => {
       await i18n.changeLanguage(copy.language);
       const drawer = await openDrawer(sessionPresent);
+      expect(within(drawer).queryByRole("note")).toBeNull();
+      const input = within(drawer).getByRole<HTMLInputElement>("spinbutton", { name: copy.limit });
+      expect(input.readOnly).toBe(!sessionPresent);
+      const user = userEvent.setup();
+      if (!sessionPresent) {
+        expect(within(drawer).queryByRole("note")).toBeNull();
+        expect(input.value).toBe("2");
+        return;
+      }
+      await user.clear(input); await user.type(input, "3");
       const notice = within(drawer).getByRole("note", { name: copy.title });
       expect(within(notice).getByRole("heading", { name: copy.title }).textContent).toBe(copy.title);
       expect(within(notice).getByText(copy.body).textContent).toBe(copy.body);
-      const input = within(drawer).getByRole<HTMLInputElement>("spinbutton", { name: copy.limit });
       const descriptions = input.getAttribute("aria-describedby")!.split(" ").map(id => document.getElementById(id)!);
       expect(descriptions).toContain(notice);
       expect(descriptions.map(element => element.textContent).join(" ")).toContain(copy.body);
       expect(input.readOnly).toBe(!sessionPresent);
       expect(notice.closest("[role=tooltip]")).toBeNull();
+      await user.clear(input); await user.type(input, "2");
+      expect(within(drawer).queryByRole("note")).toBeNull();
+      await user.clear(input); await user.type(input, "1");
+      expect(within(drawer).queryByRole("note")).toBeNull();
     });
   }
 
   it("updates the visible notice and the input's description when the mounted page changes language", async () => {
     const drawer = await openDrawer();
     const input = within(drawer).getByRole("spinbutton", { name: languages[0].limit });
+    const user = userEvent.setup();
+    await user.clear(input); await user.type(input, "3");
     const descriptionIds = input.getAttribute("aria-describedby");
     await act(async () => { await i18n.changeLanguage("en"); });
     const notice = within(drawer).getByRole("note", { name: languages[1].title });

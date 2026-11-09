@@ -1,10 +1,10 @@
-/** Directory selection; the existing roles view sends a buddy using the models intent. */
-const BUDDY_VIEWS = ["models", "roles"] as const;
+/** Directory selection; the Router view sends a buddy using the models intent. */
+const BUDDY_VIEWS = ["models", "router"] as const;
 export type BuddyView = (typeof BUDDY_VIEWS)[number];
 export type BuddyLocation = { view: BuddyView; target?: string; targetKind?: "harness" | "model" | "buddy" };
 
 export function buddyHash({ view, target, targetKind }: BuddyLocation): string {
-  if (view === "roles") return `#buddies/roles${target ? `/${encodeURIComponent(target)}` : ""}`;
+  if (view === "router") return `#buddies/router${target ? `/${encodeURIComponent(target)}` : ""}`;
   return `#buddies/catalog${target ? `/${targetKind ?? "buddy"}/${encodeURIComponent(target)}` : ""}`;
 }
 
@@ -13,8 +13,8 @@ export function buddyLocation(hash: string): BuddyLocation | null {
   const [page, route, kind, target, extra] = hash.slice(1).split("/");
   if (page !== "buddies") return null;
   if (!route) return { view: "models" };
-  if (route === "roles" && !target) {
-    try { return { view: "roles", ...(kind ? { target: decodeURIComponent(kind) } : {}) }; }
+  if (route === "router" && !target) {
+    try { return { view: "router", ...(kind ? { target: decodeURIComponent(kind) } : {}) }; }
     catch { return null; }
   }
   if (route !== "catalog" || extra) return null;

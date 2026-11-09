@@ -7,6 +7,22 @@ const B = "macro-22222222-2222-4222-8222-222222222222";
 for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const) {
   test.describe(`cooling evidence ${width}px ${theme}`, () => {
     test.use({ locale: "zh-CN", viewport: { width, height: 900 }, reducedMotion: "reduce" });
+    test("keeps each provider cooldown beside its name and its retry outside the settings button", async ({ page }) => {
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      await open(page, "#buddies/catalog");
+      const section = page.locator("[data-slot=harness-section][aria-label=DSH]");
+      const header = section.locator("[data-slot=harness-header]");
+      const provider = header.locator("[data-slot=header-provider]").filter({ hasText: "deepseek-official" });
+      await expect(provider.locator("[data-slot=cooling-status]")).toContainText("冷却中");
+      await expect(provider.getByRole("button", { name: "开放重试" })).toHaveCount(1);
+      await expect(header.locator("button button")).toHaveCount(0);
+      await expect(section.locator("[data-slot=model-row] [data-slot=cooling-status]")).toHaveCount(0);
+      await header.getByRole("button", { name: "DSH 账户" }).click();
+      const details = section.locator("[data-slot=harness-details]");
+      await expect(details.locator(":scope > [role=group]")).toHaveCount(3);
+      await expect(details.getByRole("group", { name: "冷却" }).getByRole("button", { name: "开放重试" })).toHaveCount(1);
+      await expectNoSidewaysScroll(page);
+    });
     test("shows a cooling boundary, a rerouted success, and a mid-turn quota failure", async ({ page }, testInfo) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await open(page, `#tasks/${A}/preview-run-a4`);

@@ -54,11 +54,13 @@ describe("a harness section's head", () => {
     await openHarness(fixture({ harnesses: [harness({ harness: "claude", status: "ready" })] }), "#buddies", false);
     const fold = foldHandle("Claude Code"), account = harnessButton("Claude Code");
     expect([fold.getAttribute("aria-expanded"), account.getAttribute("aria-expanded")]).toEqual(["true", "false"]);
-    // The name, the provider and the cooldown summary are all part of the row's button.
-    await user.click(within(account).getByText("Claude Code"));
+    // The visible content sits over the row's button; browser checks cover pointer hit testing.
+    expect(header("Claude Code").textContent).toContain("Claude Code");
+    expect(header("Claude Code").textContent).toContain("anthropic");
+    await user.click(account);
     expect([fold.getAttribute("aria-expanded"), account.getAttribute("aria-expanded")]).toEqual(["true", "true"]);
     expect(screen.getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
-    await user.click(within(account).getByText("anthropic"));
+    await user.click(account);
     expect(account.getAttribute("aria-expanded")).toBe("false");
     await user.click(fold);
     expect([fold.getAttribute("aria-expanded"), account.getAttribute("aria-expanded")]).toEqual(["false", "false"]);
@@ -152,13 +154,13 @@ describe("the controls band", () => {
     expect(search.parentElement).toBe(controls);
     expect(group.contains(search)).toBe(false);
     expect(group.parentElement).toBe(controls);
-    expect([...group.children].map(child => child.getAttribute("data-slot") ?? child.getAttribute("role"))).toEqual(["catalogue-filters", "status", "catalogue-actions"]);
+    expect([...group.children].map(child => child.getAttribute("data-slot") ?? child.getAttribute("role"))).toEqual(["catalogue-filters", "catalogue-actions"]);
     const actions = group.querySelector<HTMLElement>("[data-slot=catalogue-actions]")!;
     expect(within(actions).getAllByRole("button").map(button => button.textContent)).toEqual(["全部检测", "发现模型"]);
-    // From 640px the group and the pair are rows of their own; below it they dissolve into the grid.
-    expect(controls.className).toContain("sm:flex-wrap");
-    expect(group.className).toContain("sm:flex-wrap");
+    // The search and controls can wrap; the two actions stay together.
+    expect(controls.className).toContain("flex-wrap");
+    expect(group.className).toContain("flex-wrap");
     expect(actions.className).not.toContain("flex-wrap");
-    expect(actions.className).toContain("sm:flex");
+    expect(actions.className).toContain("flex");
   });
 });

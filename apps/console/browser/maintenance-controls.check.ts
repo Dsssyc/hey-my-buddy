@@ -36,7 +36,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
         await route.fulfill({ json: { ok: true, result: command.operation === "maintenance_start"
           ? { status: "running", runId: "maintenance-next" } : { alreadyTerminal: false } } });
       });
-      await open(page, "#buddies/roles");
+      await open(page, "#buddies/router");
       const row = page.locator('[data-slot="maintenance-record"]');
       await row.scrollIntoViewIfNeeded();
       if (state === "running") {
@@ -92,7 +92,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
         }];
         await route.fulfill({ response, json: snapshot });
       });
-      await open(page, "#buddies/roles");
+      await open(page, "#buddies/router");
       const records = page.locator('[data-slot="maintenance-record"]');
       await expect(records).toHaveCount(2);
       const older = records.nth(1);

@@ -101,7 +101,7 @@ async function openBuddy(api: ConsoleApi, user: ReturnType<typeof userEvent.setu
   await listed(2, 3);
   await selectModel(user, FLASH, "DSH");
 }
-const preferenceNote = () => within(level("off")).getByRole("textbox", { name: "off 的偏好备注" }) as HTMLInputElement;
+const preferenceNote = () => within(level("off")).getByRole("textbox", { name: "off 的偏好理由" }) as HTMLInputElement;
 
 const saveBar = () => screen.queryByRole("region", { name: "未保存的修改" });
 const save = () => within(saveBar()!).getByRole("button", { name: /^(保存|重试同一保存)$/ });

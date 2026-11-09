@@ -15,7 +15,7 @@ import { macroTaskGroups, macroTaskSummary } from "./macro-task-fixtures";
 const bannerNotice = /新窗口已取得写权限，此页面现在是只读/;
 const actionRefusal = /浏览器授权已失效/;
 const saveRefusal = /浏览器授权已失效/;
-const preferenceNote = () => within(level("off")).getByRole("textbox", { name: "off 的偏好备注" }) as HTMLInputElement;
+const preferenceNote = () => within(level("off")).getByRole("textbox", { name: "off 的偏好理由" }) as HTMLInputElement;
 
 /** Two model services and three execution buddies, all available. */
 function catalog(): Buddy[] {

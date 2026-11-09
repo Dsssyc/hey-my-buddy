@@ -208,13 +208,10 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 
 ## Buddy 页与 Router 的重做：待开发者确认
 
-2026-11-09 第九轮，简化 Router 左栏：每项只留工作名与一行最近结果，buddy 名字只在右边“谁担任”里显示。当前是下表 9 个画面，中英文各一份 HTML、各有深浅色整页 PNG，宽 1440、高随内容。本轮更新第 4／5／6 张 Router 的双语 HTML 与 12 张整页图，其余画面和领域树悬停局部图沿用。这些稿只核对过静态渲染，不是控制台实现或实现验收；按开发者安排没有窄屏稿与窄屏样式，窄屏未核对。
+2026-11-09 第九轮，简化 Router 左栏：每项只留工作名与一行最近结果，buddy 名字只在右边“谁担任”里显示。目录、模型服务抽屉与 harness 展开的稿随实现移除；下表保留其余 6 个画面，中英文各一份 HTML、各有深浅色整页 PNG，宽 1440、高随内容。本轮更新第 4／5／6 张 Router 的双语 HTML 与 12 张整页图，其余画面和领域树悬停局部图沿用。这些稿只核对过静态渲染，不是控制台实现或实现验收；按开发者安排没有窄屏稿与窄屏样式，窄屏未核对。
 
 | 画面 | 中文 HTML | English HTML | 深色（中文 / English） | 浅色（中文 / English） |
 | --- | --- | --- | --- | --- |
-| 目录 | [打开](buddy-redo-catalog.html) | [Open](buddy-redo-catalog.en.html) | [中文](buddy-redo-catalog-dark.png) / [English](buddy-redo-catalog.en-dark.png) | [中文](buddy-redo-catalog-light.png) / [English](buddy-redo-catalog.en-light.png) |
-| 目录：模型服务抽屉 | [打开](buddy-redo-service.html) | [Open](buddy-redo-service.en.html) | [中文](buddy-redo-service-dark.png) / [English](buddy-redo-service.en-dark.png) | [中文](buddy-redo-service-light.png) / [English](buddy-redo-service.en-light.png) |
-| 目录：位置、账户与冷却 | [打开](buddy-redo-harness.html) | [Open](buddy-redo-harness.en.html) | [中文](buddy-redo-harness-dark.png) / [English](buddy-redo-harness.en-dark.png) | [中文](buddy-redo-harness-light.png) / [English](buddy-redo-harness.en-light.png) |
 | Router：路由 | [打开](buddy-redo-routing.html) | [Open](buddy-redo-routing.en.html) | [中文](buddy-redo-routing-dark.png) / [English](buddy-redo-routing.en-dark.png) | [中文](buddy-redo-routing-light.png) / [English](buddy-redo-routing.en-light.png) |
 | Router：维护 | [打开](buddy-redo-maintenance.html) | [Open](buddy-redo-maintenance.en.html) | [中文](buddy-redo-maintenance-dark.png) / [English](buddy-redo-maintenance.en-dark.png) | [中文](buddy-redo-maintenance-light.png) / [English](buddy-redo-maintenance.en-light.png) |
 | Router：画像 | [打开](buddy-redo-profile-plane.html) | [Open](buddy-redo-profile-plane.en.html) | [中文](buddy-redo-profile-plane-dark.png) / [English](buddy-redo-profile-plane.en-dark.png) | [中文](buddy-redo-profile-plane-light.png) / [English](buddy-redo-profile-plane.en-light.png) |
@@ -222,7 +219,7 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 | 评价：模型画像与短提示 | [打开](buddy-redo-evaluation-model.html) | [Open](buddy-redo-evaluation-model.en.html) | [中文](buddy-redo-evaluation-model-dark.png) / [English](buddy-redo-evaluation-model.en-dark.png) | [中文](buddy-redo-evaluation-model-light.png) / [English](buddy-redo-evaluation-model.en-light.png) |
 | 评价：选名字与换代说明 | [打开](buddy-redo-evaluation-generation.html) | [Open](buddy-redo-evaluation-generation.en.html) | [中文](buddy-redo-evaluation-generation-dark.png) / [English](buddy-redo-evaluation-generation.en-dark.png) | [中文](buddy-redo-evaluation-generation-light.png) / [English](buddy-redo-evaluation-generation.en-light.png) |
 
-领域树悬停局部图（从 1440px 宽屏中裁取，含“存储与迁移”的浮层）：[中文深色](buddy-redo-maintenance-tree-hover-dark.png) / [English dark](buddy-redo-maintenance-tree-hover.en-dark.png) / [中文浅色](buddy-redo-maintenance-tree-hover-light.png) / [English light](buddy-redo-maintenance-tree-hover.en-light.png)。九张画面的表格链接是整页图；维护整页不指着任何节点，所有枝条均为原色。
+领域树悬停局部图（从 1440px 宽屏中裁取，含“存储与迁移”的浮层）：[中文深色](buddy-redo-maintenance-tree-hover-dark.png) / [English dark](buddy-redo-maintenance-tree-hover.en-dark.png) / [中文浅色](buddy-redo-maintenance-tree-hover-light.png) / [English light](buddy-redo-maintenance-tree-hover.en-light.png)。表格链接是整页图；维护整页不指着任何节点，所有枝条均为原色。
 
 分区仍为目录、Router、评价（Catalog、Router、Evaluation）。Router 的界面称路由／维护／画像（Routing／Maintenance／Profiles），评价只保留领域评价与模型画像两个页签，默认领域评价。用户备注已从当前画面去掉。样式仍由 `base.css` 与 [buddy-redo.css](buddy-redo.css)组成；一般颜色仍引用 base.css；领域树依照 ADR-029 的身份色规则，每个顶层领域取时间轴配色表的一个色系，按表中顺序取蓝 `#0c96c3`、绿 `#3b9f33`、玫红 `#dd44a0`、紫 `#7f5fd6`，写在 buddy-redo.css 的变量里。取深浅两档之间的中间亮度，两种主题共用；不原样用表里的深浅色，因为细线在浅色主题下浅的一半、在深色主题下深的一半会看不清，单取一半又难分蓝与紫。橙色系不用，避免接近等人接手的橙；第五个起按相同最远点规则继续生成，本稿只有四个顶层，没有新增或验证第五种颜色。同一顶层的后代与连线同色，名字与数量仍用墨色和次要色。维护稿标记为 `.round8`，没有修改 base.css、计划或 ADR；`<html data-theme="dark">` 或 `light` 切换主题。图标和状态记号沿用：完成为对勾、失败为叉、运行中为实心圆、未建画像为空心圆。所有展开处仍为 Lucide ChevronRight，16px、线宽 1.5，展开转 90°。
 

@@ -11,7 +11,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
     test.use({ locale: "zh-CN", viewport: { width, height: 1200 }, reducedMotion: "reduce" });
     test("shows maintenance history and domain hierarchy and opens the eligible buddy picker", async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
-      await open(page, "#buddies/roles");
+      await open(page, "#buddies/router");
       const plane = page.locator('[data-slot="maintenance-plane"]');
       await expect(plane).toContainText("待处理 3 个微任务");
       await expect(plane).toContainText("完成");

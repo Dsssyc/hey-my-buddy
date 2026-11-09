@@ -10,6 +10,7 @@ export default {
   retry: "重试",
   refused: "连接中断或缺少写入资格",
   unrecorded: "未记录",
+  notVerified: "未核对",
   status: {
     ready: "已找到",
     missing: "未找到",
@@ -24,13 +25,14 @@ export default {
     restored: "已恢复自动检测；{{name}} {{status}}",
   },
   pane: {
-    version: "版本",
+    installedVersion: "装着的版本",
+    verifiedVersion: "核实时的版本",
     location: "位置",
     path: "路径",
     source: "来源",
     manual: "手动",
     checked: "检测",
-    review: "审阅",
+    review: "只读",
     web: "只联网",
     pickPath: "指定路径",
     reason: "原因",
@@ -39,15 +41,17 @@ export default {
   },
   /** Local review eligibility: a free check of the shipped mechanism, never native-run evidence. */
   review: {
-    eligible: "可用",
-    ineligible: "不可用",
+    eligible: "强制限制",
+    conventional: "依照约定",
+    ineligible: "未声明",
     unknown: "未知",
-    note: "资格来自 harness 的只读档位声明，不代表原生调用已验证。",
+    note: "按 harness 的只读档位声明显示；此处不运行原生调用。",
   },
   web: {
     eligible: "强制限制",
     ineligible: "未声明强制限制",
-    description: "只联网档位只允许使用联网工具，可供画像面使用。",
+    enforcedDescription: "只联网档位声明了强制限制，可供画像面使用。",
+    unenforcedDescription: "没有强制的只联网档位声明，画像面不能使用这个 harness。",
   },
   path: {
     title: "{{name}} 路径",
@@ -83,7 +87,9 @@ export default {
   cooling: {
     name: "冷却",
     status: "冷却中 · 约 {{time}} 可再试",
-    clear: "解除冷却",
+    clear: "开放重试",
+    retryHint: "开放一次重试机会，不代表提供方已恢复。",
+    none: "当前无冷却",
     done: { cleared: "已解除冷却", none: "当前未在冷却" },
     storageUnavailable: "无法保留请求 ID；请允许页面使用会话存储后重试。",
     unknownResult: "解除冷却的结果未知；请重放此请求。",

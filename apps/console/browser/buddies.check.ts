@@ -2,40 +2,52 @@ import { expect } from "@playwright/test";
 import { TOOLBAR_ITEMS, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
 
 const languages = [
-  { locale: "zh-CN", sections: ["目录", "角色"] },
-  { locale: "en-US", sections: ["Catalog", "Roles"] },
+  { locale: "zh-CN", sections: ["目录", "Router"], enabled: "启用" },
+  { locale: "en-US", sections: ["Catalog", "Router"], enabled: "Enabled" },
 ];
 
-for (const { locale, sections } of languages) for (const width of [1280, 390]) {
-  test.describe(`the Buddy page navigation in ${locale} at ${width}px`, () => {
-    test.use({ locale, viewport: { width, height: 844 } });
+for (const { locale, sections, enabled } of languages) {
+  test.describe(`the Buddy page header in ${locale} at 1440px`, () => {
+    test.use({ locale, viewport: { width: 1440, height: 900 } });
 
-    test("places the section links in the catalogue toolbar and keeps every item whole", async ({ page }) => {
+    test("keeps one full-width header at the same height across the directory and Router", async ({ page }) => {
       await open(page, "#buddies/catalog");
-      const navigation = page.getByRole("main").getByRole("navigation");
-      await expect(navigation).toHaveCount(1);
+      const main = page.getByRole("main");
+      const header = main.locator('[data-slot="buddy-header"]');
+      const navigation = header.getByRole("navigation");
       const links = navigation.getByRole("link");
-      for (const [index, name] of sections.entries()) await expect(links.nth(index)).toContainText(name);
-      await expectWholeAndApart(navigation, links);
-      await expectTextUncut(links);
-      await expectWholeAndApart(page.getByRole("main"), page.locator("[data-slot=catalogue-toolbar]").locator(TOOLBAR_ITEMS));
-      await expectNoSidewaysScroll(page);
-      const [bar, toolbar] = [await page.getByRole("banner").first().boundingBox(), await page.locator("[data-slot=catalogue-toolbar]").boundingBox()];
-      expect(toolbar!.x).toBe(0);
-      expect(toolbar!.width).toBe(width);
-      expect(toolbar!.y).toBe(bar!.y + bar!.height);
-    });
-
-    test("returns from roles to the single catalogue address without a table selector", async ({ page }) => {
-      await open(page, "#buddies/catalog");
-      const navigation = page.getByRole("main").getByRole("navigation");
-      await navigation.getByRole("link").nth(1).click();
-      await expect(page).toHaveURL(/#buddies\/roles$/);
+      const summary = header.getByRole("status");
       await expect(navigation).toHaveCount(1);
-      await navigation.getByRole("link").nth(0).click();
+      await expect(links).toHaveCount(2);
+      for (const [index, name] of sections.entries()) await expect(links.nth(index)).toContainText(name);
+      await expect(summary).toContainText(enabled);
+      await expectWholeAndApart(header, header.locator('nav > a, :scope > [role="status"]'));
+      await expectTextUncut(header.locator('nav > a, :scope > [role="status"]'));
+      await expectNoSidewaysScroll(page);
+
+      const banner = (await page.getByRole("banner").first().boundingBox())!;
+      const catalogHeader = (await header.boundingBox())!;
+      const toolbar = (await main.locator('[data-slot="catalogue-toolbar"]').boundingBox())!;
+      expect(catalogHeader.y).toBe(banner.y + banner.height);
+      expect(catalogHeader.height).toBe(48);
+      expect(catalogHeader.width).toBe(1440);
+      expect(toolbar.y).toBe(catalogHeader.y + catalogHeader.height);
+      await expectWholeAndApart(main, main.locator('[data-slot="catalogue-toolbar"]').locator(TOOLBAR_ITEMS));
+
+      await links.nth(1).click();
+      await expect(page).toHaveURL(/#buddies\/router$/);
+      await expect(main.getByRole("region", { name: "Router" })).toBeVisible();
+      await expect(navigation).toHaveCount(1);
+      const routerHeader = (await header.boundingBox())!;
+      expect(routerHeader.y).toBe(catalogHeader.y);
+      expect(routerHeader.height).toBe(catalogHeader.height);
+      expect(routerHeader.width).toBe(catalogHeader.width);
+
+      await links.nth(0).click();
       await expect(page).toHaveURL(/#buddies\/catalog$/);
       await expect(navigation).toHaveCount(1);
-      await expect(page.getByRole("main").getByRole("table")).toHaveCount(0);
+      expect((await header.boundingBox())!.height).toBe(catalogHeader.height);
+      await expect(main.getByRole("table")).toHaveCount(0);
     });
   });
 }

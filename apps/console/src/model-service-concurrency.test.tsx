@@ -134,7 +134,7 @@ describe("a model's concurrency", () => {
     // Directly editable: there is no global edit switch gating the field.
     expect(screen.queryByRole("switch", { name: "编辑设置" })).toBeNull();
     expect(concurrencyInput()).toHaveProperty("value", "2");
-    expect(within(pane()).getByText("占用 1")).toBeTruthy();
+    expect(within(pane()).getByLabelText("占用 1")).toBeTruthy();
     // The model row writes the same two numbers at its trailing edge.
     expect(within(modelRow(FLASH)).getByLabelText("占用 1，上限 2").textContent).toBe("1 / 2");
     expect(f.command).not.toHaveBeenCalled();
@@ -161,7 +161,7 @@ describe("a model's concurrency", () => {
     expect(wire).not.toContain("buddyId");
     // The raise is visible immediately and the occupancy stays observation.
     expect(concurrencyInput()).toHaveProperty("value", "6");
-    expect(within(pane()).getByText("占用 1")).toBeTruthy();
+    expect(within(pane()).getByLabelText("占用 1")).toBeTruthy();
     expect(within(pane()).queryByRole("img", { name: "未保存" })).toBeNull();
   });
 
@@ -187,7 +187,7 @@ describe("a model's concurrency", () => {
     // The draft limit belongs to the model; its collapsed row follows it.
     expect(within(pane()).getAllByRole("spinbutton")).toHaveLength(1);
     expect(concurrencyInput()).toHaveProperty("value", "6");
-    expect(within(pane()).getByText("占用 1")).toBeTruthy();
+    expect(within(pane()).getByLabelText("占用 1")).toBeTruthy();
     expect(within(modelRow(FLASH)).getByLabelText("占用 1，上限 6").textContent).toBe("1 / 6");
   });
 

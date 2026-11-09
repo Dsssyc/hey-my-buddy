@@ -5,13 +5,12 @@ import { CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { UnsavedMark } from "@/components/ui/state-mark";
 import { concurrencyEntryFor, MODEL_SERVICE_CONCURRENCY_DEFAULT } from "../console-data";
 import type { ConsoleView, Snapshot } from "../types";
-import { CoolingStatus } from "./cooling";
-import { modelIdentity, reasonTexts } from "./models";
+import { modelIdentity, reasonTexts, pendingHint } from "./models";
 import type { ModelRow } from "./models";
 
 /** One full-width keyboard handle: the trigger of the model's drawer. Only enabled buddies appear on its second part. */
-export function ModelLine({ row, harnessState, data, recorded, expanded, onSelect }: {
-  row: ModelRow; harnessState: string | null; data: ConsoleView; recorded: Snapshot; expanded: boolean; onSelect: () => void;
+export function ModelLine({ row, harnessState, data, recorded, expanded, onSelect, showProvider }: {
+  showProvider: boolean; row: ModelRow; harnessState: string | null; data: ConsoleView; recorded: Snapshot; expanded: boolean; onSelect: () => void;
 }) {
   const { t } = useTranslation("buddies");
   const member = row.modelService.buddies[0];
@@ -19,6 +18,8 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
   const changed = row.chips.some(chip => chip.unsaved)
     || !!data.modelCorrespondenceChanges?.some(entry => entry.harness === member.harness && entry.provider === member.provider && entry.model === member.model)
     || !Object.is(row.limit, concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT);
+  const modelId = data.modelCorrespondences.find(entry => entry.harness === member.harness && entry.provider === member.provider && entry.model === member.model)?.modelId;
+  const noProfile = enabled.length > 0 && !data.models.find(model => model.modelId === modelId)?.profile;
   const occupancy = row.occupancy === null ? t("models.occupancyUnknown") : t("models.occupancy", { active: row.occupancy, limit: row.limit });
   // The open row keeps its neutral tint under the pointer: hover deepens it.
   return <div data-slot="model-row" className={cn("border-t border-l-2 border-l-transparent transition-colors duration-150 motion-reduce:transition-none", expanded && "border-l-foreground bg-selection")}>
@@ -26,14 +27,14 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
       <button type="button" aria-label={modelIdentity(row.modelService)} aria-description={enabled.length > 0 ? t("models.enabled") : undefined} onClick={onSelect}
         className="disclosure-trigger grid min-h-10 w-full grid-cols-[16px_20px_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 px-3 py-2 text-left motion-reduce:transition-none sm:grid-cols-[16px_20px_minmax(0,1fr)_minmax(0,1.5fr)_64px] sm:px-4">
         <Disclosure open={expanded} />
-        {enabled.length > 0 ? <span className="mx-auto size-2 rounded-full bg-foreground" aria-hidden="true" /> : <span className="mx-auto size-2" aria-hidden="true" />}
+        {enabled.length > 0 ? <Hint text={noProfile ? t("models.noProfile") : undefined}><span data-slot="usage-mark" aria-label={noProfile ? t("models.noProfile") : undefined} className={cn("mx-auto size-2 rounded-full", noProfile ? "border border-foreground" : "bg-foreground")} /></Hint> : <span className="mx-auto size-2" aria-hidden="true" />}
         <span className={cn("flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1", !enabled.length && "text-ink3")}>
           <span className="wrap-anywhere font-medium">{member.model}</span>
+          {showProvider && <span data-slot="model-provider" className="text-xs text-ink3">{member.provider}</span>}
           {!row.available && !harnessState && <Hint text={reasonTexts(row.reasons, t).join(" · ") || undefined}>
             <span className="text-xs text-ink3">{t("models.unavailable")}</span>
           </Hint>}
-          <CoolingStatus providers={member.providerCooling ? [member.providerCooling] : []} />
-          {row.pending && <span className="text-xs text-ink3">{t("models.pending")}</span>}
+          {row.pending && <Hint text={pendingHint(row, t)}><span className="text-xs text-ink3">{t("models.pending")}</span></Hint>}
           {row.fresh && <span className="border border-line2 px-1 text-xs text-ink2">{t("models.fresh")}</span>}
           {changed && !expanded && <UnsavedMark label={t("unsaved")} />}
         </span>

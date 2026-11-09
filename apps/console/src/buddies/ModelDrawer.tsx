@@ -20,10 +20,9 @@ import type { Editor } from "../use-editor";
 import type { ConsoleApi } from "../api";
 import { modelServiceKey } from "../console-data";
 import { ModelProfile } from "./ModelProfile";
-import { CoolingStatus } from "./cooling";
 import { ConcurrencyNotice } from "./ConcurrencyNotice";
 import { KindEvaluation } from "./KindEvaluation";
-import { modelIdentity, reasonTexts } from "./models";
+import { modelIdentity, reasonTexts, pendingHint } from "./models";
 import type { BuddyChip, ModelRow } from "./models";
 
 const MODES = ["prefer", "pin", "exclude"] as const satisfies readonly PreferenceMode[];
@@ -52,6 +51,8 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
   const enableUnsaved = recorded.buddies.find(entry => entry.buddyId === buddy.buddyId)?.enabled !== buddy.enabled;
   const preferenceUnsaved = preference?.mode !== published?.mode;
   const noteUnsaved = (preference?.note ?? "") !== (published?.note ?? "");
+  const modelId = data.modelCorrespondences.find(entry => modelServiceKey(entry) === modelServiceKey(buddy))?.modelId;
+  const evaluation = data.kindEvaluations?.find(entry => entry.harness === buddy.harness && entry.modelId === modelId && entry.effort === buddy.effort);
   const unavailableReason = reasonTexts(buddy.unavailableReason ? [buddy.unavailableReason] : [], t).join(" · ");
   const name = (text: string, unsaved: boolean, target: { id: string } | { htmlFor: string }) =>
     <span className="flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
@@ -65,16 +66,15 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
   }
 
   return <div id={buddyRowId(buddy.buddyId)} role="group" aria-label={effort} tabIndex={-1} data-slot="buddy-panel"
-    className="mt-4 flex-1 border border-line bg-card p-3 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+    className="mt-4 flex-1 border-t border-line pt-4 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
     <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2 text-xs">
       <span className="min-w-0 font-mono wrap-anywhere text-ink2">
         {buddy.harness} / {buddy.provider} / {buddy.model} / <strong className="font-semibold text-foreground">{effort}</strong>
       </span>
-      <CoolingStatus providers={buddy.providerCooling ? [buddy.providerCooling] : []} />
       {modelAvailable && !buddy.available && <Hint text={unavailableReason}><span className="text-ink3">{t("pane.unavailable")}</span></Hint>}
     </div>
-    <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3 max-[600px]:flex-col max-[600px]:items-stretch">
-      <div className="flex items-center gap-2.5 max-[600px]:justify-between">
+    <div className="mt-3 grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-4 gap-y-3">
+      <div className="contents">
         {name(t("models.enabled"), enableUnsaved, { htmlFor: `${id}-enabled` })}
         <Hint text={enableLock}><Switch id={`${id}-enabled`} checked={buddy.enabled} aria-label={t("pane.enable", { effort })}
           className="h-8 w-[34px] bg-transparent px-0.5 before:inset-x-0 before:inset-y-0 after:absolute after:inset-x-0.5 after:inset-y-2 after:rounded-full after:bg-line2 after:transition-colors after:duration-150 after:motion-reduce:transition-none aria-checked:bg-transparent aria-checked:after:bg-foreground [&_[data-slot=switch-thumb]]:relative [&_[data-slot=switch-thumb]]:z-10"
@@ -82,20 +82,20 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
             if (canToggle) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId ? { ...entry, enabled } : entry) }));
           }} /></Hint>
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-2.5 max-[600px]:justify-between">
+      <div className="contents">
         {name(t("pane.preference"), preferenceUnsaved, { id: `${id}-preference` })}
         <Segmented value={preference?.mode ?? ""} aria-label={t("pane.buddyPreference", { effort })} onValueChange={setBuddyPreference}
-          className="flex-wrap bg-card max-[600px]:max-w-full">
+          className="w-fit flex-wrap bg-card">
           <Hint text={editingLock}><SegmentedItem value="" aria-disabled={!editing || undefined} className={choice}>{t("preference.unset")}</SegmentedItem></Hint>
           {MODES.map(mode => <Hint key={mode} text={editingLock ?? (mode === "pin" && pinLocked ? t("pane.locked.pinBuddy") : undefined)}>
             <SegmentedItem value={mode} aria-disabled={!editing || mode === "pin" && pinLocked || undefined} className={choice}>{t(`preference.${mode}`)}</SegmentedItem>
           </Hint>)}
         </Segmented>
       </div>
-      <div className="flex min-w-40 flex-1 items-center gap-2.5 max-[600px]:min-w-0">
+      <div className="contents">
         {name(t("pane.note"), noteUnsaved, { htmlFor: `${id}-note` })}
         <Hint text={editingLock ?? (!preference ? t("pane.noteNone") : undefined)}>
-          <Input id={`${id}-note`} className="h-8 min-w-0 flex-1 bg-card text-sm shadow-none"
+          <Input id={`${id}-note`} className="h-8 w-full min-w-0 bg-card text-sm shadow-none"
             aria-label={t("pane.buddyNote", { effort })} value={preference?.note ?? ""} readOnly={!editing || !preference}
             aria-disabled={!editing || !preference || undefined}
             onChange={event => {
@@ -103,6 +103,8 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
             }} />
         </Hint>
       </div>
+      <span className="text-xs text-ink3">{t("pane.samples")}</span><span data-slot="buddy-samples" className="text-sm tabular-nums">{evaluation ? evaluation.statistics.overall.samples : "—"}</span>
+      <span className="text-xs text-ink3">{t("pane.infrastructureFailures")}</span><span data-slot="buddy-infrastructure-failures" className="text-sm tabular-nums">{evaluation ? evaluation.statistics.infrastructureFailures.reduce((sum, entry) => sum + entry.count, 0) : "—"}</span>
     </div>
   </div>;
 }
@@ -122,6 +124,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
   const selected = row.chips.find(chip => chip.buddy.buddyId === selectedBuddyId)!;
   const modelId = data.modelCorrespondences.find(entry => modelServiceKey(entry) === key)?.modelId;
   const publishedLimit = concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT;
+  const raised = row.limit > publishedLimit;
   const limitInvalid = concurrencyLimit(row.limit) === null;
   const buddyIds = new Set(modelService.buddies.map(buddy => buddy.buddyId));
   const mine = (issue: { modelService?: string; buddyId: string }) => issue.modelService === key || (!issue.modelService && buddyIds.has(issue.buddyId));
@@ -141,31 +144,33 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
     {attention.length > 0 && <p className="mb-3 border-l-2 border-hand-mark pl-3 text-xs text-hand" role="status">{attention.map(issue => issue.message).join(" ")}</p>}
     <div className="grid grid-cols-[minmax(0,1fr)] gap-y-4 min-[900px]:grid-cols-[minmax(0,0.8fr)_minmax(0,1.7fr)]">
       <div className="flex min-w-0 flex-col min-[900px]:pr-7">
-        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2 text-xs text-ink2">
-          <h3 className="text-xs font-medium text-ink2">{t("pane.model")}</h3>
-          <Hint text={!row.available ? reasons : undefined}><span className="flex flex-wrap items-center gap-1.5">
-            <StateMark kind={row.available ? "live" : "idle"} className="!animate-none" />{t(`pane.${state}`)}
-            {row.pending && row.pendingSince && <time dateTime={row.pendingSince}>{formatDateTime(Date.parse(row.pendingSince))}</time>}
+        <h3 className="mb-4 text-xs font-medium text-ink2">{t("pane.model")}</h3>
+        <div className="grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-4 gap-y-3">
+          <span className="text-xs text-ink3">{t("pane.status")}</span>
+          <Hint text={row.pending ? pendingHint(row, t) : !row.available ? reasons : undefined}><span className="flex items-center gap-1.5 text-sm">
+            <StateMark kind={row.available && !row.pending ? "live" : "idle"} className="!animate-none" />{t(`pane.${state}`)}
           </span></Hint>
-        </div>
-        <div className="grid flex-1 grid-cols-[max-content_minmax(0,1fr)] grid-rows-[auto_auto] items-center gap-x-3 gap-y-2.5">
+          {row.pending && row.pendingSince && <><span className="text-xs text-ink3">{t("pane.firstMissing")}</span><time className="text-sm tabular-nums" dateTime={row.pendingSince!}>{formatDateTime(Date.parse(row.pendingSince!))}</time></>}
           {name(t("pane.concurrency"), !Object.is(row.limit, publishedLimit), { htmlFor: `${id}-limit` })}
           <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-            <Hint text={editingLock}><Input id={`${id}-limit`} type="number" inputMode="numeric" className="h-8 w-48 max-w-full bg-card px-2.5 text-sm tabular-nums shadow-none"
+            <span data-slot="concurrency-meter" role="meter" aria-label={t("pane.concurrency")}
+              aria-valuemin={0} aria-valuemax={!limitInvalid ? row.limit : undefined} aria-valuenow={row.occupancy ?? undefined}
+              aria-valuetext={row.occupancy === null ? t("models.occupancyUnknown") : t("models.occupancy", { active: row.occupancy, limit: row.limit })}
+              className="h-2 w-[120px] bg-line">
+              {row.occupancy !== null && !limitInvalid && <span className="block h-full bg-ink2 transition-[width] duration-150 motion-reduce:transition-none" style={{ width: `${Math.min(100, row.occupancy / row.limit * 100)}%` }} />}
+            </span>
+            <span id={`${id}-occupancy`} className="text-sm tabular-nums" aria-label={row.occupancy === null ? t("models.occupancyUnknown") : t("pane.occupancy", { n: row.occupancy })}>{row.occupancy ?? "—"} /</span>
+            <Hint text={editingLock}><Input id={`${id}-limit`} type="number" inputMode="numeric" className="h-8 w-16 bg-card px-2 text-sm tabular-nums shadow-none"
               min={MODEL_SERVICE_CONCURRENCY_MIN} max={MODEL_SERVICE_CONCURRENCY_MAX} step={1} value={Number.isNaN(row.limit) ? "" : row.limit}
               readOnly={!editing} aria-disabled={!editing || undefined} aria-label={t("pane.concurrencyLimit")}
-              aria-invalid={limitInvalid || undefined} aria-describedby={`${id}-occupancy ${id}-concurrency-notice`} onChange={event => {
+              aria-invalid={limitInvalid || undefined} aria-describedby={`${id}-occupancy${raised ? ` ${id}-concurrency-notice` : ""}${limitInvalid ? ` ${id}-range` : ""}`} onChange={event => {
                 if (!editing) return;
-                // Keep the typed draft value, including an empty or invalid limit.
                 const value = event.target.value === "" ? NaN : Number(event.target.value);
                 editor.update(draft => setConcurrencyLimit(draft, member, value));
               }} /></Hint>
-            <span id={`${id}-occupancy`} className="grid shrink-0 grid-rows-[1rem_1rem] text-xs leading-4 text-ink3 tabular-nums">
-              <span>{row.occupancy === null ? t("pane.occupancyUnknown") : t("pane.occupancy", { n: row.occupancy })}</span>
-              <span className={cn("whitespace-nowrap text-fail", !limitInvalid && "invisible")} aria-hidden={!limitInvalid} role={limitInvalid ? "alert" : undefined}>{t("pane.range")}</span>
-            </span>
           </div>
-          <ConcurrencyNotice id={`${id}-concurrency-notice`} />
+          {limitInvalid && <span id={`${id}-range`} className="col-start-2 text-xs text-fail" role="alert">{t("pane.range")}</span>}
+          {raised && <ConcurrencyNotice id={`${id}-concurrency-notice`} />}
         </div>
       </div>
       <div className="flex min-w-0 flex-col border-t border-line pt-4 min-[900px]:border-t-0 min-[900px]:border-l min-[900px]:pt-0 min-[900px]:pl-7">
@@ -174,7 +179,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
           <span className="text-ink3 tabular-nums">{row.chips.length} · {t("models.enabled")} {row.chips.filter(chip => chip.buddy.enabled).length}</span>
         </div>
         <div role="group" aria-label={t("models.columns.effort")}
-          className="grid auto-cols-[minmax(0,1fr)] grid-flow-col border border-line2 bg-sunk max-[600px]:grid-flow-row max-[600px]:grid-cols-3">
+          className="grid grid-flow-col auto-cols-fr border border-line2 bg-sunk max-[600px]:grid-flow-row max-[600px]:grid-cols-3">
           {row.chips.map(chip => <div key={chip.buddy.buddyId}
             className="relative h-12 min-w-0 border-l border-line first:border-l-0 max-[600px]:border-t max-[600px]:nth-[-n+3]:border-t-0 max-[600px]:nth-[3n+1]:border-l-0">
             <button type="button" aria-pressed={chip.buddy.buddyId === selectedBuddyId} data-slot="buddy-stop"

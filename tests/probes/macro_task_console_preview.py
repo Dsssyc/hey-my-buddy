@@ -2644,7 +2644,8 @@ def concurrency_rows() -> list[dict]:
     return [{"harness": harness, "provider": provider, "model": model,
              "limit": 1 if model == "deepseek-v4-pro" else 2,
              "active": 1 if (harness, model) in (("claude", CFG_CLAUDE["model"]), ("codex", CFG_CODEX["model"])) else 0}
-            for harness, provider, model, _efforts, _enabled in CATALOG]
+            for harness, provider, model, _efforts, _enabled in CATALOG
+            if model != "gpt-5-mini"]
 
 
 def harness_account(harness: str, status: str, *, account_type: str | None = None,

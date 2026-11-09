@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-/** Always visible beside the model's concurrency setting, including in read-only sessions. */
+/** Shown while the draft raises this service above its published limit. */
 export function ConcurrencyNotice({ id }: { id: string }) {
   const { t } = useTranslation("common");
 

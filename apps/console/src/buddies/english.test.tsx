@@ -159,8 +159,8 @@ describe("the roles in English", () => {
     const user = userEvent.setup();
     const f = world();
     await openCatalog(f);
-    await user.click(screen.getByRole("link", { name: /^Roles/ }));
-    const roles = await screen.findByRole("region", { name: "Roles" });
+    await user.click(screen.getByRole("link", { name: /^Router/ }));
+    const roles = await screen.findByRole("region", { name: "Router" });
     expect(chinese()).toEqual([]);
     await user.click(within(roles).getByRole("button", { name: "Add" }));
     const dialog = await screen.findByRole("dialog");
@@ -175,9 +175,9 @@ describe("the roles in English", () => {
 
   it("says in English why the first Router is refused", async () => {
     const f = fixture(snapshot({ routers: [buddies[3].buddyId], extra: { buddies, harnesses } }));
-    window.location.hash = "#buddies/roles";
+    window.location.hash = "#buddies/router";
     render(createElement(App, { suppliedApi: f.api }));
-    const roles = await screen.findByRole("region", { name: "Roles" });
+    const roles = await screen.findByRole("region", { name: "Router" });
     expect(within(roles).getByText(/This reasoning effort is unavailable now/)).toBeTruthy();
     expect(chinese()).toEqual([]);
   });

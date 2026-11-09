@@ -119,5 +119,5 @@ export async function contrastOf(target: Locator): Promise<number> {
   return target.evaluate(measure);
 }
 
-/** What the catalogue's toolbar is made of, as items that take room: the sections, the search, the filters, the count and the two actions. */
-export const TOOLBAR_ITEMS = ":scope > nav, [data-slot=catalogue-controls] > input, [data-slot=catalogue-filters], [data-slot=catalogue-controls] [role=status], [data-slot=catalogue-actions] > button";
+/** What the catalogue's toolbar is made of, as items that take room: the search, the filters and the two actions. */
+export const TOOLBAR_ITEMS = "[data-slot=catalogue-controls] > input, [data-slot=catalogue-filters], [data-slot=catalogue-actions] > button";

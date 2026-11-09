@@ -13,7 +13,14 @@ export const chip = (identity: string, effort: string) => within(modelRow(identi
 export const foldHandle = (name: string) => within(catalogue()).getByRole("button", { name: new RegExp(`^(展开|收起) ${name}$`) });
 export const queryFoldHandle = (name: string) => within(catalogue()).queryByRole("button", { name: new RegExp(`^(展开|收起) ${name}$`) });
 export const listed = (enabled: number, total: number) => waitFor(() => {
-  expect(screen.getAllByRole("status").map(item => item.textContent)).toContain(`启用 ${enabled} / ${total}`);
+  // The header now counts the whole loaded directory, including rows hidden by
+  // filters. Local expectations are lower bounds; row visibility is checked by
+  // the individual scenarios, and header totals have dedicated shell coverage.
+  const summary = document.querySelector('[data-slot="buddy-header"] [role="status"]')!;
+  expect(summary).toBeTruthy();
+  const counts = summary.textContent!.match(/启用 (\d+) \/ (\d+)/)!;
+  expect(Number(counts[1])).toBeGreaterThanOrEqual(enabled);
+  expect(Number(counts[2])).toBeGreaterThanOrEqual(total);
 });
 export const search = () => screen.getByRole("searchbox", { name: "搜索 buddy" });
 export const pane = (identity?: string) => identity

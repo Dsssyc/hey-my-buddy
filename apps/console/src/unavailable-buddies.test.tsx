@@ -264,7 +264,7 @@ describe("unavailable buddies", () => {
     await screen.findByText(/固定选择指向.*请启用或改为/);
     // The existing pin stays a reachable value on its own level; only its reason changes.
     expect(within(levelPreference("max")).getByRole("radio", { name: "固定" }).getAttribute("aria-checked")).toBe("true");
-    const reason = within(level("max")).getByRole("textbox", { name: "max 的偏好备注" });
+    const reason = within(level("max")).getByRole("textbox", { name: "max 的偏好理由" });
     expect(reason).toHaveProperty("value", "以前固定");
     await user.clear(reason);
     await user.type(reason, "仍然适用");
@@ -347,7 +347,7 @@ describe("stale settings and unrelated saves", () => {
     // The stale review Router is no longer a stacked detail page: the roles
     // section carries the mark.
     const sections = screen.getByRole("navigation", { name: "Buddy 的分区" });
-    expect(within(sections).getByRole("link", { name: /^角色\s*Router 不可用$/ })).toBeTruthy();
+    expect(within(sections).getByRole("link", { name: /^Router\s*Router 不可用$/ })).toBeTruthy();
 
     await selectModel(user, FLASH, "DSH");
     await user.click(effortCell("high"));

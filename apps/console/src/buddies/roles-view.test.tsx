@@ -744,25 +744,25 @@ describe("the records of routing", () => {
 });
 
 describe("addresses of the view", () => {
-  it("focuses the line of the buddy serving now from #buddies/roles/current", async () => {
+  it("focuses the line of the buddy serving now from #buddies/router/current", async () => {
     const f = fixture(snapshot({ routers: [SOL_ID, MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
-    await openRoles(f, "#buddies/roles/current");
+    await openRoles(f, "#buddies/router/current");
     await waitFor(() => expect(document.activeElement).toBe(line(MEDIUM)));
   });
 
-  it("focuses the list when nobody serves, from #buddies/roles/current", async () => {
+  it("focuses the list when nobody serves, from #buddies/router/current", async () => {
     const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ available: false, currentRouterBuddyId: null }) }));
-    await openRoles(f, "#buddies/roles/current");
+    await openRoles(f, "#buddies/router/current");
     await waitFor(() => expect(document.activeElement).toBe(section("列表")));
   });
 
-  it("focuses the records from #buddies/roles/health", async () => {
+  it("focuses the records from #buddies/router/health", async () => {
     const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
-    await openRoles(f, "#buddies/roles/health");
+    await openRoles(f, "#buddies/router/health");
     await waitFor(() => expect(document.activeElement).toBe(section("记录")));
   });
 
-  it("opens the view without moving focus from #buddies/roles", async () => {
+  it("opens the view without moving focus from #buddies/router", async () => {
     const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     await openRoles(f);
     expect(rolesRegion().contains(document.activeElement)).toBe(false);
