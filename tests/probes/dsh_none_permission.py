@@ -16,6 +16,17 @@ native-prompt-refused, "The selected tool executor is unavailable."), the
 model makes no tool call, the service's judgment over the run's digest-bound
 tool evidence passes, and the patch disables every tool row except
 tool-executor-native.
+
+The model-facing tool list itself is read from the harness's own composed
+dump: a second owned process runs `dsh --profile acp --patch <this run's
+patch> --dump-config`, which prints the composed profile tree with the patch
+overlay applied (the dump-default-config form the product reads takes no
+patch). Every tool row except the executor row must come out disabled; a row
+whose disabled state stays an unevaluated expression, or a dump that cannot
+be read, leaves this check UNKNOWN and the probe does not pass. The model's
+own reported tool list (visibleTools) is a separate check, and the report
+says so: the model's words are a self-report, the composed dump is the
+evidence.
 """
 from __future__ import annotations
 
@@ -24,12 +35,18 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 import uuid
 from pathlib import Path
+
+import yaml
+from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
 CHECKOUT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CHECKOUT / "src"))
 
+from hey_my_buddy.buddy.harnesses.dsh.native_run import EXECUTOR_ROW  # noqa: E402
 from hey_my_buddy.buddy.harnesses.run_contract import (  # noqa: E402
     FEEDBACK_CONTINUE, PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
 )
@@ -39,6 +56,14 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": [
     "read", "command", "mcp", "visibleMcpServers", "visibleTools"],
     "properties": {key: {"type": "string"} for key in (
         "read", "command", "mcp", "visibleMcpServers", "visibleTools")}}
+
+_READ_NAMES = {"Read", "read", "file_read", "read_file", "open_file", "LS",
+               "Glob", "Grep", "glob", "grep", "Skill", "view_image", "exec_command",
+               "image_gen", "image_gen__imagegen"}
+_COMMAND_NAMES = {"Bash", "bash", "exec_command", "shell_command", "shell", "code-mode",
+                  "exec", "Agent", "Task", "spawn_agent", "fork_agent", "subagent", "workflow"}
+_MAX_BYTES = 4 * 1024 * 1024
+_STR = "tag:yaml.org,2002:str"
 
 
 def prompt(sentinel: Path) -> str:
@@ -56,6 +81,129 @@ def prompt(sentinel: Path) -> str:
         "comma-separated exact names; write `none` if none are visible. Return exactly the "
         "five requested JSON string fields."
     )
+
+
+def composed_tool_rows(raw: bytes) -> dict[str, bool | None] | None:
+    """The composed dump's tool rows as ``id -> disabled`` literal.
+
+    Compose nodes, never evaluate: ``!!js`` expressions stay inert and read as
+    ``None`` (an unevaluated disabled state). A missing ``disabled`` field
+    means the row is enabled. A new entry shape is unknown, never a verdict.
+    """
+    rows: dict[str, bool | None] = {}
+    active: set[int] = set()
+
+    def visit(sequence):
+        if (not isinstance(sequence, SequenceNode) or sequence.tag != "tag:yaml.org,2002:seq"
+                or id(sequence) in active):
+            raise ValueError()
+        active.add(id(sequence))
+        for node in sequence.value:
+            if not isinstance(node, MappingNode) or node.tag != "tag:yaml.org,2002:map":
+                raise ValueError()
+            fields: dict[str, object] = {}
+            for key, value in node.value:
+                if not isinstance(key, ScalarNode) or key.tag != _STR or key.value in fields:
+                    raise ValueError()
+                fields[key.value] = value
+            name = fields.get("id")
+            if not isinstance(name, ScalarNode) or name.tag != _STR or not name.value:
+                raise ValueError()
+            if name.value.startswith("tool-"):
+                disabled = fields.get("disabled")
+                if disabled is None:
+                    rows[name.value] = False
+                elif (isinstance(disabled, ScalarNode)
+                        and disabled.tag == "tag:yaml.org,2002:bool"):
+                    rows[name.value] = disabled.value.lower() in ("true", "yes", "on")
+                else:
+                    rows[name.value] = None
+            group = fields.get("group")
+            if group is not None:
+                if not isinstance(group, ScalarNode) or group.tag not in (
+                        "tag:yaml.org,2002:bool", "tag:yaml.org,2002:null"):
+                    raise ValueError()
+                if group.tag.endswith(":bool") and group.value.lower() in ("true", "yes", "on"):
+                    visit(fields.get("config"))
+        active.remove(id(sequence))
+
+    try:
+        visit(yaml.compose(raw, Loader=yaml.SafeLoader))
+    except (yaml.YAMLError, UnicodeError, ValueError, RecursionError):
+        return None
+    return rows if rows else None
+
+
+def native_listing(command: list[str], patch_path: Path, *, environment: dict,
+                   cwd: str, private_root: Path) -> dict:
+    """Read the harness's own composed tool rows under this run's patch.
+
+    One owned ``--dump-config`` process, no model and no turn. Returns
+    ``{"available": True, "enabledToolRows": [...]}`` when every tool row's
+    disabled state is a literal, with the enabled model-facing tool rows
+    listed (the executor row is the CLI's internal component, not a tool, and
+    is excluded); anything unreadable or unevaluated is
+    ``{"available": False, "reason": ...}``.
+    """
+    from hey_my_buddy.buddy.harnesses.dsh.acp.launch import LaunchOwnershipError, LaunchRejected, launch
+    from hey_my_buddy.buddy.harnesses.dsh.acp.connection import stop_evidence
+    from hey_my_buddy.buddy.harnesses.native_support import halt_owned_session
+    try:
+        process, handle = launch(
+            [*command, "--profile", "acp", "--patch", str(patch_path), "--dump-config"],
+            private_root=private_root, cwd=Path(cwd), source_environment=environment)
+    except (LaunchOwnershipError, LaunchRejected, OSError, ValueError) as error:
+        return {"available": False, "reason": f"the composed dump process did not start: {type(error).__name__}"}
+    chunks: list[bytes] = []
+    failed = threading.Event()
+
+    def drain(stream, retain):
+        count = 0
+        try:
+            while chunk := stream.read(65536):
+                count += len(chunk)
+                if count > _MAX_BYTES:
+                    failed.set()
+                elif retain:
+                    chunks.append(chunk)
+        except (OSError, ValueError):
+            failed.set()
+
+    readers = [threading.Thread(target=drain, args=(stream, retain), daemon=True)
+               for stream, retain in ((process.stdout, True), (process.stderr, False))]
+    try:
+        process.stdin.close()
+        for reader in readers:
+            reader.start()
+        stop_at = time.monotonic() + 10
+        while (process.poll() is None or any(reader.is_alive() for reader in readers)):
+            if failed.is_set() or time.monotonic() >= stop_at:
+                failed.set()
+                break
+            time.sleep(0.01)
+    except (OSError, ValueError):
+        failed.set()
+    finally:
+        halt_owned_session(handle, time.monotonic() + 2)
+        evidence = stop_evidence(handle)
+        for reader in readers:
+            if reader.ident is not None:
+                reader.join(timeout=1)
+        for stream in (process.stdout, process.stderr):
+            stream.close()
+    if failed.is_set() or process.returncode != 0:
+        return {"available": False,
+                "reason": f"the composed dump process failed (exit {process.returncode}, "
+                          f"stop confirmed {evidence.get('shutdownConfirmed')})"}
+    rows = composed_tool_rows(b"".join(chunks))
+    if rows is None:
+        return {"available": False, "reason": "the composed dump was not recognizable YAML"}
+    unknown = sorted(row for row, disabled in rows.items() if disabled is None and row != EXECUTOR_ROW)
+    if unknown:
+        return {"available": False,
+                "reason": f"unevaluated disabled expressions remain on: {', '.join(unknown)[:300]}"}
+    enabled = sorted(row for row, disabled in rows.items() if disabled is False and row != EXECUTOR_ROW)
+    return {"available": True, "enabledToolRows": enabled, "executorRowDisabled": rows.get(EXECUTOR_ROW)}
 
 
 def _answer(result) -> dict:
@@ -79,7 +227,7 @@ def _status(condition: bool | None) -> str:
     return "PASS" if condition is True else "FAIL"
 
 
-def evaluate(result, state_dir: Path, canary: str) -> dict:
+def evaluate(result, state_dir: Path, canary: str, listing: dict) -> dict:
     from hey_my_buddy.buddy.harnesses.registry import run_seam
     package = result.tool_evidence.value if result.tool_evidence is not None else None
     rows = list(read_tool_calls(package, state_dir=state_dir)) if package else []
@@ -93,14 +241,16 @@ def evaluate(result, state_dir: Path, canary: str) -> dict:
     names = {fact["toolName"] for row in rows for fact in row.get("facts", [])
              if isinstance(fact.get("toolName"), str)}
     categories = {category for row in rows for category in row.get("categories", [])}
+    # The model's own reported names count towards the same observations the
+    # native calls drive; the report says the words are a self-report.
+    model_read = bool(model_names & _READ_NAMES)
+    model_command = bool(model_names & _COMMAND_NAMES)
+    model_mcp = any(name.startswith(("mcp__", "mcp/")) for name in model_names)
     read_observed = (canary in json.dumps(answer, ensure_ascii=False)
-                     or bool(categories & {"read", "search"}) or bool(names & {
-                         "Read", "read", "file_read", "read_file", "open_file", "LS",
-                         "Glob", "Grep", "glob", "grep"}))
-    command_observed = bool(categories & {"execute"}) or bool(names & {
-        "Bash", "bash", "exec_command", "shell_command", "shell", "code-mode", "exec",
-        "Agent", "Task", "spawn_agent", "fork_agent", "subagent", "workflow"})
-    mcp_observed = any(name.startswith(("mcp__", "mcp/")) for name in names | model_names)
+                     or bool(categories & {"read", "search"})
+                     or bool(names & _READ_NAMES) or model_read)
+    command_observed = bool(categories & {"execute"}) or bool(names & _COMMAND_NAMES) or model_command
+    mcp_observed = (any(name.startswith(("mcp__", "mcp/")) for name in names) or model_mcp)
     reported_servers = answer.get("visibleMcpServers")
     mcp_observed |= isinstance(reported_servers, str) and reported_servers.strip().lower() not in (
         "", "none", "no visible mcp servers")
@@ -117,25 +267,37 @@ def evaluate(result, state_dir: Path, canary: str) -> dict:
     disabled = requested.get("disabledRows") if isinstance(requested, dict) else None
     behavioral_basis = settled and requested is not None
     verdict = judge_tool_evidence(package, "none", state_dir=state_dir) if package else "no tool evidence"
+    if not listing.get("available"):
+        listing_check = "UNKNOWN"
+    elif listing.get("enabledToolRows"):
+        listing_check = "FAIL"
+    else:
+        listing_check = "PASS"
     checks = {
         # The pre-fix run died here with reason native-prompt-refused ("The
         # selected tool executor is unavailable."), so a settled turn is the fix.
         "turnOpened": _status(settled),
         "noToolCalls": _status(settled and package.get("toolCalls") == 0 and not rows),
+        "nativeToolListing": listing_check,
+        "modelSeesNoTools": _status(behavioral_basis and not model_names),
         "noLocalRead": _status(behavioral_basis and not read_observed and denied("read")),
         "noCommand": _status(behavioral_basis and not command_observed and denied("command")),
         "noMcp": _status(behavioral_basis and not mcp_observed and denied("mcp")),
         "executorRowRetained": _status(isinstance(disabled, list)
-                                       and "tool-executor-native" not in disabled
+                                       and EXECUTOR_ROW not in disabled
                                        and "tool-web" in disabled),
         "serviceJudgment": "PASS" if verdict is None else verdict,
     }
     return {"checks": checks, "settled": settled, "modelReportedTools": reported,
-            "nativePolicyRequested": requested, "nativeEvidence": native_details,
+            "nativeListing": listing, "nativePolicyRequested": requested,
+            "nativeEvidence": native_details,
             "nativeToolCalls": rows, "answer": answer, "runResult": result.model_dump(mode="json"),
             "usage": result.usage.value if result.usage is not None else None,
-            "limitation": "the model's reported tool list is retained as an answer fact; the "
-                          "verdict rests on the native tool evidence and the service's judgment"}
+            "limitation": "the model's reported tool list (visibleTools) is a self-report and its "
+                          "names count towards the read/command/mcp observations; the evidence is "
+                          "the composed dump's tool rows and the native tool calls. An unreadable "
+                          "or unevaluated dump leaves nativeToolListing UNKNOWN and this probe "
+                          "does not pass"}
 
 
 def main() -> int:
@@ -179,6 +341,7 @@ def main() -> int:
         capture_evidence=True)
     (root / "request.json").write_text(request.model_dump_json(by_alias=True, indent=2), encoding="utf-8")
     from hey_my_buddy.buddy.harnesses import registry
+    from hey_my_buddy.buddy.harnesses.runtime_selection import launch_for
     from unittest import mock
     module = registry.run_seam("dsh")
     environment = dict(os.environ)
@@ -192,11 +355,22 @@ def main() -> int:
         with mock.patch.dict(os.environ, environment, clear=True):
             result = module.run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                                 services=None, cancelled=lambda: False)
-        report = evaluate(result, state, canary)
+            # The composed listing is read from the harness itself under the
+            # exact patch this run launched with, after the turn.
+            patch_path = Path(request.private_state.invocation_root) / "dsh-launch-patch.json"
+            if not patch_path.is_file():
+                listing = {"available": False, "reason": "this run wrote no launch patch"}
+            else:
+                command, _launch_environment = launch_for("dsh", dict(os.environ))
+                dump_root = Path(request.private_state.invocation_root) / "composed-dump"
+                dump_root.mkdir(mode=0o700, exist_ok=True)
+                listing = native_listing(command, patch_path, environment=dict(os.environ),
+                                         cwd=str(cwd), private_root=dump_root)
+        report = evaluate(result, state, canary, listing)
     except Exception as error:  # noqa: BLE001 - the report keeps the shape
         report = {"checks": {name: "FAIL" for name in
-                  ("turnOpened", "noToolCalls", "noLocalRead", "noCommand", "noMcp",
-                   "executorRowRetained", "serviceJudgment")},
+                  ("turnOpened", "noToolCalls", "nativeToolListing", "modelSeesNoTools",
+                   "noLocalRead", "noCommand", "noMcp", "executorRowRetained", "serviceJudgment")},
                   "error": f"{type(error).__name__}: {error}"}
     report.update(harness="dsh", outputRoot=str(root), modelCalls="one native root turn requested")
     (root / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
