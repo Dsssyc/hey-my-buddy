@@ -85,9 +85,7 @@
 2. 三条状态句的句末标点不一致：排队那条（中英文都是）没有句号，另外两条有。
 3. 合成预览里的问询（`tests/probes/macro_task_console_preview.py` 的 `message()`）仍带着 schema 28 删掉的 `author` 字符串、`recipient` 与 `attempts`，与服务的 `_message_view` 不一致；控制台的解析器不读这几个字段，所以测试没发现。
 
-**评价分区的名字与提供方用英文逗号连接。**（2026-11-09 验收 Buddy 页重做的评价一批时 Host 记下） `apps/console/src/buddies/EvaluationNames.tsx` 的名字一行与 `EvaluationView.tsx` 详情标题旁的提供方都用 `join(", ")`，中文界面应当是“、”；控制台已有按语言连接的 `formatList`，改用它。随下一个动控制台的批次做。
-
-**维护失败的原因里直接写出校验的错误标识。**（2026-11-09，同上） 维护记录的失败原因形如“维护的回答最终仍不合格。 问题：summary-citation-outside-batch”，“问题”一项是协议里的标识。照 Router 记录的做法换成每个标识一句短说法，或者只写原因、把标识放进悬停。随下一个动控制台的批次做。
+**维护失败的原因里直接写出校验的错误标识。**（2026-11-09 验收 Buddy 页重做的评价一批时 Host 记下） 维护记录的失败原因形如“维护的回答最终仍不合格。 问题：summary-citation-outside-batch”，“问题”一项是协议里的标识。照 Router 记录的做法换成每个标识一句短说法，或者只写原因、把标识放进悬停。随下一个动控制台的批次做。
 
 ## 安装与存储
 
