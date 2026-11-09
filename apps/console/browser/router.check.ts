@@ -138,6 +138,12 @@ test.describe("maintenance domain outline", () => {
 
     const parentBar = tree.locator('[data-node="preview-domain-console"].domain-tree-row .domain-tree-bar');
     await expect(parentBar.locator(".domain-tree-segment")).toHaveCount(2);
+    const parentLeaf = parentBar.locator('[data-segment="preview-domain-tokens"]');
+    const leaf = tree.locator('[data-node="preview-domain-tokens"].domain-tree-row [data-segment="preview-domain-tokens"]');
+    expect(await parentLeaf.evaluate(node => getComputedStyle(node).backgroundColor))
+      .toBe(await leaf.evaluate(node => getComputedStyle(node).backgroundColor));
+    await expect(parentBar.locator(".domain-tree-bar-fill")).toHaveCSS("column-gap", "3px");
+
     await rows.filter({ hasText: "样式与排版" }).hover();
     await expect(parentBar.locator('[data-segment="preview-domain-tokens"]')).toHaveAttribute("data-highlight", "true");
     const panel = tree.locator(".domain-tree-popover");

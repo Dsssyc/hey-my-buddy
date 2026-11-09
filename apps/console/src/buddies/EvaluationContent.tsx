@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { StateMark } from "@/components/ui/state-mark";
 import { Fold } from "../task-detail/parts";
-import { formatDuration, formatNumber, formatDateTime } from "../i18n/format";
+import { formatCompact, formatDuration, formatNumber, formatDateTime } from "../i18n/format";
 import { locale } from "../i18n";
 import { TASK_TYPES } from "../types";
 import type { DomainNode, EvaluationStatistics, KindEvaluation, Model } from "../types";
@@ -59,7 +59,7 @@ function Tally({ statistics, preferenceKey, subdued = false }: { statistics: Eva
 
 function Medians({ statistics }: { statistics: EvaluationStatistics }) {
   const { t } = useTranslation("buddies");
-  const tokens = (value: number | null) => value === null ? t("evaluation.noMedian") : t("evaluation.tokens", { n: formatNumber(value) });
+  const tokens = (value: number | null) => value === null ? t("evaluation.noMedian") : t("evaluation.tokens", { n: formatCompact(Math.round(value)) });
   const entries = [
     [t("evaluation.medianDeliveryShort"), statistics.medianDeliverySeconds === null ? t("evaluation.noMedian") : formatDuration(statistics.medianDeliverySeconds * 1000)],
     [t("evaluation.medianInputShort"), tokens(statistics.usage.medianInputTokens)],

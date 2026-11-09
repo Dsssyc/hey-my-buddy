@@ -36,7 +36,12 @@ describe("domain outline", () => {
     expect([...rootBar.querySelectorAll(".domain-tree-segment")].map(segment => segment.getAttribute("data-segment"))).toEqual(["root", "child"]);
     expect((rootBar.querySelector('[data-segment="root"]') as HTMLElement).style.flexGrow).toBe("2");
     expect((rootBar.querySelector('[data-segment="child"]') as HTMLElement).style.flexGrow).toBe("18");
-    expect((rootBar.querySelector('[data-segment="child"]') as HTMLElement).style.backgroundColor).toBe("var(--buddy-domain-4-child)");
+    expect((rootBar.querySelector('[data-segment="child"]') as HTMLElement).style.backgroundColor).toBe("var(--buddy-domain-4)");
+    expect((rootBar.querySelector('[data-segment="root"]') as HTMLElement).style.backgroundColor).toBe("var(--buddy-domain-1)");
+    const nestedLeaf = rows[1]!.querySelector('[data-segment="leaf"]') as HTMLElement;
+    const leafRow = rows[2]!.querySelector('[data-segment="leaf"]') as HTMLElement;
+    expect(nestedLeaf.style.backgroundColor).toBe(leafRow.style.backgroundColor);
+    expect(nestedLeaf.style.backgroundColor).toBe("var(--buddy-domain-2)");
     await userEvent.hover(rows[1]!);
     expect(rootBar.querySelector('[data-segment="child"]')!.getAttribute("data-highlight")).toBe("true");
     expect(screen.getByText(/旧界面/)).toBeTruthy();

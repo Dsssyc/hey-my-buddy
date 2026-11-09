@@ -71,6 +71,10 @@ export function DomainTree({ nodes, locked, command, error, note, clearFeedback 
   const outline = useMemo(() => domainOutline(nodes, isFolded), [nodes, defaultExpanded, nodeChoices]);
   const active = activeId ? outline.byId.get(activeId) : undefined;
   const maximum = outline.roots[0]?.total ?? 0;
+  // All rows share this scale, including those hidden by a fold. A colour names
+  // the count represented by a segment, whether that segment is own or a child.
+  const colorMaximum = Math.max(0, ...[...outline.byId.values()].flatMap(node =>
+    [node.directCount, ...node.children.map(child => child.total)]));
   const allExpanded = [...outline.byId.values()].every(node => !node.children.length || !isFolded(node.nodeId));
   const excluded = new Set<string>();
   if (merging) {
@@ -159,7 +163,6 @@ export function DomainTree({ nodes, locked, command, error, note, clearFeedback 
           <div className="domain-tree-list">
             {outline.visible.map(node => {
               const folded = isFolded(node.nodeId);
-              const band = colorBand(node.total, maximum);
               const segments = [{ id: node.nodeId, count: node.directCount, own: true }, ...node.children.map(child => ({ id: child.nodeId, count: child.total, own: false }))].filter(segment => segment.count > 0);
               return <button key={node.nodeId} type="button" role="treeitem" aria-level={node.depth + 1} data-slot="domain-row" data-node={node.nodeId}
                 className="domain-tree-row" style={{ "--depth": node.depth } as CSSProperties}
@@ -174,7 +177,7 @@ export function DomainTree({ nodes, locked, command, error, note, clearFeedback 
                   <span className="domain-tree-bar-fill" style={{ width: `${100 * node.total / Math.max(1, maximum)}%` }}>
                     {segments.map(segment => <span key={segment.id} className="domain-tree-segment" data-segment={segment.id} data-own={segment.own || undefined}
                       data-highlight={active?.nodeId === segment.id && segment.id !== node.nodeId || undefined}
-                      style={{ flexGrow: segment.count, backgroundColor: `var(--buddy-domain-${band}${segment.own ? "" : "-child"})` }} />)}
+                      style={{ flexGrow: segment.count, backgroundColor: `var(--buddy-domain-${colorBand(segment.count, colorMaximum)})` }} />)}
                   </span>
                 </span>
               </button>;

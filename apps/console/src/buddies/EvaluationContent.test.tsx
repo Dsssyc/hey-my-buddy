@@ -8,7 +8,7 @@ import { DomainEvaluation, ModelPortrait } from "./EvaluationContent";
 const stats: EvaluationStatistics = {
   samples: 8, successes: 6, failures: 2, firstPasses: 4, reworkRounds: 3,
   firstPassRate: 0.5, failureRate: 0.25, medianDeliverySeconds: 240,
-  usage: { samples: 8, medianInputTokens: 1200.5, medianCachedInputTokens: 300, medianOutputTokens: 500 },
+  usage: { samples: 8, medianInputTokens: 7066067.521, medianCachedInputTokens: 300, medianOutputTokens: 500 },
 };
 const cell: EvaluationStatistics = { ...stats, samples: 2, successes: 2, failures: 0, firstPasses: 1, reworkRounds: 1 };
 const evaluation: KindEvaluation = {
@@ -50,7 +50,7 @@ describe("domain evaluation", () => {
     expect(screen.getByText("debugging")).toBeTruthy();
     expect(view.container.querySelector('a[href^="#tasks/"]')).toBeNull();
     expect(screen.getAllByText(/median|中位数/i).length).toBeGreaterThan(0);
-    expect(within(tally as HTMLElement).getByText(/1,200\.5 tokens/)).toBeTruthy();
+    expect(within(tally as HTMLElement).getByText(/7\.1M tokens/)).toBeTruthy();
     view.unmount();
     const revisited = show(<DomainEvaluation evaluation={evaluation} evaluations={[evaluation, oldEvaluation]} domains={domains} />);
     expect(within(revisited.container.querySelector('[data-slot="evaluation-tally"]') as HTMLElement).getByRole("button", { name: /样本 8|Samples 8/ }).getAttribute("aria-expanded")).toBe("true");

@@ -39,6 +39,16 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
     const first = rows.first();
     await first.click();
     await expect(rows).toHaveCount(47);
+    const parentSegment = first.locator('[data-segment="preview-outline-01-2"]');
+    const childSegment = tree.locator('[data-node="preview-outline-01-2"].domain-tree-row [data-segment="preview-outline-01-2"]');
+    expect(await parentSegment.evaluate(node => getComputedStyle(node).backgroundColor))
+      .toBe(await childSegment.evaluate(node => getComputedStyle(node).backgroundColor));
+    const gaps = await tree.locator(".domain-tree-bar-fill").evaluateAll(bars => bars.flatMap(bar => {
+      const segments = [...bar.children];
+      return segments.slice(1).map((segment, index) => segment.getBoundingClientRect().left - segments[index].getBoundingClientRect().right);
+    }));
+    expect(gaps.every(gap => gap >= 2.5)).toBe(true);
+
     await tree.locator(".domain-tree-overview p").click();
     await page.mouse.move(0, 0);
     await expect(tree.locator(".domain-tree-popover")).toBeHidden();

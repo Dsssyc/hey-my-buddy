@@ -212,6 +212,9 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
     await expect(buttons.nth(1)).toBeFocused();
     await expect(page.getByRole("tooltip")).toContainText(zh ? "维护这一轮算失败" : "maintenance batch fails");
     await expect(page.getByRole("tooltip")).toContainText(zh ? "画像构建算失败" : "profile building fails");
+    await expect(page.getByRole("tooltip")).toContainText(zh ? "看不到模型何时开始作答的 harness（例如 DSH）" : "Harnesses that cannot observe when the model starts responding (such as DSH)");
+    await expect(page.getByRole("tooltip")).toContainText(zh ? "由它自己的空闲超时兜底" : "their own idle timeout");
+
     await expect(page.locator('[data-slot="routing-mode-consequence"]')).toBeVisible();
     await expectNoSidewaysScroll(page);
     if (zh) {

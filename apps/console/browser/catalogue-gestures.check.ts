@@ -357,18 +357,22 @@ for (const { locale, catalog } of languages) for (const width of [700, 800, 900,
       await open(page, "#buddies/catalog");
       const current = page.locator("[data-slot=buddy-header] a[aria-current=page]");
       await expect(current).toHaveAttribute("aria-current", "page");
-      const gap = await current.evaluate(node => {
-        // The underline is the link's ::after: 2px tall, with its bottom edge 1px below the link.
-        // Only the name is measured: a mark and its screen-reader text may follow inside the link.
+      const geometry = await current.evaluate(node => {
         const after = getComputedStyle(node, "::after");
         const range = document.createRange();
         range.selectNode(node.firstChild!);
         const text = range.getBoundingClientRect();
-        const underlineTop = node.getBoundingClientRect().bottom - parseFloat(after.bottom) - parseFloat(after.height);
-        return { text: text.bottom, underline: underlineTop };
+        const link = node.getBoundingClientRect();
+        const header = node.closest('[data-slot="buddy-header"]')!;
+        const band = header.getBoundingClientRect();
+        const border = parseFloat(getComputedStyle(header).borderBottomWidth);
+        return { textMiddle: (text.top + text.bottom) / 2, rowMiddle: (band.top + band.bottom - border) / 2,
+          underlineBottom: link.bottom - parseFloat(after.bottom), dividerBottom: band.bottom,
+          underlineHeight: parseFloat(after.height) };
       });
-      expect(gap.underline - gap.text, "the space between the name and its underline").toBeLessThanOrEqual(12);
-      expect(gap.underline - gap.text).toBeGreaterThanOrEqual(0);
+      expect(Math.abs(geometry.textMiddle - geometry.rowMiddle), "the name is vertically centered in its row").toBeLessThanOrEqual(1);
+      expect(Math.abs(geometry.underlineBottom - geometry.dividerBottom), "the underline rests on the row's bottom divider").toBeLessThanOrEqual(0.5);
+      expect(geometry.underlineHeight).toBe(2);
     });
   });
 }

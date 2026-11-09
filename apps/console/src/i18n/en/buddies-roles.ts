@@ -52,7 +52,7 @@ export default {
     reviewConsequence: "When a Router has to decide, the text of the task is sent to the Router's model provider, and so is a frozen copy of the code; DSH and ZCode have no system sandbox, so reads and transfers outside the copy cannot be ruled out",
   },
   responseWait: {
-    explanation: "If the model has not started responding within this time, routing moves to the next Router in the list; this maintenance batch fails and waits for the next batch; profile building fails and can be started again. Once the model starts responding, there is no time limit. This prevents a stalled provider from blocking delegation indefinitely.",
+    explanation: "If the model has not started responding within this time, routing moves to the next Router in the list; this maintenance batch fails and waits for the next batch; profile building fails and can be started again. Once the model starts responding, there is no time limit. This prevents a stalled provider from blocking delegation indefinitely. Harnesses that cannot observe when the model starts responding (such as DSH) are not subject to this wait limit; their own idle timeout provides the fallback.",
     name: "Wait for the model to start responding",
     invalid: "Enter an integer from 1 to 86400",
   },

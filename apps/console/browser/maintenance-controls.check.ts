@@ -71,7 +71,13 @@ for (const theme of ["dark", "light"] as const) for (const width of [1440, 390])
       const records = page.locator('[data-slot="maintenance-record"]');
       await expect(records).toHaveCount(2);
       await expect(records.nth(1)).toContainText("Router 的模型在 60 秒内没有开始作答。");
-      await expect(records.nth(1).getByRole("button")).toHaveCount(0);
+      const older = records.nth(1);
+      await expect(older.getByRole("button", { name: /停止|重试|立即运行|立即维护/ })).toHaveCount(0);
+      const usage = older.locator('[data-slot="quant-bar-trigger"]');
+      await expect(usage).toHaveAttribute("aria-expanded", "false");
+      await usage.click();
+      await expect(usage).toHaveAttribute("aria-expanded", "true");
+      await expect(older.locator('[data-slot="quant-bar-detail"]')).toContainText("缓存输入");
     });
   });
 }

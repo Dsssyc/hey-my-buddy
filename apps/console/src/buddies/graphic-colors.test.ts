@@ -64,13 +64,23 @@ for (const [index, theme] of ["light", "dark"].entries()) describe(`Buddy graphi
     });
   }
   for (let band = 0; band < 5; band++) {
-    it(`domain band ${band} distinguishes its own count and its children`, () => {
-      const own = token(`buddy-domain-${band}`), child = token(`buddy-domain-${band}-child`);
-      for (const [vision, matrix] of Object.entries(simulations))
-        expect(distance(own, child, matrix), vision).toBeGreaterThanOrEqual(vision === "normal" ? 15 : 8);
-      for (const background of ["paper", "surface", "sunk"]) for (const color of [own, child])
+    it(`domain band ${band} stays readable on the tree backgrounds`, () => {
+      const color = token(`buddy-domain-${band}`);
+      expect(values.has(`buddy-domain-${band}-child`)).toBe(false);
+      for (const background of ["paper", "surface", "sunk"])
         expect(contrast(color, token(background)), `${color} on ${background}`).toBeGreaterThanOrEqual(3);
-      expect(oklab(linear(own))[0]).toBeGreaterThan(oklab(linear(child))[0]);
     });
   }
+  it("separates adjacent domain counts by colour or a visible gap", () => {
+    const domainCss = readFileSync("src/buddies/DomainTree.css", "utf8");
+    const gap = Number(domainCss.match(/\.domain-tree-bar-fill\s*\{[^}]*gap:\s*([\d.]+)px/)![1]);
+    // Counts can land in the same band, so include equal-band neighbours too.
+    for (let left = 0; left < 5; left++) for (let right = left; right < 5; right++) {
+      for (const [vision, matrix] of Object.entries(simulations)) {
+        const delta = distance(token(`buddy-domain-${left}`), token(`buddy-domain-${right}`), matrix);
+        if (delta < (vision === "normal" ? 15 : 8))
+          expect(gap, `bands ${left}/${right} under ${vision}: ${delta}`).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
 });
