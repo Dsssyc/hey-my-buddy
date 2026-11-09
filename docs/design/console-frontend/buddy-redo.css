@@ -241,8 +241,8 @@ body{width:1440px;height:auto;min-height:1000px;overflow:visible;display:block;f
 .round5 .tree:has(li:hover) li.preview-hover:not(:hover)>.actions,.round5 .tree:has(li:focus-within) li.preview-hover:not(:focus-within)>.actions{opacity:0;pointer-events:none}
 .round5 .tree:has(li:hover) li.preview-hover:not(:hover),.round5 .tree:has(li:focus-within) li.preview-hover:not(:focus-within){background:transparent}
 .round5 details:has(.quant-bar)::details-content{overflow:visible}
-/* Round-six branch experiment: four developer-specified domain colours. */
-.round6 .branch-stage{--branch-1:#7f5fd6;--branch-2:#3b9f33;--branch-3:#0c96c3;--branch-4:#dd44a0;position:relative;margin:8px 0 0;isolation:isolate}
+/* Domain branches use timeline families at middle lightness (ADR-029 #13). */
+.round6 .branch-stage{--branch-1:#0c96c3;--branch-2:#3b9f33;--branch-3:#dd44a0;--branch-4:#7f5fd6;position:relative;margin:8px 0 0;isolation:isolate}
 .round6 .branch-viewport{max-width:100%;overflow-x:auto;overflow-y:hidden;padding:0 0 8px}
 .round6 .branch-canvas{position:relative;min-width:100%;width:100%;height:800px}
 .round6 .branch-drawing{position:absolute;inset:0;overflow:visible;pointer-events:none}

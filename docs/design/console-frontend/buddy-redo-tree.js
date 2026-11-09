@@ -73,11 +73,17 @@
       return y;
     }
     visit(root);
-    function position(node, x) {
-      const point = result.get(node.id); point.x=x;
-      if(!collapsed.has(node.id)) node.children.forEach(id => position(byId.get(id),x+point.length+point.gap));
+    // A shared column follows the longest segment and widest fan in the preceding layer.
+    const visible = [...byId.values()].filter(node => result.has(node.id));
+    const columns = [16];
+    const lastDepth = Math.max(...visible.map(node => node.depth));
+    for(let depth=0;depth<lastDepth;depth++) {
+      const layer=visible.filter(node=>node.depth===depth);
+      const longest=Math.max(...layer.map(node=>result.get(node.id).length));
+      const gap=Math.max(72,...layer.filter(node=>!collapsed.has(node.id)&&node.children.length).map(node=>result.get(node.id).gap));
+      columns[depth+1]=columns[depth]+longest+gap;
     }
-    position(root,16);
+    for(const node of visible) result.get(node.id).x=columns[node.depth];
     // Hidden descendants converge on the parent's right-hand junction during a fold.
     function hide(node, ancestor) {
       const point = result.get(node.id) ?? {x:ancestor.x+ancestor.length,y:ancestor.y,length:0,gap:72,opacity:0};
@@ -157,20 +163,47 @@
   function placePopover() {
     if(!active || popover.hidden || !current) return;
     const point=current.get(active), width=popover.offsetWidth, height=popover.offsetHeight;
-    popover.style.left=`${Math.max(8,Math.min(point.x+point.length+16-viewport.scrollLeft,stage.clientWidth-width-8))}px`;
-    popover.style.top=`${Math.max(8,Math.min(point.y+18,current.height-height-8))}px`;
+    const baseHeight=viewport.offsetHeight, maxX=Math.max(4,stage.clientWidth-width-4);
+    const clampX=x=>Math.max(4,Math.min(x,maxX));
+    const preferredX=clampX(point.x+point.length+16-viewport.scrollLeft), preferredY=point.y+18;
+    const stageRect=stage.getBoundingClientRect();
+    // Text and counts get clear space too; the floating panel may overlap only lines.
+    const names=[...controls.entries()].filter(([id])=>current.get(id).opacity>0).map(([,button])=>{
+      const r=button.getBoundingClientRect();
+      return {left:r.left-stageRect.left,right:r.right-stageRect.left,top:r.top-stageRect.top,bottom:r.bottom-stageRect.top};
+    }).filter(r=>r.right>0&&r.left<stage.clientWidth);
+    const xs=[...new Set([preferredX,clampX(point.x-width-16-viewport.scrollLeft),4,maxX,clampX((stage.clientWidth-width)/2)])];
+    let best;
+    for(const left of xs) {
+      const blocked=names.filter(r=>left<r.right+4&&left+width>r.left-4).map(r=>({start:Math.max(0,r.top-4),end:r.bottom+4})).sort((a,b)=>a.start-b.start);
+      let freeStart=0;
+      function consider(freeEnd) {
+        if(freeEnd-freeStart<height)return;
+        let top=Math.max(freeStart,Math.min(preferredY,freeEnd-height));
+        if(freeStart<=baseHeight-height)top=Math.min(top,baseHeight-height);
+        else top=freeStart;
+        const extra=Math.max(0,top+height+8-baseHeight),distance=Math.abs(left-preferredX)+Math.abs(top-preferredY);
+        if(!best||extra<best.extra||(extra===best.extra&&distance<best.distance))best={left,top,extra,distance};
+      }
+      for(const interval of blocked){consider(interval.start);freeStart=Math.max(freeStart,interval.end)}
+      consider(Infinity);
+    }
+    popover.style.left=`${best.left}px`;popover.style.top=`${best.top}px`;
+    // Only an open panel borrows height when no in-tree gap can hold it.
+    stage.style.minHeight=`${Math.ceil(Math.max(baseHeight,best.top+height+8))}px`;
   }
   function clear() {
-    active=null;popover.hidden=true;
+    active=null;popover.hidden=true;stage.style.minHeight='';
     for(const e of [...strokes.values(),...links.values()]) e.dataset.dim=false;
   }
   function closeSoon() {
     clearTimeout(timer);timer=setTimeout(()=>{
-      if(popover.matches(':hover')) return;
+      if(stage.matches(':hover')) return;
       const focused=document.activeElement.closest('.branch-node');
       if(focused) activate(focused.dataset.node); else if(!popover.contains(document.activeElement)) clear();
     },140);
   }
+  stage.addEventListener('pointerleave',closeSoon);
   popover.addEventListener('pointerenter',()=>clearTimeout(timer));popover.addEventListener('pointerleave',closeSoon);
   stage.addEventListener('focusout',()=>setTimeout(()=>{if(!stage.contains(document.activeElement))clear()},0));
   popover.addEventListener('keydown',event=>{
