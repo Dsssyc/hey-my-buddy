@@ -463,7 +463,7 @@ describe("a turn", () => {
     open({ step: 7, replies: { task: stopped, workflow: workflow({ state: "cancelled" }) } });
     await ready();
     expect(pane().textContent).toContain("终止原因：Host 有序收尾完成");
-    expect(pane().textContent).toContain("Host 停止");
+    expect(pane().textContent).toContain("由 Host 停止");
     expect(pane().textContent).toContain("改由 Host 接手");
     cleanup();
     const limited = task({ state: "failed", workflow: { ...task().workflow, state: "failed" }, providerRejection: { code: "quota-exceeded" }, selectedAttempt: { attemptId: "att-2", result: { terminationReason: "harness-error" } } });
@@ -619,8 +619,8 @@ describe("a Host's decision", () => {
     fireEvent.click(stripSlice("event:4")!);
     await waitFor(() => expect(within(pane()).getByRole("heading", { level: 3, name: "接管" })).toBeTruthy());
     fireEvent.click(stripSlice("event:5")!);
-    await waitFor(() => expect(within(pane()).getByRole("heading", { level: 3, name: "Host 停止" })).toBeTruthy());
-    expect(within(pane()).getByText("停止发起", { selector: "dt" }).nextElementSibling?.textContent).toBe("Host 停止");
+    await waitFor(() => expect(within(pane()).getByRole("heading", { level: 3, name: "由 Host 停止" })).toBeTruthy());
+    expect(within(pane()).getByText("停止发起", { selector: "dt" }).nextElementSibling?.textContent).toBe("由 Host 停止");
     expect(pane().textContent).toContain("不再需要");
   });
 });

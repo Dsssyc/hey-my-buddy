@@ -1,8 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { formatClockMinutes, formatNumber } from "../i18n/format";
 import type { TokenUsage } from "../types";
-import { Hint } from "@/components/hint";
-import { QuantBar } from "./QuantBar";
+import { QuantBarDisclosure } from "./QuantBar";
 
 type AttemptUsage = { tokenUsage: TokenUsage | null };
 
@@ -30,7 +29,7 @@ export function routerUsageTotal(usage: TokenUsage | null): number | null {
 }
 
 /** A token track; the caller supplies one scale for the whole comparison group. */
-export function RouterUsage({ usage, maximum }: { usage: TokenUsage | null; maximum?: number }) {
+export function RouterUsage({ usage, maximum, preferenceKey, label }: { usage: TokenUsage | null; maximum?: number; preferenceKey: string; label: string }) {
   const { t } = useTranslation("buddies");
   const cached = usage?.cachedInputTokens ?? null;
   const input = usage?.inputTokens ?? null;
@@ -44,10 +43,11 @@ export function RouterUsage({ usage, maximum }: { usage: TokenUsage | null; maxi
   const detail = parts.map((value, index) => `${labels[index]} ${value === null ? t("routerProfiles.unknown") : formatNumber(value)}`).join("; ");
   const total = routerUsageTotal(usage);
   const title = `${detail}; ${t("routerProfiles.total")} ${total === null ? t("routerProfiles.unknown") : formatNumber(total)}${usage?.completeness === "partial" || usage?.completeness === "unknown" ? `; ${t("routerProfiles.partial")}` : ""}`;
-  return <Hint text={title}><span data-slot="router-usage" tabIndex={0} className="inline-flex min-w-0 flex-wrap items-center gap-2 tabular-nums" aria-label={title}>
-    <QuantBar maximum={scale} width={112} parts={[{ value: cached, tone: "faint" }, { value: other, tone: "ink" }, { value: output, tone: "muted" }]} />
-    <span className="text-xs text-ink2">{parts.map(value => value === null ? "—" : formatNumber(value)).join(" / ")}</span>
-  </span></Hint>;
+  return <div data-slot="router-usage"><QuantBarDisclosure preferenceKey={`usage.${preferenceKey}`}
+    label={`${label}: ${title}`} maximum={scale} width={112}
+    parts={[{ value: cached, tone: "green-dark" }, { value: other, tone: "green" }, { value: output, tone: "orange" }]}>
+    <span aria-label={title}>{title}</span>
+  </QuantBarDisclosure></div>;
 }
 
 export function RouterTimeRange({ startedAt, finishedAt }: { startedAt: string; finishedAt: string | null }) {

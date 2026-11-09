@@ -80,7 +80,7 @@ export function RoutingView({ snapshot, editor, onNavigate }: {
           onRemove={buddyId => editor.update(draft => removeRouter(draft, buddyId))} />
       </RouterSection>
 
-      <RouterSection name={t("routerWork.settings")}><RouterField name={t("roles.mode.name")} unsaved={mark(unsaved.mode)}>
+      <RouterSection name={t("routerWork.settings")}><RouterField name={t("roles.mode.name")} help={t("roles.mode.explanation")} unsaved={mark(unsaved.mode)}>
         <Segmented aria-label={t("roles.mode.label")} value={configuration?.defaultRoutingMode ?? ""}
           onValueChange={value => change({ defaultRoutingMode: value as RoutingMode })}>
           {MODES.map(mode => <Hint key={mode} text={locked}>
@@ -90,7 +90,7 @@ export function RoutingView({ snapshot, editor, onNavigate }: {
         {configuration && <p data-slot="routing-mode-consequence" className="mt-2 text-xs text-ink3">{t(`roles.mode.${configuration.defaultRoutingMode}Consequence`)}</p>}
       </RouterField>
 
-      <RouterField name={t("roles.responseWait.name")} unsaved={mark(unsaved.responseWait)}>
+      <RouterField name={t("roles.responseWait.name")} help={t("roles.responseWait.explanation")} unsaved={mark(unsaved.responseWait)}>
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
           <Hint text={locked}>
             <Input type="number" inputMode="numeric" className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
@@ -103,10 +103,9 @@ export function RoutingView({ snapshot, editor, onNavigate }: {
           <span className="text-xs text-ink2">{t("roles.retry.unit")}</span>
           <span className="text-xs text-fail" aria-live="polite">{responseWaitInvalid && t("roles.responseWait.invalid")}</span>
         </div>
-        <p className="mt-2 text-xs text-ink2">{t("routerWork.sharedWait")}</p>
       </RouterField>
 
-      <RouterField name={t("roles.retry.name")} unsaved={mark(unsaved.interval)}>
+      <RouterField name={t("roles.retry.name")} help={t("roles.retry.explanation")} unsaved={mark(unsaved.interval)}>
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
           <Hint text={locked}>
             <Input type="number" inputMode="numeric" className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
@@ -123,7 +122,7 @@ export function RoutingView({ snapshot, editor, onNavigate }: {
         </div>
       </RouterField>
 
-      <RouterField name={t("roles.exploration.name")} unsaved={mark(unsaved.exploration)}>
+      <RouterField name={t("roles.exploration.name")} help={t("roles.exploration.explanation")} unsaved={mark(unsaved.exploration)}>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <Segmented aria-label={t("roles.exploration.name")} value={!configuration ? "" : every === null ? "off" : "on"}
             onValueChange={value => change({ explorationEvery: value === "off" ? null : 5 })}>
@@ -143,7 +142,6 @@ export function RoutingView({ snapshot, editor, onNavigate }: {
           <span className="text-xs text-ink2">{t("routerWork.everyAfter")}</span>
           <span className="text-xs text-fail" aria-live="polite">{explorationInvalid && t("roles.exploration.invalid")}</span>
         </div>
-        <p className="mt-2 text-xs text-ink3">{t("roles.exploration.explanation")}</p>
       </RouterField>
 
       </RouterSection>

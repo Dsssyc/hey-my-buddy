@@ -9,7 +9,7 @@ import { reasonText } from "../i18n/reason";
 import type { RoutingHealth } from "../types";
 import { tasksHash } from "../task-detail/location";
 import { buddyQuad, recordCounts } from "./roles";
-import { QuantBar } from "./QuantBar";
+import { QuantBarDisclosure } from "./QuantBar";
 import { routingCodeText } from "./routing-code";
 
 const head = "border-b py-3 pr-4 text-left text-xs font-normal text-ink3";
@@ -50,12 +50,10 @@ export function RoutingRecords({ health }: { health?: RoutingHealth }) {
       <thead><tr><th className={`${head} w-[34%]`}>{t("roles.records.routers.buddy")}</th><th className={`${head} w-[30%]`}>{t("routerWork.answers")}</th><th className={`${head} w-[17%]`}>{t("roles.records.routers.lastAnswered")}</th><th className={head}>{t("roles.records.routers.lastError")}</th></tr></thead>
       <tbody>{health.routers.map(row => <tr key={row.buddyId}>
         <td className={`${cell} font-mono wrap-anywhere`}>{row.identity ? buddyQuad(row.identity) : row.buddyId}</td>
-        <td className={cell}><Hint text={t("routerWork.answerHint", { answered: row.answeredCount ?? t("roles.records.unknown"), missing: row.noAnswerCount ?? t("roles.records.unknown"), consecutive: row.consecutiveNoAnswers ?? t("roles.records.unknown") })}>
-          <span tabIndex={0} className="inline-flex flex-wrap items-center gap-2 tabular-nums">
-            <QuantBar maximum={maximum} parts={[{ value: row.answeredCount ?? null, tone: "ink" }, { value: row.noAnswerCount ?? null, tone: "fail" }]} />
-            <span>{row.answeredCount ?? "—"} / <span className={row.noAnswerCount ? "inline-flex items-center gap-1 text-fail" : ""}>{!!row.noAnswerCount && <StateMark kind="fail" />}{row.noAnswerCount ?? "—"}</span></span>
-          </span>
-        </Hint></td>
+        <td className={cell}><QuantBarDisclosure preferenceKey={`routing.${row.buddyId}`} label={`${row.identity ? buddyQuad(row.identity) : row.buddyId}: ${t("routerWork.answerHint", { answered: row.answeredCount ?? t("roles.records.unknown"), missing: row.noAnswerCount ?? t("roles.records.unknown"), consecutive: row.consecutiveNoAnswers ?? t("roles.records.unknown") })}`}
+          maximum={maximum} parts={[{ value: row.answeredCount ?? null, tone: "green" }, { value: row.noAnswerCount ?? null, tone: "pink" }]}>
+          <span className="inline-flex items-center gap-1.5">{!!row.noAnswerCount && <StateMark kind="fail" />}{t("routerWork.answerHint", { answered: row.answeredCount ?? t("roles.records.unknown"), missing: row.noAnswerCount ?? t("roles.records.unknown"), consecutive: row.consecutiveNoAnswers ?? t("roles.records.unknown") })}</span>
+        </QuantBarDisclosure></td>
         <td className={cell}><Moment at={row.lastAnsweredAt} /></td>
         <td className={`${cell} wrap-anywhere`}>{row.lastError?.code ? routingCodeText(row.lastError.code) : t("roles.records.unknown")}</td>
       </tr>)}</tbody>

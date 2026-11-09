@@ -13,8 +13,8 @@ async function captureWork(page: Page, name: string) {
   await page.screenshot({ path: join(captures, name), fullPage: true });
 }
 const words = [
-  { locale: "zh-CN", jobs: "Router 的工作", routing: "路由", maintenance: "维护", profiles: "画像", who: "谁担任", settings: "设置", records: "记录", list: "Router 列表", wait: "等待模型开始作答", shared: "画像构建也按这个时长等待模型开始作答。", errors: "最近的失败", choose: "选择 buddy" },
-  { locale: "en-US", jobs: "Router work", routing: "Routing", maintenance: "Maintenance", profiles: "Profiles", who: "Who serves", settings: "Settings", records: "Records", list: "Router list", wait: "Wait for the model to start responding", shared: "Profile building uses this same wait for the model to start responding.", errors: "Recent failures", choose: "Choose buddy" },
+  { locale: "zh-CN", jobs: "Router 的工作", routing: "路由", maintenance: "维护", profiles: "画像", who: "谁担任", settings: "设置", records: "记录", list: "Router 列表", wait: "等待模型开始作答", errors: "最近的失败", choose: "选择 buddy" },
+  { locale: "en-US", jobs: "Router work", routing: "Routing", maintenance: "Maintenance", profiles: "Profiles", who: "Who serves", settings: "Settings", records: "Records", list: "Router list", wait: "Wait for the model to start responding", errors: "Recent failures", choose: "Choose buddy" },
 ] as const;
 
 for (const w of words) for (const theme of ["dark", "light"] as const) {
@@ -44,11 +44,12 @@ for (const w of words) for (const theme of ["dark", "light"] as const) {
       await expect(lines.nth(1)).toContainText("2");
       await expect(lines.nth(2)).toContainText("3");
       await expect(detail.getByRole("spinbutton", { name: w.wait })).toHaveValue("60");
-      await expect(detail).toContainText(w.shared);
+      await expect(detail.locator("[data-slot=router-setting-help]")).toHaveCount(4);
+      await expect(detail.getByRole("group", { name: w.wait, exact: true }).getByRole("button")).toHaveAttribute("aria-description", /不限时|no time limit/);
       const plots = detail.getByRole("table", { name: w.locale === "zh-CN" ? "各 Router 的记录" : "Records of each Router" }).locator('[data-slot="quant-bar"]');
       await expect(plots).toHaveCount(3);
-      await expect(plots.first().locator('rect[data-tone="ink"]')).toHaveCount(1);
-      await expect(plots.first().locator('rect[data-tone="fail"]')).toHaveCount(1);
+      await expect(plots.first().locator('rect[data-tone="green"]')).toHaveCount(1);
+      await expect(plots.first().locator('rect[data-tone="pink"]')).toHaveCount(1);
       const rows = detail.getByRole("table", { name: w.errors }).getByRole("row");
       await expect(rows).toHaveCount(2);
       await expect(rows.nth(1)).toContainText(w.locale === "zh-CN" ? "选择超出路由边界" : "Selection outside routing bounds");
@@ -71,7 +72,7 @@ for (const w of words) for (const theme of ["dark", "light"] as const) {
       const detail = page.locator('[data-slot="router-detail"]');
       const settings = detail.getByRole("group", { name: w.settings, exact: true });
       await expect(settings.getByRole("spinbutton", { name: w.wait })).toHaveValue("60");
-      await expect(settings).toContainText(w.shared);
+      await expect(settings.getByRole("group", { name: w.wait, exact: true }).getByRole("button")).toHaveAttribute("aria-description", /不限时|no time limit/);
       await page.getByRole("navigation", { name: w.jobs }).getByRole("link", { name: new RegExp(w.profiles) }).click();
       await expect(detail.getByRole("spinbutton", { name: w.wait })).toHaveCount(0);
       const failureButton = detail.locator('[data-slot="profile-records"] tr button').filter({ hasText: "glm-5" });
@@ -115,58 +116,63 @@ for (const variant of ["success", "failed", "unset"] as const) test(`Router navi
 });
 });
 
-test.describe("maintenance domain tree geometry", () => {
+test.describe("maintenance domain outline", () => {
   test.use({ locale: "zh-CN", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
-  for (const theme of ["dark", "light"] as const) test(`aligns depths and keeps the hover panel clear in ${theme}`, async ({ page }) => {
+  for (const theme of ["dark", "light"] as const) test(`aligns three columns and keeps the hover panel clear in ${theme}`, async ({ page }) => {
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await open(page, "#buddies/router/maintenance");
     const tree = page.locator('[data-slot="domain-tree"]');
     const rows = tree.getByRole("treeitem");
-    expect(await rows.count()).toBeGreaterThan(6);
-    const baseCount = await rows.count();
-    const geometry = await rows.evaluateAll(nodes => nodes.map(node => ({ level: Number(node.getAttribute("aria-level")), x: node.getBoundingClientRect().x })));
-    for (const level of new Set(geometry.map(row => row.level))) expect(new Set(geometry.filter(row => row.level === level).map(row => row.x)).size).toBe(1);
-    await rows.filter({ hasText: "控制台" }).hover();
+    await expect(rows).toHaveCount(4);
+    await tree.getByRole("button", { name: "全部展开" }).click();
+    await expect(rows).toHaveCount(9);
+    await expect(tree).toContainText("4 个顶层领域 · 9 个节点 · 28 个微任务");
+    expect(await rows.evaluateAll(nodes => nodes.filter(node => node.getAttribute("aria-level") === "1").map(node => node.getAttribute("data-node"))))
+      .toEqual(["preview-domain-ui", "preview-domain-science", "preview-domain-docs", "preview-domain-statistics"]);
+    const columns = await rows.evaluateAll(nodes => nodes.map(node => [".domain-tree-name", ".domain-tree-count", ".domain-tree-bar"].map(selector => node.querySelector(selector)!.getBoundingClientRect().x)));
+    for (let column = 1; column < 3; column++) expect(new Set(columns.map(row => Math.round(row[column]!)))).toHaveProperty("size", 1);
+    expect(columns.every(row => row[0]! < row[1]! && row[1]! < row[2]!)).toBe(true);
+    const rootNames = await rows.evaluateAll(nodes => nodes.filter(node => node.getAttribute("aria-level") === "1")
+      .map(node => node.querySelector(".domain-tree-name")!.lastElementChild!.getBoundingClientRect().x));
+    expect(new Set(rootNames.map(Math.round)).size).toBe(1);
+
+    const parentBar = tree.locator('[data-node="preview-domain-console"].domain-tree-row .domain-tree-bar');
+    await expect(parentBar.locator(".domain-tree-segment")).toHaveCount(2);
+    await rows.filter({ hasText: "样式与排版" }).hover();
+    await expect(parentBar.locator('[data-segment="preview-domain-tokens"]')).toHaveAttribute("data-highlight", "true");
     const panel = tree.locator(".domain-tree-popover");
     await expect(panel).toBeVisible();
+    await rows.filter({ hasText: "控制台" }).first().hover();
     await expect(panel).toContainText("旧控制台界面");
     await expect(panel).toContainText("前端界面");
     await settle(page);
     const overlaps = await tree.evaluate(node => {
       const panel = node.querySelector(".domain-tree-popover")!.getBoundingClientRect();
-      return [...node.querySelectorAll(".domain-branch-node")].filter(label => { const box = label.getBoundingClientRect(); return box.left < panel.right && box.right > panel.left && box.top < panel.bottom && box.bottom > panel.top; }).map(label => label.textContent);
+      return [...node.querySelectorAll(".domain-tree-name")].filter(label => { const box = label.getBoundingClientRect(); return box.left < panel.right && box.right > panel.left && box.top < panel.bottom && box.bottom > panel.top; }).map(label => label.textContent);
     });
     expect(overlaps).toEqual([]);
-    const svg = tree.locator(".domain-tree-svg");
-    await expect(svg.locator('[data-node="preview-domain-docs"]')).toHaveAttribute("data-dim", "true");
-    await expect(svg.locator('[data-node="preview-domain-tokens"]')).not.toHaveAttribute("data-dim", "true");
     await captureWork(page, `maintenance-hover-${theme}-1440.png`);
     await page.mouse.move(0, 0);
     await expect(panel).toBeHidden();
+    await tree.getByRole("button", { name: "全部收起" }).click();
+    await expect(rows).toHaveCount(4);
+    await tree.getByRole("button", { name: "全部展开" }).click();
+    await expect(rows).toHaveCount(9);
     const science = rows.filter({ hasText: "科研计算" });
-    await science.click();
-    await expect(science).toContainText("＋1");
-    await page.keyboard.press("Escape");
-    await page.locator('[data-slot="router-detail"] h2').click();
-    await page.mouse.move(0, 0);
-    await expect(panel).toBeHidden();
-    await captureWork(page, `maintenance-${theme}-1440.png`);
-    const branch = rows.filter({ hasText: "控制台" });
-    await branch.focus();
+    await science.focus();
     await page.keyboard.press("Enter");
-    await expect(branch).toHaveAttribute("aria-expanded", "false");
-    await expect(branch).toContainText("＋1");
-    await expect(rows).toHaveCount(baseCount - 2);
+    await expect(science).toHaveAttribute("aria-expanded", "false");
+    await expect(rows).toHaveCount(8);
     await page.keyboard.press("Enter");
-    await expect(rows).toHaveCount(baseCount - 1);
+    await expect(rows).toHaveCount(9);
     await expectNoSidewaysScroll(page);
   });
 
-  test("scrolls the tree when deeper data needs room, without capping depth or count", async ({ page }) => {
+  test("scrolls deep data locally without capping depth", async ({ page }) => {
     await page.route("**/api/console", async route => {
       const response = await route.fetch(); const snapshot = await response.json();
       let parent = "preview-domain-tokens";
-      for (let depth = 0; depth < 12; depth++) {
+      for (let depth = 0; depth < 60; depth++) {
         const nodeId = `synthetic-deep-${depth}`;
         snapshot.domainNodes.push({ nodeId, name: `第 ${depth + 4} 层`, definition: "合成预览", parentId: parent, mergedIntoId: null, directCount: 1 });
         parent = nodeId;
@@ -175,12 +181,15 @@ test.describe("maintenance domain tree geometry", () => {
     });
     await open(page, "#buddies/router/maintenance");
     const tree = page.locator('[data-slot="domain-tree"]');
-    expect(await tree.getByRole("treeitem").count()).toBeGreaterThan(18);
+    await tree.getByRole("button", { name: "全部展开" }).click();
+    await expect(tree.getByRole("treeitem")).toHaveCount(69);
+    await expect(tree.getByRole("treeitem", { name: /第 63 层/ })).toHaveAttribute("aria-level", "63");
     const viewport = tree.locator(".domain-tree-viewport");
     const size = await viewport.evaluate(node => ({ client: node.clientWidth, scroll: node.scrollWidth }));
     expect(size.scroll).toBeGreaterThan(size.client);
     await viewport.evaluate(node => { node.scrollLeft = node.scrollWidth; });
-    await expect(tree.getByRole("treeitem", { name: /第 15 层/ })).toBeInViewport();
+    await tree.getByRole("treeitem", { name: /第 63 层/ }).scrollIntoViewIfNeeded();
+    await expect(tree.getByRole("treeitem", { name: /第 63 层/ })).toBeInViewport();
     await expectNoSidewaysScroll(page);
   });
 });

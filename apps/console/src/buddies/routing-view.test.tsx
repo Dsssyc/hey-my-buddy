@@ -527,6 +527,28 @@ describe("what leaves the roles view out of use", () => {
 });
 
 describe("the settings of the role", () => {
+  it("explains each setting through its help control without changing the draft", async () => {
+    const f = fixture(snapshot()); const user = userEvent.setup();
+    await openRoles(f);
+    const explanations = [
+      ["默认模式", /冻结的代码副本/], ["等待模型开始作答", /开始作答之后不限时/],
+      ["重试间隔", /到期后的新路由/], ["探索名额", /样本更少的 buddy/],
+    ] as const;
+    for (const [name, meaning] of explanations) {
+      const button = within(section(name)).getByRole("button", { name: `关于${name}` });
+      expect(button.getAttribute("aria-description")).toMatch(meaning);
+    }
+    const waitHelp = screen.getByRole("button", { name: "关于等待模型开始作答" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    await user.hover(waitHelp);
+    expect((await screen.findByRole("tooltip")).textContent).toContain("维护这一轮算失败，下一轮再来");
+    expect(screen.getByRole("tooltip").textContent).toContain("画像构建算失败，可以再点");
+    await user.unhover(waitHelp);
+    expect(responseWaitInput()).toHaveProperty("value", "60");
+    expect(queryDraftBar()).toBeNull();
+    expect(f.published).toHaveLength(0);
+  });
+
   it("chooses the default mode, tells where the data goes in each choice and publishes the one setting", async () => {
     const f = fixture(snapshot({ routers: [MEDIUM_ID] }));
     const user = userEvent.setup();

@@ -58,4 +58,23 @@ for (const language of ["zh", "en"] as const) describe(`micro task state in ${la
     expect(status.classList.contains("text-hand")).toBe(entry.mark === "hand" || entry.mark === "review");
     expect(screen.queryByRole("button", { name: /续做|结束|continue|conclude/i })).toBeNull();
   });
+
+  it("explains the recorded queue blocker and names the full model service when it is full", async () => {
+    await i18n.changeLanguage(language);
+    const expected = language === "zh"
+      ? { directory: "该工作目录正被其他微任务使用", model: "所选模型服务的并发名额已满", unknown: "等待调度" }
+      : { directory: "Another micro task is using this working directory", model: "The selected model service is at capacity", unknown: "Waiting for admission" };
+    const reason = (queueReason: string | null) => {
+      const view = render(<TooltipProvider><Header view={parseTask(task({ state: "queued", queueReason }), "m1")}
+        workflow={null} turns={null} endMs={Date.parse(at("11:05"))} error="" busy={false}
+        onRefresh={() => {}} onBack={() => {}}/></TooltipProvider>);
+      const text = view.container.querySelector('[data-slot="detail-queue-reason"]')?.textContent;
+      view.unmount();
+      return text;
+    };
+    expect(reason("cwd-overlap")).toBe(expected.directory);
+    expect(reason("model-capacity")).toBe(`${expected.model} · claude / anthropic / claude-opus-5-5`);
+    expect(reason("future-blocker")).toBe(expected.unknown);
+    expect(reason(null)).toBe(expected.unknown);
+  });
 });

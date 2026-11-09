@@ -1,7 +1,7 @@
 export default {
-  hidden: "+{{count}}",
-  all: "All",
-  allDefinition: "All classified micro tasks",
+  summary: "{{roots}} top-level domains · {{nodes}} nodes · {{tasks}} micro tasks",
+  expandAll: "Expand all",
+  collapseAll: "Collapse all",
   domains: "Domain tree",
   taskCount: "{{count}} micro tasks",
   mergedFrom: "Merged from {{names}}",

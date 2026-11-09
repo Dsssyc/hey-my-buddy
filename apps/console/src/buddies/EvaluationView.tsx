@@ -120,7 +120,8 @@ export function EvaluationView({ snapshot, editor, api, refresh, mutationsAvaila
     <div className="fixed right-6 bottom-16 z-40 flex max-w-lg flex-col gap-2" data-slot="profile-notices">{actions.notices.map(notice => <div key={notice.id} role="status" data-slot="profile-notice" className="overlay-surface border bg-popover p-4 text-xs shadow-md">
       <p className="flex items-center gap-2">{notice.run && <StateMark kind={notice.run.state === "failed" ? "fail" : "done"} />}<strong>{notice.model}</strong>{notice.run ? t(`modelProfile.state.${notice.run.state}`) : t("evaluation.buildFailedShort")}</p>
       {notice.run?.reason && <p className="mt-2 text-fail">{reasonText(notice.run.reason)}</p>}{notice.message && <p className="mt-2">{notice.message()}</p>}
-      {notice.run && <div className="mt-2 flex flex-wrap items-center gap-3"><RouterUsage usage={sumRouterUsage(notice.run.usage?.attempts ?? [])} /><a className="underline underline-offset-2" href={buddyHash({ view: "router", target: "profiles", profileRunId: notice.run.profileRunId })} onClick={event => { event.preventDefault(); onNavigate({ view: "router", target: "profiles", profileRunId: notice.run!.profileRunId }); }}>{t("evaluation.viewRun")}</a></div>}
+      {notice.run && <div className="mt-2 flex flex-wrap items-center gap-3"><RouterUsage usage={sumRouterUsage(notice.run.usage?.attempts ?? [])}
+        preferenceKey={`profile-notice.${notice.run.profileRunId}`} label={`${notice.model} · ${t("routerProfiles.tokens")}`} /><a className="underline underline-offset-2" href={buddyHash({ view: "router", target: "profiles", profileRunId: notice.run.profileRunId })} onClick={event => { event.preventDefault(); onNavigate({ view: "router", target: "profiles", profileRunId: notice.run!.profileRunId }); }}>{t("evaluation.viewRun")}</a></div>}
     </div>)}</div>
   </>;
 }

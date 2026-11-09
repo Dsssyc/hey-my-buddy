@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { open, settle, test } from "./preview";
+import { expectNoSidewaysScroll, open, settle, test } from "./preview";
 import { settingsFixture, storagePlan } from "./settings-fixtures";
 
 const captures = fileURLToPath(new URL("../../../tmp/console-hints/pages", import.meta.url));
@@ -185,5 +185,39 @@ test.describe("necessary hover hints and visible consequences", () => {
       tool.locator('[data-slot="trace-icon"]'), tool.getByRole("button", { name: "复制全文", exact: true })]);
     const message = session.locator('[data-session-row="note"]').filter({ has: page.getByRole("button", { name: "复制全文", exact: true }) }).first();
     await quiet(page, [message.getByRole("button", { name: "复制全文", exact: true })]);
+  });
+});
+
+for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) test.describe(`Router setting help ${locale} ${theme}`, () => {
+  test.use({ locale, viewport: { width: 1440, height: 1100 }, reducedMotion: "reduce" });
+  test("opens an explanation from each question button and keeps the data consequence visible", async ({ page }) => {
+    const zh = locale === "zh-CN";
+    await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+    await open(page, "#buddies/router/routing");
+    const buttons = page.locator('[data-slot="router-setting-help"]');
+    await expect(buttons).toHaveCount(4);
+    const meanings = zh ? ["冻结的代码副本", "开始作答之后不限时", "到期后的新路由", "样本更少的 buddy"]
+      : ["frozen code copy", "no time limit", "after the interval", "fewer samples"];
+    for (const [index, meaning] of meanings.entries()) {
+      await expect(buttons.nth(index)).toHaveAttribute("data-size", "icon-sm");
+      await buttons.nth(index).hover();
+      await expect(page.getByRole("tooltip")).toContainText(meaning);
+      await page.keyboard.press("Escape");
+      await page.mouse.move(0, 0);
+      await expect(page.getByRole("tooltip")).toHaveCount(0);
+    }
+    const wait = page.getByRole("spinbutton", { name: zh ? "等待模型开始作答" : "Wait for the model to start responding" });
+    await wait.focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(buttons.nth(1)).toBeFocused();
+    await expect(page.getByRole("tooltip")).toContainText(zh ? "维护这一轮算失败" : "maintenance batch fails");
+    await expect(page.getByRole("tooltip")).toContainText(zh ? "画像构建算失败" : "profile building fails");
+    await expect(page.locator('[data-slot="routing-mode-consequence"]')).toBeVisible();
+    await expectNoSidewaysScroll(page);
+    if (zh) {
+      const destination = fileURLToPath(new URL("../../../tmp/buddy-fix/", import.meta.url));
+      await mkdir(destination, { recursive: true });
+      await page.screenshot({ path: `${destination}router-settings-help-${theme}-1440.png`, fullPage: true });
+    }
   });
 });

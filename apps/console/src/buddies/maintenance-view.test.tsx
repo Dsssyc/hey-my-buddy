@@ -52,10 +52,26 @@ describe("maintenance controls", () => {
     const f = fixture(data); await openRoles(f);
     const row = document.querySelector('[data-slot="maintenance-record"]') as HTMLElement;
     expect(screen.getByText(`下次自动运行 ${formatShortDateTime(Date.parse("2026-10-28T01:05:01Z"))}`)).toBeTruthy();
-    expect(within(row).getByText("— / — / 7")).toBeTruthy();
+    const usage = within(row).getByRole("button", { name: /维护记录.*用量/ });
+    expect(usage.getAttribute("aria-expanded")).toBe("false");
+    await userEvent.click(usage);
+    expect(usage.getAttribute("aria-expanded")).toBe("true");
+    expect(within(row).getByText(/缓存输入 未知; 其他输入 未知; 输出 7/)).toBeTruthy();
     expect(within(row).getByText("Router 的模型在 60 秒内没有开始作答。")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /立即运行|立即维护/ })).toBeNull();
     expect(f.operations).toEqual([]);
+  });
+  it("shows maintenance validation in plain language and keeps the original identifiers on hover", async () => {
+    const data = state();
+    const failed = maintenanceRun("failed");
+    failed.reason = { code: "maintenance-answer-invalid", params: { errors: ["summary-citation-outside-batch", "future-validation-code"] } };
+    data.maintenance!.runs = [failed];
+    await openRoles(fixture(data));
+    const reason = within(document.querySelector<HTMLElement>('[data-slot="maintenance-record"]')!).getByText(/维护的回答最终仍不合格/);
+    expect(reason.textContent).toContain("摘要引用了本批次之外的微任务");
+    expect(reason.textContent).toContain("维护回答未通过校验");
+    expect(reason.textContent).not.toContain("summary-citation-outside-batch");
+    expect(reason.getAttribute("aria-description")).toBe("summary-citation-outside-batch; future-validation-code");
   });
   it("keeps an older failure as history when a newer batch completed", async () => {
     const data = state();
@@ -66,7 +82,10 @@ describe("maintenance controls", () => {
     await openRoles(fixture(data));
     const older = within(document.querySelectorAll('[data-slot="maintenance-record"]')[1] as HTMLElement);
     expect(older.getByText("Router 的模型在 60 秒内没有开始作答。")).toBeTruthy();
-    expect(older.getByText("— / — / 7")).toBeTruthy();
+    const usage = older.getByRole("button", { name: /维护记录.*用量/ });
+    expect(usage.getAttribute("aria-expanded")).toBe("false");
+    await userEvent.click(usage);
+    expect(older.getByText(/缓存输入 未知; 其他输入 未知; 输出 7/)).toBeTruthy();
     expect(older.queryByText(/下次自动运行/)).toBeNull();
     expect(older.queryByRole("button", { name: "立即运行" })).toBeNull();
   });
@@ -93,7 +112,7 @@ describe("maintenance controls", () => {
   it("keeps a confirmed domain write visible when its subsequent read fails", async () => {
     const f = fixture(state(), { domain_rename: () => ({ nodeId: "root" }) });
     await openRoles(f); const user = userEvent.setup();
-    await user.hover(document.querySelector<HTMLElement>('[data-node="root"].domain-branch-node')!);
+    await user.hover(document.querySelector<HTMLElement>('[data-node="root"].domain-tree-row')!);
     await user.click(screen.getByRole("button", { name: "改名" }));
     vi.mocked(f.api.snapshot).mockRejectedValueOnce(new Error("read interrupted"));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
@@ -130,7 +149,7 @@ describe("maintenance controls", () => {
   it("keeps an unsuccessful domain edit open and shows its error inside the dialog", async () => {
     const f = fixture(state(), { domain_rename: () => { throw new Error("Duplicate domain name"); } });
     await openRoles(f); const user = userEvent.setup();
-    await user.hover(document.querySelector<HTMLElement>('[data-node="root"].domain-branch-node')!);
+    await user.hover(document.querySelector<HTMLElement>('[data-node="root"].domain-tree-row')!);
     await user.click(screen.getByRole("button", { name: "改名" }));
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
@@ -140,7 +159,8 @@ describe("maintenance controls", () => {
     const calls: object[] = [];
     const f = fixture(state(), { domain_rename: params => { calls.push(params); return {}; }, domain_merge: params => { calls.push(params); return {}; } });
     await openRoles(f); const user = userEvent.setup();
-    const row = document.querySelector<HTMLElement>('[data-node="child"].domain-branch-node')!;
+    await user.click(document.querySelector<HTMLElement>('[data-node="root"].domain-tree-row')!);
+    const row = document.querySelector<HTMLElement>('[data-node="child"].domain-tree-row')!;
     await user.hover(row);
     await user.click(screen.getByRole("button", { name: "改名" }));
     const rename = screen.getByRole("dialog");

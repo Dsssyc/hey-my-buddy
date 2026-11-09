@@ -1,6 +1,7 @@
 import i18n from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -93,8 +94,10 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
             {run.state === "running" && active && <div className="mt-2"><MaintenanceActivity taskId={run.taskId} api={api} /></div>}
           </td>
           <td className="py-4 pr-3 text-ink2">{t(run.triggerType === "manual" ? "maintenance.manual" : "maintenance.intervalTrigger")}</td>
-          <td className="py-4 pr-2"><RouterUsage usage={sumRouterUsage(run.usage?.attempts ?? [])} maximum={maximum} />
-            {run.reason && <p className="mt-2 wrap-anywhere text-fail">{reasonText(run.reason)}</p>}</td>
+          <td className="py-4 pr-2"><RouterUsage usage={sumRouterUsage(run.usage?.attempts ?? [])} maximum={maximum}
+            preferenceKey={`maintenance-run.${run.maintenanceRunId}`} label={`${t("maintenance.records")} ${formatShortDateTime(Date.parse(run.startedAt))}`} />
+            {run.reason && <Hint text={run.reason.code === "maintenance-answer-invalid" && Array.isArray(run.reason.params.errors)
+              ? run.reason.params.errors.map(String).join("; ") : undefined}><p tabIndex={run.reason.code === "maintenance-answer-invalid" ? 0 : undefined} className="mt-2 wrap-anywhere text-fail">{reasonText(run.reason)}</p></Hint>}</td>
           <td className="py-3 text-right">{run.state === "running" && <Button variant="ghost" size="sm" disabled={actionLocked || stopping === run.taskId}
             onClick={() => void stop(run.taskId)}>{stopping === run.taskId ? detailT("state.stopping") : t("maintenance.stop")}</Button>}</td>
         </tr>)}</tbody>

@@ -8,7 +8,7 @@ import { DomainEvaluation, ModelPortrait } from "./EvaluationContent";
 const stats: EvaluationStatistics = {
   samples: 8, successes: 6, failures: 2, firstPasses: 4, reworkRounds: 3,
   firstPassRate: 0.5, failureRate: 0.25, medianDeliverySeconds: 240,
-  usage: { samples: 8, medianInputTokens: 1200, medianCachedInputTokens: 300, medianOutputTokens: 500 },
+  usage: { samples: 8, medianInputTokens: 1200.5, medianCachedInputTokens: 300, medianOutputTokens: 500 },
 };
 const cell: EvaluationStatistics = { ...stats, samples: 2, successes: 2, failures: 0, firstPasses: 1, reworkRounds: 1 };
 const evaluation: KindEvaluation = {
@@ -30,19 +30,30 @@ const domains: DomainNode[] = [
   { nodeId: "other", name: "Other", definition: "", parentId: null, mergedIntoId: null, directCount: 0 },
 ];
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); localStorage.clear(); });
 const show = (content: React.ReactNode) => render(<TooltipProvider>{content}</TooltipProvider>);
 
 describe("domain evaluation", () => {
-  it("shows the three outcome segments, one median line, and no task citations", () => {
+  it("opens the sample graphic to reveal outcomes and medians, then remembers its state", async () => {
+    const user = userEvent.setup();
     const view = show(<DomainEvaluation evaluation={evaluation} evaluations={[evaluation, oldEvaluation]} domains={domains} />);
     const tally = view.container.querySelector('[data-slot="evaluation-tally"]')!;
     expect(tally.querySelectorAll('[data-slot="quant-bar"] [data-tone]')).toHaveLength(3);
+    expect([...tally.querySelectorAll('[data-tone]')].map(part => part.getAttribute("data-tone"))).toEqual(["green", "amber", "sample-pink"]);
+    const button = within(tally as HTMLElement).getByRole("button", { name: /样本 8|Samples 8/ });
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(within(tally as HTMLElement).queryByText(/First pass|一次通过/)).toBeNull();
+    await user.click(button);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
     expect(within(tally as HTMLElement).getByText(/First pass|一次通过/)).toBeTruthy();
     expect(tally.querySelector('[data-kind="fail"]')).toBeTruthy();
     expect(screen.getByText("debugging")).toBeTruthy();
     expect(view.container.querySelector('a[href^="#tasks/"]')).toBeNull();
     expect(screen.getAllByText(/median|中位数/i).length).toBeGreaterThan(0);
+    expect(within(tally as HTMLElement).getByText(/1,200\.5 tokens/)).toBeTruthy();
+    view.unmount();
+    const revisited = show(<DomainEvaluation evaluation={evaluation} evaluations={[evaluation, oldEvaluation]} domains={domains} />);
+    expect(within(revisited.container.querySelector('[data-slot="evaluation-tally"]') as HTMLElement).getByRole("button", { name: /样本 8|Samples 8/ }).getAttribute("aria-expanded")).toBe("true");
   });
 
   it("keeps unsampled cells blank and folds sampled descendants", async () => {
@@ -60,13 +71,19 @@ describe("domain evaluation", () => {
     expect(within(table).queryByRole("rowheader", { name: /API/ })).toBeNull();
   });
 
-  it("puts names before old groups and takes old counts from the matching kind", () => {
+  it("puts names before subdued old groups and takes old counts from the matching kind", async () => {
+    const user = userEvent.setup();
     const view = show(<DomainEvaluation evaluation={evaluation} evaluations={[evaluation, oldEvaluation]} domains={domains}><div data-testid="names">Names menu</div></DomainEvaluation>);
     const names = screen.getByTestId("names"), previous = screen.getByText("Earlier Sol");
     expect(names.compareDocumentPosition(previous) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(previous.closest("section")?.textContent).toContain("3");
     expect(previous.closest("section")?.textContent).toContain("sol-previous");
     expect(view.container.querySelectorAll('[data-slot="evaluation-tally"]')).toHaveLength(2);
+    const oldTally = view.container.querySelectorAll('[data-slot="evaluation-tally"]')[1] as HTMLElement;
+    expect(oldTally.className).toContain("opacity-70");
+    expect(within(oldTally).queryByText(/First pass|一次通过/)).toBeNull();
+    await user.click(within(oldTally).getByRole("button", { name: /样本 3|Samples 3/ }));
+    expect(within(oldTally).getByText(/First pass|一次通过/)).toBeTruthy();
   });
 });
 

@@ -24,6 +24,33 @@ SPEC.loader.exec_module(preview)
 
 
 class LeadStopPreviewTests(unittest.TestCase):
+    def test_dense_outline_preview_keeps_the_large_tree_shape_and_original_examples(self):
+        original = preview.console_snapshot('normal', True)
+        dense = preview.console_snapshot('domains', True)
+        nodes = dense['domainNodes']
+        children = {}
+        for node in nodes:
+            children.setdefault(node['parentId'], []).append(node)
+        roots = children[None]
+        def total(node):
+            return node['directCount'] + sum(total(child) for child in children.get(node['nodeId'], []))
+        self.assertEqual(len(nodes), 81)
+        self.assertEqual(len(roots), 41)
+        self.assertEqual([total(node) for node in roots],
+                         [139, 103, 89, 75, 74, 67, 51, 44, 41, 37, 28, 24, 20, 18,
+                          17, 17, 16, 15, 15, 14, 14, 13, 12, 12, 10, 10, 8, 8, 7, 6,
+                          5, 5, 3, 3, 3, 3, 2, 1, 1, 1, 1])
+        self.assertEqual(sum(node['nodeId'] in children for node in roots), 14)
+        self.assertEqual(max(len(children.get(node['nodeId'], [])) for node in roots), 6)
+        second_level = [child for root in roots for child in children.get(root['nodeId'], [])]
+        third_level_groups = [children[node['nodeId']] for node in second_level if node['nodeId'] in children]
+        self.assertEqual([len(group) for group in third_level_groups], [5])
+        self.assertTrue(all(node['nodeId'] not in children for node in third_level_groups[0]))
+        self.assertTrue(all(node['directCount'] >= 0 and node['mergedIntoId'] is None for node in nodes))
+        self.assertEqual(original['kindEvaluations'], dense['kindEvaluations'])
+        self.assertTrue(any(node['mergedIntoId'] for node in original['domainNodes']))
+        self.assertIn('domains', preview.SCENARIOS)
+
     def test_catalogue_redo_examples_keep_missing_measurements_and_declared_versions(self):
         snapshot = preview.console_snapshot('normal', True)
         services = {(row['harness'], row['provider'], row['model']) for row in snapshot['modelServiceConcurrency']}

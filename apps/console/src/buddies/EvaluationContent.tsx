@@ -4,11 +4,11 @@ import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { StateMark } from "@/components/ui/state-mark";
 import { Fold } from "../task-detail/parts";
-import { formatCompact, formatDuration, formatNumber, formatDateTime } from "../i18n/format";
+import { formatDuration, formatNumber, formatDateTime } from "../i18n/format";
 import { locale } from "../i18n";
 import { TASK_TYPES } from "../types";
 import type { DomainNode, EvaluationStatistics, KindEvaluation, Model } from "../types";
-import { QuantBar } from "./QuantBar";
+import { QuantBarDisclosure } from "./QuantBar";
 
 function sampledDomains(nodes: DomainNode[], sampled: ReadonlySet<string>, collapsed: ReadonlySet<string>) {
   const active = nodes.filter(node => node.mergedIntoId === null);
@@ -34,29 +34,32 @@ function sampledDomains(nodes: DomainNode[], sampled: ReadonlySet<string>, colla
   return rows;
 }
 
-function Tally({ statistics, subdued = false }: { statistics: EvaluationStatistics; subdued?: boolean }) {
+function Tally({ statistics, preferenceKey, subdued = false }: { statistics: EvaluationStatistics; preferenceKey: string; subdued?: boolean }) {
   const { t } = useTranslation("buddies");
   const reworked = statistics.successes - statistics.firstPasses;
   const values = [
-    { label: t("evaluation.firstPasses"), value: statistics.firstPasses, tone: "ink" as const },
-    { label: t("evaluation.reworkedSuccesses"), value: reworked, tone: "faint" as const },
-    { label: t("evaluation.failures"), value: statistics.failures, tone: "fail" as const },
+    { label: t("evaluation.firstPasses"), value: statistics.firstPasses, tone: "green" as const },
+    { label: t("evaluation.reworkedSuccesses"), value: reworked, tone: "amber" as const },
+    { label: t("evaluation.failures"), value: statistics.failures, tone: "sample-pink" as const },
   ];
   return <div data-slot="evaluation-tally" className={subdued ? "opacity-70" : undefined}>
     <div className="flex items-baseline gap-2"><span className="text-xs text-ink3">{t("evaluation.samples")}</span><strong className="text-lg font-semibold tabular-nums">{formatNumber(statistics.samples)}</strong></div>
-    <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2">
-      <QuantBar width={300} maximum={statistics.samples} parts={values.map(({ value, tone }) => ({ value, tone }))} />
-      {values.map(({ label, value }, index) => <span key={label} className={`inline-flex items-center gap-1.5 text-xs tabular-nums ${index === 2 ? "text-fail" : ""}`}>
-        {index === 2 && <StateMark kind="fail" />}{label} {formatNumber(value)}
-      </span>)}
-      <span className="text-xs text-ink3 tabular-nums">{t("evaluation.reworkRounds")} {formatNumber(statistics.reworkRounds)}</span>
-    </div>
+    <div className="mt-2"><QuantBarDisclosure width={300} maximum={statistics.samples} parts={values.map(({ value, tone }) => ({ value, tone }))}
+      label={`${t("evaluation.samples")} ${formatNumber(statistics.samples)}; ${t("evaluation.failures")} ${formatNumber(statistics.failures)}`} preferenceKey={`evaluation.${preferenceKey}`}>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        {values.map(({ label, value }, index) => <span key={label} className={`inline-flex items-center gap-1.5 ${index === 2 ? "text-fail" : ""}`}>
+          {index === 2 && <StateMark kind="fail" />}{label} {formatNumber(value)}
+        </span>)}
+        <span>{t("evaluation.reworkRounds")} {formatNumber(statistics.reworkRounds)}</span>
+      </div>
+      <div className="mt-3"><Medians statistics={statistics} /></div>
+    </QuantBarDisclosure></div>
   </div>;
 }
 
 function Medians({ statistics }: { statistics: EvaluationStatistics }) {
   const { t } = useTranslation("buddies");
-  const tokens = (value: number | null) => value === null ? t("evaluation.noMedian") : t("evaluation.tokens", { n: formatCompact(Math.round(value)) });
+  const tokens = (value: number | null) => value === null ? t("evaluation.noMedian") : t("evaluation.tokens", { n: formatNumber(value) });
   const entries = [
     [t("evaluation.medianDeliveryShort"), statistics.medianDeliverySeconds === null ? t("evaluation.noMedian") : formatDuration(statistics.medianDeliverySeconds * 1000)],
     [t("evaluation.medianInputShort"), tokens(statistics.usage.medianInputTokens)],
@@ -96,7 +99,7 @@ function DomainTable({ evaluation, domains }: { evaluation: KindEvaluation; doma
             const cell = evaluation.statistics.byDomainTaskType[node.nodeId]?.[type];
             return <td key={type} className="px-2 py-2" aria-label={!cell?.samples ? t("evaluation.noSample") : undefined}>
               {!!cell?.samples && <Hint text={t("evaluation.cell", { samples: formatNumber(cell.samples), rate: rate(cell.firstPassRate), rework: formatNumber(cell.reworkRounds) })}><span tabIndex={0} aria-label={t("evaluation.cell", { samples: formatNumber(cell.samples), rate: rate(cell.firstPassRate), rework: formatNumber(cell.reworkRounds) })} className="inline-flex items-center gap-1.5 tabular-nums">
-                <span className="block h-1.5 w-11 bg-line" aria-hidden="true"><span className="block h-full bg-ink" style={{ width: `${(cell.firstPassRate ?? 0) * 100}%` }} /></span>
+                <span className="block h-1.5 w-11 bg-line" aria-hidden="true"><span className="quant-domain-rate block h-full" style={{ width: `${(cell.firstPassRate ?? 0) * 100}%` }} /></span>
                 <span className="text-ink3">{formatNumber(cell.samples)}</span>
               </span></Hint>}
             </td>;
@@ -116,8 +119,7 @@ export function DomainEvaluation({ evaluation, evaluations, domains, children }:
     evidence: evaluations.find(item => item.harness === evaluation.harness && item.effort === evaluation.effort && item.modelId === group.modelId),
   })).filter(({ evidence }) => !!evidence?.statistics.overall.samples);
   return <div data-slot="domain-evaluation" className="space-y-5">
-    <Tally statistics={evaluation.statistics.overall} />
-    <Medians statistics={evaluation.statistics.overall} />
+    <Tally statistics={evaluation.statistics.overall} preferenceKey={`${evaluation.harness}.${evaluation.modelId}.${evaluation.effort}`} />
     <section aria-label={t("evaluation.summary")} className="space-y-1"><h3 className="text-sm font-medium">{t("evaluation.summary")}</h3>
       {evaluation.summary?.text ? <Fold text={evaluation.summary.text} /> : <p className="text-xs text-ink3">{t("evaluation.noSummary")}</p>}
     </section>
@@ -127,7 +129,7 @@ export function DomainEvaluation({ evaluation, evaluations, domains, children }:
       <h3 className="text-sm font-medium text-ink2">{t("evaluation.previousSamples")}</h3>
       {previous.map(({ group, evidence }) => <div key={group.modelId} className="space-y-2 border-t border-line/70 pt-3">
         <p className="text-xs text-ink2">{group.modelDisplayName}</p>
-        <Tally statistics={evidence!.statistics.overall} subdued />
+        <Tally statistics={evidence!.statistics.overall} preferenceKey={`${evaluation.harness}.${evaluation.modelId}.${evaluation.effort}.previous.${group.modelId}`} subdued />
         <p className="text-xs text-ink3">{group.names.map(name => <span key={`${name.harness}\0${name.provider}\0${name.model}`} className="mr-4 inline-block">
           {name.model} · {t("evaluation.since", { date: formatDateTime(Date.parse(name.since)) })}
         </span>)}</p>

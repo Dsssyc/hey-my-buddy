@@ -1,3 +1,7 @@
+import { CircleHelp } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { Hint } from "@/components/hint";
+import { Button } from "@/components/ui/button";
 import { useId } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import { UnsavedMark } from "@/components/ui/state-mark";
@@ -11,10 +15,11 @@ export function RouterSection({ name, unsaved, children, ...props }: ComponentPr
   </section>;
 }
 
-export function RouterField({ name, unsaved, children }: { name: string; unsaved?: string; children: ReactNode }) {
+export function RouterField({ name, unsaved, help, children }: { name: string; unsaved?: string; help?: string; children: ReactNode }) {
   const id = useId();
+  const { t } = useTranslation("buddies");
   return <div role="group" aria-labelledby={id} className="grid grid-cols-[220px_minmax(0,1fr)] items-start gap-x-6 gap-y-2 py-3">
-    <span className="flex items-center gap-2 pt-1.5 text-xs text-ink3"><span id={id}>{name}</span>{unsaved && <UnsavedMark label={unsaved} />}</span>
+    <span className={`flex items-center gap-2 text-xs text-ink3 ${help ? "min-h-8" : "pt-1.5"}`}><span id={id}>{name}</span>{help && <Hint text={help}><Button type="button" variant="ghost" size="icon-sm" data-slot="router-setting-help" aria-label={t("routerWork.settingHelp", { name })}><CircleHelp aria-hidden="true" /></Button></Hint>}{unsaved && <UnsavedMark label={unsaved} />}</span>
     <div className="min-w-0">{children}</div>
   </div>;
 }

@@ -81,7 +81,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
     test("shows Lead stop actors and retains a stopping Lead until owned shutdown is confirmed", async ({ page }) => {
       const data = await timeline(page, MACRO_B);
       const zh = locale === "zh-CN";
-      const stop = zh ? "Lead 停止" : "Stopped by Lead";
+      const stop = zh ? "由 Lead 停止" : "Stopped by Lead";
       const stopping = zh ? "正在停止" : "Stopping";
       expect(data.macroTask.state).toBe("host");
       expect(data.macroTask.counts.host).toBe(1);
@@ -132,7 +132,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(page.locator("[data-slot=detail-status]")).toHaveAttribute("aria-description",
         zh ? "停止未确认 · 待核实执行 1 项" : "Stop unconfirmed · executions to verify: 1");
       await expect(page.locator("[data-slot=macro-stop-state]")).toHaveText(stopping);
-      const hostStop = zh ? "Host 停止" : "Stopped by Host";
+      const hostStop = zh ? "由 Host 停止" : "Stopped by Host";
       await page.locator("[data-slot=detail-strip]").getByRole("button", { name: new RegExp(hostStop) }).click();
       await expect(page.locator("[data-slot=detail-pane]").getByRole("heading", { level: 3, name: hostStop, exact: true })).toBeVisible();
       await settle(page);

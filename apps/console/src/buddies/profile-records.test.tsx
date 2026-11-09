@@ -44,6 +44,18 @@ describe("Router profile records", () => {
     expect(within(failed).getByRole("rowheader", { name: /Page fetch.*全部失败/ })).toBeTruthy();
     expect(within(failed).getByText("第 2 次尝试")).toBeTruthy();
     expect(within(records).getByLabelText("尚未结束")).toHaveProperty("textContent", "…");
+    const toolBar = within(failed).getByRole("button", { name: /Page fetch:.*失败 8/ });
+    expect(toolBar.getAttribute("aria-expanded")).toBe("false");
+    expect(toolBar.querySelector('[data-kind="fail"]')).toBeTruthy();
+    expect(within(failed).queryByText(/成功 0 · 失败 8/)).toBeNull();
+    await userEvent.setup().click(toolBar);
+    expect(toolBar.getAttribute("aria-expanded")).toBe("true");
+    expect(within(failed).getByText(/成功 0 · 失败 8/)).toBeTruthy();
+    const usageBar = within(failed).getByRole("button", { name: /第 2 次尝试 · 用量/ });
+    expect(usageBar.getAttribute("aria-expanded")).toBe("false");
+    await userEvent.setup().click(usageBar);
+    expect(usageBar.getAttribute("aria-expanded")).toBe("true");
+    expect(within(failed).getByText(/缓存输入 4,096/)).toBeTruthy();
   });
 
   it("keeps assignment restricted to buddies with enforced web permission", async () => {

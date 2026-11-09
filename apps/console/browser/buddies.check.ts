@@ -30,6 +30,19 @@ for (const { locale, sections, enabled } of languages) {
       const toolbar = (await main.locator('[data-slot="catalogue-toolbar"]').boundingBox())!;
       expect(catalogHeader.y).toBe(banner.y + banner.height);
       expect(catalogHeader.height).toBe(48);
+      const selected = links.first();
+      const geometry = await selected.evaluate(link => {
+        const bounds = link.getBoundingClientRect();
+        const text = document.createRange(); text.selectNodeContents(link);
+        const words = text.getBoundingClientRect();
+        const underline = getComputedStyle(link, "::after");
+        return { textMiddle: (words.top + words.bottom) / 2, linkMiddle: (bounds.top + bounds.bottom) / 2,
+          underlineBottom: bounds.bottom - parseFloat(underline.bottom), height: parseFloat(underline.height) };
+      });
+      expect(Math.abs(geometry.textMiddle - geometry.linkMiddle)).toBeLessThanOrEqual(1);
+      expect(geometry.underlineBottom).toBeCloseTo(catalogHeader.y + catalogHeader.height, 0);
+      expect(geometry.height).toBe(2);
+
       expect(catalogHeader.width).toBe(1440);
       expect(toolbar.y).toBe(catalogHeader.y + catalogHeader.height);
       await expectWholeAndApart(main, main.locator('[data-slot="catalogue-toolbar"]').locator(TOOLBAR_ITEMS));

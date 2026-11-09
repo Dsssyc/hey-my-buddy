@@ -36,20 +36,6 @@ const leastPairDistance = (labs: readonly (readonly number[])[], count: number) 
 };
 
 describe("curated buddy palette", () => {
-  it("gives domain branches four mid-lightness identities and extensible contrast", async () => {
-    const { domainColorPrefix } = await import("./buddyColors");
-    expect(domainColorPrefix(4)).toEqual(["#0c96c3", "#3b9f33", "#dd44a0", "#7f5fd6"]);
-    const extended = domainColorPrefix(16);
-    expect(new Set(extended).size).toBe(16);
-    expect(domainColorPrefix(5)).toEqual(extended.slice(0, 5));
-    for (const color of extended) {
-      const value = luminance(color);
-      for (const background of ["#ffffff", "#16171a"]) {
-        const surface = luminance(background);
-        expect((Math.max(value, surface) + .05) / (Math.min(value, surface) + .05), color).toBeGreaterThanOrEqual(3);
-      }
-    }
-  });
   it("extends one deterministic shared prefix across views and polls", async () => {
     vi.resetModules();
     const { buddyColorsFor, buddyColorPrefix } = await import("./buddyColors");

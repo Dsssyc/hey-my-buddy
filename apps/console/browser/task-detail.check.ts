@@ -512,3 +512,27 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [390, 1280]) {
     });
   });
 }
+
+for (const locale of ["zh-CN", "en-US"]) test.describe(`queued micro task detail ${locale}`, () => {
+  test.use({ locale, viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+  test("explains directory and model service blockers without clipping", async ({ page }) => {
+    let queueReason = "cwd-overlap";
+    await page.route("**/api/tasks/preview-run-b5", async route => {
+      const response = await route.fetch();
+      const task = await response.json();
+      task.state = "queued";
+      task.queueReason = queueReason;
+      task.lineage = { ...task.lineage, buddy: { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" } };
+      await route.fulfill({ response, json: task });
+    });
+    await open(page, `#tasks/${B}/preview-run-b5`);
+    const reason = detail(page).locator('[data-slot="detail-queue-reason"]');
+    await expect(reason).toHaveText(locale === "zh-CN" ? "该工作目录正被其他微任务使用" : "Another micro task is using this working directory");
+    await expectNoSidewaysScroll(page);
+    queueReason = "model-capacity";
+    await page.reload();
+    await expect(reason).toContainText(locale === "zh-CN" ? "所选模型服务的并发名额已满" : "The selected model service is at capacity");
+    await expect(reason).toContainText("codex / openai / gpt-6.1-sol");
+    await expectNoSidewaysScroll(page);
+  });
+});

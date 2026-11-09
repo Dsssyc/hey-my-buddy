@@ -101,7 +101,7 @@ for (const width of [1280, 390]) test.describe(`common step content dark zh ${wi
   test("orders every step consistently and captures each step, including waits and inquiries", async ({ page }) => {
     await open(page, `#tasks/${macro}/${run}/1`);
     if (width === 1280) await expect(page.getByText("dsh-harness", { exact: true }).first()).toBeVisible();
-    const steps = ["委派", "路由", "回合 1", "决定", "继续", "换手", "回合 2", "接管", "Host 停止", "验收"];
+    const steps = ["委派", "路由", "回合 1", "决定", "继续", "换手", "回合 2", "接管", "由 Host 停止", "验收"];
     const names = ["delegation", "routing", "turn-inquiries", "decision", "continue", "handoff", "turn-result", "takeover", "cancel", "acceptance"];
     await mkdir(shots, { recursive: true });
     for (let index = 0; index < steps.length; index++) {

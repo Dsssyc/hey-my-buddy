@@ -34,25 +34,6 @@ const semanticLabs = [...tokens.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-
   .map(match => rgbHexToLab(match[1]!));
 const reservedLabs = [...semanticLabs, ...BUDDY_REJECTED_COLORS.map(rgbHexToLab)];
 type Candidate = { lab: LABColor; hex: string };
-const DOMAIN_CORE_COLORS = ["#0c96c3", "#3b9f33", "#dd44a0", "#7f5fd6"] as const;
-const domainSurfaces = ["#ffffff", "#16171a"] as const;
-
-function relativeLuminance(hex: string): number {
-  const channels = hex.match(/[0-9a-f]{2}/gi)!.map(part => {
-    const value = parseInt(part, 16) / 255;
-    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-  });
-  return channels[0]! * .2126 + channels[1]! * .7152 + channels[2]! * .0722;
-}
-
-function domainContrast(hex: string): boolean {
-  const value = relativeLuminance(hex);
-  return domainSurfaces.every(surface => {
-    const background = relativeLuminance(surface);
-    return (Math.max(value, background) + .05) / (Math.min(value, background) + .05) >= 3;
-  });
-}
-
 function squaredDistance(left: LABColor, right: LABColor): number {
   return (left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2 + (left[2] - right[2]) ** 2;
 }
@@ -129,21 +110,9 @@ const buddyPalette = makePalette(BUDDY_CORE_COLORS,
   Array.from({ length: 28 }, (_, index) => 34 + index * 2).filter(lightness => lightness !== 50 && lightness !== 52),
   lab => !isUnwantedBuddyColor(lab));
 
-const domainPalette = makePalette(DOMAIN_CORE_COLORS,
-  Array.from({ length: 10 }, (_, index) => 48 + index * 2),
-  lab => {
-    const hue = (Math.atan2(lab[2], lab[1]) * 180 / Math.PI + 360) % 360;
-    return hue >= 145 && hue <= 330 && !isUnwantedBuddyColor(lab) && domainContrast(labToRgbHex(lab));
-  });
-
 /** The shared sequence, also used by the execution legend's colour sample. */
 export function buddyColorPrefix(count: number): readonly string[] {
   return buddyPalette(count);
-}
-
-/** Mid-lightness identities for the thin branches in either theme. */
-export function domainColorPrefix(count: number): readonly string[] {
-  return domainPalette(count);
 }
 
 /** Assign the shared palette in order of each buddy's first execution. */

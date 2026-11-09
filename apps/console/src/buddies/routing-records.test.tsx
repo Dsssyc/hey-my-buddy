@@ -9,7 +9,7 @@ import { routingCodeText } from "./routing-code";
 
 const render = (node: ReactNode) => rawRender(<TooltipProvider>{node}</TooltipProvider>);
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.clear(); });
 
 describe("routing records", () => {
   it("keeps unavailable and absent records explicit and shows no invented table", () => {
@@ -17,7 +17,8 @@ describe("routing records", () => {
     cleanup(); render(<RoutingRecords health={health({ available: false, reason: { code: "router-not-configured", params: {} }, sampleCount: 0 })} />);
     expect(screen.getByText(/尚未设置 Router/)).toBeTruthy(); expect(screen.getByText("暂无记录")).toBeTruthy();
   });
-  it("uses service counts and a shared segmented scale; failures carry a cross and short reason", () => {
+  it("uses service counts and a shared segmented scale; each bar reveals counts on click", async () => {
+    const user = userEvent.setup();
     render(<RoutingRecords health={health({ failureCount: 2, sampleCount: 8, routers: [{ buddyId: MEDIUM_ID, index: 0, eligible: true, identity: null, answeredCount: 6, noAnswerCount: 2, consecutiveNoAnswers: 1,
       lastAnsweredAt: "2026-11-09T01:01:00Z", lastError: { code: "router-not-responding", at: "2026-11-09T01:00:00Z" } }, { buddyId: "second", index: 1, eligible: true, answeredCount: 2, noAnswerCount: 0 }] })} />);
     const table = screen.getByRole("table", { name: "各 Router 的记录" });
@@ -25,9 +26,22 @@ describe("routing records", () => {
     expect(within(table).getByText("模型未开始作答")).toBeTruthy();
     expect(table.textContent).not.toContain("router-not-responding");
     const plots = table.querySelectorAll('[data-slot="quant-bar"]');
-    expect(plots[0].querySelector('[data-tone="fail"]')?.getAttribute("data-value")).toBe("2");
-    expect(plots[1].querySelector('[data-tone="fail"]')).toBeNull();
-    expect(Number(plots[1].querySelector('[data-tone="ink"]')?.getAttribute("width"))).toBeLessThan(Number(plots[0].querySelector('[data-tone="ink"]')?.getAttribute("width")));
+    expect(plots[0].querySelector('[data-tone="pink"]')?.getAttribute("data-value")).toBe("2");
+    expect(plots[1].querySelector('[data-tone="pink"]')).toBeNull();
+    expect(Number(plots[1].querySelector('[data-tone="green"]')?.getAttribute("width"))).toBeLessThan(Number(plots[0].querySelector('[data-tone="green"]')?.getAttribute("width")));
+    const first = table.querySelectorAll<HTMLButtonElement>('[data-slot="quant-bar-trigger"]')[0];
+    expect(first.getAttribute("aria-expanded")).toBe("false");
+    expect(table.textContent).not.toContain("应答 6 次");
+    expect(first.querySelector('[data-kind="fail"]')).toBeTruthy();
+    await user.click(first);
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(table.textContent).toContain("应答 6 次");
+    first.focus();
+    await user.keyboard("{Enter}");
+    expect(first.getAttribute("aria-expanded")).toBe("false");
+    await user.keyboard(" ");
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(localStorage.getItem(`hey-my-buddy.console.view.quant-bar.routing.${MEDIUM_ID}`)).toBe("true");
   });
   it("links the recorded title through its exact macro group and copies the whole ID without commands", async () => {
     const user = userEvent.setup(); const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();

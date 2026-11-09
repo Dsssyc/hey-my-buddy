@@ -43,6 +43,7 @@ export default {
     disabled: "This reasoning effort is not enabled; switch it on first",
   },
   mode: {
+    explanation: "Fast uses task text and existing records; Review can also read a frozen code copy when a choice needs code evidence. The default applies to future delegations that need a Router decision; routing already in progress keeps its original mode.",
     name: "Default mode",
     label: "Default mode",
     fast: "Fast",
@@ -51,15 +52,17 @@ export default {
     reviewConsequence: "When a Router has to decide, the text of the task is sent to the Router's model provider, and so is a frozen copy of the code; DSH and ZCode have no system sandbox, so reads and transfers outside the copy cannot be ruled out",
   },
   responseWait: {
+    explanation: "If the model has not started responding within this time, routing moves to the next Router in the list; this maintenance batch fails and waits for the next batch; profile building fails and can be started again. Once the model starts responding, there is no time limit. This prevents a stalled provider from blocking delegation indefinitely.",
     name: "Wait for the model to start responding",
     invalid: "Enter an integer from 1 to 86400",
   },
   exploration: {
     name: "Exploration quota", on: "On", off: "Off", interval: "Micro tasks per exploration quota",
     disabled: "Exploration is off", invalid: "Enter an integer of at least 2",
-    explanation: "Exploration occasionally picks a buddy with fewer samples, so it builds up evidence too.",
+    explanation: "After the specified number of new micro task routings, the next gets an exploration quota; continuations, reassignments and failure recovery do not count. The Router may choose a suitable candidate that costs no more and has fewer samples in the top-level domain, to build comparison evidence. Results count in evaluations too. Turning this off stops new exploration quotas.",
   },
   retry: {
+    explanation: "A Router without a usable answer is skipped for this interval, letting other Routers take over. New routing requests can try it again after the interval. A valid answer clears its consecutive no-answer count; reading records does not extend the interval.",
     name: "Retry interval",
     label: "Retry interval in seconds",
     unit: "s",

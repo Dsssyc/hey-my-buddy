@@ -111,7 +111,7 @@ from hey_my_buddy.blackboard.tasks.macro_tasks import LIST_FIRST_LIMIT, LIST_GRO
 
 PREVIEW_HEADER = "X-Hey-My-Buddy-Preview"
 PREVIEW_VALUE = "synthetic-fixture-data"
-SCENARIOS = ("normal", "truncated", "error", "readme")
+SCENARIOS = ("normal", "truncated", "error", "readme", "domains")
 SYNTHETIC_CSRF = "synthetic-preview-csrf-not-a-credential"
 SYNTHETIC_SESSION_ID = "synthetic-preview-session-not-a-credential"
 
@@ -2835,6 +2835,37 @@ def kind_evaluation_views(domains: list[dict]) -> list[dict]:
         connection.close()
 
 
+
+def large_domain_tree() -> list[dict]:
+    """A dense invented tree: 41 roots, 81 nodes and one third-level group.
+
+    Only the shape and root totals model a large board. The names and IDs are
+    neutral invented labels; this function never reads a real board.
+    """
+    totals = (139, 103, 89, 75, 74, 67, 51, 44, 41, 37, 28, 24, 20, 18,
+              17, 17, 16, 15, 15, 14, 14, 13, 12, 12, 10, 10, 8, 8, 7, 6,
+              5, 5, 3, 3, 3, 3, 2, 1, 1, 1, 1)
+    branches = (6, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1)
+    nodes = []
+
+    def add(node_id: str, name: str, parent: str | None, count: int) -> None:
+        nodes.append({"nodeId": node_id, "name": name,
+                      "definition": "Invented domain for the synthetic outline preview.",
+                      "parentId": parent, "mergedIntoId": None, "directCount": count})
+
+    for index, total in enumerate(totals):
+        node_id = f"preview-outline-{index + 1:02}"
+        children = branches[index] if index < len(branches) else 0
+        share = total // (children + 2)
+        add(node_id, f"Luma {index + 1:02}", None, total - children * share)
+        for child in range(children):
+            child_id = f"{node_id}-{child + 1}"
+            grandchildren = 5 if index == 0 and child == 0 else 0
+            add(child_id, f"Neri {index + 1:02}.{child + 1}", node_id, share - grandchildren)
+            for grandchild in range(grandchildren):
+                add(f"{child_id}-{grandchild + 1}", f"Sela {grandchild + 1}", child_id, 1)
+    return nodes
+
 def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | None = None) -> dict:
     domains = [
         {"nodeId": "preview-domain-ui", "name": "界面工程", "definition": "构建和调整用户界面。",
@@ -2855,6 +2886,9 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
         {"nodeId": "preview-domain-old-ui", "name": "前端界面", "definition": "此前的界面分类。", "parentId": None, "mergedIntoId": "preview-domain-console", "directCount": 3},
         {"nodeId": "preview-domain-old-console", "name": "旧控制台界面", "definition": "曾使用的界面分类。", "parentId": None, "mergedIntoId": "preview-domain-old-ui", "directCount": 2},
     ]
+    evaluations = kind_evaluation_views(domains)
+    if scenario == "domains":
+        domains = large_domain_tree()
     buddies = buddy_views()
     if scenario == "readme":
         for buddy in buddies:
@@ -2902,7 +2936,7 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
                                     "toolCalls": 0, "tokenUsage": None}]},
         }]},
         "domainNodes": domains,
-        "kindEvaluations": kind_evaluation_views(domains),
+        "kindEvaluations": evaluations,
         "routingHealth": {"windowSize": 20, "sampleCount": 6, "failureCount": 1,
                           "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1,
                           "notRespondingCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,

@@ -43,6 +43,24 @@ describe("the program reason catalog", () => {
     setLanguageChoice("en");
     expect(reasonText({ code: "router-budget-exhausted", params: {} })).toBe("Before 0.65.0, this Router call reached its time or tool-call limit.");
   });
+  it("explains maintenance validation issues without leaking identifiers into the visible reason", () => {
+    const reason = { code: "maintenance-answer-invalid", params: { errors: [
+      "answer.summaries[kind].citations[0]: enum", "newNodes[node]: parent cycle", "future-validation-code",
+    ] } };
+    setLanguageChoice("zh");
+    const chinese = reasonText(reason);
+    expect(chinese).toContain("摘要引用了本批次之外的微任务");
+    expect(chinese).toContain("领域节点的上级关系形成环");
+    expect(chinese).toContain("维护回答未通过校验");
+    expect(chinese).not.toMatch(/enum|newNodes|future-validation-code/);
+    setLanguageChoice("en");
+    const english = reasonText(reason);
+    expect(english).toContain("A summary cites a micro task outside this batch");
+    expect(english).toContain("Domain node parents form a cycle");
+    expect(english).toContain("The maintenance answer failed validation");
+    expect(english).not.toMatch(/enum|newNodes|future-validation-code/);
+    expect(reasonText({ code: "profile-answer-invalid", params: { errors: ["profile.model: required"] } })).toContain("profile.model: required");
+  });
   it("has exactly the protocol's codes as its Chinese leaves", () => {
     expect(Object.values(zh).every(value => typeof value === "string")).toBe(true);
     expect(Object.keys(zh).sort()).toEqual(Object.keys(codes).sort());

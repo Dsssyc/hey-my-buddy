@@ -1,5 +1,5 @@
 import { fixtureCoverage } from "./test-fixtures";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nextProvider } from "react-i18next";
 import { createInstance } from "i18next";
@@ -19,16 +19,24 @@ import { SESSION_PAGE_SIZE } from "./use-session";
 type Trigger = { callback: (entries: IntersectionObserverEntry[]) => void; targets: Element[] };
 const observers: Trigger[] = [];
 class FakeIntersectionObserver {
-  constructor(callback: () => void) { observers.push({ callback, targets: [] }); }
-  observe(target: Element) { observers[observers.length - 1].targets.push(target); }
+  private readonly entry: Trigger;
+  constructor(callback: () => void) { this.entry = { callback, targets: [] }; observers.push(this.entry); }
+  observe(target: Element) { this.entry.targets.push(target); }
   unobserve() {}
-  disconnect() {}
+  disconnect() { this.entry.targets.length = 0; }
 }
-const reachTop = () => act(() => {
-  const panel = observers.filter(item => item.targets.some(target => target.getAttribute("aria-hidden") === "true")).at(-1);
-  expect(panel, "the panel observes its top sentinel").toBeTruthy();
-  panel!.callback([{ isIntersecting: true } as IntersectionObserverEntry]);
-});
+const topObserver = () => observers.find(item => item.targets.some(target => target.getAttribute("aria-hidden") === "true"));
+const reachTop = async () => {
+  // The page text can commit before the passive effect registers its observer.
+  // Wait for that actual readiness condition; no scroll event is lost because
+  // IntersectionObserver reports the current intersection on observe().
+  const panel = await waitFor(() => {
+    const observed = topObserver();
+    expect(observed, "the panel observes its top sentinel").toBeTruthy();
+    return observed!;
+  });
+  await act(() => { panel.callback([{ isIntersecting: true } as IntersectionObserverEntry]); });
+};
 
 const event = (text: string) => ({ sessionId: "attempt", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } });
 const page = (before: number, count: number, hasEarlier: boolean) => ({ state: "ended", stopped: null, coverage: fixtureCoverage, before, after: before + count, hasEarlier, events: Array.from({ length: count }, (_, index) => event(`第 ${before + index} 条记录`)) });
@@ -67,7 +75,7 @@ describe("reaching the top of the transcript", () => {
     expect(screen.queryByText("正在读取更早内容…")).toBeNull();
     expect(screen.getByText("第 0 条记录")).toBeTruthy();
     // The beginning has been reached: no page is earlier, so nothing more is read.
-    await reachTop();
+    await waitFor(() => expect(topObserver()).toBeUndefined());
     expect(session).toHaveBeenCalledTimes(2);
   });
 

@@ -12,6 +12,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
       const plane = page.locator('[data-slot="maintenance-plane"]');
       await expect(plane.locator('[data-slot="maintenance-record"]').first().locator('[aria-label="完成"]')).toBeVisible();
       await expect(plane).toContainText("界面工程");
+      await plane.getByRole("button", { name: "全部展开" }).click();
       await expect(plane).toContainText("路由判断");
       await plane.evaluate(node => node.scrollIntoView({ block: "start" }));
       if (width === 1440) await expectNoSidewaysScroll(page);

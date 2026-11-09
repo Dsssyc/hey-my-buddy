@@ -439,7 +439,7 @@ describe("the turn that ended otherwise than it should", () => {
       selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "wrap-up" } } });
     await ready();
     expect(pane().textContent).toContain("Lead 有序收尾完成");
-    expect(pane().textContent).toContain("Lead 停止");
+    expect(pane().textContent).toContain("由 Lead 停止");
     expect(pane().textContent).toContain("review-lead");
     expect(pane().textContent).toContain("Please summarize the current work");
     expect(pane().textContent).not.toContain("Host 有序收尾完成");
@@ -448,22 +448,22 @@ describe("the turn that ended otherwise than it should", () => {
   it("names the person who stopped it only when the stopper was a person, and the console or the service never by a name", async () => {
     ended({ state: "cancelled", cancellation: { actor: { role: "host" }, note: "Host stopped this turn" }, selectedAttempt: { stopInitiator: "host", result: { terminationReason: "forced-stop" } } });
     await ready();
-    expect(pane().textContent).toContain("Host 停止");
+    expect(pane().textContent).toContain("由 Host 停止");
     expect(pane().textContent).not.toContain("undefined");
     cleanup();
     ended({ state: "cancelled", cancellation: { actor: { role: "host", id: "old-actor" }, note: null }, selectedAttempt: { stopInitiator: "console", result: { terminationReason: "console-stop" } } });
     await ready();
-    expect(pane().textContent).toContain("控制台停止");
+    expect(pane().textContent).toContain("从控制台停止");
     expect(pane().textContent).not.toContain("old-actor");
     cleanup();
     ended({ state: "cancelled", cancellation: { actor: { role: "host", id: "old-owner" }, note: null }, selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "forced-stop" } } });
     await ready();
-    expect(pane().textContent).toContain("Lead 停止");
+    expect(pane().textContent).toContain("由 Lead 停止");
     expect(pane().textContent).not.toContain("old-owner");
     cleanup();
     ended({ state: "cancelled", selectedAttempt: { result: { terminationReason: "unknown-stop" } } });
     await ready();
-    expect(pane().textContent).toContain("停止（发起者未知）");
+    expect(pane().textContent).toContain("已停止（发起者未知）");
     expect(pane().textContent).not.toContain("用户取消");
   });
 
