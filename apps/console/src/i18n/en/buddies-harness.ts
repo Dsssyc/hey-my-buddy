@@ -50,8 +50,8 @@ export default {
   web: {
     eligible: "Enforced",
     ineligible: "No enforced declaration",
-    enforcedDescription: "The web only level declares enforced restrictions and can serve the profile plane.",
-    unenforcedDescription: "Without an enforced web only declaration, this harness cannot serve the profile plane.",
+    enforcedDescription: "The web only level declares enforced restrictions; this harness can build model profiles.",
+    unenforcedDescription: "Without an enforced web only declaration, this harness cannot build model profiles.",
   },
   path: {
     title: "Path of {{name}}",

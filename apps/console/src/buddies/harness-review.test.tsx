@@ -45,7 +45,7 @@ describe("declared web level", () => {
     await openHarness(fixture({ harnesses: [harness({ harness: "codex", status: "ready", permissions: { web } })] }));
     expect(fieldValue(paneBlock("位置"), "只联网").textContent).toBe(expected);
     expect(paneBlock("位置").textContent).toContain(web === "enforced"
-      ? "只联网档位声明了强制限制，可供画像面使用。"
-      : "没有强制的只联网档位声明，画像面不能使用这个 harness。");
+      ? "只联网档位声明了强制限制，可以担任画像。"
+      : "没有强制的只联网档位声明，这个 harness 不能担任画像。");
   });
 });

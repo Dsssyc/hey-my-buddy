@@ -50,8 +50,8 @@ export default {
   web: {
     eligible: "强制限制",
     ineligible: "未声明强制限制",
-    enforcedDescription: "只联网档位声明了强制限制，可供画像面使用。",
-    unenforcedDescription: "没有强制的只联网档位声明，画像面不能使用这个 harness。",
+    enforcedDescription: "只联网档位声明了强制限制，可以担任画像。",
+    unenforcedDescription: "没有强制的只联网档位声明，这个 harness 不能担任画像。",
   },
   path: {
     title: "{{name}} 路径",

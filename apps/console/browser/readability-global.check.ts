@@ -14,9 +14,9 @@ test.describe("shared readability", () => {
   test("dark tooltip and popover are legible floating surfaces", async ({ page }) => {
     await open(page, "#buddies");
     await page.getByRole("button", { name: "Codex 账户", exact: true }).click();
-    const review = page.getByRole("group", { name: "Codex 设置", exact: true })
-      .locator("[aria-description]").filter({ hasText: /^可用$/ }).first();
-    await review.hover();
+    const permission = page.getByRole("group", { name: "Codex 设置", exact: true })
+      .locator("[aria-description]").filter({ hasText: /^强制限制$/ });
+    await permission.hover();
     const tooltip = page.locator("[data-slot=tooltip-content]");
     await expect(tooltip).toBeVisible();
     expect(await contrastOf(tooltip)).toBeGreaterThanOrEqual(4.5);

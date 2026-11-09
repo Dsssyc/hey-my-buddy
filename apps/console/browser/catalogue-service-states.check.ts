@@ -6,7 +6,7 @@ const shots = fileURLToPath(new URL("../../../tmp/redo-b2/", import.meta.url));
 const CODEX = "codex / openai / gpt-5-codex";
 
 for (const theme of ["light", "dark"]) for (const locale of ["zh-CN", "en-US"]) {
-  test.describe(`B2 directory at 1440px in ${locale}, ${theme}`, () => {
+  test.describe(`catalog service states at 1440px in ${locale}, ${theme}`, () => {
     test.use({ locale, viewport: { width: 1440, height: 1100 }, reducedMotion: "reduce" });
     test.beforeEach(async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
@@ -58,7 +58,7 @@ for (const theme of ["light", "dark"]) for (const locale of ["zh-CN", "en-US"]) 
       await expect(details.locator(":scope > [role=group]")).toHaveCount(3);
       const zcode = page.getByRole("group", { name: zh ? "ZCode 设置" : "ZCode settings", exact: true });
       await expect(zcode).toContainText(zh ? "未核对" : "Not verified");
-      await expect(zcode).not.toContainText(zh ? "可供画像" : "can serve");
+      await expect(zcode).toContainText(zh ? "不能担任画像" : "cannot build model profiles");
       await capture("harness");
     });
   });
