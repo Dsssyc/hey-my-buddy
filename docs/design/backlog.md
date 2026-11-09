@@ -85,6 +85,8 @@
 2. 三条状态句的句末标点不一致：排队那条（中英文都是）没有句号，另外两条有。
 3. 合成预览里的问询（`tests/probes/macro_task_console_preview.py` 的 `message()`）仍带着 schema 28 删掉的 `author` 字符串、`recipient` 与 `attempts`，与服务的 `_message_view` 不一致；控制台的解析器不读这几个字段，所以测试没发现。
 
+**会话视图的一项单元测试在完整检查里偶发失败，已经出现两次。**（2026-11-07 第一次；2026-11-09 安装 0.67.0 之前的完整检查第二次） `apps/console/src/session-view/SessionPanel.test.tsx` 的 “reaching the top of the transcript › keeps the reading position when the earlier page is inserted above” 报 “the panel observes its top sentinel: expected undefined to be truthy”；两次都在 Python 与前端并行的完整检查里，单跑这个文件各 3 次都过。原因没有查明。已经第二次出现，按缺陷处理：下一个动控制台的批次查清它在负载下为什么没有观察到顶部，修掉。
+
 **维护失败的原因里直接写出校验的错误标识。**（2026-11-09 验收 Buddy 页重做的评价一批时 Host 记下） 维护记录的失败原因形如“维护的回答最终仍不合格。 问题：summary-citation-outside-batch”，“问题”一项是协议里的标识。照 Router 记录的做法换成每个标识一句短说法，或者只写原因、把标识放进悬停。随下一个动控制台的批次做。
 
 ## 安装与存储
