@@ -96,7 +96,7 @@ class RoutingHealthTests(BoardTestCase):
                 self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
                 self.assertEqual(health["recentFailures"][0], {
                     "decisionId": decision_id, "runId": f"task-health-{count}",
-                    "at": now, "code": "router-not-responding"})
+                    "title": None, "at": now, "code": "router-not-responding"})
 
     def test_cancel_and_program_selection_cannot_restore_health(self):
         for _ in range(3):

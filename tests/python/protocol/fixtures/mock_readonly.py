@@ -58,7 +58,7 @@ def _answer(document, options, mode):
     preferred = chosen
     evidence = []
     if options.get("evidence") == "foreign":
-        evidence = [{"kind": "annotation", "ref": "model-note-not-supplied"}]
+        evidence = [{"kind": "preference", "ref": "preference-not-supplied"}]
     if mode in ("abstain", "abstain_with_evidence"):
         chosen = None
         evidence = [{"kind": "file", "ref": "input.txt"}] if mode == "abstain_with_evidence" else []

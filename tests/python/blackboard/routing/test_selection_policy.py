@@ -102,8 +102,8 @@ class RouterAnswerTests(unittest.TestCase):
         self.assertEqual(self.validate(json.dumps(answer)), frozen)
         self.assertEqual(answer, frozen)
 
-    def test_annotation_and_preference_references_are_advisory(self):
-        evidence = [{"kind": kind, "ref": "not-supplied"} for kind in ("annotation", "preference")]
+    def test_preference_references_are_advisory(self):
+        evidence = [{"kind": kind, "ref": "not-supplied"} for kind in ("preference", "summary")]
         self.assertEqual(self.validate(self.answer(evidence=evidence))["evidence"], evidence)
 
     def test_abstention_uses_same_shape_and_can_cite_files(self):
@@ -132,16 +132,16 @@ class RouterAnswerTests(unittest.TestCase):
         for value in (None, "", 1, "x" * (router.MAX_NOTE + 1)):
             with self.subTest(note=value):
                 self.assert_code("answer-shape", self.answer(note=value))
-        invalid = [None, {}, "id", [{"kind": "annotation"}], [{"kind": "annotation", "ref": "a", "extra": 1}],
-                   [{"kind": "unknown", "ref": "a"}], [{"kind": "card", "ref": "a"}],
-                   [{"kind": "annotation", "ref": ""}],
-                   [{"kind": "annotation", "ref": "x" * 1025}],
-                   [{"kind": "annotation", "ref": "a"}] * (router.MAX_REFERENCES + 1)]
+        invalid = [None, {}, "id", [{"kind": "preference"}], [{"kind": "preference", "ref": "a", "extra": 1}],
+                   [{"kind": "unknown", "ref": "a"}], [{"kind": "annotation", "ref": "a"}], [{"kind": "card", "ref": "a"}],
+                   [{"kind": "preference", "ref": ""}],
+                   [{"kind": "preference", "ref": "x" * 1025}],
+                   [{"kind": "preference", "ref": "a"}] * (router.MAX_REFERENCES + 1)]
         for value in invalid:
             with self.subTest(evidence=value):
                 self.assert_code("answer-shape", self.answer(evidence=value))
         self.validate(self.answer(note="x" * router.MAX_NOTE,
-                                  evidence=[{"kind": "annotation", "ref": "x" * 1024}] * router.MAX_REFERENCES))
+                                  evidence=[{"kind": "preference", "ref": "x" * 1024}] * router.MAX_REFERENCES))
 
     def test_file_paths_cannot_escape_checkout(self):
         for ref in ("/etc/passwd", "../file", "src/../../file", "src/../file", "C:/file", "src\\file", "."):

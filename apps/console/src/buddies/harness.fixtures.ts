@@ -20,7 +20,7 @@ const sonnet = { harness: "claude", provider: "anthropic", model: "claude-sonnet
 const mediumId = "claude:anthropic:claude-sonnet-5:medium";
 
 export function harness(entry: Partial<HarnessHealth> & Pick<HarnessHealth, "harness" | "status">): HarnessHealth {
-  return { revision: 1, manualPath: null, ...entry };
+  return { revision: 1, manualPath: null, permissionsVerifiedVersion: null, ...entry };
 }
 
 /** One harness that is found, one missing, one needing a login and one that does not pass. */
@@ -56,7 +56,7 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
 
     configuration: { explorationEvery: 5, routerBuddyIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: [buddy],
-    preferences: [], ...modelFacts([buddy]), modelNotes: [], decisions: [],
+    preferences: [], ...modelFacts([buddy]), decisions: [],
 
     modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 },

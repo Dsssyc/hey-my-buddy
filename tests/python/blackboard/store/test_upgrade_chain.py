@@ -327,13 +327,8 @@ class UpgradeChainTests(unittest.TestCase):
                     for row in self.db.execute('SELECT harness,provider,model,model_id FROM model_correspondences')}
         for old in buddies:
             self.assertEqual(mappings[old['harness'], old['provider'], old['model']], old['model'])
-        saved_notes = {display[row['model_id']]: row['text'] for row in self.db.execute(
-            'SELECT model_id,text FROM model_notes')}
-        self.assertEqual(saved_notes['fixture-alpha'], notes[0]['text'])
-        self.assertIn('提供方 openai 的备注。', saved_notes['fixture-beta'])
-        self.assertIn('提供方 alternate 的备注。', saved_notes['fixture-beta'])
-        self.assertIn('openai', saved_notes['fixture-beta'])
-        self.assertIn('alternate', saved_notes['fixture-beta'])
+        self.assertIsNone(self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='model_notes'").fetchone())
         self.assert_current_structure()
 
     def test_terminal_reservation_stock_releases_at_the_original_host_decision_time(self):

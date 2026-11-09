@@ -13,7 +13,7 @@ function snapshot(): Snapshot {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
-    buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [], decisions: [],
+    buddies: [], preferences: [], models: [], modelCorrespondences: [], decisions: [],
  modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: {},
   };

@@ -5,7 +5,7 @@ import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import { modelFacts } from "./buddies/model-fixtures";
-import { listed, note, pane, selectModel } from "./buddies/page.testing";
+import { levelSwitch, listed, pane, selectModel } from "./buddies/page.testing";
 
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 
@@ -33,7 +33,7 @@ const initial = (): Snapshot => { const snapshot: Snapshot = ({
   ],
 
   preferences: [],
-      models: [], modelNotes: [], modelCorrespondences: [],
+      models: [], modelCorrespondences: [],
 
   decisions: [],
 
@@ -52,37 +52,26 @@ afterEach(() => {
 });
 
 describe("console interactions", () => {
-  it("viewing, editing locally and switching pages never sends a write or model request", async () => {
+  it("keeps a local Buddy setting across pages without sending a write", async () => {
     const state = initial();
     const api = {
       runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(state)),
-      command: vi.fn(),
-      task: vi.fn(),
-      macroTasks: vi.fn(async () => emptyMacroTasks()),
+      command: vi.fn(), task: vi.fn(), macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     await screen.findByRole("heading", { name: "还没有宏任务" });
     await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /^Buddy/ }));
     await listed(1, 1);
-    // There is no global edit switch: controls are directly editable, and no
-    // save bar appears until the user actually changes something.
-    expect(screen.queryByRole("switch", { name: "编辑设置" })).toBeNull();
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
     await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "本地草稿");
-    expect(await screen.findByRole("region", { name: "未保存的修改" })).toBeTruthy();
+    await user.click(levelSwitch("off"));
+    expect(screen.getByRole("region", { name: "未保存的修改" })).toBeTruthy();
     await user.click(screen.getByRole("link", { name: "设置" }));
-    // The save bar belongs to Buddy alone; the draft is kept without any
-    // leave confirmation and no save happens by navigating away.
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
     await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /Buddy/ }));
-    expect(note()).toHaveProperty("value", "本地草稿");
-    expect(screen.getByRole("region", { name: "未保存的修改" })).toBeTruthy();
-    expect(within(pane()).getAllByRole("textbox")).toHaveLength(2);
-    expect(within(pane()).getByRole("textbox", { name: "off 的偏好备注" })).toHaveProperty("readOnly", true);
-    await user.click(screen.getByRole("button", { name: "放弃" }));
+    expect(levelSwitch("off").getAttribute("aria-checked")).toBe("false");
     expect(api.command).not.toHaveBeenCalled();
   });
 

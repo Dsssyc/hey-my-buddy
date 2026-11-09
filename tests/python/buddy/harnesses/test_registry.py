@@ -56,6 +56,12 @@ class CapabilityReportInputLimitTests(unittest.TestCase):
         self.assertIn("permissionLevels", report["codex"])
         self.assertIn("capabilities", report["codex"])
 
+    def test_permission_verification_version_is_separate_from_installed_version(self):
+        report = self.report()
+        self.assertEqual(report["dsh"]["permissionsVerifiedVersion"], "0.2.2-rc.1")
+        for name in ("codex", "claude", "zcode"):
+            self.assertIsNone(report[name]["permissionsVerifiedVersion"])
+
 
 if __name__ == "__main__":
     unittest.main()

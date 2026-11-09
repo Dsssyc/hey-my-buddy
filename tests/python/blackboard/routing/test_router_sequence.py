@@ -35,7 +35,6 @@ BASE_INPUT = {
     "task": "fix the parser",
     "buddies": [{"buddyId": "dsh:fixture:alpha:max"}, {"buddyId": "dsh:fixture:bravo:max"}],
     "preferences": [],
-    "annotations": [],
     "policyFacts": {},
     "outputSchema": {"type": "object"},
     "modelResponseWaitSeconds": 60,

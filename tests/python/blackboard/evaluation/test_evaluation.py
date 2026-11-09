@@ -129,7 +129,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["configuration"]["modelResponseWaitSeconds"], 60)
         self.assertEqual(snapshot["buddies"], [])
         self.assertEqual(snapshot["preferences"], [])
-        self.assertEqual(snapshot["modelNotes"], [])
+        self.assertNotIn("modelNotes", snapshot)
         self.assertEqual(snapshot["decisions"], [])
         # A no-tool executor can offer selection without a configured Router;
         # fresh settings remain empty until the user chooses each slot.
@@ -143,14 +143,12 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.seed_catalog(board)
         first = self.publish(board, command_id="c1",
                              buddySettings=[{"buddyId": BUDDY_ID, "enabled": True}],
-                             preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "note": "cheap and fast"}],
-                             modelNoteChanges=[{**model_key(board), "text": "human context"}])
+                             preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "note": "cheap and fast"}])
         self.assertTrue(first["published"])
         self.publish(board, command_id="c2", buddySettings=[])
         snapshot = self.snapshot(board)
         self.assertTrue(next(item for item in snapshot["buddies"] if item["buddyId"] == BUDDY_ID)["enabled"])
         self.assertEqual(snapshot["preferences"][0]["note"], "cheap and fast")
-        self.assertEqual(snapshot["modelNotes"][0]["text"], "human context")
 
     def test_program_fields_are_rejected(self):
         board = self.board()
@@ -162,15 +160,15 @@ class EvaluationPublishTests(EvaluationTestCase):
         board = self.board()
         self.seed_catalog(board)
         params = self.publication_params(board)
-        first = self.publish_with(board, params, "first-tab", modelNoteChanges=[{**model_key(board), "text": "first"}])
+        first = self.publish_with(board, params, "first-tab", preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "note": "first"}])
         second = self.publish_with(board, params, "second-tab",
-                                   modelNoteChanges=[{**model_key(board), "text": "second"}])
+                                   preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "note": "second"}])
         snapshot = self.snapshot(board)
         self.assertTrue(first["published"] and second["published"])
         self.assertFalse(next(p for p in snapshot["buddies"] if p["buddyId"] == BUDDY_ID)["enabled"])
-        self.assertEqual(snapshot["modelNotes"][0]["text"], "second")
-        self.assertTrue(self.publish_with(board, params, "first-tab", modelNoteChanges=[{**model_key(board), "text": "first"}])["duplicate"])
-        self.assertEqual(self.snapshot(board)["modelNotes"][0]["text"], "second")
+        self.assertEqual(snapshot["preferences"][0]["note"], "second")
+        self.assertTrue(self.publish_with(board, params, "first-tab", preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "note": "first"}])["duplicate"])
+        self.assertEqual(self.snapshot(board)["preferences"][0]["note"], "second")
 
     def test_buddy_execution_identity_is_program_owned(self):
         board = self.board()
@@ -194,11 +192,11 @@ class EvaluationPublishTests(EvaluationTestCase):
                      configuration={"routerBuddyIds": [SECOND_BUDDY_ID]})
         self.publish(board, request_id="w4", command_id="c4",
                      buddySettings=[{"buddyId": SECOND_BUDDY_ID, "enabled": False}],
-                     modelNoteChanges=[{**model_key(board), "text": "other edit"}])
+                     preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "note": "other edit"}])
         snapshot = self.snapshot(board)
-        self.assertEqual(snapshot["preferences"][0]["mode"], "pin")
+        self.assertEqual(next(entry for entry in snapshot["preferences"] if entry["buddyId"] == SECOND_BUDDY_ID)["mode"], "pin")
         self.assertEqual(snapshot["configuration"]["routerBuddyIds"], [SECOND_BUDDY_ID])
-        self.assertEqual(snapshot["modelNotes"][0]["text"], "other edit")
+        self.assertEqual(next(entry for entry in snapshot["preferences"] if entry["buddyId"] == BUDDY_ID)["note"], "other edit")
 
     def test_configuration_carries_router_buddy_and_budget_without_maintenance(self):
         from protocol.fixtures import mock_readonly
@@ -240,17 +238,17 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.seed_catalog(board)
         grant = self.publication_params(board)
         base = {"commandId": "same-command", **grant}
-        payload = {**base, "modelNoteChanges": [{**model_key(board), "text": "first"}]}
+        payload = {**base, "preferenceChanges": [{"buddyId": BUDDY_ID, "mode": "prefer", "note": "first"}]}
         board.console_call("user_policy_publish", payload)
         self.assertTrue(board.console_call("user_policy_publish", payload)["duplicate"])
         self.assert_code("CONFLICT", board.console_call, "user_policy_publish",
-                         {**base, "modelNoteChanges": []})
+                         {**base, "preferenceChanges": []})
         self.assert_code("CONFLICT", board.console_call, "user_policy_publish",
-                         {**base, "modelNoteChanges": None})
+                         {**base, "preferenceChanges": None})
         other = self.publication_params(board)
         self.assert_code("INVALID_ARGUMENT", self.publish_with, board, other, "fresh-command",
-                         modelNoteChanges=None)
-        self.assertEqual(self.snapshot(board)["modelNotes"][0]["text"], "first")
+                         preferenceChanges=None)
+        self.assertEqual(self.snapshot(board)["preferences"][0]["note"], "first")
 
 
     def test_snapshot_never_leaks_credentials(self):
@@ -258,7 +256,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.seed_catalog(board)
         grant = self.publication_params(board)
         self.publish_with(board, grant, "c1",
-                          modelNoteChanges=[{**model_key(board), "text": "visible opinion"}])
+                          preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "note": "visible opinion"}])
         raw = json.dumps(self.snapshot(board))
         self.assertNotIn(board.service.token, raw)
         self.assertNotIn("token_verifier", raw)
@@ -300,27 +298,8 @@ class EvaluationPublishTests(EvaluationTestCase):
                              preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "none"}])
         self.assertEqual(self.snapshot(board)["preferences"], [])
 
-    def test_model_service_notes_write_update_and_clear(self):
-        board = self.board()
-        self.seed_catalog(board)
-        first = self.publish(board, request_id="w1", command_id="c1",
-                             modelNoteChanges=[{**model_key(board), "text": "first note"}])
-        self.assertEqual(first["counts"]["modelNoteChanges"], 1)
-        note = self.snapshot(board)["modelNotes"][0]
-        self.assertEqual(note['modelId'], model_key(board)['modelId'])
-        self.assertEqual(note["text"], "first note")
-        self.assertTrue(note["updatedAt"])
-        self.publish(board, request_id="w2", command_id="c2",
-                     modelNoteChanges=[{**model_key(board), "text": "second note"}])
-        updated = self.snapshot(board)["modelNotes"][0]
-        self.assertEqual(updated["text"], "second note")
-        self.publish(board, request_id="w3", command_id="c3",
-                     modelNoteChanges=[{**model_key(board), "text": ""}])
-        self.assertEqual(self.snapshot(board)["modelNotes"], [])
-
 
 class CatalogRefreshTests(EvaluationTestCase):
-
 
     def test_catalog_refresh_is_explicit_attributed_and_failure_safe(self):
         board = self.board()
@@ -414,7 +393,7 @@ class ConsoleCoreTests(BoardTestCase):
         board = self.board()
         core = board.evaluation.console_core()
         for key in ("configuration", "buddies",
-                    "modelServiceConcurrency", "unavailableBuddyCount", "preferences", "modelNotes", "models", "modelCorrespondences",
+                    "modelServiceConcurrency", "unavailableBuddyCount", "preferences", "models", "modelCorrespondences",
                     "decisions"):
             self.assertIn(key, core)
         snapshot = board.evaluation.snapshot({})

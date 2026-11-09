@@ -55,6 +55,39 @@ def _maintenance_view(connection) -> dict:
     }
 
 
+def _previous_groups(connection) -> dict[tuple[str, str, str], list[dict]]:
+    """Find sampled earlier identities for names currently assigned to each kind."""
+    from ..blackboard.evaluation.models import CURRENT_CORRESPONDENCES
+
+    groups = {}
+    seen = set()
+    for row in connection.execute(
+        'SELECT current.harness,current.provider,current.model,'
+        ' current.model_id AS current_model_id,current.created_at AS since,'
+        ' earlier.model_id,models.display_name,statistics.effort'
+        ' FROM (' + CURRENT_CORRESPONDENCES + ') current'
+        ' JOIN model_correspondences earlier ON earlier.harness=current.harness'
+        ' AND earlier.provider=current.provider AND earlier.model=current.model'
+        ' AND earlier.rowid<current.correspondence_order AND earlier.model_id<>current.model_id'
+        ' JOIN kind_statistics statistics ON statistics.harness=current.harness'
+        ' AND statistics.model_id=earlier.model_id AND statistics.samples>0'
+        ' JOIN models ON models.model_id=earlier.model_id'
+        ' ORDER BY current.created_at DESC,current.correspondence_order DESC,earlier.rowid DESC'
+    ):
+        name_and_old_model = (row['harness'], row['provider'], row['model'],
+                              row['model_id'], row['effort'])
+        if name_and_old_model in seen:
+            continue
+        seen.add(name_and_old_model)
+        kind = (row['harness'], row['current_model_id'], row['effort'])
+        groups.setdefault(kind, []).append({
+            'harness': row['harness'], 'provider': row['provider'], 'model': row['model'],
+            'modelId': row['model_id'], 'modelDisplayName': row['display_name'],
+            'since': row['since'],
+        })
+    return groups
+
+
 def _kind_evaluations(connection) -> list[dict]:
     from ..blackboard.evaluation.models import CURRENT_CORRESPONDENCES, model_view
     kinds = [dict(row) for row in connection.execute(
@@ -63,6 +96,7 @@ def _kind_evaluations(connection) -> list[dict]:
         ' UNION SELECT harness,model_id,effort FROM kind_statistics'
         ' UNION SELECT harness,model_id,effort FROM kind_summaries ORDER BY harness,model_id,effort')]
     statistics = kind_domain_statistics(connection, kinds)
+    previous_groups = _previous_groups(connection)
     summaries = {(row['harness'], row['model_id'], row['effort']):
                  {'text': row['text'], 'citations': []}
                  for row in connection.execute('SELECT harness,model_id,effort,text FROM kind_summaries')}
@@ -80,7 +114,7 @@ def _kind_evaluations(connection) -> list[dict]:
         result.append({'harness': kind['harness'], 'effort': kind['effort'],
                        'modelId': model['modelId'], 'modelDisplayName': model['displayName'],
                        'modelNames': model['names'], 'summary': summaries.get(key),
-                       'statistics': statistics[key]})
+                       'statistics': statistics[key], 'previousGroups': previous_groups.get(key, [])})
     return result
 
 

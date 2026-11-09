@@ -46,7 +46,7 @@ class LeadStopPreviewTests(unittest.TestCase):
                 self.assertTrue(row['evidenceUrl'].startswith('https://'))
                 self.assertIsNotNone(row['evidenceDate'])
                 self.assertTrue(row['canUndo'])
-        self.assertEqual(snapshot['modelNotes'][0]['modelId'], preview.MODEL_IDS['gpt-5-codex'])
+        self.assertNotIn('modelNotes', snapshot)
         profiled = models[preview.MODEL_IDS['gpt-5-codex']]
         self.assertEqual({claim['polarity'] for claim in profiled['profile']['claims']},
                          {'strength', 'weakness'})
@@ -65,7 +65,7 @@ class LeadStopPreviewTests(unittest.TestCase):
         self.assertEqual(unprofiled['latestProfileRun']['reason']['code'], 'profile-answer-invalid')
         self.assertIsNone(models[preview.MODEL_IDS['gpt-5-mini']]['latestProfileRun'])
         page = preview.command_result('normal', 'buddy_list', {})
-        for field in ('models', 'modelCorrespondences', 'modelNotes'):
+        for field in ('models', 'modelCorrespondences'):
             self.assertEqual(page[field], snapshot[field])
         self.assertEqual(preview.command_result('normal', 'profile_start',
                          {'modelId': profiled['modelId']}),
@@ -98,8 +98,17 @@ class LeadStopPreviewTests(unittest.TestCase):
                      == ('codex', preview.MODEL_IDS['gpt-5-codex'], 'high'))
         self.assertEqual(set(codex['statistics']['byDomain']),
                          {'preview-domain-ui', 'preview-domain-console', 'preview-domain-tokens'})
+        current_name = next(row for row in snapshot['modelCorrespondences']
+                            if (row['harness'], row['provider'], row['model'])
+                            == ('codex', 'openai', 'gpt-5-codex'))
+        self.assertEqual(codex['previousGroups'], [{
+            'harness': 'codex', 'provider': 'openai', 'model': 'gpt-5-codex',
+            'modelId': preview.MODEL_IDS['gpt-5-mini'], 'modelDisplayName': 'gpt-5-mini',
+            'since': current_name['createdAt'],
+        }])
         # Kinds without samples still use the service's empty-statistics projection.
-        empty = next(row for row in rows if row['modelId'] == preview.MODEL_IDS['gpt-5-mini'])
+        empty = next(row for row in rows if row['modelId'] == preview.MODEL_IDS['gpt-5-mini']
+                     and row['effort'] == 'low')
         self.assertEqual(empty['statistics']['overall']['samples'], 0)
         self.assertIsNone(empty['summary'])
 

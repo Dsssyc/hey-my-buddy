@@ -36,16 +36,16 @@ function snapshot(list: Buddy[] = buddies()): Snapshot {
   return {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "s" },
 
-    configuration: null, buddies: list, preferences: [],  models: [], modelNotes: [], modelCorrespondences: [], decisions: [],
+    configuration: null, buddies: list, preferences: [],  models: [], modelCorrespondences: [], decisions: [],
     modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "flash", limit: 3, active: 1 }],
     tasks: { pendingCount: 0 }, capabilities: {},
   };
 }
 
 const harnesses: HarnessHealth[] = [
-  { harness: "dsh", status: "ready", revision: 1, manualPath: null },
-  { harness: "codex", status: "ready", revision: 1, manualPath: null },
-  { harness: "claude", status: "login-required", revision: 1, manualPath: null },
+  { harness: "dsh", status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null },
+  { harness: "codex", status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null },
+  { harness: "claude", status: "login-required", revision: 1, manualPath: null, permissionsVerifiedVersion: null },
 ];
 
 function blocks(options: { recorded?: Snapshot; data?: ConsoleView; folded?: Record<string, boolean>; fresh?: string[]; health?: HarnessHealth[] } = {}) {
@@ -106,7 +106,7 @@ describe("the table's blocks", () => {
   it("falls back to plain unavailability for a harness without a health record, and keeps an unknown state as recorded", () => {
     const without = blocks({ health: [] }).find(block => block.harness === "claude")!;
     expect(without.state).toBe("unavailable");
-    const future = blocks({ health: [{ harness: "claude", status: "quarantined" as HarnessHealth["status"], revision: 1, manualPath: null }] })
+    const future = blocks({ health: [{ harness: "claude", status: "quarantined" as HarnessHealth["status"], revision: 1, manualPath: null, permissionsVerifiedVersion: null }] })
       .find(block => block.harness === "claude")!;
     expect(future.state).toBe("quarantined");
     expect(harnessStateText("quarantined", t)).toBe("quarantined");

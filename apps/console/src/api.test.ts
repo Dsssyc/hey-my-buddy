@@ -38,12 +38,12 @@ describe("L4 ordered Router list configuration", () => {
 describe("snapshot upgrade boundary and routing health", () => {
   const configuration = { explorationEvery: 5, routerBuddyIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", modelResponseWaitSeconds: 60, profileBuddyId: null };
   const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration, buddies: [],
-    preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [],
+    preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [],
     tasks: { pendingCount: 0 } };
   const health = { available: false, reason: { code: "router-consecutive-failures", params: {} }, windowSize: 20, sampleCount: 3,
     failureCount: 3, consecutiveFailures: 3, abstentionCount: 0, cancelledCount: 0,
     lastSuccessAt: null, lastSuccessDecisionId: null,
-    recentFailures: [{ decisionId: "timeout", runId: "run", at: "2026-10-02T00:00:00Z", code: "router-not-responding" }] };
+    recentFailures: [{ decisionId: "timeout", runId: "run", title: "The timed out micro task", at: "2026-10-02T00:00:00Z", code: "router-not-responding" }] };
   function apiFor(body: unknown) {
     return createApi("", vi.fn(async () => new Response(JSON.stringify(body))) as typeof fetch);
   }
@@ -237,7 +237,7 @@ describe("local read verification evidence", () => {
 
 describe("conditional reads (ETag / If-None-Match / 304)", () => {
   const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session" }, configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", modelResponseWaitSeconds: 30, profileBuddyId: null },
-    buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
+    buddies: [], preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
   function jsonResponse(value: unknown, etag?: string) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (etag) headers.ETag = etag;

@@ -617,7 +617,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(decision["output"]["policyCheck"]["userPreference"], "alternative")
         self.assertNotIn("taskPreference", decision["output"]["policyCheck"])
         self.assertEqual(decision["evidence"], [])
-        self.assertEqual(decision["input"]["annotations"], [])
+        self.assertNotIn("annotations", decision["input"])
 
     def test_answer_shape_json_and_path_boundaries_keep_one_attempt_each(self):
         clock = FakeClock()

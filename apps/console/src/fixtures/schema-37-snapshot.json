@@ -22,7 +22,6 @@
     "id": "fixture-session"
   },
   "preferences": [],
-  "modelNotes": [],
   "modelServiceConcurrency": [],
   "domainNodes": [],
   "kindEvaluations": [
@@ -31,6 +30,7 @@
       "effort": "high",
       "modelId": "09ba4b92-9c9f-4e18-a0a9-1a04af7a2f8e",
       "modelDisplayName": "claude-opus-4-8",
+      "previousGroups": [],
       "modelNames": [
         {
           "harness": "claude",
@@ -96,7 +96,8 @@
         "byDomain": {},
         "byDomainTaskType": {},
         "infrastructureFailures": []
-      }
+      },
+      "previousGroups": []
     }
   ],
   "models": [

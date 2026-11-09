@@ -14,7 +14,8 @@ from hey_my_buddy.blackboard.store import (
 from hey_my_buddy.blackboard.store.schema_37_38 import (
     DEFAULT_MODEL_RESPONSE_WAIT_SECONDS, MAX_MODEL_RESPONSE_WAIT_SECONDS, upgrade as step_upgrade,
 )
-from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
+from hey_my_buddy.blackboard.store.db import Database
+from hey_my_buddy.blackboard.store.upgrade import upgrade_state
 
 
 class Schema37To38Tests(unittest.TestCase):
@@ -113,6 +114,7 @@ class Schema37To38Tests(unittest.TestCase):
             connection.rollback()
             self.assertEqual(list(connection.execute('PRAGMA foreign_key_check')), [])
 
+        upgrade_state(self.root / 'state')
         fresh = Database(self.root / 'fresh')
         self.addCleanup(fresh.close)
         fresh.initialize()

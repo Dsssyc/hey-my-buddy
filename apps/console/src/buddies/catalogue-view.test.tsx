@@ -6,7 +6,7 @@ import { App } from "../App";
 import { ApiError, type ConsoleApi } from "../api";
 import type { HarnessHealth, Buddy, Snapshot } from "../types";
 import {
-  effortCell, foldHandle, level, levelPreference, levelSwitch, listed, modelButton, modelRow, catalogue, note, pane, search, selectModel,
+  effortCell, foldHandle, level, levelPreference, levelSwitch, listed, modelButton, modelRow, catalogue, pane, search, selectModel,
 } from "./page.testing";
 
 /**
@@ -34,12 +34,12 @@ function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: Harnes
 
     configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: [buddy(sonnet, "medium", { enabled: true }), buddy(sonnet, "high"), buddy(sol, "medium"), buddy(sol, "low")],
-    preferences: [], models: [], modelNotes: [], modelCorrespondences: [], decisions: [],
+    preferences: [], models: [], modelCorrespondences: [], decisions: [],
  modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 }, capabilities: {},
     harnesses: [
-      { harness: "claude", status: "ready", revision: 1, manualPath: null },
-      { harness: "codex", status: "ready", revision: 1, manualPath: null },
+      { harness: "claude", status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null },
+      { harness: "codex", status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null },
     ],
     ...extra,
   };
@@ -72,8 +72,7 @@ function open(f: ReturnType<typeof fixture>) {
 
 /** One page of retained rows, as `buddy_list` returns it. */
 function page(buddies: Buddy[], _state: Snapshot) {
-  return { buddies, preferences: [], ...modelFacts(buddies), modelNotes: [],
- modelServiceConcurrency: [], nextCursor: null };
+  return { buddies, preferences: [], ...modelFacts(buddies), modelServiceConcurrency: [], nextCursor: null };
 }
 
 afterEach(() => {
@@ -205,7 +204,7 @@ describe("a buddy's own preference", () => {
 });
 
 describe("a session that cannot write", () => {
-  it("shows every setting and changes none, and says why on the switch", async () => {
+  it("shows settings without applying changes", async () => {
     const f = fixture(snapshot({ consoleSession: undefined as unknown as Snapshot["consoleSession"] }));
     const user = userEvent.setup();
     open(f);
@@ -214,13 +213,10 @@ describe("a session that cannot write", () => {
     const lock = levelSwitch("medium");
     expect(lock.getAttribute("aria-checked")).toBe("true");
     expect(lock.getAttribute("aria-disabled")).toBe("true");
-    expect(lock.getAttribute("aria-description")).toBe("浏览器授权已失效，重新授权后可以修改");
     await user.click(lock);
     expect(levelSwitch("medium").getAttribute("aria-checked")).toBe("true");
     expect(within(levelPreference("medium")).getAllByRole("radio").every(radio => radio.getAttribute("aria-disabled") === "true")).toBe(true);
     expect(within(pane()).getByRole("spinbutton", { name: "并发上限" })).toHaveProperty("readOnly", true);
-    // The note stays readable and copyable, never editable.
-    expect(note()).toHaveProperty("readOnly", true);
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
@@ -418,15 +414,15 @@ describe("model-keyed kind evaluations", () => {
     // current correspondence decides which kind the catalogue displays.
     state.kindEvaluations = [
       { harness: "codex", modelId: sol.model, effort: "medium", modelDisplayName: "Old generation",
-        modelNames: [sol], statistics, summary: { text: "Old evaluation", citations: [] } },
+        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Old evaluation", citations: [] } },
       { harness: "claude", modelId: "current-generation", effort: "medium", modelDisplayName: "Other harness",
-        modelNames: [sol], statistics, summary: { text: "Wrong harness", citations: [] } },
+        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Wrong harness", citations: [] } },
       { harness: "codex", modelId: "current-generation", effort: "high", modelDisplayName: "Other effort",
-        modelNames: [sol], statistics, summary: { text: "Wrong effort", citations: [] } },
+        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Wrong effort", citations: [] } },
       { harness: "codex", modelId: "current-generation", effort: "medium", modelDisplayName: "Current model",
-        modelNames: [{ ...sol, model: "upstream-alias" }], statistics, summary: { text: "Current evaluation", citations: [] } },
+        modelNames: [{ ...sol, model: "upstream-alias" }], previousGroups: [], statistics, summary: { text: "Current evaluation", citations: [] } },
       { harness: "codex", modelId: "partner-generation", effort: "medium", modelDisplayName: "Partner model",
-        modelNames: [partner], statistics, summary: { text: "Partner evaluation", citations: [] } },
+        modelNames: [partner], previousGroups: [], statistics, summary: { text: "Partner evaluation", citations: [] } },
     ];
     const user = userEvent.setup();
     open(fixture(state));
@@ -448,7 +444,7 @@ describe("model-keyed kind evaluations", () => {
     const state = snapshot({ buddies: [buddy(sol, "medium", { enabled: true })] });
     state.modelCorrespondences = [];
     state.kindEvaluations = [{ harness: "codex", modelId: sol.model, effort: "medium",
-      modelDisplayName: "Previously mapped model", modelNames: [sol], statistics,
+      modelDisplayName: "Previously mapped model", modelNames: [sol], previousGroups: [], statistics,
       summary: { text: "Previous evaluation", citations: [] } }];
     const user = userEvent.setup();
     open(fixture(state));

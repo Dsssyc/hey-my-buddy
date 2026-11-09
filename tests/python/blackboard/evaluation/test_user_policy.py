@@ -23,11 +23,6 @@ class UserPolicyTests(BoardTestCase):
             db.execute("INSERT INTO router_buddies(position,buddy_id) VALUES(0,'retired')")
             db.execute("INSERT INTO evaluation_preferences VALUES('retired','pin','user intent')")
 
-    def model_key(self):
-        from hey_my_buddy.blackboard.evaluation.models import current_model
-        with self.board_.store.db.read() as db:
-            return {'modelId': current_model(db, 'dsh', 'fixture', 'live')}
-
     def user(self, operation, params):
         return self.board_.call(operation, {**params, 'consoleAuthority': {'sessionId': self.session}})
 
@@ -44,7 +39,7 @@ class UserPolicyTests(BoardTestCase):
 
     def test_host_cannot_publish_user_policy_or_replay_console_command(self):
         params = self.publication_params()
-        payload = self.payload(params, modelNoteChanges=[{**self.model_key(), 'text': 'human opinion'}])
+        payload = self.payload(params, buddySettings=[{'buddyId': 'live', 'enabled': False}])
         self.assert_denied('user_policy_publish', payload)
         self.assertTrue(self.user('user_policy_publish', payload)['published'])
         self.assert_denied('user_policy_publish', payload)
@@ -62,11 +57,10 @@ class UserPolicyTests(BoardTestCase):
 
     def test_retired_pin_and_selector_do_not_block_disable_or_other_edits(self):
         grant = self.publication_params()
-        payload = self.payload(grant, buddySettings=[{'buddyId': 'retired', 'enabled': False}], modelNoteChanges=[{**self.model_key(), 'text': 'prefer local evidence'}])
+        payload = self.payload(grant, buddySettings=[{'buddyId': 'retired', 'enabled': False}])
         self.user('user_policy_publish', payload)
         self.assertTrue(self.user('user_policy_publish', payload)['duplicate'])
         snapshot = console_snapshot_projection(self.board_.service)[0]
-        self.assertEqual(snapshot['modelNotes'][0]['text'], 'prefer local evidence')
         self.assertEqual(snapshot['configuration']['routerBuddyIds'], ['retired'])
         self.assertEqual(snapshot['preferences'][0]['mode'], 'pin')
         self.assertFalse(next(p for p in snapshot['buddies'] if p['buddyId'] == 'retired')['enabled'])
@@ -114,13 +108,17 @@ class UserPolicyTests(BoardTestCase):
         for changes in [
             {'buddySettings': [{'buddyId': 'live', 'enabled': False}, {'buddyId': 'retired', 'enabled': True}]},
             {'buddySettings': [{'buddyId': 'retired', 'enabled': False, 'available': True}]},
-            {'modelNoteChanges': [{**self.model_key(), 'text': 'x'}, {**self.model_key(), 'text': 'y'}]},
+            {'buddySettings': [{'buddyId': 'live', 'enabled': False}], 'modelNoteChanges': []},
         ]:
-            with self.assertRaises(BoardError):
+            with self.assertRaises(BoardError) as caught:
                 self.user('user_policy_publish', self.payload(grant, **changes))
+            if 'modelNoteChanges' in changes:
+                self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+                self.assertEqual(str(caught.exception), 'Unknown user_policy.publish parameter: modelNoteChanges')
+                self.assertEqual(caught.exception.details['field'], 'modelNoteChanges')
         snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertNotIn('tableRevision', snapshot)
-        self.assertEqual(snapshot['modelNotes'], [])
+        self.assertNotIn('modelNotes', snapshot)
         self.assertTrue(next(p for p in snapshot['buddies'] if p['buddyId'] == 'live')['enabled'])
 
 

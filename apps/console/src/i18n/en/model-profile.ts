@@ -5,7 +5,7 @@ export default {
   title: "Model profile", strength: "Strengths", weakness: "Weaknesses", notBuilt: "No profile built yet", build: "Build profile", rebuild: "Rebuild profile",
   quota: "{{name}} will browse the web to build this profile, using its quota.", noBuddy: "Choose a profile buddy on the Roles tab first.", saveFirst: "Save or discard changes before building a profile.",
   started: "The profile is running with {{name}}.", invalidReply: "The profile operation returned an invalid response", readFailed: "The operation replied, but reading failed. Refresh to see the run record.",
-  latestRun: "Latest profile run", corrections: "Correction rounds: {{n}}", usage: "Usage", note: "Model note", correspondences: "Model correspondences",
+  latestRun: "Latest profile run", corrections: "Correction rounds: {{n}}", usage: "Usage", correspondences: "Model correspondences",
   source: { "same-name": "Same-name normalization", profile: "Profile plane suggestion", user: "User" }, claimSource: { vendor: "Vendor claim", "third-party": "Third party" },
   state: { running: "Running", completed: "Completed", failed: "Failed" },
   map: "Map to an existing model", generation: "Mark a new generation", apply: "Stage change", undo: "Undo latest change",

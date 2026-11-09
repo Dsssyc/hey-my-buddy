@@ -2627,7 +2627,7 @@ def model_views() -> dict:
 
 
 def policy_views() -> dict:
-    """Synthetic buddy preferences and one human note on a model identity."""
+    """Synthetic buddy preferences and model identities."""
     def buddy_id(cfg: dict) -> str:
         return f"{cfg['harness']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}"
 
@@ -2636,9 +2636,6 @@ def policy_views() -> dict:
                    {"buddyId": buddy_id(CFG_CODEX), "mode": "pin", "note": None}]
     return {
         "preferences": sorted(preferences, key=lambda entry: entry["buddyId"]),
-        "modelNotes": [{"modelId": MODEL_IDS[CFG_CODEX["model"]],
-                        "text": "Synthetic preview: preferred for code review.",
-                        "updatedAt": "2026-09-26T00:00:00Z"}],
         **model_views(),
     }
 
@@ -2663,6 +2660,7 @@ def harness_rows(state: PreviewState | None = None) -> list[dict]:
         {"harness": "dsh", "status": "ready", "revision": 3, "manualPath": None,
          "permissions": {"none": "enforced", "read": "convention", "write": "convention", "full": "convention"},
          "executable": "/synthetic-preview/harnesses/dsh/dsh", "version": "synthetic-preview-1.0",
+         "permissionsVerifiedVersion": "0.2.2-rc.1",
          "account": harness_account("dsh", "ready", account_type="apiKey"),
          "billingByProvider": {"deepseek-official": {"kind": "metered", "source": "synthetic-preview",
                                                      "observedAt": OBSERVED_AT},
@@ -2675,18 +2673,21 @@ def harness_rows(state: PreviewState | None = None) -> list[dict]:
                         "consecutiveRejections": 1}]},
         {"harness": "zcode", "status": "ready", "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/zcode/zcode", "version": "synthetic-preview-0.4",
+         "permissionsVerifiedVersion": None,
          "account": harness_account("zcode", "ready"),
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
          "providers": [{"provider": "zai", "coolingUntil": "2020-01-01T00:00:00.000Z",
                         "consecutiveRejections": 1}]},
         {"harness": "codex", "status": "ready", "revision": 1, "manualPath": None,
          'executable': '/synthetic-preview/codex', 'version': '0.159.0',
+         'permissionsVerifiedVersion': None,
          "account": harness_account("codex", "ready", account_type="chatgpt"),
          'billingByProvider': {'openai': {'kind': 'subscription', 'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}},
          'permissions': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'},
          "source": "synthetic-preview", "checkedAt": instant(9, 55), "providers": []},
         {"harness": "claude", "status": "login-required", "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/claude/claude", "version": "synthetic-preview-2.1",
+         "permissionsVerifiedVersion": None,
          "account": harness_account("claude", "logged-out", reason=reason("account.login-required")),
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
          "reason": reason("harness.login-required", operation="execution"), "providers": []},
@@ -2756,6 +2757,11 @@ def kind_evaluation_views(domains: list[dict]) -> list[dict]:
         facts = model_views()
         connection.executemany("INSERT INTO models(model_id,display_name) VALUES(?,?)",
                                [(row["modelId"], row["displayName"]) for row in facts["models"]])
+        # One service used to point to a distinct model group that already has
+        # high-effort evidence. Its current correspondence below stays newer.
+        connection.execute("INSERT INTO model_correspondences VALUES(?,?,?,?,?,?,?,?,?)",
+                           ("synthetic-earlier-codex", "codex", "openai", "gpt-5-codex",
+                            MODEL_IDS["gpt-5-mini"], instant(0, 0), "user", None, None))
         connection.executemany(
             "INSERT INTO model_correspondences VALUES(?,?,?,?,?,?,?,?,?)",
             [(row["correspondenceId"], row["harness"], row["provider"], row["model"], row["modelId"],
@@ -2804,6 +2810,9 @@ def kind_evaluation_views(domains: list[dict]) -> list[dict]:
                           "durations": [540], "usage": (2400, 600, 360)}
                 _add_sample(connection, kind, sample, None)
                 _add_sample(connection, kind, sample, cell)
+        _add_sample(connection, ("codex", MODEL_IDS["gpt-5-mini"], "high"),
+                    {"success": True, "first_pass": True, "rework": 0,
+                     "durations": [720], "usage": (3000, 400, 500)}, None)
         connection.execute("INSERT INTO buddy_infrastructure_failures VALUES('dsh','deepseek-official',"
                            "'deepseek-flash','max',1,?)", (instant(8, 36),))
         return _kind_evaluations(connection)
@@ -2881,6 +2890,7 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
                           "available": True, "reason": None, "currentRouterBuddyId": routers[0]["buddyId"],
                           "routers": routers,
                           "recentFailures": [{"decisionId": ROUTING_A2["decisionId"], "runId": "preview-run-a2",
+                                              "title": "合成预览任务 A2",
                                               "at": instant(8, 36), "code": "routing-bounds-rejected"}]},
         "tasks": {"pendingCount": pending_root_count(state)},
         "capabilities": {"selection": True,
@@ -3943,7 +3953,10 @@ def validate_fixtures() -> list[str]:
         problems.append("each turn must keep its own usage, never one session-cumulative number")
 
     # -- console snapshot harness rows -------------------------------------- #
-    harnesses = console_snapshot("normal", False).get("harnesses")
+    preview_snapshot = console_snapshot("normal", False)
+    harnesses = preview_snapshot.get("harnesses")
+    if not any(row.get("previousGroups") for row in preview_snapshot["kindEvaluations"]):
+        problems.append("kind evaluations must retain a sampled earlier model group")
     if not isinstance(harnesses, list) or [row.get("harness") for row in harnesses] != ["dsh", "zcode",
                                                                                         "codex", "claude"]:
         problems.append("harnesses must list dsh, zcode, codex and claude in that order")

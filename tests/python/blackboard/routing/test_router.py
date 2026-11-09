@@ -13,7 +13,7 @@ from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 class RouterContractTests(unittest.TestCase):
     def test_independent_references_and_alternative_are_advisory(self):
         answer = {"domainNodeId": None, "taskType": "change", "buddyId": "legal-alternative", "note": "Better fit after reading the code",
-                  "evidence": [{"kind": "annotation", "ref": "model-note"},
+                  "evidence": [{"kind": "preference", "ref": "preferred buddy"},
                                {"kind": "file", "ref": "src/worker.py"}]}
         self.assertEqual(router.validate_answer(answer, ["preferred", "legal-alternative"]), answer)
 
@@ -174,7 +174,7 @@ class RouterPublicationTests(WorkflowTestCase):
                   'usage': {'elapsedMs': 100, 'toolCalls': 0},
                   'inputVerification': {'unchanged': True, 'manifestSha256': None, 'snapshotSha256': 'fixture-digest'},
                   'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': buddy, 'note': 'Read the frozen input',
-                               'evidence': evidence if evidence is not None else [{'kind': 'annotation', 'ref': 'not-supplied'}]}}
+                               'evidence': evidence if evidence is not None else [{'kind': 'preference', 'ref': 'not-supplied'}]}}
         if code:
             result['code'] = code
         board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': result_status or ('failed' if code else 'ok'), 'shutdownConfirmed': True, 'result': result})
@@ -184,7 +184,7 @@ class RouterPublicationTests(WorkflowTestCase):
         board, decision = self.settle(SECOND_BUDDY_ID, preferences=[{'buddyId': BUDDY_ID, 'mode': 'prefer'}])
         self.assertEqual(decision['status'], 'completed')
         self.assertEqual(decision['policyCheck']['userPreference'], 'alternative')
-        self.assertEqual(decision['evidence'], [{'kind': 'annotation', 'ref': 'not-supplied'}])
+        self.assertEqual(decision['evidence'], [{'kind': 'preference', 'ref': 'not-supplied'}])
 
     def test_boundary_and_budget_counters_are_separate(self):
         for code, counter in [('router-not-responding', 'notRespondingCount'),

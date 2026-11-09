@@ -22,7 +22,7 @@ const clock = (iso: string) => {
 };
 
 function row(entry: Partial<HarnessHealth> = {}): HarnessHealth {
-  return { harness: "dsh", status: "ready", revision: 1, manualPath: null, ...entry };
+  return { harness: "dsh", status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null, ...entry };
 }
 const account: HarnessAccount = { harness: "dsh", status: "ready",
   accountType: null, checkedAt: null, reason: null };

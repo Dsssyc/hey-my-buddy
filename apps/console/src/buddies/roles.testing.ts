@@ -69,7 +69,7 @@ export type RolesOptions = {
 };
 
 const harnesses: HarnessHealth[] = ["claude", "codex", "dsh", "zcode"].map(harness =>
-  ({ harness, status: "ready", revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] }) as HarnessHealth);
+  ({ harness, status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] }) as HarnessHealth);
 
 export function snapshot({ routers = [], configuration = {}, routingHealth, sessionPresent = true, extra = {} }: RolesOptions = {}): Snapshot & { harnesses: HarnessHealth[] } {
   return {
@@ -78,7 +78,7 @@ export function snapshot({ routers = [], configuration = {}, routingHealth, sess
     configuration: configuration === null ? null
       : { explorationEvery: 5, routerBuddyIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", modelResponseWaitSeconds: 60, profileBuddyId: null, profileUnavailableReason: { code: "profile-not-configured", params: {} }, ...configuration },
     buddies: buddies(),
-    ...modelFacts(buddies()), modelNotes: [], preferences: [],
+    ...modelFacts(buddies()), preferences: [],
  decisions: [],
     modelServiceConcurrency: [],
     tasks: { pendingCount: 0 },

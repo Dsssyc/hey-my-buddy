@@ -4,9 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
-import type { ModelNote, Preference, Buddy, BuddyPage, Snapshot } from "./types";
+import type { Preference, Buddy, BuddyPage, Snapshot } from "./types";
 import {
-  chip, choosePreference, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, note, pane, queryModel, search, selectModel,
+  chip, choosePreference, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, pane, queryModel, search, selectModel,
 } from "./buddies/page.testing";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
@@ -40,7 +40,6 @@ function catalog(): Buddy[] {
 function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSize?: number } = {}) {
   const buddies = catalog();
   const decisionId = options.staleDecision ? retiredMax : flashOff;
-  const modelNotes: ModelNote[] = [{ modelId: "retired-model", text: "用户保留的历史意见", updatedAt: "2026-11-01T00:00:00Z" }];
   const models = ["deepseek-flash", "retired-model"].map(model => ({ modelId: model, displayName: model, names: [{ harness: "dsh", provider: "deepseek-official", model }], profile: null, latestProfileRun: null }));
   const correspondences = ["deepseek-flash", "retired-model"].map(model => ({ harness: "dsh", provider: "deepseek-official", model, correspondenceId: model, modelId: model, createdAt: "2026-11-01T00:00:00Z", source: "same-name" as const, evidenceUrl: null, evidenceDate: null, canUndo: false }));
   const preferences: Preference[] = options.stalePin
@@ -59,7 +58,6 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
       buddies: slice,
 
       models, modelCorrespondences: correspondences.filter(row => [...slice].some(buddy => buddy.model === row.model)),
-      modelNotes: ids.has(retiredMax) || ids.has(retiredLow) ? modelNotes : [],
       preferences: preferences.filter(p => ids.has(p.buddyId)),
 
       modelServiceConcurrency: [],
@@ -78,7 +76,6 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     unavailableBuddyCount: buddies.filter(p => !p.available).length,
 
     models, modelCorrespondences: correspondences.filter(row => live.some(buddy => buddy.model === row.model)),
-    modelNotes: live.some(p => p.buddyId === retiredMax || p.buddyId === retiredLow) ? modelNotes : [],
     preferences: preferences.filter(p => live.some(x => x.buddyId === p.buddyId)),
      decisions: [],
 
@@ -99,8 +96,10 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
 
     if (operation === "user_policy_publish") {
       published.push(params);
-      state = { ...state,
- };
+      state = { ...state, buddies: state.buddies.map(buddy => {
+        const change = params.buddySettings?.find((entry: { buddyId: string }) => entry.buddyId === buddy.buddyId);
+        return change ? { ...buddy, enabled: change.enabled } : buddy;
+      }) };
       return {};
     }
     if (operation === "model_catalog_refresh") {
@@ -169,7 +168,6 @@ describe("unavailable buddies", () => {
     // The side column says it once for the model and keeps the note.
     expect(within(pane(RETIRED)).getByText("不可用").getAttribute("aria-description")).toBe(reasonText({ code: "catalog.native-unavailable", params: {} }));
     expect(within(pane()).getAllByText("不可用")).toHaveLength(1);
-    expect(note()).toHaveProperty("value", "用户保留的历史意见");
   });
 
   it("counts a listed offline Router once and pages the rest in by itself", async () => {
@@ -256,27 +254,6 @@ describe("unavailable buddies", () => {
     expect(f.operations).not.toContain("user_policy_publish");
   });
 
-  it("publishes a disable and a note as patches without program fields", async () => {
-    const f = fixture();
-    const user = userEvent.setup();
-    window.location.hash = "#buddies";
-    render(<App suppliedApi={f.api} />);
-    await openRetired(user);
-    await user.click(levelSwitch("max"));
-    await user.type(note(), "，仍可用于历史对照");
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("设置已保存");
-    expect(f.operations.slice(0, 2)).toEqual(["buddy_list", "user_policy_publish"]);
-    expect(f.published[0]).toEqual({
-      commandId: expect.any(String),
-      buddySettings: [{ buddyId: retiredMax, enabled: false }],
-      modelNoteChanges: [{ modelId: "retired-model", text: "用户保留的历史意见，仍可用于历史对照" }],
-    });
-    const wire = JSON.stringify(f.published[0]);
-    // Availability, provider and model are program-owned and are never uploaded.
-    expect(wire).not.toContain("available");
-    expect(wire).not.toContain("cards");
-  });
 
   it("allows a reason-only edit of a retired pin while a new pin on an unavailable buddy stays blocked", async () => {
     const f = fixture({ stalePin: true });
@@ -360,7 +337,7 @@ describe("unavailable buddies", () => {
 });
 
 describe("stale settings and unrelated saves", () => {
-  it("shows a stale Router as a mark on the roles section and still saves a note elsewhere", async () => {
+  it("shows a stale Router as a mark on the roles section and still saves an unrelated Buddy setting", async () => {
     const f = fixture({ staleDecision: true });
     const user = userEvent.setup();
     window.location.hash = "#buddies";
@@ -373,15 +350,14 @@ describe("stale settings and unrelated saves", () => {
     expect(within(sections).getByRole("link", { name: /^角色\s*Router 不可用$/ })).toBeTruthy();
 
     await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "只改这条意见");
+    await user.click(effortCell("high"));
+    await user.click(levelSwitch("high"));
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     // The stale selector stays untouched and does not block the unrelated patch.
     expect(f.published[0].configuration).toBeUndefined();
     expect(f.published[0].preferenceChanges).toBeUndefined();
-    expect(f.published[0].modelNoteChanges).toEqual([
-      { modelId: "deepseek-flash", text: "只改这条意见" },
-    ]);
+    expect(f.published[0].buddySettings).toEqual([{ buddyId: flashHigh, enabled: true }]);
   });
 
   it("keeps a stale pin visible without requiring a repair before saving", async () => {
@@ -393,13 +369,12 @@ describe("stale settings and unrelated saves", () => {
     await screen.findByText(/固定选择指向.*请启用或改为/);
     expect(chip(RETIRED, "max").textContent).toBe("max固定");
     await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "，补充说明");
+    await user.click(effortCell("high"));
+    await user.click(levelSwitch("high"));
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published[0]).not.toHaveProperty("preferenceChanges");
-    expect(f.published[0].modelNoteChanges).toEqual([
-      { modelId: "deepseek-flash", text: "，补充说明" },
-    ]);
+    expect(f.published[0].buddySettings).toEqual([{ buddyId: flashHigh, enabled: true }]);
   });
 });
 
@@ -432,7 +407,7 @@ describe("the two filters as browser habits", () => {
     const f = fixture();
     const state = f.snapshot();
     state.unavailableBuddyCount = 0;
-    f.command.mockImplementation(async () => ({ buddies: state.buddies, preferences: [], models: state.models, modelNotes: state.modelNotes,
+    f.command.mockImplementation(async () => ({ buddies: state.buddies, preferences: [], models: state.models,
       modelCorrespondences: state.modelCorrespondences, modelServiceConcurrency: [], nextCursor: null }));
     window.location.hash = "#buddies";
     const view = render(<App suppliedApi={f.api} />);

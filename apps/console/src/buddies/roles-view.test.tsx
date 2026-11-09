@@ -721,8 +721,8 @@ describe("the records of routing", () => {
     const f = fixture(snapshot({ routingHealth: health({
       sampleCount: 18, failureCount: 3, consecutiveFailures: 3,
       recentFailures: [
-        { decisionId: "dec-48", runId: "run-a", at: "2026-09-27T09:41:00.000Z", code: "call-failed" },
-        { decisionId: "dec-47", runId: null, at: "2026-09-27T09:12:00.000Z", code: "needs-host" },
+        { decisionId: "dec-48", runId: "run-a", title: "Review parser", at: "2026-09-27T09:41:00.000Z", code: "call-failed" },
+        { decisionId: "dec-47", runId: null, title: null, at: "2026-09-27T09:12:00.000Z", code: "needs-host" },
       ],
     }) }));
     await openRoles(f);

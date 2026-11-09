@@ -13,7 +13,6 @@ export default {
   "theSaveResultIsUnknownAndMay": "The save result is unknown and may have taken effect; check it before retrying.",
   "enabledState": "Enabled state",
   "reasoningEffortPreference": "Reasoning effort preference",
-  "modelNote": "Model note",
   "modelCorrespondence": "Model correspondence",
   "routerList": "Router list",
   "defaultRoutingMode": "Default routing mode",

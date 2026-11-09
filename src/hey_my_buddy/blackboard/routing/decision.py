@@ -238,7 +238,7 @@ class DecisionCoordinator:
     ) -> dict:
         """The complete bounded table slice for one request — never a silent truncation.
 
-        Every legal candidate, preference and model note is included. The final
+        Every legal candidate and preference is included. The final
         dispatch checks its byte ceiling without dropping entries.
         """
         buddy_ids = [row["buddy_id"] for row in buddies]
@@ -261,8 +261,6 @@ class DecisionCoordinator:
                                 "          parent_id) AS parent_id"
                                 " FROM domain_nodes WHERE merged_into_id IS NULL ORDER BY node_id")],
             "taskTypes": [{"id": key, "definition": value} for key, value in TASK_TYPES.items()],
-            # Notes follow the model identity supplied on every candidate.
-            "annotations": user_policy.model_notes(connection, buddy_ids),
         }
 
     def _select_input(self, connection: sqlite3.Connection, *, request_id: str, task_text: str, candidates: list[sqlite3.Row], now: str, expected_seconds: int, project: dict | None, hard_constraints: dict | None = None) -> dict:
@@ -1322,7 +1320,9 @@ class DecisionCoordinator:
                 "SELECT d.status,d.reason_code,r.updated_at AS created_at,r.decision_id,r.task_id,"
                 " (" + router_success + ") AS router_success,"
                 " (r.attempt_id IS NOT NULL) AS has_attempt,"
-                " (SELECT w.run_id FROM workflow_routes w WHERE w.decision_id=r.decision_id LIMIT 1) AS micro_task_id"
+                " (SELECT w.run_id FROM workflow_routes w WHERE w.decision_id=r.decision_id LIMIT 1) AS micro_task_id,"
+                " (SELECT run.title FROM workflow_routes w JOIN workflow_runs run ON run.run_id=w.run_id"
+                "  WHERE w.decision_id=r.decision_id LIMIT 1) AS micro_task_title"
                 + source + " ORDER BY r.updated_at DESC,r.rowid DESC LIMIT ?", (limit,),
             ).fetchall()
             success = connection.execute(
@@ -1350,7 +1350,7 @@ class DecisionCoordinator:
                 cancellations += int(row["status"] == "cancelled")
                 if is_failure:
                     failed.append({"decisionId": row["decision_id"], "runId": row["micro_task_id"] or row["task_id"],
-                                   "at": row["created_at"], "code": code})
+                                   "title": row["micro_task_title"], "at": row["created_at"], "code": code})
             facts = resolution.facts
             interval = facts.get("routerRetryIntervalSeconds")
             mode = facts.get("routingMode")

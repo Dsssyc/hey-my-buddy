@@ -115,7 +115,7 @@ export function useEditor(
     if (!draft) return { ...recorded, modelCorrespondenceChanges: [] };
     const edited = { ...recorded, buddies: draft.buddies,
       preferences: draft.preferences,
-      modelNotes: draft.modelNotes, modelCorrespondenceChanges: draft.modelCorrespondenceChanges,
+      modelCorrespondenceChanges: draft.modelCorrespondenceChanges,
       configuration: draft.configuration,
       modelServiceConcurrency: draft.modelServiceConcurrency };
     return edited;

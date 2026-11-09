@@ -37,6 +37,7 @@ export type PermissionLevels = z.infer<typeof permissionLevelsSchema>;
 export const harnessHealthSchema = z.looseObject({
   harness: nonblankString, status: harnessStatus, revision: integer.nonnegative(), manualPath: z.string().nullish(),
   command: z.array(z.string()).nullish(), executable: z.string().nullish(), version: z.string().nullish(),
+  permissionsVerifiedVersion: z.string().nullable(),
   source: z.string().nullish(), candidates: z.array(harnessCandidate).nullish(), reason: reason.nullish(),
   checkedAt: z.string().nullish(), expiresAt: z.string().nullish(),
   providers: z.custom<ProviderCooling[]>().optional(), permissions: z.custom<PermissionLevels>().optional(),
@@ -122,12 +123,6 @@ const preferenceMode = z.enum(["prefer", "pin", "exclude"]);
 export type PreferenceMode = z.infer<typeof preferenceMode>;
 export const preferencesSchema = z.array(z.strictObject({ buddyId: z.string(), mode: preferenceMode, note: z.string().nullable() }));
 export type Preference = z.infer<typeof preferencesSchema>[number];
-/** The user's note belongs to a model identity, across its service names. */
-export type ModelNote = {
-  modelId: string;
-  text: string;
-  updatedAt: string;
-};
 export type ModelCorrespondence = ModelService & {
   correspondenceId: string;
   modelId: string;
@@ -187,7 +182,6 @@ export type ProfileStartResult =
       buddy?: { harness: string; provider: string; model: string; effort: string }; usesQuota?: boolean };
 
 const modelServiceSchema = z.looseObject({ harness: nonblankString, provider: nonblankString, model: nonblankString });
-export const modelNoteSchema = z.looseObject({ modelId: nonblankString, text: z.string(), updatedAt: dateString });
 export const modelCorrespondenceSchema = modelServiceSchema.extend({
   correspondenceId: nonblankString, modelId: nonblankString, createdAt: dateString,
   source: z.enum(["same-name", "user", "profile"]), evidenceUrl: z.string().nullable(),
@@ -398,7 +392,7 @@ export const routingHealthSchema = z.looseObject({
   abstentionCount: safeCount, cancelledCount: safeCount, notRespondingCount: safeCount.optional(),
   boundsRejectedCount: safeCount.optional(), inputChangedCount: safeCount.optional(), attemptCount: safeCount.optional(),
   lastSuccessAt: z.string().nullable(), lastSuccessDecisionId: z.string().nullable(),
-  recentFailures: z.array(z.looseObject({ decisionId: z.string(), runId: z.string().nullable(), at: z.string(), code: z.string() })),
+  recentFailures: z.array(z.looseObject({ decisionId: z.string(), runId: z.string().nullable(), title: z.string().nullable(), at: z.string(), code: z.string() })),
 });
 export type RoutingHealth = z.infer<typeof routingHealthSchema>;
 
@@ -414,6 +408,7 @@ export const evaluationStatisticsSchema = z.object({
 export type EvaluationStatistics = z.infer<typeof evaluationStatisticsSchema>;
 export const kindEvaluationSchema = z.object({ harness: nonblankString, modelId: nonblankString,
   modelDisplayName: nonblankString, modelNames: z.array(modelServiceSchema), effort: nonblankString,
+  previousGroups: z.array(modelServiceSchema.extend({ modelId: nonblankString, modelDisplayName: nonblankString, since: dateString })),
   summary: z.object({ text: z.string(), citations: z.array(z.object({ runId: nonblankString, title: z.string().nullable(), macroTaskId: z.string().nullable() })) }).nullable(),
   statistics: z.object({ overall: evaluationStatisticsSchema, byDomain: z.record(z.string(), evaluationStatisticsSchema),
     byDomainTaskType: z.record(z.string(), z.partialRecord(z.enum(TASK_TYPES), evaluationStatisticsSchema)),
@@ -444,7 +439,7 @@ export type ReminderSettings = z.infer<typeof reminderSettingsSchema>;
 export const snapshotReadSchema = z.object({
   csrfToken: z.string(), eventCursor: safeCount, configuration: configurationSchema.nullable(),
   buddies: z.array(z.custom<Buddy>()), preferences: preferencesSchema,
-  models: z.array(modelSchema), modelNotes: z.array(modelNoteSchema),
+  models: z.array(modelSchema),
   modelCorrespondences: z.array(modelCorrespondenceSchema),
   modelServiceConcurrency: z.array(z.custom<ModelServiceConcurrencyEntry>(isModelServiceConcurrencyEntry)),
   tasks: z.object({ pendingCount: safeCount }),
@@ -472,7 +467,7 @@ export type Snapshot = z.infer<typeof snapshotReadSchema> & {
 /** Local draft of the fields a human may publish through `user_policy_publish`. */
 export type Draft = Pick<
   Snapshot,
-  "buddies" | "preferences" | "modelNotes" | "modelCorrespondences" | "configuration"
+  "buddies" | "preferences" | "modelCorrespondences" | "configuration"
 > & {
   modelCorrespondenceChanges: ModelCorrespondenceChange[];
   /**
@@ -491,7 +486,6 @@ export type BuddyPage = {
   buddies: Buddy[];
   preferences: Preference[];
   models: Model[];
-  modelNotes: ModelNote[];
   modelCorrespondences: ModelCorrespondence[];
   /** Concurrent-task entries for the model services this page represents. */
   modelServiceConcurrency: ModelServiceConcurrencyEntry[];

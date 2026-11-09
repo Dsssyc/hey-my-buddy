@@ -261,6 +261,17 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertIsNone(self.claim("after-final")["claim"])
         self.assertEqual(len(self.tasks()), 2)
 
+    def test_recent_failure_names_the_routed_micro_task(self):
+        request, first = self.start(micro_task=True)
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE workflow_runs SET title=? WHERE run_id='run-1'", ("Fix parser boundary",))
+        self.assert_switch(request, first, self.failure(first))
+        second = self.next_claim(request)
+        self.report(second, self.failure(second, "provider-error"), status="failed")
+        failure = self.board_.store.decisions.health_summary()["recentFailures"][0]
+        self.assertEqual(failure["runId"], "run-1")
+        self.assertEqual(failure["title"], "Fix parser boundary")
+
     def test_del_in_native_error_code_is_normalized_without_losing_failover(self):
         request, first = self.start()
         self.assert_switch(request, first, self.failure(first, "provider-error\u007f"), status="failed")
@@ -281,7 +292,7 @@ class FailoverTests(RouterDispatchTestCase):
             self.assertEqual(db.execute("SELECT adapter,queue_reason FROM tasks WHERE task_id='run-1'").fetchone()[0], "unresolved")
         second = self.next_claim(request)
         output = self.answer(second, buddy_id=C)
-        output["decision"]["evidence"] = [{"kind": "annotation", "ref": "unknown-model-note"}]
+        output["decision"]["evidence"] = [{"kind": "preference", "ref": "unsupplied-preference"}]
         output["policyCheck"] = {"modelEcho": "ignored"}
         done = self.report(second, output)
         self.assertEqual(done["decision"]["status"], "completed")

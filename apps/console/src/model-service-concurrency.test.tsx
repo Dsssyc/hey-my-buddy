@@ -45,7 +45,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
     configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
 
-    models: [], modelNotes: [], modelCorrespondences: [], preferences: [], decisions: [],
+    models: [], modelCorrespondences: [], preferences: [], decisions: [],
     modelServiceConcurrency: [flashEntry, retiredEntry],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
@@ -70,7 +70,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
 
 
     if (operation === "buddy_list") {
-      return { buddies, models: [], modelNotes: [], modelCorrespondences: [], preferences: [],         modelServiceConcurrency: structuredClone(state.modelServiceConcurrency), nextCursor: null };
+      return { buddies, models: [], modelCorrespondences: [], preferences: [],         modelServiceConcurrency: structuredClone(state.modelServiceConcurrency), nextCursor: null };
     }
     if (operation === "model_catalog_refresh") {
       // The program publishes directory facts itself. A discovery can also

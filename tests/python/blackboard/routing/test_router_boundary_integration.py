@@ -364,9 +364,6 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     def test_later_buddies_and_preferences_cannot_replace_frozen_facts(self):
         self.set_settings(ids=[])
         with self.board_.store.db.write() as db:
-            from hey_my_buddy.blackboard.evaluation.models import current_model
-            model_id = current_model(db, 'dsh', 'fixture', 'alpha')
-            db.execute("INSERT INTO model_notes VALUES(?,'private note',?)", (model_id, T0))
             db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','private preference')", (B,))
         request = self.request()
         frozen = self.boundary(request["decisionId"])
@@ -374,7 +371,6 @@ class BoundaryReadingTests(RouterDispatchTestCase):
             db.execute("UPDATE buddies SET model='later-model'")
             ensure_model_service(db, "dsh", "fixture", "later-model", self.board_.store.now())
             db.execute("UPDATE evaluation_preferences SET note='later preference'")
-            db.execute("DELETE FROM model_notes")
         current = self.boundary(request["decisionId"])
         self.assertEqual(current["facts"], frozen["facts"])
         self.assertEqual([{key: value for key, value in item.items() if key != "problem"}

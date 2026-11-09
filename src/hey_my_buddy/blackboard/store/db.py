@@ -20,7 +20,7 @@ from typing import Iterator
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 from .schema_37_38 import ROUTER_SETTINGS_DDL
 
-SCHEMA_VERSION = 38
+SCHEMA_VERSION = 39
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 AGENT_TOKEN_VERSION = 1
@@ -232,7 +232,7 @@ CREATE TABLE IF NOT EXISTS model_correspondences (
 CREATE INDEX IF NOT EXISTS model_correspondences_service_idx
     ON model_correspondences(harness, provider, model);
 CREATE TRIGGER IF NOT EXISTS model_correspondences_no_update BEFORE UPDATE ON model_correspondences
-BEGIN SELECT RAISE(ABORT, 'model correspondences are append-only'); END;
+BEGIN SELECT RAISE(ABORT, 'model correspondence rows cannot be updated; undo deletes the latest change'); END;
 CREATE TRIGGER IF NOT EXISTS model_correspondences_delete_latest_only BEFORE DELETE ON model_correspondences
 WHEN NOT EXISTS(SELECT 1 FROM model_correspondences h WHERE h.harness=OLD.harness AND h.provider=OLD.provider AND h.model=OLD.model AND h.rowid<OLD.rowid)
     OR EXISTS(SELECT 1 FROM model_correspondences h WHERE h.harness=OLD.harness AND h.provider=OLD.provider AND h.model=OLD.model AND h.rowid>OLD.rowid)
@@ -464,13 +464,6 @@ CREATE TABLE IF NOT EXISTS catalog_current (
     updated_at TEXT NOT NULL,
     read_at TEXT,
     account_status TEXT NOT NULL DEFAULT 'unknown'
-);
-""",
-    """
-CREATE TABLE IF NOT EXISTS model_notes (
-    model_id   TEXT PRIMARY KEY REFERENCES models(model_id) ON DELETE RESTRICT,
-    text       TEXT NOT NULL,
-    updated_at TEXT NOT NULL
 );
 """,
     """

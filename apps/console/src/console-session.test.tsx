@@ -8,13 +8,14 @@ import { createAuthorityLatch, sessionCanWrite } from "./console-session";
 import { FILTER_DEBOUNCE_MS } from "./use-buddy-history";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import type { ConsoleSession, Buddy, Snapshot, Task } from "./types";
-import { listed, note, selectModel } from "./buddies/page.testing";
+import { effortCell, level, listed, selectModel } from "./buddies/page.testing";
 import { timelineOfRecords } from "./task-detail/task-detail.fixtures";
 import { macroTaskGroups, macroTaskSummary } from "./macro-task-fixtures";
 
 const bannerNotice = /新窗口已取得写权限，此页面现在是只读/;
 const actionRefusal = /浏览器授权已失效/;
 const saveRefusal = /浏览器授权已失效/;
+const preferenceNote = () => within(level("off")).getByRole("textbox", { name: "off 的偏好备注" }) as HTMLInputElement;
 
 /** Two model services and three execution buddies, all available. */
 function catalog(): Buddy[] {
@@ -29,6 +30,11 @@ function catalog(): Buddy[] {
 }
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const FLASH = "dsh / deepseek-official / deepseek-flash";
+
+async function selectFlashOff(user: ReturnType<typeof userEvent.setup>) {
+  await selectModel(user, FLASH, "DSH");
+  if (effortCell("off").getAttribute("aria-pressed") !== "true") await user.click(effortCell("off"));
+}
 
 function microTask(runId: string, task: string, extra: Partial<Task> = {}): Task {
   return { runId, task, state: "queued", owner: "worker:fixture", cwd: `/worktrees/${runId}`,
@@ -71,9 +77,8 @@ function fixture(options: {
     unavailableBuddyCount: 1,
 
     models: [{ modelId: "deepseek-flash", displayName: "deepseek-flash", names: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash" }], profile: null, latestProfileRun: null }],
-    modelNotes: [{ modelId: "deepseek-flash", text: "原人工意见", updatedAt: "2026-11-01T00:00:00Z" }],
     modelCorrespondences: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", correspondenceId: "flash-map", modelId: "deepseek-flash", createdAt: "2026-11-01T00:00:00Z", source: "same-name", evidenceUrl: null, evidenceDate: null, canUndo: false }],
-    preferences: [], decisions: [],
+    preferences: [{ buddyId: flashOff, mode: "prefer", note: "原人工意见" }], decisions: [],
     modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
@@ -106,7 +111,7 @@ function fixture(options: {
     }
     if (operation === "message_list") return { messages: [], cursor: 0 };
     if (operation === "buddy_list") {
-      return { buddies: [], models: [], modelNotes: [], modelCorrespondences: [], preferences: [], modelServiceConcurrency: [], nextCursor: null };
+      return { buddies: [], models: [], modelCorrespondences: [], preferences: [], modelServiceConcurrency: [], nextCursor: null };
     }
     if (operation === "selection_get") {
       return { decision: { decisionId: String(params.decisionId), status: "completed",
@@ -176,7 +181,7 @@ function envelope(consoleSession: unknown, include = true) {
     configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast", modelResponseWaitSeconds: 60, profileBuddyId: null },
 
-    buddies: [], models: [], modelNotes: [], modelCorrespondences: [], preferences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 },
+    buddies: [], models: [], modelCorrespondences: [], preferences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     csrfToken: "csrf", eventCursor: 0,
     ...(include ? { consoleSession } : {}),
   };
@@ -269,8 +274,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(screen.queryByText("只读会话")).toBeNull();
     expect(screen.queryByText(bannerNotice)).toBeNull();
     expect(document.querySelector(".readonly-banner")).toBeNull();
-    await selectModel(user, FLASH, "DSH");
-    const opinion = note();
+    await selectFlashOff(user);
+    const opinion = preferenceNote();
     await user.clear(opinion);
     await user.type(opinion, "未保存的本地草稿");
     expect(screen.getByText(/1 项未保存/)).toBeTruthy();
@@ -284,7 +289,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(screen.queryByText(bannerNotice)).toBeNull();
     expect(document.querySelector(".readonly-banner")).toBeNull();
     // Draft value survives and stays copyable.
-    const retained = note() as HTMLTextAreaElement;
+    const retained = preferenceNote();
     expect(retained.value).toBe("未保存的本地草稿");
     expect(retained.disabled).toBe(false);
     // Save is refused locally without a publish, a begin or a renew.
@@ -319,8 +324,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await listed(2, 3);
     expect(screen.queryByText(bannerNotice)).toBeNull();
     // A local draft may open before the session lapses.
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "登录失效前的草稿");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "登录失效前的草稿");
     // The next poll is a 401: the page stays browsable with the login-expired
     // banner and no single-writer copy anywhere.
     f.expireSession();
@@ -353,8 +358,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "结果不明");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "结果不明");
     await user.click(screen.getByRole("button", { name: "保存" }));
     // The lost publish reply is staged for a deliberate retry with the same id.
     expect(await screen.findByText(/保存结果未知/)).toBeTruthy();
@@ -368,7 +373,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await readSnapshotOnForeground(f.api.snapshot);
     expect(screen.queryByText(bannerNotice)).toBeNull();
     expect(await screen.findByText(/保存结果未知/)).toBeTruthy();
-    const retained = note() as HTMLTextAreaElement;
+    const retained = preferenceNote();
     expect(retained.value).toBe("原人工意见结果不明");
     expect(retained.disabled).toBe(false);
     expect(retained.readOnly).toBe(true);
@@ -388,8 +393,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "提交结果不明");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "提交结果不明");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByText(/保存结果未知/)).toBeTruthy();
     const commandId = f.published[0].commandId;
@@ -410,7 +415,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await new Promise(resolve => setTimeout(resolve, 900));
     expect(f.operations).toEqual(operations);
     expect(f.published).toHaveLength(2);
-    expect(note()).toHaveProperty("value", "原人工意见提交结果不明");
+    expect(preferenceNote()).toHaveProperty("value", "原人工意见提交结果不明");
   });
 
   it("treats a first publish that is definitely refused as a resolved rejection", async () => {
@@ -419,8 +424,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "首次被拒");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "首次被拒");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect((await screen.findAllByText(actionRefusal)).length).toBeGreaterThan(0);
     // No earlier attempt exists, so this is not an unknown result and the
@@ -438,11 +443,11 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "被拒绝的保存");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "被拒绝的保存");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect((await screen.findAllByText(actionRefusal)).length).toBeGreaterThan(0);
-    expect(note()).toHaveProperty("value", "原人工意见被拒绝的保存");
+    expect(preferenceNote()).toHaveProperty("value", "原人工意见被拒绝的保存");
     // A definite refusal is not retried: no begin replay, no renew, no abort.
     await new Promise(resolve => setTimeout(resolve, 900));
     expect(f.operations).toEqual(["user_policy_publish"]);
@@ -499,9 +504,9 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.operations.every(operation => ["selection_get", "selection_list", "buddy_list", "workflow_get", "message_list"].includes(operation))).toBe(true);
     await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /Buddy/ }));
     await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "断线草稿");
-    expect(note()).toHaveProperty("value", "原人工意见断线草稿");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "断线草稿");
+    expect(preferenceNote()).toHaveProperty("value", "原人工意见断线草稿");
     expect(screen.getByRole("button", { name: "保存" }).getAttribute("aria-disabled")).toBe("true");
   });
 
@@ -513,14 +518,14 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await listed(2, 3);
     // Let restored-history reads become reachable before checking the default fixture's gate.
     await act(async () => { await new Promise(resolve => setTimeout(resolve, FILTER_DEBOUNCE_MS + 50)); });
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "断线草稿");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "断线草稿");
     await readSnapshotOnForeground(f.api.snapshot);
     expect(await screen.findByText(/无法连接本地黑板/)).toBeTruthy();
     const save = screen.getByRole("button", { name: "保存" });
     expect(save.getAttribute("aria-disabled")).toBe("true");
     await user.click(save);
-    expect(note()).toHaveProperty("value", "原人工意见断线草稿");
+    expect(preferenceNote()).toHaveProperty("value", "原人工意见断线草稿");
     expect(f.operations).toEqual([]);
   });
 });

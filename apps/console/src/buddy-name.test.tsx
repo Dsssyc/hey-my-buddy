@@ -49,7 +49,7 @@ function catalogSnapshot(): Snapshot {
     buddies: [flashOff, proMax],
     preferences: [],
 
-    models: [], modelNotes: [], modelCorrespondences: [],
+    models: [], modelCorrespondences: [],
 
     decisions: [],
 

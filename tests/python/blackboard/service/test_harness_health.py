@@ -59,6 +59,16 @@ class HarnessHealthTests(BoardTestCase):
         self.native.assert_called_once()
         self.assertEqual(len(self.refreshed), 1)
 
+    def test_permission_verification_version_is_declared_not_probed(self):
+        self.assertIsNone(self.health.get('codex')['permissionsVerifiedVersion'])
+        self.assertEqual(self.health.get('dsh')['permissionsVerifiedVersion'], '0.2.2-rc.1')
+        self.health.refresh('codex', force=True)
+        self.assertIsNone(self.health.get('codex')['permissionsVerifiedVersion'])
+        self.discovered = {**self.discovered, 'harness': 'dsh', 'version': 'later-version'}
+        refreshed = self.health.refresh('dsh', force=True)
+        self.assertEqual(refreshed['version'], 'later-version')
+        self.assertEqual(refreshed['permissionsVerifiedVersion'], '0.2.2-rc.1')
+
     def test_health_lists_only_persisted_provider_cooling_rows(self):
         self.health.refresh('codex')
         with self.board.db.write() as db:

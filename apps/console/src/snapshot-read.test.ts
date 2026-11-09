@@ -3,9 +3,10 @@ import realSnapshot from "./fixtures/schema-37-snapshot.json";
 import { snapshotReadSchema } from "./types";
 
 // Reduced from the Host's private schema-37 service snapshot. Evaluation,
-// model and correspondence rows retain their real wire shape; credentials and
+// model and correspondence identities retain their recorded facts, projected
+// into the current read shape; credentials and
 // unrelated board facts are omitted. This fixture must not use preview builders.
-describe("schema-37 service snapshot", () => {
+describe("current projection of the schema-37 snapshot", () => {
   it("reads model-keyed kind evaluations without a legacy model name field", () => {
     expect(realSnapshot.kindEvaluations.length).toBeGreaterThan(0);
     expect(realSnapshot.kindEvaluations.every(row => !("model" in row))).toBe(true);

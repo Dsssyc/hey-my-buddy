@@ -15,7 +15,7 @@ const domainCell: EvaluationStatistics = {
 };
 const evaluation: KindEvaluationData = {
   harness: "codex", modelId: "sol-id", modelDisplayName: "GPT Sol",
-  modelNames: [{ harness: "codex", provider: "openai", model: "gpt-6-sol" }], effort: "high",
+  modelNames: [{ harness: "codex", provider: "openai", model: "gpt-6-sol" }], effort: "high", previousGroups: [],
   summary: { text: "善于边界明确的调试。", citations: [
     { runId: "micro-1", title: "修复解析错误", macroTaskId: "macro-1" },
     { runId: "root-2", title: null, macroTaskId: null },

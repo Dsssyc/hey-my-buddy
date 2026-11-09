@@ -68,10 +68,10 @@ type Options = { routerBuddyId?: string | null; preferences?: Preference[] };
  */
 function harnesses(): HarnessHealth[] {
   return [
-    { harness: "claude", status: "ready", revision: 2, manualPath: null,
+    { harness: "claude", status: "ready", revision: 2, manualPath: null, permissionsVerifiedVersion: null,
       executable: "/Users/fixture/.local/bin/claude", version: "2.0.1",
       source: "版本管理器（nvm 默认版本）", checkedAt: "2026-09-28T09:30:00.000Z", candidates: [] },
-    { harness: "zcode", status: "missing", revision: 1, manualPath: null,
+    { harness: "zcode", status: "missing", revision: 1, manualPath: null, permissionsVerifiedVersion: null,
       reason: { code: "harness.not-found", params: {} },
       checkedAt: "2026-09-28T09:30:00.000Z",
       candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing" }] },
@@ -90,7 +90,7 @@ function snapshot(options: Options = {}): HarnessSnapshot {
     buddies: buddies(),
     preferences: options.preferences ?? [],
 
-    models: [], modelNotes: [], modelCorrespondences: [],
+    models: [], modelCorrespondences: [],
 
     decisions: [],
 
@@ -110,7 +110,6 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
     ...state,
 
     preferences: [...state.preferences],
-    modelNotes: [...state.modelNotes],
     configuration: state.configuration ? { ...state.configuration, ...(params.configuration ?? {}) } : null,
   };
   for (const setting of params.buddySettings ?? []) {
@@ -121,10 +120,6 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
     if (change.mode !== null) {
       next.preferences.push({ buddyId: change.buddyId, mode: change.mode, note: change.note });
     }
-  }
-  for (const change of params.modelNoteChanges ?? []) {
-    next.modelNotes = next.modelNotes.filter(entry => entry.modelId !== change.modelId);
-    next.modelNotes.push({ ...change, updatedAt: "2026-11-07T00:00:00Z" });
   }
   return next;
 }
@@ -139,7 +134,7 @@ function fixture(options: Options = {}) {
     if (operation === "buddy_list") {
       // Only a checked 显示不可用 asks for this page; it mirrors the board's
       // bounded contract and just returns the current rows.
-      return { buddies: state.buddies, models: state.models, modelNotes: state.modelNotes,
+      return { buddies: state.buddies, models: state.models,
         modelCorrespondences: state.modelCorrespondences,
         preferences: state.preferences,
         modelServiceConcurrency: state.modelServiceConcurrency, nextCursor: null };

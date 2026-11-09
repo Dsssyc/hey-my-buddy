@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import type { ConsoleApi, HarnessHealth } from "../api";
 import type { Buddy, Snapshot } from "../types";
-import { effortCell, level, listed, modelButton, note, pane, queryModel, search, selectModel } from "./page.testing";
+import { choosePreference, effortCell, level, levelPreference, listed, modelButton, pane, queryModel, search, selectModel } from "./page.testing";
 import { modelServiceKey } from "../console-data";
 
 /**
@@ -59,18 +59,18 @@ function buddies(): Buddy[] {
 /** Codex lacks local review eligibility; DSH carries a provider cooldown. */
 function harnesses(): HarnessHealth[] {
   return [
-    { harness: "claude", status: "ready", revision: 2, manualPath: null,
+    { harness: "claude", status: "ready", revision: 2, manualPath: null, permissionsVerifiedVersion: null,
       executable: "/usr/local/bin/claude", version: "2.0.1", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [] },
-    { harness: "codex", status: "ready", revision: 2, manualPath: null,
+    { harness: "codex", status: "ready", revision: 2, manualPath: null, permissionsVerifiedVersion: null,
       executable: "/opt/bin/codex", version: "0.159.0", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
       permissions: { write: "enforced" } },
-    { harness: "dsh", status: "ready", revision: 3, manualPath: null,
+    { harness: "dsh", status: "ready", revision: 3, manualPath: null, permissionsVerifiedVersion: null,
       executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
       providers: [{ provider: "deepseek-official", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 1 }] },
-    { harness: "zcode", status: "missing", revision: 1, manualPath: null,
+    { harness: "zcode", status: "missing", revision: 1, manualPath: null, permissionsVerifiedVersion: null,
       reason: { code: "harness.not-found", params: { operation: "probe" } },
       checkedAt: CHECKED_AT, candidates: [] },
   ];
@@ -86,7 +86,7 @@ function snapshot(routerBuddyId: string | null = solMediumId): SnapshotWithHarne
     configuration: { explorationEvery: 5, routerBuddyIds: routerBuddyId ? [routerBuddyId] : [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: buddies(),
-    preferences: [], models: [], modelNotes: [], modelCorrespondences: [],
+    preferences: [], models: [], modelCorrespondences: [],
     decisions: [],
     modelServiceConcurrency: [
       { ...sonnet, limit: 2, active: 0 }, { ...sol, limit: 2, active: 0 },
@@ -104,7 +104,7 @@ function fixture(routerBuddyId: string | null = solMediumId, extra: Partial<Snap
     if (operation === "buddy_list") {
       // Only the checked 显示不可用 asks for this page; the fixture keeps
       // every recorded row on one bounded page.
-      return { buddies: state.buddies, models: state.models, modelNotes: state.modelNotes,
+      return { buddies: state.buddies, models: state.models,
         modelCorrespondences: state.modelCorrespondences,
         preferences: state.preferences,
         modelServiceConcurrency: state.modelServiceConcurrency, nextCursor: null };
@@ -168,7 +168,7 @@ describe("the Buddy page's sections and tables", () => {
     await user.type(search(), "gpt");
     await listed(1, 1);
     await selectModel(user, SOL, "Codex");
-    await user.type(note(), "分区间保留");
+    await choosePreference(user, "medium", "优先");
     expect(screen.getByText("1 项未保存")).toBeTruthy();
 
     await user.click(sectionLink(/^角色/));
@@ -177,7 +177,7 @@ describe("the Buddy page's sections and tables", () => {
     expect(search()).toHaveProperty("value", "gpt");
     await listed(1, 1);
     expect(pane(SOL)).toBeTruthy();
-    expect(note()).toHaveProperty("value", "分区间保留");
+    expect(within(levelPreference("medium")).getByRole("radio", { name: "优先" }).getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText("1 项未保存")).toBeTruthy();
   });
 });
@@ -336,14 +336,14 @@ describe("a narrow viewport", () => {
     renderBuddy("#buddies", f);
     await listed(3, 4);
     await selectModel(user, SONNET, "Claude Code");
-    await user.type(note(), "窄屏草稿");
+    await choosePreference(user, "medium", "优先");
     expect(within(sectionsNav()).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["目录", "角色"]);
     await user.click(sectionLink(/^角色/));
     await screen.findByRole("region", { name: "角色" });
     await user.click(sectionLink(/^目录/));
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
     expect(pane(SONNET)).toBeTruthy();
-    expect(note()).toHaveProperty("value", "窄屏草稿");
+    expect(within(levelPreference("medium")).getByRole("radio", { name: "优先" }).getAttribute("aria-checked")).toBe("true");
     // Once a row is opened, the side column offers the way back to the table.
     expect(modelButton(SONNET).getAttribute("aria-expanded")).toBe("true");
     expect(within(pane()).queryByRole("button", { name: "模型" })).toBeNull();

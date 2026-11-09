@@ -21,6 +21,15 @@ PERMISSION_LEVELS = {
     "zcode": {"none": "enforced", "read": "convention", "write": "convention", "full": "enforced"},
 }
 
+#: Versions on which the ADR-023 clause 10 permission behavior was verified.
+#: An unknown version records missing verification, not unsupported permissions.
+PERMISSIONS_VERIFIED_VERSIONS: dict[str, str | None] = {
+    "codex": None,
+    "claude": None,
+    "dsh": "0.2.2-rc.1",
+    "zcode": None,
+}
+
 #: The fixed sentence every unknown input-limit declaration carries: no numeric
 #: value was obtained for the channel, which is never a claim that none exists.
 UNKNOWN_INPUT_LIMIT_NOTE = ("no numeric input limit was obtained for this channel; "

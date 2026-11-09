@@ -3,7 +3,6 @@ import {
   makeDraft,
   publication,
   setConcurrencyLimit,
-  setModelNote as setNote,
   setPreference,
 } from "./draft";
 import {
@@ -61,7 +60,7 @@ function snapshot(buddies: Buddy[] = [worker], extra: Partial<Snapshot> = {}): S
     buddies,
     preferences: [],
 
-    models: [], modelNotes: [], modelCorrespondences: [],
+    models: [], modelCorrespondences: [],
     evidence: [],
     decisions: [],
 
@@ -170,23 +169,6 @@ describe("blocking new changes", () => {
     expect(issues[0].message).toContain("无法启用");
   });
 
-  it("allows disabling an unavailable buddy and editing its model service note", () => {
-    const enabledRetired = { ...retired, enabled: true };
-    const baseline = makeDraft(snapshot([worker, enabledRetired], {
-      preferences: [{ buddyId: retired.buddyId, mode: "pin", note: "以前固定" }],
-    }));
-    let draft = {
-      ...baseline,
-      buddies: baseline.buddies.map(p => p.buddyId === retired.buddyId ? { ...p, enabled: false } : p),
-    };
-    draft = setNote(draft, retired.model, "保留经验");
-    expect(blockingIssues(baseline, draft)).toEqual([]);
-    const patch = publication(baseline, draft, "c");
-    expect(patch.buddySettings).toEqual([{ buddyId: retired.buddyId, enabled: false }]);
-    expect(patch.modelNoteChanges).toEqual([
-      { modelId: "retired-model", text: "保留经验" },
-    ]);
-  });
 
   it("blocks a new pin for an unavailable buddy but allows prefer or exclude", () => {
     const baseline = makeDraft(snapshot([worker, retired]));
@@ -252,22 +234,6 @@ describe("blocking new changes", () => {
 });
 
 describe("stale settings needing attention", () => {
-  it("reports a stale Router with its resolving action without blocking an unrelated note", () => {
-    const baseline = makeDraft(snapshot([worker, retired], {
-      configuration: { explorationEvery: 5, routerBuddyIds: [retired.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
-    }));
-    const attention = decisionAttention(baseline)!;
-    expect(attention.router).toBe(true);
-    expect(attention.message).toContain("设为 Router");
-    expect(blockingIssues(baseline, baseline)).toEqual([]);
-    const withNote = setNote(baseline, worker.model, "只改备注");
-    expect(blockingIssues(baseline, withNote)).toEqual([]);
-    const patch = publication(baseline, withNote, "c");
-    expect(patch).not.toHaveProperty("configuration");
-    expect(patch.modelNoteChanges).toEqual([
-      { modelId: "deepseek-flash", text: "只改备注" },
-    ]);
-  });
 
   it("reports a stale buddy pin while leaving other patches untouched", () => {
     const baseline = makeDraft(snapshot([worker, retired], {

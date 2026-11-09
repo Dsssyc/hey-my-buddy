@@ -45,17 +45,17 @@ const account = (harness: string) => ({
   harness, status: "ready", accountType: null, checkedAt: AT,
 });
 const harnesses = [
-  { harness: "dsh", status: "ready", revision: 1, manualPath: null, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: AT, candidates: [],
+  { harness: "dsh", permissionsVerifiedVersion: "0.2.2-rc.1", status: "ready", revision: 1, manualPath: null, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: AT, candidates: [],
     account: account("dsh"), billingByProvider: { "deepseek-official": { kind: "metered", source: "native", observedAt: AT } },
     providers: [{ provider: "deepseek-official", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 1 }] },
-  { harness: "codex", status: "ready", revision: 2, manualPath: null, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: AT, candidates: [],
+  { harness: "codex", permissionsVerifiedVersion: null, status: "ready", revision: 2, manualPath: null, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: AT, candidates: [],
     account: account("codex"),
     permissions: { write: "enforced" },
     providers: [{ provider: "openai", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 2 }] },
-  { harness: "claude", status: "login-required", revision: 3, manualPath: "/home/user/bin/claude", source: "manual", checkedAt: AT,
+  { harness: "claude", permissionsVerifiedVersion: null, status: "login-required", revision: 3, manualPath: "/home/user/bin/claude", source: "manual", checkedAt: AT,
     reason: { code: "harness.login-required", params: { operation: "probe" } },
     candidates: [{ path: "/home/user/bin/claude", source: "manual", status: "failed", reason: { code: "harness.probe-failed", params: { operation: "probe" } } }] },
-  { harness: "zcode", status: "missing", revision: 1, manualPath: null, checkedAt: AT,
+  { harness: "zcode", permissionsVerifiedVersion: null, status: "missing", revision: 1, manualPath: null, checkedAt: AT,
     reason: { code: "harness.not-found", params: { operation: "probe" } },
     candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing", reason: { code: "harness.not-found", params: { operation: "probe" } } }] },
 ] as unknown as HarnessHealth[];
@@ -77,7 +77,7 @@ function world(sessionPresent = true) {
   return fixture(snapshot({
     routers: [buddies[0].buddyId], sessionPresent,
     routingHealth: health({ consecutiveFailures: 2, failureCount: 3, abstentionCount: 1, boundsRejectedCount: 1,
-      recentFailures: [{ decisionId: "decision-1", runId: "run-1", at: AT, code: "routing-bounds-rejected" }] }),
+      recentFailures: [{ decisionId: "decision-1", runId: "run-1", title: "Review the routing result", at: AT, code: "routing-bounds-rejected" }] }),
     extra: { buddies, modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }], harnesses, unavailableBuddyCount: 3 },
   }));
 }
@@ -115,6 +115,8 @@ describe("the catalogue in English", () => {
       }
     }
     // The model's own settings and the buddy's: an edit raises the save bar, with its marks.
+    const editableModel = within(catalog).getByRole("button", { name: "dsh / deepseek-official / deepseek-flash" });
+    if (editableModel.getAttribute("aria-expanded") !== "true") await user.click(editableModel);
     await user.click(within(document.querySelector<HTMLElement>("[data-slot=model-drawer]")!).getAllByRole("switch")[0]);
     expect(screen.getByRole("region", { name: "Unsaved changes" })).toBeTruthy();
     expect(chinese()).toEqual([]);

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { ApiError, errorText, validPreferences } from "./api";
 import { isModelServiceConcurrencyEntry, modelServiceKey } from "./console-data";
-import { modelSchema, modelNoteSchema, modelCorrespondenceSchema } from "./types";
+import { modelSchema, modelCorrespondenceSchema } from "./types";
 import type { ModelService, BuddyPage, Snapshot } from "./types";
 
 /** One bounded page of retained identities, including unavailable history. */
@@ -28,8 +28,6 @@ function parseBuddyPage(value: unknown): BuddyPage {
     && validPreferences(page.preferences)
     && Array.isArray(page.models)
     && page.models.every(row => modelSchema.safeParse(row).success)
-    && Array.isArray(page.modelNotes)
-    && page.modelNotes.every(row => modelNoteSchema.safeParse(row).success)
     && Array.isArray(page.modelCorrespondences)
     && page.modelCorrespondences.every(row => modelCorrespondenceSchema.safeParse(row).success)
     && Array.isArray(page.modelServiceConcurrency)
@@ -88,7 +86,6 @@ export function mergePage(previous: BuddyPage | null, next: BuddyPage): BuddyPag
     buddies: addMissing(previous.buddies, next.buddies),
     preferences: addMissing(previous.preferences, next.preferences),
     models: addMissingModels(previous.models, next.models),
-    modelNotes: addMissingModels(previous.modelNotes, next.modelNotes),
     modelCorrespondences: addMissingModelServices(previous.modelCorrespondences, next.modelCorrespondences),
     modelServiceConcurrency: addMissingModelServices(previous.modelServiceConcurrency, next.modelServiceConcurrency),
     nextCursor: next.nextCursor,
@@ -113,7 +110,6 @@ export function historySourceKey(snapshot: Snapshot): string {
     buddies: snapshot.buddies.map(({ buddyId, available, enabled }) => [buddyId, available, enabled]),
     preferences: snapshot.preferences,
     models: snapshot.models,
-    modelNotes: snapshot.modelNotes,
     modelCorrespondences: snapshot.modelCorrespondences,
     modelServiceConcurrency: snapshot.modelServiceConcurrency.map(({ harness, provider, model, limit }) => [harness, provider, model, limit]),
     configuration: snapshot.configuration,

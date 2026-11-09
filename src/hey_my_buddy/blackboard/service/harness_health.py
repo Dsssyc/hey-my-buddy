@@ -52,7 +52,7 @@ def _name(name):
 
 
 def read_health(connection, harness):
-    from ...protocol.capabilities import PERMISSION_LEVELS
+    from ...protocol.capabilities import PERMISSION_LEVELS, PERMISSIONS_VERIFIED_VERSIONS
     from ..catalog.accounts import view as account_view
     permissions = dict(PERMISSION_LEVELS[harness])
     account = account_view(connection, harness)
@@ -60,7 +60,8 @@ def read_health(connection, harness):
     if row is None:
         record = {'harness': harness, 'status': 'unknown', 'revision': 0,
                 'manualPath': None, 'reason': _not_checked()}
-        return {**record, 'providers': [], 'account': account, 'permissions': permissions}
+        return {**record, 'providers': [], 'account': account, 'permissions': permissions,
+                'permissionsVerifiedVersion': PERMISSIONS_VERIFIED_VERSIONS[harness]}
     from ..routing.quota_routing import providers
     record = json.loads(row['record_json'])
     billing = record.get('billingByProvider') or {}
@@ -75,7 +76,8 @@ def read_health(connection, harness):
     record = {**record, "billingByProvider": billing, "providers": providers(connection, harness), 'harness': harness,
             'status': status, 'account': account, 'revision': row['revision'], 'manualPath': row['manual_path'],
             'checkedAt': row['checked_at'], 'expiresAt': row['expires_at'], 'scanAfter': row['scan_after']}
-    return {**record, 'permissions': permissions}
+    return {**record, 'permissions': permissions,
+            'permissionsVerifiedVersion': PERMISSIONS_VERIFIED_VERSIONS[harness]}
 
 
 class HarnessHealth:

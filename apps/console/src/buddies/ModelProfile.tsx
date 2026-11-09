@@ -1,5 +1,5 @@
 import i18n from "i18next";
-import { useId, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { UnsavedMark } from "@/components/ui/state-mark";
 import { ApiError, errorText } from "../api";
 import type { ConsoleApi } from "../api";
 import { modelServiceKey } from "../console-data";
-import { modelNoteText, setModelNote, stageModelCorrespondence } from "../draft";
+import { stageModelCorrespondence } from "../draft";
 import { formatDateTime, formatNumber, formatDuration } from "../i18n/format";
 import { reasonText } from "../i18n/reason";
 import { useCopyState } from "../i18n/use-copy-state";
@@ -69,7 +69,6 @@ export function ModelProfile({ modelId, snapshot, data, editor, api, refresh, mu
   refresh?: () => Promise<Snapshot | null>; mutationsAvailable: boolean;
 }) {
   const { t } = useTranslation("buddies");
-  const id = useId();
   const [busy, setBusy] = useState(false), [note, setNote] = useCopyState(), [error, setError] = useCopyState();
   const model = data.models.find(row => row.modelId === modelId)!;
   const profile = model.profile, run = model.latestProfileRun;
@@ -78,7 +77,6 @@ export function ModelProfile({ modelId, snapshot, data, editor, api, refresh, mu
   const dirty = editor.changeCount > 0;
   const locked = !editor.sessionWritable || !editor.editing;
   const actionLocked = !api || !refresh || locked || !mutationsAvailable || busy || dirty || !!unavailable || !buddy || run?.state === "running";
-  const text = modelNoteText(data, modelId);
   async function build() {
     if (actionLocked || !api || !refresh) return;
     setBusy(true); editor.setAuxiliaryBusy(true); setNote(""); setError("");
@@ -137,12 +135,6 @@ export function ModelProfile({ modelId, snapshot, data, editor, api, refresh, mu
           </li>)}
         </ul>}
     </div>}
-    <div className="space-y-2">
-      <label htmlFor={`${id}-note`} className="flex items-center gap-2 font-medium text-ink2">{t("modelProfile.note")}{text !== modelNoteText(snapshot, modelId) && <UnsavedMark label={t("unsaved")} />}</label>
-      <textarea id={`${id}-note`} rows={3} maxLength={4000} value={text} readOnly={locked} aria-disabled={locked || undefined}
-        className="w-full resize-y rounded-md border border-input bg-card px-2.5 py-1.5 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-        onChange={event => { if (!locked) editor.update(draft => setModelNote(draft, modelId, event.target.value)); }} />
-    </div>
     <div><h3 className="text-xs font-medium text-ink2">{t("modelProfile.correspondences")}</h3>
       <ul className="divide-y divide-line">{data.modelCorrespondences.filter(entry => entry.modelId === modelId).map(entry => <Correspondence key={entry.correspondenceId} entry={entry} data={data} editor={editor} />)}</ul>
     </div>

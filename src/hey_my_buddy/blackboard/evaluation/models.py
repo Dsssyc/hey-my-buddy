@@ -59,15 +59,6 @@ def model_view(connection, model_id):
     return {'modelId': model_id, 'displayName': row[0], 'names': names}
 
 
-def catalog_view(connection, buddy_ids):
-    marks = ','.join('?' for _ in buddy_ids) or 'NULL'
-    model_ids = [row[0] for row in connection.execute(
-        'SELECT DISTINCT m.model_id FROM (' + CURRENT_CORRESPONDENCES + ') m JOIN buddies b'
-        ' ON b.harness=m.harness AND b.provider=m.provider AND b.model=m.model'
-        f' WHERE b.buddy_id IN ({marks}) ORDER BY m.model_id', buddy_ids)]
-    return [model_view(connection, model_id) for model_id in model_ids]
-
-
 def correspondence_view(connection, buddy_ids):
     marks = ','.join('?' for _ in buddy_ids) or 'NULL'
     return [{**{field: row[field] for field in SERVICE_FIELDS},

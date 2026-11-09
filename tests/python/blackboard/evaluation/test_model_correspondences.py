@@ -77,7 +77,7 @@ class ModelCorrespondenceTests(WorkflowTestCase):
             {key: buddy[key] for key in ('harness', 'provider', 'model')}
             for buddy in sorted((first, newcomer), key=lambda value: value['provider'])])
 
-    def test_console_generation_undo_remap_and_model_notes(self):
+    def test_console_generation_undo_and_remap(self):
         first = BUDDY
         other = {**first, "provider": "another-provider", "model": "another-name"}
         for buddy in (first, other):
@@ -90,13 +90,9 @@ class ModelCorrespondenceTests(WorkflowTestCase):
         }])
         generated = self.model_id(first)
         self.assertNotIn(generated, (original, other_id))
-        self.publish("annotate", modelNoteChanges=[{"modelId": generated, "text": "New generation observed"}])
         snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(next(model for model in snapshot["models"] if model["modelId"] == generated)["displayName"],
                          "Second generation")
-        self.assertEqual([(note["modelId"], note["text"]) for note in snapshot["modelNotes"]],
-                         [(generated, "New generation observed")])
-        self.assertTrue(snapshot["modelNotes"][0]["updatedAt"])
         shown = next(correspondence for correspondence in snapshot["modelCorrespondences"]
                      if correspondence["model"] == first["model"])
         self.assertEqual(shown["modelId"], generated)
@@ -110,9 +106,7 @@ class ModelCorrespondenceTests(WorkflowTestCase):
                 "SELECT model_id,source FROM model_correspondences WHERE harness=? AND provider=? AND model=? ORDER BY rowid",
                 tuple(service.values()),
             ))
-            # Undo removed the generation change; the note keeps its model alive
-            # with no remaining name of its own.
-            self.assertEqual(model_view(db, generated)["names"], [])
+            self.assertIsNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
         self.assertEqual([(row["model_id"], row["source"]) for row in history], [
             (original, "same-name"), (other_id, "user"),
         ])
@@ -228,54 +222,6 @@ class ModelCorrespondenceTests(WorkflowTestCase):
                     # The map in the same save keeps the model, in either order.
                     self.assertIsNotNone(db.execute(
                         "SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
-
-    def test_one_save_applies_undo_and_note_changes_in_one_deletion_check(self):
-        first = BUDDY
-        enable_fixture_buddy(self.board_.store, first)
-        service = {key: first[key] for key in ("harness", "provider", "model")}
-        original = self.model_id(first)
-        self.publish("generation", modelCorrespondenceChanges=[{
-            **service, "action": "generation", "displayName": "Noted generation",
-        }])
-        generated = self.model_id(first)
-        # A note written in the same save as the undo keeps the model: the
-        # deletion check runs only after every change of the save.
-        self.publish("undo-with-note", modelCorrespondenceChanges=[{
-            **service, "action": "undo", "correspondenceId": self.shown_correspondence(service)["correspondenceId"]}],
-            modelNoteChanges=[{"modelId": generated, "text": "Kept by the note"}])
-        self.assertEqual(self.model_id(first), original)
-        with self.board_.store.db.read() as db:
-            self.assertIsNotNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
-        # Remarking the generation and clearing the note in one save removes it.
-        self.publish("remap", modelCorrespondenceChanges=[{**service, "action": "map", "modelId": generated}])
-        self.publish("undo-with-cleared-note", modelCorrespondenceChanges=[{
-            **service, "action": "undo", "correspondenceId": self.shown_correspondence(service)["correspondenceId"]}],
-            modelNoteChanges=[{"modelId": generated, "text": ""}])
-        self.assertEqual(self.model_id(first), original)
-        with self.board_.store.db.read() as db:
-            self.assertIsNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
-
-    def test_clearing_the_last_note_of_an_unreferenced_model_deletes_it(self):
-        first = BUDDY
-        enable_fixture_buddy(self.board_.store, first)
-        service = {key: first[key] for key in ("harness", "provider", "model")}
-        original = self.model_id(first)
-        self.publish("generation", modelCorrespondenceChanges=[{
-            **service, "action": "generation", "displayName": "Noted generation",
-        }])
-        generated = self.model_id(first)
-        self.publish("annotate", modelNoteChanges=[{"modelId": generated, "text": "Only reference left"}])
-        self.publish("undo", modelCorrespondenceChanges=[{
-            **service, "action": "undo", "correspondenceId": self.shown_correspondence(service)["correspondenceId"]}])
-        self.assertEqual(self.model_id(first), original)
-        with self.board_.store.db.read() as db:
-            self.assertIsNotNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
-        # A later save that only clears the note takes the last reference with it.
-        self.publish("clear-note", modelNoteChanges=[{"modelId": generated, "text": ""}])
-        with self.board_.store.db.read() as db:
-            self.assertIsNone(db.execute("SELECT 1 FROM models WHERE model_id=?", (generated,)).fetchone())
-        snapshot = console_snapshot_projection(self.board_.service)[0]
-        self.assertNotIn(generated, {model["modelId"] for model in snapshot["models"]})
 
     def test_undo_keeps_a_model_an_execution_or_statistics_still_references(self):
         first = BUDDY

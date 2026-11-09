@@ -8,7 +8,7 @@ import type { Buddy, Snapshot, Task } from "./types";
 import { timelineOfRecords } from "./task-detail/task-detail.fixtures";
 import { macroTaskGroups, macroTaskSummary } from "./macro-task-fixtures";
 import { modelFacts } from "./buddies/model-fixtures";
-import { catalogue, effortCell, levelSwitch, listed, modelButton, note, pane, selectModel } from "./buddies/page.testing";
+import { catalogue, effortCell, levelSwitch, listed, modelButton, pane, selectModel } from "./buddies/page.testing";
 
 const dsh = (model: string) => `dsh / deepseek-official / ${model}`;
 const GLM = "zcode / bigmodel-api / GLM-5.3";
@@ -55,7 +55,7 @@ function fixture(records: Task[] = []) {
 
     configuration: { explorationEvery: 5, routerBuddyIds: [buddies[0].buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
-    preferences: [], ...modelFacts(buddies), modelNotes: [], decisions: [],
+    preferences: [], ...modelFacts(buddies), decisions: [],
     modelServiceConcurrency: [],
     tasks: { pendingCount },
     capabilities: { selection: false } };
@@ -156,34 +156,6 @@ describe("desktop console", () => {
     expect(f.command).not.toHaveBeenCalled();
   });
 
-  it("keeps one note draft per model across rows and main pages without a lease", async () => {
-    const f = fixture();
-    window.location.hash = "#buddies";
-    const user = userEvent.setup();
-    render(<App suppliedApi={f.api} />);
-    await listed(4, 22);
-    await selectModel(user, dsh("deepseek-flash"), "DSH");
-    await user.type(note(), "flash 的备注");
-    await user.click(modelButton(dsh("deepseek-v4-pro")));
-    expect(note()).toHaveProperty("value", "");
-    await user.type(note(), "pro 的备注");
-    await user.click(modelButton(GLM));
-    expect(note()).toHaveProperty("value", "");
-    await user.type(note(), "ZCode 的备注");
-    await user.click(screen.getByRole("link", { name: "设置" }));
-    expect(screen.queryByRole("textbox", { name: "备注" })).toBeNull();
-    await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /Buddy/ }));
-    expect(note()).toHaveProperty("value", "ZCode 的备注");
-    await user.click(modelButton(dsh("deepseek-flash")));
-    expect(note()).toHaveProperty("value", "flash 的备注");
-    await user.click(modelButton(dsh("deepseek-v4-pro")));
-    expect(note()).toHaveProperty("value", "pro 的备注");
-    // Snapshot polling keeps the draft without publishing it.
-    await waitFor(() => expect((f.api.snapshot as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1), { timeout: 4500 });
-    expect(note()).toHaveProperty("value", "pro 的备注");
-    await user.click(await screen.findByRole("button", { name: "放弃" }));
-    expect(f.command).not.toHaveBeenCalled();
-  });
 
   it("opens a micro task from its macro task and keeps its detail read-only across pages", async () => {
     const record = microTask("one");

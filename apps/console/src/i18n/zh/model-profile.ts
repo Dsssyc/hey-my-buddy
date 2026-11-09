@@ -4,7 +4,7 @@ export default {
   title: "模型画像", strength: "擅长", weakness: "不擅长", notBuilt: "尚未构建画像", build: "构建画像", rebuild: "重建画像",
   quota: "{{name}} 将联网构建画像，会使用它的额度。", noBuddy: "请先在角色页选择画像 buddy。", saveFirst: "先保存或放弃修改，再构建画像。",
   started: "画像已在运行，由 {{name}} 承担。", invalidReply: "画像操作的回复格式不正确", readFailed: "操作已回复，重新读取失败，请刷新查看运行记录。",
-  latestRun: "最近一次画像运行", corrections: "打回 {{n}} 轮", usage: "用量", note: "模型备注", correspondences: "模型的对应关系",
+  latestRun: "最近一次画像运行", corrections: "打回 {{n}} 轮", usage: "用量", correspondences: "模型的对应关系",
   source: { "same-name": "同名归一", profile: "画像面的建议", user: "用户" }, claimSource: { vendor: "厂商自述", "third-party": "第三方" },
   state: { running: "运行中", completed: "已完成", failed: "失败" },
   map: "对应到已有模型", generation: "标出换代", apply: "记入修改", undo: "撤回最近一次改动",

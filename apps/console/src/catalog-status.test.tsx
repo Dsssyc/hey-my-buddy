@@ -68,7 +68,7 @@ function fixture() {
       defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: live,
     unavailableBuddyCount: buddies.filter(p => !p.available).length,
- models: [], modelNotes: [], modelCorrespondences: [], preferences: [],  decisions: [],
+ models: [], modelCorrespondences: [], preferences: [],  decisions: [],
 
     modelServiceConcurrency: [],
     tasks: { pendingCount: 0 },
@@ -85,7 +85,7 @@ function fixture() {
       const slice = [...visible].sort((a, b) => a.buddyId.localeCompare(b.buddyId))
         .filter(p => p.buddyId > after).slice(0, limit);
       const page: BuddyPage = {
-        buddies: slice, preferences: [],         models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [],
+        buddies: slice, preferences: [],         models: [], modelCorrespondences: [], modelServiceConcurrency: [],
         nextCursor: null,
       };
       return page;

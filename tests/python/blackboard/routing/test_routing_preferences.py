@@ -22,7 +22,6 @@ from hey_my_buddy.install.runtime import resource_path
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_decision import DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY, SECOND_BUDDY_ID, THIRD_BUDDY, THIRD_BUDDY_ID
 from blackboard.evaluation.test_evaluation import model_service_key
-from hey_my_buddy.blackboard.evaluation.models import current_model
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 
 NONCE = "n" * 16
@@ -182,17 +181,6 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         self.catalog_fixture()
         self.use_helper()
 
-    @staticmethod
-    def annotations(board):
-        catalog = board.call("model_catalog_refresh", {"requestId": "annotations-catalog"})
-        with board.store.db.read() as db:
-            model_id = current_model(db, CATALOG_BUDDY["harness"], CATALOG_BUDDY["provider"],
-                                     CATALOG_BUDDY["model"])
-        board.console_call("user_policy_publish", {
-            "commandId": "annotations-publish",
-            "modelNoteChanges": [{"modelId": model_id, "text": "Human preference for this workflow"}],
-        })
-
     def routed(self, board, *, request_id, **extra):
         return self.submit(board, request_id=request_id,
                            task="Implement and verify the requested change",
@@ -201,7 +189,6 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
 
     def test_submit_rejects_the_retired_preference_and_mode_entries(self):
         board = self.board()
-        self.annotations(board)
         self.seed(board)
         for key, value in (
             ("routingPreferences", [{"match": {"provider": "not-current"}, "reason": "Try this provider"}]),
@@ -248,7 +235,6 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
 
     def test_router_input_and_views_no_longer_carry_preferences(self):
         board = self.board()
-        self.annotations(board)
         self.seed(board)
         view = self.routed(board, request_id="route-plain")
         self.assertEqual(view["routing"]["status"], "queued")
@@ -259,12 +245,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         document = owned["claim"]["decisionInput"]
         self.assertNotIn("routingPreferences", document)
         self.assertNotIn("taskPreference", document["policyFacts"])
-        note = document["annotations"][0]
-        with board.store.db.read() as db:
-            model_id = current_model(db, CATALOG_BUDDY["harness"], CATALOG_BUDDY["provider"],
-                                     CATALOG_BUDDY["model"])
-        self.assertEqual({key: note[key] for key in ("modelId", "text")},
-                         {"modelId": model_id, "text": "Human preference for this workflow"})
+        self.assertNotIn("annotations", document)
         board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim'], state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["source"], "model-selection")
@@ -279,7 +260,6 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
 
     def test_permission_capability_and_user_alternative_are_audited(self):
         board = self.board()
-        self.annotations(board)
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY),
                   preferences=[{"buddyId": THIRD_BUDDY_ID, "mode": "prefer", "note": "prefer flash-high"}])
         view = self.routed(board, request_id="route-caps")
@@ -299,7 +279,6 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
 
     def test_helper_approval_rejects_the_inheritance_flag(self):
         board = self.board()
-        self.annotations(board)
         self.seed(board)
         parent = self.submit(board)
         self.register(board)
@@ -332,7 +311,6 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
 
     def test_host_override_requires_reason_and_records_no_preferences(self):
         board = self.board()
-        self.annotations(board)
         view = self.routed(board, request_id="route-override")
         self.assertEqual(view["routing"]["status"], "needs-host")
         # The shared fixture helper supplies a default reason for explicit

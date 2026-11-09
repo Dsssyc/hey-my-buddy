@@ -5,9 +5,8 @@ from ...protocol import schemas
 from ...errors import BoardError
 from . import models
 
-PATCH_FIELDS = frozenset({'buddySettings', 'preferenceChanges', 'modelNoteChanges', 'modelCorrespondenceChanges',
+PATCH_FIELDS = frozenset({'buddySettings', 'preferenceChanges', 'modelCorrespondenceChanges',
                           'configuration', 'modelServiceConcurrency'})
-MODEL_SERVICE_FIELDS = ('harness', 'provider', 'model')
 
 #: The per-model-service limit a user may set, and the fields one patch entry accepts.
 #: ``active`` and every other derived field are rejected: occupancy is observation,
@@ -47,11 +46,10 @@ def require_console() -> None:
 
 
 def policy_view(connection, buddy_ids: list[str]) -> dict:
-    """User-owned buddy preferences and model annotations for the console."""
+    """User-owned buddy preferences and model correspondences for the console."""
     from ..routing.profile_data import console_model_view
     return {
         'preferences': preferences(connection, buddy_ids),
-        'modelNotes': model_notes(connection),
         'models': [console_model_view(connection, row[0]) for row in connection.execute(
             'SELECT model_id FROM models ORDER BY display_name,model_id')],
         'modelCorrespondences': models.correspondence_view(connection, buddy_ids),
@@ -63,15 +61,6 @@ def preferences(connection, buddy_ids: list[str]) -> list[dict]:
     return [{'buddyId': row['buddy_id'], 'mode': row['mode'], 'note': row['note']}
             for row in connection.execute(f'SELECT * FROM evaluation_preferences WHERE buddy_id IN ({marks})'
                                           ' ORDER BY buddy_id', buddy_ids)]
-
-
-def model_notes(connection, buddy_ids: list[str] | None = None) -> list[dict]:
-    model_ids = ([value['modelId'] for value in models.catalog_view(connection, buddy_ids)]
-                 if buddy_ids is not None else [row[0] for row in connection.execute('SELECT model_id FROM models')])
-    marks = ','.join('?' for _ in model_ids) or 'NULL'
-    return [{'modelId': row['model_id'], 'text': row['text'], 'updatedAt': row['updated_at']}
-            for row in connection.execute(
-                f'SELECT * FROM model_notes WHERE model_id IN ({marks}) ORDER BY model_id', model_ids)]
 
 
 def _changes(params: dict, field: str, fields: set[str]) -> list[dict]:
@@ -98,9 +87,6 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         raise BoardError('INVALID_ARGUMENT', 'A user publication must contain a field patch')
     settings = _changes(params, 'buddySettings', {'buddyId', 'enabled'})
     preferences = _changes(params, 'preferenceChanges', {'buddyId', 'mode', 'note'})
-    annotations = params.get('modelNoteChanges', [])
-    if not isinstance(annotations, list):
-        raise BoardError('INVALID_ARGUMENT', 'modelNoteChanges must be a list')
     correspondence_count, lost_references = models.apply_user_changes(
         connection, params.get('modelCorrespondenceChanges', []), now)
     model_limits = _model_service_concurrency_changes(params)
@@ -134,25 +120,6 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             connection.execute('DELETE FROM evaluation_preferences WHERE buddy_id=?', (buddy_id,))
         else:
             connection.execute('INSERT INTO evaluation_preferences(buddy_id,mode,note) VALUES(?,?,?) ON CONFLICT(buddy_id) DO UPDATE SET mode=excluded.mode,note=excluded.note', (buddy_id, mode, note))
-    seen_models = set()
-    for entry in annotations:
-        if not isinstance(entry, dict):
-            raise BoardError('INVALID_ARGUMENT', 'modelNoteChanges entries must be objects')
-        schemas.reject_unknown(entry, {'modelId', 'text'}, 'modelNoteChanges')
-        model_id = schemas.required_string(entry, 'modelId', max_length=128, pattern=schemas.IDENTIFIER_PATTERN)
-        if model_id in seen_models:
-            raise BoardError('INVALID_ARGUMENT', 'modelNoteChanges repeats a modelId')
-        seen_models.add(model_id)
-        if connection.execute('SELECT 1 FROM models WHERE model_id=?', (model_id,)).fetchone() is None:
-            raise BoardError('NOT_FOUND', 'Unknown modelId')
-        text = entry.get('text')
-        if not isinstance(text, str) or len(text) > 4000:
-            raise BoardError('INVALID_ARGUMENT', 'text must be a string of at most 4000 characters')
-        if not text:
-            connection.execute('DELETE FROM model_notes WHERE model_id=?', (model_id,))
-            lost_references.add(model_id)
-        else:
-            connection.execute('INSERT INTO model_notes(model_id,text,updated_at) VALUES(?,?,?) ON CONFLICT(model_id) DO UPDATE SET text=excluded.text,updated_at=excluded.updated_at', (model_id, text, now))
     if lost_references:
         # One check after every change of the save, in whatever order they came:
         # a model is deleted only once no reference remains for it.
@@ -207,7 +174,6 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     counts = {
         'buddySettings': len(settings),
         'preferenceChanges': len(preferences),
-        'modelNoteChanges': len(annotations),
         'modelCorrespondenceChanges': correspondence_count,
         'modelServiceConcurrency': len(model_limits),
         'provided': sorted(provided),

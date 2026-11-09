@@ -3,8 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiError, type ConsoleApi } from "./api";
-import type { ModelNote, Buddy, Snapshot } from "./types";
-import { chip, effortCell, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
+import type { Buddy, Snapshot } from "./types";
+import { chip, effortCell, level, levelSwitch, listed, modelRow, selectModel } from "./buddies/page.testing";
 
 /** One model service with an enabled and a disabled effort, plus a second enabled model service. */
 function catalog(): Buddy[] {
@@ -22,9 +22,7 @@ function catalog(): Buddy[] {
   }));
 }
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
-const flashModelService = { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
 const FLASH = "dsh / deepseek-official / deepseek-flash";
-const flashNote = (text: string): ModelNote => ({ modelId: "deepseek-flash", text, updatedAt: "2026-11-01T00:00:00Z" });
 /** A buddy that only a completed program discovery can add. */
 const discovered = "dsh:deepseek-official:deepseek-v5:medium";
 
@@ -40,8 +38,7 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
 
     models: ["deepseek-flash", "deepseek-v4-pro"].map(model => ({ modelId: model, displayName: model, names: [{ harness: "dsh", provider: "deepseek-official", model }], profile: null, latestProfileRun: null })),
     modelCorrespondences: ["deepseek-flash", "deepseek-v4-pro"].map(model => ({ harness: "dsh", provider: "deepseek-official", model, correspondenceId: model, modelId: model, createdAt: "2026-11-01T00:00:00Z", source: "same-name" as const, evidenceUrl: null, evidenceDate: null, canUndo: false })),
-    modelNotes: [flashNote("原备注")],
-    preferences: [], decisions: [],
+    preferences: [{ buddyId: flashOff, mode: "prefer", note: "原备注" }], decisions: [],
 
     modelServiceConcurrency: [
       { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
@@ -61,9 +58,9 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
       if (scripted === "network") throw new ApiError("NETWORK", "lost publish reply");
       if (scripted === "forbidden") throw new ApiError("FORBIDDEN", "stale CSRF after restart");
       state = { ...state,
-        modelNotes: params.modelNoteChanges
-          ? params.modelNoteChanges.map((change: { text: string }) => flashNote(change.text))
-          : state.modelNotes,
+        preferences: params.preferenceChanges
+          ? params.preferenceChanges.map((change: { buddyId: string; mode: "prefer"; note: string }) => change)
+          : state.preferences,
         buddies: params.buddySettings
           ? state.buddies.map(buddy => ({ ...buddy, enabled: params.buddySettings.find(
               (change: { buddyId: string; enabled: boolean }) => change.buddyId === buddy.buddyId)?.enabled ?? buddy.enabled }))
@@ -75,7 +72,7 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
       // The program publishes the directory itself; the page only re-reads it.
       // A discovery can coincide with another settings publication.
       state = { ...state,
-        ...(options.discoveryNote ? { modelNotes: [flashNote(options.discoveryNote)] } : {}),
+        ...(options.discoveryNote ? { preferences: [{ buddyId: flashOff, mode: "prefer" as const, note: options.discoveryNote }] } : {}),
         models: [...state.models, { modelId: "deepseek-v5", displayName: "deepseek-v5", names: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-v5" }], profile: null, latestProfileRun: null }],
         modelCorrespondences: [...state.modelCorrespondences, { harness: "dsh", provider: "deepseek-official", model: "deepseek-v5", correspondenceId: "deepseek-v5", modelId: "deepseek-v5", createdAt: "2026-11-01T00:00:00Z", source: "same-name", evidenceUrl: null, evidenceDate: null, canUndo: false }],
         buddies: [...state.buddies, { effortRank: null, buddyId: discovered, label: "deepseek-v5 · medium", harness: "dsh",
@@ -104,7 +101,7 @@ async function openBuddy(api: ConsoleApi, user: ReturnType<typeof userEvent.setu
   await listed(2, 3);
   await selectModel(user, FLASH, "DSH");
 }
-const note = () => within(pane()).getByRole("textbox", { name: /^模型备注/ }) as HTMLTextAreaElement;
+const preferenceNote = () => within(level("off")).getByRole("textbox", { name: "off 的偏好备注" }) as HTMLInputElement;
 
 const saveBar = () => screen.queryByRole("region", { name: "未保存的修改" });
 const save = () => within(saveBar()!).getByRole("button", { name: /^(保存|重试同一保存)$/ });
@@ -138,16 +135,16 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     expect(screen.queryByRole("switch", { name: "编辑设置" })).toBeNull();
     expect(saveBar()).toBeNull();
-    await user.clear(note());
-    await user.type(note(), "本地草稿，未发布");
+    await user.clear(preferenceNote());
+    await user.type(preferenceNote(), "本地草稿，未发布");
     expect(within(saveBar()!).getByText("1 项未保存")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
     await user.click(save());
     await waitFor(() => expect(f.operations).toEqual(["user_policy_publish"]));
     expect(f.published[0]).toMatchObject({ commandId: expect.any(String) });
     expect(f.published[0]).not.toHaveProperty("expectedRevision");
-    // Only the changed model service note is published: no buddies table and no card.
-    expect(f.published[0].modelNoteChanges).toEqual([{ modelId: "deepseek-flash", text: "本地草稿，未发布" }]);
+    // Only the changed buddy preference note is published: no buddies table and no card.
+    expect(f.published[0].preferenceChanges).toEqual([{ buddyId: flashOff, mode: "prefer", note: "本地草稿，未发布" }]);
     expect(f.published[0]).not.toHaveProperty("annotationChanges");
     expect(f.published[0]).not.toHaveProperty("buddies");
     expect(f.published[0]).not.toHaveProperty("cards");
@@ -159,10 +156,10 @@ describe("direct editing and the save bar", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    await user.type(note(), "x");
+    await user.type(preferenceNote(), "x");
     expect(saveBar()).toBeTruthy();
-    await user.type(note(), "{Backspace}");
-    expect(note().value).toBe("原备注");
+    await user.type(preferenceNote(), "{Backspace}");
+    expect(preferenceNote().value).toBe("原备注");
     await waitFor(() => expect(saveBar()).toBeNull());
     expect(f.command).not.toHaveBeenCalled();
   });
@@ -171,7 +168,7 @@ describe("direct editing and the save bar", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    await user.type(note(), "，补充");
+    await user.type(preferenceNote(), "，补充");
     await user.click(effortCell("high"));
     await user.click(levelSwitch("high"));
     await user.click(within(level("high")).getByRole("radio", { name: "优先" }));
@@ -188,11 +185,11 @@ describe("direct editing and the save bar", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    await user.type(note(), "未保存的补充");
+    await user.type(preferenceNote(), "未保存的补充");
     await user.click(within(saveBar()!).getByRole("button", { name: "放弃" }));
     await screen.findByText("草稿已放弃");
     expect(saveBar()).toBeNull();
-    expect(note().value).toBe("原备注");
+    expect(preferenceNote().value).toBe("原备注");
     expect(f.command).not.toHaveBeenCalled();
   });
 
@@ -200,14 +197,14 @@ describe("direct editing and the save bar", () => {
     const f = fixture({ publish: ["network"] });
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    await user.type(note(), "结果不明");
+    await user.type(preferenceNote(), "结果不明");
     await user.click(save());
     await screen.findByText(/保存结果未知/);
     // The draft and its staged payload survive an edit freeze until confirmed;
     // the field stays read-only rather than disabled, so it is still copyable.
-    expect(note().value).toBe("原备注结果不明");
-    expect(note().readOnly).toBe(true);
-    expect(note().disabled).toBe(false);
+    expect(preferenceNote().value).toBe("原备注结果不明");
+    expect(preferenceNote().readOnly).toBe(true);
+    expect(preferenceNote().disabled).toBe(false);
     expect(within(saveBar()!).getByText("1 项未保存")).toBeTruthy();
     await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
     await screen.findByText(PUBLISHED);
@@ -220,7 +217,7 @@ describe("direct editing and the save bar", () => {
     const f = fixture({ publish: ["network", "forbidden"] });
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    await user.type(note(), "保留原请求");
+    await user.type(preferenceNote(), "保留原请求");
     await user.click(save());
     await screen.findByText(/保存结果未知/);
     await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
@@ -238,16 +235,16 @@ describe("direct editing and the save bar", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    await user.clear(note());
-    await user.type(note(), "我的备注");
-    f.setSnapshot({ ...f.snapshot(), modelNotes: [flashNote("其他窗口的备注")] });
+    await user.clear(preferenceNote());
+    await user.type(preferenceNote(), "我的备注");
+    f.setSnapshot({ ...f.snapshot(), preferences: [{ buddyId: flashOff, mode: "prefer", note: "其他窗口的备注" }] });
     await readSnapshotOnForeground(f.api.snapshot);
-    expect(note().value).toBe("我的备注");
+    expect(preferenceNote().value).toBe("我的备注");
     await user.click(save());
     await screen.findByText(PUBLISHED);
     expect(f.published).toHaveLength(1);
-    expect(f.published[0].modelNoteChanges).toEqual([{ modelId: "deepseek-flash", text: "我的备注" }]);
-    expect(note().value).toBe("我的备注");
+    expect(f.published[0].preferenceChanges).toEqual([{ buddyId: flashOff, mode: "prefer", note: "我的备注" }]);
+    expect(preferenceNote().value).toBe("我的备注");
   });
 
   it("refreshes program directory facts on discovery without uploading a draft", async () => {
@@ -274,29 +271,29 @@ describe("direct editing and the save bar", () => {
     const f = fixture({}, { discoveryNote: "其他窗口的备注" });
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    await user.type(note(), "，我的补充");
+    await user.type(preferenceNote(), "，我的补充");
     await user.click(screen.getByRole("button", { name: "发现模型" }));
     await screen.findByText("新增 1 个 buddy，默认不启用");
-    expect(note().value).toBe("原备注，我的补充");
+    expect(preferenceNote().value).toBe("原备注，我的补充");
     await user.click(save());
     await screen.findByText(PUBLISHED);
-    expect(f.published[0].modelNoteChanges).toEqual([{ modelId: "deepseek-flash", text: "原备注，我的补充" }]);
+    expect(f.published[0].preferenceChanges).toEqual([{ buddyId: flashOff, mode: "prefer", note: "原备注，我的补充" }]);
   });
 
   it("keeps an unsaved note while discovery refreshes the directory", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    await user.type(note(), "，保留的备注");
+    await user.type(preferenceNote(), "，保留的备注");
     await user.click(screen.getByRole("button", { name: "发现模型" }));
     await screen.findByText("新增 1 个 buddy，默认不启用");
     expect(f.operations).toEqual(["model_catalog_refresh"]);
-    expect(note().value).toBe("原备注，保留的备注");
+    expect(preferenceNote().value).toBe("原备注，保留的备注");
     // The rebased draft publishes only the human patch at the refreshed revision.
     await user.click(save());
     await screen.findByText(PUBLISHED);
     expect(f.published[0]).not.toHaveProperty("expectedRevision");
-    expect(f.published[0].modelNoteChanges).toEqual([{ modelId: "deepseek-flash", text: "原备注，保留的备注" }]);
+    expect(f.published[0].preferenceChanges).toEqual([{ buddyId: flashOff, mode: "prefer", note: "原备注，保留的备注" }]);
     expect(f.published[0]).not.toHaveProperty("buddies");
   });
 
@@ -306,13 +303,13 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     expect(levelSwitch("off").getAttribute("aria-checked")).toBe("true");
     expect(effortCell("high").getAttribute("aria-pressed")).toBe("false");
-    expect(chip(FLASH, "off").textContent).toBe("off");
+    expect(chip(FLASH, "off").textContent).toBe("off优先");
     await user.click(levelSwitch("off"));
     expect(levelSwitch("off").getAttribute("aria-checked")).toBe("false");
     expect(within(level("off")).getByRole("img", { name: "未保存" })).toBeTruthy();
     expect(within(saveBar()!).getByText("1 项未保存")).toBeTruthy();
     // The table's row follows the draft immediately, with the same mark.
-    expect(within(modelRow(FLASH)).queryByText("off")).toBeNull();
+    expect(modelRow(FLASH).querySelector('[data-slot="enabled-effort"]')).toBeNull();
     expect(within(effortCell("off")).getByRole("img", { name: "未保存" })).toBeTruthy();
     await user.click(save());
     await screen.findByText(PUBLISHED);

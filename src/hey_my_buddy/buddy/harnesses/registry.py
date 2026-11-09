@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Callable
 
 from ...errors import BoardError
-from ...protocol.capabilities import PERMISSION_LEVELS, declared_input_limit
+from ...protocol.capabilities import PERMISSION_LEVELS, PERMISSIONS_VERIFIED_VERSIONS, declared_input_limit
 from ...protocol.session_coverage import SessionCoverage
 from .base import Adapter, AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle
 from .run_contract import HARNESS_NAMES, HarnessRun
@@ -150,6 +150,7 @@ def capability_report() -> dict:
             "reason": cause,
             "capabilities": list(instance.capabilities),
             "permissionLevels": dict(PERMISSION_LEVELS.get(name, {})),
+            "permissionsVerifiedVersion": PERMISSIONS_VERIFIED_VERSIONS.get(name),
             "inputLimit": limit.to_payload() if limit is not None else None,
         }
     return report

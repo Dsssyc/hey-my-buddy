@@ -4,8 +4,6 @@ import {
   changeCount,
   configurationChanged,
   draftDiffers,
-  modelNoteChanges,
-  modelNoteText,
   makeDraft,
   modelServiceConcurrencyChanges,
   preferenceChanges,
@@ -13,13 +11,12 @@ import {
   publication,
   rebaseDraft,
   setConcurrencyLimit,
-  setModelNote,
   stageModelCorrespondence,
   setPreference,
 } from "./draft";
 import { blockingIssues } from "./policy";
 import type { HistoryEntries } from "./draft";
-import type { Draft, ModelNote, Buddy, Snapshot } from "./types";
+import type { Draft, Buddy, Snapshot } from "./types";
 
 const flash = { effortRank: null,
   buddyId: "flash-off",
@@ -44,15 +41,12 @@ const retired = {
   available: false,
   unavailableReason: { code: "catalog.native-unavailable", params: {} },
 } satisfies Buddy;
-const retiredModelService = { harness: "dsh", provider: "deepseek-official", model: "retired-model" };
-const note = (modelService: typeof flashModelService, text: string): ModelNote =>
-  ({ modelId: modelService.model, text, updatedAt: "2026-11-01T00:00:00Z" });
 const snapshot = {
   buddies: [flash],
 
   preferences: [],
   models: [{ modelId: flash.model, displayName: flash.model, names: [flashModelService], profile: null, latestProfileRun: null }],
-  modelNotes: [], modelCorrespondences: [],
+  modelCorrespondences: [],
   configuration: { explorationEvery: 5, routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null,
   },
 
@@ -62,19 +56,6 @@ const snapshot = {
 } as unknown as Snapshot;
 
 describe("editing a published snapshot", () => {
-  it("shares one note across service names mapped to the same model", () => {
-    const baseline = makeDraft(snapshot);
-    const secondService = { harness: "codex", provider: "openai", model: "flash-alias" };
-    const mapping = { ...secondService, correspondenceId: "alias", modelId: flash.model,
-      createdAt: "2026-11-01T00:00:00Z", source: "user" as const,
-      evidenceUrl: null, evidenceDate: null, canUndo: true };
-    const mapped = { ...baseline, modelCorrespondences: [...baseline.modelCorrespondences, mapping] };
-    const draft = setModelNote(mapped, mapping.modelId, "same model");
-    expect(modelNoteText(draft, flash.model)).toBe("same model");
-    expect(publication(mapped, draft, "note").modelNoteChanges).toEqual([
-      { modelId: flash.model, text: "same model" },
-    ]);
-  });
 
   it("keeps the server snapshot unchanged while editing", () => {
     const draft = makeDraft(snapshot);
@@ -84,8 +65,7 @@ describe("editing a published snapshot", () => {
 
   it("publishes only the dirty user patches, never a table, a card or an effective preference", () => {
     const baseline = makeDraft(snapshot);
-    let draft = setModelNote(baseline, flash.model, "我的使用备注");
-    draft = setPreference(draft, "flash-off", "exclude", "太贵");
+    let draft = setPreference(baseline, "flash-off", "exclude", "太贵");
     draft = {
       ...draft,
       buddies: draft.buddies.map((p) => ({ ...p, enabled: false })),
@@ -95,7 +75,6 @@ describe("editing a published snapshot", () => {
       commandId: "c",
       buddySettings: [{ buddyId: "flash-off", enabled: false }],
       preferenceChanges: [{ buddyId: "flash-off", mode: "exclude", note: "太贵" }],
-      modelNoteChanges: [{ modelId: flash.model, text: "我的使用备注" }],
     });
     const wire = JSON.stringify(patch);
     // Program-owned buddy facts are not human publication inputs.
@@ -117,18 +96,14 @@ describe("editing a published snapshot", () => {
     ]);
   });
 
-  it("sends a clear for an emptied note, a cleared preference", () => {
+  it("sends a clear for a cleared preference", () => {
     const baseline = {
       ...makeDraft(snapshot),
-      modelNotes: [note(flashModelService, "旧备注")],
       preferences: [{ buddyId: "flash-off", mode: "exclude" as const, note: "贵" }],
     };
-    let draft = setModelNote(baseline, flash.model, "");
-    draft = setPreference(draft, "flash-off", "");
+    const draft = setPreference(baseline, "flash-off", "");
     const patch = publication(baseline, draft, "c");
-    expect(patch.modelNoteChanges).toEqual([{ modelId: flash.model, text: "" }]);
     expect(patch.preferenceChanges).toEqual([{ buddyId: "flash-off", mode: null, note: null }]);
-    expect(modelNoteChanges(baseline, draft)).toEqual([{ modelId: flash.model, text: "" }]);
     expect(preferenceChanges(baseline, draft)).toEqual([{ buddyId: "flash-off", mode: null, note: null }]);
   });
 
@@ -149,10 +124,7 @@ describe("editing a published snapshot", () => {
     const draft = { ...baseline };
     expect(publication(baseline, draft, "c")).not.toHaveProperty("preferenceChanges");
     expect(publication(baseline, draft, "c")).not.toHaveProperty("configuration");
-    // An unrelated note still publishes while the old settings stay as they are.
-    const withNote = setModelNote(draft, flash.model, "只改备注");
-    const patch = publication(baseline, withNote, "c");
-    expect(patch.modelNoteChanges).toEqual([{ modelId: flash.model, text: "只改备注" }]);
+    const patch = publication(baseline, draft, "c");
     expect(patch).not.toHaveProperty("preferenceChanges");
     expect(patch).not.toHaveProperty("buddySettings");
   });
@@ -178,10 +150,6 @@ describe("editing a published snapshot", () => {
     const preferred = setPreference(baseline, flash.buddyId, "prefer", "更快");
     expect(draftDiffers(baseline, preferred)).toBe(true);
     expect(changeCount(baseline, preferred)).toBe(1);
-    const noted = setModelNote(preferred, flash.model, "备注");
-    expect(changeCount(baseline, noted)).toBe(2);
-    // An emptied note that never existed is not content.
-    expect(draftDiffers(baseline, setModelNote(baseline, flash.model, ""))).toBe(false);
     const disabled = {
       ...baseline,
       buddies: [{ ...baseline.buddies[0], enabled: false }],
@@ -209,8 +177,7 @@ describe("editing a published snapshot", () => {
 
   it("rebases the draft onto refreshed directory facts without losing user patches", () => {
     const baseline = makeDraft(snapshot);
-    let draft = setModelNote(baseline, flash.model, "保留的备注");
-    draft = setPreference(draft, "flash-off", "prefer", "更快");
+    let draft = setPreference(baseline, "flash-off", "prefer", "更快");
     draft = {
       ...draft,
       buddies: draft.buddies.map((p) => ({ ...p, enabled: false })),
@@ -230,12 +197,10 @@ describe("editing a published snapshot", () => {
     expect(adopted.conflicts).toEqual([]);
     expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-off")!.label).toBe("目录新名称");
     expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-max")).toBeTruthy();
-    // Program availability is adopted; the user's enablement and note are replayed.
+    // Program availability is adopted; the user's enablement and preference are replayed.
     expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-off")!.available).toBe(false);
     expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-off")!.enabled).toBe(false);
-    expect(modelNoteText(adopted.draft, flash.model)).toBe("保留的备注");
     const patch = publication(adopted.baseline, adopted.draft, "c");
-    expect(patch.modelNoteChanges).toEqual([{ modelId: flash.model, text: "保留的备注" }]);
     expect(patch.preferenceChanges).toEqual([{ buddyId: "flash-off", mode: "prefer", note: "更快" }]);
     expect(patch.buddySettings).toEqual([{ buddyId: "flash-off", enabled: false }]);
     expect(buddySettings(baseline, draft)).toEqual([
@@ -278,18 +243,6 @@ describe("replaying a draft on refreshed content", () => {
     expect(conflict.draft.modelCorrespondenceChanges).toEqual([undo]);
   });
 
-  it("keeps the local note when another writer changed the same field", () => {
-    const baseline = { ...makeDraft(snapshot), modelNotes: [note(flashModelService, "A")] };
-    const draft = setModelNote(baseline, flash.model, "B");
-    const refreshed = { ...snapshot, modelNotes: [note(flashModelService, "C")] };
-    const adopted = rebaseDraft(draft, baseline, refreshed);
-    expect(adopted.conflicts).toEqual([]);
-    expect(modelNoteText(adopted.baseline, flash.model)).toBe("C");
-    expect(modelNoteText(adopted.draft, flash.model)).toBe("B");
-    expect(publication(adopted.baseline, adopted.draft, "save").modelNoteChanges).toEqual([
-      { modelId: flash.model, text: "B" },
-    ]);
-  });
 
   it("waits for a current retained page before replaying an omitted identity", () => {
     const baseline = { ...makeDraft(snapshot), buddies: [flash, { ...retired, enabled: true }] };
@@ -330,11 +283,10 @@ describe("retained history with local removals", () => {
 
   it("still fills identities neither the draft nor the baseline knows", () => {
     const baseline = makeDraft(snapshot);
-    const page: HistoryEntries = { buddies: [retired], modelNotes: [note(retiredModelService, "history")] };
+    const page: HistoryEntries = { buddies: [retired] };
     const adopted = rebaseDraft(baseline, baseline, snapshot, page);
     expect(adopted.conflicts).toEqual([]);
     expect(adopted.draft.buddies.some(row => row.buddyId === retired.buddyId)).toBe(true);
-    expect(modelNoteText(adopted.draft, retired.model)).toBe("history");
   });
 });
 
@@ -365,7 +317,7 @@ describe("model modelService concurrency", () => {
     expect(wire).not.toContain("active");
     expect(wire).not.toContain("flash-off");
     // An unrelated edit keeps the concurrency patch out entirely.
-    expect(publication(baseline, setModelNote(baseline, flash.model, "只改备注"), "c"))
+    expect(publication(baseline, setPreference(baseline, flash.buddyId, "prefer"), "c"))
       .not.toHaveProperty("modelServiceConcurrency");
   });
 
@@ -537,13 +489,13 @@ describe("unavailable Router settings in the editor", () => {
   const unavailable = { ...snapshot, configuration: null } as Snapshot;
   it("publishes unrelated changes while leaving upgrade-only settings null", () => {
     const baseline = makeDraft(unavailable);
-    const draft = setModelNote(baseline, flash.model, "仍可保存备注");
+    const draft = setPreference(baseline, flash.buddyId, "prefer", "仍可保存偏好");
     expect(blockingIssues(baseline, draft)).toEqual([]);
     expect(publication(baseline, draft, "note")).not.toHaveProperty("configuration");
     const merged = rebaseDraft(draft, baseline, { ...unavailable,});
     expect(merged.conflicts).toEqual([]);
     expect(merged.draft.configuration).toBeNull();
-    expect(modelNoteText(merged.draft, flash.model)).toBe("仍可保存备注");
+    expect(merged.draft.preferences[0].note).toBe("仍可保存偏好");
   });
   it("keeps a dirty Router intent as a conflict when refreshed settings need upgrade", () => {
     const baseline = makeDraft(snapshot);

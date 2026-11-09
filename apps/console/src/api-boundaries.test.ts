@@ -5,6 +5,7 @@ import {
   parseRoutingHealth, parseRuntimeVersion, snapshotHarnesses, validPreferences, validRoutingConfiguration,
 } from "./api";
 import { macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { kindEvaluationSchema } from "./types";
 import type { Snapshot } from "./types";
 
 const unsafe = Number.MAX_SAFE_INTEGER + 1;
@@ -12,7 +13,7 @@ const date = "Fri, 09 Oct 2026 18:05:00 GMT"; // Date.parse, rather than ISO-onl
 const configuration = { explorationEvery: 5, routerBuddyIds: [" head ", "head"], routerRetryIntervalSeconds: 1,
   defaultRoutingMode: "fast", modelResponseWaitSeconds: 30, profileBuddyId: null };
 const snapshot = { csrfToken: "", eventCursor: 0, consoleSession: { id: " session " }, configuration,
-  buddies: [], preferences: [], models: [], modelNotes: [], modelCorrespondences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 } };
+  buddies: [], preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 } };
 
 // Keep undefined, NaN and unsafe integers intact at the parser boundary.
 function apiFor(value: unknown, command = false) {
@@ -51,7 +52,7 @@ describe("authenticated snapshot read boundaries", () => {
         code: "INVALID_RESPONSE", message: i18n.t(`common:error.${error}`),
       });
     }
-    for (const key of ["eventCursor", "csrfToken", "configuration", "buddies", "preferences", "models", "modelNotes", "modelCorrespondences", "modelServiceConcurrency", "tasks"]) {
+    for (const key of ["eventCursor", "csrfToken", "configuration", "buddies", "preferences", "models", "modelCorrespondences", "modelServiceConcurrency", "tasks"]) {
       await expect(apiFor(without(snapshot, key)).snapshot()).rejects.toMatchObject({
         code: "INVALID_RESPONSE", message: i18n.t("common:error.snapshot"),
       });
@@ -81,7 +82,7 @@ describe("authenticated snapshot read boundaries", () => {
     const correspondence = { ...service, correspondenceId: "map", modelId: "alpha",
       createdAt: "2026-11-01T00:00:00Z", source: "profile", evidenceUrl: null,
       evidenceDate: null, canUndo: true };
-    const value = { ...snapshot, models: [model], modelNotes: [{ modelId: "alpha", text: "note", updatedAt: "2026-11-01T00:00:00Z" }],
+    const value = { ...snapshot, models: [model],
       modelCorrespondences: [correspondence] };
     await expect(apiFor(value).snapshot()).resolves.toMatchObject(value);
     await expect(apiFor({ ...value, models: [{ ...model, profile: { ...model.profile,
@@ -102,6 +103,26 @@ describe("authenticated snapshot read boundaries", () => {
       correctionRounds: 0, toolSummary: null, usage: { attempts: [{ attemptId: "attempt", elapsedMs: 10, toolCalls: 1,
         tokenUsage: { inputTokens: {}, cachedInputTokens: null, outputTokens: 1, source: "native", scope: "attempt" } }] },
     } }] }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  });
+});
+
+describe("kind evaluation history boundary", () => {
+  const usage = { samples: 0, medianInputTokens: null, medianCachedInputTokens: null, medianOutputTokens: null };
+  const statistics = { samples: 0, successes: 0, failures: 0, firstPasses: 0, reworkRounds: 0,
+    firstPassRate: null, failureRate: null, medianDeliverySeconds: null, usage };
+  const group = { harness: "codex", provider: "openai", model: "sol", modelId: "older-group",
+    modelDisplayName: "Earlier Sol", since: "2026-10-20T10:00:00Z" };
+  const evaluation = { harness: "codex", modelId: "current-group", modelDisplayName: "Current Sol",
+    modelNames: [{ harness: "codex", provider: "openai", model: "sol" }], effort: "high",
+    previousGroups: [group], summary: null,
+    statistics: { overall: statistics, byDomain: {}, byDomainTaskType: {}, infrastructureFailures: [] } };
+  it("keeps the earlier group and requires its flat identity and timestamp", () => {
+    expect(kindEvaluationSchema.parse(evaluation).previousGroups).toEqual([group]);
+    expect(kindEvaluationSchema.parse({ ...evaluation, previousGroups: [] }).previousGroups).toEqual([]);
+    for (const bad of [undefined, null, {}, [{ ...group, modelId: "" }],
+      [{ ...group, since: "not-a-date" }], [{ ...group, modelDisplayName: null }]]) {
+      expect(kindEvaluationSchema.safeParse({ ...evaluation, previousGroups: bad }).success).toBe(false);
+    }
   });
 });
 
@@ -182,7 +203,7 @@ describe("optional Router observations", () => {
     const value = { ...health, reason: { code: "", params: {}, extra: true }, currentRouterBuddyId: "",
       routers: [{ ...router, identity: { harness: "", provider: "", model: "", effort: "", extra: true },
         code: null, skipUntil: "not-a-date", lastError: { at: "not-a-date", code: null } }],
-      recentFailures: [{ decisionId: "", runId: null, at: "not-a-date", code: "", extra: true }],
+      recentFailures: [{ decisionId: "", runId: null, title: "A micro task", at: "not-a-date", code: "", extra: true }],
       unattributed: [{ decisionId: "", at: "", outcome: "", code: null, extra: true }] };
     expect(parseRoutingHealth(value)).toBe(value);
     expect(parseRoutingHealth({ ...health, routers: [{ ...router, identity: null, lastError: null }] })).toBeDefined();
@@ -191,6 +212,7 @@ describe("optional Router observations", () => {
     const broken: unknown[] = [null, [], ...["lastSuccessAt", "lastSuccessDecisionId", "recentFailures"].map(k => without(health, k)),
       { ...health, reason: { code: "x", params: [] } }, { ...health, available: null }, { ...health, routers: null },
       { ...health, recentFailures: [{ decisionId: "d", at: "", code: "c" }] },
+      { ...health, recentFailures: [{ decisionId: "d", runId: "r", title: 42, at: "", code: "c" }] },
       { ...health, unattributed: [{ decisionId: "d", at: "", outcome: "x" }] }];
     for (const key of ["windowSize", "sampleCount", "failureCount", "consecutiveFailures", "abstentionCount", "cancelledCount",
       "notRespondingCount", "boundsRejectedCount", "inputChangedCount", "attemptCount", "unattributedCount"]) {
@@ -212,7 +234,7 @@ describe("optional Router observations", () => {
 });
 
 describe("harness read normalization and optional observations", () => {
-  const row = { harness: " codex ", status: "ready", revision: 0, extra: { retained: true } };
+  const row = { harness: " codex ", status: "ready", revision: 0, permissionsVerifiedVersion: null, extra: { retained: true } };
   const provider = { provider: " provider ", coolingUntil: date, consecutiveRejections: unsafe, extra: true };
   const rows = (value: unknown) => snapshotHarnesses({ harnesses: value } as Snapshot);
   it("normalizes only harness and manualPath, retaining nullable fields and unchecked facts", () => {
@@ -224,6 +246,11 @@ describe("harness read normalization and optional observations", () => {
     expect(rows([{ ...row, harness: "other" }, row, { ...row, harness: "dsh" }, { ...row, harness: "claude" },
       { ...row, harness: "zcode" }, { ...row, harness: "unknown" }]).map(x => x.harness))
       .toEqual(["dsh", "zcode", "codex", "claude", "other", "unknown"]);
+  });
+  it("keeps the version whose native permissions were verified", () => {
+    expect(rows([{ ...row, permissionsVerifiedVersion: "0.2.2-rc.1" }])[0].permissionsVerifiedVersion).toBe("0.2.2-rc.1");
+    expect(rows([without(row, "permissionsVerifiedVersion")])).toEqual([]);
+    expect(rows([{ ...row, permissionsVerifiedVersion: 2 }])).toEqual([]);
   });
   it("discards providers or permissions independently without losing a valid row", () => {
     for (const providers of [undefined, null, {}, [{ ...provider, consecutiveRejections: 0 }],

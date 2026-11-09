@@ -310,13 +310,12 @@ class ProfileExecutionTests(BoardTestCase):
                 "SELECT COUNT(*) FROM model_correspondences WHERE source='profile'").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM models").fetchone()[0], 3)
 
-    def test_router_input_contains_profile_and_user_note(self):
+    def test_router_input_contains_profile_without_user_note(self):
         self.configure()
         claim = self.claim(self.start())
         self.answer(claim, 0, self.valid_answer())
         self.settle(claim)
-        self.board_.console_call("user_policy_publish", {"commandId": "profile-note",
-            "modelNoteChanges": [{"modelId": self.model_id, "text": "My observed preference"}],
+        self.board_.console_call("user_policy_publish", {"commandId": "profile-routing",
             "configuration": {"routerBuddyIds": [PROFILE_BUDDY, TARGET_BUDDY], "defaultRoutingMode": "fast"}})
         request = self.board_.store.decisions.request_select({"requestId": "profile-routing",
                                                                "task": "Fix parser"})
@@ -324,7 +323,7 @@ class ProfileExecutionTests(BoardTestCase):
                                                       "includeAudit": True})["decision"]
         target = next(item for item in decision["input"]["buddies"] if item["buddyId"] == TARGET_BUDDY)
         self.assertEqual(target["modelProfile"]["positioning"], "Strong general model")
-        self.assertTrue(any("My observed preference" in json.dumps(value) for value in decision["input"].values()))
+        self.assertNotIn("annotations", decision["input"])
 
     def test_execution_runs_three_fresh_web_sessions_through_service_feedback(self):
         from hey_my_buddy.buddy.harnesses.registry import run_seam
