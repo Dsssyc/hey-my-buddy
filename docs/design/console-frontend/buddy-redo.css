@@ -241,3 +241,30 @@ body{width:1440px;height:auto;min-height:1000px;overflow:visible;display:block;f
 .round5 .tree:has(li:hover) li.preview-hover:not(:hover)>.actions,.round5 .tree:has(li:focus-within) li.preview-hover:not(:focus-within)>.actions{opacity:0;pointer-events:none}
 .round5 .tree:has(li:hover) li.preview-hover:not(:hover),.round5 .tree:has(li:focus-within) li.preview-hover:not(:focus-within){background:transparent}
 .round5 details:has(.quant-bar)::details-content{overflow:visible}
+/* Round-six branch experiment: four developer-specified domain colours. */
+.round6 .branch-stage{--branch-1:#7f5fd6;--branch-2:#3b9f33;--branch-3:#0c96c3;--branch-4:#dd44a0;position:relative;margin:8px 0 0;isolation:isolate}
+.round6 .branch-viewport{max-width:100%;overflow-x:auto;overflow-y:hidden;padding:0 0 8px}
+.round6 .branch-canvas{position:relative;min-width:100%;width:100%;height:800px}
+.round6 .branch-drawing{position:absolute;inset:0;overflow:visible;pointer-events:none}
+.round6 .tree-link,.round6 .tree-branch{fill:none;stroke-linecap:round;transition:stroke-opacity 120ms}
+.round6 .branch-group-root{stroke:var(--line2)}
+.round6 .branch-group-1{stroke:var(--branch-1)}
+.round6 .branch-group-2{stroke:var(--branch-2)}
+.round6 .branch-group-3{stroke:var(--branch-3)}
+.round6 .branch-group-4{stroke:var(--branch-4)}
+.round6 .tree-link[data-dim=true],.round6 .tree-branch[data-dim=true]{stroke-opacity:.25}
+.round6 .branch-node{position:absolute;top:0;left:0;width:200px;height:28px;padding:0;border:0;background:transparent;display:flex;align-items:baseline;gap:7px;white-space:nowrap;text-align:left;color:var(--ink);font-size:14px;line-height:28px;cursor:default}
+.round6 .branch-count,.round6 .branch-more{font-size:12px;color:var(--ink3);font-weight:400}
+.round6 .branch-name{font-weight:400}
+.round6 .branch-popover{position:absolute;z-index:12;width:304px;padding:16px;background:var(--surface);border:1px solid var(--line2);border-radius:6px;box-shadow:0 12px 24px color-mix(in srgb,var(--bar) 20%,transparent)}
+.round6 .branch-popover h3{font-size:16px;font-weight:500}
+.round6 .branch-popover .pop-count{margin-top:6px}
+.round6 .branch-popover .pop-definition{margin-top:14px;font-size:14px;line-height:1.6}
+.round6 .branch-popover .pop-merged{margin-top:10px}
+.round6 .branch-popover .actions{margin-top:16px}
+.round6 .branch-popover [hidden],.round6 .branch-popover[hidden]{display:none}
+.round6 .time-range-inline{display:inline-flex;align-items:baseline;white-space:nowrap;font-size:12px}
+.round6 .maintenance-records th:nth-child(2){width:230px}
+.round6 .profile-records th:nth-child(3){width:230px}
+.round6 .copy-id{border:0;color:var(--ink3);border-radius:4px}
+.round6 .copy-id:hover,.round6 .copy-id:focus-visible{background:var(--past-wash);color:var(--ink)}
