@@ -1,7 +1,6 @@
 import i18n from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -10,7 +9,6 @@ import { StateMark } from "@/components/ui/state-mark";
 import { errorText } from "../api";
 import type { ConsoleApi } from "../api";
 import { useCopyState } from "../i18n/use-copy-state";
-import { reasonText } from "../i18n/reason";
 import { formatShortDateTime } from "../i18n/format";
 import type { Configuration, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
@@ -18,6 +16,7 @@ import { buddyQuad, withConfiguration } from "./roles";
 import { DomainTree } from "./DomainTree";
 import { MaintenanceActivity } from "./MaintenanceActivity";
 import { RouterSection, RouterField } from "./RouterSection";
+import { RouterFailure } from "./RouterFailure";
 import { RouterTimeRange, RouterUsage, sumRouterUsage, routerUsageTotal } from "./RouterUsage";
 import "./RecordRegion.css";
 
@@ -97,8 +96,7 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
           <td className="py-4 pr-3 text-ink2">{t(run.triggerType === "manual" ? "maintenance.manual" : "maintenance.intervalTrigger")}</td>
           <td className="py-4 pr-2"><RouterUsage usage={sumRouterUsage(run.usage?.attempts ?? [])} maximum={maximum}
             preferenceKey={`maintenance-run.${run.maintenanceRunId}`} label={`${t("maintenance.records")} ${formatShortDateTime(Date.parse(run.startedAt))}`} />
-            {run.reason && <Hint text={run.reason.code === "maintenance-answer-invalid" && Array.isArray(run.reason.params.errors)
-              ? run.reason.params.errors.map(String).join("; ") : undefined}><p tabIndex={run.reason.code === "maintenance-answer-invalid" ? 0 : undefined} className="mt-2 wrap-anywhere text-fail">{reasonText(run.reason)}</p></Hint>}</td>
+            {run.reason && <p className="mt-2 wrap-anywhere text-fail"><RouterFailure failure={run.reason} /></p>}</td>
           <td className="py-3 text-right">{run.state === "running" && <Button variant="ghost" size="sm" disabled={actionLocked || stopping === run.taskId}
             onClick={() => void stop(run.taskId)}>{stopping === run.taskId ? detailT("state.stopping") : t("maintenance.stop")}</Button>}</td>
         </tr>)}</tbody>

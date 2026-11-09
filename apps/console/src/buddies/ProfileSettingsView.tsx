@@ -14,6 +14,7 @@ import type { Editor } from "../use-editor";
 import { buddyQuad, withConfiguration } from "./roles";
 import { QuantBarDisclosure } from "./QuantBar";
 import { RouterSection } from "./RouterSection";
+import { RouterFailure } from "./RouterFailure";
 import { RouterTimeRange, RouterUsage, routerUsageTotal, sumRouterUsage } from "./RouterUsage";
 import "./RecordRegion.css";
 
@@ -47,7 +48,7 @@ function RunDetail({ run }: { run: ProfileRun }) {
   const tools = run.toolSummary;
   return <div className="space-y-5 pb-5 pt-4 text-xs">
     <p className="font-mono text-ink2 wrap-anywhere">{buddyQuad(run.buddy)}</p>
-    {run.reason && <p className="border-l-2 border-fail bg-fail/10 px-4 py-3 text-fail" role="alert">{reasonText(run.reason)}</p>}
+    {run.reason && <p className="border-l-2 border-fail bg-fail/10 px-4 py-3 text-fail" role="alert"><RouterFailure failure={run.reason} /></p>}
     <div>
       <h4 className="mb-2 font-medium">{t("routerProfiles.toolOutcomes")}</h4>
       {tools === null ? <p className="text-ink3">{t("routerProfiles.allUnknownTools")}</p>

@@ -64,10 +64,26 @@ test.describe("shared readability", () => {
     await expect(fold).toHaveCSS("background-color", hovered);
     await fold.click();
 
-    const model = page.locator("[data-slot=model-row]").first();
-    await model.locator("button").first().click();
-    await expect(model).toHaveClass(/bg-selection/);
+    const model = page.locator("[data-slot=model-row] > button").first();
+    await model.click();
+    await expect(model).toHaveAttribute("aria-expanded", "true");
+    const selection = await model.evaluate(node => {
+      const reference = document.createElement("div");
+      reference.style.backgroundColor = "var(--past-wash)";
+      document.body.append(reference);
+      const neutral = getComputedStyle(reference).backgroundColor;
+      reference.remove();
+      return { actual: getComputedStyle(node).backgroundColor, neutral };
+    });
+    expect(selection.actual).toBe(selection.neutral);
     await expect(model).not.toHaveClass(/bg-live/);
+    await model.hover();
+    await expect(model).toHaveCSS("cursor", "pointer");
+    await expect(model).toHaveCSS("background-color", selection.neutral);
+    await page.keyboard.press("Tab");
+    await model.focus();
+    expect(await model.evaluate(node => node.matches(":focus-visible"))).toBe(true);
+    expect(await model.evaluate(node => getComputedStyle(node).boxShadow)).not.toBe("none");
   });
 
   test("stop facts appear on pointer and keyboard focus", async ({ page }) => {

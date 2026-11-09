@@ -66,5 +66,7 @@ describe("routing records", () => {
     expect(region.classList.contains("record-region--routing")).toBe(true);
     expect(within(region).getAllByRole("link").map(link => link.textContent)).toEqual(recentFailures.map(row => row.title).reverse());
   });
-  it("does not invent text for an unknown code", () => { expect(() => routingCodeText("unknown-native-code")).toThrow("Unrecognized routing error code"); });
+  it("keeps unknown historical codes readable without guessing their meaning", () => {
+    expect(routingCodeText("unknown-native-code")).toBe("本次执行失败，原因暂无法说明");
+  });
 });
