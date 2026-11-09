@@ -208,30 +208,19 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 
 ## Buddy 页与 Router 的重做：待开发者确认
 
-2026-11-09 第九轮，简化 Router 左栏：每项只留工作名与一行最近结果，buddy 名字只在右边“谁担任”里显示。目录、模型服务抽屉与 harness 展开的稿随实现移除；下表保留其余 6 个画面，中英文各一份 HTML、各有深浅色整页 PNG，宽 1440、高随内容。本轮更新第 4／5／6 张 Router 的双语 HTML 与 12 张整页图，其余画面和领域树悬停局部图沿用。这些稿只核对过静态渲染，不是控制台实现或实现验收；按开发者安排没有窄屏稿与窄屏样式，窄屏未核对。
+目录与 Router 的稿已随对应实现移除。下表保留评价分区的 3 个画面，中英文各一份 HTML、各有深浅色整页 PNG，宽 1440、高随内容。这些稿只核对过静态渲染，不是控制台实现或实现验收；按开发者安排没有窄屏稿与窄屏样式，窄屏未核对。
 
 | 画面 | 中文 HTML | English HTML | 深色（中文 / English） | 浅色（中文 / English） |
 | --- | --- | --- | --- | --- |
-| Router：路由 | [打开](buddy-redo-routing.html) | [Open](buddy-redo-routing.en.html) | [中文](buddy-redo-routing-dark.png) / [English](buddy-redo-routing.en-dark.png) | [中文](buddy-redo-routing-light.png) / [English](buddy-redo-routing.en-light.png) |
-| Router：维护 | [打开](buddy-redo-maintenance.html) | [Open](buddy-redo-maintenance.en.html) | [中文](buddy-redo-maintenance-dark.png) / [English](buddy-redo-maintenance.en-dark.png) | [中文](buddy-redo-maintenance-light.png) / [English](buddy-redo-maintenance.en-light.png) |
-| Router：画像 | [打开](buddy-redo-profile-plane.html) | [Open](buddy-redo-profile-plane.en.html) | [中文](buddy-redo-profile-plane-dark.png) / [English](buddy-redo-profile-plane.en-dark.png) | [中文](buddy-redo-profile-plane-light.png) / [English](buddy-redo-profile-plane.en-light.png) |
 | 评价：领域评价 | [打开](buddy-redo-evaluation.html) | [Open](buddy-redo-evaluation.en.html) | [中文](buddy-redo-evaluation-dark.png) / [English](buddy-redo-evaluation.en-dark.png) | [中文](buddy-redo-evaluation-light.png) / [English](buddy-redo-evaluation.en-light.png) |
 | 评价：模型画像与短提示 | [打开](buddy-redo-evaluation-model.html) | [Open](buddy-redo-evaluation-model.en.html) | [中文](buddy-redo-evaluation-model-dark.png) / [English](buddy-redo-evaluation-model.en-dark.png) | [中文](buddy-redo-evaluation-model-light.png) / [English](buddy-redo-evaluation-model.en-light.png) |
 | 评价：选名字与换代说明 | [打开](buddy-redo-evaluation-generation.html) | [Open](buddy-redo-evaluation-generation.en.html) | [中文](buddy-redo-evaluation-generation-dark.png) / [English](buddy-redo-evaluation-generation.en-dark.png) | [中文](buddy-redo-evaluation-generation-light.png) / [English](buddy-redo-evaluation-generation.en-light.png) |
 
-领域树悬停局部图（从 1440px 宽屏中裁取，含“存储与迁移”的浮层）：[中文深色](buddy-redo-maintenance-tree-hover-dark.png) / [English dark](buddy-redo-maintenance-tree-hover.en-dark.png) / [中文浅色](buddy-redo-maintenance-tree-hover-light.png) / [English light](buddy-redo-maintenance-tree-hover.en-light.png)。表格链接是整页图；维护整页不指着任何节点，所有枝条均为原色。
-
-分区仍为目录、Router、评价（Catalog、Router、Evaluation）。Router 的界面称路由／维护／画像（Routing／Maintenance／Profiles），评价只保留领域评价与模型画像两个页签，默认领域评价。用户备注已从当前画面去掉。样式仍由 `base.css` 与 [buddy-redo.css](buddy-redo.css)组成；一般颜色仍引用 base.css；领域树依照 ADR-029 的身份色规则，每个顶层领域取时间轴配色表的一个色系，按表中顺序取蓝 `#0c96c3`、绿 `#3b9f33`、玫红 `#dd44a0`、紫 `#7f5fd6`，写在 buddy-redo.css 的变量里。取深浅两档之间的中间亮度，两种主题共用；不原样用表里的深浅色，因为细线在浅色主题下浅的一半、在深色主题下深的一半会看不清，单取一半又难分蓝与紫。橙色系不用，避免接近等人接手的橙；第五个起按相同最远点规则继续生成，本稿只有四个顶层，没有新增或验证第五种颜色。同一顶层的后代与连线同色，名字与数量仍用墨色和次要色。维护稿标记为 `.round8`，没有修改 base.css、计划或 ADR；`<html data-theme="dark">` 或 `light` 切换主题。图标和状态记号沿用：完成为对勾、失败为叉、运行中为实心圆、未建画像为空心圆。所有展开处仍为 Lucide ChevronRight，16px、线宽 1.5，展开转 90°。
+评价只保留领域评价与模型画像两个页签，默认领域评价。用户备注已从当前画面去掉。样式仍由 `base.css` 与 [buddy-redo.css](buddy-redo.css) 组成；一般颜色引用 base.css。图标和状态记号沿用：完成为对勾、失败为叉、运行中为实心圆、未建画像为空心圆。所有展开处仍为 Lucide ChevronRight，16px、线宽 1.5，展开转 90°。
 
 比较的数画在高 8px 的细条中：直角端点沿时间轴执行条的矩形画法，段间为 2px 底色间隙，无边框，轨道用最淡的线色。图形内无文字，确切数值在旁边，悬停或键盘聚焦给出数值与含义；一般量用墨色与灰，失败段用红并在相邻读数或名称带叉。用量各段从左到右为缓存输入、其余输入、输出；总输入已减去缓存后才画第二段，避免重复计量。同组记录共用长度基准：维护 35,120 tokens、画像总记录 24,140、失败运行每轮 14,100；Router 应答共用 21 次、工具成败共用 8 次；领域表每格固定 100%。基准是这一组最大已知值，没有新阈值或路由规则。
 
 目录的编造事实沿用：4 个 harness、8 个模型服务、9 / 40 个 buddy 启用。Codex 有 openai、relay-lab 两个提供方，后者冷却到约 16:49；openai 的 Sol 从 2026-11-08 16:05 起这次没读到。terra 已启用但无画像，ZCode 的 glm-5 新发现且未启用。第 2 张抽屉选中 `codex / openai / gpt-6.1-sol / high`，占用 1、并发上限 2，改为小计量条与可本地修改的上限输入，启用、优先、理由跨模块改造、计入评价 30 次、基础设施失败 2 次。并发提醒只在把上限调高时出现，这张画平时没有提醒的状态；提醒触发和保存没有实现。harness 展开仍是位置、账户、冷却，示例版本 0.134.0／0.133.0、占位路径 `~/.local/bin/codex`，openai 订阅、relay-lab 按量，不显示额度百分比、重置时间或余额。
-
-路由记录的三行依次为 Codex/openai Sol（20 次应答、1 次未应答）、Claude/anthropic Sonnet（6／1）、Codex/relay-lab Sol（0／0，尚无记录）；用同一长度基准的细条显示数量，失败的 1 次为红段，旁边带叉。零次失败用普通颜色且不带叉，包含路由的 0／0、画像工具的成功／0／未知，以及全部失败行里的成功 0 和未知 0，不把整组数染红。连续未应答均为 0，放在悬停；顶部汇总仅一行，失败 2 / 28、连续失败 0、最近成功 16:28。最近错误仍写“模型未开始作答”“选择超出路由边界”，最近失败的微任务仍可通过拟议链接查看；两行的复制编号改为不带框的 Lucide Copy 图标，平时淡色、悬停出底色，提示与读屏名均为“复制编号 / Copy ID”，微任务链接与复制图标同格，和同行文字对齐基线；实际复制动作没有实现。第三个 Router 等待重试到 16:49、文字与时刻同行；默认快速、等待开始 60 秒、重试草稿 30 秒、探索每 5 个里给 1 个，沿用原设置。
-
-维护两轮的总输入／其中缓存／输出为 32,480／16,000／2,640 与 18,240／8,000／720。记录以对勾或叉开头，起止时间合为一列一行，同天结束只写时刻，例如 `2026-11-08 16:00–16:03`、`2026-11-08 14:58–15:01`，跨天则结束也写日期；删去重复状态词，用量改为缓存／其余输入／输出三段；失败原因“输出未通过结构核对；保留上一版”仍在。领域树改为横向枝条：全部 111 → 软件工程 72（存储与迁移 18、界面与可访问性 14、进程与并发 11、构建与发布 6）、科研计算 27（水动力学 15 → 网格生成 4；数值优化 5）、地理信息 8（空间索引 3）、统计分析 4。总计 13 个节点（含根），数量包含子节点；顶层合计 111。父节点居中于它的直接子节点，叶子纵向间距 44px，枝条长度按自己的名字与数实测，再留约 24px；同一层的节点对齐在同一列，下一列从上一层最长枝条的末端加共同间隔算起；分叉间隔至少 144px（大扇形会再加宽），单支延伸至少 72px。曲线提前散开、末端平缓，不把几条子线挤成近乎竖直的一束。画布高从 760px 缩为 404px，维护整页由 1703px 缩为 1347px。枝条粗细仍按数量线性从 1.25px（3）到 9px（111），连接线宽等于子节点、圆头。整页静止且没有浮层；另外的悬停局部图指着存储与迁移：它的子树与祖先路径保留原色，其余枝条淡至四分之一、文字不淡；浮层写名称、数量、定义、“合并自 数据库升级”与改名／合并到按钮。浮层位置避开每个可见节点的名字与数量；优先用树里的空白，放不下时只为打开的浮层增加局部高度，关闭后回到紧凑高度，因此不会遮住网格生成或其他节点。平时只显示名字与数，不摊定义，根没有操作按钮。地理信息收起，数量后为“＋1”。可聚焦每个可见节点，用 Enter 或点击折叠，Tab 进入浮层按钮；线色变化约 120ms，开合 180ms，减少动态效果时立即开合。节点和层级不设固定上限：节点多时纵向变长，层级多时只在树区域横向滚动，页面不横向滚动。维护间隔 3600 秒、指定 Claude buddy 沿用。
-
-画像由 `dsh / deepseek-official / deepseek-v4-flash / max` 担任。记录按模型，以状态记号开头；Sol 成功，输入 14,800（含缓存 4,096）、输出 2,360；Pro 失败，输入 21,680（含缓存 6,144）、输出 2,460；运行时段补为 Sol `2026-11-07 11:20–11:23`、Pro `2026-11-08 16:26–16:30`；Sonnet 仍运行，写 `2026-11-08 16:25–…`，结束尚未知，不编造结束时刻，用量未回传，显示空轨道。展开 Pro 的失败运行，网页搜索 6 次成功、网页抓取 8 次全部失败，以成败条显示；两轮输入／其中缓存／输出分别为 12,480／2,048／1,620 与 9,200／4,096／840，各轮也用三段条。打回 1 轮及原因保留，“网页抓取全部失败”继续醒目。点“选择 buddy”才弹候选搜索与声明强制只联网的候选，本轮不另画弹出层。
 
 评价列表按 Codex、Claude Code、DSH 分组，只看在用；六行样本数依次为 Sol high 46、Sol medium 12、terra high 8、Sonnet high 21、Flash max 18、Pro high 6。已建画像 2 / 5，terra、Pro 没有画像，Sonnet 正在构建且尚无画像；另有 7 个微任务待维护。三张评价详情均选 `codex / gpt-6.1-sol / high`，openai、relay-lab 共用。当前 46 个样本改为一条 34 一次通过／7 返工后成功／5 失败的细条，成功合计仍为 41，返工 9 轮。中位数只一行：交付 8m 20s、输入 24k、缓存 12k、输出 3.2k tokens。归纳与微任务引用保留。领域表每个有样本的格子是一条一次通过率短条与样本数，百分比和返工轮数只在提示中，无样本格留空；领域父级包含子级，不把父子样本相加。
 
@@ -242,7 +231,3 @@ Git 页把“封存证据”“整合来源”“整合”“核验结果”分�
 批量构建没有常驻确认区；拟议为点按钮后弹出确认框，由 DSH Flash max buddy 使用它的额度，为 terra、Pro 各一次，共 2 次，列明模型与取消／确认按钮，本轮不另画。领域评价图的维护未配置，立即维护不可用；换代图的画像未配置，批量构建不可用，提示先在对应 Router 工作里指定 buddy；模型画像图两项均已配置。Router 左栏每项只有工作名与一行状态：路由为“✓ 最近一次 · 成功 / Latest run · succeeded”，维护为“✓ 最近一轮 · 已完成 / Latest run · completed”，画像为“✕ 最近一次 · 失败 / Latest run · failed”；路由结果与右边记录的连续失败 0、最近成功 16:28 一致。任一 Router 工作未指定 buddy 时，左栏状态行写“○ 未设置 / Not set”，详情写“此项工作不运行，请指定 buddy。 / This work does not run. Set a buddy.”，保留选择入口与记录；本批不另画。
 
 所有模型事实、名字、账户、状态、来源、日期、版本、归纳、微任务、计数与用量均为设计数据。页面不联网、不接服务或黑板、不调用模型。部分导航、原生折叠、提示、枝条树的折叠／悬停／键盘示意和并发输入可查看本地状态；真实过滤、提醒触发、保存、构建、维护、对应关系变更、弹框流程、原生权限和状态同步没有实现。
-
-第九轮以 Node.js v24.21.0、现有 Playwright 1.64.0、headless Chromium 156.0.8078.4 经 file: 重渲染 Router 路由、维护、画像的双语深浅主题，共 12 张整页图（宽 1440；高分别为 1532、1347、1708；deviceScaleFactor 1）。字号仍仅 12／14／16／18px；页面错误、外部请求、横向溢出、文字裁切／越界与主要同级区域相交均为 0；1044 对文字采样最低对比度 4.91:1。12 张图均经目视核对；左栏三项均只剩工作名与一行状态，右侧像素与第八轮完全一致。其余 116 个 HTML／PNG 与第八轮提交的文件指纹一致（含其他批次静态稿），其中 Buddy 稿 58 个，包含四张领域树悬停图。领域树数据、配色、排布与浮层脚本均未改动，第八轮的局部图与验证记录继续保留。
-
-树的浏览器脚本 [buddy-redo-tree.js](buddy-redo-tree.js)只提供本地交互示意；改名、合并、保存与实际复制均没有实现。第八轮用本地临时数据核对了更多节点、更深层级、键盘、浮层按钮与折叠过渡，重点核对每一层同列、父子间隔不小于 72px、两种折叠状态下重新对齐、四个色系顺序、13 个节点的浮层与名字／数量都不相交、Tab 操作与关闭后恢复静止高度；详细读数在忽略目录 `tmp/redo-drafts/round8-render-report.json`、`round8-verification.json`，报告“第八轮”写明三处改动和边界；第九轮的左栏检查与内容保持核对见 `round9-render-report.json`、`round9-verification.json` 及报告“第九轮”。只核对静态稿与局部交互，没有运行真实控制台或 Python／前端全量，也没有验证真实状态同步、原生权限、改名合并的业务流程或窄屏。

@@ -1,3 +1,7 @@
+import routerErrors from "./router-errors";
+import routerWork from "./router-work";
+import domainTree from "./domain-tree";
+import routerProfiles from "./router-profiles";
 import modelProfile from "./model-profile";
 import type zh from "../zh/buddies";
 import harness from "./buddies-harness";
@@ -6,11 +10,10 @@ import evaluation from "./evaluation";
 import maintenance from "./maintenance";
 
 export default {
+  routerWork, domainTree, routerProfiles, routerErrors,
   maintenance,
   modelProfile,
   profile: {
-    title: "Profile plane",
-    buddy: "Profile buddy",
     choose: "Choose buddy",
     search: "Search buddies",
     none: "Not set",

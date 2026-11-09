@@ -77,7 +77,7 @@ function world(sessionPresent = true) {
   return fixture(snapshot({
     routers: [buddies[0].buddyId], sessionPresent,
     routingHealth: health({ consecutiveFailures: 2, failureCount: 3, abstentionCount: 1, boundsRejectedCount: 1,
-      recentFailures: [{ decisionId: "decision-1", runId: "run-1", title: "Review the routing result", at: AT, code: "routing-bounds-rejected" }] }),
+      recentFailures: [{ decisionId: "decision-1", runId: "run-1", macroTaskId: "run:run-1", title: "Review the routing result", at: AT, code: "router-out-of-bounds" }] }),
     extra: { buddies, modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }], harnesses, unavailableBuddyCount: 3 },
   }));
 }

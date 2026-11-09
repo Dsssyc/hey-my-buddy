@@ -9,7 +9,7 @@ import { ApiError, errorText } from "../api";
 import type { ConsoleApi } from "../api";
 import { modelServiceKey } from "../console-data";
 import { stageModelCorrespondence } from "../draft";
-import { formatDateTime, formatNumber, formatDuration } from "../i18n/format";
+import { formatDateTime } from "../i18n/format";
 import { reasonText } from "../i18n/reason";
 import { useCopyState } from "../i18n/use-copy-state";
 import { isReason } from "../reason";
@@ -111,30 +111,6 @@ export function ModelProfile({ modelId, snapshot, data, editor, api, refresh, mu
       <Button variant="outline" size="sm" disabled={actionLocked} onClick={() => void build()}>{t(profile ? "modelProfile.rebuild" : "modelProfile.build")}</Button>
       {note && <p role="status" className="wrap-anywhere">{note}</p>}{error && <p role="alert" className="wrap-anywhere text-fail">{error}</p>}
     </div>
-    {run && <div data-slot="profile-run" className="space-y-2">
-      <h3 className="text-xs font-medium text-ink2">{t("modelProfile.latestRun")}</h3>
-      <p className="flex flex-wrap gap-x-4 gap-y-1"><span>{t(`modelProfile.state.${run.state}`)}</span><time dateTime={run.startedAt}>{formatDateTime(Date.parse(run.startedAt))}</time>
-        {run.finishedAt && <time dateTime={run.finishedAt}>{formatDateTime(Date.parse(run.finishedAt))}</time>}<span>{t("modelProfile.corrections", { n: run.correctionRounds })}</span></p>
-      <p className="font-mono wrap-anywhere text-ink2">{buddyQuad(run.buddy)}</p>
-      {run.reason && <p className="wrap-anywhere text-fail">{reasonText(run.reason)}</p>}
-      {run.usage?.attempts.map(attempt => <dl key={attempt.attemptId} className="flex flex-wrap gap-x-5 gap-y-1 text-ink2 tabular-nums" aria-label={t("modelProfile.usage")}>
-        <div className="flex gap-2"><dt>{t("modelProfile.duration")}</dt><dd>{attempt.elapsedMs == null ? t("maintenance.unknown") : formatDuration(attempt.elapsedMs)}</dd></div>
-        <div className="flex gap-2"><dt>{t("modelProfile.toolCalls")}</dt><dd>{attempt.toolCalls == null ? t("maintenance.unknown") : formatNumber(attempt.toolCalls)}</dd></div>
-        {([["input", attempt.tokenUsage?.inputTokens], ["cached", attempt.tokenUsage?.cachedInputTokens], ["output", attempt.tokenUsage?.outputTokens]] as const).map(([key, value]) => <div key={key} className="flex gap-2"><dt>{t(`maintenance.${key}`)}</dt><dd>{value == null ? t("maintenance.unknown") : formatNumber(value)}</dd></div>)}
-      </dl>)}
-      {!run.usage && <p className="text-ink3">{t("modelProfile.usage")} · {t("maintenance.unknown")}</p>}
-      {run.toolSummary === null ? <p data-slot="profile-tool-summary" className="text-ink3">{t("modelProfile.toolOutcomesUnknown")}</p>
-        : run.toolSummary.length > 0 && <ul data-slot="profile-tool-summary" className="space-y-1 text-ink2 tabular-nums">
-          {run.toolSummary.map(tool => <li key={tool.toolName} className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
-            <span className="min-w-0 font-mono wrap-anywhere">{tool.toolName ?? t("modelProfile.unknownTool")}</span>
-            <dl className="flex flex-wrap gap-x-5 gap-y-1">
-              <div className="flex gap-2"><dt>{t("modelProfile.toolCalls")}</dt><dd>{formatNumber(tool.calls)}</dd></div>
-              <div className="flex gap-2"><dt>{t("modelProfile.toolFailed")}</dt><dd className={tool.calls > 0 && tool.failed === tool.calls ? "text-fail" : undefined}>{formatNumber(tool.failed)}</dd></div>
-              <div className="flex gap-2"><dt>{t("modelProfile.toolUnknown")}</dt><dd>{formatNumber(tool.unknown)}</dd></div>
-            </dl>
-          </li>)}
-        </ul>}
-    </div>}
     <div><h3 className="text-xs font-medium text-ink2">{t("modelProfile.correspondences")}</h3>
       <ul className="divide-y divide-line">{data.modelCorrespondences.filter(entry => entry.modelId === modelId).map(entry => <Correspondence key={entry.correspondenceId} entry={entry} data={data} editor={editor} />)}</ul>
     </div>

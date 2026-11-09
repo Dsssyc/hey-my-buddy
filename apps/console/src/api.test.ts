@@ -43,7 +43,7 @@ describe("snapshot upgrade boundary and routing health", () => {
   const health = { available: false, reason: { code: "router-consecutive-failures", params: {} }, windowSize: 20, sampleCount: 3,
     failureCount: 3, consecutiveFailures: 3, abstentionCount: 0, cancelledCount: 0,
     lastSuccessAt: null, lastSuccessDecisionId: null,
-    recentFailures: [{ decisionId: "timeout", runId: "run", title: "The timed out micro task", at: "2026-10-02T00:00:00Z", code: "router-not-responding" }] };
+    recentFailures: [{ decisionId: "timeout", runId: "run", macroTaskId: "run:run", title: "The timed out micro task", at: "2026-10-02T00:00:00Z", code: "router-not-responding" }] };
   function apiFor(body: unknown) {
     return createApi("", vi.fn(async () => new Response(JSON.stringify(body))) as typeof fetch);
   }

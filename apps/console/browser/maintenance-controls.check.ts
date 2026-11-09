@@ -1,28 +1,19 @@
-import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { join } from "node:path";
 import { expect } from "@playwright/test";
-import { open, test, expectNoSidewaysScroll, expectTextUncut } from "./preview";
+import { open, test } from "./preview";
 
-const captures = fileURLToPath(new URL("../../../tmp/maintenance-no-budget/", import.meta.url));
 const taskId = "preview-run-maintenance-1";
 const finished = "2026-10-29T06:05:01Z";
 
-for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (const state of ["running", "failed"]) {
-  test.describe(`maintenance controls ${state} ${theme} ${width}px`, () => {
+for (const theme of ["dark", "light"] as const) for (const width of [1440, 390]) {
+  test.describe(`maintenance record controls ${theme} ${width}px`, () => {
     test.use({ locale: "zh-CN", viewport: { width, height: 1200 }, reducedMotion: "reduce" });
-    test("shows activity or retry beside the existing execution action", async ({ page }) => {
+    test.beforeEach(async ({ page }) => page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme));
+
+    test("shows native activity and sends stop for a running record", async ({ page }) => {
       const commands: { operation: string; params: object }[] = [];
-      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await page.route("**/api/console", async route => {
-        const response = await route.fetch();
-        const snapshot = await response.json();
-        snapshot.maintenance.runs = [{ ...snapshot.maintenance.runs[0], state,
-          finishedAt: state === "failed" ? finished : null,
-          reason: state === "failed" ? { code: "router-not-responding", params: { seconds: 60 } } : null,
-          usage: { attempts: [{ attemptId: "maintenance-attempt", elapsedMs: state === "failed" ? 301000 : null, toolCalls: null,
-            tokenUsage: state === "failed" ? { inputTokens: 120, cachedInputTokens: null, outputTokens: 7, source: "synthetic-preview", scope: "attempt" } : null }] },
-        }];
+        const response = await route.fetch(); const snapshot = await response.json();
+        snapshot.maintenance.runs = [{ ...snapshot.maintenance.runs[0], state: "running", finishedAt: null }];
         await route.fulfill({ response, json: snapshot });
       });
       await page.route(`**/api/tasks/${taskId}`, route => route.fulfill({ json: { runId: taskId,
@@ -31,77 +22,56 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
       } }));
       await page.route("**/api/command", async route => {
         const command = route.request().postDataJSON();
-        if (!["task_cancel", "maintenance_start"].includes(command.operation)) return route.continue();
+        if (command.operation !== "task_cancel") return route.fallback();
         commands.push(command);
-        await route.fulfill({ json: { ok: true, result: command.operation === "maintenance_start"
-          ? { status: "running", runId: "maintenance-next" } : { alreadyTerminal: false } } });
+        await route.fulfill({ json: { ok: true, result: { alreadyTerminal: false } } });
       });
-      await open(page, "#buddies/router");
-      const row = page.locator('[data-slot="maintenance-record"]');
-      await row.scrollIntoViewIfNeeded();
-      if (state === "running") {
-        const live = row.locator('[data-slot="detail-live"]');
-        await expect(live).toContainText("模型输出中");
-        await expect(live).toContainText("上报");
-        await expectTextUncut(live.locator("span"));
-        const phase = (await live.getByText("模型输出中").boundingBox())!;
-        const reported = (await live.getByText(/^上报/).boundingBox())!;
-        expect(reported.x).toBeGreaterThanOrEqual(phase.x + phase.width);
-        expect(reported.x - phase.x - phase.width).toBeLessThanOrEqual(phase.height);
-        expect(Math.abs(reported.y - phase.y)).toBeLessThan(phase.height);
-        await live.getByText("模型输出中").hover();
-        await page.waitForTimeout(700);
-        await expect(page.getByRole("tooltip")).toHaveCount(0);
-        const stop = row.getByRole("button", { name: "停止", exact: true });
-        await stop.focus();
-        await expect(stop).toBeFocused();
-      } else {
-        await expect(row).toContainText("Router 的模型在 60 秒内没有开始作答。");
-        const retry = row.locator('[data-slot="maintenance-retry"]');
-        const next = await page.evaluate(value => new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "medium", hourCycle: "h23" }).format(Date.parse(value) + 3600000), finished);
-        await expect(retry).toContainText(`下次自动运行 ${next}`);
-        await expect(retry.getByRole("button", { name: "立即运行" })).toBeVisible();
-        await expectTextUncut(retry.locator("span"));
-      }
-      await expectNoSidewaysScroll(page);
-      if (width === 1440) {
-        await mkdir(captures, { recursive: true });
-        await page.screenshot({ path: join(captures, `maintenance-${state}-${theme}-1440.png`), fullPage: true });
-      }
-      await row.getByRole("button", { name: state === "running" ? "停止" : "立即运行", exact: true }).click();
-      await expect.poll(() => commands).toEqual([{ operation: state === "running" ? "task_cancel" : "maintenance_start",
-        params: state === "running" ? { runId: taskId } : {} }]);
-      if (state === "running") await expect(row.getByRole("button", { name: "正在停止" })).toBeDisabled();
+      await open(page, "#buddies/router/maintenance");
+      const row = page.locator('[data-slot="maintenance-record"]').first();
+      await expect(row.locator('[data-slot="detail-live"]')).toContainText("模型输出中");
+      const stop = row.getByRole("button", { name: "停止", exact: true });
+      await stop.focus();
+      await expect(stop).toBeFocused();
+      await stop.click();
+      await expect.poll(() => commands).toEqual([{ operation: "task_cancel", params: { runId: taskId } }]);
+      await expect(row.getByRole("button", { name: "正在停止" })).toBeDisabled();
     });
-  });
-}
 
-for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
-  test.describe(`maintenance history ${theme} ${width}px`, () => {
-    test.use({ locale: "zh-CN", viewport: { width, height: 1200 }, reducedMotion: "reduce" });
-    test("shows no future run or retry on a failure followed by a completed batch", async ({ page }) => {
-      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+    test("shows failure text and computes the next run from the shared interval", async ({ page }) => {
       await page.route("**/api/console", async route => {
-        const response = await route.fetch();
-        const snapshot = await response.json();
-        const latest = snapshot.maintenance.runs[0];
-        snapshot.maintenance.runs = [latest, { ...latest, maintenanceRunId: "maintenance-old-failure",
-          taskId: "maintenance-old-task", state: "failed",
-          reason: { code: "router-not-responding", params: { seconds: 60 } },
-          startedAt: "2026-09-26T06:00:00Z", finishedAt: "2026-09-26T06:05:01Z",
-        }];
+        const response = await route.fetch(); const snapshot = await response.json();
+        snapshot.maintenance.runs = [{ ...snapshot.maintenance.runs[0], state: "failed", finishedAt: finished,
+          reason: { code: "router-not-responding", params: { seconds: 60 } } }];
         await route.fulfill({ response, json: snapshot });
       });
-      await open(page, "#buddies/router");
+      await open(page, "#buddies/router/maintenance");
+      const row = page.locator('[data-slot="maintenance-record"]');
+      await expect(row).toContainText("Router 的模型在 60 秒内没有开始作答。");
+      await expect(row.getByRole("button", { name: "立即运行" })).toHaveCount(0);
+      await expect(row.getByRole("button", { name: "停止" })).toHaveCount(0);
+      const next = await page.evaluate(value => {
+        const date = new Date(Date.parse(value) + 3600000);
+        const pad = (part: number) => String(part).padStart(2, "0");
+        return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+      }, finished);
+      await expect(page.locator('[data-slot="maintenance-next"]')).toContainText(next);
+      await expect(page.getByRole("spinbutton", { name: "维护间隔" })).toHaveValue("3600");
+    });
+
+    test("leaves an older failed record without an action after a later completed run", async ({ page }) => {
+      await page.route("**/api/console", async route => {
+        const response = await route.fetch(); const snapshot = await response.json();
+        const latest = snapshot.maintenance.runs[0];
+        snapshot.maintenance.runs = [latest, { ...latest, maintenanceRunId: "maintenance-old-failure", taskId: "maintenance-old-task",
+          state: "failed", reason: { code: "router-not-responding", params: { seconds: 60 } },
+          startedAt: "2026-09-26T06:00:00Z", finishedAt: "2026-09-26T06:05:01Z" }];
+        await route.fulfill({ response, json: snapshot });
+      });
+      await open(page, "#buddies/router/maintenance");
       const records = page.locator('[data-slot="maintenance-record"]');
       await expect(records).toHaveCount(2);
-      const older = records.nth(1);
-      await older.scrollIntoViewIfNeeded();
-      await expect(older).toContainText("Router 的模型在 60 秒内没有开始作答。");
-      await expect(older.getByRole("definition")).toHaveCount(3);
-      await expect(older.locator('[data-slot="maintenance-retry"]')).toHaveCount(0);
-      await expect(older.getByRole("button", { name: "立即运行" })).toHaveCount(0);
-      await expectNoSidewaysScroll(page);
+      await expect(records.nth(1)).toContainText("Router 的模型在 60 秒内没有开始作答。");
+      await expect(records.nth(1).getByRole("button")).toHaveCount(0);
     });
   });
 }

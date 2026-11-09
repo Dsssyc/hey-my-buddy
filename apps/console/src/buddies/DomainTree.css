@@ -1,0 +1,20 @@
+/* The branch canvas may grow without contributing its width to the surrounding scroll content. */
+.domain-tree { min-width: 0; contain: inline-size; }
+.domain-tree-stage { position: relative; isolation: isolate; margin-top: 8px; }
+.domain-tree-viewport { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; }
+.domain-tree-canvas { position: relative; min-width: 100%; transition: height 180ms ease; }
+.domain-tree-svg { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+.domain-tree-svg g { transition: opacity 150ms ease; }
+.domain-tree-svg g[data-dim="true"] { opacity: .2; }
+.domain-tree-line { fill: none; stroke: currentColor; stroke-linecap: round; }
+.domain-branch-node { position: absolute; z-index: 1; display: flex; width: max-content; max-width: none; align-items: baseline; gap: 7px; border: 0; border-radius: 2px; padding: 0 2px; background: transparent; color: var(--ink); font-size: 14px; line-height: 28px; white-space: nowrap; text-align: left; cursor: pointer; transition: left 180ms ease, top 180ms ease, opacity 150ms ease; }
+.domain-branch-node:hover { background: var(--surface); }
+.domain-branch-node:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 2px; background: var(--surface); }
+.domain-branch-count, .domain-branch-more { color: var(--ink3); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.domain-tree-popover { position: absolute; z-index: 5; width: min(304px, calc(100% - 8px)); border: 1px solid var(--line2); border-radius: 6px; padding: 16px; background: var(--surface); box-shadow: 0 12px 24px color-mix(in srgb, var(--bar) 20%, transparent); }
+.domain-tree-popover-title { color: var(--ink); font-size: 16px; font-weight: 500; }
+.domain-tree-popover-title span { color: var(--ink3); font-size: 12px; font-weight: 400; }
+.domain-tree-popover-definition { margin-top: 12px; color: var(--ink2); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.domain-tree-popover-merged { margin-top: 10px; color: var(--ink3); font-size: 12px; overflow-wrap: anywhere; }
+.domain-tree-popover-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+@media (prefers-reduced-motion: reduce) { .domain-tree-canvas, .domain-branch-node, .domain-tree-svg g { transition: none; } }

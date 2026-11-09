@@ -1,6 +1,6 @@
 import { expect } from "@playwright/test";
 import { join } from "node:path";
-import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
+import { expectNoSidewaysScroll, expectTextUncut, open, test } from "./preview";
 
 const CODEX = "codex / openai / gpt-5-codex";
 for (const locale of ["en-US", "zh-CN"]) for (const width of [1440, 390]) for (const theme of ["light", "dark"] as const) {
@@ -9,7 +9,7 @@ for (const locale of ["en-US", "zh-CN"]) for (const width of [1440, 390]) for (c
     test.beforeEach(async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     });
-    test("shows sourced claims, usage, empty profiles and correspondence provenance without overflow", async ({ page }) => {
+    test("shows sourced claims, Router usage, empty profiles and correspondence provenance without overflow", async ({ page }) => {
       await open(page, "#buddies/catalog");
       await page.getByRole("button", { name: CODEX, exact: true }).click();
       const profile = page.locator("[data-slot=model-profile]");
@@ -19,19 +19,7 @@ for (const locale of ["en-US", "zh-CN"]) for (const width of [1440, 390]) for (c
       await expect(profile).toContainText("2026-09-20");
       await expect(profile).toContainText("https://example.org/synthetic-preview/coding");
       await expect(profile.locator("a")).toHaveCount(0);
-      await expect(profile.locator("[data-slot=profile-run]")).toContainText("4,200");
-      const tools = profile.locator("[data-slot=profile-tool-summary]");
-      await expect(tools.getByRole("listitem")).toHaveCount(3);
-      await expect(tools.getByRole("listitem").nth(0)).toContainText(locale === "en-US" ? "web_searchTool calls2Failed0Unknown1" : "web_search工具调用2失败0未知1");
-      await expect(tools.getByRole("listitem").nth(1)).toContainText(locale === "en-US" ? "web_fetchTool calls2Failed2Unknown0" : "web_fetch工具调用2失败2未知0");
-      await expect(tools.getByRole("listitem").nth(2)).toContainText(locale === "en-US" ? "Unknown tool" : "未知工具");
-      await expect(tools.locator(".text-fail")).toHaveCount(1);
-      await expect(tools.getByRole("listitem").nth(1).locator("dd.text-fail")).toHaveText("2");
-      for (const row of await tools.getByRole("listitem").all()) {
-        await expectWholeAndApart(row, row.locator(":scope > span, :scope > dl"));
-        await expectWholeAndApart(row.locator("dl"), row.locator("dl > div"));
-        await expectTextUncut(row.locator("span, dt, dd"));
-      }
+      await expect(profile.locator("[data-slot=profile-run]")).toHaveCount(0);
       await expect(profile.locator("[data-slot=profile-quota]")).toContainText("dsh / deepseek-partner / deepseek-flash / max");
       await expect(profile.getByRole("button", { name: locale === "en-US" ? "Rebuild profile" : "重建画像", exact: true })).toBeDisabled();
       await expect(profile.locator("[data-slot=model-correspondence]")).toContainText(locale === "en-US" ? "Same-name normalization" : "同名归一");
@@ -40,21 +28,34 @@ for (const locale of ["en-US", "zh-CN"]) for (const width of [1440, 390]) for (c
       await profile.scrollIntoViewIfNeeded();
       await expectNoSidewaysScroll(page);
       if (locale === "en-US") expect(await profile.innerText()).not.toMatch(/[\u3400-\u9fff]/);
-      if (process.env.HMB_PROFILE_SHOTS) {
-        await tools.scrollIntoViewIfNeeded();
-        await page.screenshot({ path: join(process.env.HMB_PROFILE_SHOTS, `tools-${locale}-${theme}-${width}.png`) });
-      }
       await page.getByRole("button", { name: "codex / openai / gpt-5-mini", exact: true }).click();
       await expect(profile).toContainText(locale === "en-US" ? "No profile built yet" : "尚未构建画像");
-      await expect(profile.locator("[data-slot=model-correspondence]")).toContainText(locale === "en-US" ? "Profile plane suggestion" : "画像面的建议");
+      await expect(profile.locator("[data-slot=model-correspondence]")).toContainText(locale === "en-US" ? "Profile suggestion" : "画像的建议");
       await expect(profile).toContainText("https://example.org/synthetic-preview/model");
       await expectNoSidewaysScroll(page);
       await page.getByRole("button", { name: "zcode / zai / glm-5", exact: true }).click();
-      await expect(tools).toHaveText(locale === "en-US" ? "Tool call outcomes are unknown" : "工具调用的成败未知");
       await expectNoSidewaysScroll(page);
+      await page.locator('a[href="#buddies/router"]').click();
+      await page.locator('a[href="#buddies/router/profiles"]').click();
+      const records = page.locator("[data-slot=profile-records]");
+      const completed = records.getByRole("button", { name: "gpt-5-codex" });
+      await completed.click();
+      const completedDetail = records.locator(`tr:has(> td > button:has-text("gpt-5-codex")) + tr`);
+      await expect(completedDetail).toContainText("900 / 3,300 / 650");
+      const tools = completedDetail.getByRole("table").first();
+      await expect(tools).toContainText("web_search");
+      await expect(tools).toContainText("web_fetch");
+      await expect(tools).toContainText(locale === "en-US" ? "All failed" : "全部失败");
+      await expect(tools.getByRole("rowheader", { name: /web_fetch/ }).locator("[data-slot=state-mark]")).toHaveAttribute("data-kind", "fail");
+      await expectTextUncut(tools.getByRole("rowheader"));
+      const failed = records.getByRole("button", { name: "glm-5" });
+      await expect(failed).toHaveAttribute("aria-expanded", "true");
+      const failedDetail = records.locator(`tr:has(> td > button:has-text("glm-5")) + tr`);
+      await expect(failedDetail).toContainText(locale === "en-US" ? "All failed" : "全部失败");
+      await expect(failedDetail.getByRole("row", { name: /web_fetch/ })).toContainText("0 / 8 / 0");
       if (process.env.HMB_PROFILE_SHOTS) {
-        await tools.scrollIntoViewIfNeeded();
-        await page.screenshot({ path: join(process.env.HMB_PROFILE_SHOTS, `unknown-${locale}-${theme}-${width}.png`) });
+        await records.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: join(process.env.HMB_PROFILE_SHOTS, `records-${locale}-${theme}-${width}.png`) });
       }
     });
   });
@@ -136,7 +137,7 @@ test.describe("model profile edits", () => {
 
 for (const locale of ["en-US", "zh-CN"]) test.describe(`profile tool outcomes and undo conflict ${locale}`, () => {
   test.use({ locale, viewport: { width: 390, height: 1000 }, reducedMotion: "reduce" });
-  test("omits empty summaries and keeps partial failures uncoloured", async ({ page }) => {
+  test("shows an empty summary and marks partial tool failures", async ({ page }) => {
     let toolSummary: { toolName: string; calls: number; failed: number; unknown: number }[] = [];
     await page.route("**/api/console", async route => {
       const response = await route.fetch();
@@ -144,15 +145,20 @@ for (const locale of ["en-US", "zh-CN"]) test.describe(`profile tool outcomes an
       for (const model of snapshot.models) if (model.latestProfileRun) model.latestProfileRun.toolSummary = toolSummary;
       await route.fulfill({ response, json: snapshot });
     });
-    await open(page, "#buddies/catalog");
-    await page.getByRole("button", { name: CODEX, exact: true }).click();
-    await expect(page.locator("[data-slot=profile-run]")).toBeVisible();
-    await expect(page.locator("[data-slot=profile-tool-summary]")).toHaveCount(0);
+    await open(page, "#buddies/router/profiles");
+    const records = page.locator("[data-slot=profile-records]");
+    const completed = records.getByRole("button", { name: "gpt-5-codex" });
+    await completed.click();
+    let detail = records.locator(`tr:has(> td > button:has-text("gpt-5-codex")) + tr`);
+    await expect(detail).toContainText(locale === "en-US" ? "No tool calls recorded" : "没有工具调用记录");
     toolSummary = [{ toolName: "web_fetch", calls: 3, failed: 1, unknown: 1 }];
     await page.reload();
-    const tools = page.locator("[data-slot=profile-tool-summary]");
-    await expect(tools).toContainText(locale === "en-US" ? "web_fetchTool calls3Failed1Unknown1" : "web_fetch工具调用3失败1未知1");
-    await expect(tools.locator(".text-fail")).toHaveCount(0);
+    await records.getByRole("button", { name: "gpt-5-codex" }).click();
+    detail = records.locator(`tr:has(> td > button:has-text("gpt-5-codex")) + tr`);
+    const toolRow = detail.getByRole("row", { name: /web_fetch/ });
+    await expect(toolRow).toContainText("1 / 1 / 1");
+    await expect(toolRow.locator("[data-slot=state-mark]")).toHaveAttribute("data-kind", "fail");
+    await expect(toolRow.locator(".text-fail")).toHaveCount(1);
   });
   test("shows the localized refresh instruction when the displayed correspondence is stale", async ({ page }) => {
     const writes: unknown[] = [];

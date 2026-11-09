@@ -2602,9 +2602,14 @@ def model_views() -> dict:
                   "state": "failed", "reason": {"code": "profile-answer-invalid",
                                                   "params": {"errors": ["answer.claims[0].sourceUrl: required"]}},
                   "startedAt": instant(8, 20), "finishedAt": instant(8, 21),
-                  "correctionRounds": 2, "toolSummary": None,
+                  "correctionRounds": 1,
+                  "toolSummary": [{"toolName": "web_search", "calls": 6, "failed": 0, "unknown": 0},
+                                  {"toolName": "web_fetch", "calls": 8, "failed": 8, "unknown": 0}],
                   "usage": {"attempts": [{"attemptId": "synthetic-profile-attempt-failed",
-                                          "elapsedMs": 60000, "toolCalls": 2, "tokenUsage": None}]}}
+                                          "elapsedMs": 60000, "toolCalls": 14,
+                                          "tokenUsage": {"inputTokens": 12480, "cachedInputTokens": 2048, "outputTokens": 1620, "source": "synthetic-preview", "scope": "attempt"}},
+                                         {"attemptId": "synthetic-profile-attempt-failed-2", "elapsedMs": 60000, "toolCalls": 0,
+                                          "tokenUsage": {"inputTokens": 9200, "cachedInputTokens": 4096, "outputTokens": 840, "source": "synthetic-preview", "scope": "attempt"}}]}}
     models = []
     for name, model_id in sorted(MODEL_IDS.items()):
         profile = None
@@ -2621,6 +2626,10 @@ def model_views() -> dict:
             latest_run = profile_run
         elif name == "glm-5":
             latest_run = failed_run
+        elif name == "gpt-5-mini":
+            latest_run = {**profile_run, "profileRunId": "synthetic-profile-running", "taskId": "synthetic-profile-task-running",
+                          "state": "running", "startedAt": instant(8, 19), "finishedAt": None,
+                          "usage": {"attempts": []}, "toolSummary": None}
         models.append({"modelId": model_id, "displayName": name, "names": names[name],
                        "profile": profile, "latestProfileRun": latest_run})
     return {"models": models, "modelCorrespondences": correspondences}
@@ -2732,7 +2741,7 @@ def router_records(buddies: list[dict]) -> list[dict]:
                 "lastAnsweredAt": None, "lastNoAnswerAt": None, "lastError": None, **facts}
     return [
         record(buddies[0]["buddyId"], 0, answeredCount=3, noAnswerCount=1, lastAnsweredAt=instant(6, 5),
-               lastNoAnswerAt=instant(4, 12), lastError={"code": "routing-bounds-rejected", "at": instant(4, 12), "phase": "answer"}),
+               lastNoAnswerAt=instant(4, 12), lastError={"code": "router-out-of-bounds", "at": instant(4, 12), "phase": "answer"}),
         record("codex:openai:gpt-5-mini:high", 1, inSkipWindow=True, skipUntil=instant(8, 46), retryAt=instant(8, 46),
                answeredCount=1, noAnswerCount=2, consecutiveNoAnswers=2, lastAnsweredAt=instant(3, 2),
                lastNoAnswerAt=instant(8, 36), lastError={"code": "router-no-answer", "at": instant(8, 36), "phase": "start"}),
@@ -2827,17 +2836,22 @@ def kind_evaluation_views(domains: list[dict]) -> list[dict]:
 def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | None = None) -> dict:
     domains = [
         {"nodeId": "preview-domain-ui", "name": "界面工程", "definition": "构建和调整用户界面。",
-         "parentId": None, "mergedIntoId": None},
+         "parentId": None, "mergedIntoId": None, "directCount": 3},
         {"nodeId": "preview-domain-routing", "name": "路由判断", "definition": "核对选择依据和路由结果。",
-         "parentId": "preview-domain-ui", "mergedIntoId": None},
+         "parentId": "preview-domain-ui", "mergedIntoId": None, "directCount": 1},
         {"nodeId": "preview-domain-console", "name": "控制台", "definition": "读取并呈现黑板事实。",
-         "parentId": "preview-domain-ui", "mergedIntoId": None},
+         "parentId": "preview-domain-ui", "mergedIntoId": None, "directCount": 2},
         {"nodeId": "preview-domain-tokens", "name": "样式与排版", "definition": "控制台的颜色、间距与字号。",
-         "parentId": "preview-domain-console", "mergedIntoId": None},
+         "parentId": "preview-domain-console", "mergedIntoId": None, "directCount": 1},
         {"nodeId": "preview-domain-docs", "name": "文档与技能", "definition": "说明、决定与共享技能。",
-         "parentId": None, "mergedIntoId": None},
+         "parentId": None, "mergedIntoId": None, "directCount": 2},
         {"nodeId": "preview-domain-skill", "name": "共享技能", "definition": "交给 agent 的使用说明。",
-         "parentId": "preview-domain-docs", "mergedIntoId": None},
+         "parentId": "preview-domain-docs", "mergedIntoId": None, "directCount": 1},
+        {"nodeId": "preview-domain-science", "name": "科研计算", "definition": "数值计算与可重复的实验。", "parentId": None, "mergedIntoId": None, "directCount": 7},
+        {"nodeId": "preview-domain-mesh", "name": "网格生成", "definition": "计算网格与网格质量。", "parentId": "preview-domain-science", "mergedIntoId": None, "directCount": 4},
+        {"nodeId": "preview-domain-statistics", "name": "统计分析", "definition": "统计模型与假设检验。", "parentId": None, "mergedIntoId": None, "directCount": 2},
+        {"nodeId": "preview-domain-old-ui", "name": "前端界面", "definition": "此前的界面分类。", "parentId": None, "mergedIntoId": "preview-domain-console", "directCount": 3},
+        {"nodeId": "preview-domain-old-console", "name": "旧控制台界面", "definition": "曾使用的界面分类。", "parentId": None, "mergedIntoId": "preview-domain-old-ui", "directCount": 2},
     ]
     buddies = buddy_views()
     if scenario == "readme":
@@ -2893,9 +2907,9 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
                           "lastSuccessAt": instant(6, 5), "lastSuccessDecisionId": ROUTING_A1["decisionId"],
                           "available": True, "reason": None, "currentRouterBuddyId": routers[0]["buddyId"],
                           "routers": routers,
-                          "recentFailures": [{"decisionId": ROUTING_A2["decisionId"], "runId": "preview-run-a2",
+                          "recentFailures": [{"decisionId": ROUTING_A2["decisionId"], "runId": "preview-run-a2", "macroTaskId": MACRO_A,
                                               "title": "合成预览任务 A2",
-                                              "at": instant(8, 36), "code": "routing-bounds-rejected"}]},
+                                              "at": instant(8, 36), "code": "router-out-of-bounds"}]},
         "tasks": {"pendingCount": pending_root_count(state)},
         "capabilities": {"selection": True,
                          "decisionAdapter": True, "decisionAdapterReason": None,

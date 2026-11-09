@@ -156,10 +156,14 @@ def console_snapshot_projection(service, *, clock=_time.time) -> tuple[dict, flo
     projection["tasks"] = {"pendingCount": macro_tasks.pending_root_count(service.store)}
     with service.store.db.read() as connection:
         projection["maintenance"] = _maintenance_view(connection)
+        direct_counts = {row["domain_node_id"]: row["direct_count"] for row in connection.execute(
+            "SELECT domain_node_id,COUNT(*) AS direct_count"
+            " FROM micro_task_classifications GROUP BY domain_node_id")}
         projection["domainNodes"] = [
             {"nodeId": row["node_id"], "name": row["name"],
              "definition": row["definition"], "parentId": row["parent_id"],
-             "mergedIntoId": row["merged_into_id"]}
+             "mergedIntoId": row["merged_into_id"],
+             "directCount": direct_counts.get(row["node_id"], 0)}
             for row in connection.execute(
                 "SELECT node_id,name,definition,parent_id,merged_into_id FROM domain_nodes"
                 " ORDER BY node_id")]

@@ -1303,6 +1303,7 @@ class DecisionCoordinator:
     def health_summary(self) -> dict:
         """Read terminal decision facts and each Router's recorded outcomes."""
         from .router_history import buddy_timeline, router_state
+        from ..tasks.macro_tasks import RUN_GROUPS_SQL
         limit = 20
         source = (
             " FROM evaluation_decisions d JOIN decision_requests r ON r.decision_id=d.decision_id"
@@ -1317,12 +1318,15 @@ class DecisionCoordinator:
         with self.db.read() as connection:
             now = self._now()
             rows = connection.execute(
+                "WITH ownership AS MATERIALIZED (" + RUN_GROUPS_SQL + ") "
                 "SELECT d.status,d.reason_code,r.updated_at AS created_at,r.decision_id,r.task_id,"
                 " (" + router_success + ") AS router_success,"
                 " (r.attempt_id IS NOT NULL) AS has_attempt,"
                 " (SELECT w.run_id FROM workflow_routes w WHERE w.decision_id=r.decision_id LIMIT 1) AS micro_task_id,"
                 " (SELECT run.title FROM workflow_routes w JOIN workflow_runs run ON run.run_id=w.run_id"
                 "  WHERE w.decision_id=r.decision_id LIMIT 1) AS micro_task_title"
+                ", (SELECT ownership.group_id FROM workflow_routes w JOIN ownership ON ownership.run_id=w.run_id"
+                "  WHERE w.decision_id=r.decision_id) AS macro_task_id"
                 + source + " ORDER BY r.updated_at DESC,r.rowid DESC LIMIT ?", (limit,),
             ).fetchall()
             success = connection.execute(
@@ -1350,7 +1354,8 @@ class DecisionCoordinator:
                 cancellations += int(row["status"] == "cancelled")
                 if is_failure:
                     failed.append({"decisionId": row["decision_id"], "runId": row["micro_task_id"] or row["task_id"],
-                                   "title": row["micro_task_title"], "at": row["created_at"], "code": code})
+                                   "title": row["micro_task_title"], "macroTaskId": row["macro_task_id"],
+                                   "at": row["created_at"], "code": code})
             facts = resolution.facts
             interval = facts.get("routerRetryIntervalSeconds")
             mode = facts.get("routingMode")

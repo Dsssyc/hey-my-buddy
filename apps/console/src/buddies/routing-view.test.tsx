@@ -68,7 +68,7 @@ describe("the Router list", () => {
     expect(waiting.getByText("等待重试")).toBeTruthy();
     expect(line(HIGH).querySelector("time")!.textContent).toBe(formatShortDateTime(Date.parse("2026-09-27T08:00:00.000Z")));
     expect(standing(HIGH)).toBe("idle");
-    expect(screen.getByRole("heading", { name: "Router", level: 2 })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "路由", level: 2 })).toBeTruthy();
   });
 
   it("names the buddy the service says holds the role, not the head of the list", async () => {
@@ -558,7 +558,7 @@ describe("the settings of the role", () => {
     await user.clear(responseWaitInput());
     await user.type(responseWaitInput(), "30");
     expect(responseWaitInput()).toHaveProperty("value", "30");
-    expect(unsavedIn("等待模型开始作答（秒）")).toHaveLength(1);
+    expect(unsavedIn("等待模型开始作答")).toHaveLength(1);
     await user.click(saveButton());
     await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { modelResponseWaitSeconds: 30 } });
@@ -625,150 +625,14 @@ describe("the settings of the role", () => {
     await user.clear(responseWaitInput());
     await user.type(responseWaitInput(), "120");
     await user.click(remove(MEDIUM));
-    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("等待模型开始作答（秒）").length, unsavedIn("重试间隔").length]).toEqual([1, 1, 1, 0]);
+    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("等待模型开始作答").length, unsavedIn("重试间隔").length]).toEqual([1, 1, 1, 0]);
     await user.click(modeOption("审阅"));
-    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("等待模型开始作答（秒）").length]).toEqual([1, 0, 1]);
+    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("等待模型开始作答").length]).toEqual([1, 0, 1]);
     await user.click(saveButton());
     await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [], modelResponseWaitSeconds: 120 } });
   });
 });
-
-describe("the records of routing", () => {
-  const records = () => within(section("记录"));
-  /** One fact of the window: its name and its number, as they read. */
-  const fact = (name: string) => records().getByText(name).closest("dl")!.textContent;
-  const time = (iso: string) => formatShortDateTime(Date.parse(iso));
-
-  it("says that nothing is recorded when the snapshot carries no health facts, and writes no failures", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID] }));
-    await openRoles(f);
-    expect(records().getByText("未记录")).toBeTruthy();
-    expect(records().queryByText("失败")).toBeNull();
-    expect(records().queryByRole("table")).toBeNull();
-  });
-
-  it("says that there are no records for an empty window, rather than zero failures", async () => {
-    const f = fixture(snapshot({ routingHealth: health({ sampleCount: 0, lastSuccessAt: null }) }));
-    await openRoles(f);
-    expect(records().getByText("暂无记录")).toBeTruthy();
-    expect(records().queryByText("失败")).toBeNull();
-    expect(records().queryByText("最近成功")).toBeNull();
-  });
-
-  it("writes the window's counts as names with numbers, leaves out what is zero, and does not work out successes", async () => {
-    const f = fixture(snapshot({ routingHealth: health({
-      sampleCount: 18, failureCount: 4, consecutiveFailures: 2, abstentionCount: 3, cancelledCount: 1,
-      notRespondingCount: 0, boundsRejectedCount: 2,
-      lastSuccessAt: "2026-09-25T08:02:00.000Z", lastSuccessDecisionId: "dec-41",
-    }) }));
-    await openRoles(f);
-    expect(fact("失败")).toBe("失败4 / 18");
-    expect(fact("连续失败")).toBe("连续失败2");
-    expect(fact("弃权")).toBe("弃权3");
-    expect(fact("取消")).toBe("取消1");
-    expect(fact("越界")).toBe("越界2");
-    expect(fact("最近成功")).toBe(`最近成功${time("2026-09-25T08:02:00.000Z")}`);
-    // A zero, and a count the service does not carry, are not written; nor is a success rate.
-    expect(records().queryByText("模型未开始作答")).toBeNull();
-    expect(records().queryByText("输入变化")).toBeNull();
-    expect(records().queryByText(/成功 \d/)).toBeNull();
-    expect(records().getByText("失败").getAttribute("aria-description")).toBeNull();
-  });
-
-  it("writes the recorded outcomes of the Router beside the failures: no response, bounds and changed input", async () => {
-    const f = fixture(snapshot({ routingHealth: health({
-      sampleCount: 12, failureCount: 2, notRespondingCount: 3, boundsRejectedCount: 2, inputChangedCount: 1, lastSuccessAt: null,
-    }) }));
-    await openRoles(f);
-    expect(fact("失败")).toBe("失败2 / 12");
-    expect(fact("模型未开始作答")).toBe("模型未开始作答3");
-    expect(fact("越界")).toBe("越界2");
-    expect(fact("输入变化")).toBe("输入变化1");
-    expect(fact("最近成功")).toBe("最近成功无");
-    expect(records().queryByText("连续失败")).toBeNull();
-  });
-
-  it("renders the structured reason of an unavailable Router in the current language", async () => {
-    const f = fixture(snapshot({ routingHealth: health({ available: false, reason: { code: "router-not-configured", params: {} }, sampleCount: 3, failureCount: 3, consecutiveFailures: 3 }) }));
-    await openRoles(f);
-    expect(fact("不可用")).toBe("不可用尚未设置 Router。");
-  });
-
-  it("gives each buddy of the list a line of its own records, with a dash where nothing is recorded", async () => {
-    const f = fixture(snapshot({
-      routers: [MEDIUM_ID, FLASH_ID],
-      routingHealth: health({ currentRouterBuddyId: MEDIUM_ID, routers: [
-        { buddyId: MEDIUM_ID, index: 0, eligible: true, identity: { harness: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "medium" },
-          answeredCount: 7, noAnswerCount: 0, consecutiveNoAnswers: 0, lastAnsweredAt: "2026-09-27T07:00:00.000Z",
-          lastError: { code: "router-out-of-bounds", at: "2026-09-26T06:30:00.000Z" } },
-        { buddyId: FLASH_ID, index: 1, eligible: true, identity: null },
-      ] }),
-    }));
-    await openRoles(f);
-    const table = records().getByRole("table", { name: "各 Router 的记录" });
-    expect(within(table).getAllByRole("columnheader").map(cell => cell.textContent))
-      .toEqual(["Buddy", "应答", "未应答", "连续未应答", "最近应答", "最近错误"]);
-    const [, first, second] = within(table).getAllByRole("row");
-    expect(within(first).getAllByRole("cell").map(cell => cell.textContent)).toEqual([
-      MEDIUM, "7", "0", "0", time("2026-09-27T07:00:00.000Z"), `router-out-of-bounds${time("2026-09-26T06:30:00.000Z")}`,
-    ]);
-    // Nothing recorded is a dash, never a zero; the buddy without a recorded identity is named by its id.
-    expect(within(second).getAllByRole("cell").map(cell => cell.textContent)).toEqual([FLASH_ID, "—", "—", "—", "—", "—"]);
-  });
-
-  it("lists the latest failures with their time, their code and the micro task, as recorded", async () => {
-    const f = fixture(snapshot({ routingHealth: health({
-      sampleCount: 18, failureCount: 3, consecutiveFailures: 3,
-      recentFailures: [
-        { decisionId: "dec-48", runId: "run-a", title: "Review parser", at: "2026-09-27T09:41:00.000Z", code: "call-failed" },
-        { decisionId: "dec-47", runId: null, title: null, at: "2026-09-27T09:12:00.000Z", code: "needs-host" },
-      ],
-    }) }));
-    await openRoles(f);
-    const table = records().getByRole("table", { name: "最近的失败" });
-    expect(within(table).getAllByRole("columnheader").map(cell => cell.textContent)).toEqual(["时间", "结果", "微任务"]);
-    const rows = within(table).getAllByRole("row").slice(1).map(row => within(row).getAllByRole("cell").map(cell => cell.textContent));
-    expect(rows).toEqual([[time("2026-09-27T09:41:00.000Z"), "call-failed", "run-a"], [time("2026-09-27T09:12:00.000Z"), "needs-host", "未记录"]]);
-    // The code is set in monospace; no title is invented for a micro task.
-    expect(within(table).getByText("call-failed").tagName).toBe("CODE");
-    expect(records().queryByRole("button")).toBeNull();
-    expect(f.command).not.toHaveBeenCalled();
-  });
-
-  it("writes no table of failures when none are recorded", async () => {
-    const f = fixture(snapshot({ routingHealth: health() }));
-    await openRoles(f);
-    expect(records().queryByRole("table", { name: "最近的失败" })).toBeNull();
-  });
-});
-
-describe("addresses of the view", () => {
-  it("focuses the line of the buddy serving now from #buddies/router/current", async () => {
-    const f = fixture(snapshot({ routers: [SOL_ID, MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
-    await openRoles(f, "#buddies/router/current");
-    await waitFor(() => expect(document.activeElement).toBe(line(MEDIUM)));
-  });
-
-  it("focuses the list when nobody serves, from #buddies/router/current", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ available: false, currentRouterBuddyId: null }) }));
-    await openRoles(f, "#buddies/router/current");
-    await waitFor(() => expect(document.activeElement).toBe(section("列表")));
-  });
-
-  it("focuses the records from #buddies/router/health", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
-    await openRoles(f, "#buddies/router/health");
-    await waitFor(() => expect(document.activeElement).toBe(section("记录")));
-  });
-
-  it("opens the view without moving focus from #buddies/router", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
-    await openRoles(f);
-    expect(rolesRegion().contains(document.activeElement)).toBe(false);
-  });
-});
-
 
 describe("exploration quota", () => {
   const input = () => within(section("探索名额")).getByRole("spinbutton", { name: "探索间隔微任务数" });
@@ -798,35 +662,5 @@ describe("exploration quota", () => {
     await user.click(saveButton());
     await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { explorationEvery: 2 } });
-  });
-});
-
-describe("profile plane", () => {
-  it("offers only enabled, available buddies with an enforced web level and publishes the chosen buddy", async () => {
-    const data = snapshot();
-    data.harnesses = data.harnesses.map(harness => ({ ...harness, permissions: harness.harness === "claude" ? { web: "enforced" } : { web: "convention" } }));
-    const f = fixture(data);
-    const user = userEvent.setup();
-    await openRoles(f);
-    expect(within(section("画像 buddy")).getByText("尚未指定画像 buddy。")).toBeTruthy();
-    await user.click(within(section("画像 buddy")).getByRole("button", { name: "选择 buddy" }));
-    const dialog = screen.getByRole("dialog", { name: "选择 buddy" });
-    expect(within(dialog).getByRole("button", { name: MEDIUM })).toBeTruthy();
-    expect(within(dialog).queryByRole("button", { name: HIGH })).toBeNull();
-    expect(within(dialog).queryByRole("button", { name: FLASH })).toBeNull();
-    expect(within(dialog).queryByRole("button", { name: GLM })).toBeNull();
-    await user.click(within(dialog).getByRole("button", { name: MEDIUM }));
-    expect(unsavedIn("画像 buddy")).toHaveLength(1);
-    await user.click(saveButton());
-    await screen.findByText("设置已保存");
-    expect(patchOf(f.published[0])).toEqual({ configuration: { profileBuddyId: MEDIUM_ID } });
-  });
-
-  it("shows a service readiness reason only while one is recorded", async () => {
-    await openRoles(fixture(snapshot({ configuration: { profileBuddyId: SOL_ID, profileUnavailableReason: { code: "profile-web-unsupported", params: {} } } })));
-    expect(within(section("画像 buddy")).getByText("画像 buddy 的 harness 未声明强制只联网档位。")).toBeTruthy();
-    cleanup();
-    await openRoles(fixture(snapshot({ configuration: { profileBuddyId: MEDIUM_ID, profileUnavailableReason: null } })));
-    expect(within(section("画像 buddy")).queryByRole("status")).toBeNull();
   });
 });

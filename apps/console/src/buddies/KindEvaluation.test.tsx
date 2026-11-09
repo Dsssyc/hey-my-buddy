@@ -24,9 +24,9 @@ const evaluation: KindEvaluationData = {
     byDomainTaskType: { backend: { debug: domainCell }, api: { debug: domainCell } }, infrastructureFailures: [] },
 };
 const domains: DomainNode[] = [
-  { nodeId: "backend", name: "后端", definition: "", parentId: null, mergedIntoId: null },
-  { nodeId: "api", name: "API", definition: "", parentId: "backend", mergedIntoId: null },
-  { nodeId: "old", name: "已合并", definition: "", parentId: null, mergedIntoId: "backend" },
+  { nodeId: "backend", name: "后端", definition: "", parentId: null, mergedIntoId: null, directCount: 0 },
+  { nodeId: "api", name: "API", definition: "", parentId: "backend", mergedIntoId: null, directCount: 0 },
+  { nodeId: "old", name: "已合并", definition: "", parentId: null, mergedIntoId: "backend", directCount: 0 },
 ];
 
 afterEach(cleanup);
@@ -94,10 +94,10 @@ describe("buddy-kind evaluation", () => {
       },
     };
     const tree: DomainNode[] = [
-      { nodeId: "backend", name: "后端", definition: "", parentId: null, mergedIntoId: null },
-      { nodeId: "api", name: "API", definition: "", parentId: "backend", mergedIntoId: null },
-      { nodeId: "leaf", name: "解析", definition: "", parentId: "api", mergedIntoId: null },
-      { nodeId: "other", name: "别的分支", definition: "", parentId: null, mergedIntoId: null },
+      { nodeId: "backend", name: "后端", definition: "", parentId: null, mergedIntoId: null, directCount: 0 },
+      { nodeId: "api", name: "API", definition: "", parentId: "backend", mergedIntoId: null, directCount: 0 },
+      { nodeId: "leaf", name: "解析", definition: "", parentId: "api", mergedIntoId: null, directCount: 0 },
+      { nodeId: "other", name: "别的分支", definition: "", parentId: null, mergedIntoId: null, directCount: 0 },
     ];
     show({ evaluation: sparse, domains: tree });
     await user.click(screen.getByRole("button", { name: /评价与领域经验/ }));

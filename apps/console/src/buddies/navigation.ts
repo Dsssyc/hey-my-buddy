@@ -13,7 +13,7 @@ export function buddyLocation(hash: string): BuddyLocation | null {
   const [page, route, kind, target, extra] = hash.slice(1).split("/");
   if (page !== "buddies") return null;
   if (!route) return { view: "models" };
-  if (route === "router" && !target) {
+  if (route === "router" && !target && (!kind || ["routing", "maintenance", "profiles"].includes(kind))) {
     try { return { view: "router", ...(kind ? { target: decodeURIComponent(kind) } : {}) }; }
     catch { return null; }
   }

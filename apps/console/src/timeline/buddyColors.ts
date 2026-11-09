@@ -33,11 +33,25 @@ export const BUDDY_EXTENSION_CORE_DISTANCE = 12;
 const semanticLabs = [...tokens.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|goal|brand-mark|past): (#[0-9a-f]{6});/g)]
   .map(match => rgbHexToLab(match[1]!));
 const reservedLabs = [...semanticLabs, ...BUDDY_REJECTED_COLORS.map(rgbHexToLab)];
-const coreLabs = BUDDY_CORE_COLORS.map(rgbHexToLab);
 type Candidate = { lab: LABColor; hex: string };
-const candidates: Candidate[] = [];
-const nearestDistanceSquared: number[] = [];
-const colors: string[] = [...BUDDY_CORE_COLORS];
+const DOMAIN_CORE_COLORS = ["#0c96c3", "#3b9f33", "#dd44a0", "#7f5fd6"] as const;
+const domainSurfaces = ["#ffffff", "#16171a"] as const;
+
+function relativeLuminance(hex: string): number {
+  const channels = hex.match(/[0-9a-f]{2}/gi)!.map(part => {
+    const value = parseInt(part, 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return channels[0]! * .2126 + channels[1]! * .7152 + channels[2]! * .0722;
+}
+
+function domainContrast(hex: string): boolean {
+  const value = relativeLuminance(hex);
+  return domainSurfaces.every(surface => {
+    const background = relativeLuminance(surface);
+    return (Math.max(value, background) + .05) / (Math.min(value, background) + .05) >= 3;
+  });
+}
 
 function squaredDistance(left: LABColor, right: LABColor): number {
   return (left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2 + (left[2] - right[2]) ** 2;
@@ -56,58 +70,80 @@ export function isUnwantedBuddyColor([lightness, a, b]: LABColor): boolean {
     || hue >= 30 && hue < 70 && (chroma < 55 || hue >= 45 && lightness < 55);
 }
 
-function prepareCandidates(): void {
-  const usedHex = new Set(colors);
-  // The extension keeps the existing deterministic farthest-point Lab grid.
-  // Measure the rounded sRGB output, which is what the user actually sees.
-  for (let lightness = 34; lightness <= 88; lightness += 2) {
-    // Neither foreground reaches 4.5:1 in the gap between the two lightness tiers.
-    if (lightness === 50 || lightness === 52) continue;
-    for (let chroma = 26; chroma <= 84; chroma += 2) {
-      for (let hue = 0; hue < 360; hue += 2) {
-        const radians = hue * Math.PI / 180;
-        const point: LABColor = [lightness, chroma * Math.cos(radians), chroma * Math.sin(radians)];
-        if (!validateRgb(labToRgb(point))) continue;
-        const hex = labToRgbHex(point);
-        if (usedHex.has(hex)) continue;
-        const lab = rgbHexToLab(hex);
-        if (isUnwantedBuddyColor(lab)) continue;
-        if (reservedLabs.some(reserved => squaredDistance(lab, reserved) < BUDDY_STATUS_DISTANCE ** 2)) continue;
-        const distance = Math.min(...coreLabs.map(core => squaredDistance(lab, core)));
-        if (distance < BUDDY_EXTENSION_CORE_DISTANCE ** 2) continue;
-        usedHex.add(hex);
-        candidates.push({ lab, hex });
-        nearestDistanceSquared.push(distance);
+function makePalette(seed: readonly string[], lightnesses: readonly number[], eligible: (lab: LABColor) => boolean): (count: number) => readonly string[] {
+  const candidates: Candidate[] = [];
+  const nearestDistanceSquared: number[] = [];
+  const colors: string[] = [...seed];
+  const seedLabs = seed.map(rgbHexToLab);
+  function prepareCandidates(): void {
+    const usedHex = new Set(colors);
+    // Distances use the rounded sRGB output, which is what the user sees.
+    for (const lightness of lightnesses) {
+      for (let chroma = 26; chroma <= 84; chroma += 2) {
+        for (let hue = 0; hue < 360; hue += 2) {
+          const radians = hue * Math.PI / 180;
+          const point: LABColor = [lightness, chroma * Math.cos(radians), chroma * Math.sin(radians)];
+          if (!validateRgb(labToRgb(point))) continue;
+          const hex = labToRgbHex(point);
+          if (usedHex.has(hex)) continue;
+          const lab = rgbHexToLab(hex);
+          if (!eligible(lab)) continue;
+          if (reservedLabs.some(reserved => squaredDistance(lab, reserved) < BUDDY_STATUS_DISTANCE ** 2)) continue;
+          const distance = Math.min(...seedLabs.map(core => squaredDistance(lab, core)));
+          if (distance < BUDDY_EXTENSION_CORE_DISTANCE ** 2) continue;
+          usedHex.add(hex);
+          candidates.push({ lab, hex });
+          nearestDistanceSquared.push(distance);
+        }
       }
     }
   }
-}
 
-function extendPalette(): void {
-  if (!candidates.length) prepareCandidates();
-  let winner = -1;
-  let largestDistance = -1;
-  for (let index = 0; index < candidates.length; index++) {
-    const distance = nearestDistanceSquared[index]!;
-    if (distance > largestDistance) {
-      winner = index;
-      largestDistance = distance;
+  function extendPalette(): void {
+    if (!candidates.length) prepareCandidates();
+    let winner = -1;
+    let largestDistance = -1;
+    for (let index = 0; index < candidates.length; index++) {
+      const distance = nearestDistanceSquared[index]!;
+      if (distance > largestDistance) {
+        winner = index;
+        largestDistance = distance;
+      }
+    }
+    if (winner < 0) throw new RangeError("Identity color grid exhausted");
+    const chosen = candidates[winner]!;
+    colors.push(chosen.hex);
+    nearestDistanceSquared[winner] = -1;
+    for (let index = 0; index < candidates.length; index++) {
+      if (nearestDistanceSquared[index]! < 0) continue;
+      nearestDistanceSquared[index] = Math.min(nearestDistanceSquared[index]!, squaredDistance(candidates[index]!.lab, chosen.lab));
     }
   }
-  if (winner < 0) throw new RangeError("Buddy color grid exhausted");
-  const chosen = candidates[winner]!;
-  colors.push(chosen.hex);
-  nearestDistanceSquared[winner] = -1;
-  for (let index = 0; index < candidates.length; index++) {
-    if (nearestDistanceSquared[index]! < 0) continue;
-    nearestDistanceSquared[index] = Math.min(nearestDistanceSquared[index]!, squaredDistance(candidates[index]!.lab, chosen.lab));
-  }
+  return count => {
+    while (colors.length < count) extendPalette();
+    return colors.slice(0, count);
+  };
 }
+
+const buddyPalette = makePalette(BUDDY_CORE_COLORS,
+  Array.from({ length: 28 }, (_, index) => 34 + index * 2).filter(lightness => lightness !== 50 && lightness !== 52),
+  lab => !isUnwantedBuddyColor(lab));
+
+const domainPalette = makePalette(DOMAIN_CORE_COLORS,
+  Array.from({ length: 10 }, (_, index) => 48 + index * 2),
+  lab => {
+    const hue = (Math.atan2(lab[2], lab[1]) * 180 / Math.PI + 360) % 360;
+    return hue >= 145 && hue <= 330 && !isUnwantedBuddyColor(lab) && domainContrast(labToRgbHex(lab));
+  });
 
 /** The shared sequence, also used by the execution legend's colour sample. */
 export function buddyColorPrefix(count: number): readonly string[] {
-  while (colors.length < count) extendPalette();
-  return colors.slice(0, count);
+  return buddyPalette(count);
+}
+
+/** Mid-lightness identities for the thin branches in either theme. */
+export function domainColorPrefix(count: number): readonly string[] {
+  return domainPalette(count);
 }
 
 /** Assign the shared palette in order of each buddy's first execution. */

@@ -1,12 +1,10 @@
 /** The roles: the Router list, that role's settings and its records. */
 export default {
-  heading: "Router",
   upgrade: {
     title: "Router 设置需要升级",
     locked: "Router 设置需要升级后才能修改",
   },
   list: {
-    name: "列表",
     label: "Router 列表",
     moveUp: "上移 {{name}}",
     moveDown: "下移 {{name}}",
@@ -53,11 +51,11 @@ export default {
     reviewConsequence: "需要 Router 判断时，任务的文字会发给 Router 的模型提供方，还会发送一份冻结的代码副本；DSH 与 ZCode 没有系统沙盒，不能保证阻止副本以外的读取或外传",
   },
   responseWait: {
-    name: "等待模型开始作答（秒）",
+    name: "等待模型开始作答",
     invalid: "需要 1 到 86400 的整数",
   },
   exploration: {
-    name: "探索名额", on: "每 N 个给 1 个", off: "关闭", interval: "探索间隔微任务数",
+    name: "探索名额", on: "开启", off: "关闭", interval: "探索间隔微任务数",
     disabled: "探索已关闭", invalid: "需要不小于 2 的整数",
     explanation: "探索会偶尔改选样本更少的同型 buddy（harness、模型与推理强度都相同的算同型），让它也积累证据。",
   },

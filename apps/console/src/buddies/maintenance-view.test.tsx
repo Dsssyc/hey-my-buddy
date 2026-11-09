@@ -3,16 +3,18 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { snapshotReadSchema } from "../types";
 import type { Maintenance } from "../types";
-import { formatDateTime } from "../i18n/format";
-import { fixture, snapshot, openRoles, MEDIUM_ID, FLASH_ID } from "./roles.testing";
+import { formatShortDateTime } from "../i18n/format";
+import { fixture, snapshot, openRoles as openRouter, MEDIUM_ID, FLASH_ID } from "./roles.testing";
+
+const openRoles = (f: ReturnType<typeof fixture>) => openRouter(f, "#buddies/router/maintenance");
 
 function state() {
   const data = snapshot({ configuration: { maintenanceBuddyId: MEDIUM_ID, maintenanceIntervalSeconds: 3600 } });
   data.harnesses = data.harnesses.map(h => ({ ...h, permissions: h.harness === "codex" ? { read: "enforced" } : { none: "convention" } }));
   data.domainNodes = [
-    { nodeId: "root", name: "工程", definition: "工程工作", parentId: null, mergedIntoId: null },
-    { nodeId: "child", name: "前端", definition: "浏览器界面", parentId: "root", mergedIntoId: null },
-    { nodeId: "other", name: "存储", definition: "持久化工作", parentId: null, mergedIntoId: null },
+    { nodeId: "root", name: "工程", definition: "工程工作", parentId: null, mergedIntoId: null, directCount: 1 },
+    { nodeId: "child", name: "前端", definition: "浏览器界面", parentId: "root", mergedIntoId: null, directCount: 2 },
+    { nodeId: "other", name: "存储", definition: "持久化工作", parentId: null, mergedIntoId: null, directCount: 1 },
   ];
   data.maintenance = { pendingCount: 3, runs: [] };
   return data;
@@ -45,19 +47,15 @@ describe("maintenance controls", () => {
     const signal = vi.mocked(f.api.task).mock.calls[0][1]!;
     cleanup(); expect(signal.aborted).toBe(true);
   });
-  it("shows the interval after the recorded finish beside an immediate retry, keeping partial usage", async () => {
+  it("places the next automatic run beside the interval and preserves partial usage without a retry action", async () => {
     const data = state(); data.maintenance!.runs = [maintenanceRun("failed")];
-    const f = fixture(data, { maintenance_start: () => ({ status: "running", runId: "maintain-2" }) });
-    await openRoles(f);
+    const f = fixture(data); await openRoles(f);
     const row = document.querySelector('[data-slot="maintenance-record"]') as HTMLElement;
-    const retry = within(row).getByText(`下次自动运行 ${formatDateTime(Date.parse("2026-10-28T01:05:01Z"))}`);
-    expect(retry.parentElement?.querySelector("button")?.textContent).toBe("立即运行");
-    expect(within(row).getByText("120")).toBeTruthy();
-    expect(within(row).getByText("7")).toBeTruthy();
-    expect(within(row).getByText("未记录")).toBeTruthy();
+    expect(screen.getByText(`下次自动运行 ${formatShortDateTime(Date.parse("2026-10-28T01:05:01Z"))}`)).toBeTruthy();
+    expect(within(row).getByText("— / — / 7")).toBeTruthy();
     expect(within(row).getByText("Router 的模型在 60 秒内没有开始作答。")).toBeTruthy();
-    await userEvent.click(within(row).getByRole("button", { name: "立即运行" }));
-    expect(f.command).toHaveBeenCalledWith("maintenance_start", {}, "csrf");
+    expect(screen.queryByRole("button", { name: /立即运行|立即维护/ })).toBeNull();
+    expect(f.operations).toEqual([]);
   });
   it("keeps an older failure as history when a newer batch completed", async () => {
     const data = state();
@@ -68,7 +66,7 @@ describe("maintenance controls", () => {
     await openRoles(fixture(data));
     const older = within(document.querySelectorAll('[data-slot="maintenance-record"]')[1] as HTMLElement);
     expect(older.getByText("Router 的模型在 60 秒内没有开始作答。")).toBeTruthy();
-    expect(older.getByText("120")).toBeTruthy();
+    expect(older.getByText("— / — / 7")).toBeTruthy();
     expect(older.queryByText(/下次自动运行/)).toBeNull();
     expect(older.queryByRole("button", { name: "立即运行" })).toBeNull();
   });
@@ -95,7 +93,8 @@ describe("maintenance controls", () => {
   it("keeps a confirmed domain write visible when its subsequent read fails", async () => {
     const f = fixture(state(), { domain_rename: () => ({ nodeId: "root" }) });
     await openRoles(f); const user = userEvent.setup();
-    await user.click(screen.getAllByRole("button", { name: "改名" })[0]);
+    await user.hover(document.querySelector<HTMLElement>('[data-node="root"].domain-branch-node')!);
+    await user.click(screen.getByRole("button", { name: "改名" }));
     vi.mocked(f.api.snapshot).mockRejectedValueOnce(new Error("read interrupted"));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -114,7 +113,7 @@ describe("maintenance controls", () => {
     await user.click(within(dialog).getByText(/dsh \/ deepseek-official/));
     const interval = screen.getByRole("spinbutton", { name: "维护间隔" });
     await user.clear(interval); await user.type(interval, "1800");
-    expect(screen.getByRole("button", { name: "立即维护" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByRole("button", { name: "立即维护" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /^保存/ }));
     await waitFor(() => expect(f.published).toHaveLength(1));
     expect(f.published[0].configuration).toEqual({ maintenanceBuddyId: FLASH_ID, maintenanceIntervalSeconds: 1800 });
@@ -128,21 +127,11 @@ describe("maintenance controls", () => {
     await user.click(screen.getByRole("button", { name: /^保存/ }));
     expect(f.published).toHaveLength(0);
   });
-  for (const [result, feedback] of [
-    [{ status: "no-new-evidence" }, "没有新证据"], [{ status: "not-configured" }, "没有设维护 buddy"],
-    [{ status: "running", runId: "maintain-1" }, "已开始"],
-    [{ status: "unavailable", reason: { code: "router-disabled", params: {} } }, "不可用："],
-    [{ status: "settings-changed" }, "设置已变化"],
-  ] as const) it(`reports ${result.status} without inventing a start`, async () => {
-    const f = fixture(state(), { maintenance_start: () => result }); await openRoles(f);
-    await userEvent.click(screen.getByRole("button", { name: "立即维护" }));
-    await waitFor(() => expect(within(document.querySelector<HTMLElement>('[data-slot="maintenance-plane"]')!).getByRole("status").textContent).toContain(feedback));
-    expect(f.operations).toEqual(["maintenance_start"]);
-  });
   it("keeps an unsuccessful domain edit open and shows its error inside the dialog", async () => {
     const f = fixture(state(), { domain_rename: () => { throw new Error("Duplicate domain name"); } });
     await openRoles(f); const user = userEvent.setup();
-    await user.click(screen.getAllByRole("button", { name: "改名" })[0]);
+    await user.hover(document.querySelector<HTMLElement>('[data-node="root"].domain-branch-node')!);
+    await user.click(screen.getByRole("button", { name: "改名" }));
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toBe("Duplicate domain name"));
@@ -151,15 +140,17 @@ describe("maintenance controls", () => {
     const calls: object[] = [];
     const f = fixture(state(), { domain_rename: params => { calls.push(params); return {}; }, domain_merge: params => { calls.push(params); return {}; } });
     await openRoles(f); const user = userEvent.setup();
-    const row = screen.getByText("前端").closest('[data-slot="domain-row"]') as HTMLElement;
-    await user.click(within(row).getByRole("button", { name: "改名" }));
+    const row = document.querySelector<HTMLElement>('[data-node="child"].domain-branch-node')!;
+    await user.hover(row);
+    await user.click(screen.getByRole("button", { name: "改名" }));
     const rename = screen.getByRole("dialog");
     await user.clear(within(rename).getByLabelText("名称")); await user.type(within(rename).getByLabelText("名称"), "界面工程");
     await user.clear(within(rename).getByLabelText("定义")); await user.type(within(rename).getByLabelText("定义"), "浏览器排版与交互");
     await user.click(within(rename).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(calls[0]).toEqual({ nodeId: "child", name: "界面工程", definition: "浏览器排版与交互" });
-    await user.click(within(row).getByRole("button", { name: "合并" }));
+    await user.hover(row);
+    await user.click(screen.getByRole("button", { name: "合并" }));
     const merge = screen.getByRole("dialog"); await user.click(within(merge).getByRole("button", { name: "存储" }));
     await user.click(within(merge).getByRole("button", { name: /^合并$/ }));
     await waitFor(() => expect(calls).toHaveLength(2));

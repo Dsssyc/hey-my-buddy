@@ -170,7 +170,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(maintenance["usage"], {"attempts": []})
         self.assertEqual(snapshot["domainNodes"], [{
             "nodeId": "software", "name": "Software", "definition": "Software tasks",
-            "parentId": None, "mergedIntoId": None,
+            "parentId": None, "mergedIntoId": None, "directCount": 0,
         }])
         evaluation = next(item for item in snapshot["kindEvaluations"]
                           if (item["harness"], item["modelId"], item["effort"])
@@ -184,7 +184,13 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         with board.store.db.write() as db:
             db.execute("INSERT INTO micro_task_classifications VALUES(?,'software','debug','maintenance-read')",
                        (run["runId"],))
+        self.assertEqual(browser.bootstrap()["domainNodes"][0]["directCount"], 1)
         self.assertEqual(browser.bootstrap()["maintenance"]["pendingCount"], 0)
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO domain_nodes VALUES('other','Other','Another domain',NULL,NULL,'maintenance-read')")
+            db.execute("UPDATE domain_nodes SET merged_into_id='other' WHERE node_id='software'")
+        domains = {node["nodeId"]: node for node in browser.bootstrap()["domainNodes"]}
+        self.assertEqual((domains["software"]["directCount"], domains["other"]["directCount"]), (1, 0))
         with board.store.db.write() as db:
             db.execute("UPDATE maintenance_runs SET state='failed',reason_code='maintenance-answer-invalid',reason_params_json=?"
                        " WHERE maintenance_run_id='maintenance-read'",

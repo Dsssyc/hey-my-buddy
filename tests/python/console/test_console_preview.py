@@ -72,9 +72,13 @@ class LeadStopPreviewTests(unittest.TestCase):
         unprofiled = models[preview.MODEL_IDS['glm-5']]
         self.assertIsNone(unprofiled['profile'])
         self.assertEqual(unprofiled['latestProfileRun']['state'], 'failed')
-        self.assertIsNone(unprofiled['latestProfileRun']['toolSummary'])
+        self.assertEqual(unprofiled['latestProfileRun']['toolSummary'], [
+            {'toolName': 'web_search', 'calls': 6, 'failed': 0, 'unknown': 0},
+            {'toolName': 'web_fetch', 'calls': 8, 'failed': 8, 'unknown': 0},
+        ])
         self.assertEqual(unprofiled['latestProfileRun']['reason']['code'], 'profile-answer-invalid')
-        self.assertIsNone(models[preview.MODEL_IDS['gpt-5-mini']]['latestProfileRun'])
+        self.assertEqual(models[preview.MODEL_IDS['gpt-5-mini']]['latestProfileRun']['state'], 'running')
+        self.assertIsNone(models[preview.MODEL_IDS['gpt-5-mini']]['latestProfileRun']['finishedAt'])
         page = preview.command_result('normal', 'buddy_list', {})
         for field in ('models', 'modelCorrespondences'):
             self.assertEqual(page[field], snapshot[field])

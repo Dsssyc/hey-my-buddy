@@ -23,7 +23,7 @@ function LineButton({ label, disabled, reason, className, onClick, children }: {
   label: string; disabled: boolean; reason?: string; className?: string; onClick: () => void; children: ReactNode;
 }) {
   return <Hint text={reason}>
-    <Button variant="ghost" size="icon-sm" className={className} aria-label={label} aria-disabled={disabled || undefined}
+    <Button variant="ghost" size="icon-sm" className={cn("aria-disabled:opacity-35 aria-disabled:cursor-default", className)} aria-label={label} aria-disabled={disabled || undefined}
       onClick={() => { if (!disabled) onClick(); }}>{children}</Button>
   </Hint>;
 }
@@ -68,23 +68,23 @@ export function RouterList({ lines, buddies, mode, locked, note, onShow, onAdd, 
 }) {
   const { t } = useTranslation("buddies");
   const [adding, setAdding] = useState(false);
-  return <div className="max-w-[720px]">
-    {lines.length > 0 && <ol aria-label={t("roles.list.label")} className="grid grid-cols-[auto_20px_minmax(0,1fr)_auto_28px] gap-x-2.5">
+  return <div>
+    {lines.length > 0 && <ol aria-label={t("roles.list.label")} className="grid grid-cols-[20px_minmax(0,1fr)_auto_28px] gap-x-2.5">
       {lines.map(({ buddyId, buddy, status }, index) => {
         const name = buddy ? buddyQuad(buddy) : buddyId;
         return <li key={buddyId} id={routerLineId(buddyId)} tabIndex={-1} aria-label={name}
-          className="col-span-full grid grid-cols-subgrid items-center border-b py-1.5 outline-none focus-visible:bg-sunk">
-          <span className="flex">
-            <LineButton label={t("roles.list.moveUp", { name })} disabled={!!locked || index === 0} reason={locked} onClick={() => onMove(buddyId, -1)}><ChevronUpIcon /></LineButton>
-            <LineButton label={t("roles.list.moveDown", { name })} disabled={!!locked || index === lines.length - 1} reason={locked} onClick={() => onMove(buddyId, 1)}><ChevronDownIcon /></LineButton>
+          className="col-span-full grid grid-cols-subgrid items-center border-b py-4 outline-none focus-visible:bg-sunk">
+          <span className="order-4 flex">
+            <LineButton label={t("roles.list.moveUp", { name })} disabled={!!locked || index === 0} reason={locked ?? (index === 0 ? t("routerWork.first") : undefined)} onClick={() => onMove(buddyId, -1)}><ChevronUpIcon /></LineButton>
+            <LineButton label={t("roles.list.moveDown", { name })} disabled={!!locked || index === lines.length - 1} reason={locked ?? (index === lines.length - 1 ? t("routerWork.last") : undefined)} onClick={() => onMove(buddyId, 1)}><ChevronDownIcon /></LineButton>
           </span>
-          <span className="text-right text-ink3 tabular-nums">{index + 1}</span>
-          {buddy
+          <span className="order-1 text-right text-ink3 tabular-nums">{index + 1}</span>
+          <div className="order-2 min-w-0 space-y-1">{buddy
             ? <a href={buddyHash({ view: "models", target: buddyId })} className="min-w-0 rounded-sm font-mono text-xs wrap-anywhere outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
               onClick={event => { event.preventDefault(); onShow(buddyId); }}>{name}</a>
             : <span className="min-w-0 font-mono text-xs wrap-anywhere">{name}</span>}
-          {status ? <Standing status={status} /> : <span />}
-          <LineButton label={t("roles.list.remove", { name })} disabled={!!locked} reason={locked} className="max-sm:col-start-5 max-sm:row-start-1"
+          {status && <Standing status={status} />}</div>
+          <LineButton label={t("roles.list.remove", { name })} disabled={!!locked} reason={locked} className="order-5"
             onClick={() => onRemove(buddyId)}><XIcon /></LineButton>
         </li>;
       })}

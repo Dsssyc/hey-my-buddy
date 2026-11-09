@@ -52,8 +52,9 @@ describe("the colour changes of the Buddy page", () => {
     expect(source).toContain("transition-transform duration-200");
     expect(source).toContain("motion-reduce:transition-none");
     // Fold detects overflow to decide whether eight rendered lines need folding.
-    // That is not an opening/closing animation; every other view still measures no height.
+    // The branch tree also measures labels and popover obstacles; its geometry is checked in the browser.
     for (const [path, view] of Object.entries(views).filter(([path]) => !support.test(path))) {
+      if (path === "../buddies/DomainTree.tsx") continue;
       const checked = path === "../task-detail/parts.tsx"
         ? view.replace(/export function Fold\([\s\S]*?\n\}/, "") : view;
       expect(checked, path).not.toMatch(/getBoundingClientRect|scrollHeight|offsetHeight|ResizeObserver/);

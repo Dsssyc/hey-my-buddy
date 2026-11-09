@@ -1,13 +1,11 @@
 import type zh from "../zh/buddies-roles";
 
 export default {
-  heading: "Router",
   upgrade: {
     title: "Router settings need an upgrade",
     locked: "Router settings can be changed once they are upgraded",
   },
   list: {
-    name: "List",
     label: "Router list",
     moveUp: "Move {{name}} up",
     moveDown: "Move {{name}} down",
@@ -53,11 +51,11 @@ export default {
     reviewConsequence: "When a Router has to decide, the text of the task is sent to the Router's model provider, and so is a frozen copy of the code; DSH and ZCode have no system sandbox, so reads and transfers outside the copy cannot be ruled out",
   },
   responseWait: {
-    name: "Wait for the model to start responding (seconds)",
+    name: "Wait for the model to start responding",
     invalid: "Enter an integer from 1 to 86400",
   },
   exploration: {
-    name: "Exploration quota", on: "One in every N", off: "Off", interval: "Micro tasks per exploration quota",
+    name: "Exploration quota", on: "On", off: "Off", interval: "Micro tasks per exploration quota",
     disabled: "Exploration is off", invalid: "Enter an integer of at least 2",
     explanation: "Exploration occasionally picks a buddy kind with fewer samples (buddies with the same harness, model and reasoning effort are one kind), so it builds up evidence too.",
   },

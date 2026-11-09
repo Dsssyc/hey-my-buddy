@@ -184,7 +184,7 @@ describe("the Buddy page's sections and tables", () => {
     expect(window.location.hash).toBe("#buddies/router");
     await screen.findByRole("region", { name: "Router" });
     expect(modelsRegion()).toBeNull(); expect(current(sectionsNav())).toEqual(["Router"]);
-    expect(screen.getByRole("spinbutton", { name: "等待模型开始作答（秒）" })).toBeTruthy();
+    expect(screen.getByRole("spinbutton", { name: "等待模型开始作答" })).toBeTruthy();
     await user.click(sectionLink(/^目录/));
     expect(window.location.hash).toBe("#buddies/catalog");
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
@@ -283,16 +283,13 @@ describe("deep links", () => {
     expect(window.location.hash).toBe(address(2));
   });
 
-  it("focuses the named Router line from #buddies/router/current", async () => {
+  it("opens routing from its own work address", async () => {
     const f = fixture();
-    renderBuddy("#buddies/router/current", f);
+    renderBuddy("#buddies/router/routing", f);
     await screen.findByRole("region", { name: "Router" });
-    expect(screen.getByRole("region", { name: "Router" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "路由", level: 2 })).toBeTruthy();
     expect(modelsRegion()).toBeNull();
-    // The snapshot carries no health facts, so the head of the list is the one serving.
-    const line = screen.getByRole("listitem", { name: `${SOL} / medium` });
-    expect(within(line).getByText("当前")).toBeTruthy();
-    await waitFor(() => expect(document.activeElement).toBe(line));
+    expect(within(screen.getByRole("listitem", { name: `${SOL} / medium` })).getByText("当前")).toBeTruthy();
   });
 
   it("shows the directory without rewriting the removed roles address", async () => {

@@ -117,14 +117,14 @@ export function fixture(state: Snapshot = snapshot(), replies: Record<string, Re
 }
 
 /** Opens the page at an address and waits until the roles section is drawn. */
-export async function openRoles(f: ReturnType<typeof fixture>, hash = "#buddies/router") {
+export async function openRoles(f: ReturnType<typeof fixture>, hash = "#buddies/router/routing") {
   window.location.hash = hash;
   render(createElement(App, { suppliedApi: f.api }));
   await screen.findByRole("region", { name: "Router" });
 }
 
 export const rolesRegion = () => screen.getByRole("region", { name: "Router" });
-export const section = (name: string) => within(rolesRegion()).getByRole("group", { name });
+export const section = (name: string) => within(rolesRegion()).getByRole("group", { name: name === "列表" ? "谁担任" : name });
 export const routerList = () => within(rolesRegion()).getByRole("list", { name: "Router 列表" });
 export const queryRouterList = () => within(rolesRegion()).queryByRole("list", { name: "Router 列表" });
 /** The four-part names of the list's buddies, in the order of the list. */
@@ -140,7 +140,7 @@ export const queryAddDialog = () => screen.queryByRole("dialog", { name: "添加
 export const choices = () => within(addDialog()).getAllByRole("button").filter(button => button.textContent !== "取消");
 export const choice = (quad: string) => within(addDialog()).getByRole("button", { name: new RegExp(`^${quad.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}`) });
 export const modeOption = (name: string) => within(section("默认模式")).getByRole("radio", { name });
-export const responseWaitInput = () => within(section("等待模型开始作答（秒）")).getByRole("spinbutton", { name: "等待模型开始作答（秒）" });
+export const responseWaitInput = () => within(section("等待模型开始作答")).getByRole("spinbutton", { name: "等待模型开始作答" });
 export const intervalInput = () => within(section("重试间隔")).getByRole("spinbutton", { name: "重试间隔秒数" });
 export const saveButton = () => within(screen.getByRole("region", { name: "未保存的修改" })).getByRole("button", { name: /^(保存|重试同一保存)$/ });
 export const queryDraftBar = () => screen.queryByRole("region", { name: "未保存的修改" });

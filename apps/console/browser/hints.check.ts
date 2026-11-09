@@ -21,18 +21,18 @@ async function capture(page: Page, name: string) {
   await mkdir(captures, { recursive: true });
   await page.screenshot({ path: `${captures}/${name}-zh-dark-1280.png` });
 }
-async function consequenceLine(target: Locator) {
+async function consequenceLine(target: Locator, singleLine = true, colorToken = "--ink3") {
   await expect(target).toBeVisible();
-  const facts = await target.evaluate(node => {
+  const facts = await target.evaluate((node, token) => {
     const range = document.createRange(); range.selectNodeContents(node);
     const rects = [...range.getClientRects()];
     const frame = node.getBoundingClientRect();
-    const probe = document.createElement("span"); probe.style.color = "var(--ink3)"; node.append(probe);
+    const probe = document.createElement("span"); probe.style.color = `var(${token})`; node.append(probe);
     const expectedColor = getComputedStyle(probe).color; probe.remove();
     return { lines: new Set(rects.map(rect => rect.top)).size, color: getComputedStyle(node).color, expectedColor,
       fontSize: getComputedStyle(node).fontSize, whole: rects.every(rect => rect.left >= frame.left && rect.right <= frame.right + 1) };
-  });
-  expect(facts.lines).toBe(1);
+  }, colorToken);
+  if (singleLine) expect(facts.lines).toBe(1);
   expect(facts.whole).toBe(true);
   expect(facts.fontSize).toBe("12px");
   expect(facts.color).toBe(facts.expectedColor);
@@ -52,28 +52,29 @@ test.describe("necessary hover hints and visible consequences", () => {
     const review = mode.getByRole("radio", { name: "审阅", exact: true });
     await fast.click();
     await expect(consequence).toHaveText("需要 Router 判断时，任务的文字会发给 Router 的模型提供方");
-    await consequenceLine(consequence);
+    await consequenceLine(consequence, false);
     await capture(page, "router-fast");
     await review.click();
     await expect(consequence).toContainText("还会发送一份冻结的代码副本");
     await expect(consequence).toContainText("DSH 与 ZCode 没有系统沙盒");
-    await consequenceLine(consequence);
+    await consequenceLine(consequence, false);
     await capture(page, "router-review");
-    const responseWait = page.getByRole("group", { name: "等待模型开始作答（秒）", exact: true });
+    const responseWait = page.getByRole("group", { name: "等待模型开始作答", exact: true });
     const retry = page.getByRole("group", { name: "重试间隔", exact: true });
     const list = page.getByRole("list", { name: "Router 列表" });
     await quiet(page, [mode.getByText("默认模式", { exact: true }), fast, review,
-      responseWait.getByText("等待模型开始作答（秒）", { exact: true }), retry.getByText("重试间隔", { exact: true }),
+      responseWait.getByText("等待模型开始作答", { exact: true }), retry.getByText("重试间隔", { exact: true }),
       list.getByRole("button").nth(1), list.getByRole("button").nth(2)]);
+    await page.getByRole("navigation", { name: "Router 的工作" }).getByRole("link", { name: /维护/ }).click();
     const maintenance = page.locator('[data-slot="maintenance-consequence"]');
     await maintenance.scrollIntoViewIfNeeded();
     await expect(maintenance).toBeVisible();
     await expect(maintenance).toContainText("维护");
-    await consequenceLine(maintenance);
+    await consequenceLine(maintenance, false, "--ink2");
     expect((await maintenance.boundingBox())!.y).toBeGreaterThan((await page.locator("[data-slot=maintenance-plane]").getByRole("button", { name: "选择 buddy", exact: true }).boundingBox())!.y);
     await capture(page, "maintenance");
-    const domainArrow = page.locator('[data-slot="domain-tree"] button[aria-expanded]').first();
-    await quiet(page, [maintenance, domainArrow, page.getByRole("group", { name: "记录", exact: true }).getByText("失败", { exact: true })]);
+    const domainBranch = page.locator('[data-slot="domain-tree"] button[aria-expanded]').first();
+    await quiet(page, [maintenance, domainBranch, page.locator('[data-slot="maintenance-record"] [aria-label="失败"]').first()]);
   });
 
   test("keeps locked choices' reasons without appending mode explanations", async ({ page }) => {
@@ -85,7 +86,7 @@ test.describe("necessary hover hints and visible consequences", () => {
     await page.getByRole("radio", { name: "审阅", exact: true }).click();
     await page.getByRole("button", { name: "保存", exact: true }).click();
     for (const target of [page.getByRole("radio", { name: "快速", exact: true }),
-      page.getByRole("spinbutton", { name: "等待模型开始作答（秒）" }),
+      page.getByRole("spinbutton", { name: "等待模型开始作答" }),
       page.getByRole("spinbutton", { name: "重试间隔秒数" })]) {
       await target.hover();
       await expect(page.getByRole("tooltip")).toHaveText("浏览器授权已失效，重新授权后可以修改");

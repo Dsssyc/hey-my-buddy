@@ -96,7 +96,49 @@ class RoutingHealthTests(BoardTestCase):
                 self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
                 self.assertEqual(health["recentFailures"][0], {
                     "decisionId": decision_id, "runId": f"task-health-{count}",
-                    "title": None, "at": now, "code": "router-not-responding"})
+                    "title": None, "macroTaskId": None, "at": now, "code": "router-not-responding"})
+
+    def link_nested_failure(self, *, macro: bool):
+        decision_id, now = self.timeout()
+        root_id = f"root-health-{decision_id}"
+        child_id = f"child-health-{decision_id}"
+        group_id = f"macro-health-{decision_id}" if macro else f"run:{root_id}"
+        with self.db.write() as connection:
+            connection.execute("INSERT INTO projects(project_id,kind,path) VALUES('health-project','folder','<private-cwd>')")
+            if macro:
+                connection.execute(
+                    "INSERT INTO macro_tasks(macro_task_id,title,project_id,project_kind,project_cwd,created_at,activity_at)"
+                    " VALUES(?,'Health group','health-project','folder','<private-cwd>',?,?)",
+                    (group_id, now, now))
+            for run_id, title in ((root_id, "Root task"), (child_id, "Nested task")):
+                connection.execute(
+                    "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at)"
+                    " VALUES(?,?,'{\"expectedSeconds\":60}','fixture',1,'unresolved','<private-cwd>','queued',1,?,?)",
+                    (run_id, run_id, now, now))
+                connection.execute(
+                    "INSERT INTO workflow_runs(run_id,macro_task_id,standalone_project_id,project_kind,checkout,title,"
+                    "execution_workspace_json,state,created_at,updated_at) VALUES(?,?,?,'folder','none',?,'{}','executing',?,?)",
+                    (run_id, group_id if macro and run_id == root_id else None,
+                     None if macro and run_id == root_id else 'health-project', title, now, now))
+            connection.execute(
+                "INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,state,created_at,updated_at)"
+                " VALUES(?,?,?,'active',?,?)", (child_id, root_id, child_id, now, now))
+            connection.execute(
+                "INSERT INTO workflow_routes(decision_id,run_id,state,exploration,created_at)"
+                " VALUES(?,?,'needs-host','counted',?)", (decision_id, child_id, now))
+        return decision_id, child_id, group_id
+
+    def test_recent_failure_links_nested_macro_member_to_task_page(self):
+        decision_id, child_id, group_id = self.link_nested_failure(macro=True)
+        failure = self.coordinator.health_summary()["recentFailures"][0]
+        self.assertEqual((failure["decisionId"], failure["runId"], failure["macroTaskId"]),
+                         (decision_id, child_id, group_id))
+
+    def test_recent_failure_links_nested_standalone_to_root_task_page(self):
+        decision_id, child_id, group_id = self.link_nested_failure(macro=False)
+        failure = self.coordinator.health_summary()["recentFailures"][0]
+        self.assertEqual((failure["decisionId"], failure["runId"], failure["macroTaskId"]),
+                         (decision_id, child_id, group_id))
 
     def test_cancel_and_program_selection_cannot_restore_health(self):
         for _ in range(3):

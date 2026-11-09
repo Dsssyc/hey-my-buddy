@@ -5,7 +5,7 @@ import type { Snapshot } from "./types";
 import { buddyAttention } from "./buddies/attention";
 import { BuddyHeader } from "./buddies/BuddyHeader";
 import { CatalogView } from "./buddies/CatalogView";
-import { RolesView } from "./buddies/RolesView";
+import { RouterView } from "./buddies/RouterView";
 import { buddyHash, buddyLocation } from "./buddies/navigation";
 import type { BuddyLocation } from "./buddies/navigation";
 
@@ -39,6 +39,6 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
       enabled={editor.view.buddies.filter(buddy => buddy.enabled).length} total={editor.view.buddies.length} />
     <CatalogView {...shared} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable}
       active={active && location.view === "models"} hidden={location.view !== "models"} />
-    <RolesView {...shared} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && location.view === "router"} hidden={location.view !== "router"} />
+    <RouterView {...shared} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && location.view === "router"} hidden={location.view !== "router"} />
   </div>;
 }

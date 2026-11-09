@@ -1,30 +1,22 @@
 import { reasonText } from "../i18n/reason";
 import type { TFunction } from "i18next";
-import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
-import { Section } from "@/components/section";
+import { RouterSection, RouterField } from "./RouterSection";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Segmented, SegmentedItem } from "@/components/ui/segmented";
 import { MODEL_RESPONSE_WAIT_MAX, ROUTER_RETRY_INTERVAL_MAX, ROUTER_RETRY_INTERVAL_MIN, modelResponseWaitSeconds, retryIntervalSeconds, validExplorationEvery } from "../console-data";
 import { routerListEqual } from "../draft";
 import type { Configuration, Buddy, RoutingMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
-import type { ConsoleApi } from "../api";
-import { MaintenanceView } from "./MaintenanceView";
-import { ProfileSettingsView } from "./ProfileSettingsView";
-import { RolesRecords } from "./RolesRecords";
-import { RouterList, routerLineId } from "./RouterList";
+import { RoutingRecords } from "./RoutingRecords";
+import { RouterList } from "./RouterList";
 import type { BuddyLocation } from "./navigation";
 import { addRouter, buddyQuad, moveRouter, removeRouter, routerLines, routerNote, withConfiguration } from "./roles";
 import type { RouterNote } from "./roles";
 
 const MODES = ["fast", "review"] as const satisfies readonly RoutingMode[];
 
-/** The sections an address can land on. */
-const LIST_ID = "router-list";
-const RECORDS_ID = "router-records";
 
 /** The note under the list, written out. */
 function noteText(note: RouterNote | null, buddies: Buddy[], t: TFunction<"buddies">): string | undefined {
@@ -42,16 +34,9 @@ function noteText(note: RouterNote | null, buddies: Buddy[], t: TFunction<"buddi
   }
 }
 
-/**
- * The roles of the Buddy page. It is one block, Router: the ordered list of
- * buddies that serve in that role, the settings of the role, and what the
- * snapshot records of routing. Every change goes into the page's draft, which
- * the save bar publishes; the records are read only.
- */
-export function RolesView({ snapshot, editor, active, location, onNavigate, hidden, api, refresh, mutationsAvailable }: {
-  snapshot: Snapshot; editor: Editor; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; mutationsAvailable: boolean;
-  /** The page is in front and this is the view it shows. */
-  active: boolean; location: BuddyLocation; onNavigate: (next: BuddyLocation) => void; hidden: boolean;
+/** Ordered routing buddies and the shared routing settings, all published through the page draft. */
+export function RoutingView({ snapshot, editor, onNavigate }: {
+  snapshot: Snapshot; editor: Editor; onNavigate: (next: BuddyLocation) => void;
 }) {
   const { t } = useTranslation("buddies");
   const data = editor.view;
@@ -79,35 +64,23 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
   const every = configuration?.explorationEvery;
   const explorationInvalid = !!configuration && !validExplorationEvery(every);
 
-  const handledLocation = useRef<BuddyLocation | null>(null);
-  // An address that names a part of this view lands on it: the line of the buddy serving now, or the list when none does.
-  useEffect(() => {
-    if (!active || !location.target || handledLocation.current === location) return;
-    const current = lines.find(line => line.status?.kind === "current");
-    const target = document.getElementById(location.target === "health" ? RECORDS_ID : current ? routerLineId(current.buddyId) : LIST_ID);
-    target?.focus(); target?.scrollIntoView?.({ block: "nearest" });
-    handledLocation.current = location;
-  }, [location, active]);
-
   function change(patch: Partial<Configuration>) {
     if (!locked) editor.update(draft => withConfiguration(draft, patch));
   }
-  return <section hidden={hidden} aria-label={t("sections.router")} className="flex min-h-0 flex-1 flex-col bg-card">
-    <ScrollArea className="min-h-0 flex-1">
-      <h2 className="px-6 pt-5 pb-2 text-base font-semibold">{t("roles.heading")}</h2>
-      {!configuration && <p className="mx-6 mb-3 border-l-2 border-fail pl-3 text-xs text-fail" role="alert">
+  return <div data-slot="routing-work">
+      {!configuration && <p className="mb-3 text-xs text-fail" role="alert">
         {t("roles.upgrade.title")}</p>}
 
-      <Section name={t("roles.list.name")} unsaved={mark(unsaved.list)} id={LIST_ID} tabIndex={-1}>
+      <RouterSection name={t("routerWork.who")} unsaved={mark(unsaved.list)}>
         <RouterList lines={lines} buddies={data.buddies} mode={configuration?.defaultRoutingMode} locked={locked}
           note={configuration ? noteText(routerNote(data, snapshot.routingHealth), data.buddies, t) : undefined}
           onShow={buddyId => onNavigate({ view: "models", target: buddyId })}
           onAdd={buddyId => editor.update(draft => addRouter(draft, buddyId))}
           onMove={(buddyId, by) => editor.update(draft => moveRouter(draft, buddyId, by))}
           onRemove={buddyId => editor.update(draft => removeRouter(draft, buddyId))} />
-      </Section>
+      </RouterSection>
 
-      <Section name={t("roles.mode.name")} unsaved={mark(unsaved.mode)}>
+      <RouterSection name={t("routerWork.settings")}><RouterField name={t("roles.mode.name")} unsaved={mark(unsaved.mode)}>
         <Segmented aria-label={t("roles.mode.label")} value={configuration?.defaultRoutingMode ?? ""}
           onValueChange={value => change({ defaultRoutingMode: value as RoutingMode })}>
           {MODES.map(mode => <Hint key={mode} text={locked}>
@@ -115,9 +88,9 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
           </Hint>)}
         </Segmented>
         {configuration && <p data-slot="routing-mode-consequence" className="mt-2 text-xs text-ink3">{t(`roles.mode.${configuration.defaultRoutingMode}Consequence`)}</p>}
-      </Section>
+      </RouterField>
 
-      <Section name={t("roles.responseWait.name")} unsaved={mark(unsaved.responseWait)}>
+      <RouterField name={t("roles.responseWait.name")} unsaved={mark(unsaved.responseWait)}>
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
           <Hint text={locked}>
             <Input type="number" inputMode="numeric" className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
@@ -127,11 +100,13 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
               aria-label={t("roles.responseWait.name")} aria-invalid={responseWaitInvalid || undefined}
               onChange={event => change({ modelResponseWaitSeconds: event.target.value === "" ? NaN : Number(event.target.value) })} />
           </Hint>
+          <span className="text-xs text-ink2">{t("roles.retry.unit")}</span>
           <span className="text-xs text-fail" aria-live="polite">{responseWaitInvalid && t("roles.responseWait.invalid")}</span>
         </div>
-      </Section>
+        <p className="mt-2 text-xs text-ink2">{t("routerWork.sharedWait")}</p>
+      </RouterField>
 
-      <Section name={t("roles.retry.name")} unsaved={mark(unsaved.interval)}>
+      <RouterField name={t("roles.retry.name")} unsaved={mark(unsaved.interval)}>
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
           <Hint text={locked}>
             <Input type="number" inputMode="numeric" className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
@@ -146,9 +121,9 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
             {intervalInvalid && t("roles.retry.range", { min: ROUTER_RETRY_INTERVAL_MIN, max: ROUTER_RETRY_INTERVAL_MAX })}
           </span>
         </div>
-      </Section>
+      </RouterField>
 
-      <Section name={t("roles.exploration.name")} unsaved={mark(unsaved.exploration)}>
+      <RouterField name={t("roles.exploration.name")} unsaved={mark(unsaved.exploration)}>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <Segmented aria-label={t("roles.exploration.name")} value={!configuration ? "" : every === null ? "off" : "on"}
             onValueChange={value => change({ explorationEvery: value === "off" ? null : 5 })}>
@@ -156,6 +131,7 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
               <SegmentedItem value={value} aria-disabled={!!locked || undefined}>{t(`roles.exploration.${value}`)}</SegmentedItem>
             </Hint>)}
           </Segmented>
+          <span className="text-xs text-ink2">{t("routerWork.everyBefore")}</span>
           <Hint text={locked ?? (every === null ? t("roles.exploration.disabled") : undefined)}>
             <Input type="number" inputMode="numeric" min={2} step={1}
               className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
@@ -164,17 +140,15 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
               aria-label={t("roles.exploration.interval")} aria-invalid={explorationInvalid || undefined}
               onChange={event => change({ explorationEvery: event.target.value === "" ? NaN : Number(event.target.value) })} />
           </Hint>
+          <span className="text-xs text-ink2">{t("routerWork.everyAfter")}</span>
           <span className="text-xs text-fail" aria-live="polite">{explorationInvalid && t("roles.exploration.invalid")}</span>
         </div>
         <p className="mt-2 text-xs text-ink3">{t("roles.exploration.explanation")}</p>
-      </Section>
+      </RouterField>
 
-      <MaintenanceView snapshot={snapshot} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} />
-      <ProfileSettingsView snapshot={snapshot} editor={editor} />
-
-      <Section name={t("roles.records.name")} id={RECORDS_ID} tabIndex={-1}>
-        <RolesRecords health={snapshot.routingHealth} />
-      </Section>
-    </ScrollArea>
-  </section>;
+      </RouterSection>
+      <RouterSection name={t("roles.records.name")}>
+        <RoutingRecords health={snapshot.routingHealth} />
+      </RouterSection>
+  </div>;
 }

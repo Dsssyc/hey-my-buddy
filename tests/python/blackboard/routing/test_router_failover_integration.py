@@ -270,6 +270,7 @@ class FailoverTests(RouterDispatchTestCase):
         self.report(second, self.failure(second, "provider-error"), status="failed")
         failure = self.board_.store.decisions.health_summary()["recentFailures"][0]
         self.assertEqual(failure["runId"], "run-1")
+        self.assertEqual(failure["macroTaskId"], "run:run-1")
         self.assertEqual(failure["title"], "Fix parser boundary")
 
     def test_del_in_native_error_code_is_normalized_without_losing_failover(self):

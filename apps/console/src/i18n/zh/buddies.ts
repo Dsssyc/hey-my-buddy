@@ -1,3 +1,7 @@
+import routerErrors from "./router-errors";
+import routerWork from "./router-work";
+import domainTree from "./domain-tree";
+import routerProfiles from "./router-profiles";
 import modelProfile from "./model-profile";
 import harness from "./buddies-harness";
 import roles from "./buddies-roles";
@@ -6,11 +10,10 @@ import maintenance from "./maintenance";
 
 /** The Buddy page: the catalogue of buddies and the roles they hold. */
 export default {
+  routerWork, domainTree, routerProfiles, routerErrors,
   maintenance,
   modelProfile,
   profile: {
-    title: "画像面",
-    buddy: "画像 buddy",
     choose: "选择 buddy",
     search: "搜索 buddy",
     none: "未指定",

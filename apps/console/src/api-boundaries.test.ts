@@ -204,7 +204,7 @@ describe("optional Router observations", () => {
     const value = { ...health, reason: { code: "", params: {}, extra: true }, currentRouterBuddyId: "",
       routers: [{ ...router, identity: { harness: "", provider: "", model: "", effort: "", extra: true },
         code: null, skipUntil: "not-a-date", lastError: { at: "not-a-date", code: null } }],
-      recentFailures: [{ decisionId: "", runId: null, title: "A micro task", at: "not-a-date", code: "", extra: true }],
+      recentFailures: [{ decisionId: "", runId: null, macroTaskId: null, title: "A micro task", at: "not-a-date", code: "", extra: true }],
       unattributed: [{ decisionId: "", at: "", outcome: "", code: null, extra: true }] };
     expect(parseRoutingHealth(value)).toBe(value);
     expect(parseRoutingHealth({ ...health, routers: [{ ...router, identity: null, lastError: null }] })).toBeDefined();
@@ -213,7 +213,8 @@ describe("optional Router observations", () => {
     const broken: unknown[] = [null, [], ...["lastSuccessAt", "lastSuccessDecisionId", "recentFailures"].map(k => without(health, k)),
       { ...health, reason: { code: "x", params: [] } }, { ...health, available: null }, { ...health, routers: null },
       { ...health, recentFailures: [{ decisionId: "d", at: "", code: "c" }] },
-      { ...health, recentFailures: [{ decisionId: "d", runId: "r", title: 42, at: "", code: "c" }] },
+      { ...health, recentFailures: [{ decisionId: "d", runId: "r", title: "A task", at: "", code: "c" }] },
+      { ...health, recentFailures: [{ decisionId: "d", runId: "r", macroTaskId: "run:r", title: 42, at: "", code: "c" }] },
       { ...health, unattributed: [{ decisionId: "d", at: "", outcome: "x" }] }];
     for (const key of ["windowSize", "sampleCount", "failureCount", "consecutiveFailures", "abstentionCount", "cancelledCount",
       "notRespondingCount", "boundsRejectedCount", "inputChangedCount", "attemptCount", "unattributedCount"]) {

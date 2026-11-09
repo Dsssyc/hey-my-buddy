@@ -392,12 +392,12 @@ export const routingHealthSchema = z.looseObject({
   abstentionCount: safeCount, cancelledCount: safeCount, notRespondingCount: safeCount.optional(),
   boundsRejectedCount: safeCount.optional(), inputChangedCount: safeCount.optional(), attemptCount: safeCount.optional(),
   lastSuccessAt: z.string().nullable(), lastSuccessDecisionId: z.string().nullable(),
-  recentFailures: z.array(z.looseObject({ decisionId: z.string(), runId: z.string().nullable(), title: z.string().nullable(), at: z.string(), code: z.string() })),
+  recentFailures: z.array(z.looseObject({ decisionId: z.string(), runId: z.string().nullable(), macroTaskId: z.string().nullable(), title: z.string().nullable(), at: z.string(), code: z.string() })),
 });
 export type RoutingHealth = z.infer<typeof routingHealthSchema>;
 
 export const TASK_TYPES = ["create", "change", "debug", "verify", "review", "research", "write"] as const;
-export const domainNodeSchema = z.object({ nodeId: nonblankString, name: nonblankString, definition: z.string(), parentId: z.string().nullable(), mergedIntoId: z.string().nullable() });
+export const domainNodeSchema = z.object({ nodeId: nonblankString, name: nonblankString, definition: z.string(), parentId: z.string().nullable(), mergedIntoId: z.string().nullable(), directCount: safeCount });
 export type DomainNode = z.infer<typeof domainNodeSchema>;
 export const evaluationStatisticsSchema = z.object({
   samples: safeCount, successes: safeCount, failures: safeCount, firstPasses: safeCount, reworkRounds: safeCount,
