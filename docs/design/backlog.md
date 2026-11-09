@@ -34,9 +34,7 @@
 
 ## 控制台
 
-**Buddy 页装上之后的几处修改。**（2026-11-09 开发者在 0.67.0 上试用） 领域树改成按数量排序的大纲加计数条，Buddy 页的图形用 logo 的色调，样本条与 Router 记录里的数点开才显示，分区页签垂直居中；见 [Buddy 页与 Router 的重做计划](adr029/buddy-router-redo-plan.md)的“装上之后的修改”。随下一个改控制台的批次做。
-
-**微任务排队时，控制台不说在等什么。**（2026-11-09 开发者看到另一个会话的微任务“画 Fig. 12 与 F1 表”排在空闲的 gpt-6.1-sol 上，问为什么；Host 只读核对过日常黑板） 读取里每个任务都带 `queueReason`（`cwd-overlap`、`capacity`、`model-capacity` 等，见[架构](../reference/architecture.md)），控制台的类型里有这一项，界面上却只写“排队”。那一次是 `cwd-overlap`：同一个宏任务的三个微任务都以 `checkout: none` 加写权限在同一个目录里，服务一次只放行一个（Fig. 12 13:25–13:38Z，Fig. 8 13:38–13:41Z，Fig. 9 从 13:41Z 起），被打回的 Fig. 12 只能排在 Fig. 9 之后，与模型忙不忙无关。建议：排队时用一句短话写出原因；`cwd-overlap` 写出占着这个目录的是哪个微任务并能点过去，`model-capacity` 写出是哪个模型服务满了；文字进中英两份文案。随下一个动控制台的批次做。
+**排队的微任务说不出是被哪个微任务挡住。**（2026-11-09 开发者看到另一个会话的微任务“画 Fig. 12 与 F1 表”排在空闲的 gpt-6.1-sol 上，问为什么；Host 只读核对过日常黑板） 排队的原因随 0.67.1 写成了一句短话（例如“该工作目录正被其他微任务使用”），但读取只给 `queueReason`，不给占着资源的是哪个微任务：服务在 `store._admission_blocker` 里知道占着目录的认领属于哪个任务，任务读取（`workflow.py` 的任务视图，Host 的 `get` 也用它）没有带出来。建议在任务读取里加上挡住它的微任务（标识与标题），控制台写出名字并能点过去；这是 Host 一侧读取的变化，属于契约，随下一次动契约的批次做。
 
 **目标卡片的宽度重复了正文的常量；复制按钮只有 20px 高。**（2026-11-03，微任务“头部 ID 对齐与目标卡片宽度”验收时记下的顺带项） `apps/console/src/index.css` 里 `.goal-card` 的宽度写成 `calc(38 * 14.5px + 48px + 2px + var(--goal-history-width))`，历史栏的宽度又以 220px、110px 各写一遍，与 `.goal-body` 的字号、行宽和内边距重复，以后改正文的字号，卡片就会对不上。建议让卡片宽度随内容（例如 `width: fit-content`，由正文自己的 `max-width` 决定），不再重复常量。另外 `CopyableIdentifier` 的按钮从 24px 降到了 20px，低于 WCAG 2.5.8 的 24px 目标尺寸；要确认四处用法里间距例外都成立，不成立就用不改变行高的办法把点击区放大。
 
@@ -70,10 +68,6 @@
 1. 窄屏下问询的头部挤成一行：390px 时时间从日期与时刻之间折断（英文折成三行），状态句挤在右侧很窄的一栏里，同一列表里相邻两条状态句的起点不一致，中文还会剩一个字单独成行。时间不折行，状态句放不下时独占一行。
 2. 三条状态句的句末标点不一致：排队那条（中英文都是）没有句号，另外两条有。
 3. 合成预览里的问询（`tests/probes/macro_task_console_preview.py` 的 `message()`）仍带着 schema 28 删掉的 `author` 字符串、`recipient` 与 `attempts`，与服务的 `_message_view` 不一致；控制台的解析器不读这几个字段，所以测试没发现。
-
-**会话视图的一项单元测试在完整检查里偶发失败，已经出现两次。**（2026-11-07 第一次；2026-11-09 安装 0.67.0 之前的完整检查第二次） `apps/console/src/session-view/SessionPanel.test.tsx` 的 “reaching the top of the transcript › keeps the reading position when the earlier page is inserted above” 报 “the panel observes its top sentinel: expected undefined to be truthy”；两次都在 Python 与前端并行的完整检查里，单跑这个文件各 3 次都过。原因没有查明。已经第二次出现，按缺陷处理：下一个动控制台的批次查清它在负载下为什么没有观察到顶部，修掉。
-
-**维护失败的原因里直接写出校验的错误标识。**（2026-11-09 验收 Buddy 页重做的评价一批时 Host 记下） 维护记录的失败原因形如“维护的回答最终仍不合格。 问题：summary-citation-outside-batch”，“问题”一项是协议里的标识。照 Router 记录的做法换成每个标识一句短说法，或者只写原因、把标识放进悬停。随下一个动控制台的批次做。
 
 ## 安装与存储
 
