@@ -190,14 +190,27 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertEqual(json.loads(body)["result"], changed)
         self.assertEqual(board.call("events_read", {"after": snapshot["eventCursor"]})["events"], events)
 
+    def test_snapshot_uses_the_service_startup_runtime_identity_without_resolving_runtime(self):
+        from hey_my_buddy.install import runtime
+
+        identity = "runtime:service-startup-fixture"
+        with mock.patch.object(runtime, "resolve_runtime", side_effect=AssertionError("console resolved runtime")):
+            board = self.board(runtime_identity=identity)
+            _stated, browser = self.open_console(board)
+            self.assertEqual(board.control["runtime"], identity)
+            self.assertEqual(browser.bootstrap()["runtimeIdentity"], identity)
+            # A later runtime selection cannot change the running console's identity.
+            board.control["runtime"] = "runtime:later-selection"
+            self.assertEqual(browser.bootstrap()["runtimeIdentity"], identity)
+
     def test_bootstrap_is_the_snapshot_object_and_sets_a_private_session(self):
         board = self.board()
         _stated, browser = self.open_console(board)
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "reminderSettings", "harnesses", "csrfToken", "runtimeContentId", "eventCursor", "configuration", "buddies", "modelServiceConcurrency", "routingHealth", "unavailableBuddyCount", "models", "modelCorrespondences", "preferences", "decisions", "tasks", "capabilities", "maintenance", "domainNodes", "kindEvaluations"]))
-        self.assertEqual(snapshot["runtimeContentId"], board.call("health", {})["runtimeContentId"])
+        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "reminderSettings", "harnesses", "csrfToken", "runtimeIdentity", "eventCursor", "configuration", "buddies", "modelServiceConcurrency", "routingHealth", "unavailableBuddyCount", "models", "modelCorrespondences", "preferences", "decisions", "tasks", "capabilities", "maintenance", "domainNodes", "kindEvaluations"]))
+        self.assertEqual(snapshot["runtimeIdentity"], board.control["runtime"])
         self.assertEqual(snapshot["reminderSettings"]["silenceSeconds"], 900)
         self.assertEqual(snapshot["routingHealth"], board.call("health", {})["routingHealth"])
         self.assertEqual(snapshot["routingHealth"]["sampleCount"], 0)

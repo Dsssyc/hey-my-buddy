@@ -12,7 +12,7 @@ const unsafe = Number.MAX_SAFE_INTEGER + 1;
 const date = "Fri, 09 Oct 2026 18:05:00 GMT"; // Date.parse, rather than ISO-only validation.
 const configuration = { explorationEvery: 5, routerBuddyIds: [" head ", "head"], routerRetryIntervalSeconds: 1,
   defaultRoutingMode: "fast", modelResponseWaitSeconds: 30, profileBuddyId: null };
-const snapshot = { csrfToken: "", runtimeContentId: "runtime-one", eventCursor: 0, consoleSession: { id: " session " }, configuration,
+const snapshot = { csrfToken: "", runtimeIdentity: "runtime-one", eventCursor: 0, consoleSession: { id: " session " }, configuration,
   buddies: [], preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 } };
 
 // Keep undefined, NaN and unsafe integers intact at the parser boundary.
@@ -34,7 +34,7 @@ function invalid(parse: () => unknown, key: string) {
 describe("authenticated snapshot read boundaries", () => {
   it("requires a nonblank runtime content ID", async () => {
     for (const value of [undefined, null, "", " ", 42]) {
-      await expect(apiFor({ ...snapshot, runtimeContentId: value }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+      await expect(apiFor({ ...snapshot, runtimeIdentity: value }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
   });
   it("preserves unknown snapshot fields and the untrimmed session id", async () => {

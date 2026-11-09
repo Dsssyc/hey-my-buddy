@@ -10,7 +10,7 @@ import type { RuntimeVersionInfo, Snapshot } from "./types";
 
 function snapshot(): Snapshot {
   return {
-    csrfToken: "csrf", runtimeContentId: "fixture-runtime", eventCursor: 0, consoleSession: { id: "fixture-session" },
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies: [], preferences: [], models: [], modelCorrespondences: [], decisions: [],

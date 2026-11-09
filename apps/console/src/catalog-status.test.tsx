@@ -62,7 +62,7 @@ function fixture() {
   const buddies = catalog();
   const live = buddies.filter(p => p.available);
   const state: Snapshot = {
-    csrfToken: "csrf", runtimeContentId: "fixture-runtime", eventCursor: 0, consoleSession: { id: "fixture-session" },
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null },

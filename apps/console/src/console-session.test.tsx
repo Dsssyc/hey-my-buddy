@@ -70,7 +70,7 @@ function fixture(options: {
 } = {}) {
   const buddies = catalog();
   let state: Snapshot = {
-    csrfToken: "csrf", runtimeContentId: "fixture-runtime", eventCursor: 0, consoleSession: session(),
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: session(),
 
     configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
@@ -182,7 +182,7 @@ function envelope(consoleSession: unknown, include = true) {
       defaultRoutingMode: "fast", modelResponseWaitSeconds: 60, profileBuddyId: null },
 
     buddies: [], models: [], modelCorrespondences: [], preferences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 },
-    csrfToken: "csrf", runtimeContentId: "runtime-one", eventCursor: 0,
+    csrfToken: "csrf", runtimeIdentity: "runtime-one", eventCursor: 0,
     ...(include ? { consoleSession } : {}),
   };
 }

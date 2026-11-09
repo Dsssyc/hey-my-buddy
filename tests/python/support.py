@@ -490,7 +490,8 @@ class InProcessBoard:
                 db.execute("INSERT OR IGNORE INTO harness_health(harness,status,record_json) VALUES(?,'ready',?)",
                            (name, json.dumps({"reason": None})))
         self.admission = WaitAdmission(options.get("wait_capacity", 4))
-        self.control: dict = {"wait_admission": self.admission, "contract_version": CONTRACT_VERSION}
+        self.control: dict = {"wait_admission": self.admission, "contract_version": CONTRACT_VERSION,
+                              "runtime": options.get("runtime_identity", "source:in-process-test")}
         self.stopped: list[dict] = []
         self.restarted: list[dict] = []
         self.evaluation = self.store.evaluation
@@ -514,6 +515,7 @@ class InProcessBoard:
         self.console = Console(
             self.store,
             self.service,
+            runtime_identity=self.control["runtime"],
             port=0,
             assets_dir=options.get("console_assets", self.directory / "console-assets"),
         )

@@ -10,7 +10,7 @@ import { levelSwitch, listed, pane, selectModel } from "./buddies/page.testing";
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 
 const initial = (): Snapshot => { const snapshot: Snapshot = ({
-  csrfToken: "fixture-csrf", runtimeContentId: "fixture-runtime", eventCursor: 0,
+  csrfToken: "fixture-csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0,
   consoleSession: { id: "fixture-session" },
 
   configuration: { explorationEvery: 5, routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null,

@@ -122,7 +122,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertNotIn(snapshot['csrfToken'], data)
         assert_private_path(self, session_file, 0o600)
         board.console.close()
-        board.console = Console(board.store, board.service, port=browser.port)
+        board.console = Console(board.store, board.service, runtime_identity=board.control["runtime"], port=browser.port)
         board.console.start(issue_ticket=False)
         restored = browser.bootstrap()
         self.assertEqual(snapshot['consoleSession']['id'], restored['consoleSession']['id'])
@@ -135,7 +135,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         board = self.board()
         _, browser = self.open_console(board)
         other = self.board()
-        occupied = Console(other.store, other.service, port=browser.port)
+        occupied = Console(other.store, other.service, runtime_identity=other.control["runtime"], port=browser.port)
         with self.assertRaises(BoardError) as caught:
             occupied.start()
         self.assertEqual(caught.exception.code, 'CONSOLE_PORT_IN_USE')
@@ -158,13 +158,13 @@ class ConsoleSessionTests(ConsoleTestCase):
             reserved.bind(('127.0.0.1',0))
             port=reserved.getsockname()[1]
         with mock.patch.dict(os.environ, {'HMB_CONSOLE_PORT':str(port)}):
-            board.console=Console(board.store,board.service)
+            board.console=Console(board.store,board.service, runtime_identity=board.control["runtime"])
             board.console.start(issue_ticket=False)
             self.assertEqual(board.console.port,port)
             board.console.close()
         clean={k:v for k,v in os.environ.items() if k!='HMB_CONSOLE_PORT'}
         with mock.patch.dict(os.environ,clean,clear=True):
-            board.console=Console(board.store,board.service)
+            board.console=Console(board.store,board.service, runtime_identity=board.control["runtime"])
             board.console.start(issue_ticket=False)
             self.assertEqual(board.console.origin,f'http://127.0.0.1:{port}')
             assert_private_path(self, board.directory / 'console-settings.json', 0o600)

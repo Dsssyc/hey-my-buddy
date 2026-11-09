@@ -9,7 +9,7 @@ import type { Snapshot } from "./types";
 beforeEach(() => vi.stubGlobal("matchMedia", (query: string) => ({ matches: false, media: query })));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
-const snapshot = { eventCursor: 8, csrfToken: "csrf", runtimeContentId: "fixture-runtime", consoleSession: { id: "session" },
+const snapshot = { eventCursor: 8, csrfToken: "csrf", runtimeIdentity: "fixture-runtime", consoleSession: { id: "session" },
   buddies: [], preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [], configuration: null,
   decisions: [], tasks: { pendingCount: 0 }, capabilities: {} } as Snapshot;
 

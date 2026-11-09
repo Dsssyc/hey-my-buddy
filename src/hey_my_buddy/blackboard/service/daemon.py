@@ -125,7 +125,7 @@ class Daemon:
             self.scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             service.execution_scheduler = self.scheduler
             self.store.on_change = self._board_changed
-            self.console = Console(self.store, service)
+            self.console = Console(self.store, service, runtime_identity=self.control["runtime"])
             self.console.start(issue_ticket=False)
             wait_service = WaitService(self.store, self.wait_admission, token=self.token)
             cc.register(BuddyControl, service, name=CONTROL_NAME,

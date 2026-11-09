@@ -36,17 +36,17 @@ function harness(strict = false) {
 
 describe("the console snapshot read", () => {
   it("compares later runtime IDs with the first successful read", async () => {
-    let runtimeContentId = "runtime-one";
-    const api = { snapshot: vi.fn(async () => ({ runtimeContentId }) as Snapshot) } as unknown as ConsoleApi;
+    let runtimeIdentity = "runtime-one";
+    const api = { snapshot: vi.fn(async () => ({ runtimeIdentity }) as Snapshot) } as unknown as ConsoleApi;
     const hook = renderHook(() => useConsole(api));
     await act(async () => {});
     expect(hook.result.current.runtimeUpdated).toBe(false);
     await act(async () => { await hook.result.current.refresh(); });
     expect(hook.result.current.runtimeUpdated).toBe(false);
-    runtimeContentId = "runtime-two";
+    runtimeIdentity = "runtime-two";
     await act(async () => { await hook.result.current.refresh(); });
     expect(hook.result.current.runtimeUpdated).toBe(true);
-    runtimeContentId = "runtime-one";
+    runtimeIdentity = "runtime-one";
     await act(async () => { await hook.result.current.refresh(); });
     expect(hook.result.current.runtimeUpdated).toBe(false);
   });

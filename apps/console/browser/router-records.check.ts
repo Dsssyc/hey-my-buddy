@@ -127,7 +127,7 @@ for (const theme of ["dark", "light"]) test.describe(`Router bounded records ${t
     let runtime = "synthetic-runtime-before";
     await page.route("**/api/console", async route => {
       const response = await route.fetch(); const snapshot = await response.json();
-      snapshot.runtimeContentId = runtime;
+      snapshot.runtimeIdentity = runtime;
       await route.fulfill({ response, json: snapshot });
     });
     await open(page, "#buddies/router/routing");

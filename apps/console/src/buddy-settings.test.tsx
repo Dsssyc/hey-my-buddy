@@ -82,7 +82,7 @@ type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
 
 function snapshot(options: Options = {}): HarnessSnapshot {
   const base: Snapshot = {
-    csrfToken: "csrf", runtimeContentId: "fixture-runtime", eventCursor: 0,
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: options.routerBuddyId === undefined ? [mediumId] : options.routerBuddyId === null ? [] : [options.routerBuddyId],

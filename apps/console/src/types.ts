@@ -438,7 +438,7 @@ export type ReminderSettings = z.infer<typeof reminderSettingsSchema>;
 // Only these snapshot fields were checked at the read boundary. The schema
 // validates; the API returns the original representation, including unknowns.
 export const snapshotReadSchema = z.object({
-  csrfToken: z.string(), runtimeContentId: nonblankString, eventCursor: safeCount, configuration: configurationSchema.nullable(),
+  csrfToken: z.string(), runtimeIdentity: nonblankString, eventCursor: safeCount, configuration: configurationSchema.nullable(),
   buddies: z.array(z.custom<Buddy>()), preferences: preferencesSchema,
   models: z.array(modelSchema),
   modelCorrespondences: z.array(modelCorrespondenceSchema),

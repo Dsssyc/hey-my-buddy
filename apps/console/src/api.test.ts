@@ -37,7 +37,7 @@ describe("L4 ordered Router list configuration", () => {
 
 describe("snapshot upgrade boundary and routing health", () => {
   const configuration = { explorationEvery: 5, routerBuddyIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", modelResponseWaitSeconds: 60, profileBuddyId: null };
-  const snapshot = { csrfToken: "csrf", runtimeContentId: "runtime-one", eventCursor: 0, consoleSession: { id: "session" }, configuration, buddies: [],
+  const snapshot = { csrfToken: "csrf", runtimeIdentity: "runtime-one", eventCursor: 0, consoleSession: { id: "session" }, configuration, buddies: [],
     preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [],
     tasks: { pendingCount: 0 } };
   const health = { available: false, reason: { code: "router-consecutive-failures", params: {} }, windowSize: 20, sampleCount: 3,
@@ -236,7 +236,7 @@ describe("local read verification evidence", () => {
 });
 
 describe("conditional reads (ETag / If-None-Match / 304)", () => {
-  const snapshot = { csrfToken: "csrf", runtimeContentId: "runtime-one", eventCursor: 0, consoleSession: { id: "session" }, configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", modelResponseWaitSeconds: 30, profileBuddyId: null },
+  const snapshot = { csrfToken: "csrf", runtimeIdentity: "runtime-one", eventCursor: 0, consoleSession: { id: "session" }, configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", modelResponseWaitSeconds: 30, profileBuddyId: null },
     buddies: [], preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
   function jsonResponse(value: unknown, etag?: string) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };

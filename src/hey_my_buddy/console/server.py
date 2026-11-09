@@ -34,7 +34,6 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..errors import BoardError
-from ..install import runtime
 from .console_sessions import BrowserSession, ConsoleSessions, ENTRY_SECONDS, COOKIE_SECONDS
 from .read_cache import ReadCache, encoding_unacceptable, select_encoding
 from . import reads, session_content
@@ -240,10 +239,10 @@ class _ConsoleHTTPServer(ThreadingHTTPServer):
 class Console:
     """One loopback console instance owned by the service."""
 
-    def __init__(self, store, service, *, assets_dir: Path | str | None = None, port: int | None = None, clock=time.time):
+    def __init__(self, store, service, *, runtime_identity: str, assets_dir: Path | str | None = None, port: int | None = None, clock=time.time):
         self.store = store
         self.service = service
-        self.runtime_content_id = runtime.resolve_runtime()["contentId"]
+        self.runtime_identity = runtime_identity
         self.assets_dir = Path(assets_dir) if assets_dir is not None else default_assets_dir()
         self.host = "127.0.0.1"
         self._persist_port = port is None
@@ -439,7 +438,7 @@ class Console:
     def _compose_snapshot(self, session: BrowserSession, projection: dict) -> dict:
         """The projection plus this session's private overlay fields."""
         snapshot = {**projection}
-        snapshot["runtimeContentId"] = self.runtime_content_id
+        snapshot["runtimeIdentity"] = self.runtime_identity
         snapshot["csrfToken"] = session.csrf
         snapshot["consoleSession"] = session.view()
         with self._lock:

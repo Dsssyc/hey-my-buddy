@@ -41,7 +41,7 @@ const proMax: Buddy = {
 
 function catalogSnapshot(): Snapshot {
   return {
-    csrfToken: "fixture-csrf", runtimeContentId: "fixture-runtime", eventCursor: 0,
+    csrfToken: "fixture-csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
     configuration: { explorationEvery: 5, routerBuddyIds: [proMaxId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null,

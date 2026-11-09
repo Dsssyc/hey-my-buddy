@@ -35,7 +35,7 @@ describe("changing the language in an already loaded console", () => {
   });
 
   it("translates a notice already shown by the editor while retaining its draft state", async () => {
-    const snapshot = { eventCursor: 8, csrfToken: "csrf", runtimeContentId: "fixture-runtime", consoleSession: { id: "session" },
+    const snapshot = { eventCursor: 8, csrfToken: "csrf", runtimeIdentity: "fixture-runtime", consoleSession: { id: "session" },
       buddies: [], preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [], configuration: null,
       decisions: [], tasks: { pendingCount: 0 }, capabilities: {} } as Snapshot;
     const { result } = renderHook(() => useEditor({} as ConsoleApi, snapshot, async () => snapshot, true, ""));
