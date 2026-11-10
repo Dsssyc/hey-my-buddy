@@ -321,29 +321,33 @@ class ExportBoardSampleTests(WorkflowTestCase):
         self.accepted(board, 'catalog-sample')
         with board.store.db.write() as connection:
             connection.execute(
-                "INSERT INTO catalog_observations(request_id,response_json,harnesses_json) "
-                "VALUES('fixture-observation','{\"models\":[]}','[\"dsh\"]')")
+                "INSERT INTO model_services(harness,provider,model,description,context_window,"
+                "input_modalities_json,concurrency_limit,source_sequence) "
+                "VALUES('dsh','fixture','sample-model','Fixture model',200000,'[\"text\",\"image\"]',3,17)")
             connection.execute(
-                "INSERT INTO catalog_current(harness,observation_id,discovery_id,status,reason,"
-                "updated_at,read_at,account_status) VALUES('dsh',1,'fixture-discovery','ready',"
-                "NULL,'2026-11-01T00:00:00.000Z','2026-11-01T00:00:00.000Z','ready')")
+                "INSERT INTO model_services(harness,provider,model,description,pending_since,source_sequence) "
+                "VALUES('dsh','fixture','vanishing-model','Pending model','2026-11-01T00:00:00.000Z',16)")
             connection.execute(
-                "INSERT INTO evaluation_catalog(discovery_id,payload_json) "
-                "VALUES('fixture-discovery','{\"providers\":[]}')")
+                "INSERT INTO model_services(harness,provider,model,description,unavailable_code,"
+                "unavailable_params_json,unavailable_content,confirmed_absent_at,source_sequence) "
+                "VALUES('dsh','fixture','absent-model','Absent model','catalog.native-unavailable',"
+                "'{}','Native diagnostic','2026-11-01T00:00:00.000Z',15)")
             connection.execute(
-                "INSERT INTO buddies(buddy_id,harness,provider,model,effort,available,"
-                "context_window,description) VALUES('dsh:fixture:sample-model:max','dsh','fixture',"
-                "'sample-model','max',1,200000,'Fixture buddy')")
+                "INSERT INTO catalog_current(harness,sequence,status,reason,"
+                "updated_at,read_at,account_status) VALUES('dsh',17,'complete',"
+                "NULL,'2026-11-01T00:00:00.000Z','2026-11-01T00:00:00.000Z','confirmed')")
             connection.execute(
-                "INSERT INTO buddies(buddy_id,harness,provider,model,effort,available,"
-                "unavailable_code,unavailable_params_json) VALUES('dsh:fixture:sample-model:low',"
-                "'dsh','fixture','sample-model','low',0,'CONFIRMED_ABSENCE_REASON','{\"cause\":\"gone\"}')")
+                "INSERT INTO buddies(buddy_id,alias,harness,provider,model,effort,effort_rank,enabled) "
+                "VALUES('dsh:fixture:sample-model:max','Sample alias','dsh','fixture','sample-model','max',0,1)")
             connection.execute(
-                "INSERT INTO catalog_pending(harness,provider,model,since,efforts_json) "
-                "VALUES('dsh','fixture','vanishing-model','2026-11-01T00:00:00.000Z','[\"low\",\"max\"]')")
+                "INSERT INTO buddies(buddy_id,harness,provider,model,effort,effort_rank,retired,enabled) "
+                "VALUES('dsh:fixture:sample-model:low','dsh','fixture','sample-model','low',1,1,0)")
             connection.execute(
-                "INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit) "
-                "VALUES('dsh','fixture','sample-model',3)")
+                "INSERT INTO buddies(buddy_id,harness,provider,model,effort) "
+                "VALUES('dsh:fixture:vanishing-model:max','dsh','fixture','vanishing-model','max')")
+            connection.execute(
+                "INSERT INTO buddies(buddy_id,harness,provider,model,effort) "
+                "VALUES('dsh:fixture:absent-model:max','dsh','fixture','absent-model','max')")
             # The in-process board seeds one ready row per harness; this row is
             # rewritten so the comparison also proves health rows travel whole.
             connection.execute(
@@ -353,10 +357,12 @@ class ExportBoardSampleTests(WorkflowTestCase):
         board.store.db.close()
         before = files(board.directory)
         output = export_sample(board.directory, self.directory / 'catalog-sample')
-        inserted = {'buddies', 'catalog_current', 'evaluation_catalog', 'catalog_observations',
-                    'catalog_pending', 'model_service_concurrency', 'harness_health'}
+        inserted = {'model_services', 'buddies', 'catalog_current', 'harness_health'}
         with closing(sqlite3.connect((board.directory / DB_FILE).as_uri() + '?mode=ro', uri=True)) as source, \
                 closing(sqlite3.connect(output / DB_FILE)) as sample:
+            self.assertEqual({table for table in CATALOG_TABLES if source.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()}, inserted)
+            self.assertEqual(sample.execute('PRAGMA foreign_key_check').fetchall(), [])
             for table in CATALOG_TABLES:
                 exists = source.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()

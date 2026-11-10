@@ -316,8 +316,7 @@ class CatalogRefreshTests(EvaluationTestCase):
         self.assertEqual(len(self.snapshot(board)["buddies"]), len(proposals))
         buddy_ids = [buddy["buddyId"] for buddy in self.snapshot(board)["buddies"]]
         # A new observation of identical native metadata keeps the same buddies.
-        repeated = board.call("model_catalog_refresh", {})
-        self.assertFalse(repeated["duplicate"])
+        board.call("model_catalog_refresh", {})
         self.assertEqual([buddy["buddyId"] for buddy in self.snapshot(board)["buddies"]], buddy_ids)
 
         # A failed discovery keeps the previous recorded catalog and the table.

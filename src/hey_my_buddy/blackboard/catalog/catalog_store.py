@@ -82,7 +82,7 @@ def _response(db, *, applied, stale):
                                 {'harness': name, 'status': 'unknown', 'accountStatus': 'unknown',
                                  'reason': read_health(db, name)['reason']} for name in HARNESS_NAMES], 'warnings': []})
     payload = view.payload
-    return {'duplicate': False, 'catalog': payload, 'buddies': view.proposed_buddies(),
+    return {'catalog': payload, 'buddies': view.proposed_buddies(),
             'appliedHarnesses': applied, 'staleHarnesses': stale}
 
 

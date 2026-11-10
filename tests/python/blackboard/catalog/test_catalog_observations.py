@@ -98,7 +98,6 @@ class CatalogObservationTests(BoardTestCase):
         with patch.object(self.b.store, '_notify') as notify:
             second = self.record({**catalog(), 'discoveredAt': self.clock.value})
         self.assertEqual(self.table_facts(), facts)
-        self.assertFalse(second['duplicate'])
         self.assertNotIn('discoveryId', second)
         self.assertNotIn('observationId', second)
         self.assertNotIn('discoveryId', second['catalog'])
@@ -355,8 +354,7 @@ class CatalogObservationTests(BoardTestCase):
         retired = catalog_store.buddies(self.e, {'includeUnavailable': True})
         self.assertFalse(retired['buddies'][0]['available'])
         self.assertTrue(retired['buddies'][0]['enabled'])
-        last = self.record(catalog())
-        self.assertFalse(last['duplicate'])
+        self.record(catalog())
         current = self.e.snapshot({})
         self.assertTrue(current['buddies'][0]['available'])
         self.assertEqual(current['buddies'][0]['catalogStatus'], 'available')

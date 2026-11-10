@@ -242,11 +242,12 @@ class CatalogTrustTests(BoardTestCase):
         kinds = [kind for kind, _ in self.events()]
         self.assertEqual(kinds, ['catalog.model_pending', 'catalog.model_pending'], 'Repeated and unknown readings invent no transitions')
         self.assertEqual({payload['model'] for _, payload in self.events()}, {'alpha', 'beta'})
-        # A duplicate request replays its recorded response without new events.
+        # Re-recording the same reading produces no additional transition events.
         observation = catalog_store.begin(self.evaluation)
-        first = self.record(reading(models=('alpha',)), observation['sequence'])
-        second = self.record(reading(models=('alpha',)), observation['sequence'])
-        self.assertFalse(second['duplicate'])
+        self.record(reading(models=('alpha',)), observation['sequence'])
+        events = self.events()
+        self.record(reading(models=('alpha',)), observation['sequence'])
+        self.assertEqual(self.events(), events)
         self.assertEqual([kind for kind, _ in self.events()][-1], 'catalog.model_recovered')
 
     def test_effort_only_change_is_not_a_model_disappearance(self):

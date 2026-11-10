@@ -316,7 +316,7 @@ class HarnessHealth:
         with self.board.db.read() as db:
             read_at = catalog_read_at(db, name)
             if read_at is None:
-                row = db.execute('SELECT updated_at FROM catalog_current WHERE harness=? AND status!="unread"', (name,)).fetchone()
+                row = db.execute("SELECT updated_at FROM catalog_current WHERE harness=? AND status!='unread'", (name,)).fetchone()
                 read_at = row['updated_at'] if row is not None else None
         if read_at is None:
             return False
