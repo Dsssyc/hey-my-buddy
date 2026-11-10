@@ -20,6 +20,23 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
       const details = page.locator("[data-slot=harness-sidebar] [data-slot=harness-card]").filter({ has: page.locator("#harness-title-dsh") }).locator("[data-slot=harness-details]");
       await expect(details.locator(":scope > [role=group]")).toHaveCount(2);
       await expect(details.getByRole("button", { name: "开放重试" })).toHaveCount(0);
+      const retries: unknown[] = [];
+      await page.route("**/api/command", async route => {
+        const command = route.request().postDataJSON();
+        if (command.operation !== "quota_redetect") return route.fallback();
+        retries.push(command);
+        await route.fulfill({ json: { ok: true, result: { harness: "dsh", provider: "deepseek-official", cleared: true, duplicate: false } } });
+      });
+      const trigger = header.locator("[data-slot=fold-handle]");
+      for (const expanded of [true, false]) {
+        if ((await trigger.getAttribute("aria-expanded") === "true") !== expanded) await trigger.click({ position: { x: 1, y: 1 } });
+        await provider.getByRole("button", { name: "开放重试" }).click();
+        await expect.poll(() => retries.length).toBe(expanded ? 1 : 2);
+        await expect(trigger).toHaveAttribute("aria-expanded", String(expanded));
+        await expect(page.getByText("已解除冷却", { exact: true })).toBeVisible();
+      }
+      expect(retries).toEqual([true, false].map(() => expect.objectContaining({ operation: "quota_redetect",
+        params: expect.objectContaining({ harness: "dsh", provider: "deepseek-official", requestId: expect.any(String) }) })));
       await expectNoSidewaysScroll(page);
     });
     test("shows a cooling boundary, a rerouted success, and a mid-turn quota failure", async ({ page }, testInfo) => {

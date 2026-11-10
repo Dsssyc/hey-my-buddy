@@ -6,8 +6,8 @@ import { harnessSection } from "./harness.testing";
 import { catalogue, effortCell, foldHandle, modelButton, selectModel } from "./page.testing";
 
 /**
- * The gestures of the catalogue, apart from what they open: a harness's fold
- * handle controls its models while details remain in the sidebar. The model drawer opens
+ * The gestures of the catalogue, apart from what they open: a harness's whole
+ * head controls its models while details remain in the sidebar. The model drawer opens
  * through the shared Collapsible. How they move and how they change colour is
  * a matter of computed style, which the browser checks assert.
  */
@@ -21,7 +21,7 @@ afterEach(() => {
 const header = (name: string) => harnessSection(name).querySelector<HTMLElement>("[data-slot=harness-header]")!;
 
 describe("a harness section's head", () => {
-  it("has one fold handle and no second arrow", async () => {
+  it("has one full-header trigger, a decorative arrow and separate retries", async () => {
     await openHarness(fixture(), "#buddies");
     for (const name of ["DSH", "ZCode", "Codex", "Claude Code"]) {
       const buttons = within(header(name)).getAllByRole("button");
@@ -33,16 +33,16 @@ describe("a harness section's head", () => {
       expect(header(name).querySelectorAll("button button, [tabindex]:not(button)")).toHaveLength(0);
       // One chevron; the cooldown summary has none of its own.
       expect(header(name).querySelectorAll("[data-slot=disclosure]")).toHaveLength(1);
-      expect(fold.querySelectorAll("[data-slot=disclosure]")).toHaveLength(1);
+      expect(fold.children).toHaveLength(0);
+      expect(fold.parentElement).toBe(header(name));
       expect(header(name).textContent).not.toMatch(/[▲▼▶▷△▽▸▾]/);
       // The shared icon uses a 16px chevron with the default stroke.
-      const mark = fold.querySelector("[data-slot=disclosure]")!;
+      const mark = header(name).querySelector("[data-slot=disclosure]")!;
+      expect(mark.getAttribute("aria-hidden")).toBe("true");
       expect(mark.getAttribute("class")).toContain("lucide-chevron-right");
       expect(mark.getAttribute("width")).toBe("16");
       expect(mark.getAttribute("stroke-width")).toBe("2");
       expect(mark.getAttribute("fill")).toBe("none");
-      expect(fold.getAttribute("data-variant")).toBe("ghost");
-      expect(fold.getAttribute("data-size")).toBe("icon-sm");
     }
   });
 
@@ -66,11 +66,18 @@ describe("a harness section's head", () => {
     const user = userEvent.setup();
     await openHarness(fixture(), "#buddies");
     const fold = foldHandle("Codex");
+    const mark = header("Codex").querySelector("[data-slot=disclosure]")!;
+    expect(mark.getAttribute("data-state")).toBe("closed");
+    expect(mark.classList.contains("rotate-90")).toBe(false);
     fold.focus();
     await user.keyboard("{Enter}");
     expect(fold.getAttribute("aria-expanded")).toBe("true");
+    expect(mark.getAttribute("data-state")).toBe("open");
+    expect(mark.classList.contains("rotate-90")).toBe(true);
     await user.keyboard(" ");
     expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(mark.getAttribute("data-state")).toBe("closed");
+    expect(mark.classList.contains("rotate-90")).toBe(false);
     expect(screen.getByRole("group", { name: "Codex 设置" })).toBeTruthy();
   });
 

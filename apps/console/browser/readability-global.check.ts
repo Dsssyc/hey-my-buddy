@@ -37,10 +37,8 @@ test.describe("shared readability", () => {
     await open(page, "#buddies");
     const fold = page.locator("[data-slot=fold-handle]").first();
     expect(await fold.evaluate(node => getComputedStyle(node).cursor)).toBe("pointer");
-    const chevron = fold.locator("[data-slot=disclosure]");
+    const chevron = fold.locator("..").locator("[data-slot=disclosure]");
     const text = await page.locator("body").evaluate(node => getComputedStyle(node).color);
-    await expect(fold).toHaveAttribute("data-variant", "ghost");
-    await expect(fold).toHaveAttribute("data-size", "icon-sm");
     expect(await chevron.evaluate(node => getComputedStyle(node).color)).not.toBe(text);
     await expect(chevron).toHaveCSS("width", "16px");
     await expect(chevron).toHaveAttribute("stroke-width", "2");

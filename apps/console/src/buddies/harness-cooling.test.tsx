@@ -8,6 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { CoolingHeaderProviders, activeCooling } from "./cooling";
 import { fixture, harness, openHarness } from "./harness.fixtures";
 import { harnessSection } from "./harness.testing";
+import { foldHandle } from "./page.testing";
 
 const deadline = new Date(Date.now() + 3600000).toISOString();
 const record = (extra: Partial<ProviderCooling> = {}): ProviderCooling => ({ provider: "zai", coolingUntil: deadline, consecutiveRejections: 2, ...extra });
@@ -40,11 +41,14 @@ describe("provider cooldown", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("retries from the header while details stay visible", async () => {
+  it.each([true, false])("retries from the header without changing expanded=%s", async expanded => {
     const user = userEvent.setup();
     const f = fixture({ harnesses: rows(), replies: { quota_redetect: () => reply(true) } });
     await openHarness(f, "#buddies");
+    const fold = foldHandle("DSH");
+    if ((fold.getAttribute("aria-expanded") === "true") !== expanded) await user.click(fold);
     await user.click(clear());
+    expect(fold.getAttribute("aria-expanded")).toBe(String(expanded));
     expect(document.querySelector("[data-slot=harness-sidebar] #harness-title-dsh")?.closest("[data-slot=harness-card]")?.querySelector("[data-slot=harness-details]")).toBeTruthy();
     expect(f.calls).toEqual([{ operation: "quota_redetect", params: expect.objectContaining({ harness: "dsh", provider: "zai" }) }]);
   });

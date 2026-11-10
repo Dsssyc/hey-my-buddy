@@ -24,7 +24,7 @@ for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear,
         const resting = await row.evaluate(node => getComputedStyle(node).backgroundColor);
         await expect(row).toHaveAttribute("aria-expanded", "false");
         await expect(row.locator("[data-slot=disclosure]")).toHaveCount(0);
-        await expect(page.locator("[data-slot=fold-handle] [data-slot=disclosure]").first()).toBeVisible();
+        await expect(page.locator("[data-slot=harness-header] [data-slot=disclosure]").first()).toBeVisible();
         await row.hover();
         await expect(row).toHaveCSS("cursor", "pointer");
         expect(await row.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe(resting);

@@ -63,19 +63,18 @@ for (const { locale, settings, fold } of languages) {
   test.describe(`the catalogue's gestures in ${locale} at 1280px`, () => {
     test.use({ locale, viewport: { width: 1280, height: 900 } });
 
-    test("keeps the fold handle separate from provider retries", async ({ page }) => {
+    test("covers the whole head with one trigger beneath the arrow and provider retries", async ({ page }) => {
       await open(page, "#buddies/catalog");
       for (const section of await page.locator("[data-slot=harness-section]").all()) {
         const name = (await section.getAttribute("aria-label"))!;
         const header = head(page, name);
         await expect(header.getByRole("button")).toHaveCount(name === "DSH" ? 2 : 1);
-        const chevron = header.getByRole("button", { name: new RegExp(`${fold.source}${name}$`) });
-        const small = await box(chevron);
-        expect(small.width, `${name}: chevron width`).toBeGreaterThanOrEqual(28);
-        expect(small.height, `${name}: chevron height`).toBeGreaterThanOrEqual(28);
-        const shape = await box(chevron.locator("[data-slot=disclosure]"));
+        const trigger = header.getByRole("button", { name: new RegExp(`${fold.source}${name}$`) });
+        const [triggerBox, headerBox] = await Promise.all([box(trigger), box(header)]);
+        expect(triggerBox, `${name}: the trigger covers the entire header`).toEqual(headerBox);
+        const shape = await box(header.locator("[data-slot=disclosure]"));
         expect(Math.min(shape.width, shape.height), `${name}: the chevron is drawn large enough to see`).toBeGreaterThanOrEqual(14);
-        expect(await chevron.locator("button").count()).toBe(0);
+        expect(await trigger.locator("button").count()).toBe(0);
         expect(await header.locator("button button").count()).toBe(0);
         if (name === "DSH") {
           const provider = header.locator("[data-slot=header-provider]").filter({ hasText: "deepseek-official" });
@@ -87,13 +86,13 @@ for (const { locale, settings, fold } of languages) {
       }
     });
 
-    test("folds models while sidebar details stay visible, by pointer and keyboard", async ({ page }) => {
+    test("folds from the name, provider and whitespace, and from Enter and Space", async ({ page }) => {
       await open(page, "#buddies/catalog");
       const header = head(page, "Codex");
-      const chevron = header.getByRole("button", { name: new RegExp(`${fold.source}Codex$`) });
+      const trigger = header.getByRole("button", { name: new RegExp(`${fold.source}Codex$`) });
       const models = page.locator("[data-slot=harness-section][aria-label=Codex] [data-slot=model-row]");
       const details = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
-      await expect(chevron).toHaveAttribute("aria-expanded", "true");
+      await expect(trigger).toHaveAttribute("aria-expanded", "true");
       await expect(details).toBeVisible();
       await expect(details.locator("xpath=ancestor::*[@data-slot='harness-sidebar'][1]")).toBeVisible();
       const blocks = await details.locator(":scope > [role=group]").all();
@@ -101,15 +100,32 @@ for (const { locale, settings, fold } of languages) {
       const columns = await Promise.all(blocks.map(box));
       expect(columns[0].y).toBeLessThan(columns[1].y);
       await expect(models.first()).toBeVisible();
-      await chevron.click();
-      await expect(chevron).toHaveAttribute("aria-expanded", "false");
-      await expect(models).toHaveCount(0);
-      await expect(details).toBeVisible();
-      await chevron.focus();
+      const mark = header.locator("[data-slot=disclosure]");
+      await expect(mark).toHaveAttribute("data-state", "open");
+      await expect(mark).toHaveCSS("rotate", "90deg");
+      // Hit the visible words by their boxes: pointer-events lets the trigger beneath receive the click.
+      for (const words of [header.getByText("Codex", { exact: true }), header.locator("[data-slot=header-provider] > span").first()]) {
+        const target = await box(words);
+        await page.mouse.click(target.x + target.width / 2, target.y + target.height / 2);
+        await expect(trigger).toHaveAttribute("aria-expanded", "false");
+        await expect(mark).toHaveAttribute("data-state", "closed");
+        await expect(mark).toHaveCSS("rotate", "none");
+        await expect(models).toHaveCount(0);
+        await expect(details).toBeVisible();
+        const reopening = await box(words);
+        await page.mouse.click(reopening.x + reopening.width / 2, reopening.y + reopening.height / 2);
+        await expect(trigger).toHaveAttribute("aria-expanded", "true");
+        await expect(mark).toHaveCSS("rotate", "90deg");
+      }
+      // The bottom-left padding has no text or retry control over it.
+      const bounds = await box(header);
+      await page.mouse.click(bounds.x + 1, bounds.y + bounds.height - 1);
+      await expect(trigger).toHaveAttribute("aria-expanded", "false");
+      await trigger.focus();
       await page.keyboard.press("Enter");
-      await expect(chevron).toHaveAttribute("aria-expanded", "true");
+      await expect(trigger).toHaveAttribute("aria-expanded", "true");
       await page.keyboard.press("Space");
-      await expect(chevron).toHaveAttribute("aria-expanded", "false");
+      await expect(trigger).toHaveAttribute("aria-expanded", "false");
       await expect(details).toBeVisible();
       await expectNoSidewaysScroll(page);
     });
@@ -117,8 +133,8 @@ for (const { locale, settings, fold } of languages) {
     test("moves every opening and closing on the Collapsible for 200ms on the height Radix measures", async ({ page }) => {
       await open(page, "#buddies/catalog");
       const section = page.locator("[data-slot=harness-section][aria-label=Codex]");
-      const chevron = head(page, "Codex").getByRole("button", { name: new RegExp(`${fold.source}Codex$`) });
-      const id = (await chevron.getAttribute("aria-controls"))!;
+      const trigger = head(page, "Codex").getByRole("button", { name: new RegExp(`${fold.source}Codex$`) });
+      const id = (await trigger.getAttribute("aria-controls"))!;
       // One step in the page: click, let one frame pass for React to commit, then read what is moving
       // while it still is: the animation is the Collapsible's, 200ms long, on the height Radix measured.
       const motion = (node: Element, contentId: string) => {
@@ -133,11 +149,11 @@ for (const { locale, settings, fold } of languages) {
           });
         }));
       };
-      const closing = await chevron.evaluate(motion, id) as { state: string; name: string; duration: string; height: string; running: string[] };
+      const closing = await trigger.evaluate(motion, id) as { state: string; name: string; duration: string; height: string; running: string[] };
       expect(closing).toMatchObject({ state: "closed", name: "disclosure-up", duration: "0.2s", running: ["disclosure-up"] });
       expect(parseFloat(closing.height)).toBeGreaterThan(0);
       await expect(section.locator("[data-slot=model-row]")).toHaveCount(0);
-      const opened = await chevron.evaluate(motion, id) as { state: string; name: string; duration: string; running: string[] };
+      const opened = await trigger.evaluate(motion, id) as { state: string; name: string; duration: string; running: string[] };
       expect(opened).toMatchObject({ state: "open", name: "disclosure-down", duration: "0.2s", running: ["disclosure-down"] });
       // Sidebar details stay visible while a model drawer uses the Collapsible.
       const block = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
@@ -152,7 +168,7 @@ for (const { locale, settings, fold } of languages) {
       });
       expect(drawerStyle).toEqual({ duration: "0.2s", state: "open" });
       // The chevron turns with it, on a transform transition of the same length.
-      const turn = await chevron.locator("[data-slot=disclosure]").evaluate(node => {
+      const turn = await head(page, "Codex").locator("[data-slot=disclosure]").evaluate(node => {
         const style = getComputedStyle(node);
         return { property: style.transitionProperty, duration: style.transitionDuration };
       });
@@ -180,7 +196,7 @@ for (const { locale, settings, fold } of languages) {
     test("changes every colour on a transition of 100 to 150ms", async ({ page }) => {
       await open(page, "#buddies/catalog");
       await expectColourTransition(page.locator("[data-slot=model-row] > button").first(), "a model row's button");
-      await expectColourTransition(page.locator("[data-slot=fold-handle]").first(), "a chevron");
+      await expectColourTransition(page.locator("[data-slot=fold-handle]").first(), "a harness header");
       await expectColourTransition(page.locator("[data-slot=catalogue-actions] > button").first(), "a toolbar button");
       await expectColourTransition(page.locator("[data-slot=checkbox]").first(), "a filter");
       await expectColourTransition(page.getByRole("main").getByRole("navigation").getByRole("link").first(), "a section link");
@@ -209,14 +225,14 @@ for (const { locale, settings, fold } of languages) {
       await open(page, "#buddies/catalog");
       for (const [label, target] of [
         ["a model row's button", page.locator("[data-slot=model-row] > button").first()],
-        ["a chevron", page.locator("[data-slot=fold-handle]").first()],
+        ["a harness header", page.locator("[data-slot=fold-handle]").first()],
         ["a toolbar button", page.locator("[data-slot=catalogue-actions] > button").first()],
         ["a section link", page.getByRole("main").getByRole("navigation").getByRole("link").first()],
         ["a chevron's shape", page.locator("[data-slot=disclosure]").first()],
       ] as const) expect((await transition(target)).property, `${label} makes no transition`).toBe("none");
-      const chevron = head(page, "Codex").getByRole("button", { name: new RegExp(`${fold.source}Codex$`) });
-      const id = (await chevron.getAttribute("aria-controls"))!;
-      const closing = await chevron.evaluate((node, contentId) => {
+      const trigger = head(page, "Codex").getByRole("button", { name: new RegExp(`${fold.source}Codex$`) });
+      const id = (await trigger.getAttribute("aria-controls"))!;
+      const closing = await trigger.evaluate((node, contentId) => {
         (node as HTMLElement).click();
         // One frame for React to commit; Radix keeps the (hidden) element but not what is in it.
         return new Promise<{ animations: number; hidden: boolean; display: string; children: number }>(resolve => requestAnimationFrame(() => {
@@ -237,6 +253,30 @@ for (const { locale, settings, fold } of languages) {
       test.use({ locale, viewport: { width: 1280, height: 900 } });
       test.beforeEach(async ({ page }) => {
         await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      });
+
+      test("gives the entire header model-row hover and keyboard focus", async ({ page }) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await open(page, "#buddies/catalog");
+        const header = head(page, "Codex");
+        const trigger = header.locator("[data-slot=fold-handle]");
+        const model = page.getByRole("button", { name: CODEX, exact: true });
+        const resting = await trigger.evaluate(node => getComputedStyle(node).backgroundColor);
+        await trigger.hover({ position: { x: 1, y: 1 } });
+        await expect(trigger).toHaveCSS("cursor", "pointer");
+        const hovered = await trigger.evaluate(node => getComputedStyle(node).backgroundColor);
+        expect(hovered).not.toBe(resting);
+        await model.hover();
+        await expect(model).toHaveCSS("background-color", hovered);
+        await trigger.click({ position: { x: 1, y: 1 } });
+        await expect(trigger).toHaveAttribute("aria-expanded", "false");
+        const closedHover = await trigger.evaluate(node => getComputedStyle(node).backgroundColor);
+        expect(closedHover).not.toBe(resting);
+        await trigger.press("Tab");
+        await page.keyboard.press("Shift+Tab");
+        await expect(trigger).toBeFocused();
+        expect(await trigger.evaluate(node => node.matches(":focus-visible"))).toBe(true);
+        expect(await trigger.evaluate(node => getComputedStyle(node).boxShadow)).not.toBe("none");
       });
 
       test("keeps an open model row and selected buddy visible under the pointer", async ({ page }) => {

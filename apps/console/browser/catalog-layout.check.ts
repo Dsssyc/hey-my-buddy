@@ -86,7 +86,7 @@ for (const theme of ["dark", "light"] as const) {
       if (width === 1440 && theme === "dark") await page.screenshot({ path: `${shots}catalog-drawer-1440-dark.png` });
     });
 
-    test("keeps harness facts beside the list or below it, with only the chevron folding models", async ({ page }) => {
+    test("keeps harness facts beside the list or below it while the whole header folds models", async ({ page }) => {
       await open(page, "#buddies/catalog");
       const models = page.locator("[data-slot=catalog-models]");
       const sidebar = page.locator("[data-slot=harness-sidebar]");
@@ -103,8 +103,8 @@ for (const theme of ["dark", "light"] as const) {
       expect(await sidebar.locator("[data-slot=harness-card] h3").allTextContents()).toEqual(await page.locator("[data-slot=harness-section]").evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-label"))));
       const header = page.locator('[data-slot=harness-section][aria-label="Codex"] [data-slot=harness-header]');
       const folded = await header.getByRole("button").getAttribute("aria-expanded");
-      await header.getByText("Codex", { exact: true }).click();
-      await expect(header.getByRole("button")).toHaveAttribute("aria-expanded", folded!);
+      await header.click({ position: { x: 1, y: 1 } });
+      await expect(header.getByRole("button")).toHaveAttribute("aria-expanded", folded === "true" ? "false" : "true");
       await expect(page.locator("[data-slot=account-summary], [data-slot=cooling-details]")).toHaveCount(0);
       await expect(page.locator("[data-slot=harness-section] [data-slot=harness-details]")).toHaveCount(0);
       for (const card of await sidebar.locator("[data-slot=harness-card]").all()) {
