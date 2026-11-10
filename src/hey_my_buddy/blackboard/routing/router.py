@@ -250,7 +250,7 @@ def render_prompt(document: dict) -> str:
 
 
 def _identity(row) -> dict:
-    """Copy the complete published four-part identity of one buddy row."""
+    """Copy the published complete name of one buddy row."""
     from ...protocol.schemas import BUDDY_FIELDS
     return {key: row[key] for key in BUDDY_FIELDS}
 

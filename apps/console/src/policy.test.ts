@@ -293,7 +293,8 @@ describe("model concurrency limits", () => {
       };
       const issues = blockingIssues(baseline, invalid);
       expect(issues).toHaveLength(1);
-      expect(issues[0].message).toContain("正整数");
+      expect(issues[0].message).toBe("deepseek-flash 并发上限须为正整数；请修改。");
+      expect(issues[0].label).toBe(worker.model);
       expect(issues[0].buddyId).toBe(worker.buddyId);
     }
     // A limit edit never depends on availability: the retired buddy's

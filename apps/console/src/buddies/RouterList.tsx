@@ -51,7 +51,7 @@ function Standing({ status }: { status: RouterStatus }) {
 
 /**
  * The Router list in the order it serves: the first buddy serves first. Each
- * line moves up and down, names the buddy by its four parts as a link to its
+ * line moves up and down, shows the buddy's complete name as a link to its
  * model, says where it stands, and can be removed; all of it only changes the
  * draft. Its recorded observations share the same row; adding is in the card heading.
  */

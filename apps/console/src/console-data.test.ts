@@ -48,6 +48,7 @@ describe("console grouping and recorded attribution", () => {
       buddy("dsh-high", "dsh", "provider-a", "high"), buddy("other-provider", "dsh", "provider-b", "high"),
       buddy("other-harness", "zcode", "provider-a", "high")]);
     expect(groupedServices).toHaveLength(3);
+    expect(groupedServices.map(group => group.name)).toEqual(["shared-model", "shared-model", "shared-model"]);
     expect(groupedServices.map(f => f.buddies.map(p => p.buddyId).sort()).sort()).toEqual([
       ["dsh-high", "dsh-low"], ["other-harness"], ["other-provider"],
     ].sort());

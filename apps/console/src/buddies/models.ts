@@ -143,7 +143,7 @@ export function reasonTexts(reasons: Reason[], _t: TFunction<"buddies">, harness
   return [...new Set(reasons.filter(reason => !harnessSaid || !reason.code.startsWith("harness.")).map(reasonText))];
 }
 
-/** The four parts of a buddy's identity without the last: `harness / provider / model`. */
+/** The complete name without the effort: `harness / provider / model`. */
 export function modelIdentity(modelService: { harness: string; provider: string; buddies: Buddy[] }): string {
   return `${modelService.harness} / ${modelService.provider} / ${modelService.buddies[0].model}`;
 }

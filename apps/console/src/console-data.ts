@@ -1,5 +1,5 @@
 import type { ModelService, ModelServiceConcurrencyEntry, Preference, Buddy, Task } from "./types";
-import { catalogPending, buddyName } from "./buddy-name";
+import { catalogPending } from "./buddy-name";
 
 export const modelServiceKey = (p: ModelService) => JSON.stringify([p.harness, p.provider, p.model]);
 
@@ -81,7 +81,7 @@ export function modelServices(buddies: Buddy[]): ModelServiceGroup[] {
   const groups = new Map<string, ModelServiceGroup>();
   for (const buddy of buddies) {
     const key = modelServiceKey(buddy);
-    if (!groups.has(key)) groups.set(key, { key, name: buddyName(buddy), harness: buddy.harness, provider: buddy.provider, buddies: [] });
+    if (!groups.has(key)) groups.set(key, { key, name: buddy.model, harness: buddy.harness, provider: buddy.provider, buddies: [] });
     groups.get(key)!.buddies.push(buddy);
   }
   // Display order only: each harness's current catalog carries its own order.

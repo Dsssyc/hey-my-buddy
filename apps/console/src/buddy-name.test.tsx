@@ -5,12 +5,7 @@ import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import type { Buddy, Snapshot } from "./types";
 import { catalogue, chip, listed, modelButton, pane } from "./buddies/page.testing";
-import {
-  effortText,
-  buddyName,
-  buddyTitle,
-  buddyTitleOr,
-} from "./buddy-name";
+import { effortText } from "./buddy-name";
 
 const flashOffId = "dsh:deepseek-official:deepseek-flash:off";
 const proMaxId = "dsh:deepseek-official:deepseek-v4-pro:max";
@@ -64,74 +59,13 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-describe("buddy display", () => {
-  it("drops the catalog's duplicate effort tail and shows the native off once", () => {
-    expect(buddyName(flashOff)).toBe("DeepSeek-V41-Flash");
-    expect(buddyTitle(flashOff)).toBe("DeepSeek-V41-Flash · off");
-  });
-
-  it("keeps a custom label and appends the effort exactly once", () => {
-    expect(
-      buddyTitle({
-        label: "我的稳定 buddy",
-        model: "deepseek-flash",
-        effort: "off",
-      }),
-    ).toBe("我的稳定 buddy · off");
-  });
-
-  it("preserves native and unknown efforts instead of translating them", () => {
-    expect(effortText("off")).toBe("off");
-    expect(effortText("default")).toBe("default");
-    expect(effortText("max")).toBe("max");
-    expect(effortText("high")).toBe("high");
-    expect(effortText("low")).toBe("low");
-    expect(effortText("turbo")).toBe("turbo");
-    expect(buddyTitle(proMax)).toBe("DeepSeek-V4-Pro · max");
-    expect(
-      buddyTitle({
-        label: "实验 buddy",
-        model: "deepseek-flash",
-        effort: "turbo",
-      }),
-    ).toBe("实验 buddy · turbo");
-  });
-
-  it("keeps off inside a name and a tail that does not match the effort", () => {
-    expect(
-      buddyTitle({
-        label: "half-off 实验",
-        model: "deepseek-flash",
-        effort: "off",
-      }),
-    ).toBe("half-off 实验 · off");
-    expect(
-      buddyTitle({
-        label: "DeepSeek-V4-Pro · low",
-        model: "deepseek-v4-pro",
-        effort: "max",
-      }),
-    ).toBe("DeepSeek-V4-Pro · low · max");
-  });
-
-  it("falls back to the model id and never renders a dangling separator", () => {
-    expect(
-      buddyTitle({ label: "", model: "deepseek-flash", effort: "off" }),
-    ).toBe("deepseek-flash · off");
-    expect(
-      buddyTitle({ label: "  ", model: "deepseek-flash", effort: "" }),
-    ).toBe("deepseek-flash");
+describe("native efforts", () => {
+  it("preserves native and unknown efforts, and omits absent efforts", () => {
+    for (const effort of ["off", "default", "max", "high", "low", "turbo"]) {
+      expect(effortText(effort)).toBe(effort);
+    }
     expect(effortText(null)).toBe("");
     expect(effortText(undefined)).toBe("");
-  });
-
-  it("keeps the recorded id when the snapshot no longer holds the buddy", () => {
-    expect(buddyTitleOr(undefined, "dsh:removed:model:off")).toBe(
-      "dsh:removed:model:off",
-    );
-    expect(buddyTitleOr(flashOff, "unused")).toBe(
-      "DeepSeek-V41-Flash · off",
-    );
   });
 });
 
@@ -148,7 +82,7 @@ describe("the catalogue's names", () => {
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     await listed(2, 2);
-    // A row shows the model's own id, the fourth part of the identity is the chip.
+    // A row shows the model's own id, the effort part of the complete name is the chip.
     expect(modelButton("dsh / deepseek-official / deepseek-flash").textContent).toContain("deepseek-flash");
     expect(modelButton("dsh / deepseek-official / deepseek-v4-pro").textContent).toContain("deepseek-v4-pro");
     // `off` keeps its native name on the chip, exactly like `max`; the catalogue's

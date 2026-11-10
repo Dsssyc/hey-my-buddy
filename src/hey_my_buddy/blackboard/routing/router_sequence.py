@@ -85,9 +85,8 @@ def reserve_dispatch(connection, *, decision_id: str, task_id: str, router_index
                      buddy: dict, now: str, round: int = 1) -> dict:
     """Record one dispatch under its internal task; the caller owns the transaction.
 
-    ``buddy`` is the complete buddy identity — ``buddyId`` plus the four-part
-    tuple — exactly as resolution selected it. The document is reconstructed
-    from the referenced round snapshot and this immutable actor identity.
+    ``buddy`` is ``buddyId`` plus the complete name, exactly as resolution
+    selected it. The document is reconstructed from the referenced round snapshot and this immutable actor identity.
     """
     row = _store(connection, "router_dispatches", {
         "task_id": task_id, "decision_id": decision_id, "round": round, "router_index": router_index,

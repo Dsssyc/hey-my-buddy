@@ -8,7 +8,6 @@ import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 import { clockTime, spanOutcome, outcomeLabel, buddyLabel, buddyNameParts, buddyColorKey, displayTitle, eventDetails, eventName } from "../macro-task-display";
 import type { TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
-import type { FriendlyBuddy } from "../macro-task-display";
 import type { TimelineScale } from "./scale";
 import { parseTimelineInstant as instant } from "./instant";
 import { formatClock, formatClockMinutes, formatDuration } from "../i18n/format";
@@ -46,7 +45,7 @@ export function markerReadout(marker: TimelineMarker): string {
   });
 }
 
-export function spanReadout(span: TimelineSpan, nowMs: number, buddies?: readonly FriendlyBuddy[] | null, row?: TimelineRow): string {
+export function spanReadout(span: TimelineSpan, nowMs: number, row?: TimelineRow): string {
   const outcome = spanOutcome(span);
   const start = instant(span.startAt);
   const end = instant(span.endAt) ?? (outcome === "running" || outcome === "open" || outcome === "unknown" ? nowMs : null);
@@ -55,7 +54,7 @@ export function spanReadout(span: TimelineSpan, nowMs: number, buddies?: readonl
       : span.kind === "host" ? i18n.t(row?.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost") : i18n.t(`tasks:kind.${span.kind}`);
   const reminders = span.reminders;
   return [head, start === null ? null : clockTime(start), end === null ? null : clockTime(end),
-    start !== null && end !== null && end >= start ? formatDuration(end - start) : null, buddyLabel(span.buddy, buddies),
+    start !== null && end !== null && end >= start ? formatDuration(end - start) : null, buddyLabel(span.buddy),
     span.buddy ? [span.buddy.harness, span.buddy.provider, span.buddy.model, span.buddy.effort].map(value => value ?? i18n.t("tasks:unknown")).join(" / ") : null,
     outcome === "unknown" ? i18n.t("tasks:drawing.stopUnconfirmed") : outcomeLabel(span, outcome),
     span.expectedSeconds === null ? null : i18n.t("tasks:drawing.expected", { duration: formatDuration(span.expectedSeconds * 1000) }),
@@ -155,9 +154,9 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds, co
 type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
 const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
 
-const TrackView = memo(function Track({ row, spans, events, scale, nowMs, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = TIMELINE_TRACK_PX, surface = "background", selectionRef, itemLinks }: {
+const TrackView = memo(function Track({ row, spans, events, scale, nowMs, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = TIMELINE_TRACK_PX, surface = "background", selectionRef, itemLinks }: {
   row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number;
-  buddies?: readonly FriendlyBuddy[] | null; selected: boolean; tabKey?: string | null; boundary?: HTMLElement | null;
+  selected: boolean; tabKey?: string | null; boundary?: HTMLElement | null;
   /** Only this fragment is outlined; the selected row has its own neutral wash. */
   selectedKey?: string | null;
   highlightedKey?: string | null;
@@ -216,7 +215,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, buddie
   const markerName = (marker: TimelineMarker) => marker.kind === "event" ? eventName(marker.event) : t("drawing.inquiry");
   const duration = (item: PositionedSpan) => formatDuration((instant(item.span.endAt) ?? nowMs) - instant(item.span.startAt)!, "minutes");
   const waitingKind = (span: TimelineSpan) => span.kind === "queue" ? t("kind.queue") : i18n.t(row.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost");
-  const modelLabel = (span: TimelineSpan) => buddyNameParts(span.buddy, buddies).name;
+  const modelLabel = (span: TimelineSpan) => buddyNameParts(span.buddy).name;
   const fullLabel = (item: PositionedSpan) => item.execution ? duration(item)!
     : t(item.span.kind === "queue" ? "drawing.queue" : "drawing.waiting", { kind: waitingKind(item.span), duration: duration(item) });
   const tails = positioned.filter(item => item.outcome === "running" && item.span.reminders?.possiblyStuck)
@@ -312,7 +311,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, buddie
       const tail = tails.find(entry => entry.item.span === span);
       const buddyMark = buddyMarks.get(span.spanId);
       const cross = crosses.find(entry => entry.item.span === span);
-      return <g key={span.spanId} role="button" tabIndex={itemLinks?.has(`span:${span.spanId}`) || tabKey === `span:${span.spanId}` ? 0 : -1} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-pressed={selectedKey === `span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, buddies, row) })}
+      return <g key={span.spanId} role="button" tabIndex={itemLinks?.has(`span:${span.spanId}`) || tabKey === `span:${span.spanId}` ? 0 : -1} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-pressed={selectedKey === `span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, row) })}
       onKeyDown={event => { if ((event.key === "Enter" || event.key === " ")) { event.preventDefault(); onOpen(row.runId, `span:${span.spanId}`); } }}
       onFocus={() => onFocusSpan(span)} onBlur={() => onFocusSpan(null)} onClick={event => { if (event.detail > 1) return; onSelect(row.runId, `span:${span.spanId}`); onOpen(row.runId, `span:${span.spanId}`); }} onPointerEnter={() => onHover(span)} onPointerLeave={() => onHover(null)} className="group/fragment outline-none">
       {isHighlighted(`span:${span.spanId}`) && <rect data-slot="selected-item" x={selection.left} y={execution ? middle - 13 : middle - 3} width={selection.right - selection.left} height={execution ? 26 : 6} fill="none" className="pointer-events-none stroke-focus"/>}

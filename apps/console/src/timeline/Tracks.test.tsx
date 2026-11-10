@@ -16,7 +16,7 @@ const scale = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs:
 const base = macroTaskTimelineFixture();
 const execution = (extra: Partial<TimelineSpan> = {}): TimelineSpan => ({ ...base.spans.find(span => span.kind === "execution")!, spanId: "e", startAt: at(5), endAt: at(15), resultStatus: "ok", state: "finished", uncertain: false, shutdownConfirmed: true, expectedSeconds: 600, reminders: null, inquiries: [], ...extra });
 function track(spans: TimelineSpan[], extra: { state?: string; rowBuddy?: TimelineBuddy | null; acceptedAt?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; highlightedKey?: string; buddyColors?: ReadonlyMap<string, string>; onOpen?: (runId: string, key: string) => void; onSelect?: (runId: string, key?: string) => void } = {}) {
-  return render(<Track row={{ ...base.rows[0]!, buddy: extra.rowBuddy === undefined ? base.rows[0]!.buddy : extra.rowBuddy, state: extra.state ?? "accepted", acceptedAt: extra.acceptedAt ?? null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} buddyColors={extra.buddyColors ?? new Map([[buddyColorKey(execution().buddy), "#6d7ec0"]])} selected={false} tabKey={extra.tabKey} highlightedKey={extra.highlightedKey}/>);
+  return render(<Track row={{ ...base.rows[0]!, buddy: extra.rowBuddy === undefined ? base.rows[0]!.buddy : extra.rowBuddy, state: extra.state ?? "accepted", acceptedAt: extra.acceptedAt ?? null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} buddyColors={extra.buddyColors ?? new Map([[buddyColorKey(execution().buddy), "#6d7ec0"]])} selected={false} tabKey={extra.tabKey} highlightedKey={extra.highlightedKey}/>);
 }
 const slot = (name: string) => document.querySelector(`[data-slot=${name}]`);
 
@@ -64,7 +64,7 @@ describe("timeline drawings follow recorded facts", () => {
   it("renders full, abbreviated or no bar text using the measured available room", () => {
     const live = execution({ startAt: at(0), endAt: null, state: "executing", shutdownConfirmed: false, expectedSeconds: null, resultStatus: undefined });
     track([live], { width: 200, rowBuddy: null });
-    expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("Claude Opus 5.5 · 40 分");
+    expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("claude-opus-5-5 · 40 分");
     cleanup(); track([live], { width: 70, rowBuddy: null });
     expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("40 分");
     cleanup(); track([live], { width: 25, rowBuddy: null });
@@ -179,7 +179,7 @@ describe("timeline drawings follow recorded facts", () => {
     for (const field of ["harness", "provider", "model"] as const) {
       cleanup(); track([live], { rowBuddy: { ...live.buddy!, [field]: "different" }, width: 800 });
       expect(slot("execution-buddy")).toBeTruthy();
-      expect(slot("track-label")?.textContent).toContain("Claude Opus 5.5");
+      expect(slot("track-label")?.textContent).toContain("claude-opus-5-5");
       const readout = spanReadout(live, Date.parse(at(40)));
       for (const value of Object.values(live.buddy!).filter(value => value !== null)) expect(readout).toContain(value);
     }
@@ -195,7 +195,7 @@ describe("timeline drawings follow recorded facts", () => {
     }
     cleanup(); track([live], { rowBuddy: { ...live.buddy!, provider: "another-provider", effort: "max" }, width: 800 });
     expect(slot("execution-buddy")).toBeTruthy();
-    expect(slot("track-label")?.textContent).toContain("Claude Opus 5.5");
+    expect(slot("track-label")?.textContent).toContain("claude-opus-5-5");
   });
   it("retains orange diamonds after human waits and acceptance waits settle", () => {
     track([execution({ spanId: "h", kind: "host", state: "approved", expectedSeconds: null, inquiries: null })]);

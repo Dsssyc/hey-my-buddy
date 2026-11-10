@@ -2545,7 +2545,7 @@ def buddy_views() -> list[dict]:
             available = harness != LOGGED_OUT_HARNESS
             pending = (harness, provider, model) == PENDING_MODEL
             view = {"buddyId": f"{harness}:{provider}:{model}:{effort}",
-                    "label": f"{model} · {effort} (synthetic preview)",
+                    "label": f"{model} · {effort}",
                     "harness": harness, "provider": provider, "model": model,
                     "effort": effort, "effortRank": effort_rank,
                     "available": available, "enabled": effort in enabled,

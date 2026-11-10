@@ -10,7 +10,6 @@ import { MacroTaskOverview } from "../MacroTaskOverview";
 import { buddyLabel, clockTime, displayTitle, rowStateInfo } from "../macro-task-display";
 import { formatDuration } from "../i18n/format";
 import { usageTotalsLabel } from "../usage-totals";
-import type { FriendlyBuddy } from "../macro-task-display";
 import type { MacroTaskSummary, MacroTaskTimeline, TimelineRow, TimelineSpan } from "../macro-task-types";
 import { parseTimelineInstant as instant } from "./instant";
 import { timelineScaleInput } from "./scale";
@@ -40,7 +39,7 @@ export type TaskWorkProps = {
   summary: MacroTaskSummary | null; timeline: MacroTaskTimeline | null; displayObservedAt: string | null;
   loading: boolean; error: string; stale: boolean; newRunIds: ReadonlySet<string>; active: boolean;
   openedRunId: string | null; detail: (runId: string) => ReactNode;
-  headerActions?: ReactNode; listToggle?: ReactNode; buddies?: readonly FriendlyBuddy[] | null;
+  headerActions?: ReactNode; listToggle?: ReactNode;
   onOpen: (runId: string, key?: string) => void; onClose: () => void;
   onRetry: () => void; onBackToList: () => void;
 };
@@ -165,7 +164,7 @@ export function TaskWork(props: TaskWorkProps) {
     const lastEnd = row.state === "delivered" && spans.filter(span => span.kind === "execution").every(span => span.shutdownConfirmed === true)
       ? Math.max(0, ...spans.filter(span => span.kind === "execution").map(span => instant(span.endAt) ?? 0)) : 0;
     const start = wait ? instant(wait.startAt) : lastEnd || null;
-    const own = [rowStateInfo(row, rows).label, start !== null ? t("openWait", { duration: formatDuration(Math.max(0, nowMs - start)) }) : null, t("turnCount", { n: turns }), buddyLabel(row.buddy, props.buddies)].filter(Boolean).join(" · ");
+    const own = [rowStateInfo(row, rows).label, start !== null ? t("openWait", { duration: formatDuration(Math.max(0, nowMs - start)) }) : null, t("turnCount", { n: turns }), buddyLabel(row.buddy)].filter(Boolean).join(" · ");
     const summary = laneSummaries.get(row.runId);
     return summary ? <span className="inline-flex max-w-full items-center"><span data-slot="timeline-lane-summary" className="shrink-0">{[
       t("laneMicroTasks", { n: summary.count }),
@@ -179,7 +178,7 @@ export function TaskWork(props: TaskWorkProps) {
   const pointerGap = scale?.breaks.find(gap => pointerX !== null && pointerX >= gap.startX && pointerX <= gap.endX);
   const pointerLine = pointerGap ? t("drawing.gap", { start: clockTime(pointerGap.startMs), end: clockTime(pointerGap.endMs), duration: formatDuration(pointerGap.endMs - pointerGap.startMs) }) : null;
   const marker = activeMarker ?? (!hoveredRow && !hoveredSpan && !focusedRow && !focusedSpan ? selectedMarker : null);
-  const facts = marker ? markerReadout(marker) : activeSpan ? t("segment", { label: spanReadout(activeSpan, nowMs, props.buddies, rows.find(row => row.runId === activeSpan.runId)) }) : activeRow ? rowLine(activeRow)
+  const facts = marker ? markerReadout(marker) : activeSpan ? t("segment", { label: spanReadout(activeSpan, nowMs, rows.find(row => row.runId === activeSpan.runId)) }) : activeRow ? rowLine(activeRow)
     : input?.domain ? t("range", { start: clockTime(input.domain.startMs), end: clockTime(input.domain.endMs), n: rows.length }) : t("noTime");
   const readout = activeMarker || hoveredSpan || focusedSpan ? facts : pointerLine ?? facts;
   const incomplete = timeline && (timeline.filtered || !timeline.scopeComplete || Object.values(timeline.truncated).some(Boolean));
@@ -191,7 +190,7 @@ export function TaskWork(props: TaskWorkProps) {
     key={row.runId}
     ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
     row={row} rows={rows} list={options.list} tall={options.tall} laneLevel={options.laneLevel} lead={options.lead} ariaPrefix={options.ariaPrefix}
-    tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} current={options.list ? openedRunId === row.runId : selectedRunId === row.runId || highlightedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
+    tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} current={options.list ? openedRunId === row.runId : selectedRunId === row.runId || highlightedRunId === row.runId} fresh={props.newRunIds.has(row.runId)}
     onClick={() => { select(row.runId); props.onOpen(row.runId); }}
     onEnter={() => { setPointerScreenX(null); setHoveredMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={event => { if (movingDetailFocus.current) event.preventDefault(); setPointerScreenX(null); setHoveredRow(null); setHoveredSpan(null); setFocusedMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>;
   const trackProps = (row: TimelineRow) => ({
@@ -203,7 +202,7 @@ export function TaskWork(props: TaskWorkProps) {
     buddyColors, scale: scale!,
     // A closed track has no moving end or silence duration to redraw.
     nowMs: input!.nowAtEnd || spansByRow.get(row.runId)?.some(span => span.reminders?.possiblyStuck) ? nowMs : instant(timeline!.observedAt)!,
-    buddies: props.buddies, onOpen: props.onOpen, onSelect: select,
+    onOpen: props.onOpen, onSelect: select,
     onFocusSpan: (span: TimelineSpan | null) => { setPointerScreenX(null); setHoveredRow(null); setHoveredSpan(null); setFocusedMarker(null); setFocusedSpan(span); },
     onHover: (span: TimelineSpan | null) => { setHoveredMarker(null); setHoveredSpan(span); if (span) setHoveredRow(null); },
   });

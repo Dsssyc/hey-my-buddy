@@ -270,7 +270,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
       }}
       onBack={backToTimeline} onOpenRun={next => openRun(next)} />}
     headerActions={<>{stopControl}{selectedSummary && entryActions(selectedSummary)}</>} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
-    buddies={snapshot.buddies} onOpen={(runId, key) => openRun(runId, key)} onClose={backToTimeline}
+    onOpen={(runId, key) => openRun(runId, key)} onClose={backToTimeline}
     onRetry={() => void timeline.retry()}
     onBackToList={() => { setShowNarrowList(true); if (listCollapsed) onExpandList(); }} /> : null;
 

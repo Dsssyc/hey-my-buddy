@@ -1,47 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import i18n from "i18next";
 import type { TimelineRow, TimelineSpan } from "./macro-task-types";
 import { acceptanceWaitMs, buddyLabel, buddyNameParts, rowStateInfo, spanOutcome } from "./macro-task-display";
 
-describe("0.16 friendly buddy names (0.3)", () => {
-  it("builds a directory once and picks up a replacement directory", () => {
-    const entry = { harness: "codex", provider: "openai", model: "test", label: "First" };
-    const directory = [entry];
-    const iterate = vi.spyOn(directory, Symbol.iterator);
-    const identity = { ...entry, effort: null };
-    expect(buddyNameParts(identity, directory).name).toBe("First");
-    expect(buddyNameParts(identity, directory).name).toBe("First");
-    expect(iterate).toHaveBeenCalledTimes(1);
-    expect(buddyNameParts(identity, [{ ...entry, label: "Second" }]).name).toBe("Second");
-  });
-
+describe("recorded model names", () => {
   const config = (model: string, effort: string | null = "high") => ({
     harness: "claude", provider: "anthropic", model, effort,
   });
 
-  it("prefers a matching snapshot buddy name, then known ids, then the raw id", () => {
-    const buddies = [{ harness: "claude", provider: "anthropic", model: "claude-opus-5-5", label: "Claude Opus 5.5 · high", effort: "high" }];
-    expect(buddyLabel(config("claude-opus-5-5"), buddies)).toBe("Claude Opus 5.5 · high");
-    expect(buddyLabel(config("claude-sonnet-5"))).toBe("Claude Sonnet 5 · high");
-    expect(buddyLabel(config("glm-5.3", "max"))).toBe("GLM-5.3 · max");
-    expect(buddyLabel(config("my-own-model"))).toBe("my-own-model · high");
+  it("uses every recorded model id without a display-name mapping", () => {
+    for (const model of ["claude-opus-5-5", "claude-sonnet-5", "glm-5.3", "my-own-model"]) {
+      expect(buddyNameParts(config(model))).toEqual({ name: model, effort: "high" });
+      expect(buddyLabel(config(model))).toBe(`${model} · high`);
+    }
     expect(buddyLabel(null)).toBe("buddy 未记录");
   });
 
-  it("omits the effort half when it is empty, and keeps every native name including off", () => {
-    expect(buddyLabel(config("glm-5.3", ""))).toBe("GLM-5.3");
-    expect(buddyLabel(config("glm-5.3", null))).toBe("GLM-5.3");
-    expect(buddyLabel(config("glm-5.3", "off"))).toBe("GLM-5.3 · off");
+  it("omits absent efforts and keeps native off", () => {
+    expect(buddyLabel(config("glm-5.3", ""))).toBe("glm-5.3");
+    expect(buddyLabel(config("glm-5.3", null))).toBe("glm-5.3");
+    expect(buddyLabel(config("glm-5.3", "off"))).toBe("glm-5.3 · off");
   });
-
-  it("shares a snapshot display name between rows and execution bars without the effort suffix", () => {
-    const buddy = { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" };
-    const buddies = [{ ...buddy, label: "GPT-6.1-Sol · high" }];
-    expect(buddyNameParts(buddy, buddies)).toEqual({ name: "GPT-6.1-Sol", effort: "high" });
-    expect(buddyLabel(buddy, buddies)).toBe("GPT-6.1-Sol · high");
-    expect(buddyNameParts(config("claude-sonnet-5"))).toEqual({ name: "Claude Sonnet 5", effort: "high" });
-  });
-
 });
 
 describe("recorded row state", () => {

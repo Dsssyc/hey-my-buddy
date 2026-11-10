@@ -369,7 +369,7 @@ export const configurationSchema = z.strictObject({
 });
 export type Configuration = z.infer<typeof configurationSchema>;
 
-/** The complete published four-part identity of one listed buddy. */
+/** The published complete name of one listed buddy. */
 export const routerHealthIdentitySchema = z.looseObject({ harness: z.string(), provider: z.string(), model: z.string(), effort: z.string() });
 export type RouterHealthIdentity = z.infer<typeof routerHealthIdentitySchema>;
 /** One listed buddy's optional observations; a malformed field refuses all health. */

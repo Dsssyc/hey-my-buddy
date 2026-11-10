@@ -5,13 +5,12 @@ import { StateMark } from "../components/ui/state-mark";
 import { ScrollingTitle } from "../components/ScrollingTitle";
 import { HarnessLogo } from "../buddies/HarnessLogo";
 import { buddyLabel, displayTitle, rowStateInfo } from "../macro-task-display";
-import type { FriendlyBuddy } from "../macro-task-display";
 import type { TimelineRow } from "../macro-task-types";
 import { isFailedRow } from "./failure";
 
 /** A micro task's full scrolling title, repair links, new mark, state and buddy. */
 const RowNameView = memo(forwardRef<HTMLButtonElement, {
-  row: TimelineRow; rows: readonly TimelineRow[]; tabIndex: number; current: boolean; fresh: boolean; buddies?: readonly FriendlyBuddy[] | null;
+  row: TimelineRow; rows: readonly TimelineRow[]; tabIndex: number; current: boolean; fresh: boolean;
   /** The plain list beside an open detail: no open hint, the current row is where the reader is. */
   list?: boolean;
   /** The taller lane-header row (60px) beside the ordinary 52px one. */
@@ -23,7 +22,7 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
   /** A word the accessible name starts with, such as the Lead badge. */
   ariaPrefix?: string;
   onClick: () => void; onEnter: () => void; onLeave: () => void; onFocus: (event: FocusEvent<HTMLButtonElement>) => void; onBlur: () => void;
-}>(function RowName({ row, rows, tabIndex, current, fresh, buddies, list, tall, laneLevel, lead, ariaPrefix, onClick, onEnter, onLeave, onFocus, onBlur }, ref) {
+}>(function RowName({ row, rows, tabIndex, current, fresh, list, tall, laneLevel, lead, ariaPrefix, onClick, onEnter, onLeave, onFocus, onBlur }, ref) {
   const { t } = useTranslation("tasks");
   const state = rowStateInfo(row, rows);
   const title = displayTitle(row.titleSource, row.title);
@@ -55,7 +54,7 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
       {fresh && <span aria-label={t("newMicroTask")} className="size-1.5 shrink-0 rounded-full bg-hand-mark"/>}
       {!list && mark && <span data-slot="row-state" data-kind={mark} className="ml-auto flex size-5 shrink-0 items-center justify-center" aria-hidden="true"><StateMark kind={mark} className="size-2.5"/></span>}
     </span>
-    <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{showState && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" ? "text-ink state-breathe" : !current && "text-ink3")}>{state.label}</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{ariaPrefix && <span>{ariaPrefix} · </span>}{buddyLabel(row.buddy, buddies)}</span>
+    <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{showState && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" ? "text-ink state-breathe" : !current && "text-ink3")}>{state.label}</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{ariaPrefix && <span>{ariaPrefix} · </span>}{buddyLabel(row.buddy)}</span>
   </button>;
 }));
 

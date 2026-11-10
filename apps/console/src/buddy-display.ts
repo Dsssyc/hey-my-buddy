@@ -1,5 +1,5 @@
 import type { ModelServiceGroup } from "./console-data";
-import { effortText, buddyName } from "./buddy-name";
+import { effortText } from "./buddy-name";
 import type { Reason } from "./reason";
 import type { Buddy } from "./types";
 
@@ -17,13 +17,13 @@ export function harnessName(harness: string): string {
 
 /**
  * Case-insensitive search text for one model service entry (docs/design/buddy-settings.md):
- * the model's display name, its recorded label/model and effort, the provider,
+ * the recorded label/model and effort, the provider,
  * and both the harness id and its harness display name, so "claude code" finds
  * the `claude` harness exactly like "claude" does.
  */
 export function modelServiceSearchText(buddy: Buddy): string {
   return [
-    buddyName(buddy), buddy.label, buddy.model, buddy.effort,
+    buddy.label, buddy.model, buddy.effort,
     buddy.provider, buddy.harness, harnessName(buddy.harness), effortText(buddy.effort),
   ].join(" ").toLowerCase();
 }

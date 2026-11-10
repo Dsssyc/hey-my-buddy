@@ -556,7 +556,7 @@ it("selects empty track space without opening on either click or double click", 
   expect(props.onOpen).not.toHaveBeenCalled();
 });
 
-it("keeps the current buddy's display name in the row and only duration on its bar", () => {
+it("keeps the current buddy's model id in the row and only duration on its bar", () => {
   const timeline = macroTaskTimelineFixture();
   const source = timeline.spans.find(span => span.kind === "execution")!;
   const buddy = { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" };
@@ -564,10 +564,10 @@ it("keeps the current buddy's display name in the row and only duration on its b
   timeline.spans = [{ ...source, buddy: { ...buddy, effort: null } }];
   timeline.events = [];
   timeline.observedAt = source.endAt!;
-  setup({ timeline, buddies: [{ ...buddy, label: "GPT-6.1-Sol · high" }] });
-  expect(row(source.runId).textContent).toContain("GPT-6.1-Sol · high");
+  setup({ timeline });
+  expect(row(source.runId).textContent).toContain("gpt-6.1-sol · high");
   const labels = [...document.querySelectorAll('[data-slot=track-label]')].map(node => node.textContent);
-  expect(labels.some(label => label?.startsWith("GPT-6.1-Sol ·"))).toBe(false);
+  expect(labels.some(label => label?.startsWith("gpt-6.1-sol ·"))).toBe(false);
   expect(document.querySelector('[data-slot=execution-buddy]')).toBeNull();
   expect(labels.some(label => label?.includes("gpt-6.1-sol") || label?.includes("high"))).toBe(false);
 });

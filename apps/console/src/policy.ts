@@ -7,7 +7,7 @@ import {
   buddySettings,
 } from "./draft";
 import { concurrencyLimit, modelResponseWaitSeconds, modelServiceKey, retryIntervalSeconds, validExplorationEvery } from "./console-data";
-import { buddyName, buddyTitle } from "./buddy-name";
+import { effortText } from "./buddy-name";
 
 /** The two capabilities have distinct authority and cannot stand in for each other. */
 export function hasFastRoutingCapability(buddy: Buddy | undefined): boolean {
@@ -93,7 +93,7 @@ type PolicyIssue = {
 };
 
 function labelOf(buddy: Buddy | undefined, buddyId: string): string {
-  return buddy ? buddyTitle(buddy) : buddyId;
+  return buddy ? [buddy.model, effortText(buddy.effort)].filter(Boolean).join(" · ") : buddyId;
 }
 
 function availabilityReason(buddy: Buddy | undefined): string {
@@ -130,7 +130,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
   for (const entry of draft.modelServiceConcurrency) {
     if (concurrencyLimit(entry.limit) !== null) continue;
     const member = draft.buddies.find((buddy) => modelServiceKey(buddy) === modelServiceKey(entry));
-    const subject = member ? buddyName(member) : `${entry.harness}/${entry.provider}/${entry.model}`;
+    const subject = entry.model;
     issues.push({
       buddyId: member?.buddyId ?? `${entry.harness}/${entry.provider}/${entry.model}`,
       modelService: modelServiceKey(entry),

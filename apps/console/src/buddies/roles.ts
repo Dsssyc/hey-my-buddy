@@ -2,7 +2,7 @@ import type { Reason } from "../reason";
 import { hasDecisionCapability, hasFastRoutingCapability, routerAttention } from "../policy";
 import type { Configuration, Draft, Buddy, RouterHealthEntry, RouterHealthIdentity, RoutingHealth, RoutingMode } from "../types";
 
-/** The four parts of a buddy's identity: `harness / provider / model / effort`. */
+/** The complete name of a buddy: `harness / provider / model / effort`. */
 export function buddyQuad(identity: RouterHealthIdentity): string {
   return `${identity.harness} / ${identity.provider} / ${identity.model} / ${identity.effort}`;
 }

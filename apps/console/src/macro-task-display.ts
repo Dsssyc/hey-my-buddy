@@ -147,73 +147,16 @@ export function displayTitle(titleSource: string, recorded: string | null): Titl
   return { text, fullText: title, clipped: text !== title, fromTask };
 }
 
-/** Product names for known native model ids (0.16 0.3); unknown ids stay as is. */
-const KNOWN_MODEL_NAMES: Record<string, string> = {
-  "claude-opus-5-5": "Claude Opus 5.5",
-  "claude-sonnet-5": "Claude Sonnet 5",
-  "glm-5.3": "GLM-5.3",
-};
-
-/** A snapshot buddy reduced to the fields friendly naming needs. */
-export type FriendlyBuddy = { harness: string; provider: string; model: string; label?: string; effort?: string };
 export type BuddyNameParts = { name: string; effort: string };
 
-/**
- * Builds the friendly-name resolver: a snapshot buddy whose harness,
- * provider and model all match wins with its buddyName; then the fixed
- * known-id map; then the raw model id.
- */
-function buddyNamer(buddies?: readonly FriendlyBuddy[] | null): (buddy: TimelineBuddy | null | undefined) => BuddyNameParts {
-  const byTuple = new Map<string, FriendlyBuddy>();
-  for (const buddy of buddies ?? []) {
-    const key = JSON.stringify([buddy.harness ?? "", buddy.provider ?? "", buddy.model ?? ""]);
-    if (!byTuple.has(key)) byTuple.set(key, buddy);
-  }
-  return (buddy) => {
-    if (!buddy) return { name: "", effort: "" };
-    const matched = byTuple.get(JSON.stringify([buddy.harness ?? "", buddy.provider ?? "", buddy.model ?? ""]));
-    const name = matched
-      ? buddyDisplayName(matched)
-      : KNOWN_MODEL_NAMES[(buddy.model ?? "").trim()] ?? (buddy.model ?? "").trim();
-    const effort = effortDisplay(buddy.effort);
-    return { name, effort };
-  };
+/** The recorded model id and native effort, available separately for execution bars. */
+export function buddyNameParts(buddy: TimelineBuddy | null | undefined): BuddyNameParts {
+  return { name: buddy?.model ?? "", effort: (buddy?.effort ?? "").trim() };
 }
 
-/** buddyName() behaviour for a snapshot buddy (label minus its effort tail). */
-function buddyDisplayName(buddy: FriendlyBuddy): string {
-  const label = (buddy.label ?? "").trim();
-  const effort = (buddy.effort ?? "").trim();
-  if (label && effort) {
-    const suffix = ` · ${effort}`;
-    if (label.endsWith(suffix)) {
-      const stripped = label.slice(0, -suffix.length).trim();
-      if (stripped) return stripped;
-    }
-  }
-  return label || buddy.model;
-}
-
-/** effortText() behaviour without importing the buddy module. */
-function effortDisplay(effort: string | null | undefined): string {
-  // Native values keep their recorded name, `off` included.
-  return (effort ?? "").trim();
-}
-
-const defaultNamer = buddyNamer(null);
-const buddyNamers = new WeakMap<readonly FriendlyBuddy[], ReturnType<typeof buddyNamer>>();
-
-/** The shared display name and native effort, available separately for execution bars. */
-export function buddyNameParts(buddy: TimelineBuddy | null | undefined, buddies?: readonly FriendlyBuddy[] | null): BuddyNameParts {
-  if (!buddies) return defaultNamer(buddy);
-  let namer = buddyNamers.get(buddies);
-  if (!namer) { namer = buddyNamer(buddies); buddyNamers.set(buddies, namer); }
-  return namer(buddy);
-}
-
-/** One consistent friendly name and effort form for task rows and timeline spans. */
-export function buddyLabel(buddy: TimelineBuddy | null | undefined, buddies?: readonly FriendlyBuddy[] | null): string {
-  const { name, effort } = buddyNameParts(buddy, buddies);
+/** One consistent model id and effort form for task rows and timeline spans. */
+export function buddyLabel(buddy: TimelineBuddy | null | undefined): string {
+  const { name, effort } = buddyNameParts(buddy);
   return [name, effort].filter(Boolean).join(" · ") || i18n.t("console:buddyNotRecorded");
 }
 

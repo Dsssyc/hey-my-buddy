@@ -8,7 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Buddy, RoutingMode } from "../types";
 import { buddyQuad, routerCandidates } from "./roles";
 
-/** The buddies that can be added, in the words of the four parts; the search keeps only those that contain what is typed. */
+/** The buddies that can be added, by their complete names; the search keeps only those that contain what is typed. */
 function Choices({ buddies, list, mode, onAdd }: {
   buddies: Buddy[]; list: string[]; mode: RoutingMode; onAdd: (buddyId: string) => void;
 }) {
