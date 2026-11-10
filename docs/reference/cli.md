@@ -65,7 +65,7 @@ Use `fixes` only for repair of an accepted micro task. Explicitly authorized `de
 
 `await` observes one `runId` for a bounded window, returning a boundary, delivery, reminder, new execution or service issue or window end. It starts no task and does not stop work when the window ends. [Host waiting](host.md) owns supervision; the [envelope](#await-envelope) lists the response facts.
 
-`get` selects exactly one of `runId`, `macroTaskId`, project `cwd` and `buddies`. A macro task view includes its goal and members, including an empty collection; a project view includes macro tasks and standalone micro tasks. `{"buddies":true}` lists every enabled buddy by its complete name, the form `submit` and `continue` take, with `available` and, when it cannot take work now, the recorded `coolingUntil` of its provider or the catalog's `unavailableReason`. Collections accept pagination, while `includeAudit` and `routingHistory` apply only to a run. Each collection's cursor continues that collection; a run's routing history has its own numeric cursor.
+`get` selects exactly one of `runId`, `macroTaskId`, project `cwd` and `buddies`. A macro task view includes its goal and members, including an empty collection; a project view includes macro tasks and standalone micro tasks. `{"buddies":true}` lists every enabled buddy with `available` and, when it cannot take work now, the recorded `coolingUntil` of its provider or the catalog's `unavailableReason`. Each is named by its complete name, followed by ` [alias]` when the user gave it one; `submit` and `continue` take that form, the complete name alone or the alias alone. Collections accept pagination, while `includeAudit` and `routingHistory` apply only to a run. Each collection's cursor continues that collection; a run's routing history has its own numeric cursor.
 
 ```sh
 "$HMB" await '{"runId":"<runId>","waitSeconds":3600}'
@@ -93,7 +93,7 @@ Use `fixes` only for repair of an accepted micro task. Explicitly authorized `de
 "$HMB" continue '{"runId":"<runId>","artifactId":"<artifactId>","input":"Address the failed acceptance case and rerun the checks.","buddy":"route","note":"Choose an available buddy for this continuation."}'
 ```
 
-With continuation input, `buddy` selects routing or a complete named buddy; a change requires a note. Access and write scope changes take effect only on the new turn. Live helpers require an explicit `helperPolicy`, absent when none are live. A workspace-site reply uses `requestId`, `resolution: "restore"`, `"adopt"` or `"abandon"`, and the observed fingerprint; adopt and abandon require a note and forbid path selection. Resolution alone opens no turn; adding input continues only after resolution succeeds. [Workflow](workflow.md#host-boundaries-and-requests) and [workspace lifecycle](workspace-lifecycle.md) own these checks.
+With continuation input, `buddy` selects routing or a named buddy, written as for `submit`; a change requires a note. Access and write scope changes take effect only on the new turn. Live helpers require an explicit `helperPolicy`, absent when none are live. A workspace-site reply uses `requestId`, `resolution: "restore"`, `"adopt"` or `"abandon"`, and the observed fingerprint; adopt and abandon require a note and forbid path selection. Resolution alone opens no turn; adding input continues only after resolution succeeds. [Workflow](workflow.md#host-boundaries-and-requests) and [workspace lifecycle](workspace-lifecycle.md) own these checks.
 
 ### Accept, conclude and cancel
 
