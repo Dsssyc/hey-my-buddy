@@ -36,11 +36,11 @@ def _alias(value: object, buddy_id: str) -> str | None:
             violation = 'format'
         elif value.casefold() == 'route':
             raise BoardError('ALIAS_RESERVED', 'Alias is reserved', buddyId=buddy_id,
-                             reason=reason('alias.reserved', buddyId=buddy_id))
+                             reason=reason('alias.reserved'))
         else:
             return value
     raise BoardError('ALIAS_INVALID', 'Alias has an invalid form', buddyId=buddy_id,
-                     reason=reason('alias.invalid', buddyId=buddy_id, violation=violation))
+                     reason=reason('alias.invalid', violation=violation))
 
 
 def _model_service_concurrency_changes(params: dict) -> list[dict]:
@@ -150,10 +150,11 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             other = aliases.get(folded)
             if other is not None:
                 buddy_id, conflicting = (row['buddy_id'], other) if row['buddy_id'] in changed else (other, row['buddy_id'])
+                identity = connection.execute(
+                    'SELECT harness,provider,model,effort FROM buddies WHERE buddy_id=?', (conflicting,)).fetchone()
                 raise BoardError('ALIAS_CONFLICT', 'Alias is already used by another buddy',
                                  buddyId=buddy_id, conflictingBuddyId=conflicting,
-                                 reason=reason('alias.conflict', buddyId=buddy_id,
-                                               conflictingBuddyId=conflicting))
+                                 reason=reason('alias.conflict', conflictingBuddy=dict(identity)))
             aliases[folded] = row['buddy_id']
     for entry in preferences:
         if 'mode' not in entry or entry['mode'] not in (None, 'pin', 'prefer', 'exclude'):

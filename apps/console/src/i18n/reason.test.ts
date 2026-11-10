@@ -9,6 +9,7 @@ const codes = JSON.parse(readFileSync("../../src/hey_my_buddy/protocol/reason-co
 const samples: Record<string, unknown> = {
   access: "read-only", adapter: "codex", bound: "unavailable", buddy: { harness: "codex", provider: "openai", model: "sample", effort: "high" },
   buddyId: "buddy-1", bytes: 12345, catalogReadAt: "2026-10-18T01:02:03Z", cause: { code: "harness.not-found", params: { operation: "probe" } },
+  conflictingBuddy: { harness: "codex", provider: "openai", model: "other", effort: "max" }, violation: "format",
   category: "OSError", message: "file write unavailable", truncated: false,
   collection: "buddies", conflictIds: ["conflict-1"], continuationId: "continuation-1", count: 1234, disposition: "completed", enabled: false,
   errorCode: "SAMPLE", errors: ["summary-citation-outside-batch"], harness: "codex", kind: "permission", leadRunId: "lead-1", legalEfforts: ["high", "max"], limit: 12000,
@@ -22,6 +23,22 @@ const samples: Record<string, unknown> = {
 afterEach(() => setLanguageChoice("browser"));
 
 describe("the program reason catalog", () => {
+  for (const language of ["zh", "en"] as const) it(`renders alias refusals with only their visible facts in ${language}`, () => {
+    setLanguageChoice(language);
+    const invalid = language === "zh" ? {
+      type: "别名必须是文字。", empty: "别名不能为空。", length: "别名最多 64 个字符。",
+      format: "别名不能含“ / ”、方括号或控制字符。",
+    } : {
+      type: "The alias must be text.", empty: "The alias cannot be empty.", length: "The alias can have at most 64 characters.",
+      format: "The alias cannot contain “ / ”, square brackets or control characters.",
+    };
+    for (const [violation, text] of Object.entries(invalid)) {
+      expect(reasonText({ code: "alias.invalid", params: { violation } })).toBe(text);
+    }
+    expect(reasonText({ code: "alias.reserved", params: {} })).toBe(language === "zh" ? "别名不能是 route。" : "The alias cannot be “route”.");
+    expect(reasonText({ code: "alias.conflict", params: { conflictingBuddy: samples.conflictingBuddy } })).toBe(language === "zh"
+      ? "这个别名已被 codex / openai / other / max 使用。" : "This alias is already used by codex / openai / other / max.");
+  });
   it("names the owning micro task for a helper cascade in both languages", () => {
     const reason = { code: "micro-task.owned-concluded", params: { runId: "root-1" } };
     setLanguageChoice("zh");

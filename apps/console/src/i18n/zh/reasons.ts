@@ -1,4 +1,7 @@
 export default {
+  "alias.invalid": "别名{{violation}}。",
+  "alias.reserved": "别名不能是 route。",
+  "alias.conflict": "这个别名已被 {{conflictingBuddy}} 使用。",
   "dsh-tool-inventory-unreadable": "无法读取 DSH CLI {{version}} 的工具行；只联网档位不可用，不用工具档位由黑板事后判定。",
   "dsh-tool-inventory-format-unrecognized": "无法识别 DSH CLI {{version}} 的工具行 YAML 格式；只联网档位不可用，不用工具档位由黑板事后判定。",
   "workflow.input-rejected": "{{harness}} 拒收输入。",

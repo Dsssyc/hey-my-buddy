@@ -93,7 +93,8 @@ class UserPolicyTests(BoardTestCase):
         self.assertEqual(error.details, {
             'buddyId': 'live', 'conflictingBuddyId': 'retired',
             'reason': {'code': 'alias.conflict', 'params': {
-                'buddyId': 'live', 'conflictingBuddyId': 'retired'}}})
+                'conflictingBuddy': {'harness': 'dsh', 'provider': 'fixture',
+                                     'model': 'retired', 'effort': 'max'}}}})
         self.assertEqual(self.aliases(), {'live': (None, 1), 'retired': ('Straße', 1)})
 
     def test_alias_batch_rejects_two_new_names_that_fold_together(self):
@@ -104,6 +105,9 @@ class UserPolicyTests(BoardTestCase):
         self.assertEqual(caught.exception.code, 'ALIAS_CONFLICT')
         self.assertEqual({caught.exception.details['buddyId'],
                           caught.exception.details['conflictingBuddyId']}, {'live', 'retired'})
+        self.assertEqual(caught.exception.details['reason']['params'], {
+            'conflictingBuddy': {'harness': 'dsh', 'provider': 'fixture',
+                                'model': caught.exception.details['conflictingBuddyId'], 'effort': 'max'}})
         self.assertEqual(self.aliases(), {'live': (None, 1), 'retired': (None, 1)})
 
     def test_invalid_and_reserved_aliases_report_specific_reasons(self):
@@ -126,8 +130,8 @@ class UserPolicyTests(BoardTestCase):
             self.assertEqual(caught.exception.code, code)
             self.assertEqual(caught.exception.details['buddyId'], 'live')
             self.assertEqual(caught.exception.details['reason']['code'], reason_code)
-            if violation is not None:
-                self.assertEqual(caught.exception.details['reason']['params']['violation'], violation)
+            self.assertEqual(caught.exception.details['reason']['params'],
+                             {'violation': violation} if violation is not None else {})
             self.assertEqual(self.aliases()['live'], (None, 1))
 
     def test_retired_pin_and_selector_do_not_block_disable_or_other_edits(self):

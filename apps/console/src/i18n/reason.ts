@@ -60,7 +60,7 @@ function parameter(value: unknown, key: string, code: string): string {
   }
   if (key === "retryAt") return formatCoolingTime(Date.parse(String(value)));
   if (key === "catalogReadAt") return formatDateTime(Date.parse(String(value)));
-  if (key === "operation" || key === "bound" || key === "disposition") return i18n.t(`shell:reasonValue.${key}.${value}`);
+  if (key === "operation" || key === "bound" || key === "disposition" || key === "violation") return i18n.t(`shell:reasonValue.${key}.${value}`);
   return String(value);
 }
 

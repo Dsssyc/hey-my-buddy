@@ -1,6 +1,9 @@
 import type zh from "../zh/reasons";
 
 export default {
+  "alias.invalid": "The alias {{violation}}.",
+  "alias.reserved": "The alias cannot be “route”.",
+  "alias.conflict": "This alias is already used by {{conflictingBuddy}}.",
   "dsh-tool-inventory-unreadable": "DSH CLI {{version}} tool rows could not be read; the web only level is unavailable, and the blackboard judges the no tools level after the run.",
   "dsh-tool-inventory-format-unrecognized": "DSH CLI {{version}} tool-row YAML format was not recognized; the web only level is unavailable, and the blackboard judges the no tools level after the run.",
   "workflow.input-rejected": "{{harness}} rejected the input.",

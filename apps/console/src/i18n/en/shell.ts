@@ -64,6 +64,12 @@ export default {
     "unfinished": "Unfinished micro tasks"
   },
   reasonValue: {
+    "violation": {
+      "type": "must be text",
+      "empty": "cannot be empty",
+      "length": "can have at most 64 characters",
+      "format": "cannot contain “ / ”, square brackets or control characters"
+    },
     "yes": "Yes",
     "no": "No",
     "operation": {

@@ -63,6 +63,12 @@ export default {
     "unfinished": "未完成的微任务"
   },
   reasonValue: {
+    "violation": {
+      "type": "必须是文字",
+      "empty": "不能为空",
+      "length": "最多 64 个字符",
+      "format": "不能含“ / ”、方括号或控制字符"
+    },
     "yes": "是",
     "no": "否",
     "operation": {
