@@ -75,8 +75,9 @@ for (const { locale, width, theme } of [
     await expect(failed).toHaveAttribute("data-state-tone", "fail");
     await expect(cancelled).toHaveAccessibleName(new RegExp(zh ? "已取消" : "Cancelled"));
     await expect(cancelled).toHaveAttribute("data-state-tone", "past");
-    await expect(cancelled.getByText(zh ? "已取消" : "Cancelled", { exact: true })).toBeVisible();
-    await expect(cancelled.getByText(zh ? "已取消" : "Cancelled", { exact: true })).not.toHaveClass(/text-hand|text-fail/);
+    await expect(cancelled.getByText(zh ? "已取消" : "Cancelled", { exact: true })).toHaveCount(0);
+    await expect(cancelled.locator("[data-slot=row-state]")).toHaveCount(0);
+    await expect(cancelled.locator("[data-slot=row-state-edge]")).toBeVisible();
     await expect(page.locator('[data-key="span:execution:att-d5h1-1"] [data-slot=execution-failed]')).toBeVisible();
     if (zh) {
       await mkdir(captures, { recursive: true });

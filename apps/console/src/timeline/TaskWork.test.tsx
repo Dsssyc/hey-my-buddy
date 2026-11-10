@@ -99,7 +99,10 @@ describe("the lanes and the detail workspace", () => {
     expect(row("r3").style.paddingLeft).toBe("31px");
   });
   it("writes the state word only while someone must act or something runs; the settled band speaks alone", () => {
-    setup();
+    const cancelledHelper = macroTaskTimelineFixture();
+    const helper = cancelledHelper.rows.find(row => row.runId === "r5")!;
+    Object.assign(helper, { kind: "helper", parentRunId: "r2", rootRunId: "r2", depth: 1 });
+    setup({ timeline: cancelledHelper });
     // Settled terminal states: the word is gone from the row and stays in the accessible name.
     for (const [id, word] of [["r1", "已验收"], ["r2", "已验收"], ["r3", "执行完成"], ["r5", "已取消"]] as const) {
       expect(within(row(id)).queryByText(word, { exact: true })).toBeNull();

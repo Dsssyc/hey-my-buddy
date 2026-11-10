@@ -19,7 +19,7 @@ export function Ask({ inquiry }: { inquiry: Inquiry }) {
       <Quote>
         <div data-slot="request-kind" className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-ink3">
           <span className="shrink-0 whitespace-nowrap">{t("inquiry.head")} · <Moment at={inquiry.createdAt} itemKey={itemKey} label={t("inquiry.head")} /></span>
-          <span className="min-w-0 flex-auto">{word}</span>
+          <span className="min-w-0 flex-auto text-balance">{word}</span>
         </div>
         <Fold text={inquiry.question} />
         {explanation && !endedReason && ["discarded", "unavailable"].includes(inquiry.state) && <Fold text={explanation} className="mt-1 text-ink3" />}

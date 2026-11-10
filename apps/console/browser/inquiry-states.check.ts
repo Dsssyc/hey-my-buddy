@@ -38,6 +38,24 @@ async function expectInquiryWhole(page: Page, inquiryId: string, text: string) {
       return [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0)
         .map(rect => ({ top: rect.top, bottom: rect.bottom }));
     });
+    const chineseLines = await label.evaluate(element => {
+      const lines = new Map<number, number>();
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        for (let offset = 0; offset < node.textContent!.length; offset++) {
+          if (!/[\u4e00-\u9fff]/.test(node.textContent![offset]!)) continue;
+          const range = document.createRange();
+          range.setStart(node, offset); range.setEnd(node, offset + 1);
+          const top = Math.round(range.getBoundingClientRect().top);
+          lines.set(top, (lines.get(top) ?? 0) + 1);
+        }
+      }
+      return [...lines.values()];
+    });
+    if (chineseLines.length > 1) {
+      expect(chineseLines.at(-1), "a wrapped Chinese inquiry state does not leave one character on its last line").toBeGreaterThan(1);
+    }
     const inline = stateLines.length === 1 && stateLines[0]!.top < time.y + time.height && stateLines[0]!.bottom > time.y;
     expect(inline || Math.abs(state.x - head.x) < 0.1,
       "an inquiry state fits on the time's line or starts at the full header's left edge").toBe(true);
