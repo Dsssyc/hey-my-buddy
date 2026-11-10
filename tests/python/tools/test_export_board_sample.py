@@ -29,6 +29,11 @@ from hey_my_buddy.protocol.transport import _read_endpoint, _request
 TOOL = Path(__file__).resolve().parents[3] / 'tools/export_board_sample.py'
 export_sample = runpy.run_path(str(TOOL))['export_sample']
 
+#: The catalog tables the sample must carry whole, mirroring the tool's own list.
+CATALOG_TABLES = ('model_services', 'buddies', 'catalog_current', 'evaluation_catalog',
+                  'catalog_observations', 'catalog_pending', 'model_service_concurrency',
+                  'harness_health')
+
 
 def files(root):
     return {str(path.relative_to(native_path(root))): path.read_bytes()
@@ -310,6 +315,96 @@ class ExportBoardSampleTests(WorkflowTestCase):
             self.assertEqual(connection.execute('SELECT project_id FROM projects').fetchall(),
                              [('sample-project',)])
         self.assert_source_unchanged(before, files(source))
+
+    def test_sample_carries_catalog_rows_row_for_row(self):
+        board = self.source_board()
+        self.accepted(board, 'catalog-sample')
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO catalog_observations(request_id,response_json,harnesses_json) "
+                "VALUES('fixture-observation','{\"models\":[]}','[\"dsh\"]')")
+            connection.execute(
+                "INSERT INTO catalog_current(harness,observation_id,discovery_id,status,reason,"
+                "updated_at,read_at,account_status) VALUES('dsh',1,'fixture-discovery','ready',"
+                "NULL,'2026-11-01T00:00:00.000Z','2026-11-01T00:00:00.000Z','ready')")
+            connection.execute(
+                "INSERT INTO evaluation_catalog(discovery_id,payload_json) "
+                "VALUES('fixture-discovery','{\"providers\":[]}')")
+            connection.execute(
+                "INSERT INTO buddies(buddy_id,harness,provider,model,effort,available,"
+                "context_window,description) VALUES('dsh:fixture:sample-model:max','dsh','fixture',"
+                "'sample-model','max',1,200000,'Fixture buddy')")
+            connection.execute(
+                "INSERT INTO buddies(buddy_id,harness,provider,model,effort,available,"
+                "unavailable_code,unavailable_params_json) VALUES('dsh:fixture:sample-model:low',"
+                "'dsh','fixture','sample-model','low',0,'CONFIRMED_ABSENCE_REASON','{\"cause\":\"gone\"}')")
+            connection.execute(
+                "INSERT INTO catalog_pending(harness,provider,model,since,efforts_json) "
+                "VALUES('dsh','fixture','vanishing-model','2026-11-01T00:00:00.000Z','[\"low\",\"max\"]')")
+            connection.execute(
+                "INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit) "
+                "VALUES('dsh','fixture','sample-model',3)")
+            # The in-process board seeds one ready row per harness; this row is
+            # rewritten so the comparison also proves health rows travel whole.
+            connection.execute(
+                "UPDATE harness_health SET revision=2,record_json='{\"healthy\":false}',"
+                "checked_at='2026-11-01T00:00:00.000Z',expires_at='2026-11-02T00:00:00.000Z' "
+                "WHERE harness='zcode'")
+        board.store.db.close()
+        before = files(board.directory)
+        output = export_sample(board.directory, self.directory / 'catalog-sample')
+        inserted = {'buddies', 'catalog_current', 'evaluation_catalog', 'catalog_observations',
+                    'catalog_pending', 'model_service_concurrency', 'harness_health'}
+        with closing(sqlite3.connect((board.directory / DB_FILE).as_uri() + '?mode=ro', uri=True)) as source, \
+                closing(sqlite3.connect(output / DB_FILE)) as sample:
+            for table in CATALOG_TABLES:
+                exists = source.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+                self.assertEqual(sample.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,)).fetchone() is not None, exists is not None, table)
+                if exists is None:
+                    continue
+                rows = [tuple(row) for row in source.execute(f'SELECT * FROM "{table}" ORDER BY rowid')]
+                if table in inserted:
+                    self.assertTrue(rows, table)
+                self.assertEqual([tuple(row) for row in sample.execute(
+                    f'SELECT * FROM "{table}" ORDER BY rowid')], rows, table)
+        self.assert_source_unchanged(before, files(board.directory))
+
+    def test_source_schema_without_a_catalog_table_exports_the_rest(self):
+        # The floor schema predates model_services: a table the source never
+        # had is simply absent, and every catalog table it does have still
+        # travels with all of its rows. The fixture's accepted runs reference
+        # its repository, so the staged upgrade writes the project marker there.
+        fixture = load_fixture(self.directory / 'source')
+        source = fixture['state']
+        with closing(sqlite3.connect(source / DB_FILE)) as connection:
+            project_ids = {row[0] for row in connection.execute(
+                "SELECT DISTINCT json_extract(workspace_manifest_json,'$.repositoryId') "
+                "FROM workflow_runs WHERE workspace_manifest_json IS NOT NULL")}
+            self.assertEqual(len(project_ids), 1)
+            project_id = project_ids.pop()
+            with connection:
+                connection.execute("UPDATE attempts SET execution_state='finished',"
+                                   "shutdown_confirmed=1,cleanup_pending=0")
+                connection.execute("UPDATE tasks SET state='completed',active_attempt_id=NULL "
+                                   "WHERE state NOT IN ('completed','concluded','failed','cancelled') "
+                                   "OR active_attempt_id IS NOT NULL")
+        before = files(source)
+        output = export_sample(source, self.directory / 'sample')
+        with closing(sqlite3.connect((source / DB_FILE).as_uri() + '?mode=ro', uri=True)) as origin, \
+                closing(sqlite3.connect(output / DB_FILE)) as sample:
+            self.assertIsNone(sample.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_services'").fetchone())
+            for table in CATALOG_TABLES:
+                if table == 'model_services':
+                    continue
+                rows = [tuple(row) for row in origin.execute(f'SELECT * FROM "{table}" ORDER BY rowid')]
+                self.assertTrue(rows, table)
+                self.assertEqual([tuple(row) for row in sample.execute(
+                    f'SELECT * FROM "{table}" ORDER BY rowid')], rows, table)
+        self.assert_only_upgrade_project_marker_changed(before, files(source), fixture, project_id)
 
     def test_invalid_selected_execution_is_not_published(self):
         for assignment in ("execution_state='uncertain'", 'shutdown_confirmed=0', 'cleanup_pending=1'):

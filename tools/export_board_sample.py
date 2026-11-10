@@ -5,14 +5,18 @@ Run from the repository root:
     uv run --frozen python tools/export_board_sample.py OUTPUT [--source STATE]
 
 Only console history, its fixed session records, and inquiry journals belonging
-to selected attempts are exported. Each selected micro task's applied cleanup
-plans travel with it, so the private service reading the sample never plans a
-reclamation inside the source state; a run whose checkout the source has not
-reclaimed is left out rather than pointing maintenance at a live checkout. The
-one judge is the staged sample itself, upgraded as an install would upgrade it:
-what the product's own candidate query still names there decides the exclusion,
-and the destination retains the source schema and is published only after that
-query falls silent and the stop checks pass.
+to selected attempts are exported, together with the catalog's current state:
+every row of each catalog table (buddies, model_services, catalog_current,
+evaluation_catalog, catalog_observations, catalog_pending,
+model_service_concurrency, harness_health) that the source schema has, so buddy
+availability can be compared on real data across versions. Each selected micro
+task's applied cleanup plans travel with it, so the private service reading the
+sample never plans a reclamation inside the source state; a run whose checkout
+the source has not reclaimed is left out rather than pointing maintenance at a
+live checkout. The one judge is the staged sample itself, upgraded as an
+install would upgrade it: what the product's own candidate query still names
+there decides the exclusion, and the destination retains the source schema and
+is published only after that query falls silent and the stop checks pass.
 """
 from __future__ import annotations
 
@@ -43,6 +47,15 @@ from hey_my_buddy.protocol.workspace_manifest import resolve_manifest, resolve_r
 from hey_my_buddy.state_root import get_state_dir
 
 MAX_TASKS = 100
+
+#: The catalog's current state travels whole, so each version's view of buddy
+#: availability can be compared on the same real rows. The order lets every
+#: foreign key between these tables be satisfied as written: catalog_pending
+#: references catalog_current, and the buddies of a later schema reference
+#: model_services. A table the source schema does not have is not exported.
+CATALOG_TABLES = ('model_services', 'buddies', 'catalog_observations',
+                  'catalog_current', 'catalog_pending', 'evaluation_catalog',
+                  'model_service_concurrency', 'harness_health')
 
 
 class _CandidateStore:
@@ -183,6 +196,14 @@ def _select(connection, source_schema: int,
         project_ids.update(row['standalone_project_id'] for row in records['workflow_runs']
                            if row['standalone_project_id'] is not None)
         records['projects'] = _rows(connection, 'projects', 'project_id', project_ids)
+    # The catalog's current state belongs to the board, not to any selected
+    # task: every row of each catalog table the source schema has travels.
+    tables = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    for table in CATALOG_TABLES:
+        if table in tables:
+            records[table] = [dict(row) for row in connection.execute(
+                f'SELECT * FROM "{table}" ORDER BY rowid')]
     for run in records['workflow_runs']:
         group = groups[run['run_id']]
         if not group.startswith('run:'):
