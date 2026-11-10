@@ -18,7 +18,7 @@ export default {
     "helper-attention": "A helper needs a Host decision",
     "attempt-uncertain-after-restart": "The previous execution has not been confirmed stopped after restart",
     "harness-probe-unknown": "Waiting to confirm harness status",
-    "workflow-routing-fenced": "Routing is fenced by the workflow",
+    "workflow-routing-fenced": "Routing ownership expired",
     "workflow-ancestor": "An ancestor micro task has ended",
     "workflow-accepted": "The micro task was accepted; waiting for queue sync",
     "workflow-concluded": "The micro task was concluded; waiting for queue sync",
@@ -42,7 +42,7 @@ export default {
   header: { elapsed: "Elapsed", turns: "Turns" },
   state: { stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", failedHost: "Failed, waiting for Host", cancelledHost: "Cancelled, waiting for Host", failedLead: "Failed, waiting for Lead", cancelledLead: "Cancelled, waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
   wait: { since: "onward", queue: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
-  strip: { label: "The steps of this micro task", position: "Step {{current}} / {{total}}", previous: "Previous step", next: "Next step", focusItem: "Select {{item}} in the step strip · {{time}}", truncated: "The read is incomplete and has no row for this micro task; only the delegation is listed." },
+  strip: { label: "Micro task steps", position: "Step {{current}} / {{total}}", previous: "Previous step", next: "Next step", focusItem: "Select {{item}} in the step strip · {{time}}", truncated: "The read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {
     delegation: "Delegate", routing: "Route", turn: "Turn {{n}}", handoff: "Handoff", decision: "Decision", continue: "Continue",
     takeover: "Takeover", acceptance: "Acceptance",
@@ -92,12 +92,12 @@ export default {
     reported: "Reported {{when}}", notReported: "No report", modelTurns: "Model turns: {{n}}", toolCalls: "Tool calls: {{n}}",
   },
   inquiry: {
-    head: "Inquiry", queued: "Queued", queuedCheckpoint: "Will be delivered at the Worker's next checkpoint; not delivered yet.", claimed: "Being delivered", delivered: "Delivered, awaiting answer", answered: "Answered",
-    discarded: "Discarded", unavailable: "Unavailable", truncated: "The answer is cut short", more: "Earlier inquiries may not be listed.",
+    head: "Inquiry", queued: "Queued", queuedCheckpoint: "To be delivered at the Worker's next checkpoint.", claimed: "Being delivered", delivered: "Delivered, awaiting answer", answered: "Answered",
+    discarded: "Discarded", unavailable: "Inquiry ended", truncated: "Answer truncated", more: "Earlier inquiries may not be listed.",
   },
   ending: { cause: "End cause: {{cause}}", unrecorded: "Cause not recorded" },
   termination: {
-    "wrap-up": "Host wrap-up finished", "grace-expired": "Stopped when the wrap-up grace ran out", "forced-stop": "Forced stop",
+    "wrap-up": "Host wrap-up finished", "grace-expired": "Stopped after the wrap-up grace period expired", "forced-stop": "Forced stop",
     "service-stop": "Service stopped", "unknown-stop": "Stopped (initiator unknown)", deadline: "The Router's model did not start responding in time", "harness-error": "Harness error",
     "transport-error": "Transport failure", "workspace-error": "Workspace error", completed: "Completed normally", wrapUpLead: "Lead wrap-up finished",
   },

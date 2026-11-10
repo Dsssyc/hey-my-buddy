@@ -18,10 +18,10 @@ export default {
     },
     empty: {
       title: "No Router yet",
-      hint: "Choose Add to pick a buddy from the catalog; the first one in the list serves first.",
+      hint: "Use Add to choose buddies from the catalog; those higher in the list act as Router first.",
     },
     attention: {
-      none: "No buddy in the list can serve as Router right now.",
+      none: "No buddy in the list can act as Router.",
       head: "The first in the list, {{name}}: {{reason}}.",
       gone: "no longer in the catalog",
       unavailable: "The Router is unavailable.",
@@ -40,7 +40,7 @@ export default {
     fast: "Its harness does not support routing calls without tools yet",
     review: "Its harness does not meet the local read-only routing eligibility yet",
     unavailable: "This reasoning effort is unavailable now",
-    disabled: "This reasoning effort is not enabled; switch it on first",
+    disabled: "This reasoning effort is not enabled; enable it first",
   },
   mode: {
     explanation: "Fast uses task text and existing records; Review can also read a frozen code copy when a choice needs code evidence. The default applies to future delegations that need a Router decision; routing already in progress keeps its original mode.",
@@ -52,21 +52,21 @@ export default {
     reviewConsequence: "When a Router has to decide, the text of the task is sent to the Router's model provider, and so is a frozen copy of the code; DSH and ZCode have no system sandbox, so reads and transfers outside the copy cannot be ruled out.",
   },
   responseWait: {
-    explanation: "If the model has not started responding within this time, routing moves to the next Router in the list; this maintenance batch fails and waits for the next batch; profile building fails and can be started again. Once the model starts responding, there is no time limit. This prevents a stalled provider from blocking delegation indefinitely. Harnesses that cannot observe when the model starts responding (such as DSH) are not subject to this wait limit; their own idle timeout provides the fallback.",
-    name: "Wait for the model to start responding",
+    explanation: "This limit keeps a stalled provider from blocking delegation: if the model does not start responding in time, routing moves to the next Router in the list, the maintenance run fails and the next run retries, and profile building fails and can be started again. There is no limit once the model starts responding. Harnesses that cannot observe the start (such as DSH) are exempt and rely on their own idle timeout.",
+    name: "Response start timeout",
     invalid: "Enter an integer from 1 to 86400",
   },
   exploration: {
     name: "Exploration quota", on: "On", off: "Off", interval: "Micro tasks per exploration quota",
     disabled: "Exploration is off", invalid: "Enter an integer of at least 2",
-    explanation: "After the specified number of new micro task routings, the next gets an exploration quota; continuations, reassignments and failure recovery do not count. The Router may choose a suitable candidate that costs no more and has fewer samples in the top-level domain, to build comparison evidence. Results count in evaluations too. Turning this off stops new exploration quotas.",
+    explanation: "One in every set number of new micro task routings gets an exploration quota; continuations, reroutes and failure recovery do not count. The Router may choose a suitable candidate that costs no more and has fewer samples in the top-level domain, to build comparison evidence; results count in evaluations too. Turning this off stops new exploration quotas.",
   },
   retry: {
     explanation: "A Router without a usable answer is skipped for this interval, letting other Routers take over. New routing requests can try it again after the interval. A valid answer clears its consecutive no-answer count; reading records does not extend the interval.",
     name: "Retry interval",
     label: "Retry interval in seconds",
     unit: "s",
-    range: "Needs a whole number from {{min}} to {{max}}",
+    range: "Enter an integer from {{min}} to {{max}}",
   },
   records: {
     name: "Records",

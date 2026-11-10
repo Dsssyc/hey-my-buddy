@@ -4,8 +4,8 @@ import { open, test } from "./preview";
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 
 for (const { locale, labels } of [
-  { locale: "zh-CN", labels: ["从开始到最近活动", "有工作在运行的时间", "各回合相加"] },
-  { locale: "en-US", labels: ["Start to last activity", "Time with work running", "Turns added up"] },
+  { locale: "zh-CN", labels: ["开始至最近活动", "运行时长", "回合时长合计"] },
+  { locale: "en-US", labels: ["Start to last activity", "Running time", "Total turn time"] },
 ]) test.describe(`round 15 facts in ${locale}`, () => {
   test.use({ locale, viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
 

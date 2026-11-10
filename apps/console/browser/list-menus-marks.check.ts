@@ -86,14 +86,14 @@ for (const [locale, theme] of [["zh-CN", "dark"], ["zh-CN", "light"], ["en-US", 
       const dialog = page.getByRole("dialog", { name: zh ? "停止宏任务" : "Stop macro task", exact: true });
       await dialog.getByRole("button", { name: zh ? "确认停止宏任务" : "Confirm stop", exact: true }).click();
       const status = page.locator("[data-slot=macro-stop-state]");
-      await expect(status).toHaveText(zh ? "停止请求未提交" : "Stop request was refused");
+      await expect(status).toHaveText(zh ? "停止请求被拒绝" : "Stop request was refused");
       await expect(status.locator("button")).toHaveCount(0);
-      await expect(header.getByRole("button", { name: zh ? "知道了" : "Dismiss", exact: true })).toHaveCount(0);
+      await expect(header.getByRole("button", { name: zh ? "关闭" : "Dismiss", exact: true })).toHaveCount(0);
       await page.mouse.move(1400, 900); await settle(page);
       await page.screenshot({ path: `${shots}/stop-state-${suffix}` });
       await selectedButton.click();
-      await expect(menu.getByRole("menuitem", { name: zh ? "知道了" : "Dismiss", exact: true })).toBeVisible();
-      await menu.getByRole("menuitem", { name: zh ? "知道了" : "Dismiss", exact: true }).click();
+      await expect(menu.getByRole("menuitem", { name: zh ? "关闭" : "Dismiss", exact: true })).toBeVisible();
+      await menu.getByRole("menuitem", { name: zh ? "关闭" : "Dismiss", exact: true }).click();
       await expect(status).toHaveCount(0);
     });
 

@@ -151,7 +151,7 @@ describe("session rows", () => {
     const first = result[0];
     if (first.type !== "task") throw Error("Expected task");
     const { container } = render(<TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="# Micro task title\nOpening" checkoutRoot={project} routingMode="review" expansion={{ expanded: new Set([first.key]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider>);
-    expect(container.textContent).toContain("为这个微任务选择 buddy（审阅模式）");
+    expect(container.textContent).toContain("为此微任务选择 buddy（审阅模式）");
     expect(container.textContent).toContain("Micro task title");
     for (const line of prompt.split("\n")) expect(container.textContent).toContain(line);
     const answer = container.querySelector('[data-session-row="answer"]')!;

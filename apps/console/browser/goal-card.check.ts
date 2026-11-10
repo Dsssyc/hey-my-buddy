@@ -184,7 +184,7 @@ test("keeps the Chinese zoom hint on one line at 1280px and wraps only when its 
   const ruler = page.locator('[data-slot="zoom-ruler"]:visible');
   const bounds = (await ruler.boundingBox())!;
   await page.mouse.move(bounds.x + bounds.width - 80, bounds.y + 10);
-  const tip = page.locator('[data-slot="tooltip-content"]').filter({ hasText: "滚轮缩放" });
+  const tip = page.locator('[data-slot="tooltip-content"]').filter({ hasText: "滚轮或 + / − 缩放" });
   await expect(tip).toBeVisible();
   const lines = await tip.evaluate(element => {
     const text = document.createRange(); text.selectNodeContents(element.firstChild!);

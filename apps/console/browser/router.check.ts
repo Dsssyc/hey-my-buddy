@@ -13,8 +13,8 @@ async function captureWork(page: Page, name: string) {
   await page.screenshot({ path: join(captures, name), fullPage: true });
 }
 const words = [
-  { locale: "zh-CN", jobs: "Router 的工作", routing: "路由", maintenance: "维护", profiles: "画像", maintenanceBuddy: "维护 buddy", profileBuddy: "画像 buddy", settings: "设置", records: "记录", list: "Router 列表", wait: "等待模型开始作答", errors: "最近的失败", choose: "选择 buddy" },
-  { locale: "en-US", jobs: "Router work", routing: "Routing", maintenance: "Maintenance", profiles: "Profiles", maintenanceBuddy: "Maintenance buddy", profileBuddy: "Profile buddy", settings: "Settings", records: "Records", list: "Router list", wait: "Wait for the model to start responding", errors: "Recent failures", choose: "Choose buddy" },
+  { locale: "zh-CN", jobs: "Router 的工作", routing: "路由", maintenance: "维护", profiles: "画像", maintenanceBuddy: "维护 buddy", profileBuddy: "画像 buddy", settings: "设置", records: "记录", list: "Router 列表", wait: "开始作答时限", errors: "最近的失败", choose: "选择 buddy" },
+  { locale: "en-US", jobs: "Router work", routing: "Routing", maintenance: "Maintenance", profiles: "Profiles", maintenanceBuddy: "Maintenance buddy", profileBuddy: "Profile buddy", settings: "Settings", records: "Records", list: "Router list", wait: "Response start timeout", errors: "Recent failures", choose: "Choose buddy" },
 ] as const;
 
 for (const w of words) for (const theme of ["dark", "light"] as const) {
@@ -50,7 +50,7 @@ for (const w of words) for (const theme of ["dark", "light"] as const) {
       await expect(detail.locator("[data-slot=router-setting-help]")).toHaveCount(4);
       const waitHelp = detail.getByRole("group", { name: w.wait, exact: true }).locator("[data-slot=router-setting-help]");
       await waitHelp.click();
-      await expect(page.getByRole("dialog", { name: new RegExp(w.wait) })).toContainText(/不限时|no time limit/);
+      await expect(page.getByRole("dialog", { name: new RegExp(w.wait) })).toContainText(/不限时|no limit/);
       await waitHelp.click();
       const plots = detail.getByRole("table", { name: w.locale === "zh-CN" ? "各 Router 的记录" : "Records of each Router" }).locator('[data-slot="quant-bar"]');
       await expect(plots).toHaveCount(3);
@@ -82,7 +82,7 @@ for (const w of words) for (const theme of ["dark", "light"] as const) {
       await expect(settings.getByRole("spinbutton", { name: w.wait })).toHaveValue("60");
       const waitHelp = settings.getByRole("group", { name: w.wait, exact: true }).locator("[data-slot=router-setting-help]");
       await waitHelp.click();
-      await expect(page.getByRole("dialog", { name: new RegExp(w.wait) })).toContainText(/不限时|no time limit/);
+      await expect(page.getByRole("dialog", { name: new RegExp(w.wait) })).toContainText(/不限时|no limit/);
       await page.keyboard.press("Escape");
       await expect(waitHelp).toHaveAttribute("aria-expanded", "false");
       await page.getByRole("navigation", { name: w.jobs }).getByRole("link", { name: new RegExp(w.profiles) }).click();

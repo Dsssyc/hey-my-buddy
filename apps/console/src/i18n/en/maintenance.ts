@@ -2,7 +2,7 @@ export default {
   stop: "Stop", stopRequested: "Stop requested", nextRun: "Next automatic run {{when}}", runNow: "Maintain now",
   settingsChanged: "Settings changed; retry with the refreshed settings", invalidReply: "Could not read the maintenance response",
   buddy: "Maintenance buddy", choose: "Choose buddy", none: "Not configured", search: "Search buddies", noCandidates: "No eligible buddies",
-  interval: "Maintenance interval", seconds: "seconds", intervalInvalid: "Maintenance interval must be a positive integer in seconds", ineligible: "Choose an enabled, available buddy that supports no tools",
+  interval: "Maintenance interval", seconds: "seconds", intervalInvalid: "Maintenance interval must be a positive integer in seconds", ineligible: "Choose an enabled, available buddy that supports the no tools level",
   dataFlow: "Maintenance sends micro task descriptions and outcome facts to the maintenance buddy’s provider.",
   pending: "{{n}} micro tasks pending", now: "Maintain now", unsaved: "Save maintenance settings first", noData: "No new evidence", notConfigured: "No maintenance buddy configured",
   started: "Started", alreadyRunning: "Maintenance in progress", unavailable: "Unavailable: {{reason}}", readFailed: "Action submitted; read not refreshed", saved: "Saved", merged: "Merged",

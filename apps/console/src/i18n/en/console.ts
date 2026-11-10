@@ -1,7 +1,7 @@
 import type zh from "../zh/console";
 
 export default {
-  correspondenceChanged: "This correspondence has changed; refresh and undo again.",
+  correspondenceChanged: "The correspondence has changed; refresh before undoing.",
   "waitingForLead": "Waiting for Lead",
   "waitingForHost": "Waiting for Host",
   "stopUnconfirmed": "Stop unconfirmed",
@@ -33,7 +33,7 @@ export default {
   "stillWaiting": "Still waiting",
   "decided": "Decided",
   "executionFailed": "Execution failed",
-  "reroutedAfterRejection": "Refused for quota; rerouted",
+  "reroutedAfterRejection": "Provider rejection; rerouted",
   "timeMissing": "Time missing",
   "abstained": "Abstained",
   "approved": "Approved",

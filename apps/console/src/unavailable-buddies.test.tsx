@@ -120,7 +120,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   return { api, command, published, operations, snapshot: () => state };
 }
 
-const enabledOnly = () => screen.getByRole("checkbox", { name: "只看已启用" });
+const enabledOnly = () => screen.getByRole("checkbox", { name: "仅显示已启用" });
 const showUnavailable = () => screen.getByRole("checkbox", { name: /^显示不可用/ });
 const checked = (box: HTMLElement | null) => box?.getAttribute("aria-checked");
 
@@ -209,13 +209,13 @@ describe("unavailable buddies", () => {
     expect(f.operations.filter(op => op === "buddy_list")).toHaveLength(2);
   });
 
-  it("combines 只看已启用 with 显示不可用", async () => {
+  it("combines 仅显示已启用 with 显示不可用", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(1, 2);
-    // 只看已启用 alone still hides the model: none of its available buddies exist.
+    // 仅显示已启用 alone still hides the model: none of its available buddies exist.
     await user.click(enabledOnly());
     await listed(1, 2);
     expect(queryModel(RETIRED)).toBeNull();
@@ -272,7 +272,7 @@ describe("unavailable buddies", () => {
     await user.click(effortCell("low"));
     const pin = within(levelPreference("low")).getByRole("radio", { name: /^固定/ });
     expect(pin.getAttribute("aria-disabled")).toBe("true");
-    expect(pin.getAttribute("aria-description")).toBe("这个 buddy 不可用或未启用，不能固定");
+    expect(pin.getAttribute("aria-description")).toBe("该 buddy 不可用或未启用，不能固定");
     await user.click(pin);
     expect(pin.getAttribute("aria-checked")).toBe("false");
     await user.click(screen.getByRole("button", { name: "保存" }));
@@ -392,7 +392,7 @@ describe("the two filters as browser habits", () => {
     view.unmount();
     const reloaded = fixture();
     view = render(<App suppliedApi={reloaded.api} />);
-    await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "只看已启用" }))).toBe("true"));
+    await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "仅显示已启用" }))).toBe("true"));
     expect(checked(showUnavailable())).toBe("true");
     await listed(2, 4);
     await user.click(showUnavailable());
@@ -470,7 +470,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
     view.unmount();
     window.location.hash = "#buddies/catalog";
     view = render(<App suppliedApi={f.api} />);
-    await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "只看已启用" }))).toBe("true"));
+    await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "仅显示已启用" }))).toBe("true"));
     expect(checked(showUnavailable())).toBe("false");
     expect(localStorage.getItem(enabledKey)).toBe("true");
     expect(localStorage.getItem(unavailableKey)).toBe("false");

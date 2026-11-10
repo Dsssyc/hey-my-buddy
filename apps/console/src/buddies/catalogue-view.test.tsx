@@ -87,8 +87,8 @@ describe("an empty catalogue", () => {
     const f = fixture(snapshot({ buddies: [], modelServiceConcurrency: [] }));
     open(f);
     await listed(0, 0);
-    expect(screen.getByText("还没有模型")).toBeTruthy();
-    expect(screen.getByText("点“发现模型”，查找本机的 Harness 能用的模型。")).toBeTruthy();
+    expect(screen.getByText("暂无模型")).toBeTruthy();
+    expect(screen.getByText("使用“发现模型”查找本机 harness 可用的模型。")).toBeTruthy();
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     expect(catalogue()).toBeTruthy();
   });
@@ -101,8 +101,8 @@ describe("an empty catalogue", () => {
     await user.type(search(), "no-such-model");
     await listed(0, 0);
     expect(screen.getByText("没有匹配的模型")).toBeTruthy();
-    expect(screen.getByText("换一个搜索词，或者去掉筛选。")).toBeTruthy();
-    expect(screen.queryByText("还没有模型")).toBeNull();
+    expect(screen.getByText("更换搜索词或清除筛选。")).toBeTruthy();
+    expect(screen.queryByText("暂无模型")).toBeNull();
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
   });
 });
@@ -133,7 +133,7 @@ describe("the harness sections", () => {
     expect(within(catalogue()).getByRole("region", { name: "Claude Code" })).toBe(section);
     expect(within(section).getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
     await user.clear(search());
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await user.click(screen.getByRole("checkbox", { name: "仅显示已启用" }));
     await listed(0, 0);
     expect(header.getByText("未登录")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
@@ -176,7 +176,7 @@ describe("the selected model", () => {
     const user = userEvent.setup();
     open(f);
     await listed(1, 4);
-    expect(within(modelRow(SONNET)).getByLabelText("占用 0，上限 2").textContent).toBe("0 / 2");
+    expect(within(modelRow(SONNET)).getByLabelText("占用 0 / 2").textContent).toBe("0 / 2");
     await selectModel(user, SOL, "Codex");
     // The board reported no entry for this model: the limit is the default, the occupancy unknown.
     expect(within(modelRow(SOL)).getByLabelText("占用未知").textContent).toBe("— / 2");

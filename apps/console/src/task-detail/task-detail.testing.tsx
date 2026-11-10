@@ -39,7 +39,7 @@ export function open(options: Options = {}) {
 }
 
 /** The steps strip along the top of the detail: the micro task's own row of the macro task. */
-export const strip = () => screen.getByRole("group", { name: "这个微任务的各步" });
+export const strip = () => screen.getByRole("group", { name: "微任务步骤" });
 export const stripSlice = (key: string) => strip().querySelector(`[data-key="${key}"]`) as SVGElement | null;
 /** What the chosen step calls itself in the pane below the strip. */
 export const chosenStep = () => (pane().querySelector("h3") ?? pane()).textContent!;

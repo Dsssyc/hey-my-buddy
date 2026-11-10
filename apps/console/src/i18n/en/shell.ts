@@ -144,7 +144,7 @@ export default {
   },
   reminders: {
     overdue: "Overdue",
-    possiblyStuck: "Possibly stuck",
+    possiblyStuck: "Possibly stalled",
   },
   macroStop: {
     title: "Stop macro task", cancel: "Cancel", confirm: "Confirm stop",
@@ -157,7 +157,7 @@ export default {
     refused: "Stop request was refused", refusedDetail: "The request was refused.", unknown: "Stop unconfirmed",
     unknownDetail: "The stop outcome is unknown and may have taken effect. Retry the same request or refresh to check.",
     stopping: "Stopping", stoppingDetail: "Stopping · awaiting evidence",
-    incomplete: "This macro task's record is incomplete", incompleteDetail: "This macro task's record is incomplete · stop unconfirmed",
+    incomplete: "Macro task record incomplete", incompleteDetail: "Macro task record incomplete · stop unconfirmed",
     pendingCount: "Stops unconfirmed {{count}}",
     uncertainCount: "Stops unconfirmed or outside the read {{count}}",
     stopped: "Stopped", stoppedCount: "Stopped {{roots}}; {{helpers}}",

@@ -2,7 +2,7 @@ export default {
   heading: "Storage", overview: "Storage overview", used: "Used", reclaimable: "Reclaimable", unchecked: "Not checked",
   check: "Check usage", retry: "Retry", checking: "Checking…", applying: "Reclaiming…",
   reclaim: "Reclaim…",
-  category: "Category", count: "Count", reasonsLabel: "{{category}}: why retained",
+  category: "Category", count: "Count", reasonsLabel: "{{category}}: retention reasons",
   protected: "The blackboard, records and the pre-upgrade blackboard are protected", checkedAt: "Checked at {{time}}", checked: "Checked at {{time}} · reclaim within {{duration}}",
   expired: "Plan expired · check again", applied: "Expired · check again", expiredHint: "The plan expired; check again",
   unknown: "Reclamation result unknown; it may have run", incomplete: "Reclamation incomplete · deletion has started", replay: "Retry the same request",

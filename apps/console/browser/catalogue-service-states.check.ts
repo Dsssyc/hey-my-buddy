@@ -21,8 +21,8 @@ for (const theme of ["light", "dark"]) for (const locale of ["zh-CN", "en-US"]) 
         await page.screenshot({ path: `${shots}${name}-${locale}-${theme}.png`, fullPage: true });
       };
       const pending = page.getByRole("button", { name: "zcode / zai / glm-5", exact: true });
-      const missing = pending.getByText(zh ? "这次没读到" : "Not read this time", { exact: true });
-      await expect(missing).toHaveAttribute("aria-description", zh ? /满一小时再读一次.*用户不用做什么/ : /one hour.*No action is needed/);
+      const missing = pending.getByText(zh ? "待确认" : "Pending", { exact: true });
+      await expect(missing).toHaveAttribute("aria-description", zh ? /满一小时后复查.*无需操作/ : /one hour.*No action is needed/);
       await missing.hover();
       await expect(page.getByRole("tooltip")).toContainText("2026");
       await page.mouse.move(0, 0);
@@ -58,7 +58,7 @@ for (const theme of ["light", "dark"]) for (const locale of ["zh-CN", "en-US"]) 
       await expect(details.locator(":scope > [role=group]")).toHaveCount(3);
       const zcode = page.getByRole("group", { name: zh ? "ZCode 设置" : "ZCode settings", exact: true });
       await expect(zcode).toContainText(zh ? "未核对" : "Not verified");
-      await expect(zcode).toContainText(zh ? "不能担任画像" : "cannot build model profiles");
+      await expect(zcode).toContainText(zh ? "不能构建模型画像" : "cannot build model profiles");
       await capture("harness");
     });
   });

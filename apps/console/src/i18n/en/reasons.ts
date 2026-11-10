@@ -1,8 +1,8 @@
 import type zh from "../zh/reasons";
 
 export default {
-  "dsh-tool-inventory-unreadable": "DSH CLI {{version}} tool rows could not be read; web scope is unavailable and none scope uses the blackboard’s tool judgment after the run.",
-  "dsh-tool-inventory-format-unrecognized": "DSH CLI {{version}} tool-row YAML format was not recognized; web scope is unavailable and none scope uses the blackboard’s tool judgment after the run.",
+  "dsh-tool-inventory-unreadable": "DSH CLI {{version}} tool rows could not be read; the web only level is unavailable, and the blackboard judges the no tools level after the run.",
+  "dsh-tool-inventory-format-unrecognized": "DSH CLI {{version}} tool-row YAML format was not recognized; the web only level is unavailable, and the blackboard judges the no tools level after the run.",
   "workflow.input-rejected": "{{harness}} rejected the input.",
   "checkout.process-blockers": "Processes using this checkout: {{processes}}. Processes started since its first execution with unreadable working directories: {{unreadableProcesses}}.",
   "checkout.process-scan-failed": "Process working directories could not be fully checked. Retry deletion after the observation is available.",
@@ -159,7 +159,7 @@ export default {
   "session.unreadable": "The session could not be read.",
   "single-candidate": "There was one legal candidate; the blackboard selected it directly.",
   "timeout": "The operation timed out.",
-  "workflow-routing-fenced": "Ownership of this route was fenced.",
+  "workflow-routing-fenced": "Routing ownership has expired.",
   "workspace-cleanup-started": "Workspace cleanup started.",
   "workspace-error": "Workspace error.",
   "workspace-ownership-lost": "Workspace ownership was lost.",

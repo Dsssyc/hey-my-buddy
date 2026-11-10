@@ -34,7 +34,7 @@ for (const width of [390, 1440]) test.describe(`track style ${width}px`, () => {
         return bars.some(bar => box.top >= bar.top && box.bottom <= bar.bottom && box.left >= bar.left && box.right <= bar.right);
       }).map(label => label.textContent ?? "");
     }));
-    expect(words.join(" ")).not.toMatch(/进行中|执行中|失败|可能卡住|无动静/);
+    expect(words.join(" ")).not.toMatch(/进行中|执行中|失败|疑似停滞|无动静/);
     await expect(page.locator('[data-outcome=failed]').first().locator('xpath=..')).toHaveAttribute("aria-label", /失败/);
   });
 

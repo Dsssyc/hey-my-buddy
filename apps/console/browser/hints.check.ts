@@ -62,11 +62,11 @@ test.describe("necessary hover hints and visible consequences", () => {
     await expect(page.getByRole("dialog", { name: "关于默认模式" })).toContainText("DSH 与 ZCode 没有系统沙盒");
     await modeHelp.click();
     await capture(page, "router-review");
-    const responseWait = page.getByRole("group", { name: "等待模型开始作答", exact: true });
+    const responseWait = page.getByRole("group", { name: "开始作答时限", exact: true });
     const retry = page.getByRole("group", { name: "重试间隔", exact: true });
     const list = page.getByRole("list", { name: "Router 列表" });
     await quiet(page, [mode.getByText("默认模式", { exact: true }), fast, review,
-      responseWait.getByText("等待模型开始作答", { exact: true }), retry.getByText("重试间隔", { exact: true }),
+      responseWait.getByText("开始作答时限", { exact: true }), retry.getByText("重试间隔", { exact: true }),
       list.getByRole("button").nth(1), list.getByRole("button").nth(2)]);
     await page.getByRole("navigation", { name: "Router 的工作" }).getByRole("link", { name: /维护/ }).click();
     const maintenance = page.getByRole("group", { name: "维护 buddy", exact: true });
@@ -89,7 +89,7 @@ test.describe("necessary hover hints and visible consequences", () => {
     await page.getByRole("radio", { name: "审阅", exact: true }).click();
     await page.getByRole("button", { name: "保存", exact: true }).click();
     for (const target of [page.getByRole("radio", { name: "快速", exact: true }),
-      page.getByRole("spinbutton", { name: "等待模型开始作答" }),
+      page.getByRole("spinbutton", { name: "开始作答时限" }),
       page.getByRole("spinbutton", { name: "重试间隔秒数" })]) {
       await target.hover();
       await expect(page.getByRole("tooltip")).toHaveText("浏览器授权已失效，重新授权后可以修改");
@@ -102,10 +102,10 @@ test.describe("necessary hover hints and visible consequences", () => {
     await quiet(page, [page.locator('[data-slot="fold-handle"]').first(),
       page.getByRole("button", { name: "Codex 账户", exact: true }),
       page.locator('[data-slot="model-row"] .rounded-full').first()]);
-    const missing = page.locator('[data-slot="model-row"]').getByText("这次没读到", { exact: true });
+    const missing = page.locator('[data-slot="model-row"]').getByText("待确认", { exact: true });
     await missing.hover();
-    await expect(page.getByRole("tooltip")).toContainText("首次缺席满一小时再读一次");
-    await expect(page.getByRole("tooltip")).toContainText("用户不用做什么");
+    await expect(page.getByRole("tooltip")).toContainText("首次缺席满一小时后复查");
+    await expect(page.getByRole("tooltip")).toContainText("无需操作");
     await expect(page.getByRole("tooltip")).toContainText("2026");
     await page.mouse.move(0, 0);
     await page.getByRole("button", { name: "codex / openai / gpt-5-codex", exact: true }).click();
@@ -151,7 +151,7 @@ test.describe("necessary hover hints and visible consequences", () => {
     await expect(orphans.locator('[data-slot="orphans-consequence"]')).toHaveText("清理不会停止这些进程。");
     await consequenceLine(orphans.locator('[data-slot="orphans-consequence"]'));
     await capture(page, "storage");
-    const ordinary = storage.getByRole("row").filter({ hasText: "保留的 Harness 目录" });
+    const ordinary = storage.getByRole("row").filter({ hasText: "保留的 harness 目录" });
     await quiet(page, [check, time, storage.getByRole("button", { name: "回收…", exact: true }),
       ordinary.getByRole("cell").nth(1), ordinary.getByRole("cell").nth(2), orphans.getByRole("heading")]);
     const protectedRow = storage.getByRole("row").filter({ hasText: "备份" });
@@ -174,7 +174,7 @@ test.describe("necessary hover hints and visible consequences", () => {
     await page.keyboard.press("=");
     await page.getByRole("button", { name: "适应宽度", exact: true }).hover();
     await expect(page.getByRole("tooltip", { name: "适应宽度", exact: true })).toBeVisible();
-    await expect(page.getByRole("tooltip", { name: /^滚轮缩放/ })).toBeVisible();
+    await expect(page.getByRole("tooltip", { name: /^滚轮或 \+ \/ − 缩放/ })).toBeVisible();
   });
 
   test("leaves session call status, kind and both copy affordances quiet", async ({ page }) => {
@@ -215,8 +215,8 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
     await open(page, "#buddies/router/routing");
     const buttons = page.locator('[data-slot="router-setting-help"]');
     await expect(buttons).toHaveCount(4);
-    const meanings = zh ? ["冻结的代码副本", "开始作答之后不限时", "到期后的新路由", "样本更少的 buddy"]
-      : ["frozen code copy", "no time limit", "after the interval", "fewer samples"];
+    const meanings = zh ? ["冻结的代码副本", "开始作答后不限时", "间隔过后，新路由", "样本更少的 buddy"]
+      : ["frozen code copy", "no limit", "after the interval", "fewer samples"];
     for (const [index, meaning] of meanings.entries()) {
       await expect(buttons.nth(index)).toHaveAttribute("data-size", "icon-sm");
       await expect(buttons.nth(index)).toHaveAttribute("aria-expanded", "false");
@@ -244,16 +244,16 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
       await expect(buttons.nth(index)).toHaveAttribute("aria-expanded", "false");
       await expect(buttons.nth(index)).toBeFocused();
     }
-    const wait = page.getByRole("spinbutton", { name: zh ? "等待模型开始作答" : "Wait for the model to start responding" });
+    const wait = page.getByRole("spinbutton", { name: zh ? "开始作答时限" : "Response start timeout" });
     await wait.focus();
     await page.keyboard.press("Shift+Tab");
     await expect(buttons.nth(1)).toBeFocused();
     await page.keyboard.press("Enter");
-    const waitDialog = page.getByRole("dialog", { name: new RegExp(zh ? "关于等待模型开始作答" : "About Wait for the model to start responding") });
-    await expect(waitDialog).toContainText(zh ? "维护这一轮算失败" : "maintenance batch fails");
-    await expect(waitDialog).toContainText(zh ? "画像构建算失败" : "profile building fails");
-    await expect(waitDialog).toContainText(zh ? "看不到模型何时开始作答的 harness（例如 DSH）" : "Harnesses that cannot observe when the model starts responding (such as DSH)");
-    await expect(waitDialog).toContainText(zh ? "由它自己的空闲超时兜底" : "their own idle timeout");
+    const waitDialog = page.getByRole("dialog", { name: new RegExp(zh ? "关于开始作答时限" : "About Response start timeout") });
+    await expect(waitDialog).toContainText(zh ? "本轮维护记为失败" : "maintenance run fails");
+    await expect(waitDialog).toContainText(zh ? "画像构建记为失败" : "profile building fails");
+    await expect(waitDialog).toContainText(zh ? "无法观察作答开始的 harness（如 DSH）" : "Harnesses that cannot observe the start (such as DSH)");
+    await expect(waitDialog).toContainText(zh ? "由其自身的空闲超时处理" : "their own idle timeout");
     await buttons.nth(1).focus();
     await page.keyboard.press("Enter");
     await expect(waitDialog).toHaveCount(0);

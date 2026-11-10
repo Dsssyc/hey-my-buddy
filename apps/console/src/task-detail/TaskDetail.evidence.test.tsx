@@ -174,7 +174,7 @@ describe("a route", () => {
       excluded: [{ buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" }, note: "提交时排除低推理强度" }], overloadedModelServices: [], cooling: [], preferences: [] };
     const f = open({ step: 2, replies: { routing: [routing({ source: "no-candidate", routerBuddy: null, routingMode: null })], bases: { "decision-1": bounds } } });
     await ready();
-    await waitFor(() => expect(pane().textContent).toContain("没有合法候选"));
+    await waitFor(() => expect(pane().textContent).toContain("无合法候选"));
     expect(pane().textContent).not.toContain("模型选择");
     expect(band().textContent).toContain("未调用 Router");
     await waitFor(() => expect(f.reads.basis).toHaveBeenCalledExactlyOnceWith("decision-1"));
@@ -312,11 +312,11 @@ describe("the inquiries", () => {
     const cut = { items: [inquiry({ messageId: "x", attemptId: "att-1", question: "最早列出的问询", createdAt: at("10:20") })], more: true };
     open({ step: 3, replies: { inquiries: cut } });
     await ready();
-    expect(pane().textContent).toContain("更早的问询可能没有列出");
+    expect(pane().textContent).toContain("更早的问询可能未列出");
     cleanup();
     open({ step: 7, replies: { inquiries: cut } });
     await ready();
-    expect(pane().textContent).not.toContain("更早的问询可能没有列出");
+    expect(pane().textContent).not.toContain("更早的问询可能未列出");
   });
 });
 
@@ -387,13 +387,13 @@ describe("the title of a turn that runs", () => {
   it("says possibly stuck in orange where it would say running, and past the expected time when only that is so", async () => {
     running({ overdue: true, possiblyStuck: true });
     await ready();
-    expect(turnTitle().textContent).toContain("可能卡住");
-    expect(within(turnTitle()).getByText("可能卡住").className).toContain("text-hand");
+    expect(turnTitle().textContent).toContain("疑似停滞");
+    expect(within(turnTitle()).getByText("疑似停滞").className).toContain("text-hand");
     cleanup();
     running({ overdue: true, possiblyStuck: false });
     await ready();
     expect(turnTitle().textContent).toContain("已超过预期");
-    expect(within(turnTitle()).queryByText("可能卡住")).toBeNull();
+    expect(within(turnTitle()).queryByText("疑似停滞")).toBeNull();
     cleanup();
     running({ overdue: false, possiblyStuck: false });
     await ready();
@@ -428,7 +428,7 @@ describe("the turn that ended otherwise than it should", () => {
 
   it("names each cause in words, and a wrap-up that a Lead asked for as the Lead's", async () => {
     for (const [cause, words] of [["deadline", "Router 的模型未能及时开始作答"], ["forced-stop", "强制停止"], ["console-stop", "控制台停止"], ["service-stop", "服务停止"],
-      ["unknown-stop", "停止（发起者未知）"], ["harness-error", "Harness 错误"], ["transport-error", "传输故障"], ["grace-expired", "有序收尾的宽限期到期后停止"]] as const) {
+      ["unknown-stop", "停止（发起者未知）"], ["harness-error", "harness 错误"], ["transport-error", "传输故障"], ["grace-expired", "有序收尾的宽限期到期后停止"]] as const) {
       cleanup();
       ended({ state: "failed", selectedAttempt: { result: { terminationReason: cause } } });
       await ready();

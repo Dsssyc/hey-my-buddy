@@ -41,7 +41,7 @@ describe("the timeline legend", () => {
     }
     expect(items.find(item => item.dataset.kind === "waiting")?.textContent).toContain("Host 或 Lead");
     expect(items.find(item => item.dataset.kind === "review")?.textContent).toContain("空心橙色菱形");
-    expect(items.find(item => item.dataset.kind === "cluster")?.textContent).toContain("挨近的记号合成一个，数字是个数，点开看每一项。");
+    expect(items.find(item => item.dataset.kind === "cluster")?.textContent).toContain("相邻的记号合并显示，数字为记号数；点击可查看各项。");
     expect(items.find(item => item.dataset.kind === "idle")?.textContent).toContain("折叠显示");
     expect(items.find(item => item.dataset.kind === "accepted")?.querySelector('[data-slot="conclusion-glyph"][data-kind="accepted"]')).toBeTruthy();
     expect(items.find(item => item.dataset.kind === "failed")?.querySelector('[data-slot="conclusion-glyph"][data-kind="failed"]')).toBeTruthy();

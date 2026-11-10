@@ -68,7 +68,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       expect(rejected?.state).toBe("rejected");
       expect(rejected?.resultStatus).toBe("failed");
       const segment = page.locator('[data-key="span:execution:att-b9-1"]');
-      await expect(segment).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "已改派" : "Refused for quota; rerouted"));
+      await expect(segment).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "已改派" : "Provider rejection; rerouted"));
       await expect(segment.locator('[data-slot=execution-bar]')).toHaveAttribute("data-outcome", "rejected");
       await expect(segment.locator('[data-slot=execution-failed]')).toHaveCount(0);
       await segment.focus();

@@ -85,7 +85,7 @@ describe("opening the detail of a micro task", () => {
   it("waits for the timeline before it lists the steps, and lists the delegation alone, with a note, when the timeline has no row for it", async () => {
     const waiting = open({ timeline: null, timelineLoading: true });
     expect(await screen.findByRole("status")).toBeTruthy();
-    expect(screen.queryByRole("group", { name: "这个微任务的各步" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "微任务步骤" })).toBeNull();
     expect(waiting.onStep).not.toHaveBeenCalled();
     cleanup();
     const cut = timeline();
@@ -93,7 +93,7 @@ describe("opening the detail of a micro task", () => {
     open({ timeline: cut });
     await ready();
     expect(document.querySelector("[data-slot=detail-strip]")).toBeNull();
-    expect(document.querySelector("[data-slot=task-detail]")!.textContent).toContain("没有这个微任务的一行");
+    expect(document.querySelector("[data-slot=task-detail]")!.textContent).toContain("缺少此微任务的记录行");
     expect(pane().textContent).toContain("实现微任务详情");
   });
 
@@ -138,7 +138,7 @@ describe("opening the detail of a micro task", () => {
     const f = open({ client: reads });
     expect((await screen.findByRole("alert")).textContent).toContain("Unknown runId");
     expect(screen.getByRole("heading", { name: "读取微任务失败" })).toBeTruthy();
-    expect(screen.queryByRole("group", { name: "这个微任务的各步" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "微任务步骤" })).toBeNull();
     await f.user.click(screen.getByRole("button", { name: "重试读取" }));
     await ready();
     expect(reads.task).toHaveBeenCalledTimes(2);
@@ -205,13 +205,13 @@ describe("the head of the detail", () => {
     await ready();
     const head = document.querySelector("[data-slot=detail-header]") as HTMLElement;
     expect(head.textContent).toContain("已超过预期");
-    expect(head.textContent).toContain("可能卡住");
+    expect(head.textContent).toContain("疑似停滞");
     expect(pane().textContent).toContain("已超过预期");
     cleanup();
     // The same record on a micro task whose attempt is no longer running warns of nothing.
     open({ replies: { task: task({ state: "completed", activeAttemptId: null, selectedAttempt: { attemptId: "att-2", reminders } }) } });
     await ready();
-    expect(document.querySelector("[data-slot=detail-header]")!.textContent).not.toContain("可能卡住");
+    expect(document.querySelector("[data-slot=detail-header]")!.textContent).not.toContain("疑似停滞");
   });
 
   it("reads the micro task again by its button without a checking-time tooltip", async () => {
@@ -300,7 +300,7 @@ describe("the route", () => {
     open({ step: 2, replies: { routing: [routing({ source: "single-candidate" })] } });
     await ready();
     expect(pane().textContent).toContain("程序直选");
-    expect(pane().textContent).toContain("没有调用 Router");
+    expect(pane().textContent).toContain("未调用 Router");
     cleanup();
     const failed = timeline();
     Object.assign(failed.spans.find(item => item.spanId === "r1")!, { resultStatus: "failed", error: "路由边界被拒绝" });
@@ -321,7 +321,7 @@ describe("the route", () => {
       bases: { "decision-1": { constraints: {}, requiredCapabilities: [], candidateCount: 0, excluded: [], overloadedModelServices: [], cooling: [{ buddy: CODEX, coolingUntil: at("12:00") }, { buddy: OPUS, coolingUntil: at("12:30") }], preferences: [] } },
     } });
     await ready();
-    expect(pane().textContent).toContain("所有候选都在冷却");
+    expect(pane().textContent).toContain("所有候选均在冷却中");
     await userEvent.setup().click(within(pane()).getByRole("button", { name: "提交时的约束" }));
     expect(pane().textContent).toContain("冷却中的候选 2 个");
     expect(pane().textContent).toContain(CODEX.model);

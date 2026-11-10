@@ -11,7 +11,7 @@ const captures = fileURLToPath(new URL("../../../tmp/filter-row", import.meta.ur
 const groupCaptures = fileURLToPath(new URL("../../../tmp/macro-list-groups", import.meta.url));
 
 const words = [
-  { locale: "zh-CN", list: "宏任务列表", macro: "宏任务", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目或 ID", noMatch: "没有匹配的宏任务", empty: "还没有宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，更新排序" },
+  { locale: "zh-CN", list: "宏任务列表", macro: "宏任务", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目或 ID", noMatch: "没有匹配的宏任务", empty: "暂无宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，更新排序" },
   { locale: "en-US", list: "Macro task list", macro: "Macro tasks", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search titles, projects or IDs", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", stop: "Stop macro task", time: "Time statistics", update: "New activity; update order" },
 ] as const;
 

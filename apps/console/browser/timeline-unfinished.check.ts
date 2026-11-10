@@ -35,7 +35,7 @@ for (const scene of [
       await route.fulfill({ response, json: otherTimeline });
     });
     await open(page, `#tasks/${macro}`);
-    const unfinished = header(page).getByRole("button", { name: scene.language === "zh" ? "只看未结束的" : "Unfinished only", exact: true });
+    const unfinished = header(page).getByRole("button", { name: scene.language === "zh" ? "仅显示未结束" : "Unfinished only", exact: true });
     const count = header(page).locator('[data-slot=timeline-row-count]');
     await expect(unfinished).toHaveAttribute("aria-pressed", "false");
     await expect(names(page)).toHaveCount(timeline.rows.length);
@@ -49,7 +49,7 @@ for (const scene of [
     await page.screenshot({ path: `${shot}-all.png` });
 
     const ruler = page.locator('[data-slot=zoom-ruler]');
-    const hint = page.locator('[data-slot=tooltip-content]').filter({ hasText: scene.language === "zh" ? "滚轮缩放" : "Shift" });
+    const hint = page.locator('[data-slot=tooltip-content]').filter({ hasText: scene.language === "zh" ? "滚轮或 + / − 缩放" : "Shift" });
     await ruler.hover({ position: { x: scene.width === 390 ? 80 : 400, y: 15 } });
     await expect(hint).toBeVisible();
     await unfinished.hover();

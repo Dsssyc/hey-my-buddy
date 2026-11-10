@@ -140,7 +140,7 @@ export const queryAddDialog = () => screen.queryByRole("dialog", { name: "添加
 export const choices = () => within(addDialog()).getAllByRole("button").filter(button => button.textContent !== "取消");
 export const choice = (quad: string) => within(addDialog()).getByRole("button", { name: new RegExp(`^${quad.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}`) });
 export const modeOption = (name: string) => within(section("默认模式")).getByRole("radio", { name });
-export const responseWaitInput = () => within(section("等待模型开始作答")).getByRole("spinbutton", { name: "等待模型开始作答" });
+export const responseWaitInput = () => within(section("开始作答时限")).getByRole("spinbutton", { name: "开始作答时限" });
 export const intervalInput = () => within(section("重试间隔")).getByRole("spinbutton", { name: "重试间隔秒数" });
 export const saveButton = () => within(screen.getByRole("region", { name: "未保存的修改" })).getByRole("button", { name: /^(保存|重试同一保存)$/ });
 export const queryDraftBar = () => screen.queryByRole("region", { name: "未保存的修改" });

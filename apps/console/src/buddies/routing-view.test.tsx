@@ -115,8 +115,8 @@ describe("the Router list", () => {
   it("says that there is no Router yet and how to add one, and draws no list", async () => {
     const f = fixture(snapshot());
     await openRoles(f);
-    expect(screen.getByText("还没有 Router")).toBeTruthy();
-    expect(screen.getByText(/点“添加”/)).toBeTruthy();
+    expect(screen.getByText("暂无 Router")).toBeTruthy();
+    expect(screen.getByText(/使用“添加”/)).toBeTruthy();
     expect(queryRouterList()).toBeNull();
     expect(within(section("列表")).queryByRole("status")).toBeNull();
   });
@@ -157,13 +157,13 @@ describe("what the list says needs the user", () => {
   it("says that no buddy of the list can serve when the service names none", async () => {
     const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ available: false, reason: { code: "router-skip-window", params: {} }, currentRouterBuddyId: null }) }));
     await openRoles(f);
-    expect(note()!.textContent).toBe("列表里没有一个 buddy 现在能担任 Router。");
+    expect(note()!.textContent).toBe("列表中没有可担任 Router 的 buddy。");
   });
 
   it("names the first buddy and why the default mode refuses it, in the words of the refusal", async () => {
     const f = fixture(snapshot({ routers: [SOL_ID, MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     await openRoles(f);
-    expect(note()!.textContent).toBe(`列表第一项 ${SOL}：所属 Harness 尚不具备本地只读路由资格。`);
+    expect(note()!.textContent).toBe(`列表第一项 ${SOL}：所属 harness 尚不具备本地只读路由资格。`);
   });
 
   it("says that the first buddy is no longer in the catalogue", async () => {
@@ -190,7 +190,7 @@ describe("what the list says needs the user", () => {
     await openRoles(f);
     expect(note()).toBeNull();
     await user.click(modeOption("审阅"));
-    expect(note()!.textContent).toBe(`列表第一项 ${FLASH}：所属 Harness 尚不具备本地只读路由资格。`);
+    expect(note()!.textContent).toBe(`列表第一项 ${FLASH}：所属 harness 尚不具备本地只读路由资格。`);
     await user.click(modeOption("快速"));
     expect(note()).toBeNull();
   });
@@ -244,9 +244,9 @@ describe("adding to the list", () => {
     const rows = choices();
     expect(rows.map(row => row.textContent)).toEqual([
       PENDING,
-      `${HIGH}该推理强度未启用：先打开它的开关`,
-      `${FLASH}所属 Harness 尚不具备本地只读路由资格`,
-      `${SOL}所属 Harness 尚不具备本地只读路由资格`,
+      `${HIGH}该推理强度未启用，请先启用`,
+      `${FLASH}所属 harness 尚不具备本地只读路由资格`,
+      `${SOL}所属 harness 尚不具备本地只读路由资格`,
       `${GLM}该推理强度当前不可用`,
     ]);
     expect(rows.map(row => row.getAttribute("aria-disabled"))).toEqual([null, "true", "true", "true", "true"]);
@@ -259,13 +259,13 @@ describe("adding to the list", () => {
     await openRoles(f);
     await user.click(addButton());
     expect(choice(FLASH).getAttribute("aria-disabled")).toBe("true");
-    expect(within(choice(FLASH)).getByText("所属 Harness 尚不具备本地只读路由资格")).toBeTruthy();
+    expect(within(choice(FLASH)).getByText("所属 harness 尚不具备本地只读路由资格")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "取消" }));
     await user.click(modeOption("快速"));
     await user.click(addButton());
     expect(choice(FLASH).getAttribute("aria-disabled")).toBeNull();
     expect(choice(SOL).getAttribute("aria-disabled")).toBe("true");
-    expect(within(choice(SOL)).getByText("所属 Harness 尚不支持无工具路由调用")).toBeTruthy();
+    expect(within(choice(SOL)).getByText("所属 harness 尚不支持无工具路由调用")).toBeTruthy();
   });
 
   it("does not add a buddy whose Harness is not eligible in review mode, says why in its row and changes nothing", async () => {
@@ -276,7 +276,7 @@ describe("adding to the list", () => {
     await user.click(choice(SOL));
     // The dialog stays open on the reason, and the draft is untouched.
     expect(addDialog()).toBeTruthy();
-    expect(within(choice(SOL)).getByText("所属 Harness 尚不具备本地只读路由资格")).toBeTruthy();
+    expect(within(choice(SOL)).getByText("所属 harness 尚不具备本地只读路由资格")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(queryRouterList()).toBeNull();
     expect(queryDraftBar()).toBeNull();
@@ -288,7 +288,7 @@ describe("adding to the list", () => {
     const user = userEvent.setup();
     await openRoles(f);
     await user.click(addButton());
-    expect(within(choice(HIGH)).getByText("该推理强度未启用：先打开它的开关")).toBeTruthy();
+    expect(within(choice(HIGH)).getByText("该推理强度未启用，请先启用")).toBeTruthy();
     await user.click(choice(HIGH));
     expect(queryAddDialog()).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "取消" }));
@@ -314,10 +314,10 @@ describe("adding to the list", () => {
     await user.click(addButton());
     const search = within(addDialog()).getByRole("searchbox", { name: "搜索 buddy" });
     await user.type(search, "DEEPSEEK");
-    expect(choices().map(row => row.textContent)).toEqual([`${FLASH}所属 Harness 尚不具备本地只读路由资格`]);
+    expect(choices().map(row => row.textContent)).toEqual([`${FLASH}所属 harness 尚不具备本地只读路由资格`]);
     await user.clear(search);
     await user.type(search, "high");
-    expect(choices().map(row => row.textContent)).toEqual([`${HIGH}该推理强度未启用：先打开它的开关`]);
+    expect(choices().map(row => row.textContent)).toEqual([`${HIGH}该推理强度未启用，请先启用`]);
     await user.clear(search);
     await user.type(search, "no-such-buddy");
     expect(within(addDialog()).getByText("没有匹配的 buddy")).toBeTruthy();
@@ -420,7 +420,7 @@ describe("moving and removing", () => {
     await openRoles(f);
     await user.click(remove(MEDIUM));
     expect(queryRouterList()).toBeNull();
-    expect(screen.getByText("还没有 Router")).toBeTruthy();
+    expect(screen.getByText("暂无 Router")).toBeTruthy();
     await user.click(within(screen.getByRole("region", { name: "未保存的修改" })).getByRole("button", { name: "放弃" }));
     await screen.findByText("草稿已放弃");
     expect(listed()).toEqual([MEDIUM]);
@@ -531,8 +531,8 @@ describe("the settings of the role", () => {
     const f = fixture(snapshot()); const user = userEvent.setup();
     await openRoles(f);
     const explanations = [
-      ["默认模式", /冻结的代码副本/], ["等待模型开始作答", /开始作答之后不限时/],
-      ["重试间隔", /到期后的新路由/], ["探索名额", /样本更少的 buddy/],
+      ["默认模式", /冻结的代码副本/], ["开始作答时限", /开始作答后不限时/],
+      ["重试间隔", /间隔过后，新路由/], ["探索名额", /样本更少的 buddy/],
     ] as const;
     for (const [name, meaning] of explanations) {
       const button = within(section(name)).getByRole("button", { name: `关于${name}` });
@@ -544,12 +544,12 @@ describe("the settings of the role", () => {
       expect(button.getAttribute("aria-expanded")).toBe("false");
       expect(screen.queryByRole("dialog", { name: `关于${name}` })).toBeNull();
     }
-    const waitHelp = screen.getByRole("button", { name: "关于等待模型开始作答" });
+    const waitHelp = screen.getByRole("button", { name: "关于开始作答时限" });
     waitHelp.focus();
     await user.keyboard("{Enter}");
     expect(waitHelp.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByRole("dialog", { name: "关于等待模型开始作答" }).textContent).toContain("维护这一轮算失败，下一轮再来");
-    expect(screen.getByRole("dialog", { name: "关于等待模型开始作答" }).textContent).toContain("画像构建算失败，可以再点");
+    expect(screen.getByRole("dialog", { name: "关于开始作答时限" }).textContent).toContain("本轮维护记为失败并由下一轮重试");
+    expect(screen.getByRole("dialog", { name: "关于开始作答时限" }).textContent).toContain("画像构建记为失败、可重新发起");
     await user.keyboard("{Escape}");
     expect(waitHelp.getAttribute("aria-expanded")).toBe("false");
     waitHelp.focus();
@@ -588,7 +588,7 @@ describe("the settings of the role", () => {
     await user.click(modeHelp);
     expect([...screen.getByRole("dialog", { name: "关于默认模式" }).querySelectorAll("p")].map(paragraph => paragraph.textContent)).toEqual([
       "需要 Router 判断时，任务的文字会发给 Router 的模型提供方。",
-      expect.stringMatching(/^快速用任务文字/),
+      expect.stringMatching(/^快速模式依据任务文字/),
     ]);
     await user.click(modeHelp);
     expect(unsavedIn("默认模式")).toHaveLength(1);
@@ -606,7 +606,7 @@ describe("the settings of the role", () => {
     await user.clear(responseWaitInput());
     await user.type(responseWaitInput(), "30");
     expect(responseWaitInput()).toHaveProperty("value", "30");
-    expect(unsavedIn("等待模型开始作答")).toHaveLength(1);
+    expect(unsavedIn("开始作答时限")).toHaveLength(1);
     await user.click(saveButton());
     await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { modelResponseWaitSeconds: 30 } });
@@ -650,7 +650,7 @@ describe("the settings of the role", () => {
     if (value) await user.type(intervalInput(), value);
     expect(intervalInput()).toHaveProperty("value", value);
     expect(intervalInput().getAttribute("aria-invalid")).toBe("true");
-    expect(within(section("重试间隔")).getByText("需要 1–2147483647 的整数")).toBeTruthy();
+    expect(within(section("重试间隔")).getByText("须为 1–2147483647 的整数")).toBeTruthy();
     // Leaving the field does not publish an earlier valid prefix.
     await user.tab();
     expect(intervalInput()).toHaveProperty("value", value);
@@ -659,7 +659,7 @@ describe("the settings of the role", () => {
     await user.clear(intervalInput());
     await user.type(intervalInput(), "7");
     expect(intervalInput().getAttribute("aria-invalid")).toBeNull();
-    expect(within(section("重试间隔")).queryByText(/需要 1–2147483647/)).toBeNull();
+    expect(within(section("重试间隔")).queryByText(/须为 1–2147483647/)).toBeNull();
     await user.click(saveButton());
     await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerRetryIntervalSeconds: 7 } });
@@ -673,9 +673,9 @@ describe("the settings of the role", () => {
     await user.clear(responseWaitInput());
     await user.type(responseWaitInput(), "120");
     await user.click(remove(MEDIUM));
-    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("等待模型开始作答").length, unsavedIn("重试间隔").length]).toEqual([1, 1, 1, 0]);
+    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("开始作答时限").length, unsavedIn("重试间隔").length]).toEqual([1, 1, 1, 0]);
     await user.click(modeOption("审阅"));
-    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("等待模型开始作答").length]).toEqual([1, 0, 1]);
+    expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("开始作答时限").length]).toEqual([1, 0, 1]);
     await user.click(saveButton());
     await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerBuddyIds: [], modelResponseWaitSeconds: 120 } });

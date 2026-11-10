@@ -61,7 +61,7 @@ describe("console interactions", () => {
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await screen.findByRole("heading", { name: "还没有宏任务" });
+    await screen.findByRole("heading", { name: "暂无宏任务" });
     await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /^Buddy/ }));
     await listed(1, 1);
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();

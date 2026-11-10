@@ -16,11 +16,11 @@ export default {
       unavailable: "不可用",
     },
     empty: {
-      title: "还没有 Router",
-      hint: "点“添加”，从目录里选一个 buddy 担任；列表里的第一项优先担任。",
+      title: "暂无 Router",
+      hint: "使用“添加”从目录中选择 buddy；列表靠前的 buddy 优先担任 Router。",
     },
     attention: {
-      none: "列表里没有一个 buddy 现在能担任 Router。",
+      none: "列表中没有可担任 Router 的 buddy。",
       head: "列表第一项 {{name}}：{{reason}}。",
       gone: "已不在目录中",
       unavailable: "Router 当前不可用。",
@@ -37,13 +37,13 @@ export default {
   },
   /** Why a buddy cannot be the Router in the default mode. */
   refusal: {
-    fast: "所属 Harness 尚不支持无工具路由调用",
-    review: "所属 Harness 尚不具备本地只读路由资格",
+    fast: "所属 harness 尚不支持无工具路由调用",
+    review: "所属 harness 尚不具备本地只读路由资格",
     unavailable: "该推理强度当前不可用",
-    disabled: "该推理强度未启用：先打开它的开关",
+    disabled: "该推理强度未启用，请先启用",
   },
   mode: {
-    explanation: "快速用任务文字与已有记录判断，审阅还能读取冻结的代码副本，为需要代码证据的选择提供依据。默认模式用于后续需要 Router 判断的委派；已经发出的路由沿用原模式。",
+    explanation: "快速模式依据任务文字与已有记录判断；审阅模式还可读取冻结的代码副本，为需要代码证据的选择提供依据。默认模式用于此后需要 Router 判断的委派，已发出的路由沿用原模式。",
     name: "默认模式",
     label: "默认模式",
     fast: "快速",
@@ -52,21 +52,21 @@ export default {
     reviewConsequence: "需要 Router 判断时，任务的文字会发给 Router 的模型提供方，还会发送一份冻结的代码副本；DSH 与 ZCode 没有系统沙盒，不能保证阻止副本以外的读取或外传。",
   },
   responseWait: {
-    explanation: "这段时间里模型没有开始作答，路由就换列表里的下一个 Router；维护这一轮算失败，下一轮再来；画像构建算失败，可以再点。开始作答之后不限时。这样卡住的提供方就不会一直挡住委派。看不到模型何时开始作答的 harness（例如 DSH）不受这个等待限制，由它自己的空闲超时兜底。",
-    name: "等待模型开始作答",
-    invalid: "需要 1 到 86400 的整数",
+    explanation: "此时限防止停滞的提供方阻塞委派：模型未在时限内开始作答时，路由改用列表中的下一个 Router，本轮维护记为失败并由下一轮重试，画像构建记为失败、可重新发起。开始作答后不限时。无法观察作答开始的 harness（如 DSH）不受此限，由其自身的空闲超时处理。",
+    name: "开始作答时限",
+    invalid: "须为 1–86400 的整数",
   },
   exploration: {
     name: "探索名额", on: "开启", off: "关闭", interval: "探索间隔微任务数",
-    disabled: "探索已关闭", invalid: "需要不小于 2 的整数",
-    explanation: "每累计指定次数的新微任务路由，下一次给一个探索名额；续接、改派与失败恢复不计数。Router 可在适合任务且不更贵的候选中，改选该顶层领域样本更少的 buddy，让它积累比较证据。结果同样计入评价，关闭后不再给探索名额。",
+    disabled: "探索已关闭", invalid: "须为不小于 2 的整数",
+    explanation: "新微任务的路由每满设定次数，其中一次获得探索名额；续接、改派与失败恢复不计数。Router 可在适合任务且不更贵的候选中改选该顶层领域样本更少的 buddy，以积累比较证据；结果同样计入评价。关闭后不再发放探索名额。",
   },
   retry: {
-    explanation: "没有可用应答的 Router 会在这段间隔内跳过，到期后的新路由会再次尝试，让其他 Router 先接手。有效应答会清除它的连续未应答记录；读取记录不会延长间隔。",
+    explanation: "未给出可用应答的 Router 在此间隔内被跳过，由其他 Router 接手；间隔过后，新路由会再次尝试它。有效应答清除其连续未应答计数；读取记录不延长间隔。",
     name: "重试间隔",
     label: "重试间隔秒数",
     unit: "秒",
-    range: "需要 {{min}}–{{max}} 的整数",
+    range: "须为 {{min}}–{{max}} 的整数",
   },
   records: {
     name: "记录",

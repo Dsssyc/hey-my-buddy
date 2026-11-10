@@ -134,16 +134,16 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     // The pending model stays in the default view: it is available, so no
     // 显示不可用 is needed to see it.
     await listed(2, 4);
-    const marks = within(nameCell("deepseek-flash")).getAllByText("这次没读到");
+    const marks = within(nameCell("deepseek-flash")).getAllByText("待确认");
     expect(marks).toHaveLength(1);
     expect(nameCell("deepseek-flash").textContent).not.toContain("不可用");
     // A fixture without the new field shows no invented state.
-    expect(within(nameCell("legacy-model")).queryByText("这次没读到")).toBeNull();
-    // The unavailable model reads as 不可用, never as 这次没读到.
+    expect(within(nameCell("legacy-model")).queryByText("待确认")).toBeNull();
+    // The unavailable model reads as 不可用, never as 待确认.
     await user.click(screen.getByRole("checkbox", { name: "显示不可用 3" }));
     await listed(3, 7);
     expect(within(nameCell("retired-model")).getByText("不可用").getAttribute("aria-description")).toBe(reasonText({ code: "catalog.native-unavailable", params: {} }));
-    expect(within(nameCell("retired-model")).queryByText("这次没读到")).toBeNull();
+    expect(within(nameCell("retired-model")).queryByText("待确认")).toBeNull();
   });
 
   it("explains first absence, continued usability and the one-hour recheck on hover", async () => {
@@ -153,12 +153,12 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     render(<App suppliedApi={f.api} />);
     await listed(2, 4);
     // The compact row names the state; the drawer still carries its recorded time.
-    const mark = within(nameCell("deepseek-flash")).getByText("这次没读到");
+    const mark = within(nameCell("deepseek-flash")).getByText("待确认");
     expect(mark.getAttribute("aria-description")).toContain(early);
-    expect(mark.getAttribute("aria-description")).toContain("满一小时再读一次");
-    expect(mark.getAttribute("aria-description")).toContain("用户不用做什么");
+    expect(mark.getAttribute("aria-description")).toContain("满一小时后复查");
+    expect(mark.getAttribute("aria-description")).toContain("无需操作");
     await user.hover(mark);
-    expect((await screen.findByRole("tooltip")).textContent).toContain("此前照常可用");
+    expect((await screen.findByRole("tooltip")).textContent).toContain("复查前仍可使用");
     expect(document.body.textContent).not.toContain(late);
   });
 
@@ -170,7 +170,7 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     await listed(2, 4);
     await selectModel(user, model("deepseek-flash"), "DSH");
     // The model's state is pending since the recorded time; it is not unavailable.
-    expect(within(pane()).getByText("这次没读到")).toBeTruthy();
+    expect(within(pane()).getByText("待确认")).toBeTruthy();
     expect(within(pane()).getByText(early).getAttribute("datetime")).toBe(earlyMissing);
     expect(within(pane()).queryByText("不可用")).toBeNull();
     expect(within(pane()).queryByText("可用")).toBeNull();
@@ -185,16 +185,16 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     expect(within(levelPreference("off")).getByRole("radio", { name: "固定" }).hasAttribute("aria-disabled")).toBe(false);
   });
 
-  it("shows a pending model without a recorded time as plain 这次没读到, never an invented date", async () => {
+  it("shows a pending model without a recorded time as plain 待确认, never an invented date", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(2, 4);
-    const mark = within(nameCell("ghost-model")).getByText("这次没读到");
-    expect(mark.getAttribute("aria-description")).toContain("用户不用做什么");
+    const mark = within(nameCell("ghost-model")).getByText("待确认");
+    expect(mark.getAttribute("aria-description")).toContain("无需操作");
     await selectModel(user, model("ghost-model"), "DSH");
-    expect(within(pane()).getByText("这次没读到")).toBeTruthy();
+    expect(within(pane()).getByText("待确认")).toBeTruthy();
     expect(pane().querySelector("time")).toBeNull();
     expect(pane().textContent).not.toContain("未记录");
   });
@@ -208,10 +208,10 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     await user.click(screen.getByRole("checkbox", { name: "显示不可用 3" }));
     await listed(3, 7);
     // The board lists this model as present in the catalogue, yet harness health
-    // makes it unusable now: it reads 不可用 with that reason, never 可用 or 这次没读到.
+    // makes it unusable now: it reads 不可用 with that reason, never 可用 or 待确认.
     const state = within(nameCell("plain-model")).getByText("不可用");
     expect(state.getAttribute("aria-description")).toBe(reasonText({ code: "harness.probe-failed", params: {} }));
-    expect(within(nameCell("plain-model")).queryByText("这次没读到")).toBeNull();
+    expect(within(nameCell("plain-model")).queryByText("待确认")).toBeNull();
     await user.click(modelButton(model("plain-model")));
     expect(within(pane(model("plain-model"))).getByText("不可用")).toBeTruthy();
     expect(within(pane()).getByText("不可用").getAttribute("aria-description")).toBe(reasonText({ code: "harness.probe-failed", params: {} }));

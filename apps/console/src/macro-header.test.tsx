@@ -31,7 +31,7 @@ describe("the macro task header", () => {
     await user.click(within(head).getByRole("button", { name: "时间统计" }));
     const details = screen.getByRole("dialog", { name: "时间统计" });
     expect(details.textContent).not.toContain(timeline.macroTask.goal!.body);
-    expect(details.textContent).toContain("从开始到最近活动");
+    expect(details.textContent).toContain("开始至最近活动");
   });
 
   it("uses the complete fallback title without a hover tooltip", async () => {

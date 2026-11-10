@@ -58,7 +58,7 @@ describe("macro task deletion confirmation", () => {
   it("names the fixed target, reads complete backend counts and safely focuses cancel", async () => {
     const f = dialogHarness();
     const dialog = await screen.findByRole("dialog", { name: `删除「${f.props.summary.title}」` });
-    await screen.findByText("73 个，其中 2 个取消或失败而没有结论");
+    await screen.findByText("73 个，其中 2 个已取消或失败且无结论");
     expect(f.command).toHaveBeenCalledWith("macro_task_deletion_preview", { macroTaskId: "macro-1" }, "synthetic-csrf");
     expect(dialog.querySelector("[data-slot=macro-delete-scope]")?.textContent).toContain("封存的产物14 份，共 6.2 MB会话11 个，共 48.0 MB检出与 Git 引用3 个检出，12 个引用");
     expect(dialog.textContent).toContain("备份轮换");
@@ -96,7 +96,7 @@ describe("macro task deletion confirmation", () => {
       { ...blocker("running", "unloaded-task"), title: task, titleSource: "task" },
       { ...blocker("stop-unconfirmed", "unloaded-unnamed"), title: null, titleSource: "none" }];
     dialogHarness({ api: { command: vi.fn(async () => preview({ blockerTotal: 3, blockers })) } as unknown as ConsoleApi });
-    await screen.findByRole("dialog", { name: language === "zh" ? /还不能删除/ : /Cannot delete/ });
+    await screen.findByRole("dialog", { name: language === "zh" ? /暂不能删除/ : /Cannot delete/ });
     const titles = [...document.querySelectorAll("[data-slot=macro-delete-blockers] li p.font-medium")].map(node => node.textContent);
     expect(titles).toEqual([authored, task, language === "zh" ? "未命名" : "Unnamed"]);
   });
@@ -105,12 +105,12 @@ describe("macro task deletion confirmation", () => {
     const blockers = [blocker("queued"), blocker("running"), blocker("routing", "r2"), blocker("review", "r3"),
       blocker("awaiting-host", "r4"), blocker("stop-unconfirmed", "r5")];
     const f = dialogHarness({ api: { command: vi.fn(async () => preview({ blockerTotal: 6, blockers })) } as unknown as ConsoleApi });
-    const dialog = await screen.findByRole("dialog", { name: /还不能删除/ });
-    expect(dialog.textContent).toContain("名下还有 5 个微任务或路由计算没有了结");
+    const dialog = await screen.findByRole("dialog", { name: /暂不能删除/ });
+    expect(dialog.textContent).toContain("名下有 5 个微任务或路由计算尚未了结");
     expect(dialog.querySelectorAll("[data-slot=macro-delete-blockers] > li")).toHaveLength(5);
     for (const text of ["排队中", "路由中", "进行中", "等待验收", "等待 Host", "停止未确认", "由 Host 验收、打回或给出结论"]) expect(dialog.textContent).toContain(text);
     expect(within(dialog).queryByRole("button", { name: "删除" })).toBeNull();
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "知道了" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "关闭" }));
     await f.user.keyboard("{Escape}");
     expect(f.onClose).toHaveBeenCalled();
   });
@@ -118,8 +118,8 @@ describe("macro task deletion confirmation", () => {
   it("explains the server's fifty-reason limit without claiming a complete task count", async () => {
     dialogHarness({ api: { command: vi.fn(async () => preview({ blockerTotal: 51,
       blockers: Array.from({ length: 50 }, (_, index) => blocker("review", `r${index}`)) })) } as unknown as ConsoleApi });
-    expect((await screen.findByRole("dialog", { name: /还不能删除/ })).textContent).toContain("前 50 条拦截原因，共 51 条");
-    expect(screen.queryByText("名下还有 50 个微任务或路由计算没有了结。")).toBeNull();
+    expect((await screen.findByRole("dialog", { name: /暂不能删除/ })).textContent).toContain("前 50 条拦截原因，共 51 条");
+    expect(screen.queryByText("名下有 50 个微任务或路由计算尚未了结。")).toBeNull();
   });
 
   it("prevents duplicate submission and dismissal while deleting", async () => {
@@ -270,7 +270,7 @@ describe("macro task deletion confirmation", () => {
     expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
     f.command.mockResolvedValueOnce(preview({ microTaskCount: 74 }));
     await f.user.click(screen.getByRole("button", { name: "重新读取" }));
-    await screen.findByText("74 个，其中 2 个取消或失败而没有结论");
+    await screen.findByText("74 个，其中 2 个已取消或失败且无结论");
     expect(f.onDeleted).not.toHaveBeenCalled();
     f.command.mockResolvedValueOnce(receipt({ microTaskCount: 74 }));
     await confirm();
@@ -282,10 +282,10 @@ describe("macro task deletion confirmation", () => {
     await screen.findByRole("button", { name: "删除" });
     f.command.mockRejectedValueOnce(new ApiError("MACRO_TASK_NOT_SETTLED", "untranslated backend message"));
     await confirm();
-    await screen.findByText(/还有未了结的微任务/);
+    await screen.findByText(/仍有未了结的微任务/);
     f.command.mockResolvedValueOnce(preview({ blockerTotal: 1, blockers: [blocker("review")] }));
     await f.user.click(screen.getByRole("button", { name: "重新读取" }));
-    expect(await screen.findByRole("dialog", { name: /还不能删除/ })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: /暂不能删除/ })).toBeTruthy();
     expect(f.command.mock.calls.filter(call => call[0] === "macro_task_delete")).toHaveLength(1);
   });
 
@@ -450,7 +450,7 @@ describe("macro task deletion workspace integration", () => {
     f.command.mockImplementationOnce(async () => { f.setRows([]); return receipt(); });
     await f.user.click(screen.getByRole("button", { name: "重试删除" }));
     await waitFor(() => expect(window.location.hash).toBe("#tasks"));
-    expect(await screen.findByRole("heading", { name: "还没有宏任务" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "暂无宏任务" })).toBeTruthy();
     expect(document.activeElement).toBe(document.querySelector("[data-slot=macro-delete-result]"));
   });
 
@@ -517,7 +517,7 @@ describe("macro task deletion workspace integration", () => {
     await f.user.click(within(stop).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(document.querySelector("[data-slot=timeline-row-name]")?.getAttribute("aria-label")).toContain("已取消"));
     const dialog = await openDelete(f);
-    await within(dialog).findByText("1 个，其中 1 个取消或失败而没有结论");
+    await within(dialog).findByText("1 个，其中 1 个已取消或失败且无结论");
     await confirm();
     await waitFor(() => expect(window.location.hash).toBe("#tasks"));
     expect(f.command).toHaveBeenLastCalledWith("macro_task_delete", { macroTaskId: "macro-1", microTaskCount: 1, confirm: true }, "synthetic-csrf");

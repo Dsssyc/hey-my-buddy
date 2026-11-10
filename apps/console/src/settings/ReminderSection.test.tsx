@@ -20,7 +20,7 @@ function setup(settings = initial) {
 
 it("saves valid minutes and refreshes the snapshot", async () => {
   const { input, command, refresh, user, save } = setup();
-  const description = screen.getByText("一次执行这么久没有任何进展，会标为可能卡住。");
+  const description = screen.getByText("执行持续无进展达到此时长，即标记为疑似停滞。");
   expect(description.tagName).toBe("P");
   expect(input.getAttribute("aria-describedby")).toBe(description.id);
   await user.clear(input); await user.type(input, "20");

@@ -10,14 +10,14 @@ export default {
     "awaiting-buddy-validation": "等待校验 buddy",
     "awaiting-routing-shutdown": "等待路由执行停止",
     "awaiting-workspace-preparation": "等待工作区准备",
-    "awaiting-helpers": "等待 helper 结束",
+    "awaiting-helpers": "等待协助任务结束",
     "awaiting-host": "等待 Host 决定",
     "awaiting-owned": "等待名下微任务结束",
     "awaiting-acknowledgement": "等待结果确认",
-    "helper-attention": "helper 需要 Host 决定",
+    "helper-attention": "协助任务需要 Host 决定",
     "attempt-uncertain-after-restart": "重启后尚未确认上次执行已停止",
     "harness-probe-unknown": "等待确认 harness 状态",
-    "workflow-routing-fenced": "路由已被工作流拦住",
+    "workflow-routing-fenced": "路由所有权已失效",
     "workflow-ancestor": "上级微任务已结束",
     "workflow-accepted": "微任务已验收，等待队列同步",
     "workflow-concluded": "微任务已作结论，等待队列同步",
@@ -41,7 +41,7 @@ export default {
   header: { elapsed: "历时", turns: "回合" },
   state: { stopping: "正在停止", running: "进行中", unknown: "结束未确认", queued: "排队", host: "等待 Host", lead: "等待 Lead", failedHost: "失败，等待 Host", cancelledHost: "已取消，等待 Host", failedLead: "失败，等待 Lead", cancelledLead: "已取消，等待 Lead", review: "等待验收", accepted: "已验收", done: "已完成", ended: "已结束", failed: "失败" },
   wait: { since: "起", queue: "排队", host: "等待 Host", lead: "等待 Lead", acceptance: "等待验收" },
-  strip: { label: "这个微任务的各步", position: "步骤 {{current}} / {{total}}", previous: "上一步", next: "下一步", focusItem: "在步骤条中选中{{item}} · {{time}}", truncated: "读取不完整，没有这个微任务的一行；这里只列出委派。" },
+  strip: { label: "微任务步骤", position: "步骤 {{current}} / {{total}}", previous: "上一步", next: "下一步", focusItem: "在步骤条中选中{{item}} · {{time}}", truncated: "读取不完整，缺少此微任务的记录行；仅列出委派。" },
   step: {
     delegation: "委派", routing: "路由", turn: "回合 {{n}}", handoff: "换手", decision: "决定", continue: "继续",
     takeover: "接管", acceptance: "验收",
@@ -63,7 +63,7 @@ export default {
     markers: { subAgentActivity: "子代理活动", contextCompaction: "上下文压缩" },
     markerCount_one: "{{name}} {{count}} 次", markerCount_other: "{{name}} {{count}} 次",
     turnChanges: "本回合的改动", nativeMarker: "标记 · {{type}}",
-    routingTask: { fast: "为这个微任务选择 buddy", review: "为这个微任务选择 buddy（审阅模式）" },
+    routingTask: { fast: "为此微任务选择 buddy", review: "为此微任务选择 buddy（审阅模式）" },
     routerAnswer: { domainNodeId: "领域节点", taskType: "任务类型", buddyId: "选中的 buddy", note: "说明", evidence: "依据" },
     task: "任务", answer: "回答", fullPrompt: "展开发给 buddy 的全文（含角色说明与交回格式）· {{count}} 字",
     moreLines: "展开其余 {{count}} 行", collapseOutput: "收起输出", groupSeparator: " · ", failures_one: "{{count}} 次失败", failures_other: "{{count}} 次失败",
@@ -88,16 +88,16 @@ export default {
   activity: {
     unknown: "进展未知", starting: "正在启动", "waiting-model": "等待模型", "streaming-model": "模型输出中",
     "tool-running": "工具执行中", "waiting-external": "等待外部结果", "waiting-host": "等待 Host", finishing: "正在结束",
-    reported: "上报 {{when}}", notReported: "没有上报", modelTurns: "模型回合 {{n}}", toolCalls: "工具调用 {{n}}",
+    reported: "上报 {{when}}", notReported: "未上报", modelTurns: "模型回合 {{n}}", toolCalls: "工具调用 {{n}}",
   },
   inquiry: {
-    head: "问询", queued: "排队", queuedCheckpoint: "在 Worker 下次检查点时送达，现在尚未送达。", claimed: "正在送达", delivered: "已送达，等待答复", answered: "已答复",
-    discarded: "已丢弃", unavailable: "问询已结束", truncated: "答复已截断", more: "更早的问询可能没有列出。",
+    head: "问询", queued: "排队", queuedCheckpoint: "将在 Worker 的下一个检查点送达。", claimed: "正在送达", delivered: "已送达，等待答复", answered: "已答复",
+    discarded: "已丢弃", unavailable: "问询已结束", truncated: "答复已截断", more: "更早的问询可能未列出。",
   },
   ending: { cause: "终止原因：{{cause}}", unrecorded: "终止原因未记录" },
   termination: {
     "wrap-up": "Host 有序收尾完成", "grace-expired": "有序收尾的宽限期到期后停止", "forced-stop": "强制停止",
-    "service-stop": "服务停止", "unknown-stop": "停止（发起者未知）", deadline: "Router 的模型未能及时开始作答", "harness-error": "Harness 错误",
+    "service-stop": "服务停止", "unknown-stop": "停止（发起者未知）", deadline: "Router 的模型未能及时开始作答", "harness-error": "harness 错误",
     "transport-error": "传输故障", "workspace-error": "工作区错误", completed: "正常完成", wrapUpLead: "Lead 有序收尾完成",
   },
   inputFailure: {
@@ -112,7 +112,7 @@ export default {
   seal: {
     diff: "差异", base: "起点",
     id: "产物 ID", sha: "SHA-256", note: "标注",
-    partialNote: "部分、未验证、非最终；可以查看、整合或用于续做，不能当作已验收的成果。",
+    partialNote: "部分、未验证、非最终；可查看、整合或用于续接，不等同于已验收的成果。",
     paths: "改动路径",
   },
   delivery: {
@@ -144,8 +144,8 @@ export default {
     taskTypes: { create: "新建", change: "改造", debug: "排错", verify: "验证", review: "审查", research: "调研", write: "撰写" },
     mode: { fast: "快速", review: "审阅" },
     sources: {
-      "single-candidate": "程序直选，唯一的合法候选，没有调用 Router",
-      "no-candidate": "没有合法候选，没有调用 Router",
+      "single-candidate": "唯一合法候选，由程序直选，未调用 Router",
+      "no-candidate": "无合法候选，未调用 Router",
     },
   },
   delegation: {

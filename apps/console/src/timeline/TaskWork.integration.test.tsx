@@ -35,7 +35,7 @@ it("refits on filtering, shares the saved habit across macro tasks and keeps sub
   const canvas = () => Number(document.querySelector('[data-slot=timeline-canvas]')!.getAttribute("data-ppm"));
   const ruler = () => document.querySelector('[data-slot=zoom-ruler]')!;
   fireEvent.keyDown(ruler(), { key: "+" });
-  fireEvent.click(screen.getByRole("button", { name: "只看未结束的" }));
+  fireEvent.click(screen.getByRole("button", { name: "仅显示未结束" }));
   const expected = createTimelineScale(timelineScaleInput(visibleTimeline(props.timeline!, true)), 1088 - 272 - TIMELINE_OUTSET_PX * 2).pixelsPerMinute;
   expect(canvas()).toBe(expected);
   expect(document.querySelector('[data-slot=timeline-row-count]')!.textContent).toBe("2 / 6");
@@ -46,20 +46,20 @@ it("refits on filtering, shares the saved habit across macro tasks and keeps sub
   rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} displayObservedAt="2026-09-26T08:13:00Z"/></TooltipProvider>);
   expect(canvas()).toBe(manual);
   rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} timeline={{ ...props.timeline!, macroTask: { ...props.timeline!.macroTask, macroTaskId: "other" } }}/></TooltipProvider>);
-  expect(screen.getByRole("button", { name: "只看未结束的" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "仅显示未结束" }).getAttribute("aria-pressed")).toBe("true");
   expect(canvas()).toBe(expected);
   cleanup(); setup();
-  expect(screen.getByRole("button", { name: "只看未结束的" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "仅显示未结束" }).getAttribute("aria-pressed")).toBe("true");
 });
 
 it("leaves the filter available when all rows have ended", () => {
   const { props, rerender } = setup();
   const timeline = { ...props.timeline!, rows: props.timeline!.rows.map(row => ({ ...row, category: "ended" as const })) };
   rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} timeline={timeline}/></TooltipProvider>);
-  fireEvent.click(screen.getByRole("button", { name: "只看未结束的" }));
+  fireEvent.click(screen.getByRole("button", { name: "仅显示未结束" }));
   expect(screen.getByText("没有未结束的微任务")).toBeTruthy();
   expect(document.querySelector('[data-slot=timeline-row-count]')!.textContent).toBe("0 / 6");
-  fireEvent.click(screen.getByRole("button", { name: "只看未结束的" }));
+  fireEvent.click(screen.getByRole("button", { name: "仅显示未结束" }));
   expect(document.querySelectorAll('[data-slot=timeline-row-name]')).toHaveLength(6);
 });
 

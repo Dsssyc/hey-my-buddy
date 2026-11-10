@@ -49,7 +49,7 @@ describe("macro task time statistics", () => {
     const dialog = screen.getByRole("dialog", { name: "时间统计" });
     expect(container.contains(dialog)).toBe(false);
     const values = dialog.querySelector('[data-slot="time-stats-values"]')!;
-    expect([...values.querySelectorAll("dt")].map(node => node.textContent)).toEqual(["从开始到最近活动", "有工作在运行的时间", "各回合相加"]);
+    expect([...values.querySelectorAll("dt")].map(node => node.textContent)).toEqual(["开始至最近活动", "运行时长", "回合时长合计"]);
     expect([...values.querySelectorAll("dt")].map(node => node.firstElementChild?.getAttribute("aria-description")))
       .toEqual([null, null, null]);
     expect(values.querySelectorAll("dd")).toHaveLength(3);

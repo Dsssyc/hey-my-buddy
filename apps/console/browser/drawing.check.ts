@@ -101,7 +101,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         "inquiry-mark", "waiting-diamond", "accept-mark"]) {
         expect(await drawing.locator(`[data-slot="${slot}"]`).count(), `${slot} is drawn`).toBeGreaterThan(0);
       }
-      await expect(drawing.locator('[data-slot="track-label"]').filter({ hasText: locale === "zh-CN" ? /可能卡住|无动静/ : /Possibly stuck|Silent/ })).toHaveCount(0);
+      await expect(drawing.locator('[data-slot="track-label"]').filter({ hasText: locale === "zh-CN" ? /疑似停滞|无动静/ : /Possibly stalled|Silent/ })).toHaveCount(0);
       await expect(drawing.locator('[data-slot="gap-label"]')).toHaveText(locale === "zh-CN" ? ["35 分", "2 时 14 分"] : ["35 min", "2 h 14 min"]);
       await expect(page.locator('[data-slot="timeline-row-name"][data-run-id="preview-run-a1"]:visible [data-slot="fixed-by"]')).toHaveText("↩ 2");
       for (const run of ["preview-run-a2", "preview-run-a3"])

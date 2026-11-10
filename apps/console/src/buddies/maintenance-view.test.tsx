@@ -129,7 +129,7 @@ describe("maintenance controls", () => {
     const f = fixture(state(), { domain_rename: () => ({ nodeId: "root" }) });
     await openRoles(f); const user = userEvent.setup();
     await user.click(within(document.querySelector<HTMLElement>('[data-node="root"].domain-tree-row')!).getByRole("button", { name: "工程 的详情" }));
-    await user.click(screen.getByRole("button", { name: "改名" }));
+    await user.click(screen.getByRole("button", { name: "重命名" }));
     vi.mocked(f.api.snapshot).mockRejectedValueOnce(new Error("read interrupted"));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -158,7 +158,7 @@ describe("maintenance controls", () => {
     const f = fixture(state()); await openRoles(f); const user = userEvent.setup();
     const interval = screen.getByRole("spinbutton", { name: "维护间隔" });
     await user.clear(interval); await user.type(interval, "0");
-    expect(screen.getByText("维护间隔需要是正整数秒数")).toBeTruthy();
+    expect(screen.getByText("维护间隔须为正整数秒")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /^保存/ }));
     expect(f.published).toHaveLength(0);
   });
@@ -166,7 +166,7 @@ describe("maintenance controls", () => {
     const f = fixture(state(), { domain_rename: () => { throw new Error("Duplicate domain name"); } });
     await openRoles(f); const user = userEvent.setup();
     await user.click(within(document.querySelector<HTMLElement>('[data-node="root"].domain-tree-row')!).getByRole("button", { name: "工程 的详情" }));
-    await user.click(screen.getByRole("button", { name: "改名" }));
+    await user.click(screen.getByRole("button", { name: "重命名" }));
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toBe("Duplicate domain name"));
@@ -178,7 +178,7 @@ describe("maintenance controls", () => {
     await user.click(document.querySelector<HTMLElement>('[data-node="root"].domain-tree-row')!);
     const row = document.querySelector<HTMLElement>('[data-node="child"].domain-tree-row')!;
     await user.click(within(row).getByRole("button", { name: "前端 的详情" }));
-    await user.click(screen.getByRole("button", { name: "改名" }));
+    await user.click(screen.getByRole("button", { name: "重命名" }));
     const rename = screen.getByRole("dialog");
     await user.clear(within(rename).getByLabelText("名称")); await user.type(within(rename).getByLabelText("名称"), "界面工程");
     await user.clear(within(rename).getByLabelText("定义")); await user.type(within(rename).getByLabelText("定义"), "浏览器排版与交互");

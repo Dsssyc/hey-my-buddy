@@ -20,12 +20,12 @@ export default {
   },
   done: {
     checked: "已检测 {{name}}：{{status}}",
-    checkedAll: "已检测全部 Harness：已找到 {{ready}} / {{n}}",
+    checkedAll: "已检测全部 harness：已找到 {{ready}} / {{n}}",
     saved: "已保存路径 {{path}}；{{name}} {{status}}",
     restored: "已恢复自动检测；{{name}} {{status}}",
   },
   pane: {
-    installedVersion: "装着的版本",
+    installedVersion: "已安装版本",
     verifiedVersion: "核实时的版本",
     location: "位置",
     path: "路径",
@@ -36,7 +36,7 @@ export default {
     web: "只联网",
     pickPath: "指定路径",
     reason: "原因",
-    tried: "试过的位置",
+    tried: "已尝试的位置",
     noPath: "未记录路径",
   },
   /** Local review eligibility: a free check of the shipped mechanism, never native-run evidence. */
@@ -50,8 +50,8 @@ export default {
   web: {
     eligible: "强制限制",
     ineligible: "未声明强制限制",
-    enforcedDescription: "只联网档位声明了强制限制，可以担任画像。",
-    unenforcedDescription: "没有强制的只联网档位声明，这个 harness 不能担任画像。",
+    enforcedDescription: "只联网档位已声明强制执行，可构建模型画像。",
+    unenforcedDescription: "只联网档位未声明强制执行，不能构建模型画像。",
   },
   path: {
     title: "{{name}} 路径",
@@ -86,7 +86,7 @@ export default {
   },
   cooling: {
     name: "冷却",
-    status: "冷却中 · 约 {{time}} 可再试",
+    status: "冷却中 · 约 {{time}} 结束",
     clear: "开放重试",
     retryHint: "开放一次重试机会，不代表提供方已恢复。",
     none: "当前无冷却",

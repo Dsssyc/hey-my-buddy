@@ -22,7 +22,7 @@ describe("provider cooldown", () => {
     await openHarness(fixture({ harnesses: rows() }));
     const block = paneBlock("冷却", "DSH");
     expect(within(block).getByText("zai")).toBeTruthy();
-    expect(within(block).getByText(`冷却中 · 约 ${formatCoolingTime(Date.parse(deadline))} 可再试`).className).toContain("text-ink3");
+    expect(within(block).getByText(`冷却中 · 约 ${formatCoolingTime(Date.parse(deadline))} 结束`).className).toContain("text-ink3");
     expect(within(block).getAllByRole("button")).toHaveLength(1);
     const header = harnessButton("DSH").closest("[data-slot=harness-header]")!;
     expect(header.textContent).toContain("zai冷却中");

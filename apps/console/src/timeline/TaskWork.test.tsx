@@ -168,7 +168,7 @@ describe("the lanes and the detail workspace", () => {
   it("explains incomplete reads and retains frozen source facts with retry", () => {
     const timeline = macroTaskTimelineFixture({ filtered: true });
     const { props } = setup({ timeline, error: "offline", stale: true });
-    expect(status()).toContain("记录没有读全");
+    expect(status()).toContain("记录读取不完整");
     expect(screen.getByRole("alert").textContent).toContain("时间冻结");
     fireEvent.click(screen.getByRole("button", { name: "重试连接" }));
     expect(props.onRetry).toHaveBeenCalledOnce();
@@ -230,7 +230,7 @@ describe("Lead lanes from recorded ownership", () => {
     const timeline = laneFixture();
     timeline.rows.find(item => item.runId === "r2")!.category = "active";
     setup({ timeline });
-    fireEvent.click(screen.getByRole("button", { name: "只看未结束的" }));
+    fireEvent.click(screen.getByRole("button", { name: "仅显示未结束" }));
     expect(row("r3")).toBeNull();
     fireEvent.pointerEnter(row("r2"));
     const summary = document.querySelector('[data-slot=timeline-lane-summary]')!;
@@ -497,7 +497,7 @@ describe("timeline keyboard and screen reader navigation", () => {
     await user.keyboard("{ArrowDown}"); expect(document.activeElement).toBe(row("r3"));
     await user.keyboard("{ArrowUp}"); expect(document.activeElement).toBe(row("r2"));
     await user.keyboard("{Enter}"); expect(props.onOpen).toHaveBeenLastCalledWith("r2");
-    expect(screen.getByRole("region", { name: "这个宏任务的微任务" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "宏任务下的微任务" })).toBeTruthy();
   });
 
   it("clamps row navigation at the ends and keeps rows without fragments on their name", async () => {
@@ -719,6 +719,6 @@ it("keeps the name column, filter and empty timeline for an empty macro task", a
   expect(document.querySelector('[data-slot="timeline-status"]')).toBeTruthy();
   expect(stage.children).toHaveLength(2);
   expect(document.querySelector('[data-slot="timeline-canvas"]')).toBeNull();
-  await userEvent.click(within(stage as HTMLElement).getByRole("button", { name: "只看未结束的" }));
+  await userEvent.click(within(stage as HTMLElement).getByRole("button", { name: "仅显示未结束" }));
   expect(stage.textContent).toContain("没有已提交的微任务");
 });

@@ -98,7 +98,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     const table = screen.getByRole("table");
     const rows = [...table.querySelectorAll<HTMLElement>("tbody tr")].filter(row => row.querySelector("th"));
     expect(rows.map(row => row.querySelector("th")!.textContent)).toEqual([
-      "保留的 Harness 目录", "受管检出", "运行时", "备份", "黑板与记录",
+      "保留的 harness 目录", "受管检出", "运行时", "备份", "黑板与记录",
     ]);
     expect(within(rows[0]!).getByText("3.3 GB")).toBeTruthy();
     expect(within(rows[0]!).getByText("0 B")).toBeTruthy();
@@ -119,11 +119,11 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await checkUsage(user);
     expect(screen.getByText("future-thing")).toBeTruthy();
     expect(within(screen.getByText("future-thing").closest("tr")!).getByText("1")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "保留的 Harness 目录：为何保留" }));
+    await user.click(screen.getByRole("button", { name: "保留的 harness 目录：保留原因" }));
     expect(screen.getByText("仍可能续接")).toBeTruthy();
     expect(screen.getByText("宽限期未满")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "保留的 Harness 目录：为何保留" }));
-    await user.click(screen.getByRole("button", { name: "future-thing：为何保留" }));
+    await user.click(screen.getByRole("button", { name: "保留的 harness 目录：保留原因" }));
+    await user.click(screen.getByRole("button", { name: "future-thing：保留原因" }));
     expect(within(screen.getByRole("table")).getByText("5 B")).toBeTruthy();
     expect(screen.getByText("never-seen-code")).toBeTruthy();
   });
@@ -136,7 +136,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     const user = userEvent.setup();
     render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
-    await user.click(screen.getByRole("button", { name: "受管检出：为何保留" }));
+    await user.click(screen.getByRole("button", { name: "受管检出：保留原因" }));
     expect(screen.getByText("统计时内容正在变化")).toBeTruthy();
   });
 
@@ -169,7 +169,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     const panelResult = view.container.firstElementChild as HTMLElement;
     expect(panelResult.closest('[aria-hidden="true"]')).toBeTruthy();
     expect(dialog.hasAttribute("inert")).toBe(false);
-    expect(dialog.textContent).not.toContain("保留的 Harness 目录：");
+    expect(dialog.textContent).not.toContain("保留的 harness 目录：");
     expect(dialog.textContent).not.toContain("原生目录由服务自动回收");
     expect(dialog.textContent).toContain("黑板、记录和上次升级之前的黑板不会删除。");
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
@@ -248,7 +248,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await user.click(screen.getByRole("button", { name: "检查占用" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("记录冲突");
-    expect(screen.getByText("保留的 Harness 目录")).toBeTruthy();
+    expect(screen.getByText("保留的 harness 目录")).toBeTruthy();
   });
 
   it("disables actions with a reason while the connection is interrupted", () => {

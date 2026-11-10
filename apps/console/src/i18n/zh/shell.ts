@@ -77,7 +77,7 @@ export default {
       "identity-changed": "身份已变化",
       "constraints": "约束不符",
       "not-pinned": "未被固定选择",
-      "harness-unavailable": "Harness 不可用",
+      "harness-unavailable": "harness 不可用",
       "quota-exhausted": "额度已耗尽",
       "not-a-candidate": "不在候选内"
     },
@@ -90,7 +90,7 @@ export default {
     "state": {
       "queued": "排队",
       "executing": "执行中",
-      "waiting-helpers": "等待 helper",
+      "waiting-helpers": "等待协助任务",
       "waiting-owned": "等待名下微任务",
       "awaiting-host": "等待 Host",
       "delivered": "待验收",
@@ -106,7 +106,7 @@ export default {
     events: {
       dispatch: "{{time}} {{role}} 派发「{{title}}」", approved: "{{time}} {{role}} 批准了「{{title}}」的请求",
       declined: "{{time}} {{role}} 拒绝了「{{title}}」的请求", decide: "{{time}} {{role}} 批准 / 拒绝了「{{title}}」的请求",
-      continue: "{{time}} {{role}} 让「{{title}}」继续", integrate: "{{time}} {{role}} 整合了「{{title}}」的产出",
+      continue: "{{time}} {{role}} 续接「{{title}}」", integrate: "{{time}} {{role}} 整合了「{{title}}」的产出",
       accept: "{{time}} {{role}} 验收通过「{{title}}」", reject: "{{time}} {{role}} 对「{{title}}」提出验收问题",
       stop: "{{time}} {{role}} 停止了「{{title}}」", console: "{{time}} 控制台停止了「{{title}}」",
       service: "{{time}} 服务停止了「{{title}}」", unknown: "{{time}} 停止了「{{title}}」（发起者未知）",
@@ -144,7 +144,7 @@ export default {
   },
   reminders: {
     overdue: "已超过预期",
-    possiblyStuck: "可能卡住",
+    possiblyStuck: "疑似停滞",
   },
   macroStop: {
     title: "停止宏任务", cancel: "取消", confirm: "确认停止宏任务",
@@ -154,16 +154,16 @@ export default {
     scopeAccepted: "保留 {{count}} 个已验收微任务",
     pending: "停止请求已发出，等待回复。", noActive: "没有进行中的微任务或协助任务。",
     actionHint: "停止进行中的微任务及协助任务（需确认）。",
-    refused: "停止请求未提交", refusedDetail: "请求被拒绝。", unknown: "停止未确认",
+    refused: "停止请求被拒绝", refusedDetail: "请求被拒绝。", unknown: "停止未确认",
     unknownDetail: "停止结果未知，可能已生效；可重试同一请求或刷新核对。",
     stopping: "正在停止", stoppingDetail: "停止中 · 等待证据",
-    incomplete: "这个宏任务的记录没有读全", incompleteDetail: "这个宏任务的记录没有读全 · 停止未确认",
+    incomplete: "宏任务记录读取不完整", incompleteDetail: "宏任务记录读取不完整 · 停止未确认",
     pendingCount: "仍有 {{count}} 项停止未确认", uncertainCount: "{{count}} 项停止未确认或超出读取范围",
     stopped: "已停止", stoppedCount: "{{roots}}及 {{helpers}}已停止",
     stoppedRoots: "{{count}} 个微任务", stoppedHelpers: "{{count}} 个协助任务",
     noOp: "无需停止", noOpDetail: "本次没有微任务需要停止；清单内状态已保留。",
     retry: "重试停止", retryHint: "重试同一停止请求；不会重复取消，也不会扩大取消范围。",
-    dismiss: "知道了", replayUnknown: "停止结果未知；可重试同一请求。",
+    dismiss: "关闭", replayUnknown: "停止结果未知；可重试同一请求。",
     invalidResponse: "停止宏任务的响应不完整，提交结果尚未确认。",
   },
   /** The state of the page's draft: what waits to be saved, and what a save ran into. */

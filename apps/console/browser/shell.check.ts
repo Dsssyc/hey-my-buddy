@@ -67,7 +67,7 @@ test.describe("an active micro task's reminder status at narrow width", () => {
     await page.locator('[data-slot=timeline-tracks] [data-key="span:execution:att-a3-1"]').press("Enter");
     const title = page.locator("[data-slot=detail-pane] h3").first().locator("..");
     await expect(title.getByText("已超过预期")).toBeVisible();
-    await expect(title.getByText("可能卡住")).toBeVisible();
+    await expect(title.getByText("疑似停滞")).toBeVisible();
     await expectTextUncut(title.locator(".text-hand"));
     await expectNoSidewaysScroll(page);
   });

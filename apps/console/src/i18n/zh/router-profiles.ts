@@ -1,7 +1,7 @@
 export default {
   buddy: "画像 buddy",
   records: "记录",
-  noRuns: "还没有画像运行记录。",
+  noRuns: "暂无画像运行记录。",
   model: "模型",
   period: "开始至结束",
   tokens: "用量 · 缓存 / 其他输入 / 输出",

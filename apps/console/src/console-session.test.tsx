@@ -304,7 +304,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.published).toHaveLength(0);
     // Navigation keeps working and no control reacquires authority.
     await user.click(screen.getByRole("link", { name: "任务" }));
-    expect(await screen.findByRole("heading", { name: "还没有宏任务" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "暂无宏任务" })).toBeTruthy();
     expect(f.operations).toEqual([]);
     // Refreshing again never regains rights without a new login.
     // The edit cluster only exists on the settings tabs (P1.2), so return there.
@@ -467,7 +467,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
       window.location.hash = "#tasks/run%3Abrowse-task/browse-task";
       render(<App suppliedApi={f.api} />);
       const detail = await screen.findByRole("region", { name: "微任务详情" });
-      await screen.findByRole("group", { name: "这个微任务的各步" });
+      await screen.findByRole("group", { name: "微任务步骤" });
       expect(await within(detail).findByText("协助 browse-task")).toBeTruthy();
       expect(within(detail).queryByRole("group", { name: "用户决定" })).toBeNull();
       expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
@@ -494,7 +494,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#tasks/run%3Agated-micro-task/gated-micro-task";
     render(<App suppliedApi={f.api} />);
     const detail = await screen.findByRole("region", { name: "微任务详情" });
-    await screen.findByRole("group", { name: "这个微任务的各步" });
+    await screen.findByRole("group", { name: "微任务步骤" });
 
     await readSnapshotOnForeground(f.api.snapshot);
     expect(await screen.findByText("连接中断")).toBeTruthy();

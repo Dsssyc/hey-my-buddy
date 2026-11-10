@@ -154,7 +154,7 @@ describe("the Buddy page's sections and tables", () => {
 
     await user.type(search(), "gpt");
     await listed(1, 1);
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await user.click(screen.getByRole("checkbox", { name: "仅显示已启用" }));
     expect(summary.textContent).toBe("4 个 harness · 启用 3 / 5");
 
     routerLink.focus();
@@ -193,7 +193,7 @@ describe("the Buddy page's sections and tables", () => {
     expect(window.location.hash).toBe("#buddies/router");
     await screen.findByRole("region", { name: "Router" });
     expect(modelsRegion()).toBeNull(); expect(current(sectionsNav())).toEqual(["Router"]);
-    expect(screen.getByRole("spinbutton", { name: "等待模型开始作答" })).toBeTruthy();
+    expect(screen.getByRole("spinbutton", { name: "开始作答时限" })).toBeTruthy();
     await user.click(sectionLink("评价"));
     expect(window.location.hash).toBe("#buddies/evaluation");
     expect(current(sectionsNav())).toEqual(["评价"]);
@@ -345,11 +345,11 @@ describe("deep links", () => {
     await user.type(search(), "gpt");
     await listed(1, 1);
     expect(queryModel(SONNET)).toBeNull();
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await user.click(screen.getByRole("checkbox", { name: "仅显示已启用" }));
 
     await act(async () => { window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(highId)}`; });
     await waitFor(() => expect(search()).toHaveProperty("value", ""));
-    expect(screen.getByRole("checkbox", { name: "只看已启用" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("checkbox", { name: "仅显示已启用" }).getAttribute("aria-checked")).toBe("false");
     await listed(3, 4);
     await waitFor(() => pane(SONNET));
     await waitFor(() => expect(document.activeElement).toBe(level("high")));

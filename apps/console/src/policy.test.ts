@@ -78,8 +78,8 @@ describe("decision capability", () => {
     expect(isFastRouterCandidate(worker)).toBe(false);
     expect(isDecisionCandidate(worker)).toBe(true);
     expect(fastRouterCandidates([fast, { ...fast, enabled: false }, { ...fast, available: false }])).toHaveLength(1);
-    expect(routerRefusal(fast, "review")).toContain("所属 Harness 尚不具备本地只读路由资格");
-    expect(routerRefusal(worker, "fast")).toContain("所属 Harness 尚不支持无工具路由调用");
+    expect(routerRefusal(fast, "review")).toContain("所属 harness 尚不具备本地只读路由资格");
+    expect(routerRefusal(worker, "fast")).toContain("所属 harness 尚不支持无工具路由调用");
     const baseline = makeDraft(snapshot([worker, fast]));
     expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, routerBuddyIds: [fast.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast" } })).toEqual([]);
     expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, defaultRoutingMode: "fast" } })).toEqual([]);
@@ -112,9 +112,9 @@ describe("decision capability", () => {
 
   it("explains why an effort's tag menu cannot make it the Router", () => {
     expect(routerRefusal(worker)).toBeNull();
-    expect(routerRefusal(coder)).toContain("所属 Harness 尚不具备本地只读路由资格");
+    expect(routerRefusal(coder)).toContain("所属 harness 尚不具备本地只读路由资格");
     // The capability is reported first: it is the one reason the user cannot fix.
-    expect(routerRefusal({ ...coder, enabled: false })).toContain("所属 Harness 尚不具备本地只读路由资格");
+    expect(routerRefusal({ ...coder, enabled: false })).toContain("所属 harness 尚不具备本地只读路由资格");
     expect(routerRefusal({ ...worker, available: false })).toContain("不可用");
     expect(routerRefusal(disabled)).toContain("未启用");
   });
@@ -181,11 +181,11 @@ describe("blocking new changes", () => {
   it("blocks a new pin for an available but disabled buddy, matching the board", () => {
     const baseline = makeDraft(snapshot([worker, disabled]));
     const pinned = setPreference(baseline, disabled.buddyId, "pin");
-    expect(blockingIssues(baseline, pinned)[0].message).toContain("停用状态");
+    expect(blockingIssues(baseline, pinned)[0].message).toContain("已停用");
     // An existing pin on a disabled buddy is attention, never a blocker.
     const stale = { ...baseline, preferences: [{ buddyId: disabled.buddyId, mode: "pin" as const, note: "以前固定" }] };
     expect(blockingIssues(stale, stale)).toEqual([]);
-    expect(attentionIssues(stale)[0].message).toContain("停用状态");
+    expect(attentionIssues(stale)[0].message).toContain("已停用");
   });
 
   it("allows a reason-only edit of an existing unavailable pin", () => {

@@ -5,9 +5,9 @@ import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, set
 // turn is still running; the two terminal questions belong to the ended DSH turn.
 const MACRO = "macro-22222222-2222-4222-8222-222222222222";
 const labels = [
-  { locale: "zh-CN", turn: "回合", queued: "在 Worker 下次检查点时送达，现在尚未送达。",
+  { locale: "zh-CN", turn: "回合", queued: "将在 Worker 的下一个检查点送达。",
     unanswered: "问询已送达，但 Worker 在回合结束前没有答复。", ended: "此回合已结束，问询未排入。" },
-  { locale: "en-US", turn: "Turn", queued: "Will be delivered at the Worker's next checkpoint; not delivered yet.",
+  { locale: "en-US", turn: "Turn", queued: "To be delivered at the Worker's next checkpoint.",
     unanswered: "The inquiry was delivered, but the Worker did not answer before the turn ended.",
     ended: "The turn had ended before the inquiry could be queued." },
 ];

@@ -14,7 +14,7 @@ describe("declared review level", () => {
   it("shows installed and verification versions independently, including an unchecked declaration", async () => {
     await openHarness(fixture({ harnesses: [harness({ harness: "dsh", status: "ready", version: "0.4.2", permissionsVerifiedVersion: null })] }));
     const location = paneBlock("位置");
-    expect(fieldValue(location, "装着的版本").textContent).toBe("0.4.2");
+    expect(fieldValue(location, "已安装版本").textContent).toBe("0.4.2");
     expect(fieldValue(location, "核实时的版本").textContent).toBe("未核对");
     expect(screen.getByRole("group", { name: "DSH 设置" }).querySelectorAll(":scope > [role=group]")).toHaveLength(3);
     expect(within(paneBlock("账户")).queryByRole("button")).toBeNull();
@@ -45,7 +45,7 @@ describe("declared web level", () => {
     await openHarness(fixture({ harnesses: [harness({ harness: "codex", status: "ready", permissions: { web } })] }));
     expect(fieldValue(paneBlock("位置"), "只联网").textContent).toBe(expected);
     expect(paneBlock("位置").textContent).toContain(web === "enforced"
-      ? "只联网档位声明了强制限制，可以担任画像。"
-      : "没有强制的只联网档位声明，这个 harness 不能担任画像。");
+      ? "只联网档位已声明强制执行，可构建模型画像。"
+      : "只联网档位未声明强制执行，不能构建模型画像。");
   });
 });

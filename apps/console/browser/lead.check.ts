@@ -151,9 +151,9 @@ for (const { locale, language, tasks } of [
       expect(response.request().postDataJSON().params.commandId).not.toBe("");
       await expect(dialog).toBeHidden();
       const status = page.locator("[data-slot=macro-stop-state]");
-      await expect(status).toHaveText(zh ? "停止请求未提交" : "Stop request was refused");
+      await expect(status).toHaveText(zh ? "停止请求被拒绝" : "Stop request was refused");
       await expect(status).toHaveAttribute("aria-description", zh
-        ? "无操作权限；请重新打开控制台。" : "You may not do this; reopen the console.");
+        ? "无操作权限；请重新打开控制台。" : "Not permitted; reopen the console.");
       await expectTextUncut(status);
       await expect(page.getByText(zh ? "已停止" : "Stopped", { exact: true })).toHaveCount(0);
 
@@ -165,7 +165,7 @@ for (const { locale, language, tasks } of [
       await expectReadableStart(row(page, WAITING).getByText(zh ? "等待 Lead" : "Waiting for Lead", { exact: true }), zh ? "等待 Lead" : "Waiting for Lead");
       await more.click();
       await expect(page.getByRole("menuitem", { name: zh ? "重试停止" : "Retry stop", exact: true })).toHaveCount(0);
-      await page.getByRole("menuitem", { name: zh ? "知道了" : "Dismiss", exact: true }).click();
+      await page.getByRole("menuitem", { name: zh ? "关闭" : "Dismiss", exact: true }).click();
       // Dismissing this browser's refusal leaves the earlier recorded Lead stop visible.
       await expect(status).toHaveText(zh ? "正在停止" : "Stopping");
       await expect(status).toHaveAttribute("aria-description", zh ? "仍有 1 项停止未确认" : "Stops unconfirmed 1");

@@ -174,7 +174,7 @@ async function openBuddy(api: ConsoleApi) {
 }
 
 const saveButton = () => within(screen.getByRole("region", { name: "未保存的修改" })).getByRole("button", { name: /^(保存|重试同一保存)$/ });
-const enabledOnly = () => screen.getByRole("checkbox", { name: "只看已启用" });
+const enabledOnly = () => screen.getByRole("checkbox", { name: "仅显示已启用" });
 const showUnavailable = () => screen.getByRole("checkbox", { name: "显示不可用 1" });
 
 afterEach(() => {
@@ -212,7 +212,7 @@ describe("the harness directory", () => {
     await listed(1, 4);
     expect(foldHandle("Codex")).toBeTruthy();
     // The two filters combine: with 显示不可用 on, the offline model is listed,
-    // and 只看已启用 still hides it because none of its buddies is enabled.
+    // and 仅显示已启用 still hides it because none of its buddies is enabled.
     await user.click(showUnavailable());
     await listed(1, 5);
     expect(foldHandle("ZCode").getAttribute("aria-expanded")).toBe("false");
@@ -394,7 +394,7 @@ describe("the settings page", () => {
     expect(overview.textContent).toContain("占用977 KB");
     expect(overview.textContent).toContain("可回收977 KB");
     // No buddy settings leak into the system settings page.
-    expect(screen.queryByRole("checkbox", { name: "只看已启用" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "仅显示已启用" })).toBeNull();
     expect(screen.queryByRole("table", { name: "模型" })).toBeNull();
   });
 });

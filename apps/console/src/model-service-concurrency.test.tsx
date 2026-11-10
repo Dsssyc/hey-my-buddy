@@ -136,7 +136,7 @@ describe("a model's concurrency", () => {
     expect(concurrencyInput()).toHaveProperty("value", "2");
     expect(within(pane()).getByLabelText("占用 1")).toBeTruthy();
     // The model row writes the same two numbers at its trailing edge.
-    expect(within(modelRow(FLASH)).getByLabelText("占用 1，上限 2").textContent).toBe("1 / 2");
+    expect(within(modelRow(FLASH)).getByLabelText("占用 1 / 2").textContent).toBe("1 / 2");
     expect(f.command).not.toHaveBeenCalled();
   });
 
@@ -188,7 +188,7 @@ describe("a model's concurrency", () => {
     expect(within(pane()).getAllByRole("spinbutton")).toHaveLength(1);
     expect(concurrencyInput()).toHaveProperty("value", "6");
     expect(within(pane()).getByLabelText("占用 1")).toBeTruthy();
-    expect(within(modelRow(FLASH)).getByLabelText("占用 1，上限 6").textContent).toBe("1 / 6");
+    expect(within(modelRow(FLASH)).getByLabelText("占用 1 / 6").textContent).toBe("1 / 6");
   });
 
   it("keeps an out-of-range input unsaved until it is corrected", async () => {

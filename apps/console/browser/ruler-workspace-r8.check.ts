@@ -33,7 +33,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     const axis = page.locator('[data-slot=timeline-axis]');
     await moveTo(page, axis, .4);
     await expect(zoomRuler).toHaveCSS("background-color", ground);
-    await expect(page.getByRole("tooltip")).toHaveText("滚轮缩放 · Shift+滚轮平移 · 适应宽度：双击 · 键盘 + − 0");
+    await expect(page.getByRole("tooltip")).toHaveText("滚轮或 + / − 缩放，Shift+滚轮平移，双击或按 0 适应宽度。");
     await page.mouse.wheel(0, -350);
     await expect.poll(() => ppm(page)).toBeGreaterThan(initial);
     const zoomed = await ppm(page);

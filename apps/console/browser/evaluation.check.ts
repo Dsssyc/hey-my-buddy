@@ -146,7 +146,7 @@ test.describe("evaluation actions", () => {
     await page.getByRole("menuitem", { name: "Undo" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Stage change" }).click();
     await page.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(page.getByRole("alert")).toHaveText("This correspondence has changed; refresh and undo again.");
+    await expect(page.getByRole("alert")).toHaveText("The correspondence has changed; refresh before undoing.");
     await expect(names).toContainText("Will restore the previous correspondence when saved");
     expect(writes).toHaveLength(1);
   });

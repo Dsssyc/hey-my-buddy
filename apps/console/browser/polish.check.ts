@@ -214,7 +214,7 @@ for (const theme of ["light", "dark"]) test.describe(`model order ${theme}`, () 
     });
     await open(page, `#tasks/${macro}`);
     await page.locator('[data-slot=legend-trigger]').click();
-    await expect(page.locator('[data-slot=timeline-legend]')).toContainText("Possibly stuck");
+    await expect(page.locator('[data-slot=timeline-legend]')).toContainText("Possibly stalled");
     const bars = page.locator('[data-slot=execution-bar]');
     await expect(bars).toHaveCount(2);
     const colors = await bars.evaluateAll(nodes => nodes.map(node => getComputedStyle(node).fill));

@@ -39,7 +39,7 @@ describe("the program reason catalog", () => {
   });
   it("explains the historical Router budget reason in both languages", () => {
     setLanguageChoice("zh");
-    expect(reasonText({ code: "router-budget-exhausted", params: {} })).toBe("0.65.0 之前的这次 Router 调用达到时限或工具调用上限。");
+    expect(reasonText({ code: "router-budget-exhausted", params: {} })).toBe("此 Router 调用（0.65.0 之前）达到时限或工具调用上限。");
     setLanguageChoice("en");
     expect(reasonText({ code: "router-budget-exhausted", params: {} })).toBe("Before 0.65.0, this Router call reached its time or tool-call limit.");
   });

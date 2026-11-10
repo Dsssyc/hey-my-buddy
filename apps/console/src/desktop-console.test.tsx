@@ -89,7 +89,7 @@ describe("desktop console", () => {
     const f = fixture();
     f.api.readVerifiedAt = () => Date.parse("2026-01-02T03:04:05Z");
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "还没有宏任务" });
+    await screen.findByRole("heading", { name: "暂无宏任务" });
     expect(screen.queryByRole("button", { name: "刷新工作台" })).toBeNull();
     // A read from an earlier day is written with its date; the top bar holds the only copy.
     const read = within(screen.getByRole("banner")).getByText(formatDateTime(Date.parse("2026-01-02T03:04:05Z")));
@@ -124,7 +124,7 @@ describe("desktop console", () => {
     // The count comes from the slim snapshot's server-side field.
     f.snapshot.tasks.pendingCount = 5;
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "还没有宏任务" });
+    await screen.findByRole("heading", { name: "暂无宏任务" });
     // The count and what it counts are both part of the tab's name.
     expect(screen.getByRole("link", { name: /^任务\s*5\s*等待 Host 决定的微任务$/ })).toBeTruthy();
     f.snapshot.tasks.pendingCount = 0;
@@ -169,7 +169,7 @@ describe("desktop console", () => {
     await waitFor(() => expect(document.querySelector('[data-key="row:one"]')).toBeTruthy());
     await user.dblClick(document.querySelector('[data-key="row:one"]') as HTMLElement);
     const detail = await screen.findByRole("region", { name: "微任务详情" });
-    await screen.findByRole("group", { name: "这个微任务的各步" });
+    await screen.findByRole("group", { name: "微任务步骤" });
     expect(within(detail).getByRole("heading", { name: /目标 one/ })).toBeTruthy();
     expect(detail.querySelectorAll("input, textarea, select, form")).toHaveLength(0);
     expect(screen.queryByRole("button", { name: "批准所列协助" })).toBeNull();

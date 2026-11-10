@@ -44,7 +44,7 @@ describe("the harness sections", () => {
       expect(within(harnessSection(name)).getByText(state)).toBeTruthy();
     }
     await selectHarness(user, "Codex");
-    expect(fieldValue(paneBlock("位置", "Codex"), "装着的版本").textContent).toBe("0.157.0");
+    expect(fieldValue(paneBlock("位置", "Codex"), "已安装版本").textContent).toBe("0.157.0");
     expect(f.command).not.toHaveBeenCalled();
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
   });
@@ -89,14 +89,14 @@ describe("the location block", () => {
     const f = fixture();
     await openHarness(f);
     const location = paneBlock("位置");
-    expect(fieldValue(location, "装着的版本").textContent).toBe("0.4.2");
+    expect(fieldValue(location, "已安装版本").textContent).toBe("0.4.2");
     expect(fieldValue(location, "路径").textContent).toBe("/usr/local/bin/dsh");
     expect(fieldValue(location, "来源").textContent).toBe("版本管理器（nvm 默认版本）");
     expect(fieldValue(location, "检测").textContent).toBe(clock(CHECKED_AT));
     expect(within(location).getByText("已找到")).toBeTruthy();
     // Nothing exceptional is said of a harness that is found.
-    for (const word of ["原因", "试过的位置"]) expect(within(location).queryByText(word)).toBeNull();
-    expect(within(harnessPane()).queryByText(/请先|安装/)).toBeNull();
+    for (const word of ["原因", "已尝试的位置"]) expect(within(location).queryByText(word)).toBeNull();
+    expect(within(harnessPane()).queryByText(/请先|(?<!已)安装/)).toBeNull();
     // The path can always be set, found or not.
     expect(within(location).getByRole("button", { name: "检测" })).toBeTruthy();
     await user.click(within(location).getByRole("button", { name: "指定路径" }));
@@ -115,7 +115,7 @@ describe("the location block", () => {
     expect(fieldValue(location, "原因").textContent).toBe(reasonText({ code: "harness.not-found", params: { operation: "probe" } }));
     expect(within(location).getByText("未找到").getAttribute("aria-description")).toBe(reasonText({ code: "harness.not-found", params: { operation: "probe" } }));
     expect(fieldValue(location, "路径").textContent).toBe("未记录");
-    const tried = within(location).getByText("试过的位置").parentElement!;
+    const tried = within(location).getByText("已尝试的位置").parentElement!;
     expect(within(tried).getByText("/Applications/ZCode.app/Contents/MacOS/zcode")).toBeTruthy();
     expect(within(tried).getByText("应用包 · " + reasonText({ code: "harness.not-found", params: { operation: "probe" } }))).toBeTruthy();
     expect(within(tried).getByText("/opt/homebrew/bin/zcode")).toBeTruthy();
@@ -193,7 +193,7 @@ describe("checking", () => {
     const f = fixture();
     await openHarness(f);
     await user.click(screen.getByRole("button", { name: "全部检测" }));
-    await screen.findByText("已检测全部 Harness：已找到 4 / 4");
+    await screen.findByText("已检测全部 harness：已找到 4 / 4");
     expect(f.calls).toEqual([{ operation: "capabilities", params: { refresh: true } }]);
     for (const name of ["DSH", "ZCode", "Codex", "Claude Code"]) expect(within(harnessSection(name)).queryByText(/未找到|未登录|未通过/)).toBeNull();
   });
@@ -209,7 +209,7 @@ describe("checking", () => {
     expect(within(harnessSection("ZCode")).getByText("未找到")).toBeTruthy();
     expect(screen.queryByText(/已检测/)).toBeNull();
     await user.click(screen.getByRole("button", { name: "重试" }));
-    await screen.findByText("已检测全部 Harness：已找到 4 / 4");
+    await screen.findByText("已检测全部 harness：已找到 4 / 4");
     expect(f.calls.map(call => call.operation)).toEqual(["capabilities", "capabilities"]);
     expect(screen.queryByRole("alert")).toBeNull();
   });

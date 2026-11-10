@@ -94,7 +94,7 @@ describe("domain outline", () => {
     const details = document.querySelector<HTMLElement>('[data-slot="domain-details"]')!;
     expect(details.classList.contains("domain-tree-popover")).toBe(true);
     expect(within(details).getByText("工程工作")).toBeTruthy();
-    expect(within(details).getByRole("button", { name: "改名" })).toBeTruthy();
+    expect(within(details).getByRole("button", { name: "重命名" })).toBeTruthy();
     await user.keyboard("{Escape}");
     expect(document.querySelector('[data-slot="domain-details"]')).toBeNull();
     expect(document.activeElement).toBe(info);
@@ -113,7 +113,7 @@ describe("domain outline", () => {
     expect(rows[34]!.getAttribute("aria-level")).toBe("35");
     expect((rows[34] as HTMLElement).style.getPropertyValue("--depth")).toBe("34");
     await userEvent.click(within(rows[0]!).getByRole("button", { name: "Level 0 的详情" }));
-    expect((screen.getByRole("button", { name: "改名" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "重命名" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "合并" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

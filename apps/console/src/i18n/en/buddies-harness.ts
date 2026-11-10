@@ -50,8 +50,8 @@ export default {
   web: {
     eligible: "Enforced",
     ineligible: "No enforced declaration",
-    enforcedDescription: "The web only level declares enforced restrictions; this harness can build model profiles.",
-    unenforcedDescription: "Without an enforced web only declaration, this harness cannot build model profiles.",
+    enforcedDescription: "The web only level is declared enforced, so this harness can build model profiles.",
+    unenforcedDescription: "The web only level is not declared enforced, so this harness cannot build model profiles.",
   },
   path: {
     title: "Path of {{name}}",
@@ -86,7 +86,7 @@ export default {
   },
   cooling: {
     name: "Cooldown",
-    status: "Cooling down · try again around {{time}}",
+    status: "Cooling down · ends around {{time}}",
     clear: "Open retry",
     retryHint: "Opens one retry opportunity; it does not mean the provider has recovered.",
     none: "No active cooldown",

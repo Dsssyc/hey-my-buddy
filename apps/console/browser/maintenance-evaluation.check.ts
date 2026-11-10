@@ -10,7 +10,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await open(page, "#buddies/router/maintenance");
       const plane = page.locator('[data-slot="maintenance-plane"]');
-      await expect(plane.locator('[data-slot="maintenance-record"]').first().locator('[aria-label="完成"]')).toBeVisible();
+      await expect(plane.locator('[data-slot="maintenance-record"]').first().locator('[aria-label="已完成"]')).toBeVisible();
       await expect(plane).toContainText("界面工程");
       await plane.getByRole("button", { name: "全部展开" }).click();
       await expect(plane).toContainText("路由判断");
@@ -30,7 +30,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
       await domain.hover();
       await domain.locator(".domain-tree-info").click();
       await expect(page.locator('[data-slot="domain-details"]')).toBeVisible();
-      await page.locator('[data-slot="domain-details"]').getByRole("button", { name: "改名" }).click();
+      await page.locator('[data-slot="domain-details"]').getByRole("button", { name: "重命名" }).click();
       await expect(page.getByRole("dialog").getByLabel("名称")).toBeVisible();
       await expect(page.getByRole("dialog").getByLabel("定义")).toBeVisible();
       await page.keyboard.press("Escape");

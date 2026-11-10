@@ -234,6 +234,6 @@ test("removed macro controls and time-label hints stay absent", async ({ page })
   const header = page.locator('[data-slot="macro-overview-header"]');
   await header.getByRole("button", { name: "时间统计", exact: true }).click();
   const stats = page.locator('[data-slot="time-stats-values"]');
-  await expect(stats.locator("dt")).toHaveText(["从开始到最近活动", "有工作在运行的时间", "各回合相加"]);
+  await expect(stats.locator("dt")).toHaveText(["开始至最近活动", "运行时长", "回合时长合计"]);
   for (const label of await stats.locator("dt").all()) await noHint(page, label);
 });

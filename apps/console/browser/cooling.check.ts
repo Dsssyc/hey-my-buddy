@@ -27,7 +27,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await open(page, `#tasks/${A}/preview-run-a4`);
       const pane = page.locator("[data-slot=detail-pane]");
-      await expect(pane).toContainText("所有候选都在冷却");
+      await expect(pane).toContainText("所有候选均在冷却中");
       await pane.getByRole("button", { name: "提交时的约束" }).click();
       await expect(pane).toContainText("冷却中的候选 2 个");
       await settle(page);

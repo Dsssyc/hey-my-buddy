@@ -111,7 +111,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`timeline refineme
     expect(breaks.length).toBeGreaterThan(0);
     for (const width of breaks) expect(width).toBeCloseTo(54);
     const legend = await openLegend(page);
-    await expect(legend.locator('[data-kind=waiting]')).toContainText("菱形标出工作交给 Host 或 Lead 的地方，虚线表示仍在等");
+    await expect(legend.locator('[data-kind=waiting]')).toContainText("菱形标记工作交给 Host 或 Lead 的时刻，虚线表示仍在等待");
     const patterns = await page.locator('[data-slot=idle-pattern]').evaluateAll(elements => elements.map(pattern => ({
       width: pattern.getAttribute("width"), height: pattern.getAttribute("height"),
       path: pattern.querySelector("path")!.getAttribute("d"), stroke: getComputedStyle(pattern.querySelector("path")!).stroke,
