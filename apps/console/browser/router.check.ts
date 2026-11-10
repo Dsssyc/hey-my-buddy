@@ -24,7 +24,7 @@ for (const w of words) for (const theme of ["dark", "light"] as const) {
 
     test("keeps three icon jobs and one detail, with ordered routing controls", async ({ page }) => {
       await open(page, "#buddies/router/routing");
-      const region = page.getByRole("region", { name: "Router" });
+      const region = page.getByRole("region", { name: "Router", exact: true });
       const nav = region.getByRole("navigation", { name: w.jobs });
       await expect(nav).toHaveAttribute("data-slot", "router-work-toolbar");
       const links = nav.getByRole("link");

@@ -49,7 +49,7 @@ for (const { locale, sections, enabled } of languages) {
 
       await links.nth(1).click();
       await expect(page).toHaveURL(/#buddies\/router$/);
-      await expect(main.getByRole("region", { name: "Router" })).toBeVisible();
+      await expect(main.getByRole("region", { name: "Router", exact: true })).toBeVisible();
       await expect(navigation).toHaveCount(1);
       const routerHeader = (await header.boundingBox())!;
       expect(routerHeader.y).toBe(catalogHeader.y);

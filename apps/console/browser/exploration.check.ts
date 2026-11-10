@@ -16,7 +16,7 @@ for (const words of [
     });
     test("Router settings remain readable and steady", async ({ page }) => {
       await open(page, "#buddies/router");
-      const region = page.getByRole("region", { name: words.roles });
+      const region = page.getByRole("region", { name: words.roles, exact: true });
       const section = region.getByRole("group", { name: stage === "before" ? words.mode : words.quota, exact: true });
       await section.evaluate(node => node.scrollIntoView({ block: "center" }));
       await settle(page);
