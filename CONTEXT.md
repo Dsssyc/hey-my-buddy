@@ -40,7 +40,7 @@ A buddy's four parts written together as `harness / provider / model / effort`, 
 _Avoid_: 四段名字, 完整名字, four-part name, full name
 
 **别名 / alias**:
-A short name the user gives one buddy, for example Claudea. Wherever the user names a buddy the alias stands for that buddy's complete name, and a list of buddies writes it in square brackets after the complete name, `claude / anthropic / fable-5.2 / max [Claudea]`. Records keep the buddy, never the alias, so renaming an alias changes no history. Decided by the developer on 2026-11-10; not built yet.
+A short name the user gives one buddy, for example Claudea. Wherever the user names a buddy the alias stands for that buddy's complete name, and text for a Host writes it in square brackets after the complete name, `claude / anthropic / fable-5.2 / max [Claudea]`. Records keep the buddy, never the alias, so renaming an alias changes no history. Decided by the developer on 2026-11-10; not built yet.
 _Avoid_: label (today the harness's display name of a model with its effort, which goes when aliases are built), nickname
 
 **同型 buddy / buddy kind**:
