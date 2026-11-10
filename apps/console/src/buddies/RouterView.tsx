@@ -24,13 +24,13 @@ export function RouterView({ snapshot, editor, location, onNavigate, attention, 
   const { t } = useTranslation("buddies");
   const work = (location.view === "router" ? location.target ?? "routing" : "routing") as Work;
   return <section hidden={hidden} aria-label={t("sections.router")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
-    <nav data-slot="router-work-toolbar" aria-label={t("routerWork.jobs")} className="flex min-h-12 shrink-0 items-center gap-2 border-b bg-card px-6 py-2 text-ink2">
+    <nav data-slot="router-work-toolbar" aria-label={t("routerWork.jobs")} className="flex min-h-12 shrink-0 items-end gap-2 border-b bg-card px-6 pt-3 text-ink2">
       {ROUTER_WORK.map(job => {
         const Icon = workIcons[job];
         const reason = job === "routing" && attention.roles ? t(`attention.${attention.roles}`) : undefined;
         const description = [t(`routerWork.description.${job}`), reason].filter(Boolean).join("\n");
         return <Hint key={job} text={description} side="bottom"><a href={buddyHash({ view: "router", target: job })} aria-current={work === job ? "page" : undefined}
-          className="flex h-8 items-center gap-2 rounded-sm px-3 text-sm whitespace-nowrap outline-none transition-colors duration-150 hover:bg-sunk aria-[current=page]:bg-past-wash aria-[current=page]:font-semibold aria-[current=page]:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+          className="flex h-9 items-center gap-2 rounded-t-sm px-3 text-sm whitespace-nowrap outline-none transition-colors duration-150 hover:bg-sunk aria-[current=page]:bg-past-wash aria-[current=page]:font-semibold aria-[current=page]:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
           onClick={event => { event.preventDefault(); onNavigate({ view: "router", target: job }); }}>
           <Icon size={16} aria-hidden="true" />{t(`routerWork.${job}`)}
           {reason && <span className="size-1.5 rounded-full bg-hand-mark" aria-hidden="true" />}

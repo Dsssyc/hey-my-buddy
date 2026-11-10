@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { expectNoSidewaysScroll, open, settle, test } from "./preview";
 
 const captures = fileURLToPath(new URL("../../../tmp/redo-b3/", import.meta.url));
@@ -105,11 +105,11 @@ for (const theme of ["dark", "light"] as const) for (const width of [1440, 390])
   await open(page, "#buddies/catalog");
   const catalogue = page.locator('[data-slot="catalogue-toolbar"]');
   const catalogueBox = (await catalogue.boundingBox())!;
-  const catalogueStyle = await catalogue.evaluate(node => ({ padding: getComputedStyle(node).paddingLeft, border: getComputedStyle(node).borderBottomWidth }));
+  const catalogueStyle = await catalogue.evaluate(node => ({ padding: getComputedStyle(node).paddingLeft, border: getComputedStyle(node).borderBottomWidth, borderColor: getComputedStyle(node).borderBottomColor }));
   await page.locator('[data-slot="buddy-header"]').getByRole("link", { name: /^Router/ }).click();
   const toolbar = page.locator('[data-slot="router-work-toolbar"]');
   const toolbarBox = (await toolbar.boundingBox())!;
-  const toolbarStyle = await toolbar.evaluate(node => ({ padding: getComputedStyle(node).paddingLeft, border: getComputedStyle(node).borderBottomWidth }));
+  const toolbarStyle = await toolbar.evaluate(node => ({ padding: getComputedStyle(node).paddingLeft, border: getComputedStyle(node).borderBottomWidth, borderColor: getComputedStyle(node).borderBottomColor }));
   expect(toolbarBox.y).toBe(catalogueBox.y);
   if (width === 1440) expect(toolbarBox.height).toBe(catalogueBox.height);
   expect(toolbarBox.x).toBe(catalogueBox.x);
@@ -121,7 +121,7 @@ for (const theme of ["dark", "light"] as const) for (const width of [1440, 390])
   const links = toolbar.getByRole("link");
   for (const link of await links.all()) {
     const block = (await link.boundingBox())!;
-    expect(block.height).toBe(32);
+    expect(block.height).toBe(36);
     const style = await link.evaluate(node => ({ line: getComputedStyle(node).textDecorationLine, after: getComputedStyle(node, "::after").content }));
     expect(style.line).toBe("none");
     expect(style.after).toBe("none");
@@ -142,6 +142,40 @@ for (const theme of ["dark", "light"] as const) for (const width of [1440, 390])
   const profileTitle = (await detail.getByRole("heading", { level: 3 }).first().boundingBox())!;
   expect(profileTitle.y - toolbarBox.y - toolbarBox.height).toBe(24);
   await expectNoSidewaysScroll(page);
+  });
+
+  test("joins each selected and hovered job to the toolbar border without a gap", async ({ page }) => {
+    await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+    await open(page, "#buddies/router/routing");
+    const toolbar = page.locator('[data-slot="router-work-toolbar"]');
+    const links = toolbar.getByRole("link");
+    const band = (await toolbar.boundingBox())!;
+    const border = await toolbar.evaluate(node => parseFloat(getComputedStyle(node).borderBottomWidth));
+    const borderTop = band.y + band.height - border;
+    const touchesBorder = async (link: Locator) => {
+      const block = (await link.boundingBox())!;
+      expect(block.height).toBe(36);
+      expect(block.y + block.height, "the job background reaches the top of the border").toBe(borderTop);
+    };
+    for (const [index, link] of (await links.all()).entries()) {
+      const corners = await link.evaluate(node => {
+        const style = getComputedStyle(node);
+        return [style.borderTopLeftRadius, style.borderTopRightRadius, style.borderBottomLeftRadius, style.borderBottomRightRadius].map(parseFloat);
+      });
+      expect(corners[0]).toBeGreaterThan(0);
+      expect(corners[1]).toBeGreaterThan(0);
+      expect(corners.slice(2)).toEqual([0, 0]);
+      await link.click();
+      await page.mouse.move(0, 0);
+      await expect(link).toHaveAttribute("aria-current", "page");
+      expect(await link.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe("rgba(0, 0, 0, 0)");
+      await touchesBorder(link);
+      const hovered = links.nth((index + 1) % 3);
+      const resting = await hovered.evaluate(node => getComputedStyle(node).backgroundColor);
+      await hovered.hover();
+      expect(await hovered.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe(resting);
+      await touchesBorder(hovered);
+    }
   });
 });
 
