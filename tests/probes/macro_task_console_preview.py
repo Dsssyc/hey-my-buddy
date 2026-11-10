@@ -2545,7 +2545,7 @@ def buddy_views() -> list[dict]:
             available = harness != LOGGED_OUT_HARNESS
             pending = (harness, provider, model) == PENDING_MODEL
             view = {"buddyId": f"{harness}:{provider}:{model}:{effort}",
-                    "label": f"{model} · {effort}",
+                    "alias": None,
                     "harness": harness, "provider": provider, "model": model,
                     "effort": effort, "effortRank": effort_rank,
                     "available": available, "enabled": effort in enabled,
@@ -2894,9 +2894,6 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
     if scenario == "domains":
         domains = large_domain_tree()
     buddies = buddy_views()
-    if scenario == "readme":
-        for buddy in buddies:
-            buddy["label"] = f"{buddy['model']} · {buddy['effort']}"
     routers = router_records(buddies)
     return {
         "csrfToken": SYNTHETIC_CSRF,

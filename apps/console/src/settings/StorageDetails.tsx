@@ -64,7 +64,7 @@ export function StorageOutcome({ result }: { result: StorageApplyResult }) {
     {result.skipped.length > 0 && <Collapsible open={skipped} onOpenChange={setSkipped}>
       <p className="flex items-center gap-2"><StateMark kind="hand" />{t("skipped", { n: formatNumber(result.skipped.length) })}</p>
       <CollapsibleTrigger className="inline-flex h-7 items-center gap-2 px-0 text-xs"><Disclosure open={skipped} />{t(skipped ? "hideSkipped" : "showSkipped")}</CollapsibleTrigger>
-      <CollapsibleContent><ul className="space-y-2 py-2 text-ink2">{result.skipped.map(item => <li key={item.id} className="break-all">{t("item", { path: item.path, detail: item.reasons.length ? formatList(item.reasons.map(reasonText)) : t("changed") })}</li>)}</ul></CollapsibleContent>
+      <CollapsibleContent><ul className="space-y-2 py-2 text-ink2">{result.skipped.map(item => <li key={item.id} className="break-all">{t("item", { path: item.path, detail: item.reasons.length ? formatList(item.reasons.map(reason => reasonText(reason))) : t("changed") })}</li>)}</ul></CollapsibleContent>
     </Collapsible>}
   </div>;
 }

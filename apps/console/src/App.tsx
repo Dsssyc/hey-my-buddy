@@ -1,3 +1,4 @@
+import { BuddyNamesProvider } from "./components/AliasTag";
 import i18n from "i18next";
 import { cn } from "cn";
 import { useEffect, useState } from "react";
@@ -145,7 +146,7 @@ function Connected({ api, snapshot, refresh, connectionError, verifiedAt, runtim
     tasks: pending > 0 ? t("nav.pendingHost") : undefined,
     buddies: editor.dirty ? t("nav.unsaved") : waiting.roles,
   };
-  return <TooltipProvider><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
+  return <BuddyNamesProvider buddies={snapshot.buddies}><TooltipProvider><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
     <a className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"
       href="#main" onClick={event => { event.preventDefault(); document.getElementById("main")?.focus(); }}>{t("skipToContent")}</a>
     <header className="flex h-9 shrink-0 items-center gap-2 bg-bar px-3 text-bar-ink sm:gap-7 sm:px-4">
@@ -210,7 +211,7 @@ function Connected({ api, snapshot, refresh, connectionError, verifiedAt, runtim
         className="min-h-0 min-w-0 flex-1 overflow-hidden" aria-label={t(`nav.${key}`)}>
         {key === "tasks" ? <MacroTasks snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
           authority={authority} writesAvailable={writesAvailable} onAddress={setTasksAddress} connectionError={connectionError} verifiedAtMs={verifiedAt} /> :
-          key === "buddies" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
+          key === "buddies" ? <BuddyNamesProvider buddies={editor.view.buddies}><BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /></BuddyNamesProvider> :
             <Settings api={api} csrfToken={snapshot.csrfToken} connectionError={connectionError}
               access={snapshot.consoleAccess} reminders={snapshot.reminderSettings} refresh={refresh} writesAvailable={writesAvailable}
               active={tab === "settings"}
@@ -219,5 +220,5 @@ function Connected({ api, snapshot, refresh, connectionError, verifiedAt, runtim
       {draftTab && editor.mode && <SaveBar editor={editor} mutationsAvailable={mutationsAvailable}
         describedBy={saveRefusal ? "editor-save-reason" : undefined} />}
     </main>
-  </div></TooltipProvider>;
+  </div></TooltipProvider></BuddyNamesProvider>;
 }

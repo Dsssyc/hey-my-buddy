@@ -155,7 +155,7 @@ export function modelServiceConcurrencyChanges(
 }
 
 /** The only fields a human may publish; program-owned buddy/catalog fields stay out. */
-type BuddySettingPatch = { buddyId: string; enabled: boolean };
+type BuddySettingPatch = { buddyId: string; enabled?: boolean; alias?: string | null };
 /** One buddy's preference; `mode: null` clears it. */
 type PreferenceChangePatch = { buddyId: string; mode: PreferenceMode | null; note: string | null };
 export type UserPolicyPublication = {
@@ -177,17 +177,20 @@ type UserEditable = Pick<
 const byBuddyId = (a: { buddyId: string }, b: { buddyId: string }) =>
   a.buddyId.localeCompare(b.buddyId);
 
-/** Enabled-intent changes, one patch per buddy that recorded one. */
+/** User settings changes, one patch per buddy with only the changed fields. */
 export function buddySettings(
   baseline: Draft,
   draft: Draft,
 ): BuddySettingPatch[] {
-  const before = new Map(baseline.buddies.map((p) => [p.buddyId, p.enabled]));
-  return draft.buddies
-    .filter(
-      (p) => before.get(p.buddyId) !== undefined && before.get(p.buddyId) !== p.enabled,
-    )
-    .map((p) => ({ buddyId: p.buddyId, enabled: p.enabled }))
+  const before = new Map(baseline.buddies.map(buddy => [buddy.buddyId, buddy]));
+  return draft.buddies.flatMap(buddy => {
+    const old = before.get(buddy.buddyId);
+    if (!old) return [];
+    const enabled = old.enabled !== buddy.enabled;
+    const alias = old.alias !== buddy.alias;
+    return enabled || alias ? [{ buddyId: buddy.buddyId,
+      ...(enabled ? { enabled: buddy.enabled } : {}), ...(alias ? { alias: buddy.alias } : {}) }] : [];
+  })
     .sort(byBuddyId);
 }
 
@@ -271,7 +274,7 @@ export function publication(
 function fingerprint(draft: UserEditable): string {
   return JSON.stringify({
     buddies: [...draft.buddies]
-      .map(({ buddyId, enabled }) => ({ buddyId, enabled }))
+      .map(({ buddyId, enabled, alias }) => ({ buddyId, enabled, alias }))
       .sort(byBuddyId),
     preferences: [...draft.preferences].map(({ buddyId, mode, note }) => ({ buddyId, mode, note })).sort(byBuddyId),
     modelCorrespondenceChanges: [...draft.modelCorrespondenceChanges].sort(byModelService),
@@ -322,7 +325,7 @@ export function changeCount(baseline: Draft, draft: Draft): number {
 type RebaseConflictKind = "changed" | "unread";
 type RebaseConflict = {
   kind: RebaseConflictKind;
-  field: "enabled" | "preference" | "modelCorrespondence" | "configuration" | "defaultRoutingMode" | "modelResponseWaitSeconds" | "routerRetryIntervalSeconds" | "explorationEvery" | "modelServiceConcurrency" | "maintenanceBuddyId" | "maintenanceIntervalSeconds" | "profileBuddyId";
+  field: "alias" | "enabled" | "preference" | "modelCorrespondence" | "configuration" | "defaultRoutingMode" | "modelResponseWaitSeconds" | "routerRetryIntervalSeconds" | "explorationEvery" | "modelServiceConcurrency" | "maintenanceBuddyId" | "maintenanceIntervalSeconds" | "profileBuddyId";
   /** The buddy id, or the `harness/provider/model` of a model service field. */
   buddyId: string;
   message: string;
@@ -338,6 +341,7 @@ const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   get maintenanceBuddyId() { return i18n.t("buddies:maintenance.buddy"); },
   get maintenanceIntervalSeconds() { return i18n.t("buddies:maintenance.interval"); },
   get profileBuddyId() { return i18n.t("buddies:profile.buddy"); },
+  get alias() { return i18n.t("buddies:pane.alias"); },
   get enabled() { return i18n.t("console:enabledState"); },
   get preference() { return i18n.t("console:reasoningEffortPreference"); },
   get modelCorrespondence() { return i18n.t("console:modelCorrespondence"); },
@@ -406,16 +410,21 @@ export function rebaseDraft(
   const freshBuddies = new Map(nextBaseline.buddies.map((p) => [p.buddyId, p]));
   const freshModelServices = new Set(nextBaseline.buddies.map(modelServiceKey));
 
-  // Enabled intent: only a buddy that still exists in the refreshed table can
-  // be compared; a missing row is unresolved rather than silently dropped.
-  const enabledOverrides = new Map<string, boolean>();
+  // Merge settings per field, preserving fresh catalogue facts and unrelated edits.
+  const settingOverrides = new Map<string, Partial<Pick<Buddy, "enabled" | "alias">>>();
   for (const setting of buddySettings(baseline, draft)) {
     const fresh = freshBuddies.get(setting.buddyId);
-    if (!fresh) {
-      fail("unread", "enabled", setting.buddyId);
-      continue;
+    const old = baseline.buddies.find(buddy => buddy.buddyId === setting.buddyId)!;
+    const patch: Partial<Pick<Buddy, "enabled" | "alias">> = {};
+    for (const field of ["enabled", "alias"] as const) {
+      if (!(field in setting)) continue;
+      if (!fresh) { fail("unread", field, setting.buddyId); continue; }
+      if (field === "alias") {
+        if (fresh.alias !== old.alias && fresh.alias !== setting.alias) { fail("changed", field, setting.buddyId); continue; }
+        patch.alias = setting.alias;
+      } else patch.enabled = setting.enabled;
     }
-    enabledOverrides.set(setting.buddyId, setting.enabled);
+    settingOverrides.set(setting.buddyId, patch);
   }
 
   // Buddy preferences: mode and note are merged per buddy.
@@ -490,9 +499,7 @@ export function rebaseDraft(
     draft: {
       ...nextBaseline,
       buddies: nextBaseline.buddies.map((buddy) =>
-        enabledOverrides.has(buddy.buddyId)
-          ? { ...buddy, enabled: enabledOverrides.get(buddy.buddyId)! }
-          : buddy,
+        ({ ...buddy, ...settingOverrides.get(buddy.buddyId) }),
       ),
       preferences,
       modelCorrespondenceChanges: draft.modelCorrespondenceChanges,

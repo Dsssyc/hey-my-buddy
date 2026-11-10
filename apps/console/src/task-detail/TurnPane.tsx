@@ -1,3 +1,4 @@
+import { BuddyName } from "../components/AliasTag";
 import { useTranslation } from "react-i18next";
 import { CopyableIdentifier } from "../components/CopyableIdentifier";
 import { reasonText } from "../i18n/reason";
@@ -79,7 +80,7 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
       {expected !== null && <span className="tabular-nums text-ink3">{t("turn.expected", { time: formatDuration(expected * 1000) })}</span>}
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>}>
-    <Band role="Worker" identity={quad(buddy) ?? <span className="font-sans text-ink3">{t("unrecorded")}</span>}
+    <Band role="Worker" identity={buddy ? <BuddyName buddy={buddy}>{quad(buddy)}</BuddyName> : <span className="font-sans text-ink3">{t("unrecorded")}</span>}
       end={!turn?.routing ? <span className="text-ink3">{t("origin.unrecorded")}</span>
         : <span>{
           turn.routing.decisionId === null ? t("origin.host")

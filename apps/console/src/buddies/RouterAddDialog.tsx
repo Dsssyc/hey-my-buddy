@@ -1,3 +1,4 @@
+import { BuddyName } from "../components/AliasTag";
 import { cn } from "cn";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -6,7 +7,7 @@ import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from "@
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Buddy, RoutingMode } from "../types";
-import { buddyQuad, routerCandidates } from "./roles";
+import { routerCandidates } from "./roles";
 
 /** The buddies that can be added, by their complete names; the search keeps only those that contain what is typed. */
 function Choices({ buddies, list, mode, onAdd }: {
@@ -28,7 +29,7 @@ function Choices({ buddies, list, mode, onAdd }: {
             className={cn("flex w-full flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2 text-left outline-none transition-colors duration-150 focus-visible:bg-sunk motion-reduce:transition-none",
               refusal ? "cursor-not-allowed" : "hover:bg-sunk")}
             onClick={() => { if (!refusal) onAdd(buddy.buddyId); }}>
-            <span className={cn("font-mono text-xs", refusal && "text-ink3")}>{buddyQuad(buddy)}</span>
+            <span className={cn("font-mono text-xs", refusal && "text-ink3")}><BuddyName buddy={buddy}>{[buddy.harness, buddy.provider, buddy.model, buddy.effort].join(" / ")}</BuddyName></span>
             {refusal && <span className="text-xs text-ink3">{t(`roles.refusal.${refusal}`)}</span>}
           </button>
         </li>)}</ul>}

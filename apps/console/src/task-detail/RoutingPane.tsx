@@ -1,10 +1,11 @@
+import { BuddyName, useBuddies } from "../components/AliasTag";
 import { useTranslation } from "react-i18next";
 import { reasonText } from "../i18n/reason";
 import { formatDuration } from "../i18n/format";
 import { Hint } from "@/components/hint";
 import { BasisFold } from "./facts";
 import { Band, Fold, Section, MomentRange, Pane, PaneTitle } from "./parts";
-import { quad } from "./names";
+import { quad, namedQuad } from "./names";
 import { parseTokenUsage } from "./parse";
 import type { ContentTabs } from "./parts";
 import type { Step } from "./steps";
@@ -21,8 +22,10 @@ import { Usage } from "./usage";
  */
 export function RoutingPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?: ContentTabs }) {
   const { t } = useTranslation("taskDetail");
+  const buddies = useBuddies();
   const span = step.span!;
   const entry = ctx.routing.find(item => item.decisionId === span.decisionId) ?? null;
+  const preferred = buddies.find(buddy => buddy.buddyId === entry?.exploration.preferredBuddyId);
   const basis = entry ? ctx.bases[entry.decisionId] ?? null : null;
   const unrecorded = t("unrecorded");
   // The program chose without asking a Router: there is no Router to name and no mode to speak of.
@@ -38,7 +41,7 @@ export function RoutingPane({ step, ctx, tabs }: { step: Step; ctx: Context; tab
       <MomentRange start={step.at} end={span.endAt} itemKey={step.key} label={t("step.routing")}/>
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>}>
-    <Band role={entry?.routerIndex != null && !notCalled ? t("routing.routerPosition", { n: entry.routerIndex + 1 }) : "Router"} identity={notCalled ? undefined : quad(entry?.routerBuddy) ?? <span className="font-sans text-ink3">{unrecorded}</span>}
+    <Band role={entry?.routerIndex != null && !notCalled ? t("routing.routerPosition", { n: entry.routerIndex + 1 }) : "Router"} identity={notCalled ? undefined : entry?.routerBuddy ? <BuddyName buddy={entry.routerBuddy}>{quad(entry.routerBuddy)}</BuddyName> : <span className="font-sans text-ink3">{unrecorded}</span>}
       end={notCalled ? t("routing.notCalled") : mode ? t(`routing.mode.${mode}`) : unrecorded}
       second={<span className="inline-flex flex-wrap gap-x-3.5">
         <Usage usage={parseTokenUsage(span.tokenUsage)} />
@@ -46,13 +49,13 @@ export function RoutingPane({ step, ctx, tabs }: { step: Step; ctx: Context; tab
         <span>{t("routing.toolCalls", { n: usage?.toolCalls ?? t("unknown") })}</span>
       </span>} />
     <Section name={t("routing.chosen")}><div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-      <span className="font-mono text-xs">{quad(span.routing?.selectedBuddy) ?? unrecorded}</span>
-      {entry?.exploration.quota && entry.exploration.reselected && <Hint text={t("routing.preferredBuddy", { buddy: entry.exploration.preferredBuddyId?.split(":").join(" / ") ?? unrecorded })}>
+      <span className="font-mono text-xs"><BuddyName buddy={span.routing?.selectedBuddy}>{quad(span.routing?.selectedBuddy) ?? unrecorded}</BuddyName></span>
+      {entry?.exploration.quota && entry.exploration.reselected && <Hint text={t("routing.preferredBuddy", { buddy: namedQuad(preferred) ?? unrecorded })}>
         <span tabIndex={0} className="border border-border px-1.5 py-0.5 text-xs text-ink2 focus-visible:outline focus-visible:outline-ring">{t("routing.exploration")}</span>
       </Hint>}
     </div></Section>
     <Section name={t("routing.reason")}>
-      <Fold text={[span.routing?.reason ? reasonText(span.routing.reason) : null, span.routing?.note].filter(Boolean).join("\n") || unrecorded} />
+      <Fold text={[span.routing?.reason ? reasonText(span.routing.reason, buddies) : null, span.routing?.note].filter(Boolean).join("\n") || unrecorded} />
       {basis && <BasisFold basis={basis} />}
     </Section>
     {entry?.taskType !== undefined && <>

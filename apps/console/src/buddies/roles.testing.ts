@@ -29,7 +29,7 @@ export const PENDING = "claude / anthropic / claude-haiku-4 / low";
 
 function buddy(buddyId: string, capabilities: string[], extra: Partial<Buddy> = {}): Buddy {
   const [harness, provider, model, effort] = buddyId.split(":");
-  return { effortRank: null, buddyId, label: `${model} · ${effort}`, harness, provider, model, effort, available: true, enabled: true,
+  return { effortRank: null, buddyId, alias: null, harness, provider, model, effort, available: true, enabled: true,
     capabilities, contextWindow: null, description: "", source: "catalog:fixture", ...extra };
 }
 

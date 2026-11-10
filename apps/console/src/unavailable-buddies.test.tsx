@@ -23,11 +23,11 @@ function catalog(): Buddy[] {
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [
-    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off", available: true, enabled: true },
-    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high", available: true, enabled: false },
-    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
+    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", alias: null, available: true, enabled: true },
+    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", alias: null, available: true, enabled: false },
+    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", alias: null,
       available: false, enabled: true, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
-    { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", label: "retired-model · low",
+    { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", alias: null,
       available: false, enabled: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
   ];
 }

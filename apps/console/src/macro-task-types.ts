@@ -44,7 +44,7 @@ export const macroTaskPageSchema = z.object({
 });
 export type MacroTaskPage = z.infer<typeof macroTaskPageSchema>;
 export type TimelineBuddy = {
-  harness: string | null; provider: string | null; model: string | null; effort: string | null;
+  harness: string | null; provider: string | null; model: string | null; effort: string | null; alias?: string | null;
 };
 const timelineRemindersSchema = z.looseObject({
   overdue: z.boolean(), possiblyStuck: z.boolean(), lastNativeEventAt: dateString.nullable(), toolInProgress: z.boolean(),

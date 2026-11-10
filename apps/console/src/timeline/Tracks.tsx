@@ -1,3 +1,4 @@
+import { AliasTag, useNamedBuddy } from "../components/AliasTag";
 import { buddyUsesLightInk, leadingBuddyColor, runningBuddyColor } from "./buddyColors";
 import { IsolatedStatusMark } from "./IsolatedStatusMark";
 import { HarnessLogo } from "../buddies/HarnessLogo";
@@ -55,7 +56,7 @@ export function spanReadout(span: TimelineSpan, nowMs: number, row?: TimelineRow
   const reminders = span.reminders;
   return [head, start === null ? null : clockTime(start), end === null ? null : clockTime(end),
     start !== null && end !== null && end >= start ? formatDuration(end - start) : null, buddyLabel(span.buddy),
-    span.buddy ? [span.buddy.harness, span.buddy.provider, span.buddy.model, span.buddy.effort].map(value => value ?? i18n.t("tasks:unknown")).join(" / ") : null,
+    span.buddy && !span.buddy.alias ? [span.buddy.harness, span.buddy.provider, span.buddy.model, span.buddy.effort].map(value => value ?? i18n.t("tasks:unknown")).join(" / ") : null,
     outcome === "unknown" ? i18n.t("tasks:drawing.stopUnconfirmed") : outcomeLabel(span, outcome),
     span.expectedSeconds === null ? null : i18n.t("tasks:drawing.expected", { duration: formatDuration(span.expectedSeconds * 1000) }),
     reminders?.possiblyStuck ? i18n.t("tasks:drawing.silent", { duration: formatDuration(nowMs - instant(reminders.lastNativeEventAt ?? span.startAt)!) }) : null,
@@ -215,6 +216,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, onOpen
   const markerName = (marker: TimelineMarker) => marker.kind === "event" ? eventName(marker.event) : t("drawing.inquiry");
   const duration = (item: PositionedSpan) => formatDuration((instant(item.span.endAt) ?? nowMs) - instant(item.span.startAt)!, "minutes");
   const waitingKind = (span: TimelineSpan) => span.kind === "queue" ? t("kind.queue") : i18n.t(row.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost");
+  const named = useNamedBuddy();
   const modelLabel = (span: TimelineSpan) => buddyNameParts(span.buddy).name;
   const fullLabel = (item: PositionedSpan) => item.execution ? duration(item)!
     : t(item.span.kind === "queue" ? "drawing.queue" : "drawing.waiting", { kind: waitingKind(item.span), duration: duration(item) });
@@ -231,7 +233,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, onOpen
   const candidates = [t("drawing.inquiry"), t("review"), ...positioned.flatMap(item => [`${modelLabel(item.span)} · ${fullLabel(item)}`, fullLabel(item), duration(item)!, waitingKind(item.span)]),
     ...owned.map(entry => ownedLabel(entry)),
     ...markerGroups.filter(group => group.length > 1).map(group => String(group.length)),
-    ...expected.map(entry => entry.text), ...markers.map(marker => eventName(marker.event)), acceptanceLabel, acceptance?.duration ?? ""];
+    ...positioned.map(item => named(item.span.buddy)?.alias ?? ""), ...expected.map(entry => entry.text), ...markers.map(marker => eventName(marker.event)), acceptanceLabel, acceptance?.duration ?? ""];
   const { measure, ruler } = useTextMeasure(candidates);
   useImperativeHandle<Interval | null, Interval | null>(selectionRef, () => {
     const span = positioned.find(item => `span:${item.span.spanId}` === selectedKey);
@@ -255,11 +257,14 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, onOpen
   const crosses = positioned.filter(item => item.span.kind === "execution" && item.outcome === "failed")
     .map(item => ({ item, left: item.end - item.start >= 14 ? item.end - 10 : item.end + 8 }));
   const crossObstacles: Occupancy[] = crosses.map(cross => ({ kind: "obstacle", left: cross.left - 2.4, right: cross.left + 8.4 }));
-  const labels: Label[] = [];
+  const labels: (Label & { alias?: string; aliasWidth?: number; aliasModel?: string })[] = [];
   const occupied: Record<number, Occupancy[]> = { [topTextY]: [], [barTextY]: [...crossObstacles, ...[...markerGroups.map(group => ({ x: group.reduce((sum, mark) => sum + mark.x, 0) / group.length, radius: group.length > 1 ? clusterHalfWidth(group.length, measure(String(group.length))) + 3 : 8 })), ...expected.map(mark => ({ x: mark.x, radius: 8 }))].map(mark => ({ kind: "obstacle" as const, left: mark.x - mark.radius, right: mark.x + mark.radius }))] };
-  const add = (texts: string[], left: number, right: number, y: number, className: string, preferred = left, blocks: Occupancy[] = []) => {
-    const label = fitLabel(texts, { left: Math.max(0, left), right: Math.min(scale.widthPx, right) }, [...occupied[y]!, ...blocks], measure, preferred);
-    if (label) { labels.push({ ...label, y, className }); occupied[y]!.push(label); }
+  const add = (texts: string[], left: number, right: number, y: number, className: string, preferred = left, blocks: Occupancy[] = [], alias?: string | null, aliasModel?: string) => {
+    const aliasWidth = alias ? measure(alias) + 22 : 0;
+    const hasName = (text: string) => texts.length > 1 && text === texts[0];
+    const label = fitLabel(texts, { left: Math.max(0, left), right: Math.min(scale.widthPx, right) }, [...occupied[y]!, ...blocks],
+      text => measure(text) + (hasName(text) ? aliasWidth : 0), preferred);
+    if (label) { labels.push({ ...label, y, className, ...(alias && hasName(label.text) ? { alias, aliasWidth, aliasModel } : {}) }); occupied[y]!.push(label); }
   };
   for (const { x } of singletonInquiries) {
     const labelWidth = measure(t("drawing.inquiry"));
@@ -298,7 +303,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, onOpen
       const tail = tails.find(entry => entry.item === item);
       const buddyMark = buddyMarks.get(item.span.spanId);
       const texts = differentBuddy(item.span) ? [`${modelLabel(item.span)} · ${fullLabel(item)}`, fullLabel(item), duration(item)!] : [duration(item)!];
-      add(texts, buddyMark?.inside ? buddyMark.right + 6 : item.start + 6, (tail?.x ?? item.end) - (["failed", "unknown"].includes(item.outcome) ? 14 : 6), barTextY, item.span.kind === "execution" ? (lightInk(item.span) ? "fill-execution-ink-light" : "fill-execution-ink") : "fill-ink");
+      add(texts, buddyMark?.inside ? buddyMark.right + 6 : item.start + 6, (tail?.x ?? item.end) - (["failed", "unknown"].includes(item.outcome) ? 14 : 6), barTextY, item.span.kind === "execution" ? (lightInk(item.span) ? "fill-execution-ink-light" : "fill-execution-ink") : "fill-ink", undefined, [], differentBuddy(item.span) ? named(item.span.buddy)?.alias : null, modelLabel(item.span));
     } else add([fullLabel(item), duration(item)!], item.start + (item.outcome === "open" && item.span.kind === "host" ? 10 : 0), item.end, topTextY, item.outcome === "open" && item.span.kind === "host" ? "fill-hand" : "fill-ink3");
   }
   return <svg data-slot="timeline-track" viewBox={`${-INSET_PX} 0 ${scale.widthPx + INSET_PX * 2} ${height - 1}`} width={scale.widthPx + INSET_PX * 2} height={height} preserveAspectRatio="none" className="block max-w-none select-none overflow-hidden border-t text-xs" aria-label={t("track", { title: displayTitle(row.titleSource, row.title).fullText })}>
@@ -311,7 +316,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, onOpen
       const tail = tails.find(entry => entry.item.span === span);
       const buddyMark = buddyMarks.get(span.spanId);
       const cross = crosses.find(entry => entry.item.span === span);
-      return <g key={span.spanId} role="button" tabIndex={itemLinks?.has(`span:${span.spanId}`) || tabKey === `span:${span.spanId}` ? 0 : -1} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-pressed={selectedKey === `span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, row) })}
+      return <g key={span.spanId} role="button" tabIndex={itemLinks?.has(`span:${span.spanId}`) || tabKey === `span:${span.spanId}` ? 0 : -1} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-pressed={selectedKey === `span:${span.spanId}`} aria-label={t("segment", { label: spanReadout({ ...span, buddy: named(span.buddy) ?? null }, nowMs, row) })}
       onKeyDown={event => { if ((event.key === "Enter" || event.key === " ")) { event.preventDefault(); onOpen(row.runId, `span:${span.spanId}`); } }}
       onFocus={() => onFocusSpan(span)} onBlur={() => onFocusSpan(null)} onClick={event => { if (event.detail > 1) return; onSelect(row.runId, `span:${span.spanId}`); onOpen(row.runId, `span:${span.spanId}`); }} onPointerEnter={() => onHover(span)} onPointerLeave={() => onHover(null)} className="group/fragment outline-none">
       {isHighlighted(`span:${span.spanId}`) && <rect data-slot="selected-item" x={selection.left} y={execution ? middle - 13 : middle - 3} width={selection.right - selection.left} height={execution ? 26 : 6} fill="none" className="pointer-events-none stroke-focus"/>}
@@ -367,7 +372,13 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, onOpen
       return <MarkerCluster key={markerKey(group[0]!)} markers={group} x={center} y={middle} hitPath={hitPath(center - 9, center + 9)}
         runId={row.runId} taskTitle={displayTitle(row.titleSource, row.title).fullText} tabKey={tabKey} boundary={boundary} onOpen={onOpen} onSelect={onSelect} onFocusMarker={focusMarker} markerName={markerName} markerReadout={markerReadout} selectedKey={selectedKey} highlightedKey={highlightedKey} itemLinks={itemLinks}/>;
     })}
-    {labels.map((label, index) => <text aria-hidden="true" pointerEvents="none" data-slot="track-label" data-event-key={label.eventKey} key={index} x={label.left} y={label.y} className={label.className}>{label.text}</text>)}
+    {labels.map((label, index) => <g aria-hidden="true" pointerEvents="none" key={index}>
+      <text data-slot="track-label" data-event-key={label.eventKey} x={label.left} y={label.y} className={label.className}>{label.alias ? label.aliasModel : label.text}</text>
+      {label.alias && <foreignObject x={label.left + measure(label.aliasModel!)} y={label.y! - 14} width={label.aliasWidth} height={20} className="overflow-visible">
+        <div className="flex h-5 items-center"><AliasTag alias={label.alias} /></div>
+      </foreignObject>}
+      {label.alias && <text data-slot="track-label-duration" x={label.left + measure(label.aliasModel!) + label.aliasWidth!} y={label.y} className={label.className}>{label.text.slice(label.aliasModel!.length)}</text>}
+    </g>)}
   </svg>;
 });
 

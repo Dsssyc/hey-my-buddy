@@ -98,7 +98,7 @@ export function harnessBlocks({ listed, data, recorded, harnesses, folded, fresh
             buddy,
             effort: effortText(buddy.effort),
             preference: data.preferences.find(entry => entry.buddyId === buddy.buddyId)?.mode ?? null,
-            unsaved: (!!published && published.enabled !== buddy.enabled)
+            unsaved: (!!published && (published.enabled !== buddy.enabled || published.alias !== buddy.alias))
               || own(data)?.mode !== own(recorded)?.mode || (own(data)?.note ?? "") !== (own(recorded)?.note ?? ""),
           };
         }),
@@ -140,7 +140,7 @@ export function harnessStateText(state: string, t: TFunction<"buddies">): string
 
 /** Each program reason is read in the current language; a stated harness cause is not repeated. */
 export function reasonTexts(reasons: Reason[], _t: TFunction<"buddies">, harnessSaid = false): string[] {
-  return [...new Set(reasons.filter(reason => !harnessSaid || !reason.code.startsWith("harness.")).map(reasonText))];
+  return [...new Set(reasons.filter(reason => !harnessSaid || !reason.code.startsWith("harness.")).map(reason => reasonText(reason)))];
 }
 
 /** The complete name without the effort: `harness / provider / model`. */

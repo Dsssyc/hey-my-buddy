@@ -93,7 +93,8 @@ type PolicyIssue = {
 };
 
 function labelOf(buddy: Buddy | undefined, buddyId: string): string {
-  return buddy ? [buddy.model, effortText(buddy.effort)].filter(Boolean).join(" · ") : buddyId;
+  return buddy?.alias ? `${buddy.harness} / ${buddy.provider} / ${buddy.model} / ${buddy.effort} [${buddy.alias}]`
+    : buddy ? [buddy.model, effortText(buddy.effort)].filter(Boolean).join(" · ") : buddyId;
 }
 
 function availabilityReason(buddy: Buddy | undefined): string {
@@ -139,7 +140,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
     });
   }
   for (const setting of buddySettings(baseline, draft)) {
-    if (!setting.enabled) continue;
+    if (setting.enabled !== true) continue;
     const buddy = buddies.get(setting.buddyId);
     if (!buddy?.available) {
       issues.push({

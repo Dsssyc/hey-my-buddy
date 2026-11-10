@@ -15,6 +15,7 @@ export class ApiError extends Error {
   constructor(
     public code: string,
     message: string | (() => string),
+    public details?: Record<string, unknown>,
   ) {
     super(typeof message === "function" ? message() : message);
     if (typeof message === "function") Object.defineProperty(this, "message", { get: message, configurable: true });
@@ -236,12 +237,13 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     }
     const body = data as {
       ok?: boolean;
-      error?: { code?: string; message?: string };
+      error?: { code?: string; message?: string; details?: Record<string, unknown> };
     };
     if (!response.ok || body?.ok === false) {
       throw new ApiError(
         body?.error?.code || `HTTP_${response.status}`,
         body?.error?.message || (() => i18n.t("common:error.refused")),
+        body?.error?.details,
       );
     }
     return verifiedRead(data, responseVerifiedAtMs(response));
@@ -364,13 +366,14 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const stillCurrent = outstanding.get(url) === ticket;
       const body = data as {
         ok?: boolean;
-        error?: { code?: string; message?: string };
+        error?: { code?: string; message?: string; details?: Record<string, unknown> };
       };
       if (!response.ok || body?.ok === false) {
         if (body?.ok === false && body?.error?.code === SESSION_EXPIRED_CODE) clearConditionalCache();
         throw new ApiError(
           body?.error?.code || `HTTP_${response.status}`,
           body?.error?.message || (() => i18n.t("common:error.refused")),
+          body?.error?.details,
         );
       }
       if (stillCurrent && cacheGeneration === atGeneration && !signal?.aborted) {

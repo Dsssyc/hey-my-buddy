@@ -84,6 +84,7 @@ export default {
     },
   },
   pane: {
+    alias: "Alias",
     preference: "Preference",
     noteNone: "Choose a preference to add a reason",
     enable: "Enable {{effort}}",

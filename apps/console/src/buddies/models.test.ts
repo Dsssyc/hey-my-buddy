@@ -15,7 +15,7 @@ const t = i18n.getFixedT(null, "buddies");
 
 function buddy(harness: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
   return { effortRank: null,
-    buddyId: `${harness}:${provider}:${model}:${effort}`, label: `${model.toUpperCase()} · ${effort}`, harness, provider, model, effort,
+    buddyId: `${harness}:${provider}:${model}:${effort}`, alias: null, harness, provider, model, effort,
     available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
   };
 }
@@ -72,14 +72,14 @@ describe("which models are listed", () => {
     expect(names({ enabledOnly: true, showUnavailable: true })).toEqual(["claude / anthropic / opus", "dsh / deepseek-official / flash"]);
   });
 
-  it("keeps the original label searchable when it differs from the model id", () => {
-    const list = [buddy("codex", "openai", "sol", "high", { label: "Directory Display high" })];
+  it("searches aliases and complete identities as well as the model id", () => {
+    const list = [buddy("codex", "openai", "sol", "high", { alias: "Directory Display high" })];
     expect(listedModels(list, { query: "directory display high", enabledOnly: false, showUnavailable: false }).map(modelIdentity))
       .toEqual(["codex / openai / sol"]);
     expect(listedModels(list, { query: "sol", enabledOnly: false, showUnavailable: false })[0].name).toBe("sol");
   });
 
-  it("searches the label, the model, the provider, the harness and the harness's name without regard to case", () => {
+  it("searches the alias, the model, the provider, the harness and the harness's name without regard to case", () => {
     expect(names({ query: "  SOL " })).toEqual(["codex / openai / sol"]);
     expect(names({ query: "second-prov" })).toEqual(["dsh / second-provider / pro"]);
     expect(names({ query: "claude code", showUnavailable: true })).toEqual(["claude / anthropic / opus"]);

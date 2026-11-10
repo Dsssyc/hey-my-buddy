@@ -17,13 +17,13 @@ export function harnessName(harness: string): string {
 
 /**
  * Case-insensitive search text for one model service entry (docs/design/buddy-settings.md):
- * the recorded label/model and effort, the provider,
+ * the alias, model id and complete identity, the provider,
  * and both the harness id and its harness display name, so "claude code" finds
  * the `claude` harness exactly like "claude" does.
  */
 export function modelServiceSearchText(buddy: Buddy): string {
   return [
-    buddy.label, buddy.model, buddy.effort,
+    buddy.alias, buddy.model, buddy.effort, `${buddy.harness} / ${buddy.provider} / ${buddy.model} / ${buddy.effort}`,
     buddy.provider, buddy.harness, harnessName(buddy.harness), effortText(buddy.effort),
   ].join(" ").toLowerCase();
 }

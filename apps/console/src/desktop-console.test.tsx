@@ -22,7 +22,7 @@ function catalog(): Buddy[] {
       .flatMap(model => ["off", "low", "high", "max"].map((effort, effortRank) => ({ harness: "dsh", provider: "deepseek-official", model, effort, effortRank }))),
     ...["GLM-5.3", "GLM-5.3-Flash"].flatMap(model => ["low", "high", "max"]
       .map((effort, effortRank) => ({ harness: "zcode", provider: "bigmodel-api", model, effort, effortRank }))),
-  ].map(p => ({ ...p, buddyId: [p.harness, p.provider, p.model, p.effort].join(":"), label: `${p.model} · ${p.effort}`,
+  ].map(p => ({ ...p, buddyId: [p.harness, p.provider, p.model, p.effort].join(":"), alias: null,
     available: true, enabled: enabled.has([p.harness, p.model, p.effort].join(":")), capabilities: [],
     contextWindow: null, source: "catalog:fixture", description: "" }));
 }

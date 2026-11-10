@@ -48,7 +48,7 @@ export function harnesses(): HarnessHealth[] {
 type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
 
 export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
-  const buddy: Buddy = { effortRank: null, buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium", available: true,
+  const buddy: Buddy = { effortRank: null, buddyId: mediumId, alias: null, ...sonnet, effort: "medium", available: true,
     enabled: true, capabilities: ["execution:claude", "decision"], contextWindow: 200_000, description: "", source: "catalog:fixture" };
   return {
     csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0,

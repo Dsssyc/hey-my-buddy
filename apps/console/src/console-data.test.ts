@@ -13,7 +13,7 @@ import type { Preference, Buddy, Task } from "./types";
 
 const buddy = (buddyId: string, harness: string, provider: string, effort: string,
   effortRank: number | null = null): Buddy => ({
-  buddyId, harness, provider, model: "shared-model", effort, effortRank, label: "Shared model", available: true,
+  buddyId, harness, provider, model: "shared-model", effort, effortRank, alias: null, available: true,
   enabled: true, capabilities: [], contextWindow: null, source: "fixture", description: "",
 });
 

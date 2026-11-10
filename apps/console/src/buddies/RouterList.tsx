@@ -1,3 +1,4 @@
+import { BuddyName } from "../components/AliasTag";
 import { cn } from "cn";
 import { ChevronDownIcon, ChevronUpIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -99,7 +100,7 @@ export function RouterList({ lines, buddies, mode, locked, note, records, unsave
             <td className="pr-3 text-right text-ink3 tabular-nums">{index + 1}</td>
             <td className="pr-4 font-mono">{buddy
               ? <a href={buddyHash({ view: "models", target: buddyId })} className="rounded-sm whitespace-nowrap outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                onClick={event => { event.preventDefault(); onShow(buddyId); }}>{name}</a>
+                onClick={event => { event.preventDefault(); onShow(buddyId); }}><BuddyName buddy={buddy}>{[buddy.harness, buddy.provider, buddy.model, buddy.effort].join(" / ")}</BuddyName></a>
               : <span>{name}</span>}</td>
             <td className="pr-4">{status && <Standing status={status} />}</td>
             <td className="pr-4">{record ? <QuantBarDisclosure label={`${name}: ${answerHint}`} maximum={maximum}

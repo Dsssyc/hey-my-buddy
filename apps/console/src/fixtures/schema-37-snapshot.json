@@ -133,7 +133,6 @@
   "buddies": [
     {
       "buddyId": "claude:anthropic:claude-opus-4-8:low",
-      "label": "Opus 4.8 · low",
       "harness": "claude",
       "provider": "anthropic",
       "model": "claude-opus-4-8",
@@ -162,11 +161,11 @@
         "observedAt": "2026-11-06T17:14:18.026984Z",
         "source": "claude/auth-status"
       },
-      "providerCooling": null
+      "providerCooling": null,
+      "alias": null
     },
     {
       "buddyId": "claude:anthropic:claude-opus-4-8:medium",
-      "label": "Opus 4.8 · medium",
       "harness": "claude",
       "provider": "anthropic",
       "model": "claude-opus-4-8",
@@ -195,11 +194,11 @@
         "observedAt": "2026-11-06T17:14:18.026984Z",
         "source": "claude/auth-status"
       },
-      "providerCooling": null
+      "providerCooling": null,
+      "alias": null
     },
     {
       "buddyId": "claude:anthropic:claude-opus-4-8:high",
-      "label": "Opus 4.8 · high",
       "harness": "claude",
       "provider": "anthropic",
       "model": "claude-opus-4-8",
@@ -228,11 +227,11 @@
         "observedAt": "2026-11-06T17:14:18.026984Z",
         "source": "claude/auth-status"
       },
-      "providerCooling": null
+      "providerCooling": null,
+      "alias": null
     },
     {
       "buddyId": "claude:anthropic:claude-opus-4-8:xhigh",
-      "label": "Opus 4.8 · xhigh",
       "harness": "claude",
       "provider": "anthropic",
       "model": "claude-opus-4-8",
@@ -261,11 +260,11 @@
         "observedAt": "2026-11-06T17:14:18.026984Z",
         "source": "claude/auth-status"
       },
-      "providerCooling": null
+      "providerCooling": null,
+      "alias": null
     },
     {
       "buddyId": "claude:anthropic:claude-opus-4-8:max",
-      "label": "Opus 4.8 · max",
       "harness": "claude",
       "provider": "anthropic",
       "model": "claude-opus-4-8",
@@ -294,7 +293,8 @@
         "observedAt": "2026-11-06T17:14:18.026984Z",
         "source": "claude/auth-status"
       },
-      "providerCooling": null
+      "providerCooling": null,
+      "alias": null
     }
   ]
 }

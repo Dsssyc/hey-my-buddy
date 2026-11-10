@@ -3,8 +3,8 @@ import { hasDecisionCapability, hasFastRoutingCapability, routerAttention } from
 import type { Configuration, Draft, Buddy, RouterHealthEntry, RouterHealthIdentity, RoutingHealth, RoutingMode } from "../types";
 
 /** The complete name of a buddy: `harness / provider / model / effort`. */
-export function buddyQuad(identity: RouterHealthIdentity): string {
-  return `${identity.harness} / ${identity.provider} / ${identity.model} / ${identity.effort}`;
+export function buddyQuad(identity: RouterHealthIdentity & { alias?: string | null }): string {
+  return `${identity.harness} / ${identity.provider} / ${identity.model} / ${identity.effort}${identity.alias ? ` [${identity.alias}]` : ""}`;
 }
 
 /** What the recorded window says is wrong with routing; the user has something to do about either. */

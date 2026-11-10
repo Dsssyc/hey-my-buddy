@@ -98,7 +98,7 @@ describe("a route", () => {
     await ready();
     expect(pane().textContent).toContain("第 2 个 Router");
     const mark = within(pane()).queryByText("探索", { exact: true });
-    if (quota && reselected) expect(mark?.getAttribute("aria-description")).toBe("首选：dsh / p / preferred / max");
+    if (quota && reselected) expect(mark?.getAttribute("aria-description")).toBe("首选：未记录");
     else expect(mark).toBeNull();
   });
   it("shows a recorded domain and task type, including an unclassified domain, but leaves old routes clear", async () => {

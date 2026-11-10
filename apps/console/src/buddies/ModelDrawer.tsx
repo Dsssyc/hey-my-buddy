@@ -1,3 +1,5 @@
+import { AliasTag, useBuddies } from "../components/AliasTag";
+import { reasonText } from "../i18n/reason";
 import { cn } from "cn";
 import { useId, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
@@ -40,18 +42,21 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigat
   const editing = editor.editing;
   const id = useId();
   const { buddy, effort } = chip;
+  const buddies = useBuddies();
   const preference = data.preferences.find(entry => entry.buddyId === buddy.buddyId);
   const published = recorded.preferences.find(entry => entry.buddyId === buddy.buddyId);
   const baselineMode = (editor.baseline ?? recorded).preferences.find(entry => entry.buddyId === buddy.buddyId)?.mode;
   const pinLocked = baselineMode !== "pin" && (!buddy.available || !buddy.enabled);
   const editingLock = !editor.sessionWritable ? t("pane.locked.session") : !editing ? t("pane.locked.saving") : undefined;
   const preferenceUnsaved = preference?.mode !== published?.mode;
+  const aliasUnsaved = buddy.alias !== recorded.buddies.find(entry => entry.buddyId === buddy.buddyId)?.alias;
+  const aliasError = editor.aliasRefusal?.buddyId === buddy.buddyId ? editor.aliasRefusal.reason : null;
   const noteUnsaved = (preference?.note ?? "") !== (published?.note ?? "");
   const modelId = data.modelCorrespondences.find(entry => modelServiceKey(entry) === modelServiceKey(buddy))?.modelId;
   const evaluation = data.kindEvaluations?.find(entry => entry.harness === buddy.harness && entry.modelId === modelId && entry.effort === buddy.effort);
   const unavailableReason = reasonTexts(buddy.unavailableReason ? [buddy.unavailableReason] : [], t).join(" · ");
   const name = (text: string, unsaved: boolean, target: { id: string } | { htmlFor: string }) =>
-    <span className="flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
+    <span className="col-start-1 flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
       <label {...target}>{text}</label>{unsaved && <UnsavedMark label={t("unsaved")} />}
     </span>;
 
@@ -63,8 +68,8 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigat
 
   return <div id={buddyRowId(buddy.buddyId)} role="group" aria-label={effort} tabIndex={-1} data-slot="buddy-panel"
     className="min-w-0 border-t border-line pt-3 min-[900px]:border-t-0 min-[900px]:border-l min-[900px]:pt-0 min-[900px]:pl-7 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
-    <div className="grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-4 gap-y-3">
-      <span className="flex h-5 items-center text-xs text-ink3">{t("pane.samples")}</span><span className="flex min-h-5 flex-wrap items-center gap-3 text-sm"><span data-slot="buddy-samples" className="tabular-nums">{modelId ? <a className="underline decoration-line2 underline-offset-4 hover:decoration-foreground" href={buddyHash({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } })} onClick={event => { event.preventDefault(); onNavigate({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } }); }}>{t("pane.sampleCount", { n: evaluation ? evaluation.statistics.overall.samples : 0 })}</a> : "—"}</span>
+    <div className="grid grid-cols-[max-content_minmax(0,max-content)_minmax(0,1fr)] items-center gap-x-4 gap-y-3">
+      <span className="flex h-5 items-center text-xs text-ink3">{t("pane.samples")}</span><span className="col-span-2 flex min-h-5 flex-wrap items-center gap-3 text-sm"><span data-slot="buddy-samples" className="tabular-nums">{modelId ? <a className="underline decoration-line2 underline-offset-4 hover:decoration-foreground" href={buddyHash({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } })} onClick={event => { event.preventDefault(); onNavigate({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } }); }}>{t("pane.sampleCount", { n: evaluation ? evaluation.statistics.overall.samples : 0 })}</a> : "—"}</span>
         {modelAvailable && !buddy.available && <Hint text={unavailableReason}><span className="text-xs text-ink3">{t("pane.unavailable")}</span></Hint>}</span>
       <div className="contents">
         {name(t("pane.preference"), preferenceUnsaved, { id: `${id}-preference` })}
@@ -77,9 +82,22 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigat
         </Segmented>
       </div>
       <div className="contents">
+        <div className="col-start-1 self-start pt-2">{name(t("pane.alias"), aliasUnsaved, { htmlFor: `${id}-alias` })}</div>
+        <div className="w-0 min-w-full" data-slot="buddy-alias">
+          <Hint text={editingLock}><Input id={`${id}-alias`} className="h-8 w-full min-w-0 bg-card text-sm shadow-none"
+            value={buddy.alias ?? ""} readOnly={!editing} aria-disabled={!editing || undefined}
+            aria-invalid={!!aliasError || undefined} aria-describedby={aliasError ? `${id}-alias-error` : undefined}
+            onChange={event => {
+              if (editing) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId
+                ? { ...entry, alias: event.target.value === "" ? null : event.target.value } : entry) }));
+            }} /></Hint>
+          {aliasError && <p id={`${id}-alias-error`} data-slot="alias-error" className="mt-1 text-xs text-fail" role="alert">{reasonText(aliasError, buddies)}</p>}
+        </div>
+      </div>
+      <div className="contents">
         {name(t("pane.note"), noteUnsaved, { htmlFor: `${id}-note` })}
         <Hint text={editingLock ?? (!preference ? t("pane.noteNone") : undefined)}>
-          <Input id={`${id}-note`} className="h-8 w-full max-w-[28rem] min-w-0 bg-card text-sm shadow-none"
+          <Input id={`${id}-note`} className="col-span-2 h-8 w-full max-w-[28rem] min-w-0 bg-card text-sm shadow-none"
             aria-label={t("pane.buddyNote", { effort })} value={preference?.note ?? ""} readOnly={!editing || !preference}
             aria-disabled={!editing || !preference || undefined}
             onChange={event => {
@@ -110,7 +128,7 @@ function EffortRow({ chip, selected, onSelect, editor }: {
       }} /></Hint>
     <button type="button" aria-pressed={selected} data-slot="buddy-stop" aria-label={effort} onClick={onSelect}
       className="flex h-10 w-full items-center gap-2 pr-10 pl-12 text-left text-sm whitespace-nowrap outline-none transition-[color,background-color,box-shadow] duration-150 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none">
-      <span className={cn(buddy.enabled ? "text-foreground" : "text-ink3", selected && "font-medium")}>{effort}</span>
+      <span className={cn("inline-flex items-center", buddy.enabled ? "text-foreground" : "text-ink3", selected && "font-medium")}>{effort}<AliasTag alias={buddy.alias} /></span>
       {chip.preference && <span className="text-xs text-ink2">{t(`preference.${chip.preference}`)}</span>}
       {chip.unsaved && <UnsavedMark label={t("unsaved")} />}
     </button>

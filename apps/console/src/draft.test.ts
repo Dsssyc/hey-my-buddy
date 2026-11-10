@@ -20,7 +20,7 @@ import type { Draft, Buddy, Snapshot } from "./types";
 
 const flash = { effortRank: null,
   buddyId: "flash-off",
-  label: "Flash",
+  alias: null,
   harness: "dsh",
   provider: "deepseek-official",
   model: "deepseek-flash",
@@ -141,10 +141,10 @@ describe("editing a published snapshot", () => {
     const reordered: typeof baseline = {
       ...baseline,
       buddies: [
-        { ...flash, available: false, label: "目录已改名", contextWindow: null },
+        { ...flash, available: false, description: "new description", contextWindow: null },
       ],
     };
-    // A program-side rename or availability change is not a user change.
+    // A description or availability change is not a user change.
     expect(draftDiffers(baseline, reordered)).toBe(false);
     expect(changeCount(baseline, reordered)).toBe(0);
     const preferred = setPreference(baseline, flash.buddyId, "prefer", "更快");
@@ -190,12 +190,12 @@ describe("editing a published snapshot", () => {
     } satisfies Buddy;
     const refreshed = {
       ...snapshot,
-      // The program renamed the existing buddy and added a new buddy.
-      buddies: [{ ...flash, label: "目录新名称", available: false }, discovered],
+      // The programme updated a description and added a new buddy.
+      buddies: [{ ...flash, description: "new description", available: false }, discovered],
     } as unknown as Snapshot;
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
-    expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-off")!.label).toBe("目录新名称");
+    expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-off")!.description).toBe("new description");
     expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-max")).toBeTruthy();
     // Program availability is adopted; the user's enablement and preference are replayed.
     expect(adopted.draft.buddies.find((p) => p.buddyId === "flash-off")!.available).toBe(false);

@@ -95,7 +95,7 @@ export type Buddy = {
   billing?: BillingFact;
   providerCooling?: ProviderCooling | null;
   buddyId: string;
-  label: string;
+  alias: string | null;
   harness: string;
   provider: string;
   model: string;

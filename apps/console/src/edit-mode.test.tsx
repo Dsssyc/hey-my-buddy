@@ -15,7 +15,7 @@ function catalog(): Buddy[] {
   ];
   return entries.map(({ model, effort, enabled }) => ({ effortRank: null,
     buddyId: `dsh:deepseek-official:${model}:${effort}`,
-    label: `${model} · ${effort}`,
+    alias: null,
     harness: "dsh", provider: "deepseek-official", model, effort,
     available: true, enabled, capabilities: ["execution:dsh", "decision"], contextWindow: 1000000,
     source: "catalog:fixture", description: "",
@@ -75,7 +75,7 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
         ...(options.discoveryNote ? { preferences: [{ buddyId: flashOff, mode: "prefer" as const, note: options.discoveryNote }] } : {}),
         models: [...state.models, { modelId: "deepseek-v5", displayName: "deepseek-v5", names: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-v5" }], profile: null, latestProfileRun: null }],
         modelCorrespondences: [...state.modelCorrespondences, { harness: "dsh", provider: "deepseek-official", model: "deepseek-v5", correspondenceId: "deepseek-v5", modelId: "deepseek-v5", createdAt: "2026-11-01T00:00:00Z", source: "same-name", evidenceUrl: null, evidenceDate: null, canUndo: false }],
-        buddies: [...state.buddies, { effortRank: null, buddyId: discovered, label: "deepseek-v5 · medium", harness: "dsh",
+        buddies: [...state.buddies, { effortRank: null, buddyId: discovered, alias: null, harness: "dsh",
           provider: "deepseek-official", model: "deepseek-v5", effort: "medium", available: true, enabled: false,
           capabilities: [], contextWindow: null, source: "catalog:refresh", description: "" }] };
       return { discovered: true };

@@ -22,7 +22,7 @@ import type { Buddy, Snapshot } from "./types";
 
 const worker: Buddy = { effortRank: null,
   buddyId: "dsh:deepseek-official:deepseek-flash:off",
-  label: "flash · off",
+  alias: null,
   harness: "dsh",
   provider: "deepseek-official",
   model: "deepseek-flash",

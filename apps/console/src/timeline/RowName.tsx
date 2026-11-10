@@ -1,3 +1,4 @@
+import { BuddyName } from "../components/AliasTag";
 import { cn } from "cn";
 import { forwardRef, memo, useImperativeHandle, useMemo, useRef, type ComponentProps, type FocusEvent } from "react";
 import { useTranslation } from "react-i18next";
@@ -54,7 +55,7 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
       {fresh && <span aria-label={t("newMicroTask")} className="size-1.5 shrink-0 rounded-full bg-hand-mark"/>}
       {!list && mark && <span data-slot="row-state" data-kind={mark} className="ml-auto flex size-5 shrink-0 items-center justify-center" aria-hidden="true"><StateMark kind={mark} className="size-2.5"/></span>}
     </span>
-    <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{showState && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" ? "text-ink state-breathe" : !current && "text-ink3")}>{state.label}</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{ariaPrefix && <span>{ariaPrefix} · </span>}{buddyLabel(row.buddy)}</span>
+    <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{showState && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" ? "text-ink state-breathe" : !current && "text-ink3")}>{state.label}</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{ariaPrefix && <span>{ariaPrefix} · </span>}<BuddyName buddy={row.buddy}>{buddyLabel(row.buddy ? { ...row.buddy, alias: null } : null)}</BuddyName></span>
   </button>;
 }));
 

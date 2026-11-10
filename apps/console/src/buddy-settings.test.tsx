@@ -36,7 +36,7 @@ const SONNET = "claude / anthropic / claude-sonnet-5";
 const SOL = "codex / openai / gpt-6-sol";
 const GLM = "zcode / zhipu / glm-5";
 
-function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harness" | "provider" | "model" | "effort">): Buddy {
+function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "alias" | "harness" | "provider" | "model" | "effort">): Buddy {
   return {
     effortRank: null, available: true, enabled: false, capabilities: [], contextWindow: null,
     description: "", source: "catalog:fixture", ...entry,
@@ -46,15 +46,15 @@ function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harnes
 /** Three harnesses: one available model service, one all-disabled model service, one offline model service. */
 function buddies(): Buddy[] {
   return [
-    buddy({ effortRank: null, buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
+    buddy({ effortRank: null, buddyId: mediumId, alias: null, ...sonnet, effort: "medium",
       enabled: true, capabilities: ["execution:claude", "routing:fast", "decision"], contextWindow: 200_000 }),
-    buddy({ effortRank: null, buddyId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
+    buddy({ effortRank: null, buddyId: highId, alias: null, ...sonnet, effort: "high",
       capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
-    buddy({ effortRank: null, buddyId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
+    buddy({ effortRank: null, buddyId: solMediumId, alias: null, ...sol, effort: "medium",
       capabilities: ["execution:codex"] }),
-    buddy({ effortRank: null, buddyId: solLowId, label: "GPT-6 Sol · low", ...sol, effort: "low",
+    buddy({ effortRank: null, buddyId: solLowId, alias: null, ...sol, effort: "low",
       capabilities: ["execution:codex"] }),
-    buddy({ buddyId: glmId, label: "GLM-5 · default", ...glm, effort: "default", available: false,
+    buddy({ buddyId: glmId, alias: null, ...glm, effort: "default", available: false,
       unavailableReason: { code: "harness.not-found", params: {} } }),
   ];
 }
@@ -299,9 +299,9 @@ describe("the harness directory", () => {
     expect(foldHandle("ZCode")).toBeTruthy();
     expect(queryFoldHandle("Claude Code")).toBeTruthy();
     expect(queryModel(SONNET)).toBeNull();
-    // The model's display label, lowercase, still finds the row that shows its id.
+    // The model id is searchable after the directory label was removed.
     await user.clear(search());
-    await user.type(search(), "gpt-6 sol");
+    await user.type(search(), "gpt-6-sol");
     await listed(0, 2);
     await user.click(foldHandle("Codex"));
     expect(modelButton(SOL)).toBeTruthy();

@@ -1,3 +1,4 @@
+import { BuddyName } from "../components/AliasTag";
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -47,7 +48,7 @@ function RunDetail({ run }: { run: ProfileRun }) {
   const maximum = Math.max(1, ...attempts.map(attempt => routerUsageTotal(attempt.tokenUsage) ?? 0));
   const tools = run.toolSummary;
   return <div className="space-y-5 pb-5 pt-4 text-xs">
-    <p className="font-mono text-ink2 wrap-anywhere">{buddyQuad(run.buddy)}</p>
+    <p className="font-mono text-ink2 wrap-anywhere"><BuddyName buddy={run.buddy}>{[run.buddy.harness, run.buddy.provider, run.buddy.model, run.buddy.effort].join(" / ")}</BuddyName></p>
     {run.reason && <p className="border-l-2 border-fail bg-fail/10 px-4 py-3 text-fail" role="alert"><RouterFailure failure={run.reason} /></p>}
     <div>
       <h4 className="mb-2 font-medium">{t("routerProfiles.toolOutcomes")}</h4>
@@ -123,7 +124,7 @@ export function ProfileSettingsView({ snapshot, editor, profileRunId }: { snapsh
     <RouterSection name={t("routerWork.settings")}>
       <div className="router-settings">
         <RouterField name={t("routerProfiles.buddy")} help={t("profile.dataFlow")} unsaved={dirty ? t("unsaved") : undefined} className="xl:col-span-4">
-          <div className="flex min-w-0 flex-wrap items-center gap-3"><span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? buddyQuad(selected) : config?.profileBuddyId ?? t("profile.none")}</span>
+          <div className="flex min-w-0 flex-wrap items-center gap-3"><span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? <BuddyName buddy={selected}>{[selected.harness, selected.provider, selected.model, selected.effort].join(" / ")}</BuddyName> : config?.profileBuddyId ?? t("profile.none")}</span>
             <Hint text={locked}><Button variant="outline" size="sm" disabled={!!locked} onClick={() => setChoosing(true)}>{t("profile.choose")}</Button></Hint>
             {!config?.profileBuddyId && <span className="text-xs text-ink2">{t("routerWork.notSet")}</span>}
             {snapshot.configuration?.profileUnavailableReason && config?.profileBuddyId && config.profileBuddyId === snapshot.configuration.profileBuddyId && <span role="status" className="text-xs text-ink2">{reasonText(snapshot.configuration.profileUnavailableReason)}</span>}
@@ -138,7 +139,7 @@ export function ProfileSettingsView({ snapshot, editor, profileRunId }: { snapsh
       <ScrollArea className="h-72"><ul className="divide-y divide-line">
         <li><button disabled={!!locked} className="w-full px-2 py-3 text-left transition-colors duration-150 hover:bg-sunk motion-reduce:transition-none" onClick={() => { change({ profileBuddyId: null }); setChoosing(false); }}>{t("profile.none")}</button></li>
         {candidates.filter(buddy => buddyQuad(buddy).toLowerCase().includes(query.trim().toLowerCase())).map(buddy => <li key={buddy.buddyId}>
-          <button disabled={!!locked} className="w-full px-2 py-3 text-left font-mono text-xs wrap-anywhere transition-colors duration-150 hover:bg-sunk motion-reduce:transition-none" onClick={() => { change({ profileBuddyId: buddy.buddyId }); setChoosing(false); }}>{buddyQuad(buddy)}</button>
+          <button disabled={!!locked} className="w-full px-2 py-3 text-left font-mono text-xs wrap-anywhere transition-colors duration-150 hover:bg-sunk motion-reduce:transition-none" onClick={() => { change({ profileBuddyId: buddy.buddyId }); setChoosing(false); }}><BuddyName buddy={buddy}>{[buddy.harness, buddy.provider, buddy.model, buddy.effort].join(" / ")}</BuddyName></button>
         </li>)}
         {candidates.length === 0 && <li className="px-2 py-3 text-xs text-ink3">{t("profile.noCandidates")}</li>}
       </ul></ScrollArea>

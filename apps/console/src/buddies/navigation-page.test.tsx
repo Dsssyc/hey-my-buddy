@@ -33,7 +33,7 @@ const SOL = "codex / openai / gpt-6-sol";
 const GLM = "zcode / zhipu / glm-5";
 const modelsRegion = () => screen.queryByRole("region", { name: "目录" });
 
-function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harness" | "provider" | "model" | "effort">): Buddy {
+function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "alias" | "harness" | "provider" | "model" | "effort">): Buddy {
   return {
     effortRank: null, available: true, enabled: false, capabilities: [], contextWindow: null,
     description: "", source: "catalog:fixture", ...entry,
@@ -43,15 +43,15 @@ function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harnes
 /** One enabled model service per harness plus an offline model service hidden by default. */
 function buddies(): Buddy[] {
   return [
-    buddy({ effortRank: null, buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
+    buddy({ effortRank: null, buddyId: mediumId, alias: null, ...sonnet, effort: "medium",
       enabled: true, capabilities: ["execution:claude", "routing:fast", "decision"], contextWindow: 200_000 }),
-    buddy({ effortRank: null, buddyId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
+    buddy({ effortRank: null, buddyId: highId, alias: null, ...sonnet, effort: "high",
       capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
-    buddy({ effortRank: null, buddyId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
+    buddy({ effortRank: null, buddyId: solMediumId, alias: null, ...sol, effort: "medium",
       enabled: true, capabilities: ["execution:codex"] }),
-    buddy({ effortRank: null, buddyId: flashMaxId, label: "DeepSeek Flash · max", ...flash, effort: "max",
+    buddy({ effortRank: null, buddyId: flashMaxId, alias: null, ...flash, effort: "max",
       enabled: true, capabilities: ["execution:dsh", "routing:fast"] }),
-    buddy({ buddyId: glmId, label: "GLM-5 · default", ...glm, effort: "default", available: false,
+    buddy({ buddyId: glmId, alias: null, ...glm, effort: "default", available: false,
       unavailableReason: { code: "harness.not-found", params: {} } }),
   ];
 }

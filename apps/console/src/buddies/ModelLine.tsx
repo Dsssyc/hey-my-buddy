@@ -1,3 +1,4 @@
+import { BuddyName } from "../components/AliasTag";
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
@@ -38,7 +39,7 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
         </span>
         <span className="col-start-2 row-start-2 flex min-h-4 min-w-0 flex-wrap items-center gap-x-6 gap-y-1 text-xs sm:col-start-auto sm:row-start-auto">
           {enabled.map(chip => <span key={chip.buddy.buddyId} data-slot="enabled-effort" className="inline-flex items-center gap-1.5">
-            <span>{chip.effort}</span>
+            <BuddyName buddy={chip.buddy}><span>{chip.effort}</span></BuddyName>
             {chip.preference && <span className="text-ink2">{t(`preference.${chip.preference}`)}</span>}
           </span>)}
         </span>

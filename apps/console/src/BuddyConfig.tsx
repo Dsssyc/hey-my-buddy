@@ -35,6 +35,9 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
     setLocation(next);
     window.location.hash = buddyHash(next);
   }
+  useEffect(() => {
+    if (editor.aliasRefusal) navigate({ view: "models", targetKind: "buddy", target: editor.aliasRefusal.buddyId });
+  }, [editor.aliasRefusal]);
   const shared = { snapshot, location, onNavigate: navigate };
   return <div className="flex h-full min-h-0 flex-col">
     <BuddyHeader location={location} attention={attention} onNavigate={navigate}

@@ -85,6 +85,7 @@ export default {
     },
   },
   pane: {
+    alias: "别名",
     preference: "偏好",
     noteNone: "选择偏好后可填写理由",
     enable: "启用 {{effort}}",

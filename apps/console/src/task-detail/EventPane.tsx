@@ -1,3 +1,4 @@
+import { BuddyName } from "../components/AliasTag";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Section } from "./parts";
@@ -24,7 +25,7 @@ export function EventPane({ step, ctx }: { step: Step; ctx: Context }) {
     <PaneTitle title={title}>{event?.actor && <span>{actorText(event.actor)}</span>}<Moment at={step.at} itemKey={step.key} label={title} /></PaneTitle>}>
     <Section name={t("event.facts")}>
       {step.kind === "handoff"
-        ? <Facts items={[[t("event.from"), quad(step.from) ?? unrecorded, true], [t("event.to"), quad(step.to) ?? unrecorded, true]]} />
+        ? <Facts items={[[t("event.from"), <BuddyName buddy={step.from}>{quad(step.from) ?? unrecorded}</BuddyName>, true], [t("event.to"), <BuddyName buddy={step.to}>{quad(step.to) ?? unrecorded}</BuddyName>, true]]} />
         : <Facts items={[
           ...(stopped ? [[t("event.stoppedBy"), stopActorText(stopped)] as [string, string]] : []),
           ...(note ? [[t("event.details"), <Fold key="note" text={note} />] as [string, ReactNode]] : []),

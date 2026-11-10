@@ -25,7 +25,7 @@ function catalog(): Buddy[] {
     { harness: "zcode", provider: "bigmodel-api", model: "GLM-5.3", effort: "high", enabled: false },
   ];
   return entries.map(p => ({ ...p, effortRank: null, buddyId: [p.harness, p.provider, p.model, p.effort].join(":"),
-    label: `${p.model} · ${p.effort}`, available: true, capabilities: [], contextWindow: null,
+    alias: null, available: true, capabilities: [], contextWindow: null,
     source: "catalog:fixture", description: "" }));
 }
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";

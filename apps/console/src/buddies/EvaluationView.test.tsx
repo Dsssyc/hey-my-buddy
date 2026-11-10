@@ -210,7 +210,7 @@ describe("the language's list separators in the evaluation detail", () => {
     data.modelCorrespondences.push(alias, other);
     data.models.find(row => row.modelId === identity.modelId)!.names.push(alias, other);
     data.kindEvaluations![0].modelNames.push(alias, other);
-    data.buddies.push({ ...data.buddies.find(buddy => buddy.buddyId === MEDIUM_ID)!, buddyId: "claude:bedrock:sonnet-bedrock:medium", label: "sonnet-bedrock · medium", provider: "bedrock", model: "sonnet-bedrock" });
+    data.buddies.push({ ...data.buddies.find(buddy => buddy.buddyId === MEDIUM_ID)!, buddyId: "claude:bedrock:sonnet-bedrock:medium", alias: null, provider: "bedrock", model: "sonnet-bedrock" });
     const f = fixture(data); await open(f);
     const names = () => document.querySelector<HTMLElement>('[data-slot="evaluation-names"]')!;
     expect(names().textContent).toContain("claude-sonnet-5、sonnet-latest、sonnet-bedrock");

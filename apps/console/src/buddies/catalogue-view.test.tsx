@@ -23,7 +23,7 @@ const SOL = "codex / openai / gpt-6-sol";
 
 function buddy(modelService: typeof sonnet, effort: string, extra: Partial<Buddy> = {}): Buddy {
   return { effortRank: null,
-    buddyId: `${modelService.harness}:${modelService.provider}:${modelService.model}:${effort}`, label: `${modelService.model} · ${effort}`, ...modelService, effort,
+    buddyId: `${modelService.harness}:${modelService.provider}:${modelService.model}:${effort}`, alias: null, ...modelService, effort,
     available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
   };
 }

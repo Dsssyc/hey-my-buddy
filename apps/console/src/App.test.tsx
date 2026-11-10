@@ -18,7 +18,7 @@ const initial = (): Snapshot => { const snapshot: Snapshot = ({
   buddies: [
     { effortRank: null,
       buddyId: "flash-off",
-      label: "Flash 决策",
+      alias: null,
       harness: "dsh",
       provider: "deepseek-official",
       model: "deepseek-flash",

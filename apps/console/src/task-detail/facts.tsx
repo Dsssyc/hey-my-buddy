@@ -1,10 +1,12 @@
+import { useBuddies, useNamedBuddy } from "../components/AliasTag";
+import type { BuddyIdentity } from "../components/AliasTag";
 import { useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { actorText, stopActorText } from "../actor";
 import { formatCoolingTime, formatList } from "../i18n/format";
-import { quad } from "./names";
+import { namedQuad } from "./names";
 import { Paths } from "./parts";
 import type { Basis, Ending } from "./types";
 
@@ -23,8 +25,7 @@ export function endingText(ending: Ending, t: TFunction<"taskDetail">): string {
 }
 
 /** What a routing decision was bound by, one fact to a line. */
-function basisLines(basis: Basis, t: TFunction<"taskDetail">): string[] {
-  const named = (buddy: Parameters<typeof quad>[0]) => quad(buddy) ?? t("unrecorded");
+function basisLines(basis: Basis, t: TFunction<"taskDetail">, named: (buddy: BuddyIdentity) => string, byId: (buddyId: string) => string): string[] {
   return [
     ...(Object.keys(basis.constraints).length > 0 ? [t("basis.constraints", { buddy: named(basis.constraints) })] : []),
     ...(basis.requiredCapabilities.length > 0 ? [t("basis.capabilities", { list: formatList(basis.requiredCapabilities) })] : []),
@@ -40,7 +41,7 @@ function basisLines(basis: Basis, t: TFunction<"taskDetail">): string[] {
         list: basis.cooling.map(item => t("basis.coolingBuddy", { buddy: named(item.buddy),
           time: item.coolingUntil ? formatCoolingTime(Date.parse(item.coolingUntil)) : t("unrecorded") })).join("; ") })]
       : []),
-    ...basis.preferences.map(item => t(`basis.${item.mode}`, { buddy: item.buddyId, note: item.note ?? t("unrecorded") })),
+    ...basis.preferences.map(item => t(`basis.${item.mode}`, { buddy: byId(item.buddyId), note: item.note ?? t("unrecorded") })),
   ];
 }
 
@@ -48,7 +49,13 @@ function basisLines(basis: Basis, t: TFunction<"taskDetail">): string[] {
 export function BasisFold({ basis }: { basis: Basis }) {
   const { t } = useTranslation("taskDetail");
   const [open, setOpen] = useState(false);
-  const lines = basisLines(basis, t);
+  const current = useNamedBuddy();
+  const buddies = useBuddies();
+  const named = (buddy: BuddyIdentity) => namedQuad(current(buddy)) ?? t("unrecorded");
+  const lines = basisLines(basis, t, named, buddyId => {
+    const buddy = buddies.find(entry => entry.buddyId === buddyId);
+    return buddy ? named(buddy) : buddyId;
+  });
   if (lines.length === 0) return null;
   return <Collapsible open={open} onOpenChange={setOpen} className="mt-2">
     <CollapsibleTrigger className="inline-flex items-center gap-1 rounded-sm text-xs">

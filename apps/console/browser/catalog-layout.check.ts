@@ -90,7 +90,7 @@ for (const theme of ["dark", "light"] as const) {
       await expect(drawer.locator("[data-slot=buddy-panel]").getByRole("switch")).toHaveCount(0);
       await expect(drawer.getByText("基础设施失败", { exact: true })).toHaveCount(0);
       await expect(drawer.locator("[data-slot=buddy-samples]")).toContainText("次");
-      const note = await frame(drawer.getByRole("textbox"));
+      const note = await frame(drawer.getByRole("textbox", { name: "high 的偏好理由" }));
       expect(note.width).toBeLessThanOrEqual(448);
       await expectNoSidewaysScroll(page);
       if (width === 1440) await page.screenshot({ path: `${screenshots}/catalog-drawer-1440-${theme}.png` });

@@ -318,3 +318,18 @@ it("merges mixed shape and label clearances before finding free space", () => {
   const label = fitLabel(["fits"], { left: 0, right: 200 }, occupied, () => 90)!;
   expect(occupied[1]!.left - label.right).toBeGreaterThanOrEqual(12);
 });
+
+it("keeps an alias beside the measured model name and drops both when only duration fits", () => {
+  const span = execution({ buddy: { ...execution().buddy!, model: "other-model", alias: "Reviewer" }, startAt: at(0), endAt: at(40) });
+  const colors = new Map([[buddyColorKey(span.buddy), "#6d7ec0"]]);
+  track([span], { width: 800, buddyColors: colors });
+  expect(slot("alias-tag")?.textContent).toBe("Reviewer");
+  expect(slot("track-label")?.textContent).toBe("other-model");
+  expect(slot("track-label-duration")?.textContent).toContain("分");
+  const alias = slot("alias-tag")!.parentElement!.parentElement!;
+  expect(Number(alias.getAttribute("x"))).toBeGreaterThan(Number(slot("track-label")!.getAttribute("x")));
+  cleanup();
+  track([span], { width: 90, buddyColors: colors });
+  expect(slot("alias-tag")).toBeNull();
+  expect(slot("track-label")?.textContent).not.toContain("other-model");
+});

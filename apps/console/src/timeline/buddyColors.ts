@@ -16,7 +16,7 @@ export const BUDDY_CORE_COLORS = [
   "#6137a5", // 深紫 / Deep violet
   "#acec6e", // 浅柠绿 / Light lime
   "#fad58e", // 浅金黄 / Light gold
-  "#baabfe", // 浅紫 / Lilac
+  "#beaaff", // 浅紫 / Lilac: clears the dark alias colour by at least 25.
 ] as const;
 
 /** Developer-rejected colours are reserved just like semantic colours. */
@@ -30,7 +30,7 @@ export const BUDDY_EXTENSION_CORE_DISTANCE = 12;
 
 // Both themes come from the same tokens that the console renders. No semantic
 // hue bands: distance leaves room for individual colours near reserved hues.
-const semanticLabs = [...tokens.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|goal|brand-mark|past): (#[0-9a-f]{6});/g)]
+const semanticLabs = [...tokens.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|goal|brand-mark|past|alias|alias-line): (#[0-9a-f]{6});/g)]
   .map(match => rgbHexToLab(match[1]!));
 const reservedLabs = [...semanticLabs, ...BUDDY_REJECTED_COLORS.map(rgbHexToLab)];
 type Candidate = { lab: LABColor; hex: string };

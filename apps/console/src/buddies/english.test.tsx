@@ -61,7 +61,7 @@ const harnesses = [
 ] as unknown as HarnessHealth[];
 
 function buddy(harness: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
-  return { effortRank: null, buddyId: `${harness}:${provider}:${model}:${effort}`, label: `${model} · ${effort}`, harness, provider, model, effort,
+  return { effortRank: null, buddyId: `${harness}:${provider}:${model}:${effort}`, alias: null, harness, provider, model, effort,
     available: true, enabled: false, capabilities: [`execution:${harness}`, "routing:fast", "decision"], contextWindow: null, description: "", source: "catalog:fixture", ...extra };
 }
 const buddies = [

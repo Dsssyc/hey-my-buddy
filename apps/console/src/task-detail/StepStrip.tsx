@@ -1,3 +1,4 @@
+import { useNamedBuddy } from "../components/AliasTag";
 import { useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ReactNode, Ref } from "react";
@@ -60,6 +61,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
   revealRef: Ref<() => void>;
 }) {
   const { t } = useTranslation("taskDetail");
+  const named = useNamedBuddy();
   const links = useContext(DetailLinks)!;
   const focusedKey = links.origin && stepForItem(steps, links.origin, timeline) === selected ? links.origin : null;
   const { viewport, setViewport, width } = useViewport(640);
@@ -174,7 +176,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
             {delegationAt !== null && sliceButton("delegation", 0, t("step.delegation"), x(delegationAt),
               <circle cx={x(delegationAt)} cy={middle} r={4} className="fill-past"/>)}
             {steps.steps.map((item, index) => item.kind === "handoff" && item.at !== null && Number.isFinite(item.at)
-              ? sliceButton(item.key, index, [t("step.handoff"), modelEffort(item.from) || t("unknown"), modelEffort(item.to) || t("unknown")].join(" · "), x(item.at!),
+              ? sliceButton(item.key, index, [t("step.handoff"), modelEffort(named(item.from)) || t("unknown"), modelEffort(named(item.to)) || t("unknown")].join(" · "), x(item.at!),
                 <path d={`M${x(item.at!)} ${middle - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`} className="fill-ink2"/>)
               : null)}
             {acceptanceIndex >= 0 && wait && sliceButton(`settle:${row.runId}`, acceptanceIndex, t("wait.acceptance"), x(wait.startMs),

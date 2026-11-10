@@ -38,22 +38,22 @@ function catalog(): Buddy[] {
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [
-    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off",
+    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", alias: null,
       available: true, enabled: true, catalogStatus: "pending" as const, pendingSince: earlyMissing },
-    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high",
+    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", alias: null,
       available: true, enabled: false, catalogStatus: "pending" as const, pendingSince: lateMissing },
     // Catalog-available by the board, unusable by harness health: the two
     // facts must never merge into one state.
-    { ...base, buddyId: plainMax, model: "plain-model", effort: "max", label: "plain-model · max",
+    { ...base, buddyId: plainMax, model: "plain-model", effort: "max", alias: null,
       available: false, enabled: true, catalogStatus: "available" as const,
       unavailableReason: { code: "harness.probe-failed", params: {} } },
-    { ...base, buddyId: legacyMax, model: "legacy-model", effort: "max", label: "legacy-model · max",
+    { ...base, buddyId: legacyMax, model: "legacy-model", effort: "max", alias: null,
       available: true, enabled: true },
-    { ...base, buddyId: ghostLow, model: "ghost-model", effort: "low", label: "ghost-model · low",
+    { ...base, buddyId: ghostLow, model: "ghost-model", effort: "low", alias: null,
       available: true, enabled: false, catalogStatus: "pending" as const, pendingSince: null },
-    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
+    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", alias: null,
       available: false, enabled: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
-    { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", label: "retired-model · low",
+    { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", alias: null,
       available: false, enabled: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
   ];
 }

@@ -6,8 +6,8 @@ import { open, test } from "./preview";
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const run = "preview-run-a1";
 
-for (const theme of ["dark", "light"] as const) for (const labelForm of ["catalog", "nonstandard", "repeated-effort"] as const) {
-  test.describe(`model ids with ${labelForm} labels in ${theme}`, () => {
+for (const theme of ["dark", "light"] as const) for (const aliased of [false, true]) {
+  test.describe(`model ids with alias=${aliased} in ${theme}`, () => {
     test.use({ locale: "zh-CN", viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
 
     test("uses model ids in the timeline and micro task detail with one effort in each name", async ({ page }) => {
@@ -17,9 +17,7 @@ for (const theme of ["dark", "light"] as const) for (const labelForm of ["catalo
         const snapshot: Snapshot = await response.json();
         snapshot.buddies = snapshot.buddies.map(buddy => ({
           ...buddy,
-          label: labelForm === "catalog" ? `Directory display ${buddy.model.toUpperCase()} · ${buddy.effort}`
-            : labelForm === "nonstandard" ? `Directory display ${buddy.model.toUpperCase()} · ${buddy.effort} (catalog)`
-              : `Directory display ${buddy.model.toUpperCase()} · ${buddy.effort} · ${buddy.effort}`,
+          alias: aliased && buddy.model === "gpt-5-codex" && buddy.effort === "high" ? "Review desk" : null,
         }));
         await route.fulfill({ response, json: snapshot });
       });
@@ -34,22 +32,26 @@ for (const theme of ["dark", "light"] as const) for (const labelForm of ["catalo
       });
       await open(page, `#tasks/${macro}`);
       const name = page.locator(`[data-slot=timeline-row-name][data-run-id="${run}"]:visible`);
-      await expect(name.locator(":scope > span:last-child")).toHaveText("gpt-5-codex · high");
+      await expect(name.locator(":scope > span:last-child")).toContainText("gpt-5-codex · high");
+      await expect(name.locator('[data-slot=alias-tag]')).toHaveCount(aliased ? 1 : 0);
+      if (aliased) await expect(name.locator('[data-slot=alias-tag]')).toHaveText("Review desk");
       // The old hard-coded map renamed this model even without a directory row.
       await expect(page.locator('[data-slot=timeline-row-name]:visible').filter({ hasText: "claude-opus-5-5 · high" }).first()).toBeVisible();
       await expect(page.locator('[data-slot=task-work]')).not.toContainText("Directory display");
       await name.click();
       const detail = page.locator('[data-slot=task-detail]');
       await expect(detail).toBeVisible();
-      const turn = detail.locator('[data-slot=detail-strip] [role=button][aria-label*="gpt-5-codex · high"]').first();
+      const turn = detail.locator(`[data-slot=detail-strip] [role=button][aria-label*="${aliased ? "codex / openai / gpt-5-codex / high [Review desk]" : "gpt-5-codex · high"}"]`).first();
       await expect(turn).toBeAttached();
       // Each readout contains the short model/effort name and the complete name;
       // check each separately so their intentional coexistence is preserved.
-      expect(await turn.getAttribute("aria-label")).toContain("gpt-5-codex · high · codex / openai / gpt-5-codex / high");
+      expect(await turn.getAttribute("aria-label")).toContain(aliased ? "codex / openai / gpt-5-codex / high [Review desk]" : "gpt-5-codex · high · codex / openai / gpt-5-codex / high");
       await turn.click();
       await expect(detail.locator('[data-slot=detail-band]').first()).toContainText("codex / openai / gpt-5-codex / high");
-      await expect(detail).not.toContainText("Directory display");
-      await expect(name.locator(":scope > span:last-child")).toHaveText("gpt-5-codex · high");
+      await expect(detail.locator('[data-slot=detail-band] [data-slot=alias-tag]').first()).toHaveCount(aliased ? 1 : 0);
+      await expect(name.locator(":scope > span:last-child")).toContainText("gpt-5-codex · high");
+      await expect(name.locator('[data-slot=alias-tag]')).toHaveCount(aliased ? 1 : 0);
+      if (aliased) await expect(name.locator('[data-slot=alias-tag]')).toHaveText("Review desk");
     });
   });
 }

@@ -1,3 +1,5 @@
+import { isReason } from "./reason";
+import type { Reason } from "./reason";
 import i18n from "i18next";
 import { useCopyState } from "./i18n/use-copy-state";
 import { useTranslation } from "react-i18next";
@@ -36,6 +38,7 @@ export function useEditor(
   const [draft, setDraftState] = useState<Draft | null>(null);
   const [baseline, setBaseline] = useState<Draft | null>(null);
   const [historyEntries, setHistoryEntries] = useState<{ key: string; entries: HistoryEntries | null } | null>(null);
+  const [aliasRefusal, setAliasRefusal] = useState<{ buddyId: string; reason: Reason } | null>(null);
   const [saving, setSaving] = useState(false);
   const [auxiliaryBusy, setAuxiliaryBusy] = useState(false);
   const [error, setError] = useCopyState();
@@ -130,6 +133,7 @@ export function useEditor(
   const loseAuthority = () => { latch.lose(sessionId.current); writable.current = false; };
 
   function closeDraft() {
+    setAliasRefusal(null);
     draftRef.current = null;
     setDraft(null);
     setBaselineValue(null);
@@ -154,6 +158,7 @@ export function useEditor(
       setDraft(next);
       setBaselineValue(structuredClone(next));
     }
+    setAliasRefusal(null);
     setDraft(current => current ? change(current) : current);
   }
 
@@ -213,6 +218,11 @@ export function useEditor(
       saveDispatched.current = false;
       saveAmbiguous.current = false;
       setConfirming(false); setUncertain(false);
+      if (failure instanceof ApiError && typeof failure.details?.buddyId === "string"
+        && isReason(failure.details.reason) && failure.details.reason.code.startsWith("alias.")) {
+        setAliasRefusal({ buddyId: failure.details.buddyId, reason: failure.details.reason });
+        return;
+      }
       setError(() => failure instanceof ApiError && failure.code === "CONFLICT"
         && payload.modelCorrespondenceChanges?.some(change => change.action === "undo")
         ? i18n.t("console:correspondenceChanged") : errorText(failure));
@@ -234,6 +244,7 @@ export function useEditor(
       setBlocked(() => unavailable() || i18n.t("console:cannotSaveRightNowRetryShortlyYour"));
       return;
     }
+    setAliasRefusal(null);
     setBlocked(""); setError(""); setNotice("");
     const blockedIssues = blockingIssues(base, current);
     if (blockedIssues.length) {
@@ -327,7 +338,7 @@ export function useEditor(
     mode: draft !== null, editing, sessionWritable, draft, view, setDraft, baseline,
     busy, setAuxiliaryBusy, uncertain, confirming, dirty, changeCount,
     configurationDirty, blocking, attention,
-    error, notice: noticeCopy ? { text: noticeCopy, fading: noticeFading } : null, blocked, saveBlockedReason,
+    aliasRefusal, error, notice: noticeCopy ? { text: noticeCopy, fading: noticeFading } : null, blocked, saveBlockedReason,
     update, save, discard, reloadLatest, rebase, adoptHistory,
   };
 }

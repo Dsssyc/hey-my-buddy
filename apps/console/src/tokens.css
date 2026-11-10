@@ -5,6 +5,9 @@
 :root {
   color-scheme: light;
   --paper: #f3f1ea;
+  --alias: #104aee;
+  --alias-line: #104aee;
+  --alias-wash: #dee6fd;
   /* Buddy-page graphics have their own logo-derived vocabulary. */
   --buddy-green: #105a35;
   --buddy-green-dark: #021e10;
@@ -56,6 +59,9 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --paper: #0e0f10;
+  --alias: #5593e6;
+  --alias-line: #5593e6;
+  --alias-wash: #1f2837;
   /* Buddy-page graphics have their own logo-derived vocabulary. */
   --buddy-green: #5cbf86;
   --buddy-green-dark: #287348;

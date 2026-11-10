@@ -11,7 +11,7 @@ const spans = Array.from({ length: 40 }, (_, index) => ({
   buddy: { ...source.buddy!, model: `model-${index}` },
 }));
 const css = readFileSync("src/tokens.css", "utf8");
-const tokens = [...css.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|goal|brand-mark|past): (#[0-9a-f]{6});/g)].map(match => match[1]!);
+const tokens = [...css.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|goal|brand-mark|past|alias|alias-line): (#[0-9a-f]{6});/g)].map(match => match[1]!);
 const goals = [...css.matchAll(/--goal: (#[0-9a-f]{6});/g)].map(match => match[1]!);
 const executionInks = [...css.matchAll(/--execution-ink: (#[0-9a-f]{6});/g)].map(match => match[1]!);
 const lightInks = [...css.matchAll(/--execution-ink-light: (#[0-9a-f]{6});/g)].map(match => match[1]!);
@@ -94,7 +94,7 @@ describe("curated buddy palette", () => {
     const { buddyColorPrefix, buddyUsesLightInk, BUDDY_STATUS_DISTANCE, BUDDY_EXTENSION_CORE_DISTANCE, BUDDY_REJECTED_COLORS } = await import("./buddyColors");
     expect(BUDDY_STATUS_DISTANCE).toBe(25);
     expect(BUDDY_EXTENSION_CORE_DISTANCE).toBe(12);
-    expect(tokens).toHaveLength(18);
+    expect(tokens).toHaveLength(22);
     expect(executionInks).toHaveLength(2);
     expect(lightInks).toHaveLength(2);
     const palette = buddyColorPrefix(40);
