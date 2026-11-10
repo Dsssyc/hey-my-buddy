@@ -94,8 +94,8 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
           <td><span aria-label={t(`maintenance.${run.state}`)}><StateMark kind={run.state === "running" ? "live" : run.state === "failed" ? "fail" : "done"} /></span></td>
           <td className="pr-3"><RouterTimeRange startedAt={run.startedAt} finishedAt={run.finishedAt} /></td>
           <td className="pr-3 text-ink2">{t(run.triggerType === "manual" ? "maintenance.manual" : "maintenance.intervalTrigger")}</td>
-          <td className="pr-3"><RouterUsage floating usage={sumRouterUsage(run.usage?.attempts ?? [])} maximum={maximum}
-            preferenceKey={`maintenance-run.${run.maintenanceRunId}`} label={`${t("maintenance.records")} ${formatShortDateTime(Date.parse(run.startedAt))}`} /></td>
+          <td className="pr-3"><RouterUsage usage={sumRouterUsage(run.usage?.attempts ?? [])} maximum={maximum}
+            label={`${t("maintenance.records")} ${formatShortDateTime(Date.parse(run.startedAt))}`} /></td>
           <td className="pr-3"><div className="truncate text-fail">{run.state === "failed" && run.reason && <RouterFailure failure={run.reason} />}{run.state === "running" && active && <MaintenanceActivity taskId={run.taskId} api={api} />}</div></td>
           <td className="text-right">{run.state === "running" && <Button variant="ghost" size="sm" disabled={actionLocked || stopping === run.taskId}
             onClick={() => void stop(run.taskId)}>{stopping === run.taskId ? detailT("state.stopping") : t("maintenance.stop")}</Button>}</td>

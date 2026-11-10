@@ -102,7 +102,7 @@ export function RouterList({ lines, buddies, mode, locked, note, records, unsave
                 onClick={event => { event.preventDefault(); onShow(buddyId); }}>{name}</a>
               : <span>{name}</span>}</td>
             <td className="pr-4">{status && <Standing status={status} />}</td>
-            <td className="pr-4">{record ? <QuantBarDisclosure floating preferenceKey={`routing.${buddyId}`} label={`${name}: ${answerHint}`} maximum={maximum}
+            <td className="pr-4">{record ? <QuantBarDisclosure label={`${name}: ${answerHint}`} maximum={maximum}
               parts={[{ value: record.answeredCount ?? null, tone: "green" }, { value: record.noAnswerCount ?? null, tone: "pink" }]}>
               {answerHint}
             </QuantBarDisclosure> : none}</td>

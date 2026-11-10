@@ -142,15 +142,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Router cards ${th
     }
   });
 
-  test("keeps count popovers transient despite old inline preferences", async ({ page }) => {
-    const keys = [
-      "quant-bar.routing.dsh:deepseek-official:deepseek-flash:max",
-      "quant-bar.usage.maintenance-run.preview-maintenance-1",
-      "quant-bar.usage.profile-run.synthetic-profile-run-failed",
-    ].map(name => `hey-my-buddy.console.view.${name}`);
-    await page.addInitScript(keys => {
-      for (const key of keys) localStorage.setItem(key, "true");
-    }, keys);
+  test("keeps count popovers closed after reload", async ({ page }) => {
     await open(page, "#buddies/router/routing");
     for (const [work, region] of [
       ["routing", "routing-routers-region"], ["maintenance", "maintenance-records-region"], ["profiles", "profile-records"],
@@ -166,7 +158,6 @@ for (const theme of ["dark", "light"] as const) test.describe(`Router cards ${th
       await expect(page.locator('[data-slot="quant-bar-detail"]')).toHaveCount(0);
       await trigger.click();
       await page.keyboard.press("Escape");
-      expect(await page.evaluate(keys => keys.map(key => localStorage.getItem(key)), keys)).toEqual(keys.map(() => "true"));
     }
   });
 

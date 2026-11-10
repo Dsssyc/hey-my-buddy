@@ -34,7 +34,7 @@ afterEach(() => { cleanup(); localStorage.clear(); });
 const show = (content: React.ReactNode) => render(<TooltipProvider>{content}</TooltipProvider>);
 
 describe("domain evaluation", () => {
-  it("opens the sample graphic to reveal outcomes and medians, then remembers its state", async () => {
+  it("opens sample outcomes and medians in a transient popover", async () => {
     const user = userEvent.setup();
     const view = show(<DomainEvaluation evaluation={evaluation} evaluations={[evaluation, oldEvaluation]} domains={domains} />);
     const tally = view.container.querySelector('[data-slot="evaluation-tally"]')!;
@@ -45,15 +45,16 @@ describe("domain evaluation", () => {
     expect(within(tally as HTMLElement).queryByText(/First pass|一次通过/)).toBeNull();
     await user.click(button);
     expect(button.getAttribute("aria-expanded")).toBe("true");
-    expect(within(tally as HTMLElement).getByText(/First pass|一次通过/)).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByText(/First pass|一次通过/)).toBeTruthy();
     expect(tally.querySelector('[data-kind="fail"]')).toBeTruthy();
     expect(screen.getByText("debugging")).toBeTruthy();
     expect(view.container.querySelector('a[href^="#tasks/"]')).toBeNull();
     expect(screen.getAllByText(/median|中位数/i).length).toBeGreaterThan(0);
-    expect(within(tally as HTMLElement).getByText(/7\.1M tokens/)).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByText(/7\.1M tokens/)).toBeTruthy();
     view.unmount();
     const revisited = show(<DomainEvaluation evaluation={evaluation} evaluations={[evaluation, oldEvaluation]} domains={domains} />);
-    expect(within(revisited.container.querySelector('[data-slot="evaluation-tally"]') as HTMLElement).getByRole("button", { name: /样本 8|Samples 8/ }).getAttribute("aria-expanded")).toBe("true");
+    expect(within(revisited.container.querySelector('[data-slot="evaluation-tally"]') as HTMLElement).getByRole("button", { name: /样本 8|Samples 8/ }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("keeps unsampled cells blank and folds sampled descendants", async () => {
@@ -83,7 +84,9 @@ describe("domain evaluation", () => {
     expect(oldTally.className).toContain("opacity-70");
     expect(within(oldTally).queryByText(/First pass|一次通过/)).toBeNull();
     await user.click(within(oldTally).getByRole("button", { name: /样本 3|Samples 3/ }));
-    expect(within(oldTally).getByText(/First pass|一次通过/)).toBeTruthy();
+    const popover = screen.getByRole("dialog", { name: /样本 3|Samples 3/ });
+    expect(within(popover).getByText(/First pass|一次通过/).textContent).toMatch(/1/);
+    expect(within(popover).getByText(/Rework rounds|返工轮数/).textContent).toMatch(/2/);
   });
 });
 

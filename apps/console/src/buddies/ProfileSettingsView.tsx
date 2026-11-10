@@ -23,7 +23,7 @@ function RunMark({ state }: { state: ProfileRun["state"] }) {
   return <span role="img" aria-label={t(`modelProfile.state.${state}`)}><StateMark kind={state === "running" ? "live" : state === "failed" ? "fail" : "done"} /></span>;
 }
 
-function ToolOutcome({ tool, maximum, preferenceKey }: { tool: ProfileToolSummary; maximum: number; preferenceKey: string }) {
+function ToolOutcome({ tool, maximum }: { tool: ProfileToolSummary; maximum: number }) {
   const { t } = useTranslation("buddies");
   const success = tool.calls - tool.failed - tool.unknown;
   const allFailed = tool.calls > 0 && tool.failed === tool.calls;
@@ -32,7 +32,7 @@ function ToolOutcome({ tool, maximum, preferenceKey }: { tool: ProfileToolSummar
     <th scope="row" className="py-2 pr-5 text-left font-normal">
       <span className="inline-flex items-center gap-2 font-mono wrap-anywhere">{allFailed && <RunMark state="failed" />}{tool.toolName ?? t("modelProfile.unknownTool")}{allFailed && <span className="font-sans font-semibold">· {t("routerProfiles.allFailed")}</span>}</span>
     </th>
-    <td className="py-2"><QuantBarDisclosure floating preferenceKey={preferenceKey} label={`${tool.toolName ?? t("modelProfile.unknownTool")}: ${label}`}
+    <td className="py-2"><QuantBarDisclosure label={`${tool.toolName ?? t("modelProfile.unknownTool")}: ${label}`}
       maximum={maximum} parts={[{ value: success, tone: "green" }, { value: tool.failed, tone: "pink" }, { value: tool.unknown, tone: "gray" }]}>
       <span aria-label={label} className="inline-flex flex-wrap items-center gap-2">
         {t("routerProfiles.succeeded")} {formatNumber(success)} · {tool.failed > 0 && <StateMark kind="fail" />}{t("routerProfiles.failed")} {formatNumber(tool.failed)} · {t("routerProfiles.unknownCalls")} {formatNumber(tool.unknown)}
@@ -55,7 +55,7 @@ function RunDetail({ run }: { run: ProfileRun }) {
         : tools.length === 0 ? <p className="text-ink3">{t("routerProfiles.noTools")}</p>
           : <div className="overflow-x-auto"><table className="w-full min-w-[400px] border-collapse text-left">
             <thead className="text-ink3"><tr><th className="py-2 font-normal">{t("routerProfiles.tool")}</th><th className="py-2 font-normal">{t("routerProfiles.succeeded")} / {t("routerProfiles.failed")} / {t("routerProfiles.unknownCalls")}</th></tr></thead>
-            <tbody>{tools.map((tool, index) => <ToolOutcome key={`${tool.toolName}-${index}`} tool={tool} maximum={Math.max(1, ...tools.map(row => row.calls))} preferenceKey={`profile-tool.${run.profileRunId}.${tool.toolName ?? "unknown"}.${index}`} />)}</tbody>
+            <tbody>{tools.map((tool, index) => <ToolOutcome key={`${tool.toolName}-${index}`} tool={tool} maximum={Math.max(1, ...tools.map(row => row.calls))} />)}</tbody>
           </table></div>}
     </div>
     <div>
@@ -65,7 +65,7 @@ function RunDetail({ run }: { run: ProfileRun }) {
         <tbody>{attempts.map((attempt, index) => <tr key={attempt.attemptId}>
           <td className="py-2 pr-4">{t("routerProfiles.attempt", { n: index + 1 })}</td>
           <td className="py-2 pr-4 tabular-nums">{attempt.elapsedMs === null ? t("routerProfiles.unknown") : formatDuration(attempt.elapsedMs)}</td>
-          <td className="py-2"><RouterUsage floating usage={attempt.tokenUsage} maximum={maximum} preferenceKey={`profile-attempt.${run.profileRunId}.${attempt.attemptId}`} label={`${t("routerProfiles.attempt", { n: index + 1 })} · ${t("routerProfiles.tokens")}`} /></td>
+          <td className="py-2"><RouterUsage usage={attempt.tokenUsage} maximum={maximum} label={`${t("routerProfiles.attempt", { n: index + 1 })} · ${t("routerProfiles.tokens")}`} /></td>
         </tr>)}</tbody>
       </table></div> : <p className="text-ink3">{t("routerProfiles.noUsage")}</p>}
     </div>
@@ -100,7 +100,7 @@ function RunRow({ model, initiallyOpen, selected, maximum }: { model: Model; ini
         onClick={() => setOpen(value => !value)}><ChevronRight aria-hidden="true" size={16} strokeWidth={1.5} className={`shrink-0 transition-transform duration-150 motion-reduce:transition-none ${open ? "rotate-90" : ""}`} /><span className="truncate">{model.displayName}</span></button></td>
       <td aria-label={t("routerProfiles.corrections", { n: run.correctionRounds })} className={`tabular-nums ${run.correctionRounds === 0 ? "text-ink3" : "text-ink"}`}>{run.correctionRounds}</td>
       <td className="pr-4"><RouterTimeRange startedAt={run.startedAt} finishedAt={run.finishedAt} /></td>
-      <td><RouterUsage floating usage={sumRouterUsage(run.usage?.attempts ?? [])} maximum={maximum} preferenceKey={`profile-run.${run.profileRunId}`} label={`${model.displayName} · ${t("routerProfiles.tokens")}`} /></td>
+      <td><RouterUsage usage={sumRouterUsage(run.usage?.attempts ?? [])} maximum={maximum} label={`${model.displayName} · ${t("routerProfiles.tokens")}`} /></td>
     </tr>
     {open && <tr id={detailId}><td colSpan={5} className="bg-sunk/30 px-5"><RunDetail run={run} /></td></tr>}
   </>;

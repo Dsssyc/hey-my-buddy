@@ -34,7 +34,7 @@ function sampledDomains(nodes: DomainNode[], sampled: ReadonlySet<string>, colla
   return rows;
 }
 
-function Tally({ statistics, preferenceKey, subdued = false }: { statistics: EvaluationStatistics; preferenceKey: string; subdued?: boolean }) {
+function Tally({ statistics, subdued = false }: { statistics: EvaluationStatistics; subdued?: boolean }) {
   const { t } = useTranslation("buddies");
   const reworked = statistics.successes - statistics.firstPasses;
   const values = [
@@ -45,7 +45,7 @@ function Tally({ statistics, preferenceKey, subdued = false }: { statistics: Eva
   return <div data-slot="evaluation-tally" className={subdued ? "opacity-70" : undefined}>
     <div className="flex items-baseline gap-2"><span className="text-xs text-ink3">{t("evaluation.samples")}</span><strong className="text-lg font-semibold tabular-nums">{formatNumber(statistics.samples)}</strong></div>
     <div className="mt-2"><QuantBarDisclosure width={300} maximum={statistics.samples} parts={values.map(({ value, tone }) => ({ value, tone }))}
-      label={`${t("evaluation.samples")} ${formatNumber(statistics.samples)}; ${t("evaluation.failures")} ${formatNumber(statistics.failures)}`} preferenceKey={`evaluation.${preferenceKey}`}>
+      label={`${t("evaluation.samples")} ${formatNumber(statistics.samples)}; ${t("evaluation.failures")} ${formatNumber(statistics.failures)}`}>
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
         {values.map(({ label, value }, index) => <span key={label} className={`inline-flex items-center gap-1.5 ${index === 2 ? "text-fail" : ""}`}>
           {index === 2 && <StateMark kind="fail" />}{label} {formatNumber(value)}
@@ -66,7 +66,7 @@ function Medians({ statistics }: { statistics: EvaluationStatistics }) {
     [t("evaluation.medianCachedShort"), tokens(statistics.usage.medianCachedInputTokens)],
     [t("evaluation.medianOutputShort"), tokens(statistics.usage.medianOutputTokens)],
   ];
-  return <div className="flex items-baseline gap-5 overflow-x-auto whitespace-nowrap border-t border-line pt-3 text-xs">
+  return <div className="flex flex-wrap items-baseline gap-x-5 gap-y-2 border-t border-line pt-3 text-xs">
     <span className="font-medium text-ink2">{t("evaluation.medians")}</span>
     {entries.map(([label, value]) => <span key={label} className="whitespace-nowrap text-ink3">{label} <span className="tabular-nums text-foreground">{value}</span></span>)}
   </div>;
@@ -119,7 +119,7 @@ export function DomainEvaluation({ evaluation, evaluations, domains, children }:
     evidence: evaluations.find(item => item.harness === evaluation.harness && item.effort === evaluation.effort && item.modelId === group.modelId),
   })).filter(({ evidence }) => !!evidence?.statistics.overall.samples);
   return <div data-slot="domain-evaluation" className="space-y-5">
-    <Tally statistics={evaluation.statistics.overall} preferenceKey={`${evaluation.harness}.${evaluation.modelId}.${evaluation.effort}`} />
+    <Tally statistics={evaluation.statistics.overall} />
     <section aria-label={t("evaluation.summary")} className="space-y-1"><h3 className="text-sm font-medium">{t("evaluation.summary")}</h3>
       {evaluation.summary?.text ? <Fold text={evaluation.summary.text} /> : <p className="text-xs text-ink3">{t("evaluation.noSummary")}</p>}
     </section>
@@ -129,7 +129,7 @@ export function DomainEvaluation({ evaluation, evaluations, domains, children }:
       <h3 className="text-sm font-medium text-ink2">{t("evaluation.previousSamples")}</h3>
       {previous.map(({ group, evidence }) => <div key={group.modelId} className="space-y-2 border-t border-line/70 pt-3">
         <p className="text-xs text-ink2">{group.modelDisplayName}</p>
-        <Tally statistics={evidence!.statistics.overall} preferenceKey={`${evaluation.harness}.${evaluation.modelId}.${evaluation.effort}.previous.${group.modelId}`} subdued />
+        <Tally statistics={evidence!.statistics.overall} subdued />
         <p className="text-xs text-ink3">{group.names.map(name => <span key={`${name.harness}\0${name.provider}\0${name.model}`} className="mr-4 inline-block">
           {name.model} · {t("evaluation.since", { date: formatDateTime(Date.parse(name.since)) })}
         </span>)}</p>

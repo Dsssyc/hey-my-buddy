@@ -121,7 +121,7 @@ export function EvaluationView({ snapshot, editor, api, refresh, mutationsAvaila
       <p className="flex items-center gap-2">{notice.run && <StateMark kind={notice.run.state === "failed" ? "fail" : "done"} />}<strong>{notice.model}</strong>{notice.run ? t(`modelProfile.state.${notice.run.state}`) : t("evaluation.buildFailedShort")}</p>
       {notice.run?.reason && <p className="mt-2 text-fail">{reasonText(notice.run.reason)}</p>}{notice.message && <p className="mt-2">{notice.message()}</p>}
       {notice.run && <div className="mt-2 flex flex-wrap items-center gap-3"><RouterUsage usage={sumRouterUsage(notice.run.usage?.attempts ?? [])}
-        preferenceKey={`profile-notice.${notice.run.profileRunId}`} label={`${notice.model} · ${t("routerProfiles.tokens")}`} /><a className="underline underline-offset-2" href={buddyHash({ view: "router", target: "profiles", profileRunId: notice.run.profileRunId })} onClick={event => { event.preventDefault(); onNavigate({ view: "router", target: "profiles", profileRunId: notice.run!.profileRunId }); }}>{t("evaluation.viewRun")}</a></div>}
+        label={`${notice.model} · ${t("routerProfiles.tokens")}`} /><a className="underline underline-offset-2" href={buddyHash({ view: "router", target: "profiles", profileRunId: notice.run.profileRunId })} onClick={event => { event.preventDefault(); onNavigate({ view: "router", target: "profiles", profileRunId: notice.run!.profileRunId }); }}>{t("evaluation.viewRun")}</a></div>}
     </div>)}</div>
   </>;
 }

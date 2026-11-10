@@ -183,7 +183,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
     expect(await definition.innerText()).not.toBe("");
   });
 
-  test("reveals exact values from the graphics and preserves each record's choice", async ({ page }) => {
+  test("reveals exact values from the graphics without saving open details", async ({ page }) => {
     await open(page, "#buddies/evaluation/dsh/00000000-0000-4000-8000-000000000001/max");
     const sample = page.locator('[data-slot="evaluation-tally"]').first();
     const trigger = sample.locator('[data-slot="quant-bar-trigger"]');
@@ -197,9 +197,11 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
     await capture(page, "evaluation-hover", theme);
     await trigger.press("Enter");
     await expect(trigger).toHaveAttribute("aria-expanded", "true");
-    await expect(sample.locator('[data-slot="quant-bar-detail"]')).toContainText("中位数");
+    await expect(page.locator('[data-slot="quant-bar-detail"]')).toContainText("中位数");
     await capture(page, "evaluation-expanded", theme);
     await page.reload();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await trigger.press("Space");
     await expect(trigger).toHaveAttribute("aria-expanded", "true");
     await trigger.press("Space");
     await expect(trigger).toHaveAttribute("aria-expanded", "false");

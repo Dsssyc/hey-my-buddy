@@ -25,10 +25,10 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"] a
       const tally = detail.locator('[data-slot="evaluation-tally"]').first();
       const sampleBar = tally.locator('[data-slot="quant-bar-trigger"]');
       await expect(sampleBar).toHaveAttribute("aria-expanded", "false");
-      await expect(tally.locator('[data-slot="quant-bar-detail"]')).toHaveCount(0);
+      await expect(page.locator('[data-slot="quant-bar-detail"]')).toHaveCount(0);
       await sampleBar.click();
       await expect(sampleBar).toHaveAttribute("aria-expanded", "true");
-      await expect(tally.locator('[data-slot="quant-bar-detail"]')).toContainText(locale === "zh-CN" ? "中位数" : "Medians");
+      await expect(page.locator('[data-slot="quant-bar-detail"]')).toContainText(locale === "zh-CN" ? "中位数" : "Medians");
       await sampleBar.press("Space");
       await expect(sampleBar).toHaveAttribute("aria-expanded", "false");
       await expect(detail).toContainText("Earlier Codex");
@@ -36,7 +36,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"] a
       const previousBar = detail.locator('[data-slot="evaluation-tally"]').nth(1).locator('[data-slot="quant-bar-trigger"]');
       await expect(previousBar).toHaveAttribute("aria-expanded", "false");
       await previousBar.click();
-      await expect(detail.locator('[data-slot="evaluation-tally"]').nth(1).locator('[data-slot="quant-bar-detail"]')).toBeVisible();
+      await expect(page.locator('[data-slot="quant-bar-detail"]')).toBeVisible();
       await previousBar.click();
       await expect(detail).toContainText("合成样例：只有样式与排版这个节点有样本。");
       await expect(detail).not.toContainText(locale === "zh-CN" ? "引用的微任务" : "Cited micro tasks");
@@ -205,7 +205,7 @@ test.describe("evaluation actions", () => {
     await expect(notice).toBeVisible();
     await expect(notice).toContainText("answer.claims[0].sourceUrl");
     await notice.locator('[data-slot="router-usage"] [data-slot="quant-bar-trigger"]').click();
-    await expect(notice.locator('[data-slot="router-usage"]')).toContainText("6,144");
+    await expect(page.locator('[data-slot="quant-bar-detail"]')).toContainText("6,144");
     await expect(notice.getByRole("link", { name: "View run record" })).toHaveAttribute("href", "#buddies/router/profiles/synthetic-profile-failure-new");
     await page.clock.runFor(6100);
     await expect(notice).toHaveCount(0);
