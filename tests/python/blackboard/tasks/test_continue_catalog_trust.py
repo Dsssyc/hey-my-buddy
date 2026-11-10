@@ -49,6 +49,13 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
             db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id='dsh:fixture:alpha:max'")
         return self.board.call("workflow_get", {"runId": submitted["runId"]})
 
+    def enable_missing_buddy(self, identity):
+        """Retain the user's enabled row while the model is absent from the catalog."""
+        enable_fixture_buddy(self.board.store, identity)
+        with self.board.store.db.write() as db:
+            db.execute('UPDATE model_services SET confirmed_absent_at=? WHERE harness=? AND provider=? AND model=?',
+                       (self.clock.value, identity['harness'], identity['provider'], identity['model']))
+
     def continue_with(self, view, buddy):
         """A Host continuation override without the test helper's auto-enable."""
         if view["state"] == "executing":
@@ -86,7 +93,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
 
         catalog.register_catalog_reread(self.directory, reread)
         override = {**IDENTITY, "model": "beta"}
-        enable_fixture_buddy(self.board.store, override)
+        self.enable_missing_buddy(override)
         continued = self.continue_with(submitted, override)
         self.assertEqual(calls, ["dsh"], "Exactly one bounded re-read of exactly that harness")
         self.assertEqual(continued["buddy"], {**override, "alias": None})
@@ -102,7 +109,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
 
         catalog.register_catalog_reread(self.directory, reread)
         override = {**IDENTITY, "model": "beta"}
-        enable_fixture_buddy(self.board.store, override)  # The user gate is satisfied.
+        self.enable_missing_buddy(override)  # The user gate is satisfied.
         with self.assertRaises(BoardError) as rejected:
             self.continue_with(submitted, override)
         error = rejected.exception
@@ -208,7 +215,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertEqual(calls, [], "An admitted route is not re-read for the user gate")
         # A route missing from the catalog whose buddy row the user enabled.
         override = {**IDENTITY, "model": "beta"}
-        enable_fixture_buddy(self.board.store, override)
+        self.enable_missing_buddy(override)
         with self.assertRaises(BoardError) as missing:
             self.continue_with(submitted, override)
         absent = missing.exception
@@ -231,7 +238,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
 
         catalog.register_catalog_reread(self.directory, reread)
         override = {**IDENTITY, "model": "beta"}  # Absent now; the re-read will list it.
-        enable_fixture_buddy(self.board.store, override)
+        self.enable_missing_buddy(override)
         with self.board.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id='dsh:fixture:beta:max'")
         with self.assertRaises(BoardError) as refused:

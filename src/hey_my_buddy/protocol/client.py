@@ -130,8 +130,8 @@ class BoardClient:
     def console(self, action: str = "open") -> dict:
         return self.call("console", {"action": action})
 
-    def model_catalog_refresh(self, request_id: str | None = None) -> dict:
-        return self.call("model_catalog_refresh", {"requestId": request_id})
+    def model_catalog_refresh(self) -> dict:
+        return self.call("model_catalog_refresh", {})
 
     # -- micro-task workflow --------------------------------------------------
     def workflow_create(self, **params: Any) -> dict:

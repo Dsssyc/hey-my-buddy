@@ -65,8 +65,8 @@ def _preflight_no_answer(connection, item, event, state, now):
     """Project a recorded qualification failure, including after a dispatch queued."""
     item.update(outcome="no_answer", phase=event["payload"].get("phase"),
                 code=event["payload"].get("code"), retryAt=None)
-    buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?",
-                                 (item["buddyId"],)).fetchone()
+    from ..catalog import buddy_state
+    buddy = buddy_state.get(connection, item["buddyId"])
     if item["code"] == "router-quota-exhausted":
         _, item["retryAt"] = _quota_recovery(connection, buddy, now)
         if (item["retryAt"] and state.get("inSkipWindow")
@@ -134,7 +134,8 @@ def router_trials(connection, row, *, now):
                 item.update(phase=None, outcome="skipped")
             if item["code"] not in (None, "router-skip-window"):
                 item["retryAt"] = None
-                buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
+                from ..catalog import buddy_state
+                buddy = buddy_state.get(connection, buddy_id)
                 if item["code"] == "router-quota-exhausted":
                     _, item["retryAt"] = _quota_recovery(connection, buddy, now)
                     if item["retryAt"] and state.get("inSkipWindow") and router_history._parse(state["retryAt"]) > router_history._parse(item["retryAt"]):
@@ -263,7 +264,8 @@ def _continuation_context(connection, row, run_id, owner_run_id, state_dir):
 
 
 def _candidate_problem(connection, candidate, request, run, now):
-    published = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (candidate["buddyId"],)).fetchone()
+    from ..catalog import buddy_state
+    published = buddy_state.get(connection, candidate["buddyId"])
     constraints = request.get("constraints", {})
     bound = candidate_bound(connection, published, {**request, "constraints": constraints}, now, frozen=candidate)
     return {"code": "router-out-of-bounds", "bound": bound} if bound is not None else None
@@ -277,7 +279,8 @@ def _retry_at(connection, facts, trials, *, now, kind):
     known = []
     for index, buddy_id in enumerate(facts.get("routerBuddyIds") or []):
         identity = (facts.get("routerIdentities") or [])[index]
-        buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
+        from ..catalog import buddy_state
+        buddy = buddy_state.get(connection, buddy_id)
         if candidate_bound(connection, buddy, {"codingOnly": False}, now,
                            frozen=identity, apply_preferences=False, check_cooling=False) is not None:
             continue

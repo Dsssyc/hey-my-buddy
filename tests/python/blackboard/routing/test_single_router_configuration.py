@@ -13,7 +13,7 @@ class SingleRouterConfigurationTests(BoardTestCase):
         super().setUp()
         self.catalog_fixture()
         self.board_ = self.board()
-        self.board_.call('model_catalog_refresh', {'requestId': 'configuration-catalog'})
+        self.board_.call('model_catalog_refresh', {})
 
     def configure(self, settings, *, enable=False):
         params = {}
@@ -58,7 +58,7 @@ class SingleRouterConfigurationTests(BoardTestCase):
     def test_unavailable_existing_router_does_not_block_response_wait_or_clear(self):
         self.configure({'routerBuddyIds': [BUDDY]}, enable=True)
         with self.board_.store.db.write() as db:
-            db.execute('UPDATE buddies SET available=0 WHERE buddy_id=?', (BUDDY,))
+            db.execute('UPDATE buddies SET retired=1 WHERE buddy_id=?', (BUDDY,))
         self.configure({'modelResponseWaitSeconds': 90})
         self.assertEqual(self.settings()['routerBuddyIds'], [BUDDY])
         self.configure({'routerBuddyIds': [], 'defaultRoutingMode': 'review'})

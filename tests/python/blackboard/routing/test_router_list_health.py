@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from support import BoardTestCase, FakeClock
+from support import BoardTestCase, FakeClock, seed_buddy
 
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
@@ -34,12 +34,9 @@ class RouterListHealthTestCase(BoardTestCase):
     # -- fixtures ------------------------------------------------------------
     def add_buddy(self, buddy_id, *, harness="dsh", provider="fixture", available=1, enabled=1):
         with self.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                       "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,?,?)",
-                       (buddy_id, harness, provider, buddy_id, "max", available, enabled,
-                        canonical_json([])))
-            ensure_model_service(db, harness, provider, buddy_id, self.board_.store.now())
+            seed_buddy(db, buddy_id=buddy_id, harness=harness, provider=provider,
+                       model=buddy_id, effort="max", available=available, enabled=enabled,
+                       now=self.board_.store.now())
 
     def set_settings(self, *, ids, interval=600, mode="fast"):
         with self.db.write() as db:

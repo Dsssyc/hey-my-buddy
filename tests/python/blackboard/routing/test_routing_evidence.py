@@ -398,7 +398,8 @@ class RoutingEvidenceTests(WorkflowTestCase):
         self.assertEqual(self.facts()[0]["load"]["wait"], {"seconds": 30, "atLeast": True, "overdue": 1})
         # A reduced ceiling retains both occupancies until enough executions end.
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO model_service_concurrency VALUES(?,?,?,?)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"], 1))
+            db.execute("UPDATE model_services SET concurrency_limit=? WHERE harness=? AND provider=? AND model=?",
+                       (1, BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
         self.assertEqual(self.facts()[0]["load"], {"active": 2, "limit": 1, "queued": 2,
                          "wait": {"seconds": 70, "atLeast": True, "overdue": 1}})
 

@@ -29,21 +29,12 @@ class EvaluationStore:
             settings = router.configuration(connection)
             _profile_buddy, profile_problem = self.board.profile.readiness(connection)
             configured_ids = settings["routerBuddyIds"]
-            configured_marks = ",".join("?" for _ in configured_ids) or "NULL"
-            from ..catalog import catalog_store
-            from ..catalog.catalog import pending_model_services
-            pending = pending_model_services(connection)
-            current_catalog = catalog_store.current(connection)
-            effort_ranks = current_catalog.effort_ranks() if current_catalog is not None else {}
+            from ..catalog import buddy_state
+            all_buddies = buddy_state.rows(connection)
             buddies = [
-                self._buddy_view(row, pending=pending, effort_ranks=effort_ranks)
-                for row in connection.execute(
-                    "SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM buddies p "
-                    "LEFT JOIN harness_health h ON h.harness=p.harness "
-                    "LEFT JOIN catalog_current c ON c.harness=p.harness "
-                    f"WHERE (p.available=1 AND h.status='ready') OR p.buddy_id IN ({configured_marks}) ORDER BY p.rowid",
-                    configured_ids
-                )
+                self._buddy_view(row)
+                for row in all_buddies
+                if row["available"] or row["buddy_id"] in configured_ids
             ]
             from ...protocol.billing import for_provider
             from ..routing.quota_routing import cooling
@@ -67,9 +58,7 @@ class EvaluationStore:
                     (MAX_DECISION_PAGE,),
                 )
             ]
-            unavailable_count = connection.execute(
-                "SELECT COUNT(*) AS count FROM buddies p LEFT JOIN harness_health h ON h.harness=p.harness WHERE p.available=0 OR h.status IS NULL OR h.status!='ready'"
-            ).fetchone()["count"]
+            unavailable_count = sum(not row["available"] for row in all_buddies)
             # One row per model service represented in this response, with the
             # effective limit (explicit setting or default) and the unresolved
             # attempt count. Effort variants collapse into their shared model service.
@@ -123,8 +112,7 @@ class EvaluationStore:
         return catalog_store.record(self, discovered, observation_id)
 
     @staticmethod
-    def _buddy_view(row: sqlite3.Row, *, pending: dict | None = None,
-                    effort_ranks: dict[tuple[str, str, str], dict[str, int]]) -> dict:
+    def _buddy_view(row: dict) -> dict:
         from ...protocol.capabilities import buddy_capabilities
         capabilities = buddy_capabilities(row["harness"], json.loads(row["capabilities_json"]))
         view = {
@@ -134,8 +122,8 @@ class EvaluationStore:
             "provider": row["provider"],
             "model": row["model"],
             "effort": row["effort"],
-            "effortRank": effort_ranks.get((row["harness"], row["provider"], row["model"]), {}).get(row["effort"]),
-            "available": bool(row["available"]) and row["harness_status"] == "ready",
+            "effortRank": row["effort_rank"],
+            "available": bool(row["available"]),
             "enabled": bool(row["enabled"]),
             "capabilities": capabilities,
             "contextWindow": row["context_window"],
@@ -150,16 +138,9 @@ class EvaluationStore:
         view["catalogReason"] = json.loads(row["catalog_reason"]) if row["catalog_reason"] else None
         # ADR-027 rule 6: the model-level catalog judgment, separate from the
         # harness-level reading state above. Pending is per model identity.
-        from ..catalog.catalog import CATALOG_FACT_REASONS
-        model_service = (row["harness"], row["provider"], row["model"])
-        since = (pending or {}).get(model_service)
-        if since:
-            view["catalogStatus"] = "pending"
-            view["pendingSince"] = since
-        elif not row["available"] and row["unavailable_code"] in (*CATALOG_FACT_REASONS, 'catalog.account-binding-changed'):
-            view["catalogStatus"] = "unavailable"
-        else:
-            view["catalogStatus"] = "available"
+        view["catalogStatus"] = row["catalog_status"]
+        if row["pending_since"] is not None:
+            view["pendingSince"] = row["pending_since"]
         return view
 
     @staticmethod

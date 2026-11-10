@@ -1,11 +1,11 @@
 {
   "aliasStock": {
     "baseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
-    "derivation": "On a private schema-39 copy, retain floor-written alpha as the proven assembled description; derive beta from its floor-written row and a copied retained payload with a native description; retain gamma's model in a historical payload while its current source is missing; derive a fourth orphan row from floor-written gamma with a model absent from every retained payload. No sealed input is rewritten.",
+    "derivation": "The floor-written three buddy rows and catalog payloads are augmented on a private schema-39 copy: beta gains a native description, gamma loses source provenance, an orphan lacks any payload, alpha gains retired and health-overwritten efforts, and gamma yields native-unavailable and confirmed-absent model identities; concurrency is set through the schema-39 settings table.",
     "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/<new-private-dir> --output-dir tmp/<new-output-dir> --alias-stock-for tests/fixtures/upgrade-floor",
-    "generatorSha256": "795638e931721608071ad42380a87002d02efb320c6a4b9e99ce73be5de22a8a",
+    "generatorSha256": "ffd447d904c106c40c1467e170d02997e1d06dd835397e3a4d9dec5a5896c51f",
     "schemaVersion": 39,
-    "sha256": "0036f6bb7dc12ca5039642ad3ef6fe5289fee672e6f1bf0dfebd8bb26121085e",
+    "sha256": "eca80b667f3b5b8854c42b1523bcd173713780f84c4db45312a2c15e3581a252",
     "sourceBuddyIds": [
       "codex:openai:fixture-alpha:high",
       "codex:openai:fixture-beta:high",

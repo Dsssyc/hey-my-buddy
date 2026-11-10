@@ -58,7 +58,7 @@ class ModelServiceAdmissionTests(BoardTestCase):
 
     def test_full_model_service_does_not_hide_command_work(self):
         board = self.board(max_concurrent=3)
-        board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
+        board.call("model_catalog_refresh", {})
         model = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash"}
         buddy_id = "dsh:deepseek-official:deepseek-flash:off"
         board.console_call("user_policy_publish", {
@@ -83,7 +83,7 @@ class ModelServiceAdmissionTests(BoardTestCase):
 
     def test_uncertain_deep_model_attempt_holds_model_and_machine_capacity(self):
         board = self.board(max_concurrent=2)
-        board.call("model_catalog_refresh", {"requestId": "catalog-deep"})
+        board.call("model_catalog_refresh", {})
         deep = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-v4-pro"}
         board.console_call("user_policy_publish", {
             "commandId": "deep-limit",

@@ -437,30 +437,34 @@ CREATE TABLE IF NOT EXISTS decision_requests (
 );
 """
 
-MODEL_SERVICE_CONCURRENCY_DDL = """
-CREATE TABLE IF NOT EXISTS model_service_concurrency (
+MODEL_SERVICES_DDL = """
+CREATE TABLE IF NOT EXISTS model_services (
     harness           TEXT NOT NULL,
     provider          TEXT NOT NULL,
     model             TEXT NOT NULL,
-    concurrency_limit INTEGER NOT NULL DEFAULT 2 CHECK (concurrency_limit >= 1),
+    description TEXT NOT NULL DEFAULT '',
+    context_window INTEGER,
+    input_modalities_json TEXT NOT NULL DEFAULT '[]',
+    unavailable_code TEXT,
+    unavailable_params_json TEXT,
+    unavailable_content TEXT,
+    pending_since TEXT,
+    confirmed_absent_at TEXT,
+    concurrency_limit INTEGER CHECK (concurrency_limit >= 1),
+    source_sequence INTEGER,
+    CHECK ((unavailable_code IS NULL) = (unavailable_params_json IS NULL)),
     PRIMARY KEY (harness, provider, model)
 );
 """
 
 EVALUATION_TABLES = (
     """
-CREATE TABLE IF NOT EXISTS catalog_observations (
-    observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_id TEXT NOT NULL UNIQUE,
-    response_json TEXT,
-    harnesses_json TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS catalog_current (
     harness TEXT PRIMARY KEY,
-    observation_id INTEGER NOT NULL,
-    discovery_id TEXT,
+    sequence INTEGER NOT NULL,
     status TEXT NOT NULL,
     reason TEXT,
+    content TEXT,
     updated_at TEXT NOT NULL,
     read_at TEXT,
     account_status TEXT NOT NULL DEFAULT 'unknown'
@@ -469,28 +473,22 @@ CREATE TABLE IF NOT EXISTS catalog_current (
     """
 CREATE TABLE IF NOT EXISTS buddies (
     buddy_id          TEXT PRIMARY KEY,
-    alias               TEXT,
+    alias             TEXT,
     harness             TEXT NOT NULL,
     provider            TEXT NOT NULL,
     model               TEXT NOT NULL,
     effort              TEXT NOT NULL,
-    available           INTEGER NOT NULL DEFAULT 0,
+    effort_rank         INTEGER NOT NULL DEFAULT 0,
+    retired             INTEGER NOT NULL DEFAULT 0,
     enabled             INTEGER NOT NULL DEFAULT 1,
-    capabilities_json   TEXT NOT NULL DEFAULT '[]',
-    context_window      INTEGER,
-    description         TEXT NOT NULL DEFAULT '',
-    source              TEXT NOT NULL DEFAULT '',
-    unavailable_code        TEXT,
-    unavailable_params_json TEXT,
-    unavailable_content     TEXT,
-    CHECK ((unavailable_code IS NULL) = (unavailable_params_json IS NULL)),
-    CHECK (unavailable_content IS NULL OR unavailable_code IS 'catalog.native-unavailable')
+    FOREIGN KEY (harness,provider,model)
+        REFERENCES model_services(harness,provider,model) ON DELETE RESTRICT
 );
 """,
     """
-CREATE INDEX IF NOT EXISTS buddies_current_idx ON buddies(available, buddy_id);
 CREATE INDEX IF NOT EXISTS buddies_harness_idx ON buddies(harness, buddy_id);
 """,
+    MODEL_SERVICES_DDL,
     """
 CREATE TABLE IF NOT EXISTS evaluation_preferences (
     buddy_id        TEXT PRIMARY KEY REFERENCES buddies(buddy_id) ON DELETE RESTRICT,
@@ -500,12 +498,6 @@ CREATE TABLE IF NOT EXISTS evaluation_preferences (
 CREATE INDEX IF NOT EXISTS evaluation_preferences_mode_idx ON evaluation_preferences(mode, buddy_id);
 """,
     EVALUATION_DECISIONS_DDL,
-    """
-CREATE TABLE IF NOT EXISTS evaluation_catalog (
-    discovery_id      TEXT PRIMARY KEY,
-    payload_json      TEXT NOT NULL
-);
-""",
     # Extended decision state. ``evaluation_decisions`` stays the bounded public
     # history row the console reads; this table carries the audit material (the
     # helper envelope and the selected buddy)
@@ -518,13 +510,6 @@ CREATE INDEX IF NOT EXISTS decision_requests_task_idx ON decision_requests(task_
 CREATE INDEX IF NOT EXISTS evaluation_decisions_created_idx
     ON evaluation_decisions(created_at, decision_id);
 """,
-    # User-owned per-model-service concurrent-attempt limits (ADR-011). A model service is the
-    # exact harness/provider/model tuple; effort variants share one row. The row
-    # is independent of ``buddies`` availability on purpose: a setting
-    # survives discovery marking a model unavailable, and a model service without a row
-    # uses the code-owned default. Only the authenticated console writer patch in
-    # ``user_policy.py`` ever writes here.
-    MODEL_SERVICE_CONCURRENCY_DDL,
 )
 
 EVALUATION_SCHEMA = "\n".join(EVALUATION_TABLES)
@@ -1302,16 +1287,6 @@ CREATE TABLE IF NOT EXISTS buddy_infrastructure_failures (
     PRIMARY KEY (harness, provider, model, effort)
 );
 """
-CATALOG_PENDING_SCHEMA = """
-CREATE TABLE IF NOT EXISTS catalog_pending (
-    harness      TEXT NOT NULL REFERENCES catalog_current(harness) ON DELETE RESTRICT,
-    provider     TEXT NOT NULL,
-    model        TEXT NOT NULL,
-    since        TEXT NOT NULL,
-    efforts_json TEXT NOT NULL,
-    PRIMARY KEY (harness, provider, model)
-);
-"""
 FIX_SCHEMA = """
 CREATE TABLE IF NOT EXISTS workflow_fixes (
     run_id TEXT NOT NULL PRIMARY KEY REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
@@ -1363,7 +1338,7 @@ CREATE TABLE IF NOT EXISTS issue_deliveries (
 SCHEMA = "\n".join((MODEL_IDENTITY_SCHEMA, CORE_SCHEMA, ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, CORE_SCHEMA_TAIL,
                     EVENTS_ROUTER_CLAIMED_INDEX_DDL, MESSAGES_DDL, ALLOCATION_REVOCATIONS_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
                     HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA, DOMAIN_EVALUATION_SCHEMA, STATISTICS_SCHEMA,
-                    CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA, FIX_SCHEMA))
+                    REMINDER_SCHEMA, FIX_SCHEMA))
 
 
 def utc_now() -> str:

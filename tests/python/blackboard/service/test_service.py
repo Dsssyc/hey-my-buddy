@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog, catalog_store
+from hey_my_buddy.errors import BoardError
 
 
 def native_payload(account_status, *, status="complete", reason=None, models=("alpha",)):
@@ -30,6 +31,11 @@ class CatalogRefreshServiceTests(BoardTestCase):
         stub = SimpleNamespace(discover_models=lambda *, state_dir: native_payload(account_status, **reading))
         with patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=stub):
             self.service._refresh_harness_catalog("dsh", self.record)
+
+    def test_refresh_rejects_retired_request_identity(self):
+        with self.assertRaises(BoardError) as caught:
+            self.board.call("model_catalog_refresh", {"requestId": "old-refresh"})
+        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
     def catalog_state(self):
         with self.board.store.db.read() as db:
@@ -60,8 +66,8 @@ class CatalogRefreshServiceTests(BoardTestCase):
         self.refresh_catalog("confirmed", models=("alpha", "beta"))
         _, _, confirmed_at = self.catalog_state()
         with self.board.store.db.read() as db:
-            confirmed_discovery = db.execute("SELECT discovery_id FROM catalog_current WHERE harness='dsh'").fetchone()[0]
             confirmed_buddies = [tuple(row) for row in db.execute("SELECT * FROM buddies WHERE harness='dsh'")]
+            confirmed_services = [tuple(row) for row in db.execute("SELECT * FROM model_services WHERE harness='dsh' ORDER BY provider,model")]
         for elapsed in (1, catalog.CONFIRMATION_SECONDS + 1):
             self.clock.advance(elapsed)
             self.refresh_catalog("confirmed", status="unknown", reason={"code": "catalog.model-shape-unreadable", "params": {}},
@@ -71,10 +77,10 @@ class CatalogRefreshServiceTests(BoardTestCase):
             self.assertEqual(row["reason"], {"code": "catalog.model-shape-unreadable", "params": {}})
             self.assertEqual(read_at, confirmed_at)
             with self.board.store.db.read() as db:
-                self.assertEqual(db.execute("SELECT discovery_id FROM catalog_current WHERE harness='dsh'").fetchone()[0],
-                                 confirmed_discovery)
                 self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM buddies WHERE harness='dsh'")],
                                  confirmed_buddies)
+                self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM model_services WHERE harness='dsh' ORDER BY provider,model")],
+                                 confirmed_services)
                 self.assertEqual(catalog.pending_model_services(db), {})
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind LIKE 'catalog.model_%'").fetchone()[0], 0)
 
@@ -102,7 +108,8 @@ class CatalogRefreshServiceTests(BoardTestCase):
         self.assertEqual({p["buddy_id"] for p in buddies},
                          {"dsh:fixture:alpha:max", "dsh:fixture:beta:max", "dsh:fixture:gamma:max"})
         with self.board.store.db.read() as db:
-            buddies = {p["model"]: p for p in db.execute("SELECT model,available,unavailable_code FROM buddies")}
+            from hey_my_buddy.blackboard.catalog import buddy_state
+            buddies = {p["model"]: p for p in buddy_state.rows(db)}
             self.assertTrue(buddies["alpha"]["available"])
             self.assertTrue(buddies["gamma"]["available"])
             self.assertFalse(buddies["beta"]["available"])

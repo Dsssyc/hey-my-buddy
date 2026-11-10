@@ -411,8 +411,9 @@ class CatalogShelfLifeTests(BoardTestCase):
 
     def catalog_state(self):
         with self.board.db.read() as db:
+            from hey_my_buddy.blackboard.catalog import buddy_state
             row = db.execute("SELECT status, reason FROM catalog_current WHERE harness='codex'").fetchone()
-            buddies = db.execute("SELECT buddy_id, available FROM buddies WHERE harness='codex'").fetchall()
+            buddies = buddy_state.rows(db, harness='codex')
             read_at = db.execute("SELECT read_at FROM catalog_current WHERE harness='codex'").fetchone()
         return row, buddies, (read_at[0] if read_at else None)
 
@@ -676,12 +677,7 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
 
 
 class HealthRecoveryRestoreTests(BoardTestCase):
-    """The direct restore on health recovery, with no catalog publication behind it.
-
-    The publication layer (a trusted reading upserting its rows, or an unknown
-    reading calling the same restore) is the other restorer; this is the one
-    that runs when recovery publishes nothing, inside the health write itself.
-    """
+    """Health recovery changes the composed view without catalog publication."""
 
     def setUp(self):
         super().setUp()
@@ -719,6 +715,9 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         self.evaluation.record_catalog(self.reading(('max',)))  # alpha:high retires
         with self.board.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=1 WHERE harness='dsh'")
+        with self.board.store.db.read() as db:
+            retained = ([tuple(row) for row in db.execute("SELECT * FROM model_services ORDER BY harness,provider,model")],
+                        [tuple(row) for row in db.execute("SELECT * FROM buddies ORDER BY buddy_id")])
         self.health.invalidate('dsh', self.health.get('dsh')['revision'])
         broken = self.buddies()['dsh:fixture:alpha:max']
         self.assertFalse(broken['available'], 'The health failure zeroed the retained route')
@@ -731,12 +730,14 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason']['code'], catalog.RETIRED_EFFORT_REASON)
         self.assertFalse(buddies['dsh:fixture:gamma:max']['available'], 'A native unavailable declaration stays down')
         with self.board.store.db.read() as db:
+            self.assertEqual(([tuple(row) for row in db.execute("SELECT * FROM model_services ORDER BY harness,provider,model")],
+                              [tuple(row) for row in db.execute("SELECT * FROM buddies ORDER BY buddy_id")]), retained)
             self.assertEqual([row['buddy_id'] for row in DecisionCoordinator._scan_candidates(db, [], coding_only=True)[0]],
                              ['dsh:fixture:alpha:max'])
 
 
 class CatalogHealthOwnershipTests(BoardTestCase):
-    """Every health write preserves adopted catalog facts, including NULL rows."""
+    """Every health write preserves adopted model and effort facts."""
 
     def setUp(self):
         super().setUp()
@@ -760,6 +761,9 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         with self.board.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=1 WHERE harness='dsh'")
         self.before = self.buddies()
+        with self.board.store.db.read() as db:
+            self.stored_before = ([tuple(row) for row in db.execute("SELECT * FROM model_services ORDER BY harness,provider,model")],
+                                  [tuple(row) for row in db.execute("SELECT * FROM buddies ORDER BY buddy_id")])
 
     def reading(self, efforts, *, beta):
         models = [{'id': 'alpha', 'efforts': list(efforts), 'available': True},
@@ -793,6 +797,8 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         self.assertTrue(all(item['enabled'] for item in buddies.values()))
         self.assertEqual(set(buddies), set(self.before), 'Buddy identities survive')
         with self.board.store.db.read() as db:
+            self.assertEqual(([tuple(row) for row in db.execute("SELECT * FROM model_services ORDER BY harness,provider,model")],
+                              [tuple(row) for row in db.execute("SELECT * FROM buddies ORDER BY buddy_id")]), self.stored_before)
             candidates = [row['buddy_id'] for row in DecisionCoordinator._scan_candidates(db, [], coding_only=True)[0]]
             transitions = [row[0] for row in db.execute("SELECT kind FROM events WHERE kind LIKE 'catalog.model_%' ORDER BY seq")]
         self.assertEqual(candidates, ['dsh:fixture:alpha:high'])

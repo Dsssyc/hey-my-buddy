@@ -252,31 +252,28 @@ class UpgradeChainTests(unittest.TestCase):
             self.assertEqual(self.db.execute(f'SELECT COUNT(*) FROM {table} WHERE json_type({column},?) IS NOT NULL',
                                              (path,)).fetchone()[0], 0)
 
-    def test_catalog_observation_stock_keeps_only_observation_facts(self):
+    def test_catalog_observation_stock_becomes_current_sequence(self):
         self.schema31()
         query = 'SELECT rowid,observation_id,request_id,response_json,harnesses_json FROM catalog_observations ORDER BY rowid'
         before = [tuple(row) for row in self.db.execute(query)]
         self.assertEqual(len(before), 4)
-        expected = {}
         completed = 0
         for row in before:
             if row[3] is None:
-                expected[row[0]] = None
                 continue
-            value = json.loads(row[3])
-            expected[row[0]] = {'discoveryId': value['discoveryId'], 'observationId': value['observationId'],
-                                'duplicate': value['duplicate'], 'discoveredAt': value['catalog']['discoveredAt'],
-                                'appliedHarnesses': value['appliedHarnesses'], 'staleHarnesses': value['staleHarnesses']}
             completed += 1
         self.assertEqual(completed, 3)
-        retained = {table: [tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
-                    for table in ('evaluation_catalog', 'catalog_current', 'catalog_pending')}
+        current = [dict(row) for row in self.db.execute('SELECT * FROM catalog_current')]
+        pending = [dict(row) for row in self.db.execute('SELECT * FROM catalog_pending')]
         upgrade.upgrade_state(self.state)
-        after = [tuple(row) for row in self.db.execute(query)]
-        self.assertEqual([row[:3] + row[4:] for row in after], [row[:3] + row[4:] for row in before])
-        self.assertEqual({row[0]: json.loads(row[3]) if row[3] is not None else None for row in after}, expected)
-        for table, rows in retained.items():
-            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
+        for table in ('catalog_observations', 'evaluation_catalog', 'catalog_pending',
+                      'model_service_concurrency'):
+            self.assertIsNone(self.db.execute('SELECT 1 FROM sqlite_master WHERE name=?', (table,)).fetchone())
+        self.assertEqual([row['sequence'] for row in self.db.execute('SELECT * FROM catalog_current')],
+                         [row['observation_id'] for row in current])
+        self.assertEqual({(row['harness'], row['provider'], row['model']): row['pending_since']
+                          for row in self.db.execute('SELECT * FROM model_services') if row['pending_since']},
+                         {(row['harness'], row['provider'], row['model']): row['since'] for row in pending})
 
     def test_floor_runs_every_step_with_schema31_stock_and_matches_a_new_board(self):
         def step_with_new_form(db):
@@ -304,7 +301,9 @@ class UpgradeChainTests(unittest.TestCase):
         self.assertEqual(original, {'fixture-alpha': 'fixture-alpha via openai',
                                     'fixture-beta': 'Native beta description',
                                     'fixture-gamma': 'fixture-gamma via openai',
-                                    'fixture-orphan': 'fixture-orphan via openai'})
+                                    'fixture-orphan': 'fixture-orphan via openai',
+                                    'fixture-native': 'Native model detail',
+                                    'fixture-absent': 'Remembered absent model'})
         frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
                   for table in ('router_requests', 'decision_requests')}
 
@@ -320,15 +319,82 @@ class UpgradeChainTests(unittest.TestCase):
 
         self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 39, 'targetSchema': 40})
         self.assertEqual({row['model']: row['description'] for row in self.db.execute(
-            'SELECT model,description FROM buddies')},
+            'SELECT model,description FROM model_services')},
             {'fixture-alpha': '', 'fixture-beta': 'Native beta description',
-             'fixture-gamma': '', 'fixture-orphan': 'fixture-orphan via openai'})
+             'fixture-gamma': '', 'fixture-orphan': 'fixture-orphan via openai',
+             'fixture-native': 'Native model detail',
+             'fixture-absent': 'Remembered absent model'})
         columns = [row['name'] for row in self.db.execute('PRAGMA table_info(buddies)')]
         self.assertIn('alias', columns)
         self.assertNotIn('label', columns)
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM buddies WHERE alias IS NOT NULL').fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT concurrency_limit FROM model_services WHERE model='fixture-alpha'").fetchone()[0], 3)
+        self.assertEqual(self.db.execute("SELECT source_sequence FROM model_services WHERE model='fixture-alpha'").fetchone()[0], 3)
+        self.assertIsNone(self.db.execute("SELECT context_window FROM model_services WHERE model='fixture-alpha'").fetchone()[0])
+        self.assertEqual(json.loads(self.db.execute("SELECT input_modalities_json FROM model_services WHERE model='fixture-alpha'").fetchone()[0]), ['text'])
+        self.assertEqual(self.db.execute("SELECT concurrency_limit FROM model_services WHERE model='fixture-native'").fetchone()[0], 5)
+        self.assertEqual(self.db.execute("SELECT unavailable_code FROM model_services WHERE model='fixture-native'").fetchone()[0], 'catalog.native-unavailable')
+        self.assertIsNone(self.db.execute("SELECT unavailable_code FROM model_services WHERE model='fixture-absent'").fetchone()[0])
+        self.assertEqual(self.db.execute("SELECT confirmed_absent_at FROM model_services WHERE model='fixture-absent'").fetchone()[0],
+                         '2026-01-01T00:02:00.000Z')
+        self.assertEqual(self.db.execute("SELECT retired FROM buddies WHERE effort='medium'").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT retired FROM buddies WHERE effort='low'").fetchone()[0], 1)
+        self.assertEqual([row[0] for row in self.db.execute("SELECT effort FROM buddies WHERE model='fixture-alpha' AND retired=0 ORDER BY effort_rank")], ['high'])
+        self.assertEqual([tuple(row) for row in self.db.execute("SELECT effort,effort_rank FROM buddies WHERE model='fixture-alpha' ORDER BY effort_rank")], [('high', 0), ('medium', 1), ('low', 2)])
+        self.assertEqual(self.db.execute("SELECT source_sequence FROM model_services WHERE model='fixture-gamma'").fetchone()[0], None)
+        self.assertEqual(self.db.execute("SELECT source_sequence FROM model_services WHERE model='fixture-orphan'").fetchone()[0], None)
         for table, before in frozen.items():
             self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT * FROM {table} ORDER BY rowid')], before)
+        self.assert_current_structure()
+
+    def test_model_facts_choose_current_buddy_group_or_last_unlisted_row(self):
+        self.schema31()
+        with self.db:
+            for version in range(31, 39):
+                upgrade.STEPS[version](self.db)
+        self.db.executescript((FIXTURE / 'schema-39-alias-stock.sql').read_text(encoding='utf-8'))
+        with self.db:
+            # The old writer's selected current row is the model fact source;
+            # the payload supplies effort order, not a second metadata copy.
+            self.db.execute("UPDATE buddies SET capabilities_json='[\"execution:codex\",\"effort:high\",\"input:image\"]' WHERE buddy_id='codex:openai:fixture-alpha:high'")
+            # An unlisted service has multiple old rows: the later physical row
+            # carries the last written model facts, without source proof.
+            self.db.execute("""INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,
+                available,enabled,capabilities_json,context_window,description,source)
+                SELECT 'codex:openai:fixture-orphan:low','orphan low',harness,provider,model,
+                       'low',1,enabled,'["execution:codex","effort:low","input:image"]',
+                       8192,'Last orphan detail','catalog:missing-later'
+                FROM buddies WHERE buddy_id='codex:openai:fixture-orphan:high'""")
+        upgrade.upgrade_state(self.state)
+        alpha = self.db.execute("SELECT input_modalities_json FROM model_services WHERE model='fixture-alpha'").fetchone()
+        orphan = self.db.execute("SELECT description,context_window,input_modalities_json,source_sequence FROM model_services WHERE model='fixture-orphan'").fetchone()
+        self.assertEqual(json.loads(alpha[0]), ['image'])
+        self.assertEqual(tuple(orphan), ('Last orphan detail', 8192, '["image"]', None))
+        self.assert_current_structure()
+
+    def test_confirmed_absence_wins_over_an_older_native_unavailability_payload(self):
+        self.schema31()
+        with self.db:
+            for version in range(31, 39):
+                upgrade.STEPS[version](self.db)
+        self.db.executescript((FIXTURE / 'schema-39-alias-stock.sql').read_text(encoding='utf-8'))
+        expected_time = self.db.execute("SELECT read_at FROM catalog_current WHERE harness='codex'").fetchone()[0]
+        payload = json.loads(self.db.execute("SELECT payload_json FROM evaluation_catalog WHERE discovery_id='cat-89b5b236ee44be1428bb5c86'").fetchone()[0])
+        provider = next(item for item in payload['providers'] if item['harness'] == 'codex' and item['provider'] == 'openai')
+        previous_model = dict(provider['models'][0])
+        previous_model.update(id='fixture-absent', available=False,
+                              unavailableReason={'code': 'catalog.native-unavailable', 'params': {}},
+                              unavailableContent='Earlier native limitation')
+        provider['models'] = [previous_model]
+        with self.db:
+            self.db.execute('INSERT INTO evaluation_catalog(discovery_id,payload_json) VALUES(?,?)',
+                            ('prior-native-unavailability', json.dumps(payload)))
+            self.db.execute("UPDATE buddies SET source='catalog:prior-native-unavailability' WHERE model='fixture-absent'")
+        upgrade.upgrade_state(self.state)
+        service = self.db.execute("SELECT confirmed_absent_at,unavailable_code FROM model_services WHERE model='fixture-absent'").fetchone()
+        self.assertEqual(tuple(service), (expected_time, None))
+        from hey_my_buddy.blackboard.catalog import buddy_state
+        self.assertEqual(buddy_state.get(self.db, 'codex:openai:fixture-absent:high')['unavailable_code'], 'catalog.model-absent')
         self.assert_current_structure()
 
     def test_schema36_model_stock_preserves_every_rekeyed_form(self):

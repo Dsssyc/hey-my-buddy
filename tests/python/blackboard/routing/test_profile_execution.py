@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from admission import admit_board
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
-from support import BoardTestCase, FakeClock
+from support import BoardTestCase, FakeClock, seed_buddy
 
 from hey_my_buddy.blackboard.evaluation.models import current_model, ensure_model_service
 from hey_my_buddy.blackboard.routing import router
@@ -33,10 +33,7 @@ class ProfileExecutionTests(BoardTestCase):
         with self.board_.store.db.write() as db:
             for buddy_id, service in ((PROFILE_BUDDY, PROFILE_SERVICE), (TARGET_BUDDY, TARGET_SERVICE),
                                       (CANDIDATE_BUDDY, CANDIDATE_SERVICE)):
-                db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                           "available,enabled,capabilities_json) VALUES(?,?,?,?,?,1,1,'[]')",
-                           (buddy_id, service["harness"], service["provider"], service["model"], "off"))
-                ensure_model_service(db, *service.values(), self.board_.store.now())
+                seed_buddy(db, buddy_id=buddy_id, **service, effort="off", now=self.board_.store.now())
             self.model_id = current_model(db, *TARGET_SERVICE.values())
             self.candidate_id = current_model(db, *CANDIDATE_SERVICE.values())
 

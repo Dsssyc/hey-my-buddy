@@ -74,8 +74,7 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         board = self.board(max_concurrent=4)
         with board.store.db.write() as db:
             db.execute(
-                "INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
-                " VALUES(?,?,?,8)",
+                "INSERT INTO model_services(harness,provider,model,concurrency_limit) VALUES(?,?,?,8) ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=8",
                 (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]),
             )
         lead, claim = self.lead(board)

@@ -54,7 +54,7 @@ class BillingTests(BoardTestCase):
         from copy import deepcopy
         from support import FIXTURE_CATALOG
         board = self.board()
-        board.call("model_catalog_refresh", {"requestId": "dsh-billing"})
+        board.call("model_catalog_refresh", {})
         with board.store.db.read() as db:
             from hey_my_buddy.protocol.billing import for_provider
             self.assertEqual(for_provider(db, "dsh", "deepseek-official")["kind"], "metered")
@@ -63,7 +63,7 @@ class BillingTests(BoardTestCase):
         provider.update(harness="zcode", provider="zhipu", accessType="zhipu-coding-plan-api-key")
         native["discoveries"] = [{"harness": "zcode", "status": "complete"}]
         self.catalog_fixture(native)
-        board.call("model_catalog_refresh", {"requestId": "zcode-billing"})
+        board.call("model_catalog_refresh", {})
         with board.store.db.read() as db:
             from hey_my_buddy.protocol.billing import for_provider
             self.assertEqual(for_provider(db, "zcode", "zhipu")["kind"], "subscription")

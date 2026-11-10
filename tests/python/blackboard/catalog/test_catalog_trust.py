@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
-from hey_my_buddy.blackboard.catalog import catalog, catalog_store
+from hey_my_buddy.blackboard.catalog import catalog, catalog_store, buddy_state
 
 
 def reading(harness='dsh', models=('alpha',), status='complete', account_status=None, efforts=('max',)):
@@ -44,10 +44,10 @@ class CatalogTrustTests(BoardTestCase):
 
     def state(self, harness='dsh'):
         with self.board.store.db.read() as db:
-            row = db.execute('SELECT status, reason, discovery_id FROM catalog_current WHERE harness=?', (harness,)).fetchone()
+            row = db.execute('SELECT status, reason, read_at FROM catalog_current WHERE harness=?', (harness,)).fetchone()
             pending = catalog.pending_model_services(db)
             read_at = catalog.catalog_read_at(db, harness)
-            buddies = db.execute('SELECT buddy_id, available, unavailable_code FROM buddies WHERE harness=?', (harness,)).fetchall()
+            buddies = [{key: row[key] for key in ('buddy_id','available','unavailable_code')} for row in buddy_state.rows(db, harness=harness)]
         return row, pending, read_at, buddies
 
     def test_unknown_discovery_retains_catalog_without_confirming_model_absence(self):
@@ -68,48 +68,41 @@ class CatalogTrustTests(BoardTestCase):
             self.assertEqual(row['status'], 'unknown')
             self.assertEqual(json.loads(row['reason']), payload['discoveries'][0]['reason'])
             self.assertEqual(result['catalog']['discoveries'][0]['content'], payload['discoveries'][0]['content'])
-            self.assertEqual(row['discovery_id'], confirmed['discoveryId'])
+            self.assertEqual(row['read_at'], before[2])
             self.assertEqual(read_at, before[2])
             self.assertEqual([tuple(buddy) for buddy in buddies], [tuple(buddy) for buddy in before[3]])
             self.assertEqual(pending, {})
             self.assertEqual(self.events(), [])
             self.assertNotIn('tableRevision', result)
 
-    def test_pending_owned_table_persists_the_first_absence_and_efforts_without_meta(self):
+    def test_pending_model_service_persists_the_first_absence_and_legal_efforts(self):
         self.record(reading(efforts=('high', 'max')))
         self.record(reading(models=()))
         with self.board.store.db.read() as db:
-            first = tuple(db.execute('SELECT harness,provider,model,since,efforts_json FROM catalog_pending').fetchone())
+            first = tuple(db.execute('SELECT harness,provider,model,pending_since FROM model_services').fetchone())
             self.assertEqual(first[:3], ('dsh', 'fixture', 'alpha'))
-            self.assertEqual(json.loads(first[4]), ['high', 'max'])
+            self.assertEqual(catalog.pending_model_efforts(db, 'dsh', 'fixture', 'alpha'), ['high', 'max'])
             self.assertIsNone(db.execute("SELECT key FROM meta WHERE key LIKE 'catalog-pending:%'").fetchone())
         self.clock.advance(60)
         self.record(reading(models=()))
         with self.board.store.db.read() as db:
-            self.assertEqual(tuple(db.execute('SELECT harness,provider,model,since,efforts_json FROM catalog_pending').fetchone()), first)
+            self.assertEqual(tuple(db.execute('SELECT harness,provider,model,pending_since FROM model_services').fetchone()), first)
         self.record(reading(efforts=('high', 'max')))
-        with self.board.store.db.read() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM catalog_pending').fetchone()[0], 0)
+        self.assertEqual(self.state()[1], {})
 
-    def test_pending_identity_and_current_directory_foreign_key_are_enforced(self):
+    def test_buddy_requires_its_model_service_identity(self):
         self.record(reading())
-        self.record(reading(models=()))
-        for harness in ('dsh', 'missing'):
-            with self.subTest(harness=harness), self.assertRaises(sqlite3.IntegrityError):
-                with self.board.store.db.write() as db:
-                    db.execute("INSERT INTO catalog_pending(harness,provider,model,since,efforts_json)"
-                               " VALUES(?,'fixture','alpha','other','[]')", (harness,))
-        self.assertEqual(len(self.state()[1]), 1)
+        with self.assertRaises(sqlite3.IntegrityError), self.board.store.db.write() as db:
+            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort) VALUES('missing','dsh','fixture','missing','max')")
 
-    def test_pending_replacement_rolls_back_with_the_publisher_transaction(self):
+    def test_pending_update_rolls_back_with_the_publisher_transaction(self):
         self.record(reading())
         self.record(reading(models=()))
         before = self.state()[1]
         before_events = self.events()
         with self.assertRaises(AssertionError):
             with self.board.store.db.write() as db:
-                catalog._write_pending_map(db, 'dsh', {catalog._model_service_key('fixture', 'beta'):
-                                                      {'since':'later','efforts':['max']}})
+                db.execute("UPDATE model_services SET pending_since='later'")
                 raise AssertionError('private publisher rollback')
         self.assertEqual(self.state()[1], before)
         self.assertEqual(self.events(), before_events)
@@ -125,7 +118,7 @@ class CatalogTrustTests(BoardTestCase):
         self.record(reading())
         observation = catalog_store.begin(self.evaluation)['observationId']
         with self.board.store.db.write() as db:
-            db.execute("CREATE TRIGGER refuse_pending BEFORE INSERT ON catalog_pending BEGIN"
+            db.execute("CREATE TRIGGER refuse_pending BEFORE UPDATE OF pending_since ON model_services BEGIN"
                        " SELECT RAISE(ABORT,'private pending failure'); END")
         with self.board.store.db.read() as db:
             before = rows(db)
@@ -153,7 +146,7 @@ class CatalogTrustTests(BoardTestCase):
         row, pending, read_at, buddies = self.state()
         self.assertEqual(row['status'], 'unknown')
         self.assertEqual(json.loads(row['reason']), {'code': 'catalog.account-status-unknown', 'params': {'harness': 'dsh'}})
-        self.assertIsNotNone(row['discovery_id'], 'The previously confirmed payload is retained')
+        self.assertIsNotNone(row['read_at'], 'The previously confirmed model facts are retained')
         self.assertEqual(read_at, trusted_at, 'An unknown reading is not a successful read')
         self.assertEqual([p['buddy_id'] for p in buddies], ['dsh:fixture:alpha:max'])
         self.assertTrue(buddies[0]['available'])
@@ -173,7 +166,7 @@ class CatalogTrustTests(BoardTestCase):
         self.assertEqual(result['appliedHarnesses'], ['dsh'])
         row, pending, read_at, buddies = self.state()
         self.assertEqual(row['status'], 'unknown')
-        self.assertIsNone(row['discovery_id'])
+        self.assertIsNone(row['read_at'])
         self.assertIsNone(read_at)
         self.assertEqual(buddies, [])
         with self.board.store.db.read() as db:
@@ -250,10 +243,10 @@ class CatalogTrustTests(BoardTestCase):
         self.assertEqual(kinds, ['catalog.model_pending', 'catalog.model_pending'], 'Repeated and unknown readings invent no transitions')
         self.assertEqual({payload['model'] for _, payload in self.events()}, {'alpha', 'beta'})
         # A duplicate request replays its recorded response without new events.
-        observation = catalog_store.begin(self.evaluation, 'replay')
+        observation = catalog_store.begin(self.evaluation)
         first = self.record(reading(models=('alpha',)), observation['observationId'])
         second = self.record(reading(models=('alpha',)), observation['observationId'])
-        self.assertTrue(second['duplicate'])
+        self.assertFalse(second['duplicate'])
         self.assertEqual([kind for kind, _ in self.events()][-1], 'catalog.model_recovered')
 
     def test_effort_only_change_is_not_a_model_disappearance(self):
@@ -269,9 +262,9 @@ class CatalogTrustTests(BoardTestCase):
 
     def test_out_of_order_observations_cannot_rewrite_the_pending_state(self):
         self.record(reading())
-        slow = catalog_store.begin(self.evaluation, 'slow')['observationId']
+        slow = catalog_store.begin(self.evaluation)['observationId']
         self.clock.advance(60)
-        fast = catalog_store.begin(self.evaluation, 'fast')['observationId']
+        fast = catalog_store.begin(self.evaluation)['observationId']
         self.record(reading(models=()), fast)
         result = self.record(reading(models=('alpha',)), slow)
         self.assertEqual(result['staleHarnesses'], ['dsh'])
@@ -294,9 +287,9 @@ class CatalogTrustTests(BoardTestCase):
         self.record(reading(efforts=('high', 'max')))
         self.record(reading(models=()))
         with self.board.store.db.read() as db:
-            stock = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending')]
+            stock = [tuple(row) for row in db.execute('SELECT harness,provider,model,pending_since FROM model_services WHERE pending_since IS NOT NULL')]
             self.assertEqual(catalog.pending_model_efforts(db, 'dsh', 'fixture', 'alpha'), ['high', 'max'])
         self.record(reading(models=(), account_status='unknown'))
         with self.board.store.db.read() as db:
-            self.assertEqual([tuple(row) for row in db.execute('SELECT * FROM catalog_pending')], stock)
+            self.assertEqual([tuple(row) for row in db.execute('SELECT harness,provider,model,pending_since FROM model_services WHERE pending_since IS NOT NULL')], stock)
             self.assertEqual(catalog.pending_model_efforts(db, 'dsh', 'fixture', 'alpha'), ['high', 'max'])

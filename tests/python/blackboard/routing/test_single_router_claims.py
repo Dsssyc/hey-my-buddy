@@ -96,7 +96,7 @@ class SingleRouterClaimTests(DecisionTestCase):
 
     def test_disabled_and_unavailable_buddies_are_specific_boundaries(self):
         for sql, code in (("UPDATE buddies SET enabled=0 WHERE buddy_id=?", 'router-disabled'),
-                          ("UPDATE buddies SET available=0 WHERE buddy_id=?", 'router-catalog-unavailable')):
+                          ("UPDATE buddies SET retired=1 WHERE buddy_id=?", 'router-catalog-unavailable')):
             with self.subTest(code=code, sql=sql):
                 board = self.case_board()
                 self.seed(board)
@@ -139,7 +139,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit) VALUES(?,?,?,1)",
+            connection.execute("UPDATE model_services SET concurrency_limit=1 WHERE harness=? AND provider=? AND model=?",
                                (CATALOG_BUDDY['harness'], CATALOG_BUDDY['provider'], CATALOG_BUDDY['model']))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')
@@ -163,7 +163,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit) VALUES(?,?,?,1)",
+            connection.execute("UPDATE model_services SET concurrency_limit=1 WHERE harness=? AND provider=? AND model=?",
                                ('dsh', 'deepseek-official', 'deepseek-flash'))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')

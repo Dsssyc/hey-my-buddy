@@ -26,7 +26,7 @@ class ProviderDenialRoutingTests(BoardTestCase):
         self.clock = FakeClock("2026-01-01T00:00:00.000Z")
         self.board_ = self.board(clock=self.clock)
         self.board_.evaluation._clock = self.clock
-        self.board_.call("model_catalog_refresh", {"requestId": "catalog"})
+        self.board_.call("model_catalog_refresh", {})
         self.board_.console_call("user_policy_publish", {"commandId": "enable",
             "buddySettings": [{"buddyId": item, "enabled": True}
                               for item in [*BUDDY_IDS, OTHER_PROVIDER_ID]],

@@ -613,27 +613,17 @@ class BoardService(_BaseResource):
         def handler(params: dict) -> dict:
             from ..catalog import catalog, catalog_store
 
-            schemas.reject_unknown(params, {"requestId"}, "model.catalog.refresh")
-            request_id = schemas.optional_string(params, "requestId", max_length=128)
-            observation = catalog_store.begin(self.evaluation, request_id)
-            if observation["response"] is not None:
-                return {**observation["response"], "duplicate": True}
+            schemas.reject_unknown(params, set(), "model.catalog.refresh")
             if self.automatic_discovery:
                 from .harness_health import HARNESSES
                 for name in HARNESSES:
                     self.harnesses.refresh(name, force=True)
-                with self.store.db.read() as db:
-                    cached = catalog_store.current(db)
-                discovered = cached.payload if cached else {'source': 'harness-health', 'providers': [], 'discoveries': [
-                    {'harness': row['harness'], 'status': 'unknown', 'reason': row.get('reason')} for row in self.harnesses.all()]}
-                if cached is None:
-                    discovered = catalog.canonical_payload(discovered)
-            else:
-                from ...buddy.harnesses.runtime_selection import bound
-                with bound(observation['harnesses']):
-                    discovered = catalog.discover(directory=self.store.directory, harnesses=observation['harnesses'])
-            recorded = self.evaluation.record_catalog(discovered, observation["observationId"])
-            return {**recorded, "requestId": request_id}
+                return catalog_store.response(self.evaluation)
+            from ...buddy.harnesses.runtime_selection import bound
+            observation = catalog_store.begin(self.evaluation)
+            with bound(observation['harnesses']):
+                discovered = catalog.discover(directory=self.store.directory, harnesses=observation['harnesses'])
+            return self.evaluation.record_catalog(discovered, observation["observationId"])
 
         return self._guard("model.catalog.refresh", request_json, handler)
 

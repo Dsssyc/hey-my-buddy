@@ -1,6 +1,6 @@
 """Authenticated policy changes cannot be forged by a Host."""
 
-from support import BoardTestCase
+from support import BoardTestCase, seed_buddy
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import schemas
@@ -17,9 +17,8 @@ class UserPolicyTests(BoardTestCase):
         self.board_.service.register_console_authority(self.session)
         with self.board_.store.db.write() as db:
             for buddy_id, available in [('live', 1), ('retired', 0)]:
-                db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,?,?)", (buddy_id, 'dsh', 'fixture', buddy_id, 'max', available, 1, '["decision"]'))
-                from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
-                ensure_model_service(db, 'dsh', 'fixture', buddy_id, self.board_.store.now())
+                seed_buddy(db, buddy_id=buddy_id, harness='dsh', provider='fixture',
+                           model=buddy_id, effort='max', available=available, now=self.board_.store.now())
             db.execute("INSERT INTO router_buddies(position,buddy_id) VALUES(0,'retired')")
             db.execute("INSERT INTO evaluation_preferences VALUES('retired','pin','user intent')")
 
@@ -46,11 +45,9 @@ class UserPolicyTests(BoardTestCase):
 
     def test_buddy_settings_patch_accepts_more_than_200_distinct_buddies(self):
         with self.board_.store.db.write() as db:
-            db.executemany(
-                "INSERT INTO buddies(buddy_id,harness,provider,model,effort,available,enabled,capabilities_json)"
-                " VALUES(?,?,?,?,?,?,?,?)",
-                [(f'bulk-{index}', 'dsh', 'fixture', f'model-{index}', 'max', 1, 1, '[]')
-                 for index in range(205)])
+            for index in range(205):
+                seed_buddy(db, buddy_id=f'bulk-{index}', harness='dsh', provider='fixture',
+                           model=f'model-{index}', effort='max', now=self.board_.store.now())
         changes = [{'buddyId': f'bulk-{index}', 'enabled': False} for index in range(205)]
         published = self.user('user_policy_publish', self.payload({}, 'bulk-disable', buddySettings=changes))
         self.assertEqual(published['counts']['buddySettings'], 205)
@@ -208,7 +205,7 @@ class UserPolicyTests(BoardTestCase):
         result = self.user('user_policy_publish', self.payload(grant, modelServiceConcurrency=patch))
         self.assertEqual(result['counts']['modelServiceConcurrency'], 1)
         with self.board_.store.db.read() as db:
-            stored = db.execute('SELECT concurrency_limit FROM model_service_concurrency').fetchall()
+            stored = db.execute('SELECT concurrency_limit FROM model_services WHERE concurrency_limit IS NOT NULL').fetchall()
         self.assertEqual([row['concurrency_limit'] for row in stored], [3])
         self.assert_denied('user_policy_publish', self.payload(self.publication_params(), 'forged-limits', modelServiceConcurrency=patch))
 
@@ -217,7 +214,7 @@ class UserPolicyTests(BoardTestCase):
         patch = [{**LIVE_MODEL_SERVICE, 'limit': 2 ** 63 - 1}]
         self.user('user_policy_publish', self.payload(grant, 'raised-limit', modelServiceConcurrency=patch))
         with self.board_.store.db.read() as db:
-            stored = db.execute('SELECT concurrency_limit FROM model_service_concurrency').fetchone()
+            stored = db.execute('SELECT concurrency_limit FROM model_services WHERE concurrency_limit IS NOT NULL').fetchone()
         self.assertEqual(stored['concurrency_limit'], 2 ** 63 - 1)
 
     def test_model_service_concurrency_rejects_integer_beyond_sqlite_without_mutation(self):
@@ -230,7 +227,7 @@ class UserPolicyTests(BoardTestCase):
         self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
         self.assertIn('positive SQLite integer', str(caught.exception))
         with self.board_.store.db.read() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM model_service_concurrency').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM model_services WHERE concurrency_limit IS NOT NULL').fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT enabled FROM buddies WHERE buddy_id='live'").fetchone()[0], 1)
 
     def test_model_service_concurrency_rejects_derived_fields_and_bad_limits(self):
@@ -248,4 +245,4 @@ class UserPolicyTests(BoardTestCase):
                 self.user('user_policy_publish', self.payload(grant, modelServiceConcurrency=patch))
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
         with self.board_.store.db.read() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) AS count FROM model_service_concurrency').fetchone()['count'], 0)
+            self.assertEqual(db.execute('SELECT COUNT(*) AS count FROM model_services WHERE concurrency_limit IS NOT NULL').fetchone()['count'], 0)

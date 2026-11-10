@@ -266,12 +266,13 @@ def buddy_problem(connection, buddy_id: str, routing_mode: str, *, now=None) -> 
     def unavailable(code, **facts):
         return None, code, facts
 
-    row = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
+    from ..catalog import buddy_state
+    row = buddy_state.get(connection, buddy_id)
     if row is None:
         return unavailable("router-catalog-unavailable")
     if not row["enabled"]:
         return unavailable("router-disabled")
-    if not row["available"]:
+    if not row["catalog_available"]:
         cause = reason_from_json(row["unavailable_code"], row["unavailable_params_json"])
         return unavailable("router-catalog-unavailable", **({"cause": cause} if cause else {}))
     health = read_health(connection, row["harness"])

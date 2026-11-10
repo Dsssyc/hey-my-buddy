@@ -41,18 +41,19 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         else:
             with self.board_.store.db.write() as db:
                 if kind == "capability":
-                    db.execute("UPDATE buddies SET capabilities_json='[]' WHERE buddy_id=?", (buddy,))
+                    db.execute("UPDATE model_services SET input_modalities_json='[]' WHERE (harness,provider,model)=(SELECT harness,provider,model FROM buddies WHERE buddy_id=?)", (buddy,))
                 else:
-                    field = "enabled" if kind == "disabled" else "available"
-                    db.execute(f"UPDATE buddies SET {field}=0 WHERE buddy_id=?", (buddy,))
+                    field = "enabled" if kind == "disabled" else "retired"
+                    db.execute(f"UPDATE buddies SET {field}=? WHERE buddy_id=?", (0 if kind == "disabled" else 1, buddy))
 
     def assert_retry(self, kind, reason):
         if kind == "quota":
             with self.board_.store.db.write() as db:
+                db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','fixture-b','bravo')")
                 db.execute("UPDATE buddies SET provider='fixture-b' WHERE buddy_id=?", (B,))
                 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
                 ensure_model_service(db, "dsh", "fixture-b", "bravo", self.board_.store.now())
-        request, first = self.start(three=True, micro_task=True, required_capabilities=("fixture:required",) if kind == "capability" else ())
+        request, first = self.start(three=True, micro_task=True, required_capabilities=("input:image",) if kind == "capability" else ())
         old_dispatch = self.dispatch_of(first["task"]["taskId"])
         with self.board_.store.db.read() as db:
             from hey_my_buddy.blackboard.routing import router_sequence
@@ -202,7 +203,7 @@ class CatalogAndPreferencePublicationTests(DecisionTestCase):
     def test_catalog_refresh_during_call_keeps_frozen_input_and_publishes(self):
         board = self.board()
         request, claim = self.begin(board)
-        board.call("model_catalog_refresh", {"requestId": "reread-during-call"})
+        board.call("model_catalog_refresh", {})
         self.finish(board, request, claim)
 
     def test_unrelated_preference_during_call_keeps_frozen_input_and_publishes(self):

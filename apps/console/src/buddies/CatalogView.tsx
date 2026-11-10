@@ -145,7 +145,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     if (refusal) { setRefused(true); return; }
     setBusy(true); editor.setAuxiliaryBusy(true); setError(""); setRefused(false); setNote("");
     try {
-      await api.command("model_catalog_refresh", { requestId: crypto.randomUUID() }, snapshot.csrfToken);
+      await api.command("model_catalog_refresh", {}, snapshot.csrfToken);
       // The program publishes the catalogue itself; this page only reads the
       // snapshot again and moves its draft onto it. It never uploads a buddy.
       const next = await refresh();

@@ -281,7 +281,7 @@ class RouterPublicationTests(WorkflowTestCase):
         buddy = next(p for p in snapshot['buddies'] if p['buddyId'] == BUDDY_ID)
         self.assertNotIn('decision', buddy['capabilities'])
         with board.store.db.read() as connection:
-            recorded = json.loads(connection.execute('SELECT capabilities_json FROM buddies WHERE buddy_id=?', (BUDDY_ID,)).fetchone()[0])
+            recorded = json.loads(connection.execute('SELECT input_modalities_json FROM model_services WHERE (harness,provider,model)=(SELECT harness,provider,model FROM buddies WHERE buddy_id=?)', (BUDDY_ID,)).fetchone()[0])
         self.assertNotIn('decision', recorded)
         self.assertFalse(hasattr(DshAdapter, 'read_only_structured_verified'))
         eligible = console_snapshot_projection(board.service)[0]

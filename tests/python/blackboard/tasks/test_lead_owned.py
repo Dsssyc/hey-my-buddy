@@ -214,8 +214,8 @@ class LeadOwnedTests(WorkflowTestCase):
     def test_lead_can_review_continue_accept_conclude_and_cancel_owned_work(self):
         board = self.board(max_concurrent=4)
         with board.store.db.write() as db:
-            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
-                       " VALUES(?,?,?,8)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
+            db.execute("INSERT INTO model_services(harness,provider,model,concurrency_limit) VALUES(?,?,?,8) ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=8",
+                       (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
         _, claim = self.lead(board)
         credential = {"credential": claim["agentCredential"]}
         child = self.owned(board, claim)
@@ -251,8 +251,8 @@ class LeadOwnedTests(WorkflowTestCase):
     def test_child_execution_does_not_inherit_lead_authority(self):
         board = self.board(max_concurrent=4)
         with board.store.db.write() as db:
-            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
-                       " VALUES(?,?,?,8)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
+            db.execute("INSERT INTO model_services(harness,provider,model,concurrency_limit) VALUES(?,?,?,8) ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=8",
+                       (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
         _, claim = self.lead(board)
         first = self.owned(board, claim, "first")
         second = self.owned(board, claim, "second")
@@ -284,8 +284,8 @@ class LeadOwnedTests(WorkflowTestCase):
     def test_lead_can_settle_helpers_inside_its_owned_micro_task(self):
         board = self.board(max_concurrent=4)
         with board.store.db.write() as db:
-            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
-                       " VALUES(?,?,?,8)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
+            db.execute("INSERT INTO model_services(harness,provider,model,concurrency_limit) VALUES(?,?,?,8) ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=8",
+                       (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
         _, claim = self.lead(board)
         owned = self.owned(board, claim)
         view, _ = self.finish_owned(board, owned, disposition="assistance")
@@ -335,8 +335,8 @@ class LeadOwnedTests(WorkflowTestCase):
     def test_lead_cannot_target_a_foreign_helper_through_its_owned_root(self):
         board = self.board(max_concurrent=4)
         with board.store.db.write() as db:
-            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
-                       " VALUES(?,?,?,8)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
+            db.execute("INSERT INTO model_services(harness,provider,model,concurrency_limit) VALUES(?,?,?,8) ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=8",
+                       (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
         _, claim = self.lead(board)
         owned = self.owned(board, claim)
         foreign = self.submit(board, request_id="foreign-root", cwd=str(self.workdir("foreign-root")),

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from ...protocol.capabilities import buddy_capabilities
 from .candidate import candidate_bound
+from ..catalog import buddy_state
 
 from contextlib import nullcontext
 
@@ -148,9 +149,9 @@ class DecisionCoordinator:
                    "codingOnly": coding_only, "routingBasis": {"overloadedModelServices": overloaded_model_services or []}}
         selected, cooling_buddies = [], []
         has_pins = connection.execute("SELECT 1 FROM evaluation_preferences WHERE mode='pin' LIMIT 1").fetchone() is not None
-        for row in connection.execute(
-            "SELECT p.*,f.note AS preference_note FROM buddies p"
-            " LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id ORDER BY p.rowid"):
+        notes = {row['buddy_id']: row['note'] for row in connection.execute('SELECT buddy_id,note FROM evaluation_preferences')}
+        for row in buddy_state.rows(connection):
+            row['preference_note'] = notes.get(row['buddy_id'])
             bound = candidate_bound(connection, row, request, now, has_pins=has_pins)
             if bound is None:
                 selected.append(row)
@@ -170,14 +171,14 @@ class DecisionCoordinator:
     def _excluded_buddies(self, connection: sqlite3.Connection, *, required_capabilities: list[str], constraints: dict | None = None) -> list[dict]:
         """The user's exclusions inside this request's other hard bounds."""
         request = {"requiredCapabilities": required_capabilities, "constraints": constraints or {}}
+        excluded = {row['buddy_id']: row['note'] for row in connection.execute(
+            "SELECT buddy_id,note FROM evaluation_preferences WHERE mode='exclude'")}
         return [{"buddyId": row["buddy_id"], **{key: row[key] for key in schemas.BUDDY_FIELDS},
-                 "note": row["preference_note"]}
-                for row in connection.execute(
-                    "SELECT p.*, f.note AS preference_note FROM buddies p"
-                    " JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE f.mode='exclude' ORDER BY p.rowid")
-                if candidate_bound(connection, row, request, self._now(), apply_preferences=False, check_cooling=False) is None]
+                 "note": excluded[row['buddy_id']]}
+                for row in buddy_state.rows(connection) if row['buddy_id'] in excluded
+                and candidate_bound(connection, row, request, self._now(), apply_preferences=False, check_cooling=False) is None]
 
-    def _freeze_routing_basis(self, connection: sqlite3.Connection, *, candidates: list[sqlite3.Row], required_capabilities: list[str], constraints: dict | None = None, cooling_buddies: list[dict], overloaded_model_services: list[dict] | None = None) -> dict:
+    def _freeze_routing_basis(self, connection: sqlite3.Connection, *, candidates: list[dict], required_capabilities: list[str], constraints: dict | None = None, cooling_buddies: list[dict], overloaded_model_services: list[dict] | None = None) -> dict:
         """Keep submission-time facts; a retry records its own frozen basis."""
         return {"candidateCount": len(candidates), "excludedBuddies": self._excluded_buddies(
                     connection, required_capabilities=required_capabilities, constraints=constraints),
@@ -207,7 +208,7 @@ class DecisionCoordinator:
         return "counted"
 
     # -- bounded model input -------------------------------------------------
-    def _buddy_input(self, row: sqlite3.Row) -> dict:
+    def _buddy_input(self, row: dict) -> dict:
         entry = {
             "buddyId": row["buddy_id"],
             "harness": row["harness"],
@@ -1173,7 +1174,7 @@ class DecisionCoordinator:
             return {**checked, "answer_valid": True, "abstained": True, "note": note,
                     "output": {**output, "decision": decision, "policyCheck": None}, "evidence": decision["evidence"]}
         selected = next(dict(item) for item in buddies if item["buddyId"] == buddy_id)
-        candidate = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
+        candidate = buddy_state.get(connection, buddy_id)
         # A changed cached harness health does not invalidate an answer already run.
         bound = candidate_bound(connection, candidate, request, now, frozen=selected, require_health=False)
         if bound is not None:

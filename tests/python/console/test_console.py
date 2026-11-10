@@ -273,7 +273,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         _stated, browser = self.open_console(board)
         snapshot = browser.bootstrap()
         csrf = snapshot["csrfToken"]
-        body = {"operation": "model_catalog_refresh", "params": {"requestId": "origin-check"}}
+        body = {"operation": "model_catalog_refresh", "params": {}}
         good_headers = {"X-Hey-My-Buddy-CSRF": csrf, "Content-Type": "application/json"}
 
         status, _h, _d = browser.call(
@@ -360,7 +360,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         run_id = submitted["task"]["runId"]
         _, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
-        board.call("model_catalog_refresh", {"requestId": "cat"})
+        board.call("model_catalog_refresh", {})
         buddy = next(p for p in browser.bootstrap()["buddies"] if p["buddyId"] == BUDDY_ID)
         model_service = {key: buddy[key] for key in ("harness", "provider", "model")}
         status, _h, data = browser.command("task_cancel", {"runId": run_id, 'note': "console operator"}, csrf=csrf)
@@ -683,25 +683,25 @@ class ConsoleDaemonTests(ConsoleTestCase):
                 browser = Browser(opened["url"])
                 csrf = browser.bootstrap()["csrfToken"]
                 status, _headers, body = browser.command(
-                    "model_catalog_refresh", {"requestId": "r05-http-catalog"}, csrf=csrf,
+                    "model_catalog_refresh", {}, csrf=csrf,
                 )
                 self.assertEqual(status, 200, body)
                 self.assertFalse(trace.exists(), trace.read_text(encoding="utf-8") if trace.exists() else "")
                 refreshed = json.loads(body)["result"]["catalog"]
-                self.assertEqual(refreshed["source"], f"file:{fixture}", "R-05: private fixture source")
-                self.assertEqual(refreshed["providers"][0]["models"][0]["id"], model["id"], "R-05: private fixture content")
+                self.assertEqual(refreshed["source"], "current-native-observations", "R-05: current catalog projection")
+                self.assertEqual({item['id'] for item in refreshed['providers'][0]['models']}, {item['id'] for item in payload['providers'][0]['models']}, 'R-05: private fixture content')
                 # Re-read changed file contents through the console service boundary;
                 # a cached constant or a different fixture cannot satisfy this check.
                 model["id"] = "r05-second-private-model"
                 fixture.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
                 status, _headers, body = browser.command(
-                    "model_catalog_refresh", {"requestId": "r05-second-catalog"}, csrf=csrf,
+                    "model_catalog_refresh", {}, csrf=csrf,
                 )
                 self.assertEqual(status, 200, body)
                 refreshed = json.loads(body)["result"]
                 self.assertFalse(trace.exists(), trace.read_text(encoding="utf-8") if trace.exists() else "")
-                self.assertEqual(refreshed["catalog"]["source"], f"file:{fixture}", "R-05: private fixture source after rewrite")
-                self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"], model["id"], "R-05: private fixture content after rewrite")
+                self.assertEqual(refreshed["catalog"]["source"], "current-native-observations", "R-05: current catalog projection after rewrite")
+                self.assertEqual({item['id'] for item in refreshed['catalog']['providers'][0]['models']}, {item['id'] for item in payload['providers'][0]['models']}, 'R-05: private fixture content after rewrite')
                 self.assertIn(model["id"], {buddy["model"] for buddy in browser.bootstrap()["buddies"]})
         finally:
             # CLI, HTTP and bootstrap failures must still identify a discovery
@@ -751,10 +751,9 @@ class ConsoleDaemonTests(ConsoleTestCase):
             browser = Browser(opened["url"])
             csrf = browser.bootstrap()["csrfToken"]
             self.assertNotIn("tableRevision", browser.bootstrap())
-            status, _headers, body = browser.command("model_catalog_refresh", {"requestId": "console-cat"}, csrf=csrf)
+            status, _headers, body = browser.command("model_catalog_refresh", {}, csrf=csrf)
             self.assertEqual(status, 200, body)
-            self.assertEqual(json.loads(body)["result"]["catalog"]["source"],
-                             f"file:{self.directory / 'model-catalog.json'}")
+            self.assertEqual(json.loads(body)["result"]["catalog"]["source"], "current-native-observations")
             status, _headers, body = browser.command("user_policy_publish", {
                 "commandId": "cli-publish",
                 "buddySettings": [{"buddyId": BUDDY_ID, "enabled": True}],
@@ -775,7 +774,7 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         from blackboard.routing.test_decision import CATALOG_BUDDY, SECOND_BUDDY
 
         board = self.board()
-        board.call("model_catalog_refresh", {"requestId": "cancel-host-selection"})
+        board.call("model_catalog_refresh", {})
         board.console_call("user_policy_publish", {
             "commandId": "configure-cancel-host-selection",
             "buddySettings": [{"buddyId": buddy["buddyId"], "enabled": True}

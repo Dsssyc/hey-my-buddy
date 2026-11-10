@@ -14,15 +14,13 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from fake_executable import make_fake_executable
-from support import FIXTURE_CATALOG, BoardTestCase, wait_for
+from support import FIXTURE_CATALOG, BoardTestCase, seed_buddy, wait_for
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase
 from blackboard.tasks.test_workflow import WorkflowTestCase
-from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler, _RecoveredExecution
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.store import BoardStore
-from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.execution import fsync_json
 from hey_my_buddy.protocol.process_identity import inspect_process_identity, kill_verified_process_session
@@ -357,11 +355,8 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             first = "dsh:deepseek-official:deepseek-flash:max"
             with store.db.write() as db:
                 for buddy_id, model in ((first, "deepseek-flash"), (candidate, "deepseek-v4-pro")):
-                    db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                               "available,enabled,capabilities_json) VALUES(?,?,?,?,?,1,1,?)",
-                               (buddy_id, "dsh", "deepseek-official", model, "max",
-                                canonical_json([])))
-                    ensure_model_service(db, "dsh", "deepseek-official", model, store.now())
+                    seed_buddy(db, buddy_id=buddy_id, harness="dsh", provider="deepseek-official",
+                               model=model, effort="max", now=store.now())
                 settings = {**router.configuration(db), "routerBuddyIds": [first],
                             "defaultRoutingMode": "fast"}
                 router._write_settings(db, settings)
@@ -421,10 +416,8 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             store.initialize()
             with store.db.write() as db:
                 for buddy_id, harness, provider, model, effort in (*routers, candidate):
-                    db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                               "available,enabled,capabilities_json) VALUES(?,?,?,?,?,1,1,?)",
-                               (buddy_id, harness, provider, model, effort, canonical_json([])))
-                    ensure_model_service(db, harness, provider, model, store.now())
+                    seed_buddy(db, buddy_id=buddy_id, harness=harness, provider=provider,
+                               model=model, effort=effort, now=store.now())
                 settings = {**router.configuration(db), "routerBuddyIds": [item[0] for item in routers],
                             "defaultRoutingMode": "fast"}
                 if wait is not None:

@@ -128,7 +128,7 @@ class ConsoleAccessTests(ConsoleTestCase):
 
     def test_two_cookie_free_writers_apply_last_write(self):
         board = self.board()
-        board.call("model_catalog_refresh", {"requestId": "two-windows-catalog"})
+        board.call("model_catalog_refresh", {})
         _, first = self.open_console(board)
         second = Browser(first.origin + "/")
         before = [first.bootstrap(), second.bootstrap()]

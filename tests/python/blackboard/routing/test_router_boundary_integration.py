@@ -14,7 +14,7 @@ from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router_boundary_data import _candidate_problem, _continuation_context, router_trials, routing_boundary
-from support import FakeClock
+from support import FakeClock, seed_buddy
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase, A, B, C, T0, NONCE
 import blackboard.routing.test_router_failover_integration as failover
 from blackboard.tasks.test_workflow import WorkflowTestCase
@@ -249,6 +249,8 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.add_buddy(C, model="charlie")
         self.add_buddy("dsh:fixture:delta:max", model="delta")
         with self.board_.store.db.write() as db:
+            db.executemany("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','workers',?)",
+                           [(model,) for model in ('charlie', 'delta')])
             db.execute("UPDATE buddies SET provider='workers' WHERE model IN ('charlie','delta')")
             for model in ("charlie", "delta"):
                 ensure_model_service(db, "dsh", "workers", model, self.board_.store.now())
@@ -267,6 +269,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     def test_queued_dispatch_preflight_failure_keeps_its_own_outcome_and_recovery(self):
         from hey_my_buddy.blackboard.routing.quota_routing import record_rejection
         with self.board_.store.db.write() as db:
+            db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','other-router','bravo')")
             db.execute("UPDATE buddies SET provider='other-router' WHERE buddy_id=?", (B,))
             ensure_model_service(db, "dsh", "other-router", "bravo", self.board_.store.now())
         request = self.request()
@@ -368,6 +371,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         request = self.request()
         frozen = self.boundary(request["decisionId"])
         with self.board_.store.db.write() as db:
+            db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','fixture','later-model')")
             db.execute("UPDATE buddies SET model='later-model'")
             ensure_model_service(db, "dsh", "fixture", "later-model", self.board_.store.now())
             db.execute("UPDATE evaluation_preferences SET note='later preference'")
@@ -526,11 +530,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.board_ = self.board(clock=self.clock)
         with self.board_.store.db.write() as db:
             for buddy_id, model in ((A, "alpha"), (B, "bravo")):
-                db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                           "available,enabled,capabilities_json) "
-                           "VALUES(?,'dsh','fixture',?,'max',1,1,?)",
-                           (buddy_id, model, canonical_json([])))
-                ensure_model_service(db, "dsh", "fixture", model, self.board_.store.now())
+                seed_buddy(db, buddy_id=buddy_id, harness="dsh", provider="fixture",
+                           model=model, effort="max", now=self.board_.store.now())
             router._write_settings(db, {**router.configuration(db), "routerBuddyIds": []})
 
     def routed(self, request_id="micro-task-1", *, access="write", kind="existing"):
@@ -657,6 +658,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         view = self.routed()
         original = view["routing"]["routingBoundary"]
         with self.board_.store.db.write() as db:
+            db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','fixture','changed-model')")
             db.execute("UPDATE buddies SET model='changed-model' WHERE buddy_id=?", (B,))
             ensure_model_service(db, "dsh", "fixture", "changed-model", self.board_.store.now())
         latest = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
@@ -829,7 +831,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         cases = (
             ("identity-changed", "UPDATE buddies SET model='changed' WHERE buddy_id=?", (B,), {}),
             ("disabled", "UPDATE buddies SET enabled=0 WHERE buddy_id=?", (B,), {}),
-            ("unavailable", "UPDATE buddies SET available=0 WHERE buddy_id=?", (B,), {}),
+            ("unavailable", "UPDATE buddies SET retired=1 WHERE buddy_id=?", (B,), {}),
             ("constraints", None, (), {"constraints": {"model": "other"}}),
             ("capability-missing", None, (), {"requiredCapabilities": ["fixture-only"]}),
             ("excluded", "INSERT INTO evaluation_preferences VALUES(?,'exclude','Host content')", (B,), {}),
@@ -841,6 +843,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
             for bound, statement, values, request in cases:
                 with self.subTest(bound=bound):
                     db.execute("SAVEPOINT candidate_gate")
+                    if bound == "identity-changed":
+                        db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','fixture','changed')")
                     if statement:
                         db.execute(statement, values)
                     if bound == "identity-changed":

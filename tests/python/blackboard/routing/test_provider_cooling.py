@@ -114,7 +114,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
              "models": [{"id": item["model"], "name": item["model"]}]} for item in self.identities]})
         self.board_ = self.board(clock=self.clock)
         self.board_.evaluation._clock = self.clock
-        self.board_.call("model_catalog_refresh", {"requestId": "catalog"})
+        self.board_.call("model_catalog_refresh", {})
         self.enable(0)
 
     def enable(self, index):
@@ -274,7 +274,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
         provider = self.identities[0]["provider"]
         self.catalog_fixture({**FIXTURE_CATALOG, "providers": [{"harness": "dsh", "provider": provider,
             "efforts": ["off", "max"], "models": [{"id": self.identities[0]["model"]}, {"id": "spare"}]}]})
-        self.board_.call("model_catalog_refresh", {"requestId": "extra-efforts"})
+        self.board_.call("model_catalog_refresh", {})
         extra = [f"dsh:{provider}:{self.identities[0]['model']}:max", f"dsh:{provider}:spare:off"]
         self.board_.console_call("user_policy_publish", {"commandId": "enable-extra",
             "buddySettings": [{"buddyId": buddy_id, "enabled": True} for buddy_id in extra],
@@ -290,7 +290,8 @@ class CoolingWorkflowTests(WorkflowTestCase):
         self.assertEqual(basis["excludedBuddies"], [{"buddyId": self.ids[0], **self.identities[0], "note": "also excluded by user"}])
         from hey_my_buddy.blackboard.routing.candidate import candidate_bound
         with self.board_.store.db.read() as db:
-            other_harness = dict(db.execute("SELECT * FROM buddies WHERE buddy_id=?", (self.ids[0],)).fetchone())
+            from hey_my_buddy.blackboard.catalog import buddy_state
+            other_harness = buddy_state.get(db, self.ids[0])
             other_harness["harness"] = "codex"
             self.assertIsNone(candidate_bound(db, other_harness, {"routingBasis": {"overloadedModelServices": excluded}}, T0,
                                              require_health=False, apply_preferences=False, check_cooling=False))

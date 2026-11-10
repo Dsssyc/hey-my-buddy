@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from support import BoardTestCase
+from support import BoardTestCase, seed_buddy
 
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
@@ -67,7 +67,7 @@ class EvaluationTestCase(BoardTestCase):
         return console_snapshot_projection(board.service)[0]
 
     def seed_catalog(self, board) -> dict:
-        return board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
+        return board.call("model_catalog_refresh", {})
 
     def publication_params(self, board) -> dict:
         return {}
@@ -114,7 +114,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         expected_permissions = {"permission:none", "permission:web", "permission:read", "permission:write", "permission:full"}
         self.assertFalse(any(cap.startswith("permission:") or cap in ("decision", "routing:fast") for cap in buddy["capabilities"]))
         with board.store.db.read() as db:
-            stored = json.loads(db.execute("SELECT capabilities_json FROM buddies WHERE buddy_id=?", (BUDDY_ID,)).fetchone()[0])
+            stored = json.loads(db.execute("SELECT input_modalities_json FROM model_services WHERE harness='dsh' AND provider='deepseek-official' AND model='deepseek-flash'").fetchone()[0])
         self.assertFalse(any(cap.startswith("permission:") or cap in ("decision", "routing:fast") for cap in stored))
         self.publish(board, buddySettings=[{"buddyId": BUDDY_ID, "enabled": True}])
         published = next(item for item in self.snapshot(board)["buddies"] if item["buddyId"] == BUDDY_ID)
@@ -303,10 +303,10 @@ class CatalogRefreshTests(EvaluationTestCase):
 
     def test_catalog_refresh_is_explicit_attributed_and_failure_safe(self):
         board = self.board()
-        refreshed = board.call("model_catalog_refresh", {"requestId": "cat-1"})
-        self.assertEqual(refreshed["catalog"]["source"], f"file:{self.directory / 'model-catalog.json'}")
-        self.assertEqual(refreshed["catalog"]["harnessVersion"], "test-harness-1")
-        self.assertEqual(refreshed["catalog"]["providers"][0]["efforts"], ["off", "low", "high", "max"])
+        refreshed = board.call("model_catalog_refresh", {})
+        self.assertEqual(refreshed["catalog"]["source"], "current-native-observations")
+        self.assertIsNone(refreshed["catalog"]["harnessVersion"])
+        self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["efforts"], ["off", "low", "high", "max"])
         proposals = refreshed["buddies"]
         self.assertTrue(proposals)
         self.assertTrue(all(item["enabled"] is False for item in proposals), "discovered buddies start disabled")
@@ -316,8 +316,8 @@ class CatalogRefreshTests(EvaluationTestCase):
         self.assertEqual(len(self.snapshot(board)["buddies"]), len(proposals))
         buddy_ids = [buddy["buddyId"] for buddy in self.snapshot(board)["buddies"]]
         # A new observation of identical native metadata keeps the same buddies.
-        repeated = board.call("model_catalog_refresh", {"requestId": "cat-2"})
-        self.assertTrue(repeated["duplicate"])
+        repeated = board.call("model_catalog_refresh", {})
+        self.assertFalse(repeated["duplicate"])
         self.assertEqual([buddy["buddyId"] for buddy in self.snapshot(board)["buddies"]], buddy_ids)
 
         # A failed discovery keeps the previous recorded catalog and the table.
@@ -327,7 +327,7 @@ class CatalogRefreshTests(EvaluationTestCase):
         original = catalog.discover
         catalog.discover = lambda **_kwargs: (_ for _ in ()).throw(_BoardError("CATALOG_UNAVAILABLE", "no harness"))
         try:
-            self.assert_code("CATALOG_UNAVAILABLE", board.call, "model_catalog_refresh", {"requestId": "cat-3"})
+            self.assert_code("CATALOG_UNAVAILABLE", board.call, "model_catalog_refresh", {})
         finally:
             catalog.discover = original
         self.assertEqual(len(self.snapshot(board)["buddies"]), len(proposals))
@@ -366,18 +366,13 @@ class EffortRankTests(EvaluationTestCase):
         self.assertEqual(ranks(self.snapshot(board)["buddies"]), expected)
         self.assertEqual(ranks(board.call("buddy_list", {"includeUnavailable": True})["buddies"]), expected)
 
-        # A retained buddy whose model or effort is not in the current catalog
-        # keeps its row but has no position in that catalog's order.
+        # A manually retained fixture keeps its stored effort rank, whose default is zero.
         with board.store.db.write() as db:
             for model, effort in (("retired-model", "max"), ("deepseek-flash", "ultra")):
                 buddy_id = f"dsh:deepseek-official:{model}:{effort}"
-                db.execute(
-                    "INSERT INTO buddies(buddy_id,harness,provider,model,effort,available,enabled,capabilities_json)"
-                    " VALUES(?,?,?,?,?,?,?,?)",
-                    (buddy_id, "dsh", "deepseek-official", model, effort, 1, 1, "[]"),
-                )
-                ensure_model_service(db, "dsh", "deepseek-official", model, board.store.now())
-        expected.update({("retired-model", "max"): None, ("deepseek-flash", "ultra"): None})
+                seed_buddy(db, buddy_id=buddy_id, harness="dsh", provider="deepseek-official",
+                           model=model, effort=effort, now=board.store.now())
+        expected.update({("retired-model", "max"): 0, ("deepseek-flash", "ultra"): 0})
         self.assertEqual(ranks(self.snapshot(board)["buddies"]), expected)
         self.assertEqual(ranks(board.call("buddy_list", {"includeUnavailable": True})["buddies"]), expected)
 

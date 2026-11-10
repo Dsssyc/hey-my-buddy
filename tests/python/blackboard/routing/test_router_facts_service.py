@@ -20,7 +20,7 @@ class RouterFactsServiceTests(BoardTestCase):
         })
         ids = [f"codex:openai:fixture-model:{effort}" for effort in ("low", "high")]
         board = self.board()
-        board.call("model_catalog_refresh", {"requestId": "private-catalog"})
+        board.call("model_catalog_refresh", {})
         board.console_call("user_policy_publish", {
             "commandId": "private-settings", "buddySettings": [{"buddyId": buddy, "enabled": True} for buddy in ids],
             "configuration": {"defaultRoutingMode": "fast", "routerBuddyIds": [ids[0]]},

@@ -31,7 +31,7 @@ class ModelServiceConcurrencyTestCase(StoreConcurrencyTestCase):
         mock_readonly.install(self)
 
     def seed_decision_buddy(self, board) -> None:
-        board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
+        board.call("model_catalog_refresh", {})
         board.console_call(
             "user_policy_publish",
             {
@@ -73,7 +73,7 @@ class PublicationInterfaceTests(ModelServiceConcurrencyTestCase):
     def setUp(self):
         super().setUp()
         self.board_ = self.board(max_concurrent=8)
-        self.board_.call("model_catalog_refresh", {"requestId": "catalog-seed"})
+        self.board_.call("model_catalog_refresh", {})
 
     def test_snapshot_reports_one_row_per_represented_model_service_with_defaults(self):
         snapshot = console_reads.console_snapshot_projection(self.board_.service)[0]
@@ -145,7 +145,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
     def setUp(self):
         super().setUp()
         self.board_ = self.board(max_concurrent=8)
-        self.board_.call("model_catalog_refresh", {"requestId": "catalog-seed"})
+        self.board_.call("model_catalog_refresh", {})
 
     def test_the_authenticated_console_writer_sets_and_updates_limits(self):
         result = self.publish_limits(
@@ -178,7 +178,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         # Nothing was published by a rejected draft.
         with board.store.db.read() as connection:
-            count = connection.execute("SELECT COUNT(*) AS count FROM model_service_concurrency").fetchone()["count"]
+            count = connection.execute("SELECT COUNT(*) AS count FROM model_services WHERE concurrency_limit IS NOT NULL").fetchone()["count"]
         self.assertEqual(count, 0)
 
     def test_limits_are_positive_integers(self):
@@ -222,7 +222,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
             })
         self.assertEqual(caught.exception.code, "NOT_FOUND")
         with self.board_.store.db.write() as connection:
-            connection.execute("UPDATE buddies SET available=0 WHERE model=?", (MODEL_SERVICE_B[2],))
+            connection.execute("UPDATE model_services SET unavailable_code='catalog.model-unavailable',unavailable_params_json='{}' WHERE model=?", (MODEL_SERVICE_B[2],))
         self.publish_limits(self.board_, {
             "harness": MODEL_SERVICE_B[0], "provider": MODEL_SERVICE_B[1], "model": MODEL_SERVICE_B[2], "limit": 3,
         })
@@ -245,7 +245,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
         again = board.console_call("user_policy_publish", payload)
         self.assertTrue(again["duplicate"])
         with board.store.db.read() as connection:
-            count = connection.execute("SELECT COUNT(*) AS count FROM model_service_concurrency").fetchone()["count"]
+            count = connection.execute("SELECT COUNT(*) AS count FROM model_services WHERE concurrency_limit IS NOT NULL").fetchone()["count"]
         self.assertEqual(count, 1)
 
     def test_a_setting_survives_discovery_marking_the_model_unavailable(self):
@@ -253,7 +253,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
         self.publish_limits(board, {"harness": MODEL_SERVICE_B[0], "provider": MODEL_SERVICE_B[1], "model": MODEL_SERVICE_B[2], "limit": 7})
         with board.store.db.write() as connection:
             connection.execute(
-                "UPDATE buddies SET available=0 WHERE model=?", (MODEL_SERVICE_B[2],)
+                "UPDATE model_services SET unavailable_code='catalog.model-unavailable',unavailable_params_json='{}' WHERE model=?", (MODEL_SERVICE_B[2],)
             )
         # The unavailable model service is no longer represented in the response, but the
         # stored setting remains and applies again when the model service returns.
@@ -261,7 +261,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
         self.assertNotIn(MODEL_SERVICE_B, {(row["harness"], row["provider"], row["model"]) for row in snapshot["modelServiceConcurrency"]})
         with board.store.db.read() as connection:
             row = connection.execute(
-                "SELECT concurrency_limit FROM model_service_concurrency WHERE model=?", (MODEL_SERVICE_B[2],)
+                "SELECT concurrency_limit FROM model_services WHERE model=?", (MODEL_SERVICE_B[2],)
             ).fetchone()
         self.assertEqual(row["concurrency_limit"], 7)
 
@@ -270,7 +270,7 @@ class SaveAppliesAtClaimTests(ModelServiceConcurrencyTestCase):
     def setUp(self):
         super().setUp()
         self.board_ = self.board(max_concurrent=8)
-        self.board_.call("model_catalog_refresh", {"requestId": "catalog-for-live-limits"})
+        self.board_.call("model_catalog_refresh", {})
         # Two live model-service-A attempts hold the default limit exactly.
         self.live_run_ids = {}
         for index in range(2):

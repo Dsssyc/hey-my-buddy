@@ -457,16 +457,16 @@ class FixtureCleanupTests(unittest.TestCase):
                     self.assertFalse(native.called, "fixture capabilities attempted native discovery")
                     self.assertNotIn("error", capabilities)
                     self.assertTrue(capabilities["adapters"]["dsh"]["available"])
-                    refreshed = call_operation(service, "model_catalog_refresh", {"requestId": "r05-fixture"})
-                    self.assertEqual(refreshed["catalog"]["source"], f"file:{catalog}")
+                    refreshed = call_operation(service, "model_catalog_refresh", {})
+                    self.assertEqual(refreshed["catalog"]["source"], "current-native-observations")
                     payload = json.loads(catalog.read_text(encoding="utf-8"))
-                    self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"],
-                                     payload["providers"][0]["models"][0]["id"])
+                    self.assertEqual({model['id'] for model in refreshed['catalog']['providers'][0]['models']},
+                                     {model['id'] for model in payload['providers'][0]['models']})
                     payload["providers"][0]["models"][0]["id"] = "r05-fixture-changed-model"
                     catalog.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
-                    reread = call_operation(service, "model_catalog_refresh", {"requestId": "r05-fixture-reread"})
-                    self.assertEqual(reread["catalog"]["providers"][0]["models"][0]["id"],
-                                     payload["providers"][0]["models"][0]["id"])
+                    reread = call_operation(service, "model_catalog_refresh", {})
+                    self.assertEqual({model['id'] for model in reread['catalog']['providers'][0]['models']},
+                                     {model['id'] for model in payload['providers'][0]['models']})
                     self.assertFalse(native.called, "fixture catalog attempted native discovery")
                 finally:
                     daemon.store.db.close()

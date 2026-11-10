@@ -137,7 +137,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
 
     def test_maintenance_and_kind_evidence_reads_are_current_and_linkable(self):
         board = self.board()
-        board.call("model_catalog_refresh", {"requestId": "catalog-maintenance-read"})
+        board.call("model_catalog_refresh", {})
         run = self.submit(board, request_id="maintenance-evidence", task="Repair parser",
                           cwd=str(self.workdir("maintenance-evidence")))
         self.finish_turn(board, self.claim(board, run_id=run["runId"]))

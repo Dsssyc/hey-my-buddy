@@ -161,9 +161,10 @@ class HarnessServiceTests(BoardTestCase):
                     result = self.call('capabilities', refresh=True, harness='codex')
                     self.assertNotIn('error', result)
                     with self.board.db.read() as db:
-                        row = db.execute("SELECT capabilities_json FROM buddies WHERE buddy_id='codex:openai:gpt-6-sol:high'").fetchone()
+                        from hey_my_buddy.blackboard.catalog import buddy_state
+                        row = buddy_state.get(db, 'codex:openai:gpt-6-sol:high')
                     self.assertIsNotNone(row)
-                    self.assertNotIn('decision', json.loads(row[0]))
+                    self.assertNotIn('decision', json.loads(row['capabilities_json']))
                     buddy = next(item for item in self.board.evaluation.console_core()['buddies'] if item['buddyId'] == 'codex:openai:gpt-6-sol:high')
                     self.assertIn('decision', buddy['capabilities'])
 
@@ -222,7 +223,9 @@ class HarnessServiceTests(BoardTestCase):
             self.assertEqual(health["status"], "unhealthy")
             self.assertEqual(health["reason"], {"code": "catalog.discovery-failed", "params": {"harness": "codex", "errorCode": "CATALOG_INVALID"}})
             with self.board.db.read() as db:
-                self.assertIsNone(db.execute("SELECT 1 FROM catalog_current WHERE harness='codex'").fetchone())
+                reading = db.execute("SELECT status,read_at FROM catalog_current WHERE harness='codex'").fetchone()
+                self.assertEqual(tuple(reading), ('unread', None))
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM model_services WHERE harness='codex'").fetchone()[0], 0)
 
     def test_probe_failure_retains_exception_detail_in_service_issues(self):
         with patch("hey_my_buddy.blackboard.service.harness_health._snapshot", return_value={"harness": "codex", "managerRecords": [], "candidates": []}), \

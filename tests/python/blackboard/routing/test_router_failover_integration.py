@@ -47,7 +47,7 @@ class FailoverTests(RouterDispatchTestCase):
         with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             if required_capabilities:
                 with self.board_.store.db.write() as db:
-                    db.execute("UPDATE buddies SET capabilities_json=?", (json.dumps(list(required_capabilities)),))
+                    db.execute("UPDATE model_services SET input_modalities_json='[\"text\",\"image\"]'")
             request = (dispatch_fixtures.WorkflowWiringTests.route_micro_task(self, required_capabilities=required_capabilities) if micro_task else self.request())
             if micro_task:
                 dispatch_fixtures.WorkflowWiringTests.attach_pending_link(self, request["decisionId"])
@@ -489,6 +489,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_next_dispatch_has_no_whole_input_ceiling(self):
         with self.board_.store.db.write() as db:
+            db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','fixture',?)", ("b" * 80,))
             db.execute("UPDATE buddies SET model=? WHERE buddy_id=?", ("b" * 80, B))
             ensure_model_service(db, "dsh", "fixture", "b" * 80, self.board_.store.now())
         request, first = self.start(three=True)
@@ -800,6 +801,7 @@ for name, kwargs in (("list", {"ids": [B, A]}), ("mode", {"mode": "review"}),
     install_unfenced_edit_case(name, lambda self, request, claim, output, kwargs=kwargs: self.set_settings(**kwargs))
 def replace_model_identity(self, request, claim, output):
     with self.board_.store.db.write() as db:
+        db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','fixture','replacement')")
         db.execute("UPDATE buddies SET model='replacement' WHERE buddy_id=?", (A,))
         ensure_model_service(db, 'dsh', 'fixture', 'replacement', self.board_.store.now())
 

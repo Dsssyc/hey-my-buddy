@@ -2780,6 +2780,10 @@ def kind_evaluation_views(domains: list[dict]) -> list[dict]:
             [(row["correspondenceId"], row["harness"], row["provider"], row["model"], row["modelId"],
               row["createdAt"], row["source"], row["evidenceUrl"], row["evidenceDate"])
              for row in facts["modelCorrespondences"]])
+        services = {(row["harness"], row["provider"], row["model"]) for row in buddy_views()}
+        connection.executemany(
+            "INSERT INTO model_services(harness,provider,model) VALUES(?,?,?)",
+            sorted(services))
         connection.executemany(
             "INSERT INTO buddies(buddy_id,harness,provider,model,effort) VALUES(?,?,?,?,?)",
             [(row["buddyId"], row["harness"], row["provider"], row["model"], row["effort"])

@@ -11,7 +11,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from support import BoardTestCase, FakeClock
+from support import BoardTestCase, FakeClock, seed_buddy
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
@@ -35,12 +35,9 @@ class CurrentRouterTestCase(BoardTestCase):
     # -- fixtures ------------------------------------------------------------
     def add_buddy(self, buddy_id, *, harness="dsh", provider="fixture", available=1, enabled=1, model=None):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                       "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,?,?)",
-                       (buddy_id, harness, provider, model or buddy_id, "max",
-                        available, enabled, canonical_json([])))
-            ensure_model_service(db, harness, provider, model or buddy_id, self.board_.store.now())
+            seed_buddy(db, buddy_id=buddy_id, harness=harness, provider=provider,
+                       model=model or buddy_id, effort="max", available=available,
+                       enabled=enabled, now=self.board_.store.now())
 
     def set_settings(self, *, ids=None, mode=None, wait=None, interval=None):
         """Patch the shared version-3 settings the way a publication would."""
@@ -321,6 +318,7 @@ class FrozenContinuationTests(CurrentRouterTestCase):
     def test_frozen_identity_drift_keeps_the_original_actor(self):
         facts = self.prepare()
         with self.board_.store.db.write() as db:
+            db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','fixture','replaced')")
             db.execute("UPDATE buddies SET model='replaced' WHERE buddy_id=?", (B,))
             ensure_model_service(db, "dsh", "fixture", "replaced", self.board_.store.now())
         with self.board_.store.db.read() as db:

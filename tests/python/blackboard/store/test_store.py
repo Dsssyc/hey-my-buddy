@@ -82,23 +82,25 @@ class CurrentSchemaTests(BoardTestCase):
         self.assertEqual(viewed["runId"], task_id)
         self.assertNotIn("taskId", viewed)
 
-    def test_fresh_board_is_the_current_schema_with_the_model_service_concurrency_table(self):
+    def test_fresh_board_is_the_current_schema_with_normalized_model_services(self):
         board = self.board()
         integrity = board.store.integrity()
         self.assertEqual(integrity["schemaVersion"], SCHEMA_VERSION)
         with board.store.db.read() as connection:
             columns = {
                 row["name"]
-                for row in connection.execute("PRAGMA table_info(model_service_concurrency)")
+                for row in connection.execute("PRAGMA table_info(model_services)")
             }
-            model_services = connection.execute("SELECT COUNT(*) AS count FROM model_service_concurrency").fetchone()["count"]
+            model_services = connection.execute("SELECT COUNT(*) AS count FROM model_services").fetchone()["count"]
             attempt_columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(attempts)")
             }
         self.assertEqual(
             columns,
-            {"harness", "provider", "model", "concurrency_limit"},
+            {"harness", "provider", "model", "description", "context_window", "input_modalities_json",
+             "unavailable_code", "unavailable_params_json", "unavailable_content", "pending_since",
+             "confirmed_absent_at", "concurrency_limit", "source_sequence"},
         )
         self.assertEqual(model_services, 0)
         self.assertTrue({"model_harness", "model_provider", "model_model"} <= attempt_columns)

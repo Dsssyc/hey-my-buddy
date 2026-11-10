@@ -782,7 +782,26 @@ def enable_fixture_buddy(store, buddy):
     if not all(buddy.get(key) for key in keys):
         return
     with store.db.write() as db:
-        db.execute("INSERT OR IGNORE INTO buddies(buddy_id,harness,provider,model,effort,enabled,available) VALUES(?,?,?,?,?,1,1) ON CONFLICT(buddy_id) DO UPDATE SET enabled=1,available=1",
-                   (":".join(buddy[key] for key in keys), *(buddy[key] for key in keys)))
-        from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
-        ensure_model_service(db, buddy['harness'], buddy['provider'], buddy['model'], store.now())
+        buddy_id = ":".join(buddy[key] for key in keys)
+        if db.execute("SELECT 1 FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone() is None:
+            seed_buddy(db, buddy_id=buddy_id, **{key: buddy[key] for key in keys}, now=store.now())
+        db.execute("UPDATE buddies SET enabled=1,retired=0 WHERE buddy_id=?",
+                   (buddy_id,))
+
+
+def seed_buddy(db, *, buddy_id: str, harness: str, provider: str, model: str,
+               effort: str, available: int = 1, enabled: int = 1,
+               input_modalities: tuple[str, ...] = ('text',), description: str = '',
+               context_window: int | None = None, unavailable_reason: str | None = None,
+               now: str = '2026-01-01T00:00:00.000Z') -> None:
+    """Insert one normalized private fixture and its model correspondence."""
+    db.execute(
+        "INSERT OR IGNORE INTO model_services(harness,provider,model,description,context_window,"
+        "input_modalities_json,unavailable_code,unavailable_params_json) VALUES(?,?,?,?,?,?,?,?)",
+        (harness, provider, model, description, context_window, json.dumps(input_modalities),
+         unavailable_reason, '{}' if unavailable_reason else None))
+    db.execute(
+        "INSERT INTO buddies(buddy_id,harness,provider,model,effort,retired,enabled) VALUES(?,?,?,?,?,?,?)",
+        (buddy_id, harness, provider, model, effort, int(not available and unavailable_reason is None), enabled))
+    from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
+    ensure_model_service(db, harness, provider, model, now)

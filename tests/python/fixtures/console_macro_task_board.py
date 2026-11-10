@@ -263,7 +263,7 @@ class SyntheticBoard:
         # MockWorkspace recognizes this empty marker as one fictional project.
         # It is not a Git repository and no Git operation is performed.
         (self.state / "fictional-project/.git").mkdir(parents=True)
-        self.call("model_catalog_refresh", {"requestId": "synthetic-catalog"})
+        self.call("model_catalog_refresh", {})
         self.board.console_call("user_policy_publish", {
             "commandId": "synthetic-policy",
             "buddySettings": [{"buddyId": item, "enabled": True} for item in

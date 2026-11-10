@@ -8,7 +8,7 @@ from unittest.mock import patch
 from admission import admit_board, release_before_spawn
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.tasks.test_workflow import WorkflowTestCase
-from support import BoardTestCase, FakeClock
+from support import BoardTestCase, FakeClock, seed_buddy
 
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
@@ -72,10 +72,8 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.finish_turn(self.board_, self.claim(self.board_, run_id=self.evidence_id))
         self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": self.evidence_id}))
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                       "available,enabled,capabilities_json) VALUES(?,?,?,?,?,1,1,?)",
-                       (BUDDY_ID, "dsh", "fixture", "maintenance", "off", canonical_json([])))
-            ensure_model_service(db, "dsh", "fixture", "maintenance", self.board_.store.now())
+            seed_buddy(db, buddy_id=BUDDY_ID, harness="dsh", provider="fixture",
+                       model="maintenance", effort="off", now=self.board_.store.now())
 
     def configure(self, *, buddy_id=BUDDY_ID, interval=3600, wait=60):
         with self.board_.store.db.write() as db:
@@ -826,8 +824,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.board_.store.max_concurrent = 8
         with self.board_.store.db.write() as db:
             buddy_id = ":".join(BUDDY[key] for key in ("harness", "provider", "model", "effort"))
-            db.execute("INSERT INTO model_service_concurrency VALUES(?,?,?,1)"
-                       " ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=1",
+            db.execute("UPDATE model_services SET concurrency_limit=1 WHERE harness=? AND provider=? AND model=?",
                        tuple(BUDDY[key] for key in ("harness", "provider", "model")))
         work = self.submit(self.board_, request_id="same-service-worker", task="Occupy a model slot",
                            cwd=str(self.workdir("same-service-worker")), kind="worktree")

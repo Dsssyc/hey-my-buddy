@@ -7,7 +7,7 @@ from unittest.mock import patch
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.errors import BoardError
-from support import FakeClock, enable_fixture_buddy
+from support import FakeClock, enable_fixture_buddy, seed_buddy
 
 
 class HostWorkflowTests(WorkflowTestCase):
@@ -113,11 +113,7 @@ class HostWorkflowTests(WorkflowTestCase):
         identity = {**BUDDY, "model": "fixture/model"}
         buddy_id = re.sub(r"[^A-Za-z0-9._:-]", "-", ":".join(identity.values()))
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,enabled,available)"
-                               " VALUES(?,?,?,?,?,1,1)",
-                               (buddy_id, *identity.values()))
-            ensure_model_service(connection, identity["harness"], identity["provider"],
-                                 identity["model"], board.store.now())
+            seed_buddy(connection, buddy_id=buddy_id, **identity, now=board.store.now())
         submitted = self.submit(board, buddy=" / ".join(identity.values()), request_id="quad-name")
         self.assertEqual(submitted["buddy"], {**identity, "alias": None})
         for name in (buddy_id, ":".join(identity.values()), "dsh / deepseek-official / absent-model / off"):
@@ -141,7 +137,7 @@ class GetBuddiesTests(WorkflowTestCase):
         self.clock = FakeClock("2026-01-01T00:00:00.000Z")
         board = self.board(clock=self.clock)
         board.evaluation._clock = self.clock
-        board.call("model_catalog_refresh", {"requestId": "catalog"})
+        board.call("model_catalog_refresh", {})
         board.console_call("user_policy_publish", {"commandId": "enable",
             "buddySettings": [{"buddyId": item, "enabled": True} for item in self.ENABLED],
             "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": []}})
@@ -187,9 +183,9 @@ class GetBuddiesTests(WorkflowTestCase):
     def test_a_buddy_that_cannot_take_work_carries_its_recorded_reasons(self):
         from hey_my_buddy.blackboard.evaluation.native_observations import persist
         with self.enabled_board.store.db.write() as connection:
-            connection.execute("UPDATE buddies SET available=0, unavailable_code='catalog.model-absent',"
-                               " unavailable_params_json='{}'"
-                               " WHERE buddy_id='dsh:deepseek-official:deepseek-v4-pro:high'")
+            connection.execute("UPDATE model_services SET confirmed_absent_at=?"
+                               " WHERE (harness,provider,model)=(SELECT harness,provider,model FROM buddies WHERE buddy_id='dsh:deepseek-official:deepseek-v4-pro:high')",
+                               (self.clock(),))
             persist(connection, {"attempt_id": "synthetic-denial", "adapter": "dsh", "model_harness": "dsh",
                                  "model_provider": "deepseek-official", "started_at": self.clock()},
                     {"providerRejection": {"code": "quota-exceeded", "nativeCode": "1310",

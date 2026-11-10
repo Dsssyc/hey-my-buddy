@@ -197,7 +197,7 @@ class RunningConclusionTests(WorkflowTestCase):
         child = self.owned(board, lead_claim)
         # The two fixtures represent independent execution processes.
         with board.store.db.write() as connection:
-            connection.execute("UPDATE model_service_concurrency SET concurrency_limit=4")
+            connection.execute("UPDATE model_services SET concurrency_limit=4")
         child_claim = self.claim(board, claim_request_id="child", run_id=child["runId"])
         self.assertIsNotNone(child_claim["claim"])
         stops = [(lead["runId"], {"claim": lead_claim}), (child["runId"], child_claim)]

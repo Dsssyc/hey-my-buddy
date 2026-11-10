@@ -109,7 +109,7 @@ def _changes(params: dict, field: str, fields: set[str]) -> list[dict]:
 
 def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     """Apply only requested human fields in the caller's publication transaction."""
-    from ..service.harness_health import read_health
+    from ..catalog import buddy_state
     provided = set(params) & PATCH_FIELDS
     if not provided:
         raise BoardError('INVALID_ARGUMENT', 'A user publication must contain a field patch')
@@ -122,11 +122,10 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     for entry in settings + preferences:
         buddy_id = entry['buddyId']
         if buddy_id not in buddies:
-            row = connection.execute('SELECT * FROM buddies WHERE buddy_id=?', (buddy_id,)).fetchone()
+            row = buddy_state.get(connection, buddy_id)
             if row is None:
                 raise BoardError('NOT_FOUND', 'Unknown buddyId', buddyId=buddy_id)
-            buddies[buddy_id] = dict(row)
-            buddies[buddy_id]['available'] = bool(row['available']) and read_health(connection, row['harness'])['status'] == 'ready'
+            buddies[buddy_id] = row
     for entry in settings:
         buddy_id = entry['buddyId']
         if 'enabled' not in entry and 'alias' not in entry:
@@ -175,7 +174,7 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         models.delete_unreferenced(connection, lost_references)
     for entry in model_limits:
         if connection.execute(
-            'SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? LIMIT 1',
+            'SELECT 1 FROM model_services WHERE harness=? AND provider=? AND model=? LIMIT 1',
             (entry['harness'], entry['provider'], entry['model']),
         ).fetchone() is None:
             raise BoardError('NOT_FOUND', 'Unknown model service')
@@ -184,14 +183,12 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         # returns. Only the named model services are touched; unrelated settings and
         # fields keep their stored values.
         connection.execute(
-            'INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)'
-            ' VALUES(?,?,?,?)'
-            ' ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=excluded.concurrency_limit',
+            'UPDATE model_services SET concurrency_limit=? WHERE harness=? AND provider=? AND model=?',
             (
+                entry['limit'],
                 entry['harness'],
                 entry['provider'],
                 entry['model'],
-                entry['limit'],
             ),
         )
     if 'configuration' in provided:

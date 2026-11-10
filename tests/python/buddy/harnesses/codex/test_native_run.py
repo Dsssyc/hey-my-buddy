@@ -1429,7 +1429,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertFalse((self.base / "activity" / "activity.json").exists())
 
     def test_non_chatgpt_login_and_configured_provider_can_run(self):
-        from hey_my_buddy.blackboard.catalog.catalog import canonical_payload, identities_from_payload
+        from hey_my_buddy.blackboard.catalog.catalog import canonical_payload, CatalogView
         (self.home / "config.toml").write_text('model_provider = "fixture-provider"\n', encoding="utf-8", newline="\n")
         self.set_case("api-key")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "catalog-read",
@@ -1439,8 +1439,9 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(catalog["discoveries"][0]["accountStatus"], "confirmed")
         self.assertEqual(catalog["billingByProvider"]["fixture-provider"]["kind"], "unknown")
         normalized = canonical_payload(catalog)
-        self.assertIn(("fixture-provider", "fixture-model", "low"),
-                      identities_from_payload(json.dumps(normalized), "codex"))
+        model = CatalogView(normalized).lookup('codex', 'fixture-provider', 'fixture-model')
+        self.assertTrue(model['available'])
+        self.assertIn('low', model['efforts'])
         request = self.request(permission="write", output_schema=OUTCOME_SCHEMA, prompt="Work",
                                turn_id="turn-1", input_sha256="a" * 64, native="worker-native")
         request = request.model_copy(update={"buddy": RunBuddy(

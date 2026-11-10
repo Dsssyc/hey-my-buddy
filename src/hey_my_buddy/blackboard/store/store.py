@@ -759,8 +759,8 @@ class BoardStore:
         }
 
     def model_limits(self, connection: sqlite3.Connection) -> dict[tuple[str, str, str], int]:
-        """Explicit per-model-service limits from the user-owned ``model_service_concurrency`` table."""
-        rows = connection.execute("SELECT harness, provider, model, concurrency_limit FROM model_service_concurrency").fetchall()
+        """Explicit per-model-service limits stored on model services."""
+        rows = connection.execute("SELECT harness, provider, model, concurrency_limit FROM model_services WHERE concurrency_limit IS NOT NULL").fetchall()
         return {
             (row["harness"], row["provider"], row["model"]): row["concurrency_limit"]
             for row in rows

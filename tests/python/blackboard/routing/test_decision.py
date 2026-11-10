@@ -83,7 +83,7 @@ class DecisionTestCase(BoardTestCase):
         decision_buddy: str | None = BUDDY_ID,
         preferences=None,
     ) -> dict:
-        board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
+        board.call("model_catalog_refresh", {})
         result = board.console_call(
             "user_policy_publish",
             {
@@ -389,7 +389,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
         for name, constraints, field, replacement in (
             ("fixed", {"effort": "high"}, "effort", "off"),
-            ("capability", {"requiredCapabilities": ["execution:dsh"]}, "capabilities_json", "[]"),
+            ("capability", {"requiredCapabilities": ["input:text"]}, "input_modalities_json", "[]"),
         ):
             with self.subTest(name=name):
                 self.use_helper(buddy_id=SECOND_BUDDY_ID)
@@ -408,8 +408,12 @@ class SelectionRequestTests(DecisionTestCase):
                 pass  # Admission is owned by the service.
                 claim = admit_execution(client, "n" * 32, task_id=request["runId"])["claim"]
                 with board.store.db.write() as connection:
-                    before = connection.execute(f"SELECT {field} FROM buddies WHERE buddy_id=?", (SECOND_BUDDY_ID,)).fetchone()[0]
-                    connection.execute(f"UPDATE buddies SET {field}=? WHERE buddy_id=?", (replacement, SECOND_BUDDY_ID))
+                    if name == "capability":
+                        before = connection.execute("SELECT input_modalities_json FROM model_services WHERE harness='dsh' AND provider='deepseek-official' AND model='deepseek-v4-pro'").fetchone()[0]
+                        connection.execute("UPDATE model_services SET input_modalities_json=? WHERE harness='dsh' AND provider='deepseek-official' AND model='deepseek-v4-pro'", (replacement,))
+                    else:
+                        before = connection.execute(f"SELECT {field} FROM buddies WHERE buddy_id=?", (SECOND_BUDDY_ID,)).fetchone()[0]
+                        connection.execute(f"UPDATE buddies SET {field}=? WHERE buddy_id=?", (replacement, SECOND_BUDDY_ID))
                 output = {**claim_tool_receipt(claim, state_dir=board.directory), "status": "ok", "operation": "select",
                           "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                           "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": None},
@@ -421,7 +425,10 @@ class SelectionRequestTests(DecisionTestCase):
                 self.assertIn(decision["status"], ("queued", "completed"))
                 self.assertNotEqual(decision["buddyId"], SECOND_BUDDY_ID)
                 with board.store.db.write() as connection:
-                    connection.execute(f"UPDATE buddies SET {field}=? WHERE buddy_id=?", (before, SECOND_BUDDY_ID))
+                    if name == "capability":
+                        connection.execute("UPDATE model_services SET input_modalities_json=? WHERE harness='dsh' AND provider='deepseek-official' AND model='deepseek-v4-pro'", (before,))
+                    else:
+                        connection.execute(f"UPDATE buddies SET {field}=? WHERE buddy_id=?", (before, SECOND_BUDDY_ID))
 
     def test_missing_decision_buddy_is_needs_host_without_a_model_call(self):
         board = self.board()

@@ -181,20 +181,21 @@ class SingleRouterRequestTests(BoardTestCase):
         self.seed(board)
         with board.store.db.write() as connection:
             for updates, code in (("enabled=0", "router-disabled"),
-                                  ("enabled=1,available=0", "router-catalog-unavailable")):
+                                  ("enabled=1,retired=1", "router-catalog-unavailable")):
                 connection.execute(f"UPDATE buddies SET {updates} WHERE buddy_id=?", (BUDDY_ID,))
                 buddy, actual, _ = router.buddy_problem(connection, BUDDY_ID, "review")
                 self.assertIsNone(buddy)
                 self.assertEqual(actual, code)
+            connection.execute("UPDATE buddies SET retired=0 WHERE buddy_id=?", (BUDDY_ID,))
             cause = {"code": "catalog.model-unavailable", "params": {"harness": "dsh"}}
-            connection.execute("UPDATE buddies SET unavailable_code=?,unavailable_params_json=? WHERE buddy_id=?",
+            connection.execute("UPDATE model_services SET unavailable_code=?,unavailable_params_json=? WHERE (harness,provider,model)=(SELECT harness,provider,model FROM buddies WHERE buddy_id=?)",
                                (cause["code"], canonical_json(cause["params"]), BUDDY_ID))
             _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-catalog-unavailable")
             self.assertEqual(facts, {"cause": cause})
             resolution = router.current_router(connection)
             self.assertEqual(resolution.inspections[0]["cause"], cause)
-            connection.execute("UPDATE buddies SET available=1 WHERE buddy_id=?", (BUDDY_ID,))
+            connection.execute("UPDATE model_services SET unavailable_code=NULL,unavailable_params_json=NULL WHERE (harness,provider,model)=(SELECT harness,provider,model FROM buddies WHERE buddy_id=?)", (BUDDY_ID,))
             with patch("hey_my_buddy.blackboard.service.harness_health.read_health", return_value={"status": "missing", "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}):
                 _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-harness-unavailable")

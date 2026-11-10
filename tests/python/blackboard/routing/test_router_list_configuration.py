@@ -8,7 +8,7 @@ from copy import deepcopy
 import sqlite3
 import unittest
 
-from support import BoardTestCase
+from support import BoardTestCase, seed_buddy
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router
@@ -30,12 +30,8 @@ class RouterListConfigurationTests(BoardTestCase):
         self.board_.service.register_console_authority(self.session)
         with self.board_.store.db.write() as db:
             for buddy_id in (A, B):
-                db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                           "available,enabled,capabilities_json)"
-                           " VALUES(?,?,?,?,?,1,1,?)",
-                           (buddy_id, "dsh", "fixture", buddy_id, "max",
-                            canonical_json([])))
-                ensure_model_service(db, "dsh", "fixture", buddy_id, self.board_.store.now())
+                seed_buddy(db, buddy_id=buddy_id, harness="dsh", provider="fixture",
+                           model=buddy_id, effort="max", now=self.board_.store.now())
 
     def stored(self):
         with self.board_.store.db.read() as db:
@@ -147,37 +143,20 @@ class RouterListConfigurationTests(BoardTestCase):
         # Disabled, catalog-unavailable and mode-ineligible buddies may all be saved;
         # the resolver explains them per item later.
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                       "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,1,?)",
-                       ("disabled", "dsh", "fixture", "disabled", "max", 1,
-                        canonical_json([])))
-            ensure_model_service(db, "dsh", "fixture", "disabled", self.board_.store.now())
-            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id='disabled'")
-            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                       "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,0,1,?)",
-                       ("offline", "dsh", "fixture", "offline", "max",
-                        canonical_json([])))
-            ensure_model_service(db, "dsh", "fixture", "offline", self.board_.store.now())
-            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                       "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,1,1,?)",
-                       ("reviewonly", "zcode", "fixture", "reviewonly", "max",
-                        canonical_json([])))
-            ensure_model_service(db, "zcode", "fixture", "reviewonly", self.board_.store.now())
+            seed_buddy(db, buddy_id="disabled", harness="dsh", provider="fixture",
+                       model="disabled", effort="max", enabled=0, now=self.board_.store.now())
+            seed_buddy(db, buddy_id="offline", harness="dsh", provider="fixture",
+                       model="offline", effort="max", available=0, now=self.board_.store.now())
+            seed_buddy(db, buddy_id="reviewonly", harness="zcode", provider="fixture",
+                       model="reviewonly", effort="max", now=self.board_.store.now())
         self.publish({"routerBuddyIds": [A, "disabled", "offline", "reviewonly"], "defaultRoutingMode": "review"})
         self.assertEqual(console_snapshot_projection(self.board_.service)[0]["configuration"]["routerBuddyIds"],
                          [A, "disabled", "offline", "reviewonly"])
 
     def test_interval_and_wait_patches_do_not_require_availability(self):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
-                       "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,0,1,?)",
-                       ("offline", "dsh", "fixture", "offline", "max",
-                        canonical_json([])))
-            ensure_model_service(db, "dsh", "fixture", "offline", self.board_.store.now())
+            seed_buddy(db, buddy_id="offline", harness="dsh", provider="fixture",
+                       model="offline", effort="max", available=0, now=self.board_.store.now())
         self.publish({"routerBuddyIds": ["offline"]})
         self.publish({"routerRetryIntervalSeconds": 1, "modelResponseWaitSeconds": 30, "defaultRoutingMode": "review"})
         configuration = console_snapshot_projection(self.board_.service)[0]["configuration"]
