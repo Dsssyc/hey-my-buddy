@@ -122,13 +122,15 @@ export function ProfileSettingsView({ snapshot, editor, profileRunId }: { snapsh
   return <div data-slot="profile-plane" className="min-w-0 space-y-4">
     <RouterSection name={t("routerWork.settings")}>
       <div className="router-settings">
-        <RouterField name={t("routerProfiles.buddy")} help={t("profile.dataFlow")} unsaved={dirty ? t("unsaved") : undefined} className="xl:col-span-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-3"><span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? buddyQuad(selected) : config?.profileBuddyId ?? t("profile.none")}</span>
-            <Hint text={locked}><Button variant="outline" size="sm" disabled={!!locked} onClick={() => setChoosing(true)}>{t("profile.choose")}</Button></Hint>
-            {!config?.profileBuddyId && <span className="text-xs text-ink2">{t("routerWork.notSet")}</span>}
-            {snapshot.configuration?.profileUnavailableReason && config?.profileBuddyId && config.profileBuddyId === snapshot.configuration.profileBuddyId && <span role="status" className="text-xs text-ink2">{reasonText(snapshot.configuration.profileUnavailableReason)}</span>}
-          </div>
-        </RouterField>
+        <div className="router-settings-column xl:col-span-2">
+          <RouterField name={t("routerProfiles.buddy")} help={t("profile.dataFlow")} unsaved={dirty ? t("unsaved") : undefined}>
+            <div className="flex min-w-0 flex-wrap items-center gap-3"><span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? buddyQuad(selected) : config?.profileBuddyId ?? t("profile.none")}</span>
+              <Hint text={locked}><Button variant="outline" size="sm" disabled={!!locked} onClick={() => setChoosing(true)}>{t("profile.choose")}</Button></Hint>
+              {!config?.profileBuddyId && <span className="text-xs text-ink2">{t("routerWork.notSet")}</span>}
+              {snapshot.configuration?.profileUnavailableReason && config?.profileBuddyId && config.profileBuddyId === snapshot.configuration.profileBuddyId && <span role="status" className="text-xs text-ink2">{reasonText(snapshot.configuration.profileUnavailableReason)}</span>}
+            </div>
+          </RouterField>
+        </div>
       </div>
     </RouterSection>
     <RouterSection name={t("routerProfiles.records")}><ProfileRecords models={models} profileRunId={profileRunId} /></RouterSection>

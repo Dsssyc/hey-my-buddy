@@ -45,6 +45,14 @@
   grid-template-columns: minmax(0, 1fr);
   column-gap: 32px;
   padding-right: 10px;
+  align-items: start;
+}
+
+/* Each form column shares label and control tracks across all its fields. */
+.router-settings-column {
+  display: grid;
+  grid-template-columns: fit-content(50%) minmax(0, 1fr);
+  column-gap: 16px;
 }
 
 .routing-readings {

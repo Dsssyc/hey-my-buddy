@@ -110,7 +110,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Router cards ${th
     await expect(settings).toHaveCSS("grid-template-columns", /.+ .+/);
     await expect(settings).toHaveCSS("column-gap", "32px");
     await expect(readings).toHaveCSS("column-gap", "32px");
-    const settingCells = await settings.locator('[data-slot="router-field"]').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
+    const settingCells = await settings.locator(".router-settings-column").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
     const readingCells = await readings.locator(":scope > *").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
     expect(settingCells[1]).toBeCloseTo(readingCells[2], 0);
     const failureCells = await detail.locator('[data-slot="routing-failures-region"] tbody > tr').first().locator("td").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
@@ -121,9 +121,9 @@ for (const theme of ["dark", "light"] as const) test.describe(`Router cards ${th
       return child.y + child.height / 2;
     }));
     for (const center of failureCenters) expect(Math.abs(center - failureCenters[0])).toBeLessThanOrEqual(1);
-    const largeNumber = readings.locator(":scope > *").first().locator(".text-xl");
+    const largeNumber = readings.locator(":scope > *").first().locator(".text-lg");
     await expect(largeNumber).toHaveCount(1);
-    await expect(largeNumber).toHaveCSS("font-size", "20px");
+    await expect(largeNumber).toHaveCSS("font-size", "18px");
     await expect(largeNumber).toHaveCSS("font-weight", "600");
     await expectNoSidewaysScroll(page);
 
@@ -131,7 +131,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Router cards ${th
       await page.goto(`#buddies/router/${hash}`);
       await expect(page.locator('[data-slot="router-card"]')).toHaveCount(expected);
       if (hash === "maintenance") {
-        const fields = await page.locator('[data-slot="maintenance-plane"] .router-settings > [data-slot="router-field"]').evaluateAll(nodes => nodes.map(node => {
+        const fields = await page.locator('[data-slot="maintenance-plane"] .router-settings [data-slot="router-field"]').evaluateAll(nodes => nodes.map(node => {
           const box = node.getBoundingClientRect();
           return { x: box.x, y: box.y, width: box.width, height: box.height };
         }));
@@ -296,5 +296,36 @@ for (const theme of ["dark", "light"] as const) for (const width of [1280, 1360,
       expect(geometry.height, name).toBeGreaterThanOrEqual(44);
     }
     await expectNoSidewaysScroll(page);
+  });
+});
+
+for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["dark", "light"] as const) for (const width of [1280, 1440]) test.describe(`Router setting alignment ${locale} ${theme} ${width}px`, () => {
+  test.use({ locale, viewport: { width, height: 1000 }, reducedMotion: "reduce" });
+  test("shares label widths and aligns controls while unsaved marks are present", async ({ page }) => {
+    await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+    await open(page, "#buddies/router/routing");
+    const columns = page.locator('[data-slot="routing-work"] .router-settings-column');
+    await expect(columns).toHaveCount(2);
+    const assertAligned = async () => {
+      for (const column of await columns.all()) {
+        const fields = column.locator(':scope > [data-slot="router-field"]');
+        await expect(fields).toHaveCount(2);
+        const geometry = await fields.evaluateAll(nodes => nodes.map(node => ({
+          labelWidth: node.firstElementChild!.getBoundingClientRect().width,
+          controlLeft: node.querySelector('[data-slot="segmented"], input')!.getBoundingClientRect().left,
+        })));
+        expect(Math.abs(geometry[0].labelWidth - geometry[1].labelWidth)).toBeLessThanOrEqual(1);
+        expect(Math.abs(geometry[0].controlLeft - geometry[1].controlLeft)).toBeLessThanOrEqual(1);
+      }
+    };
+    await assertAligned();
+    await columns.first().getByRole("radio", { checked: false }).first().click();
+    await columns.nth(1).getByRole("spinbutton").first().fill("61");
+    await expect(page.locator('[data-slot="router-field"] [data-slot="unsaved-mark"]')).toHaveCount(2);
+    await assertAligned();
+    await columns.first().getByRole("spinbutton").fill("601");
+    await columns.nth(1).getByRole("spinbutton").nth(1).fill("7");
+    await expect(page.locator('[data-slot="router-field"] [data-slot="unsaved-mark"]')).toHaveCount(4);
+    await assertAligned();
   });
 });

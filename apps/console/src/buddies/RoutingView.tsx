@@ -78,70 +78,73 @@ export function RoutingView({ snapshot, editor, onNavigate }: {
           onMove={(buddyId, by) => editor.update(draft => moveRouter(draft, buddyId, by))}
           onRemove={buddyId => editor.update(draft => removeRouter(draft, buddyId))} />
 
-      <RouterSection name={t("routerWork.settings")}><div className="router-settings"><RouterField name={t("roles.mode.name")} help={configuration ? <><p>{t(`roles.mode.${configuration.defaultRoutingMode}Consequence`)}</p><p className="mt-3">{t("roles.mode.explanation")}</p></> : t("roles.mode.explanation")} unsaved={mark(unsaved.mode)}>
-        <Segmented aria-label={t("roles.mode.label")} value={configuration?.defaultRoutingMode ?? ""}
-          onValueChange={value => change({ defaultRoutingMode: value as RoutingMode })}>
-          {MODES.map(mode => <Hint key={mode} text={locked}>
-            <SegmentedItem value={mode} aria-disabled={!!locked || undefined}>{t(`roles.mode.${mode}`)}</SegmentedItem>
-          </Hint>)}
-        </Segmented>
-      </RouterField>
-
-      <RouterField name={t("roles.responseWait.name")} help={t("roles.responseWait.explanation")} unsaved={mark(unsaved.responseWait)}>
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-          <Hint text={locked}>
-            <Input type="number" inputMode="numeric" className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
-              min={1} max={MODEL_RESPONSE_WAIT_MAX} step={1}
-              value={responseWait === undefined || Number.isNaN(responseWait) ? "" : responseWait}
-              readOnly={!!locked} aria-disabled={!!locked || undefined}
-              aria-label={t("roles.responseWait.name")} aria-invalid={responseWaitInvalid || undefined}
-              onChange={event => change({ modelResponseWaitSeconds: event.target.value === "" ? NaN : Number(event.target.value) })} />
-          </Hint>
-          <span className="text-xs text-ink2">{t("roles.retry.unit")}</span>
-          <span className="text-xs text-fail" aria-live="polite">{responseWaitInvalid && t("roles.responseWait.invalid")}</span>
+      <RouterSection name={t("routerWork.settings")}>
+        <div className="router-settings">
+          <div className="router-settings-column">
+            <RouterField name={t("roles.mode.name")} help={configuration ? <><p>{t(`roles.mode.${configuration.defaultRoutingMode}Consequence`)}</p><p className="mt-3">{t("roles.mode.explanation")}</p></> : t("roles.mode.explanation")} unsaved={mark(unsaved.mode)}>
+              <Segmented aria-label={t("roles.mode.label")} value={configuration?.defaultRoutingMode ?? ""}
+                onValueChange={value => change({ defaultRoutingMode: value as RoutingMode })}>
+                {MODES.map(mode => <Hint key={mode} text={locked}>
+                  <SegmentedItem value={mode} aria-disabled={!!locked || undefined}>{t(`roles.mode.${mode}`)}</SegmentedItem>
+                </Hint>)}
+              </Segmented>
+            </RouterField>
+            <RouterField name={t("roles.retry.name")} help={t("roles.retry.explanation")} unsaved={mark(unsaved.interval)}>
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                <Hint text={locked}>
+                  <Input type="number" inputMode="numeric" className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
+                    min={ROUTER_RETRY_INTERVAL_MIN} max={ROUTER_RETRY_INTERVAL_MAX} step={1}
+                    value={interval === undefined || Number.isNaN(interval) ? "" : interval}
+                    readOnly={!!locked} aria-disabled={!!locked || undefined}
+                    aria-label={t("roles.retry.label")} aria-invalid={intervalInvalid || undefined}
+                    onChange={event => change({ routerRetryIntervalSeconds: event.target.value === "" ? NaN : Number(event.target.value) })} />
+                </Hint>
+                <span className="text-ink2">{t("roles.retry.unit")}</span>
+                <span className="text-xs text-fail" aria-live="polite">
+                  {intervalInvalid && t("roles.retry.range", { min: ROUTER_RETRY_INTERVAL_MIN, max: ROUTER_RETRY_INTERVAL_MAX })}
+                </span>
+              </div>
+            </RouterField>
+          </div>
+          <div className="router-settings-column">
+            <RouterField name={t("roles.responseWait.name")} help={t("roles.responseWait.explanation")} unsaved={mark(unsaved.responseWait)}>
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                <Hint text={locked}>
+                  <Input type="number" inputMode="numeric" className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
+                    min={1} max={MODEL_RESPONSE_WAIT_MAX} step={1}
+                    value={responseWait === undefined || Number.isNaN(responseWait) ? "" : responseWait}
+                    readOnly={!!locked} aria-disabled={!!locked || undefined}
+                    aria-label={t("roles.responseWait.name")} aria-invalid={responseWaitInvalid || undefined}
+                    onChange={event => change({ modelResponseWaitSeconds: event.target.value === "" ? NaN : Number(event.target.value) })} />
+                </Hint>
+                <span className="text-xs text-ink2">{t("roles.retry.unit")}</span>
+                <span className="text-xs text-fail" aria-live="polite">{responseWaitInvalid && t("roles.responseWait.invalid")}</span>
+              </div>
+            </RouterField>
+            <RouterField name={t("roles.exploration.name")} help={t("roles.exploration.explanation")} unsaved={mark(unsaved.exploration)}>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <Segmented aria-label={t("roles.exploration.name")} value={!configuration ? "" : every === null ? "off" : "on"}
+                  onValueChange={value => change({ explorationEvery: value === "off" ? null : 5 })}>
+                  {(["on", "off"] as const).map(value => <Hint key={value} text={locked}>
+                    <SegmentedItem value={value} aria-disabled={!!locked || undefined}>{t(`roles.exploration.${value}`)}</SegmentedItem>
+                  </Hint>)}
+                </Segmented>
+                <span className="text-xs text-ink2">{t("routerWork.everyBefore")}</span>
+                <Hint text={locked ?? (every === null ? t("roles.exploration.disabled") : undefined)}>
+                  <Input type="number" inputMode="numeric" min={2} step={1}
+                    className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
+                    value={every === undefined || every === null || Number.isNaN(every) ? "" : every}
+                    disabled={every === null} readOnly={!!locked} aria-disabled={!!locked || every === null || undefined}
+                    aria-label={t("roles.exploration.interval")} aria-invalid={explorationInvalid || undefined}
+                    onChange={event => change({ explorationEvery: event.target.value === "" ? NaN : Number(event.target.value) })} />
+                </Hint>
+                <span className="text-xs text-ink2">{t("routerWork.everyAfter")}</span>
+                <span className="text-xs text-fail" aria-live="polite">{explorationInvalid && t("roles.exploration.invalid")}</span>
+              </div>
+            </RouterField>
+          </div>
         </div>
-      </RouterField>
-
-      <RouterField name={t("roles.retry.name")} help={t("roles.retry.explanation")} unsaved={mark(unsaved.interval)}>
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-          <Hint text={locked}>
-            <Input type="number" inputMode="numeric" className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
-              min={ROUTER_RETRY_INTERVAL_MIN} max={ROUTER_RETRY_INTERVAL_MAX} step={1}
-              value={interval === undefined || Number.isNaN(interval) ? "" : interval}
-              readOnly={!!locked} aria-disabled={!!locked || undefined}
-              aria-label={t("roles.retry.label")} aria-invalid={intervalInvalid || undefined}
-              onChange={event => change({ routerRetryIntervalSeconds: event.target.value === "" ? NaN : Number(event.target.value) })} />
-          </Hint>
-          <span className="text-ink2">{t("roles.retry.unit")}</span>
-          <span className="text-xs text-fail" aria-live="polite">
-            {intervalInvalid && t("roles.retry.range", { min: ROUTER_RETRY_INTERVAL_MIN, max: ROUTER_RETRY_INTERVAL_MAX })}
-          </span>
-        </div>
-      </RouterField>
-
-      <RouterField name={t("roles.exploration.name")} help={t("roles.exploration.explanation")} unsaved={mark(unsaved.exploration)}>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <Segmented aria-label={t("roles.exploration.name")} value={!configuration ? "" : every === null ? "off" : "on"}
-            onValueChange={value => change({ explorationEvery: value === "off" ? null : 5 })}>
-            {(["on", "off"] as const).map(value => <Hint key={value} text={locked}>
-              <SegmentedItem value={value} aria-disabled={!!locked || undefined}>{t(`roles.exploration.${value}`)}</SegmentedItem>
-            </Hint>)}
-          </Segmented>
-          <span className="text-xs text-ink2">{t("routerWork.everyBefore")}</span>
-          <Hint text={locked ?? (every === null ? t("roles.exploration.disabled") : undefined)}>
-            <Input type="number" inputMode="numeric" min={2} step={1}
-              className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
-              value={every === undefined || every === null || Number.isNaN(every) ? "" : every}
-              disabled={every === null} readOnly={!!locked} aria-disabled={!!locked || every === null || undefined}
-              aria-label={t("roles.exploration.interval")} aria-invalid={explorationInvalid || undefined}
-              onChange={event => change({ explorationEvery: event.target.value === "" ? NaN : Number(event.target.value) })} />
-          </Hint>
-          <span className="text-xs text-ink2">{t("routerWork.everyAfter")}</span>
-          <span className="text-xs text-fail" aria-live="polite">{explorationInvalid && t("roles.exploration.invalid")}</span>
-        </div>
-      </RouterField>
-
-      </div></RouterSection>
+      </RouterSection>
       <RouterSection name={t("roles.records.name")}>
         <RoutingRecords health={snapshot.routingHealth} />
       </RouterSection>

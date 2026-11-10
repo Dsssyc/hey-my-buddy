@@ -65,24 +65,28 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
   return <div data-slot="maintenance-plane" aria-busy={busy} className="min-w-0 space-y-4">
     <RouterSection name={t("routerWork.settings")}>
       <div className="router-settings">
-      <RouterField name={t("maintenance.buddy")} help={t("maintenance.dataFlow")} unsaved={dirty ? t("unsaved") : undefined}>
-        <div className="flex min-w-0 flex-wrap items-center gap-3">
-          <span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? buddyQuad(selected) : config?.maintenanceBuddyId ?? t("maintenance.none")}</span>
-          <Button variant="outline" size="sm" disabled={locked} onClick={() => setChoosing(true)}>{t("maintenance.choose")}</Button>
-          {!config?.maintenanceBuddyId && <span className="text-xs text-ink2">{t("routerWork.notSet")}</span>}
+        <div className="router-settings-column">
+          <RouterField name={t("maintenance.buddy")} help={t("maintenance.dataFlow")} unsaved={dirty ? t("unsaved") : undefined}>
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              <span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? buddyQuad(selected) : config?.maintenanceBuddyId ?? t("maintenance.none")}</span>
+              <Button variant="outline" size="sm" disabled={locked} onClick={() => setChoosing(true)}>{t("maintenance.choose")}</Button>
+              {!config?.maintenanceBuddyId && <span className="text-xs text-ink2">{t("routerWork.notSet")}</span>}
+            </div>
+          </RouterField>
         </div>
-      </RouterField>
-      <RouterField name={t("maintenance.interval")} unsaved={dirtyInterval ? t("unsaved") : undefined}>
-        <div className="flex flex-wrap items-center gap-2">
-          <Input className="h-8 w-24 bg-card tabular-nums" type="number" min={1} step={1} aria-label={t("maintenance.interval")}
-            value={config?.maintenanceIntervalSeconds === undefined || Number.isNaN(config.maintenanceIntervalSeconds) ? "" : config.maintenanceIntervalSeconds}
-            readOnly={locked} aria-invalid={config?.maintenanceIntervalSeconds !== undefined && !validInterval || undefined}
-            onChange={e => change({ maintenanceIntervalSeconds: e.target.value === "" ? NaN : Number(e.target.value) })} />
-          <span className="text-xs text-ink2">{t("maintenance.seconds")}</span>
-          {nextAt !== null && <span className="text-xs text-ink2" data-slot="maintenance-next">{t("maintenance.nextRun", { when: formatShortDateTime(nextAt) })}</span>}
-          {config?.maintenanceIntervalSeconds !== undefined && !validInterval && <p className="text-xs text-fail" role="alert">{t("maintenance.intervalInvalid")}</p>}
+        <div className="router-settings-column">
+          <RouterField name={t("maintenance.interval")} unsaved={dirtyInterval ? t("unsaved") : undefined}>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input className="h-8 w-24 bg-card tabular-nums" type="number" min={1} step={1} aria-label={t("maintenance.interval")}
+                value={config?.maintenanceIntervalSeconds === undefined || Number.isNaN(config.maintenanceIntervalSeconds) ? "" : config.maintenanceIntervalSeconds}
+                readOnly={locked} aria-invalid={config?.maintenanceIntervalSeconds !== undefined && !validInterval || undefined}
+                onChange={e => change({ maintenanceIntervalSeconds: e.target.value === "" ? NaN : Number(e.target.value) })} />
+              <span className="text-xs text-ink2">{t("maintenance.seconds")}</span>
+              {nextAt !== null && <span className="text-xs text-ink2" data-slot="maintenance-next">{t("maintenance.nextRun", { when: formatShortDateTime(nextAt) })}</span>}
+              {config?.maintenanceIntervalSeconds !== undefined && !validInterval && <p className="text-xs text-fail" role="alert">{t("maintenance.intervalInvalid")}</p>}
+            </div>
+          </RouterField>
         </div>
-      </RouterField>
       </div>
     </RouterSection>
     <RouterSection name={t("roles.records.name")}>
