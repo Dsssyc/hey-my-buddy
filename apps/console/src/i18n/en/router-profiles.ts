@@ -1,9 +1,8 @@
 import type zh from "../zh/router-profiles";
 
 export default {
-  assigned: "Assigned buddy",
+  buddy: "Profile buddy",
   records: "Records",
-  notConfigured: "No profile buddy is assigned; profile builds will not run. Choose a buddy.",
   noRuns: "No profile runs yet.",
   model: "Model",
   period: "Started–ended",

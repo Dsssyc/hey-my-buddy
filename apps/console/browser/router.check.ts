@@ -13,8 +13,8 @@ async function captureWork(page: Page, name: string) {
   await page.screenshot({ path: join(captures, name), fullPage: true });
 }
 const words = [
-  { locale: "zh-CN", jobs: "Router 的工作", routing: "路由", maintenance: "维护", profiles: "画像", who: "谁担任", settings: "设置", records: "记录", list: "Router 列表", wait: "等待模型开始作答", errors: "最近的失败", choose: "选择 buddy" },
-  { locale: "en-US", jobs: "Router work", routing: "Routing", maintenance: "Maintenance", profiles: "Profiles", who: "Who serves", settings: "Settings", records: "Records", list: "Router list", wait: "Wait for the model to start responding", errors: "Recent failures", choose: "Choose buddy" },
+  { locale: "zh-CN", jobs: "Router 的工作", routing: "路由", maintenance: "维护", profiles: "画像", maintenanceBuddy: "维护 buddy", profileBuddy: "画像 buddy", settings: "设置", records: "记录", list: "Router 列表", wait: "等待模型开始作答", errors: "最近的失败", choose: "选择 buddy" },
+  { locale: "en-US", jobs: "Router work", routing: "Routing", maintenance: "Maintenance", profiles: "Profiles", maintenanceBuddy: "Maintenance buddy", profileBuddy: "Profile buddy", settings: "Settings", records: "Records", list: "Router list", wait: "Wait for the model to start responding", errors: "Recent failures", choose: "Choose buddy" },
 ] as const;
 
 for (const w of words) for (const theme of ["dark", "light"] as const) {
@@ -22,20 +22,23 @@ for (const w of words) for (const theme of ["dark", "light"] as const) {
     test.use({ locale: w.locale, viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
     test.beforeEach(async ({ page }) => page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme));
 
-    test("keeps three name/status jobs and one detail, with ordered routing controls", async ({ page }) => {
+    test("keeps three icon jobs and one detail, with ordered routing controls", async ({ page }) => {
       await open(page, "#buddies/router/routing");
       const region = page.getByRole("region", { name: "Router" });
       const nav = region.getByRole("navigation", { name: w.jobs });
+      await expect(nav).toHaveAttribute("data-slot", "router-work-toolbar");
       const links = nav.getByRole("link");
       await expect(links).toHaveCount(3);
       for (const [index, name] of [w.routing, w.maintenance, w.profiles].entries()) {
         await expect(links.nth(index)).toContainText(name);
+        await expect(links.nth(index).locator("svg")).toHaveCount(1);
         await expect(links.nth(index).locator("p, button, input")).toHaveCount(0);
+        await expect(links.nth(index)).not.toContainText(/最近|未设置|Latest|Not set/);
       }
       await expect(links.first()).toHaveAttribute("aria-current", "page");
       const detail = region.locator('[data-slot="router-detail"]');
-      await expect(detail.getByRole("heading", { name: w.routing, exact: true })).toBeVisible();
-      await expect(detail.getByRole("group", { name: w.who, exact: true })).toBeVisible();
+      await expect(detail.getByRole("heading", { name: w.routing, exact: true })).toHaveCount(0);
+      await expect(detail.getByRole("group", { name: w.list, exact: true })).toBeVisible();
       await expect(detail.getByRole("group", { name: w.settings, exact: true })).toBeVisible();
       await expect(detail.getByRole("group", { name: w.records, exact: true })).toBeVisible();
       const lines = detail.getByRole("list", { name: w.list }).getByRole("listitem");
@@ -62,10 +65,12 @@ for (const w of words) for (const theme of ["dark", "light"] as const) {
       if (w.locale === "zh-CN") await captureWork(page, `router-${theme}-1440.png`);
       await links.nth(1).click();
       await expect(links.nth(1)).toHaveAttribute("aria-current", "page");
-      await expect(detail.getByRole("heading", { name: w.maintenance, exact: true })).toBeVisible();
+      await expect(detail.getByRole("heading", { name: w.maintenance, exact: true })).toHaveCount(0);
+      await expect(detail.getByRole("group", { name: w.maintenanceBuddy, exact: true })).toBeVisible();
       await expect(detail.locator('[data-slot="routing-work"]')).toHaveCount(0);
       await links.nth(2).click();
-      await expect(detail.getByRole("heading", { name: w.profiles, exact: true })).toBeVisible();
+      await expect(detail.getByRole("heading", { name: w.profiles, exact: true })).toHaveCount(0);
+      await expect(detail.getByRole("group", { name: w.profileBuddy, exact: true })).toBeVisible();
       await expect(detail.locator('[data-slot="maintenance-plane"]')).toHaveCount(0);
       await expect(detail.getByRole("button", { name: w.choose })).toBeVisible();
     });
@@ -93,13 +98,85 @@ for (const w of words) for (const theme of ["dark", "light"] as const) {
   });
 }
 
-test.describe("Router navigation facts", () => {
-  test.use({ locale: "zh-CN" });
-for (const variant of ["success", "failed", "unset"] as const) test(`Router navigation reports ${variant} work from synthetic facts`, async ({ page }) => {
+for (const theme of ["dark", "light"] as const) for (const width of [1440, 390]) test.describe(`Router toolbar at ${width}px in ${theme}`, () => {
+  test.use({ locale: "zh-CN", viewport: { width, height: 900 }, reducedMotion: "reduce" });
+  test("follows the catalogue band", async ({ page }) => {
+  await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+  await open(page, "#buddies/catalog");
+  const catalogue = page.locator('[data-slot="catalogue-toolbar"]');
+  const catalogueBox = (await catalogue.boundingBox())!;
+  const catalogueStyle = await catalogue.evaluate(node => ({ padding: getComputedStyle(node).paddingLeft, border: getComputedStyle(node).borderBottomWidth }));
+  await page.locator('[data-slot="buddy-header"]').getByRole("link", { name: /^Router/ }).click();
+  const toolbar = page.locator('[data-slot="router-work-toolbar"]');
+  const toolbarBox = (await toolbar.boundingBox())!;
+  const toolbarStyle = await toolbar.evaluate(node => ({ padding: getComputedStyle(node).paddingLeft, border: getComputedStyle(node).borderBottomWidth }));
+  expect(toolbarBox.y).toBe(catalogueBox.y);
+  if (width === 1440) expect(toolbarBox.height).toBe(catalogueBox.height);
+  expect(toolbarBox.x).toBe(catalogueBox.x);
+  expect(toolbarBox.width).toBe(catalogueBox.width);
+  expect(toolbarStyle).toEqual(catalogueStyle);
+  const links = toolbar.getByRole("link");
+  for (const link of await links.all()) {
+    const block = (await link.boundingBox())!;
+    expect(block.height).toBe(32);
+    const style = await link.evaluate(node => ({ line: getComputedStyle(node).textDecorationLine, after: getComputedStyle(node, "::after").content }));
+    expect(style.line).toBe("none");
+    expect(style.after).toBe("none");
+  }
+  const background = await links.first().evaluate(node => getComputedStyle(node).backgroundColor);
+  expect(background).not.toBe(await links.nth(1).evaluate(node => getComputedStyle(node).backgroundColor));
+  await links.nth(1).click();
+  expect(await links.nth(1).evaluate(node => getComputedStyle(node).backgroundColor)).toBe(background);
+  await expectNoSidewaysScroll(page);
+  });
+});
+
+for (const w of words) for (const theme of ["dark", "light"] as const) test.describe(`unset buddy guidance in ${w.locale} ${theme}`, () => {
+  test.use({ locale: w.locale, viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+  test("stays in its section", async ({ page }) => {
+  await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+  await page.route("**/api/console", async route => {
+    const response = await route.fetch(); const snapshot = await response.json();
+    snapshot.configuration.maintenanceBuddyId = null;
+    snapshot.configuration.profileBuddyId = null;
+    await route.fulfill({ response, json: snapshot });
+  });
+  await open(page, "#buddies/router/maintenance");
+  const detail = page.locator('[data-slot="router-detail"]');
+  const missing = w.locale === "zh-CN" ? "此项工作不运行，请指定 buddy。" : "This work does not run. Set a buddy.";
+  const maintenance = detail.getByRole("group", { name: w.maintenanceBuddy, exact: true });
+  await expect(maintenance.getByText(missing)).toHaveCount(1);
+  await expect(detail.getByText(missing)).toHaveCount(1);
+  await expect(maintenance.locator('[data-slot="maintenance-consequence"]')).toHaveCount(0);
+  const maintenanceHelp = maintenance.locator('[data-slot="router-setting-help"]');
+  await maintenanceHelp.click();
+  const maintenanceDialog = page.getByRole("dialog");
+  await expect(maintenanceDialog).toContainText(w.locale === "zh-CN" ? "任务描述与结果事实" : "descriptions and outcome facts");
+  const bubble = (await maintenanceDialog.boundingBox())!;
+  const trigger = (await maintenanceHelp.boundingBox())!;
+  const buddyHeader = (await page.locator('[data-slot="buddy-header"]').boundingBox())!;
+  expect(bubble.y).toBeGreaterThanOrEqual(trigger.y + trigger.height);
+  expect(bubble.y).toBeGreaterThanOrEqual(buddyHeader.y + buddyHeader.height);
+  await page.keyboard.press("Escape");
+  await page.locator('[data-slot="router-work-toolbar"]').getByRole("link", { name: new RegExp(w.profiles) }).click();
+  const profile = detail.getByRole("group", { name: w.profileBuddy, exact: true });
+  await expect(profile.getByText(missing)).toHaveCount(1);
+  await expect(detail.getByText(missing)).toHaveCount(1);
+  await expect(profile.locator('[data-slot="profile-consequence"]')).toHaveCount(0);
+  await profile.locator('[data-slot="router-setting-help"]').click();
+  await expect(page.getByRole("dialog")).toContainText(w.locale === "zh-CN" ? "模型名称与对应关系候选" : "model names and correspondence candidates");
+  });
+});
+
+test.describe("Router toolbar attention", () => {
+  test.use({ locale: "zh-CN", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+for (const theme of ["dark", "light"] as const) for (const variant of ["success", "failed", "unset"] as const) test(`shows ${variant} routing attention in ${theme}`, async ({ page }) => {
+  await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
   await page.route("**/api/console", async route => {
     const response = await route.fetch(); const snapshot = await response.json();
     if (variant === "success") {
       snapshot.routingHealth.recentFailures = [];
+      snapshot.routingHealth.consecutiveFailures = 0;
       for (const router of snapshot.routingHealth.routers) router.lastError = null;
       snapshot.maintenance.runs = snapshot.maintenance.runs.filter((run: { state: string }) => run.state === "completed");
       for (const model of snapshot.models) if (model.latestProfileRun) { model.latestProfileRun.state = "completed"; model.latestProfileRun.reason = null; }
@@ -109,23 +186,35 @@ for (const variant of ["success", "failed", "unset"] as const) test(`Router navi
       snapshot.configuration.maintenanceBuddyId = null;
       snapshot.configuration.profileBuddyId = null;
     }
+    if (variant === "failed") snapshot.routingHealth.consecutiveFailures = 2;
     await route.fulfill({ response, json: snapshot });
   });
   await open(page, "#buddies/router/routing");
-  const nav = page.getByRole("navigation", { name: "Router 的工作" });
+  const nav = page.locator('[data-slot="router-work-toolbar"]');
   const links = nav.getByRole("link");
-  const expected = variant === "unset" ? ["未设置", "未设置", "未设置"]
-    : variant === "success" ? ["最近一次 · 成功", "最近一轮 · 已完成", "最近一次 · 成功"]
-      : ["最近一次 · 失败", "最近一轮 · 已完成", "最近一次 · 失败"];
-  for (const [index, status] of expected.entries()) await expect(links.nth(index)).toContainText(status);
-  await expect(nav).not.toContainText("deepseek");
-  await expect(nav).not.toContainText("dsh");
+  await expect(links).toHaveCount(3);
+  await expect(links.nth(0).locator(".bg-hand-mark")).toHaveCount(variant === "success" ? 0 : 1);
+  await expect(links.nth(1).locator(".bg-hand-mark")).toHaveCount(0);
+  await expect(links.nth(2).locator(".bg-hand-mark")).toHaveCount(0);
+  for (const link of await links.all()) await expect(link).not.toContainText(/最近|未设置|Latest|Not set|deepseek|dsh/);
+  await links.nth(1).hover();
+  await expect(page.getByRole("tooltip")).toContainText("将已结束的微任务归入领域树与任务类型");
+  const tip = (await page.getByRole("tooltip").boundingBox())!;
+  const trigger = (await links.nth(1).boundingBox())!;
+  const buddyHeader = (await page.locator('[data-slot="buddy-header"]').boundingBox())!;
+  expect(tip.y).toBeGreaterThanOrEqual(trigger.y + trigger.height - 1);
+  expect(tip.y).toBeGreaterThanOrEqual(buddyHeader.y + buddyHeader.height);
+  await page.mouse.move(0, 0);
+  await links.nth(1).focus();
+  await page.keyboard.press("Tab");
+  await expect(links.nth(2)).toBeFocused();
+  await expect(page.getByRole("tooltip")).toContainText("联网查找公开资料");
 });
 });
 
 test.describe("maintenance domain outline", () => {
   test.use({ locale: "zh-CN", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
-  for (const theme of ["dark", "light"] as const) test(`aligns three columns and keeps the hover panel clear in ${theme}`, async ({ page }) => {
+  for (const theme of ["dark", "light"] as const) test(`aligns three columns and opens details from the info button in ${theme}`, async ({ page }) => {
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await open(page, "#buddies/router/maintenance");
     const tree = page.locator('[data-slot="domain-tree"]');
@@ -151,22 +240,28 @@ test.describe("maintenance domain outline", () => {
       .toBe(await leaf.evaluate(node => getComputedStyle(node).backgroundColor));
     await expect(parentBar.locator(".domain-tree-bar-fill")).toHaveCSS("column-gap", "3px");
 
-    await rows.filter({ hasText: "样式与排版" }).hover();
+    const child = rows.filter({ hasText: "样式与排版" });
+    const childInfo = child.locator(".domain-tree-info");
+    await expect(childInfo).toHaveCSS("opacity", "0");
+    await child.hover();
+    await expect(childInfo).toHaveCSS("opacity", "1");
     await expect(parentBar.locator('[data-segment="preview-domain-tokens"]')).toHaveAttribute("data-highlight", "true");
-    const panel = tree.locator(".domain-tree-popover");
+    await expect(page.locator('[data-slot="domain-details"]')).toHaveCount(0);
+    await childInfo.click();
+    const panel = page.locator('[data-slot="domain-details"]');
     await expect(panel).toBeVisible();
-    await rows.filter({ hasText: "控制台" }).first().hover();
+    await expect(panel).toContainText("样式与排版");
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+    const parent = rows.filter({ hasText: "控制台" }).first();
+    await parent.focus();
+    await expect(parent.locator(".domain-tree-info")).toHaveCSS("opacity", "1");
+    await parent.locator(".domain-tree-info").click();
     await expect(panel).toContainText("旧控制台界面");
     await expect(panel).toContainText("前端界面");
-    await settle(page);
-    const overlaps = await tree.evaluate(node => {
-      const panel = node.querySelector(".domain-tree-popover")!.getBoundingClientRect();
-      return [...node.querySelectorAll(".domain-tree-name")].filter(label => { const box = label.getBoundingClientRect(); return box.left < panel.right && box.right > panel.left && box.top < panel.bottom && box.bottom > panel.top; }).map(label => label.textContent);
-    });
-    expect(overlaps).toEqual([]);
     await captureWork(page, `maintenance-hover-${theme}-1440.png`);
-    await page.mouse.move(0, 0);
-    await expect(panel).toBeHidden();
+    await page.locator('[data-slot="buddy-header"]').getByRole("status").click();
+    await expect(panel).toHaveCount(0);
     await tree.getByRole("button", { name: "全部收起" }).click();
     await expect(rows).toHaveCount(4);
     await tree.getByRole("button", { name: "全部展开" }).click();

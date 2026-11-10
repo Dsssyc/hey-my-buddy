@@ -300,7 +300,7 @@ describe("deep links", () => {
     const f = fixture();
     renderBuddy("#buddies/router/routing", f);
     await screen.findByRole("region", { name: "Router" });
-    expect(screen.getByRole("heading", { name: "路由", level: 2 })).toBeTruthy();
+    expect(within(screen.getByRole("navigation", { name: "Router 的工作" })).getByRole("link", { name: "路由" }).getAttribute("aria-current")).toBe("page");
     expect(modelsRegion()).toBeNull();
     expect(within(screen.getByRole("listitem", { name: `${SOL} / medium` })).getByText("当前")).toBeTruthy();
   });

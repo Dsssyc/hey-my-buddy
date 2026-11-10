@@ -26,8 +26,11 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
       await expect(picker.getByRole("button", { name: /dsh \/ deepseek-official \/ deepseek-flash \/ max/ })).toBeVisible();
       if (width === 1440) await expectNoSidewaysScroll(page);
       await page.keyboard.press("Escape");
-      await plane.getByRole("treeitem", { name: /界面工程/ }).hover();
-      await plane.getByRole("button", { name: "改名" }).click();
+      const domain = plane.getByRole("treeitem", { name: /界面工程/ });
+      await domain.hover();
+      await domain.locator(".domain-tree-info").click();
+      await expect(page.locator('[data-slot="domain-details"]')).toBeVisible();
+      await page.locator('[data-slot="domain-details"]').getByRole("button", { name: "改名" }).click();
       await expect(page.getByRole("dialog").getByLabel("名称")).toBeVisible();
       await expect(page.getByRole("dialog").getByLabel("定义")).toBeVisible();
       await page.keyboard.press("Escape");

@@ -1,7 +1,6 @@
 export default {
-  assigned: "谁担任",
+  buddy: "画像 buddy",
   records: "记录",
-  notConfigured: "未指定画像 buddy；画像构建不会运行。请选择 buddy。",
   noRuns: "还没有画像运行记录。",
   model: "模型",
   period: "开始至结束",

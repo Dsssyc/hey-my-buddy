@@ -64,14 +64,14 @@ describe("Router profile records", () => {
     const f = fixture(data);
     await openRoles(f, "#buddies/router/profiles");
     expect(f.command).not.toHaveBeenCalled();
-    expect(screen.getByText("未指定画像 buddy；画像构建不会运行。请选择 buddy。")).toBeTruthy();
-    await userEvent.setup().click(within(screen.getByRole("group", { name: "谁担任" })).getByRole("button", { name: "选择 buddy" }));
+    expect(screen.getByText("此项工作不运行，请指定 buddy。")).toBeTruthy();
+    await userEvent.setup().click(within(screen.getByRole("group", { name: "画像 buddy" })).getByRole("button", { name: "选择 buddy" }));
     const dialog = screen.getByRole("dialog", { name: "选择 buddy" });
     expect(within(dialog).getByRole("button", { name: MEDIUM })).toBeTruthy();
     expect(within(dialog).queryByRole("button", { name: /gpt-6-sol/ })).toBeNull();
     expect(within(dialog).queryByRole("button", { name: /sonnet-5 \/ high/ })).toBeNull();
     await userEvent.setup().click(within(dialog).getByRole("button", { name: MEDIUM }));
-    expect(within(screen.getByRole("group", { name: "谁担任" })).getByRole("img", { name: "未保存" })).toBeTruthy();
+    expect(within(screen.getByRole("group", { name: "画像 buddy" })).getByRole("img", { name: "未保存" })).toBeTruthy();
     await userEvent.setup().click(saveButton());
     await screen.findByText("设置已保存");
     expect(f.published).toHaveLength(1);
@@ -93,16 +93,16 @@ describe("Router profile records", () => {
   it("shows a recorded readiness reason and locks assignment when configuration is unavailable", async () => {
     const configured = snapshot({ configuration: { profileBuddyId: MEDIUM_ID, profileUnavailableReason: { code: "profile-web-unsupported", params: {} } } });
     await openRoles(fixture(configured), "#buddies/router/profiles");
-    expect(within(screen.getByRole("group", { name: "谁担任" })).getByRole("status").textContent).toBe("画像 buddy 的 harness 未声明强制只联网档位。");
+    expect(within(screen.getByRole("group", { name: "画像 buddy" })).getByRole("status").textContent).toBe("画像 buddy 的 harness 未声明强制只联网档位。");
     cleanup();
     await openRoles(fixture(snapshot({ configuration: null })), "#buddies/router/profiles");
-    expect(within(screen.getByRole("group", { name: "谁担任" })).getByRole("button", { name: "选择 buddy" }).hasAttribute("disabled")).toBe(true);
+    expect(within(screen.getByRole("group", { name: "画像 buddy" })).getByRole("button", { name: "选择 buddy" }).hasAttribute("disabled")).toBe(true);
   });
 
   it("keeps assignment read only without a browser session or during a save", async () => {
     const noSession = snapshot({ sessionPresent: false });
     await openRoles(fixture(noSession), "#buddies/router/profiles");
-    expect(within(screen.getByRole("group", { name: "谁担任" })).getByRole("button", { name: "选择 buddy" }).hasAttribute("disabled")).toBe(true);
+    expect(within(screen.getByRole("group", { name: "画像 buddy" })).getByRole("button", { name: "选择 buddy" }).hasAttribute("disabled")).toBe(true);
     cleanup();
     const data = snapshot();
     data.harnesses = data.harnesses.map(harness => ({ ...harness, permissions: { web: "enforced" } }));
@@ -111,7 +111,7 @@ describe("Router profile records", () => {
     const f = fixture(data, { user_policy_publish: () => pending });
     await openRoles(f, "#buddies/router/profiles");
     const user = userEvent.setup();
-    const choose = within(screen.getByRole("group", { name: "谁担任" })).getByRole("button", { name: "选择 buddy" });
+    const choose = within(screen.getByRole("group", { name: "画像 buddy" })).getByRole("button", { name: "选择 buddy" });
     await user.click(choose);
     await user.click(within(screen.getByRole("dialog", { name: "选择 buddy" })).getByRole("button", { name: MEDIUM }));
     await user.click(saveButton());

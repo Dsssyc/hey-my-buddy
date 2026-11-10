@@ -18,7 +18,7 @@ function HintTarget({ children, "data-state": tooltipState, ...props }: Componen
  * Focus that a dialog or a script moves to the control does not show them: only
  * focus the keyboard brought, which the browser draws a ring for.
  */
-export function Hint({ text, children, delayFocus = false }: { text?: string; children: ReactElement; delayFocus?: boolean }) {
+export function Hint({ text, children, delayFocus = false, side = "top" }: { text?: string; children: ReactElement; delayFocus?: boolean; side?: "top" | "bottom" }) {
   const [open, setOpen] = useState(false);
   const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelFocus = () => { if (focusTimer.current !== null) clearTimeout(focusTimer.current); focusTimer.current = null; };
@@ -34,6 +34,6 @@ export function Hint({ text, children, delayFocus = false }: { text?: string; ch
       }} onBlur={() => { cancelFocus(); if (delayFocus) setOpen(false); }} onPointerDown={cancelFocus}>
       <HintTarget>{children}</HintTarget>
     </TooltipPrimitive.Trigger>
-    {text && <TooltipContent>{text}</TooltipContent>}
+    {text && <TooltipContent side={side}>{text}</TooltipContent>}
   </Tooltip>;
 }

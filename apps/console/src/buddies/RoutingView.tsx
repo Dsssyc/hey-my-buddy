@@ -71,7 +71,7 @@ export function RoutingView({ snapshot, editor, onNavigate }: {
       {!configuration && <p className="mb-3 text-xs text-fail" role="alert">
         {t("roles.upgrade.title")}</p>}
 
-      <RouterSection name={t("routerWork.who")} unsaved={mark(unsaved.list)}>
+      <RouterSection name={t("roles.list.label")} unsaved={mark(unsaved.list)}>
         <RouterList lines={lines} buddies={data.buddies} mode={configuration?.defaultRoutingMode} locked={locked}
           note={configuration ? noteText(routerNote(data, snapshot.routingHealth), data.buddies, t) : undefined}
           onShow={buddyId => onNavigate({ view: "models", target: buddyId })}

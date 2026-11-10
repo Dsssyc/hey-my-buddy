@@ -120,12 +120,11 @@ export function ProfileSettingsView({ snapshot, editor, profileRunId }: { snapsh
   const models = editor.view.models;
   function change(patch: Partial<Configuration>) { if (!locked) editor.update(draft => withConfiguration(draft, patch)); }
   return <div data-slot="profile-plane" className="min-w-0">
-    <RouterSection name={t("routerProfiles.assigned")} unsaved={dirty ? t("unsaved") : undefined}>
+    <RouterSection name={t("routerProfiles.buddy")} help={t("profile.dataFlow")} unsaved={dirty ? t("unsaved") : undefined}>
       <div className="flex flex-wrap items-center justify-between gap-3"><span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? buddyQuad(selected) : config?.profileBuddyId ?? t("profile.none")}</span>
         <Hint text={locked}><Button variant="outline" size="sm" disabled={!!locked} onClick={() => setChoosing(true)}>{t("profile.choose")}</Button></Hint></div>
-      {!config?.profileBuddyId && <p className="mt-2 text-xs text-ink2">{t("routerProfiles.notConfigured")}</p>}
+      {!config?.profileBuddyId && <p className="mt-2 text-xs text-ink2">{t("routerWork.notSet")}</p>}
       {snapshot.configuration?.profileUnavailableReason && config?.profileBuddyId && config.profileBuddyId === snapshot.configuration.profileBuddyId && <p role="status" className="mt-2 text-xs text-ink2">{reasonText(snapshot.configuration.profileUnavailableReason)}</p>}
-      <p data-slot="profile-consequence" className="mt-2 max-w-3xl text-xs leading-relaxed text-ink2">{t("profile.dataFlow")}</p>
     </RouterSection>
     <RouterSection name={t("routerProfiles.records")}><ProfileRecords models={models} profileRunId={profileRunId} /></RouterSection>
     <Dialog open={choosing && !locked} onOpenChange={setChoosing}><DialogContent aria-describedby={undefined} className="sm:max-w-xl">

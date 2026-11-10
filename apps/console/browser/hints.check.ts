@@ -44,7 +44,7 @@ test.describe("necessary hover hints and visible consequences", () => {
     await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
   });
 
-  test("changes the mode consequence, keeps section names and arrows quiet and writes maintenance data flow below its setting", async ({ page }) => {
+  test("changes the mode consequence, keeps section names quiet and explains maintenance data flow from its heading", async ({ page }) => {
     await open(page, "#buddies/router");
     const mode = page.getByRole("group", { name: "默认模式", exact: true });
     const modeHelp = mode.locator('[data-slot="router-setting-help"]');
@@ -69,15 +69,15 @@ test.describe("necessary hover hints and visible consequences", () => {
       responseWait.getByText("等待模型开始作答", { exact: true }), retry.getByText("重试间隔", { exact: true }),
       list.getByRole("button").nth(1), list.getByRole("button").nth(2)]);
     await page.getByRole("navigation", { name: "Router 的工作" }).getByRole("link", { name: /维护/ }).click();
-    const maintenance = page.locator('[data-slot="maintenance-consequence"]');
-    await maintenance.scrollIntoViewIfNeeded();
-    await expect(maintenance).toBeVisible();
-    await expect(maintenance).toContainText("维护");
-    await consequenceLine(maintenance, false, "--ink2");
-    expect((await maintenance.boundingBox())!.y).toBeGreaterThan((await page.locator("[data-slot=maintenance-plane]").getByRole("button", { name: "选择 buddy", exact: true }).boundingBox())!.y);
+    const maintenance = page.getByRole("group", { name: "维护 buddy", exact: true });
+    await expect(maintenance.locator('[data-slot="maintenance-consequence"]')).toHaveCount(0);
+    const help = maintenance.locator('[data-slot="router-setting-help"]');
+    await help.click();
+    await expect(page.getByRole("dialog", { name: "关于维护 buddy" })).toContainText("任务描述与结果事实");
     await capture(page, "maintenance");
-    const domainBranch = page.locator('[data-slot="domain-tree"] button[aria-expanded]').first();
-    await quiet(page, [maintenance, domainBranch, page.locator('[data-slot="maintenance-record"] [aria-label="失败"]').first()]);
+    await page.keyboard.press("Escape");
+    const domainBranch = page.locator('[data-slot="domain-tree"] [role="treeitem"]').first();
+    await quiet(page, [domainBranch, page.locator('[data-slot="maintenance-record"] [aria-label="失败"]').first()]);
   });
 
   test("keeps locked choices' reasons without appending mode explanations", async ({ page }) => {

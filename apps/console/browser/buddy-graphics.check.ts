@@ -21,7 +21,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
   test.use({ locale: "zh-CN", viewport: { width: 1440, height: 1100 }, reducedMotion: "reduce" });
   test.beforeEach(async ({ page }) => page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme));
 
-  test("keeps a dense outline aligned, expandable and clear of its popover", async ({ page }) => {
+  test("keeps a dense outline aligned and opens details below its Info button", async ({ page }) => {
     await page.route("**/api/console", async route => {
       const response = await route.fetch();
       await route.fulfill({ response, json: { ...await response.json(), domainNodes: denseTree } });
@@ -34,7 +34,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
     await expect(tree).toContainText("41 个顶层领域 · 81 个节点");
     expect(await rows.evaluateAll(nodes => nodes.map(node => Number(node.querySelector(".domain-tree-count")!.textContent))))
       .toEqual([139, 103, 89, 75, 74, 67, 51, 44, 41, 37, 28, 24, 20, 18, 17, 17, 16, 15, 15, 14, 14, 13, 12, 12, 10, 10, 8, 8, 7, 6, 5, 5, 3, 3, 3, 3, 2, 1, 1, 1, 1]);
-    await expectTextUncut(tree.locator(".domain-tree-name"));
+    await expectTextUncut(tree.locator(".domain-tree-name-text"));
     await capture(page, "domains-collapsed", theme);
     const first = rows.first();
     await first.click();
@@ -51,22 +51,56 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
 
     await tree.locator(".domain-tree-overview p").click();
     await page.mouse.move(0, 0);
-    await expect(tree.locator(".domain-tree-popover")).toBeHidden();
+    const child = rows.nth(1);
+    const info = child.locator(".domain-tree-info");
+    await expect(info).toHaveCSS("opacity", "0");
+    await expect(info).toHaveCSS("pointer-events", "none");
+    await expect(page.locator('[data-slot="domain-details"]')).toHaveCount(0);
     await capture(page, "domains-one-expanded", theme);
-    await rows.nth(1).hover();
+    await child.hover();
+    await expect(info).toHaveCSS("opacity", "1");
     await expect(first.locator('[data-segment="preview-outline-01-1"]')).toHaveAttribute("data-highlight", "true");
-    const panel = tree.locator(".domain-tree-popover");
+    await page.mouse.move(0, 0);
+    await expect(info).toHaveCSS("opacity", "0");
+    await child.focus();
+    await expect(info).toHaveCSS("opacity", "1");
+    await page.keyboard.press("Tab");
+    await expect(info).toBeFocused();
+    await expect(info).toHaveCSS("opacity", "1");
+    await page.keyboard.press("Tab");
+    await expect(rows.nth(2)).toBeFocused();
+    await child.hover();
+    const hoverBackground = await child.evaluate(node => getComputedStyle(node).backgroundColor);
+    const beforeOpen = await rows.count();
+    await info.click();
+    await expect(rows).toHaveCount(beforeOpen);
+    await expect(child).toHaveAttribute("data-details-open", "true");
+    const panel = page.locator('[data-slot="domain-details"]');
     await expect(panel).toBeVisible();
-    const overlaps = await tree.evaluate(node => {
-      const panel = node.querySelector(".domain-tree-popover")!.getBoundingClientRect();
-      return [...node.querySelectorAll(".domain-tree-name")].filter(label => {
-        const box = label.getBoundingClientRect();
-        return box.left < panel.right && box.right > panel.left && box.top < panel.bottom && box.bottom > panel.top;
-      }).length;
-    });
-    expect(overlaps).toBe(0);
+    await expect(panel).toHaveClass(/domain-tree-popover/);
+    const infoBox = (await info.boundingBox())!;
+    const nameBox = (await child.locator(".domain-tree-name-text").boundingBox())!;
+    const panelBox = (await panel.boundingBox())!;
+    expect(panelBox.y).toBeGreaterThanOrEqual(infoBox.y + infoBox.height - 1);
+    expect(panelBox.y).toBeGreaterThanOrEqual(nameBox.y + nameBox.height - 1);
+    await page.mouse.move(0, 0);
+    expect(await child.evaluate(node => getComputedStyle(node).backgroundColor)).toBe(hoverBackground);
+    await expect(first.locator('[data-segment="preview-outline-01-1"]')).toHaveAttribute("data-highlight", "true");
     await capture(page, "domains-hover", theme);
-    await rows.nth(1).press("Enter");
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+    await expect(info).toBeFocused();
+    await info.click();
+    await expect(panel).toBeVisible();
+    await tree.locator(".domain-tree-overview p").click();
+    await expect(panel).toHaveCount(0);
+    await expect(info).toHaveCSS("opacity", "0");
+    await child.focus();
+    await child.press("Enter");
+    await expect(rows).toHaveCount(52);
+    await child.press("Space");
+    await expect(rows).toHaveCount(47);
+    await child.press("Enter");
     await expect(rows).toHaveCount(52);
     await page.reload();
     await expect(rows).toHaveCount(52);

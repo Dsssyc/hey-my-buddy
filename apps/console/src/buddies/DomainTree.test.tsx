@@ -44,8 +44,12 @@ describe("domain outline", () => {
     expect(nestedLeaf.style.backgroundColor).toBe("var(--buddy-domain-2)");
     await userEvent.hover(rows[1]!);
     expect(rootBar.querySelector('[data-segment="child"]')!.getAttribute("data-highlight")).toBe("true");
-    expect(screen.getByText(/旧界面/)).toBeTruthy();
-    expect(screen.getByText(/旧前端/)).toBeTruthy();
+    await userEvent.click(within(rows[1]!).getByRole("button", { name: "前端 的详情" }));
+    const details = document.querySelector<HTMLElement>('[data-slot="domain-details"]')!;
+    expect(within(details).getByText("浏览器界面")).toBeTruthy();
+    expect(within(details).getByText(/旧界面/)).toBeTruthy();
+    expect(within(details).getByText(/旧前端/)).toBeTruthy();
+    expect(rootBar.querySelector('[data-segment="child"]')!.getAttribute("data-highlight")).toBe("true");
   });
 
   it("expands and collapses all, retains the chosen default, and keeps keyboard actions", async () => {
@@ -63,12 +67,40 @@ describe("domain outline", () => {
     await user.click(screen.getByRole("button", { name: "全部收起" }));
     expect(screen.getAllByRole("treeitem")).toHaveLength(2);
     expect(localStorage.getItem(VIEW_PREFERENCE_PREFIX + "domain-tree-expanded")).toBe("false");
+    const collapsedRoot = screen.getByRole("treeitem", { name: /工程/ });
+    expect(collapsedRoot.tagName).toBe("DIV");
+    expect(collapsedRoot.tabIndex).toBe(0);
+    collapsedRoot.focus();
+    await user.keyboard("{Enter}");
+    expect(collapsedRoot.getAttribute("aria-expanded")).toBe("true");
+    await user.keyboard(" ");
+    expect(collapsedRoot.getAttribute("aria-expanded")).toBe("false");
     await user.tab();
-    expect(screen.getByRole("button", { name: "改名" })).toBeTruthy();
-    await user.keyboard("{Tab}");
-    expect(document.activeElement?.textContent).toBe("改名");
+    expect(document.activeElement).toBe(within(collapsedRoot).getByRole("button", { name: "工程 的详情" }));
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("treeitem", { name: /研究/ }));
     cleanup(); tree();
     expect(screen.getByRole("tree").querySelectorAll('[role="treeitem"]')).toHaveLength(2);
+  });
+
+  it("opens details from Info without folding the row and returns focus after Escape", async () => {
+    const view = tree(); const user = userEvent.setup();
+    const root = within(view).getByRole("treeitem", { name: /工程/ });
+    const info = within(root).getByRole("button", { name: "工程 的详情" });
+    expect(root.getAttribute("aria-expanded")).toBe("false");
+    await user.click(info);
+    expect(root.getAttribute("aria-expanded")).toBe("false");
+    expect(root.getAttribute("data-details-open")).toBe("true");
+    const details = document.querySelector<HTMLElement>('[data-slot="domain-details"]')!;
+    expect(details.classList.contains("domain-tree-popover")).toBe(true);
+    expect(within(details).getByText("工程工作")).toBeTruthy();
+    expect(within(details).getByRole("button", { name: "改名" })).toBeTruthy();
+    await user.keyboard("{Escape}");
+    expect(document.querySelector('[data-slot="domain-details"]')).toBeNull();
+    expect(document.activeElement).toBe(info);
+    expect(root.getAttribute("data-details-open")).not.toBe("true");
+    await user.click(root);
+    expect(root.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("supports arbitrarily deep data and locks edits", async () => {
@@ -80,7 +112,7 @@ describe("domain outline", () => {
     expect(rows).toHaveLength(35);
     expect(rows[34]!.getAttribute("aria-level")).toBe("35");
     expect((rows[34] as HTMLElement).style.getPropertyValue("--depth")).toBe("34");
-    await userEvent.hover(rows[0]!);
+    await userEvent.click(within(rows[0]!).getByRole("button", { name: "Level 0 的详情" }));
     expect((screen.getByRole("button", { name: "改名" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "合并" }) as HTMLButtonElement).disabled).toBe(true);
   });

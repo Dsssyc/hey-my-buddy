@@ -42,7 +42,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
       enabled={editor.view.buddies.filter(buddy => buddy.enabled).length} total={editor.view.buddies.length} />
     <CatalogView {...shared} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable}
       active={active && location.view === "models"} hidden={location.view !== "models"} />
-    <RouterView {...shared} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && location.view === "router"} hidden={location.view !== "router"} />
+    <RouterView {...shared} attention={attention} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && location.view === "router"} hidden={location.view !== "router"} />
     {evaluationVisited && <EvaluationView {...shared} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} hidden={location.view !== "evaluation"} />}
   </div>;
 }

@@ -148,7 +148,7 @@ function Connected({ api, snapshot, refresh, connectionError, verifiedAt, runtim
   return <TooltipProvider><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
     <a className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"
       href="#main" onClick={event => { event.preventDefault(); document.getElementById("main")?.focus(); }}>{t("skipToContent")}</a>
-    <header className="flex h-11 shrink-0 items-center gap-2 bg-bar px-3 text-bar-ink sm:gap-7 sm:px-4">
+    <header className="flex h-9 shrink-0 items-center gap-2 bg-bar px-3 text-bar-ink sm:gap-7 sm:px-4">
       <a className="flex shrink-0 items-center gap-2 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-bar-ink/60"
         href={tasksAddress} aria-label="Hey my buddy" onClick={() => select("tasks")}>
         <BrandMark />

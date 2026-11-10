@@ -128,7 +128,7 @@ describe("maintenance controls", () => {
   it("keeps a confirmed domain write visible when its subsequent read fails", async () => {
     const f = fixture(state(), { domain_rename: () => ({ nodeId: "root" }) });
     await openRoles(f); const user = userEvent.setup();
-    await user.hover(document.querySelector<HTMLElement>('[data-node="root"].domain-tree-row')!);
+    await user.click(within(document.querySelector<HTMLElement>('[data-node="root"].domain-tree-row')!).getByRole("button", { name: "工程 的详情" }));
     await user.click(screen.getByRole("button", { name: "改名" }));
     vi.mocked(f.api.snapshot).mockRejectedValueOnce(new Error("read interrupted"));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
@@ -165,7 +165,7 @@ describe("maintenance controls", () => {
   it("keeps an unsuccessful domain edit open and shows its error inside the dialog", async () => {
     const f = fixture(state(), { domain_rename: () => { throw new Error("Duplicate domain name"); } });
     await openRoles(f); const user = userEvent.setup();
-    await user.hover(document.querySelector<HTMLElement>('[data-node="root"].domain-tree-row')!);
+    await user.click(within(document.querySelector<HTMLElement>('[data-node="root"].domain-tree-row')!).getByRole("button", { name: "工程 的详情" }));
     await user.click(screen.getByRole("button", { name: "改名" }));
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
@@ -177,7 +177,7 @@ describe("maintenance controls", () => {
     await openRoles(f); const user = userEvent.setup();
     await user.click(document.querySelector<HTMLElement>('[data-node="root"].domain-tree-row')!);
     const row = document.querySelector<HTMLElement>('[data-node="child"].domain-tree-row')!;
-    await user.hover(row);
+    await user.click(within(row).getByRole("button", { name: "前端 的详情" }));
     await user.click(screen.getByRole("button", { name: "改名" }));
     const rename = screen.getByRole("dialog");
     await user.clear(within(rename).getByLabelText("名称")); await user.type(within(rename).getByLabelText("名称"), "界面工程");
@@ -185,7 +185,7 @@ describe("maintenance controls", () => {
     await user.click(within(rename).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(calls[0]).toEqual({ nodeId: "child", name: "界面工程", definition: "浏览器排版与交互" });
-    await user.hover(row);
+    await user.click(within(row).getByRole("button", { name: "前端 的详情" }));
     await user.click(screen.getByRole("button", { name: "合并" }));
     const merge = screen.getByRole("dialog"); await user.click(within(merge).getByRole("button", { name: "存储" }));
     await user.click(within(merge).getByRole("button", { name: /^合并$/ }));

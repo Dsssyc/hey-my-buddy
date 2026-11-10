@@ -24,6 +24,19 @@ async function box(target: Locator): Promise<Box> {
   return found!;
 }
 
+async function labelToUnderline(target: Locator, textSelector?: string): Promise<number> {
+  return target.evaluate((node, selector) => {
+    const text = selector ? node.querySelector(selector) : node.firstChild;
+    const range = document.createRange();
+    range.selectNodeContents(text!);
+    const words = range.getBoundingClientRect();
+    const link = node.getBoundingClientRect();
+    const after = getComputedStyle(node, "::after");
+    const underlineTop = link.bottom - parseFloat(after.bottom) - parseFloat(after.height);
+    return underlineTop - words.bottom;
+  }, textSelector);
+}
+
 /** Seconds in a computed `transition-duration` or `animation-duration`, one per listed property. */
 const seconds = (value: string) => value.split(",").map(part => parseFloat(part));
 async function transition(target: Locator) {
@@ -373,6 +386,42 @@ for (const { locale, catalog } of languages) for (const width of [700, 800, 900,
       expect(Math.abs(geometry.textMiddle - geometry.rowMiddle), "the name is vertically centered in its row").toBeLessThanOrEqual(1);
       expect(Math.abs(geometry.underlineBottom - geometry.dividerBottom), "the underline rests on the row's bottom divider").toBeLessThanOrEqual(0.5);
       expect(geometry.underlineHeight).toBe(2);
+    });
+  });
+}
+
+for (const { locale } of languages) for (const theme of ["dark", "light"] as const) for (const width of [1440, 390]) {
+  test.describe(`underlined navigation at ${width}px in ${locale} ${theme}`, () => {
+    test.use({ locale, viewport: { width, height: 900 }, reducedMotion: "reduce" });
+    test("keeps labels five to seven pixels above their underline", async ({ page }) => {
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      await open(page, "#tasks");
+      const top = page.getByRole("banner").first();
+      expect((await box(top)).height).toBe(36);
+      const topGap = await labelToUnderline(top.getByRole("navigation").locator('a[aria-current="page"]'));
+      expect(topGap).toBeGreaterThanOrEqual(5);
+      expect(topGap).toBeLessThanOrEqual(7);
+      const taskTab = page.locator('[data-slot="macro-filter-tabs"] [data-slot="tabs-trigger"][data-state="active"]');
+      await expect(taskTab).toBeVisible();
+      const taskGap = await labelToUnderline(taskTab, '[data-slot="macro-filter-name"]');
+      expect(taskGap).toBeGreaterThanOrEqual(5);
+      expect(taskGap).toBeLessThanOrEqual(7);
+
+      await open(page, "#buddies/catalog");
+      const header = page.locator('[data-slot="buddy-header"]');
+      expect((await box(header)).height).toBe(36);
+      const buddyGap = await labelToUnderline(header.locator('a[aria-current="page"]'));
+      expect(buddyGap).toBeGreaterThanOrEqual(5);
+      expect(buddyGap).toBeLessThanOrEqual(7);
+
+      await open(page, "#buddies/evaluation/codex/00000000-0000-4000-8000-000000000003/high");
+      const detail = page.locator('[data-slot="evaluation-detail"]');
+      const detailTab = detail.getByRole("navigation").locator('a[aria-current="page"]');
+      await expect(detailTab).toBeVisible();
+      const detailGap = await labelToUnderline(detailTab);
+      expect(detailGap).toBeGreaterThanOrEqual(5);
+      expect(detailGap).toBeLessThanOrEqual(7);
+      await expectNoSidewaysScroll(page);
     });
   });
 }

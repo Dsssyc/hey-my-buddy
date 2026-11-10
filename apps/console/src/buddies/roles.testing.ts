@@ -124,7 +124,7 @@ export async function openRoles(f: ReturnType<typeof fixture>, hash = "#buddies/
 }
 
 export const rolesRegion = () => screen.getByRole("region", { name: "Router" });
-export const section = (name: string) => within(rolesRegion()).getByRole("group", { name: name === "列表" ? "谁担任" : name });
+export const section = (name: string) => within(rolesRegion()).getByRole("group", { name: name === "列表" ? "Router 列表" : name });
 export const routerList = () => within(rolesRegion()).getByRole("list", { name: "Router 列表" });
 export const queryRouterList = () => within(rolesRegion()).queryByRole("list", { name: "Router 列表" });
 /** The four-part names of the list's buddies, in the order of the list. */

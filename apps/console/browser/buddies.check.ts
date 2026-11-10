@@ -29,7 +29,7 @@ for (const { locale, sections, enabled } of languages) {
       const catalogHeader = (await header.boundingBox())!;
       const toolbar = (await main.locator('[data-slot="catalogue-toolbar"]').boundingBox())!;
       expect(catalogHeader.y).toBe(banner.y + banner.height);
-      expect(catalogHeader.height).toBe(48);
+      expect(catalogHeader.height).toBe(36);
       const selected = links.first();
       const geometry = await selected.evaluate(link => {
         const bounds = link.getBoundingClientRect();

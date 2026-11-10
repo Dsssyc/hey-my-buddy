@@ -34,7 +34,7 @@ export function BuddyHeader({ location, attention, onNavigate, harnessCount, ena
   const { t } = useTranslation("buddies");
   const hints = attentionHints(attention, t);
   const inCatalog = location.view === "models";
-  return <div data-slot="buddy-header" className="flex h-12 shrink-0 items-center justify-between gap-6 border-b bg-card px-6"><nav aria-label={t("sections.label")} className="flex h-full shrink-0 items-center gap-[22px] bg-card">
+  return <div data-slot="buddy-header" className="flex h-9 shrink-0 items-center justify-between gap-6 border-b bg-card px-6"><nav aria-label={t("sections.label")} className="flex h-full shrink-0 items-center gap-[22px] bg-card">
     <ViewLink view="models" label={t("sections.catalog")} current={inCatalog} className={sectionClass}
       onNavigate={onNavigate} />
     <ViewLink view="router" label={t("sections.router")} current={location.view === "router"} className={sectionClass} hint={hints.roles} onNavigate={onNavigate} />

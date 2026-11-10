@@ -68,7 +68,7 @@ describe("the Router list", () => {
     expect(waiting.getByText("等待重试")).toBeTruthy();
     expect(line(HIGH).querySelector("time")!.textContent).toBe(formatShortDateTime(Date.parse("2026-09-27T08:00:00.000Z")));
     expect(standing(HIGH)).toBe("idle");
-    expect(screen.getByRole("heading", { name: "路由", level: 2 })).toBeTruthy();
+    expect(within(screen.getByRole("navigation", { name: "Router 的工作" })).getByRole("link", { name: "路由" }).getAttribute("aria-current")).toBe("page");
   });
 
   it("names the buddy the service says holds the role, not the head of the list", async () => {

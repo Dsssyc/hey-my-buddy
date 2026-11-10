@@ -63,12 +63,12 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
     if (!await command("task_cancel", { runId: taskId })) setStopping(null);
   }
   return <div data-slot="maintenance-plane" aria-busy={busy}>
-    <RouterSection name={t("routerWork.who")} unsaved={dirty ? t("unsaved") : undefined}>
+    <RouterSection name={t("maintenance.buddy")} help={t("maintenance.dataFlow")} unsaved={dirty ? t("unsaved") : undefined}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? buddyQuad(selected) : config?.maintenanceBuddyId ?? t("maintenance.none")}</span>
         <Button variant="outline" size="sm" disabled={locked} onClick={() => setChoosing(true)}>{t("maintenance.choose")}</Button>
       </div>
-      <p data-slot="maintenance-consequence" className="mt-2 text-xs text-ink2">{t("maintenance.dataFlow")}</p>
+      {!config?.maintenanceBuddyId && <p className="mt-2 text-xs text-ink2">{t("routerWork.notSet")}</p>}
     </RouterSection>
     <RouterSection name={t("routerWork.settings")}>
       <RouterField name={t("maintenance.interval")} unsaved={dirtyInterval ? t("unsaved") : undefined}>
