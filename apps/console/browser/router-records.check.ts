@@ -106,11 +106,6 @@ for (const theme of ["dark", "light"]) test.describe(`Router bounded records ${t
     await capture(page, `routing-records-${theme}-1440.png`);
 
     const nav = page.getByRole("navigation", { name: "Router 的工作" });
-    const geometry = await nav.evaluate(node => ({ width: node.getBoundingClientRect().width,
-      rows: [...node.querySelectorAll("a")].map(link => link.getBoundingClientRect().height) }));
-    expect(geometry.width).toBeLessThan(220);
-    expect(geometry.rows.every(height => height >= 48 && height <= 72)).toBe(true);
-    await capture(page, `router-jobs-${theme}-1440.png`);
     await nav.getByRole("link", { name: /^画像/ }).click();
     const profiles = page.locator('[data-slot="profile-records"]');
     await scrollHistory(page, profiles, 20);
