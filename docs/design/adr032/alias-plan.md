@@ -146,11 +146,12 @@
 5. **`task-detail/RoutingPane.tsx`：** 不再把 `preferredBuddyId` 按冒号拆成四元组，改用 buddy 记录的四个字段。
 6. **类型与样例：** `types.ts` 的 `Buddy` 去掉 `label`、加上 `alias`，样例数据与合成预览跟着改。
 7. **界面文字**由 Host 给出，走 i18n：
-   - 别名 / Alias；
-   - 这个别名已被 {name} 使用 / This alias is already used by {name}；
-   - 别名不能含“ / ”、方括号或控制字符 / An alias cannot contain “ / ”, square brackets or control characters；
-   - 别名不能是 route / An alias cannot be “route”；
-   - 别名最多 64 个字符 / An alias has at most 64 characters。
+   - 这里只加抽屉里的字段名“别名 / Alias”。
+   - 拒绝的原因在微任务 1 已经加好：
+     - `alias.invalid`：“别名{{violation}}。”，`violation` 有四种说法：必须是文字、不能为空、最多 64 个字符、不能含“ / ”、方括号或控制字符；
+     - `alias.reserved`：“别名不能是 route。”；
+     - `alias.conflict`：“这个别名已被 {{conflictingBuddy}} 使用。”；
+     - 英文各有对应。
 
 ## Host 做的
 
