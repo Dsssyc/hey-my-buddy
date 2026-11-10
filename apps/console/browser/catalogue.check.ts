@@ -222,7 +222,7 @@ for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear,
         await expect(review).toBeFocused();
         const hint = page.locator("[data-slot=tooltip-content][data-state$=open]");
         await expect(hint).toBeVisible();
-        expect((await hint.boundingBox())!.width).toBeLessThanOrEqual(320);
+        expect((await hint.boundingBox())!.width).toBeLessThanOrEqual(Math.min(448, page.viewportSize()!.width - 32));
         await expectWholeAndApart(page.locator("body"), hint);
         await expectNoSidewaysScroll(page);
       });

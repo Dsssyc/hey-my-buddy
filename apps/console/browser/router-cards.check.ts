@@ -110,7 +110,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Router cards ${th
     await expect(settings).toHaveCSS("grid-template-columns", /.+ .+/);
     await expect(settings).toHaveCSS("column-gap", "32px");
     await expect(readings).toHaveCSS("column-gap", "32px");
-    const settingCells = await settings.locator(".router-settings-column").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
+    const settingCells = await settings.locator(':scope > [data-slot="router-field"]').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
     const readingCells = await readings.locator(":scope > *").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
     expect(settingCells[1]).toBeCloseTo(readingCells[2], 0);
     const failureCells = await detail.locator('[data-slot="routing-failures-region"] tbody > tr').first().locator("td").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
@@ -304,28 +304,62 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["dark", "
   test("shares label widths and aligns controls while unsaved marks are present", async ({ page }) => {
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await open(page, "#buddies/router/routing");
-    const columns = page.locator('[data-slot="routing-work"] .router-settings-column');
-    await expect(columns).toHaveCount(2);
+    const fields = page.locator('[data-slot="routing-work"] .router-settings > [data-slot="router-field"]');
+    await expect(fields).toHaveCount(4);
     const assertAligned = async () => {
-      for (const column of await columns.all()) {
-        const fields = column.locator(':scope > [data-slot="router-field"]');
-        await expect(fields).toHaveCount(2);
-        const geometry = await fields.evaluateAll(nodes => nodes.map(node => ({
-          labelWidth: node.firstElementChild!.getBoundingClientRect().width,
-          controlLeft: node.querySelector('[data-slot="segmented"], input')!.getBoundingClientRect().left,
-        })));
-        expect(Math.abs(geometry[0].labelWidth - geometry[1].labelWidth)).toBeLessThanOrEqual(1);
-        expect(Math.abs(geometry[0].controlLeft - geometry[1].controlLeft)).toBeLessThanOrEqual(1);
+      const geometry = await fields.evaluateAll(nodes => nodes.map(node => ({
+        labelWidth: node.firstElementChild!.getBoundingClientRect().width,
+        controlLeft: node.querySelector('[data-slot="segmented"], input')!.getBoundingClientRect().left,
+      })));
+      for (const [first, second] of [[0, 2], [1, 3]]) {
+        expect(Math.abs(geometry[first].labelWidth - geometry[second].labelWidth)).toBeLessThanOrEqual(1);
+        expect(Math.abs(geometry[first].controlLeft - geometry[second].controlLeft)).toBeLessThanOrEqual(1);
       }
     };
     await assertAligned();
-    await columns.first().getByRole("radio", { checked: false }).first().click();
-    await columns.nth(1).getByRole("spinbutton").first().fill("61");
+    await fields.nth(0).getByRole("radio", { checked: false }).first().click();
+    await fields.nth(1).getByRole("spinbutton").fill("61");
     await expect(page.locator('[data-slot="router-field"] [data-slot="unsaved-mark"]')).toHaveCount(2);
     await assertAligned();
-    await columns.first().getByRole("spinbutton").fill("601");
-    await columns.nth(1).getByRole("spinbutton").nth(1).fill("7");
+    await fields.nth(2).getByRole("spinbutton").fill("601");
+    await fields.nth(3).getByRole("spinbutton").fill("7");
     await expect(page.locator('[data-slot="router-field"] [data-slot="unsaved-mark"]')).toHaveCount(4);
     await assertAligned();
+  });
+});
+
+for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["dark", "light"] as const) for (const width of [390, 1440]) test.describe(`Router setting order ${locale} ${theme} ${width}px`, () => {
+  test.use({ locale, viewport: { width, height: 1000 }, reducedMotion: "reduce" });
+  test("preserves reading, visual and keyboard order across the shared grid", async ({ page }) => {
+    await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+    await open(page, "#buddies/router/routing");
+    const fields = page.locator('[data-slot="routing-work"] .router-settings > [data-slot="router-field"]');
+    const names = locale === "zh-CN" ? ["默认模式", "开始作答时限", "重试间隔", "探索名额"]
+      : ["Default mode", "Response start timeout", "Retry interval", "Exploration quota"];
+    expect(await fields.evaluateAll(nodes => nodes.map(node => document.getElementById(node.getAttribute("aria-labelledby")!)!.textContent))).toEqual(names);
+    const positions = await fields.evaluateAll(nodes => nodes.map(node => ({ x: node.getBoundingClientRect().x, y: node.getBoundingClientRect().y })));
+    if (width === 390) {
+      for (let index = 1; index < positions.length; index++) {
+        expect(positions[index].x).toBeCloseTo(positions[0].x, 0);
+        expect(positions[index].y).toBeGreaterThan(positions[index - 1].y);
+      }
+    } else {
+      for (const [left, right] of [[0, 1], [2, 3]]) {
+        expect(positions[left].y).toBeCloseTo(positions[right].y, 0);
+        expect(positions[left].x).toBeLessThan(positions[right].x);
+      }
+    }
+    const helps = fields.locator('[data-slot="router-setting-help"]');
+    await helps.nth(0).focus();
+    await page.keyboard.press("Tab");
+    await expect(fields.nth(0).getByRole("radio", { checked: true })).toBeFocused();
+    for (const index of [1, 2, 3]) {
+      await page.keyboard.press("Tab");
+      await expect(helps.nth(index)).toBeFocused();
+      if (index < 3) {
+        await page.keyboard.press("Tab");
+        await expect(fields.nth(index).getByRole("spinbutton")).toBeFocused();
+      }
+    }
   });
 });

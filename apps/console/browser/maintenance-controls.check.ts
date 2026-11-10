@@ -77,7 +77,7 @@ for (const theme of ["dark", "light"] as const) for (const width of [1440, 390])
       await expect(usage).toHaveAttribute("aria-expanded", "false");
       await usage.click();
       await expect(usage).toHaveAttribute("aria-expanded", "true");
-      await expect(older.locator('[data-slot="quant-bar-detail"]')).toContainText("缓存输入");
+      await expect(page.locator('[data-slot="quant-bar-detail"]')).toContainText("缓存输入");
     });
   });
 }

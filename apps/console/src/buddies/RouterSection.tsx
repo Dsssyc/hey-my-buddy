@@ -37,8 +37,8 @@ function RouterLabel({ id, name, help, unsaved, className = "" }: { id: string; 
 
 export function RouterField({ name, unsaved, help, children, className }: { name: string; unsaved?: string; help?: ReactNode; children: ReactNode; className?: string }) {
   const id = useId();
-  return <div role="group" aria-labelledby={id} data-slot="router-field" className={cn("col-span-full grid min-h-11 grid-cols-subgrid items-center gap-x-4 py-1.5", className)}>
+  return <div role="group" aria-labelledby={id} data-slot="router-field" className={cn("col-span-2 grid min-h-11 grid-cols-subgrid items-center gap-x-4 py-1.5", className)}>
     <RouterLabel id={id} name={name} help={help} unsaved={unsaved} className="text-sm text-ink2" />
-    <div className="min-w-0">{children}</div>
+    <div className="col-start-2 col-end-[-1] min-w-0">{children}</div>
   </div>;
 }
