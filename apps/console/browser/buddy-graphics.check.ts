@@ -62,7 +62,10 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
     await expect(first.locator('[data-segment="preview-outline-01-1"]')).toHaveAttribute("data-highlight", "true");
     await page.mouse.move(0, 0);
     await expect(info).toHaveCSS("opacity", "0");
-    await child.focus();
+    await first.focus();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await expect(child).toBeFocused();
     await expect(info).toHaveCSS("opacity", "1");
     await page.keyboard.press("Tab");
     await expect(info).toBeFocused();
@@ -90,6 +93,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
     await page.keyboard.press("Escape");
     await expect(panel).toHaveCount(0);
     await expect(info).toBeFocused();
+    await expect(info).toHaveCSS("opacity", "1");
     await info.click();
     await expect(panel).toBeVisible();
     await tree.locator(".domain-tree-overview p").click();
@@ -109,6 +113,77 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
     await tree.getByRole("button", { name: "全部收起" }).click();
     await expect(rows).toHaveCount(41);
     await expectNoSidewaysScroll(page);
+  });
+
+  test("hides domain Info after mouse toggles and trigger dismissal", async ({ page }) => {
+    await open(page, "#buddies/router/maintenance");
+    const rows = page.locator('[data-slot="domain-row"]');
+    const row = rows.first();
+    const info = row.locator(".domain-tree-info");
+    const other = rows.filter({ hasText: "科研计算" });
+    const panel = page.locator('[data-slot="domain-details"]');
+    for (const expanded of ["true", "false"]) {
+      await row.locator(".domain-tree-name-text").click();
+      await expect(row).toHaveAttribute("aria-expanded", expanded);
+      await other.hover();
+      await expect(row).toBeFocused();
+      await expect(info).toHaveCSS("opacity", "0");
+      await expect(info).toHaveCSS("pointer-events", "none");
+    }
+    await row.hover();
+    await info.click();
+    await expect(panel).toBeVisible();
+    await other.hover();
+    await expect(info).toHaveCSS("opacity", "1");
+    await info.click();
+    await expect(panel).toHaveCount(0);
+    await other.hover();
+    await expect(info).toBeFocused();
+    await expect(info).toHaveCSS("opacity", "0");
+    await expect(info).toHaveCSS("pointer-events", "none");
+  });
+
+  test("reveals domain Info for keyboard focus and restores it after Escape", async ({ page }) => {
+    await open(page, "#buddies/router/maintenance");
+    const tree = page.locator('[data-slot="domain-tree"]');
+    const row = tree.getByRole("treeitem").first();
+    const info = row.locator(".domain-tree-info");
+    await tree.getByRole("button", { name: "全部展开" }).click();
+    await page.mouse.move(0, 0);
+    await page.keyboard.press("Tab");
+    await expect(row).toBeFocused();
+    expect(await row.evaluate(node => node.matches(":focus-visible"))).toBe(true);
+    await expect(info).toHaveCSS("opacity", "1");
+    await page.keyboard.press("Tab");
+    await expect(info).toBeFocused();
+    await expect(info).toHaveCSS("opacity", "1");
+    await page.keyboard.press("Enter");
+    const panel = page.locator('[data-slot="domain-details"]');
+    await expect(panel).toBeVisible();
+    await expect(info).toHaveCSS("opacity", "1");
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+    await expect(info).toBeFocused();
+    expect(await info.evaluate(node => node.matches(":focus-visible"))).toBe(true);
+    await expect(info).toHaveCSS("opacity", "1");
+    await page.keyboard.press("Tab");
+    await expect(tree.getByRole("treeitem").nth(1)).toBeFocused();
+    await expect(info).toHaveCSS("opacity", "0");
+  });
+
+  test("prevents rapid-click row selection while keeping domain definitions selectable", async ({ page }) => {
+    await open(page, "#buddies/router/maintenance");
+    const row = page.locator('[data-slot="domain-row"]').first();
+    for (const selector of [".domain-tree-name-text", ".domain-tree-count"]) {
+      await row.locator(selector).click({ clickCount: 3, delay: 30 });
+      expect(await page.evaluate(() => window.getSelection()!.toString())).toBe("");
+    }
+    await row.hover();
+    await row.locator(".domain-tree-info").click();
+    const definition = page.locator(".domain-tree-popover-definition");
+    await definition.click({ clickCount: 3, delay: 30 });
+    expect((await page.evaluate(() => window.getSelection()!.toString())).trim()).toBe((await definition.innerText()).trim());
+    expect(await definition.innerText()).not.toBe("");
   });
 
   test("reveals exact values from the graphics and preserves each record's choice", async ({ page }) => {
