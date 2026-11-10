@@ -220,7 +220,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
     await expect(page.locator('[data-slot="quant-bar-detail"]').first()).toContainText("应答");
     await capture(page, "routing-expanded", theme);
     await page.reload();
-    await expect(bar).toHaveAttribute("aria-expanded", "true");
+    await expect(bar).toHaveAttribute("aria-expanded", "false");
 
     await page.goto("#buddies/router/maintenance");
     const maintenance = page.locator('[data-slot="maintenance-record"]');

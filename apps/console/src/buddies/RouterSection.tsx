@@ -1,7 +1,6 @@
 import { cn } from "cn";
 import { CircleHelp } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useId } from "react";
@@ -38,8 +37,8 @@ function RouterLabel({ id, name, help, unsaved, className = "" }: { id: string; 
 
 export function RouterField({ name, unsaved, help, children, className }: { name: string; unsaved?: string; help?: ReactNode; children: ReactNode; className?: string }) {
   const id = useId();
-  return <div role="group" aria-labelledby={id} data-slot="router-field" className={cn("grid h-11 grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-4", className)}>
+  return <div role="group" aria-labelledby={id} data-slot="router-field" className={cn("grid min-h-11 grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-4 py-1.5", className)}>
     <RouterLabel id={id} name={name} help={help} unsaved={unsaved} className="text-sm text-ink2" />
-    <ScrollArea orientation="both" className="min-w-0 h-11" viewportProps={{ className: "[&>div]:block!" }}><div className="router-field-content flex h-11 min-w-max items-center">{children}</div></ScrollArea>
+    <div className="min-w-0">{children}</div>
   </div>;
 }

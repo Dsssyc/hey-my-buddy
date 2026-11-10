@@ -38,11 +38,11 @@ export function RoutingRecords({ health }: { health?: RoutingHealth }) {
   return <div className="space-y-5">
     {health.available === false && <p className="text-xs text-ink2">{t("roles.records.unavailable")} · {health.reason ? <RouterFailure failure={health.reason} /> : t("roles.records.unknown")}</p>}
     {health.sampleCount === 0 ? <p className="text-xs text-ink2">{t("roles.records.empty")}</p> : <div className="routing-readings" data-slot="routing-summary">
-      <div><div className="mb-1 text-xs text-ink3">{t("roles.records.failed")}</div><div className={`flex items-center gap-2 text-lg tabular-nums ${health.failureCount ? "text-fail" : ""}`}>
+      <div><div className="mb-1 text-xs text-ink3">{t("roles.records.failed")}</div><div className={`flex items-center gap-2 text-xl font-semibold tabular-nums ${health.failureCount ? "text-fail" : ""}`}>
         {!!health.failureCount && <StateMark kind="fail" />}{health.failureCount} / {health.sampleCount}</div></div>
-      <div><div className="mb-1 text-xs text-ink3">{t("roles.records.consecutiveFailures")}</div><div className="text-lg tabular-nums">{health.consecutiveFailures}</div></div>
-      {recordCounts(health).filter(item => item.name !== "consecutiveFailures").map(item => <div key={item.name}><div className="mb-1 text-xs text-ink3">{t(`roles.records.${item.name}`)}</div><div className="text-lg tabular-nums">{item.n}</div></div>)}
-      <div><div className="mb-1 text-xs text-ink3">{t("roles.records.lastSuccess")}</div><div className="text-lg"><Moment at={health.lastSuccessAt} /></div></div>
+      <div><div className="mb-1 text-xs text-ink3">{t("roles.records.consecutiveFailures")}</div><div className="text-xl font-semibold tabular-nums">{health.consecutiveFailures}</div></div>
+      {recordCounts(health).filter(item => item.name !== "consecutiveFailures").map(item => <div key={item.name}><div className="mb-1 text-xs text-ink3">{t(`roles.records.${item.name}`)}</div><div className="text-xl font-semibold tabular-nums">{item.n}</div></div>)}
+      <div><div className="mb-1 text-xs text-ink3">{t("roles.records.lastSuccess")}</div><div className="text-xl font-semibold"><Moment at={health.lastSuccessAt} /></div></div>
     </div>}
     {!!failures.length && <div>
       <h4 className="pb-2 text-sm font-medium">{t("roles.records.failures.label")}</h4>

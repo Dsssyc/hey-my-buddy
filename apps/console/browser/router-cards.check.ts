@@ -1,15 +1,10 @@
-import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { join } from "node:path";
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { expectNoSidewaysScroll, open, test } from "./preview";
 
 const instant = (index: number) => new Date(Date.UTC(2026, 10, 10, 0, index)).toISOString();
-const captures = fileURLToPath(new URL("../../../tmp/router-cards/", import.meta.url));
 
-async function capture(page: Page, work: string, theme: string) {
-  await mkdir(captures, { recursive: true });
-  await page.screenshot({ path: join(captures, `${work}-${theme}.png`) });
+async function capture(page: Page, work: string, theme: string, testInfo: TestInfo) {
+  await page.screenshot({ path: testInfo.outputPath(`${work}-${theme}.png`) });
 }
 
 async function syntheticRows(page: Page, count: number, extraBuddy = false) {
@@ -83,9 +78,9 @@ for (const theme of ["dark", "light"] as const) test.describe(`Router cards ${th
   test.use({ locale: "zh-CN", viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
   test.beforeEach(async ({ page }) => page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme));
 
-  test("uses full-width cards and aligned settings and readings", async ({ page }) => {
+  test("uses full-width cards and aligned settings and readings", async ({ page }, testInfo) => {
     await open(page, "#buddies/router/routing");
-    await capture(page, "routing", theme);
+    await capture(page, "routing", theme, testInfo);
     const detail = page.locator('[data-slot="router-detail"]');
     const cards = detail.locator('[data-slot="router-card"]');
     await expect(cards).toHaveCount(3);
@@ -126,15 +121,54 @@ for (const theme of ["dark", "light"] as const) test.describe(`Router cards ${th
       return child.y + child.height / 2;
     }));
     for (const center of failureCenters) expect(Math.abs(center - failureCenters[0])).toBeLessThanOrEqual(1);
-    const largeNumber = readings.locator(":scope > *").first().locator(".text-lg");
+    const largeNumber = readings.locator(":scope > *").first().locator(".text-xl");
     await expect(largeNumber).toHaveCount(1);
-    await expect(largeNumber).toHaveCSS("font-size", "18px");
+    await expect(largeNumber).toHaveCSS("font-size", "20px");
+    await expect(largeNumber).toHaveCSS("font-weight", "600");
     await expectNoSidewaysScroll(page);
 
     for (const [hash, expected] of [["maintenance", 3], ["profiles", 2]] as const) {
       await page.goto(`#buddies/router/${hash}`);
       await expect(page.locator('[data-slot="router-card"]')).toHaveCount(expected);
-      await capture(page, hash, theme);
+      if (hash === "maintenance") {
+        const fields = await page.locator('[data-slot="maintenance-plane"] .router-settings > [data-slot="router-field"]').evaluateAll(nodes => nodes.map(node => {
+          const box = node.getBoundingClientRect();
+          return { x: box.x, y: box.y, width: box.width, height: box.height };
+        }));
+        expect(fields).toHaveLength(2);
+        expect(fields[0].y).toBeCloseTo(fields[1].y, 0);
+        expect(fields[0].height).toBeCloseTo(fields[1].height, 0);
+        expect(fields[1].x).toBeGreaterThan(fields[0].x + fields[0].width);
+      }
+      await capture(page, hash, theme, testInfo);
+    }
+  });
+
+  test("keeps count popovers transient despite old inline preferences", async ({ page }) => {
+    const keys = [
+      "quant-bar.routing.dsh:deepseek-official:deepseek-flash:max",
+      "quant-bar.usage.maintenance-run.preview-maintenance-1",
+      "quant-bar.usage.profile-run.synthetic-profile-run-failed",
+    ].map(name => `hey-my-buddy.console.view.${name}`);
+    await page.addInitScript(keys => {
+      for (const key of keys) localStorage.setItem(key, "true");
+    }, keys);
+    await open(page, "#buddies/router/routing");
+    for (const [work, region] of [
+      ["routing", "routing-routers-region"], ["maintenance", "maintenance-records-region"], ["profiles", "profile-records"],
+    ] as const) {
+      await page.goto(`#buddies/router/${work}`);
+      const trigger = page.locator(`[data-slot="${region}"]`).locator('[data-slot="quant-bar-trigger"]').first();
+      await expect(trigger).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator('[data-slot="quant-bar-detail"]')).toHaveCount(0);
+      await trigger.click();
+      await expect(page.locator('[data-slot="quant-bar-detail"]')).toBeVisible();
+      await page.reload();
+      await expect(trigger).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator('[data-slot="quant-bar-detail"]')).toHaveCount(0);
+      await trigger.click();
+      await page.keyboard.press("Escape");
+      expect(await page.evaluate(keys => keys.map(key => localStorage.getItem(key)), keys)).toEqual(keys.map(() => "true"));
     }
   });
 
@@ -228,6 +262,39 @@ for (const theme of ["dark", "light"] as const) test.describe(`Router cards ${th
     expect(await viewport.evaluate(node => node.scrollWidth - node.clientWidth)).toBeGreaterThan(0);
     await viewport.evaluate(node => { node.scrollLeft = node.scrollWidth; });
     await expect.poll(() => viewport.evaluate(node => node.scrollLeft)).toBeGreaterThan(0);
+    await expectNoSidewaysScroll(page);
+  });
+});
+
+for (const theme of ["dark", "light"] as const) for (const width of [1280, 1360, 1440, 390]) test.describe(`Router validation ${theme} ${width}px`, () => {
+  test.use({ locale: "en-US", viewport: { width, height: 1000 }, reducedMotion: "reduce" });
+  test("wraps invalid input messages within their own setting without scrolling", async ({ page }) => {
+    await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+    await open(page, "#buddies/router/routing");
+    const invalid = [
+      ["Response start timeout", "Response start timeout", "Enter an integer from 1 to 86400"],
+      ["Retry interval", "Retry interval in seconds", "Enter an integer from 1 to 2147483647"],
+      ["Exploration quota", "Micro tasks per exploration quota", "Enter an integer of at least 2"],
+    ] as const;
+    for (const [, input] of invalid) await page.getByRole("spinbutton", { name: input, exact: true }).fill("0");
+    for (const [name, input, message] of invalid) {
+      const field = page.locator('[data-slot="router-field"]').filter({ has: page.getByRole("spinbutton", { name: input, exact: true }) });
+      await expect(field.getByText(message, { exact: true })).toBeVisible();
+      await field.scrollIntoViewIfNeeded();
+      const geometry = await field.evaluate((node, message) => {
+        const bounds = node.getBoundingClientRect();
+        const error = [...node.querySelectorAll("[aria-live]")].find(node => node.textContent === message)!;
+        const range = document.createRange(); range.selectNodeContents(error);
+        const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
+        return { height: bounds.height, overflow: node.scrollWidth - node.clientWidth,
+          scrollAreas: node.querySelectorAll('[data-slot="scroll-area"]').length,
+          visible: rects.every(rect => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 && rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1) };
+      }, message);
+      expect(geometry.visible, `${name}: complete error text stays inside its field`).toBe(true);
+      expect(geometry.overflow, name).toBeLessThanOrEqual(1);
+      expect(geometry.scrollAreas, name).toBe(0);
+      expect(geometry.height, name).toBeGreaterThanOrEqual(44);
+    }
     await expectNoSidewaysScroll(page);
   });
 });

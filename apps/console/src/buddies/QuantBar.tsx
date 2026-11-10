@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { StateMark } from "@/components/ui/state-mark";
 import { useViewPreference } from "../view-preferences";
@@ -24,17 +24,34 @@ export function QuantBar({ parts, maximum, width = 144 }: {
   </svg>;
 }
 
-/** The graphic itself opens its exact values; the saved state is a console view preference. */
-export function QuantBarDisclosure({ parts, maximum, width, label, preferenceKey, children, floating = false }: {
-  parts: Part[]; maximum: number; width?: number; label: string; preferenceKey: string; children: ReactNode; floating?: boolean;
+type DisclosureProps = {
+  parts: Part[]; maximum: number; width?: number; label: string; children: ReactNode;
+};
+
+/** Floating details are transient; only inline expansion is a saved display habit. */
+export function QuantBarDisclosure({ floating = false, preferenceKey, ...props }: DisclosureProps & { preferenceKey: string; floating?: boolean }) {
+  return floating ? <FloatingDisclosure {...props} /> : <InlineDisclosure {...props} preferenceKey={preferenceKey} />;
+}
+
+function FloatingDisclosure(props: DisclosureProps) {
+  const [open, setOpen] = useState(false);
+  return <DisclosureContent {...props} floating open={open} onOpenChange={setOpen} />;
+}
+
+function InlineDisclosure({ preferenceKey, ...props }: DisclosureProps & { preferenceKey: string }) {
+  const [open, setOpen] = useViewPreference(`quant-bar.${preferenceKey}`);
+  return <DisclosureContent {...props} floating={false} open={open} onOpenChange={setOpen} />;
+}
+
+function DisclosureContent({ parts, maximum, width, label, children, floating, open, onOpenChange }: DisclosureProps & {
+  floating: boolean; open: boolean; onOpenChange: (open: boolean) => void;
 }) {
   const detailId = useId();
-  const [open, setOpen] = useViewPreference(`quant-bar.${preferenceKey}`);
   const hasFailure = parts.some(part => (part.tone === "pink" || part.tone === "sample-pink") && (part.value ?? 0) > 0);
   const trigger = <button type="button" data-slot="quant-bar-trigger" aria-label={label} aria-expanded={open} aria-controls={open ? detailId : undefined}
-    className="quant-bar-trigger" onClick={floating ? undefined : () => setOpen(!open)}><QuantBar parts={parts} maximum={maximum} width={width} />{hasFailure && <StateMark kind="fail" />}</button>;
+    className="quant-bar-trigger" onClick={floating ? undefined : () => onOpenChange(!open)}><QuantBar parts={parts} maximum={maximum} width={width} />{hasFailure && <StateMark kind="fail" />}</button>;
   return <div data-slot="quant-disclosure" className="inline-block max-w-full align-middle">
-    {floating ? <Popover open={open} onOpenChange={setOpen}>
+    {floating ? <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent id={detailId} data-slot="quant-bar-detail" aria-label={label} align="start" collisionPadding={16} onOpenAutoFocus={event => event.preventDefault()}
         className="w-max max-w-[min(28rem,calc(100vw-2rem))] text-xs tabular-nums text-ink2">{children}</PopoverContent>

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { QuantBarDisclosure } from "./QuantBar";
 import { RouterList } from "./RouterList";
 import { RoutingRecords } from "./RoutingRecords";
 import { health, MEDIUM_ID } from "./roles.testing";
@@ -43,7 +44,26 @@ describe("routing records", () => {
     expect(first.getAttribute("aria-expanded")).toBe("false");
     await user.keyboard(" ");
     expect(first.getAttribute("aria-expanded")).toBe("true");
-    expect(localStorage.getItem(`hey-my-buddy.console.view.quant-bar.routing.${MEDIUM_ID}`)).toBe("true");
+    expect(localStorage.getItem(`hey-my-buddy.console.view.quant-bar.routing.${MEDIUM_ID}`)).toBeNull();
+  });
+  it("never reads or writes floating preferences while keeping inline expansion saved", async () => {
+    const user = userEvent.setup();
+    const key = "hey-my-buddy.console.view.quant-bar.legacy";
+    localStorage.setItem(key, "true");
+    const read = vi.spyOn(Storage.prototype, "getItem");
+    const write = vi.spyOn(Storage.prototype, "setItem");
+    const props = { preferenceKey: "legacy", label: "Counts", maximum: 1, parts: [{ value: 1, tone: "green" as const }] };
+    render(<QuantBarDisclosure {...props} floating>Recorded counts</QuantBarDisclosure>);
+    expect(screen.getByRole("button", { name: "Counts" }).getAttribute("aria-expanded")).toBe("false");
+    expect(read).not.toHaveBeenCalledWith(key);
+    await user.click(screen.getByRole("button", { name: "Counts" }));
+    await user.keyboard("{Escape}");
+    expect(write).not.toHaveBeenCalledWith(key, expect.anything());
+    cleanup();
+    render(<QuantBarDisclosure {...props}>Recorded counts</QuantBarDisclosure>);
+    expect(screen.getByRole("button", { name: "Counts" }).getAttribute("aria-expanded")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "Counts" }));
+    expect(write).toHaveBeenCalledWith(key, "false");
   });
   it("links the recorded title through its exact macro group and copies the whole ID without commands", async () => {
     const user = userEvent.setup(); const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
