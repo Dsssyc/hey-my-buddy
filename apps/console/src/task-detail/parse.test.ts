@@ -128,7 +128,7 @@ describe("the compact collaboration record", () => {
 
 describe("the audit", () => {
   const result = { ...turn, summary: "结果", remaining: ["还差一项"] };
-  const entry = { decisionId: "d1", status: "completed", source: "single-candidate", selectedBuddy: { harness: "dsh", provider: "p", model: "m", effort: "off", buddyId: "x", label: "L" },
+  const entry = { decisionId: "d1", status: "completed", source: "single-candidate", selectedBuddy: { harness: "dsh", provider: "p", model: "m", effort: "off", alias: "研究员" },
     routerBuddy: null, routerIndex: null, exploration: { quota: false, reselected: false, preferredBuddyId: null }, routingMode: "review", reason: null, note: null };
   const audit = { runId: "m1", audit: { turns: [result], continuations: [], requests: [], hostConclusions: [] }, routingHistory: { entries: [entry], nextCursor: 12, total: 40 } };
 
@@ -136,8 +136,17 @@ describe("the audit", () => {
     const parsed = parseAudit(audit, "m1");
     expect(parsed.audit.turns[0]).toMatchObject({ turnId: "t1", attemptId: "a1", summary: "结果", remaining: ["还差一项"] });
     expect(parsed.routing.entries).toEqual([{ decisionId: "d1", status: "completed", source: "single-candidate", routerBuddy: null, routerIndex: null, exploration: { quota: false, reselected: false, preferredBuddyId: null }, routingMode: "review", reason: null, note: null,
-      selectedBuddy: { harness: "dsh", provider: "p", model: "m", effort: "off" } }]);
+      selectedBuddy: { harness: "dsh", provider: "p", model: "m", effort: "off", alias: "研究员" } }]);
     expect(parsed.routing.nextCursor).toBe(12);
+  });
+
+  it("requires the current identity and nullable alias, and refuses frozen candidate payloads", () => {
+    const read = (selectedBuddy: unknown) => parseAudit({ ...audit, routingHistory: { ...audit.routingHistory, entries: [{ ...entry, selectedBuddy }] } }, "m1");
+    expect(read({ ...entry.selectedBuddy, alias: null }).routing.entries[0].selectedBuddy?.alias).toBeNull();
+    const { alias: _alias, ...oldIdentity } = entry.selectedBuddy;
+    for (const selected of [oldIdentity, { ...entry.selectedBuddy, alias: 4 }, { ...entry.selectedBuddy, label: "L" }, { ...entry.selectedBuddy, buddyId: "x" }]) {
+      expect(() => read(selected)).toThrow();
+    }
   });
 
   it("reads a turn that has returned nothing as one with no result yet", () => {

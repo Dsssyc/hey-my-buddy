@@ -172,7 +172,7 @@ export type RoutingEntry = {
   decisionId: string;
   status: string;
   source: string | null;
-  selectedBuddy: Buddy | null;
+  selectedBuddy: (Buddy & { alias: string | null }) | null;
   routerBuddy: Buddy | null;
   routingMode: RoutingMode | null;
   reason: Reason | null;

@@ -241,7 +241,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual(entry["status"], "completed")
         self.assertTrue(entry["current"])
         self.assertEqual(entry["taskId"], selector_task_id)
-        self.assertEqual(entry["selectedBuddy"]["buddyId"], BUDDY_ID)
+        self.assertEqual(set(entry["selectedBuddy"]), {"harness", "provider", "model", "effort", "alias"})
         self.assertEqual(entry["selectedBuddy"]["model"], CATALOG_BUDDY["model"])
         self.finish_turn(board, self.claim(board, run_id=submitted["runId"], claim_request_id="routed-turn"))
 
@@ -406,9 +406,9 @@ class TurnRoutingBindingTests(RoutingHistoryTestCase):
         expected_first = {"decisionId": None, "buddyRevision": 1}
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["currentTurn"]["routing"], expected_first)
-        self.assertEqual(view["currentTurn"]["buddy"], BUDDY)
+        self.assertEqual(view["currentTurn"]["buddy"], {**BUDDY, "alias": None})
         self.assertEqual(view["turns"][0]["routing"], expected_first)
-        self.assertEqual(view["turns"][0]["buddy"], BUDDY)
+        self.assertEqual(view["turns"][0]["buddy"], {**BUDDY, "alias": None})
 
         self.finish_turn(board, first, disposition="attention")
         view = board.call("workflow_get", {"runId": submitted["runId"]})

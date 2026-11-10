@@ -34,6 +34,19 @@ class ViewTests(unittest.TestCase):
             self.assertEqual(routing["constraints"], {"harness": "zcode"})
         self.assertEqual(cli_views.render("submit", {"buddy": IDENTITY}, "full")["buddy"], QUAD)
 
+    def test_alias_names_share_one_formatter_in_all_host_views(self):
+        identity = {**IDENTITY, "alias": "助手"}
+        response = {"buddy": identity, "currentTurn": {"buddy": identity},
+                    "routing": {"selectedBuddy": identity},
+                    "routingHistory": [{"selectedBuddy": identity}]}
+        for mode in ("brief", "full"):
+            rendered = cli_views.render("get", response, mode)
+            self.assertEqual(rendered["buddy"], QUAD + " [助手]")
+            self.assertEqual(rendered["currentTurn"]["buddy"], QUAD + " [助手]")
+            self.assertEqual(rendered["routing"]["selectedBuddy"], QUAD + " [助手]")
+            self.assertEqual(rendered["routingHistory"][0]["selectedBuddy"], QUAD + " [助手]")
+        self.assertEqual(cli_views.render("submit", {"buddy": {**IDENTITY, "alias": None}})["buddy"], QUAD)
+
     def test_get_brief_keeps_response_ids_and_drops_repeated_input(self):
         response = {"runId": "run-1", "state": "delivered", "actions": ["accept"],
                     "finalArtifactId": "art-2", "microTask": {"task": "long task text"},

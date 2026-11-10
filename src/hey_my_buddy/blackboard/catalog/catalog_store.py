@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from itertools import islice
 import uuid
 
 from ..evaluation import user_policy
@@ -232,7 +233,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 if existing_row and tuple(existing_row) != tuple(p[key] for key in ('harness', 'provider', 'model', 'effort')):
                     raise BoardError('CATALOG_INVALID', 'A native buddy ID collided with a different execution identity', buddyId=p['buddyId'])
                 unavailable = p['unavailableReason']
-                db.execute('INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_code,unavailable_params_json,unavailable_content) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,?) ON CONFLICT(buddy_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_code=excluded.unavailable_code,unavailable_params_json=excluded.unavailable_params_json,unavailable_content=excluded.unavailable_content', (p['buddyId'], p['label'], p['harness'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], unavailable['code'] if unavailable else None, canonical_json(unavailable['params']) if unavailable else None, p['unavailableContent']))
+                db.execute('INSERT INTO buddies(buddy_id,harness,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_code,unavailable_params_json,unavailable_content) VALUES(?,?,?,?,?,?,0,?,?,?,?,?,?,?) ON CONFLICT(buddy_id) DO UPDATE SET available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_code=excluded.unavailable_code,unavailable_params_json=excluded.unavailable_params_json,unavailable_content=excluded.unavailable_content', (p['buddyId'], p['harness'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], unavailable['code'] if unavailable else None, canonical_json(unavailable['params']) if unavailable else None, p['unavailableContent']))
                 from ..evaluation.models import ensure_model_service
                 ensure_model_service(db, p['harness'], p['provider'], p['model'], now)
             # ADR-027 rules 2 and 6: reappearance inside a trusted reading
@@ -292,14 +293,20 @@ def buddies(evaluation, params):
         values.append(harness)
     if schemas.optional_bool(params, 'enabled', False):
         clauses.append('p.enabled=1')
-    for term in query.split()[:8]:
-        escaped = term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-        clauses.append("(p.buddy_id LIKE ? ESCAPE '\\' OR p.label LIKE ? ESCAPE '\\' OR p.model LIKE ? ESCAPE '\\' OR p.provider LIKE ? ESCAPE '\\' OR p.harness LIKE ? ESCAPE '\\')")
-        values.extend(['%' + escaped + '%'] * 5)
-    if len(query.split()) > 8:
+    terms = [term.casefold() for term in query.split()]
+    if len(terms) > 8:
         raise BoardError('INVALID_ARGUMENT', 'query accepts at most 8 search terms')
     with evaluation.db.read() as db:
-        rows = db.execute('SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM buddies p LEFT JOIN harness_health h ON h.harness=p.harness LEFT JOIN catalog_current c ON c.harness=p.harness WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.buddy_id LIMIT ?', [*values, limit + 1]).fetchall()
+        sql = ('SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM buddies p LEFT JOIN harness_health h ON h.harness=p.harness LEFT JOIN catalog_current c ON c.harness=p.harness WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.buddy_id')
+        if terms:
+            def matches(row):
+                fields = tuple(str(row[field] or '').casefold() for field in
+                               ('alias', 'model', 'provider', 'harness', 'effort'))
+                complete_name = f"{row['harness']} / {row['provider']} / {row['model']} / {row['effort']}".casefold()
+                return all(any(term in field for field in (*fields, complete_name)) for term in terms)
+            rows = list(islice((row for row in db.execute(sql, values) if matches(row)), limit + 1))
+        else:
+            rows = db.execute(sql + ' LIMIT ?', [*values, limit + 1]).fetchall()
         from .catalog import pending_model_services
         pending = pending_model_services(db)
         current_catalog = current(db)

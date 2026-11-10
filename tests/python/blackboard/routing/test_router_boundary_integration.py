@@ -526,10 +526,10 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.board_ = self.board(clock=self.clock)
         with self.board_.store.db.write() as db:
             for buddy_id, model in ((A, "alpha"), (B, "bravo")):
-                db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
+                db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
                            "available,enabled,capabilities_json) "
-                           "VALUES(?,?,'dsh','fixture',?,'max',1,1,?)",
-                           (buddy_id, buddy_id, model, canonical_json([])))
+                           "VALUES(?,'dsh','fixture',?,'max',1,1,?)",
+                           (buddy_id, model, canonical_json([])))
                 ensure_model_service(db, "dsh", "fixture", model, self.board_.store.now())
             router._write_settings(db, {**router.configuration(db), "routerBuddyIds": []})
 

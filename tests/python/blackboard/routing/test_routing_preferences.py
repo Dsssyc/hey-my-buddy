@@ -225,7 +225,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         delegated = self.routed(board, request_id="direct-buddy", buddy=BUDDY)
         self.assertEqual(delegated["routing"]["status"], "explicit")
         self.assertEqual(delegated["routing"]["source"], "original-explicit")
-        self.assertEqual(delegated["buddy"], BUDDY)
+        self.assertEqual(delegated["buddy"], {**BUDDY, "alias": None})
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 0)
             self.assertIsNone(connection.execute("SELECT current_routing_id FROM workflow_runs").fetchone()[0])

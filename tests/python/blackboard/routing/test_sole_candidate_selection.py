@@ -218,7 +218,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
                           "note": "fixture filter"}],
                           "coolingBuddies": [], "overloadedModelServices": []})
         self.assertEqual(submitted["buddy"],
-                         {key: SECOND_BUDDY[key] for key in BUDDY})
+                         {**{key: SECOND_BUDDY[key] for key in BUDDY}, "alias": None})
         self.assertEqual(submitted["counts"]["turns"], 0)
         self.assertFalse(submitted["awaitingHost"])
         with board.store.db.read() as connection:
@@ -319,7 +319,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["routing"]["status"], "completed")
         self.assertEqual(view["routing"]["source"], "model-selection")
-        self.assertEqual(view["buddy"], BUDDY)
+        self.assertEqual(view["buddy"], {**BUDDY, "alias": None})
 
 
 if __name__ == "__main__":

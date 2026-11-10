@@ -44,10 +44,10 @@ class RouterDispatchTestCase(BoardTestCase):
     def add_buddy(self, buddy_id, *, model=None, available=1, enabled=1):
         with self.board_.store.db.write() as db:
             model = model or buddy_id
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,?,?,?)",
-                       (buddy_id, buddy_id, "dsh", "fixture", model, "max", available, enabled,
+                       " VALUES(?,?,?,?,?,?,?,?)",
+                       (buddy_id, "dsh", "fixture", model, "max", available, enabled,
                         canonical_json([])))
             ensure_model_service(db, "dsh", "fixture", model, self.board_.store.now())
 

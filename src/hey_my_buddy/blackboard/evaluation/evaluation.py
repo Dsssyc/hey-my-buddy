@@ -129,7 +129,7 @@ class EvaluationStore:
         capabilities = buddy_capabilities(row["harness"], json.loads(row["capabilities_json"]))
         view = {
             "buddyId": row["buddy_id"],
-            "label": row["label"],
+            "alias": row["alias"],
             "harness": row["harness"],
             "provider": row["provider"],
             "model": row["model"],

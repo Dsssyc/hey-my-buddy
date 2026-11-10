@@ -17,7 +17,7 @@ class UserPolicyTests(BoardTestCase):
         self.board_.service.register_console_authority(self.session)
         with self.board_.store.db.write() as db:
             for buddy_id, available in [('live', 1), ('retired', 0)]:
-                db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,?,?,?)", (buddy_id, buddy_id, 'dsh', 'fixture', buddy_id, 'max', available, 1, '["decision"]'))
+                db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,?,?)", (buddy_id, 'dsh', 'fixture', buddy_id, 'max', available, 1, '["decision"]'))
                 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
                 ensure_model_service(db, 'dsh', 'fixture', buddy_id, self.board_.store.now())
             db.execute("INSERT INTO router_buddies(position,buddy_id) VALUES(0,'retired')")
@@ -47,13 +47,88 @@ class UserPolicyTests(BoardTestCase):
     def test_buddy_settings_patch_accepts_more_than_200_distinct_buddies(self):
         with self.board_.store.db.write() as db:
             db.executemany(
-                "INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json)"
-                " VALUES(?,?,?,?,?,?,?,?,?)",
-                [(f'bulk-{index}', f'bulk-{index}', 'dsh', 'fixture', f'model-{index}', 'max', 1, 1, '[]')
+                "INSERT INTO buddies(buddy_id,harness,provider,model,effort,available,enabled,capabilities_json)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                [(f'bulk-{index}', 'dsh', 'fixture', f'model-{index}', 'max', 1, 1, '[]')
                  for index in range(205)])
         changes = [{'buddyId': f'bulk-{index}', 'enabled': False} for index in range(205)]
         published = self.user('user_policy_publish', self.payload({}, 'bulk-disable', buddySettings=changes))
         self.assertEqual(published['counts']['buddySettings'], 205)
+
+    def aliases(self):
+        with self.board_.store.db.read() as db:
+            return {row['buddy_id']: (row['alias'], row['enabled']) for row in
+                    db.execute('SELECT buddy_id,alias,enabled FROM buddies ORDER BY buddy_id')}
+
+    def test_alias_only_patch_trims_and_clears_without_changing_enablement(self):
+        self.user('user_policy_publish', self.payload({}, 'name-retired',
+                  buddySettings=[{'buddyId': 'retired', 'alias': '  阿尔法  '}]))
+        self.assertEqual(self.aliases()['retired'], ('阿尔法', 1))
+        self.user('user_policy_publish', self.payload({}, 'clear-retired',
+                  buddySettings=[{'buddyId': 'retired', 'alias': None}]))
+        self.assertEqual(self.aliases()['retired'], (None, 1))
+        self.user('user_policy_publish', self.payload({}, 'name-at-limit',
+                  buddySettings=[{'buddyId': 'live', 'alias': '字' * 64}]))
+        self.assertEqual(self.aliases()['live'], ('字' * 64, 1))
+        with self.assertRaises(BoardError) as caught:
+            self.user('user_policy_publish', self.payload({}, 'empty-setting',
+                      buddySettings=[{'buddyId': 'retired'}]))
+        self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+
+    def test_alias_batch_allows_atomic_swap(self):
+        self.user('user_policy_publish', self.payload({}, 'first-names', buddySettings=[
+            {'buddyId': 'live', 'alias': 'Alpha'}, {'buddyId': 'retired', 'alias': 'Beta'}]))
+        self.user('user_policy_publish', self.payload({}, 'swap-names', buddySettings=[
+            {'buddyId': 'live', 'alias': 'Beta'}, {'buddyId': 'retired', 'alias': 'Alpha'}]))
+        self.assertEqual(self.aliases(), {'live': ('Beta', 1), 'retired': ('Alpha', 1)})
+
+    def test_unicode_casefold_conflict_reports_the_other_buddy_and_rolls_back(self):
+        self.user('user_policy_publish', self.payload({}, 'first-name',
+                  buddySettings=[{'buddyId': 'retired', 'alias': 'Straße'}]))
+        with self.assertRaises(BoardError) as caught:
+            self.user('user_policy_publish', self.payload({}, 'conflicting-name', buddySettings=[
+                {'buddyId': 'live', 'enabled': False, 'alias': 'STRASSE'}]))
+        error = caught.exception
+        self.assertEqual(error.code, 'ALIAS_CONFLICT')
+        self.assertEqual(error.details, {
+            'buddyId': 'live', 'conflictingBuddyId': 'retired',
+            'reason': {'code': 'alias.conflict', 'params': {
+                'buddyId': 'live', 'conflictingBuddyId': 'retired'}}})
+        self.assertEqual(self.aliases(), {'live': (None, 1), 'retired': ('Straße', 1)})
+
+    def test_alias_batch_rejects_two_new_names_that_fold_together(self):
+        with self.assertRaises(BoardError) as caught:
+            self.user('user_policy_publish', self.payload({}, 'same-batch', buddySettings=[
+                {'buddyId': 'live', 'alias': 'Sigma'},
+                {'buddyId': 'retired', 'alias': 'SIGMA'}]))
+        self.assertEqual(caught.exception.code, 'ALIAS_CONFLICT')
+        self.assertEqual({caught.exception.details['buddyId'],
+                          caught.exception.details['conflictingBuddyId']}, {'live', 'retired'})
+        self.assertEqual(self.aliases(), {'live': (None, 1), 'retired': (None, 1)})
+
+    def test_invalid_and_reserved_aliases_report_specific_reasons(self):
+        values = [
+            (42, 'ALIAS_INVALID', 'alias.invalid', 'type'),
+            ('  ', 'ALIAS_INVALID', 'alias.invalid', 'empty'),
+            ('a' * 65, 'ALIAS_INVALID', 'alias.invalid', 'length'),
+            ('a / b', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            ('a[b', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            ('a]b', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            ('a\x00b', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            ('a\x85b', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            ('a\nb', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            (' ROUTE ', 'ALIAS_RESERVED', 'alias.reserved', None),
+        ]
+        for index, (value, code, reason_code, violation) in enumerate(values):
+            with self.subTest(value=value), self.assertRaises(BoardError) as caught:
+                self.user('user_policy_publish', self.payload({}, f'bad-alias-{index}',
+                          buddySettings=[{'buddyId': 'live', 'alias': value}]))
+            self.assertEqual(caught.exception.code, code)
+            self.assertEqual(caught.exception.details['buddyId'], 'live')
+            self.assertEqual(caught.exception.details['reason']['code'], reason_code)
+            if violation is not None:
+                self.assertEqual(caught.exception.details['reason']['params']['violation'], violation)
+            self.assertEqual(self.aliases()['live'], (None, 1))
 
     def test_retired_pin_and_selector_do_not_block_disable_or_other_edits(self):
         grant = self.publication_params()

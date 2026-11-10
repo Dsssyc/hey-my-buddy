@@ -20,7 +20,7 @@ from typing import Iterator
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 from .schema_37_38 import ROUTER_SETTINGS_DDL
 
-SCHEMA_VERSION = 39
+SCHEMA_VERSION = 40
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 AGENT_TOKEN_VERSION = 1
@@ -469,7 +469,7 @@ CREATE TABLE IF NOT EXISTS catalog_current (
     """
 CREATE TABLE IF NOT EXISTS buddies (
     buddy_id          TEXT PRIMARY KEY,
-    label               TEXT NOT NULL,
+    alias               TEXT,
     harness             TEXT NOT NULL,
     provider            TEXT NOT NULL,
     model               TEXT NOT NULL,

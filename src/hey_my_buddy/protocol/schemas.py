@@ -300,8 +300,9 @@ def normalize_access(intent: dict) -> tuple[str, str | None]:
 
 
 def buddy_name(identity: dict) -> str:
-    """The Host-facing buddy writing: 'harness / provider / model / effort'."""
-    return " / ".join(identity[key] for key in BUDDY_FIELDS)
+    """The single Host-facing writing of a buddy and its current alias."""
+    name = " / ".join(identity[key] for key in BUDDY_FIELDS)
+    return f"{name} [{identity['alias']}]" if identity.get("alias") is not None else name
 
 
 def buddy_constraints(spec: dict) -> dict:

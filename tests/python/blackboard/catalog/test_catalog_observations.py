@@ -162,7 +162,7 @@ class CatalogObservationTests(BoardTestCase):
     def test_metadata_fields_update_buddy_facts(self):
         payload = catalog()
         self.record(payload)
-        for field, value in [('name', 'new label'), ('description', 'new description'),
+        for field, value in [('description', 'new description'),
                              ('contextWindow', 12345), ('inputModalities', ['text', 'image']),
                              ('available', False), ('unavailableContent', 'native unavailable'),
                              ('available', True)]:
@@ -175,6 +175,45 @@ class CatalogObservationTests(BoardTestCase):
                 self.assertNotIn('tableRevision', response)
                 self.assertGreater(after[0], before[0])
                 self.assertNotEqual(after[1], before[1])
+
+    def test_native_display_name_only_changes_catalog_provenance(self):
+        payload = catalog()
+        self.record(payload)
+        before = self.table_facts()[1]
+        payload['providers'][0]['models'][0]['name'] = 'new native display name'
+        self.record(payload)
+        after = self.table_facts()[1]
+        self.assertEqual([row[:11] + row[12:] for row in after],
+                         [row[:11] + row[12:] for row in before])
+        self.assertNotEqual(after[0][11], before[0][11])
+
+    def test_catalog_refresh_preserves_user_alias(self):
+        payload = catalog()
+        self.record(payload)
+        with self.e.db.write() as db:
+            db.execute("UPDATE buddies SET alias='My Buddy' WHERE model='alpha'")
+        payload['providers'][0]['models'][0]['description'] = 'native updated description'
+        self.record(payload)
+        with self.e.db.read() as db:
+            row = db.execute("SELECT alias,description FROM buddies WHERE model='alpha'").fetchone()
+        self.assertEqual(tuple(row), ('My Buddy', 'native updated description'))
+
+    def test_search_matches_unicode_alias_model_and_complete_name(self):
+        payload = catalog(models=('alpha', 'beta'))
+        payload['providers'][0]['models'][0]['name'] = 'Display Only'
+        self.record(payload)
+        with self.e.db.write() as db:
+            db.execute("UPDATE buddies SET alias='Straße模型甲' WHERE model='alpha'")
+        queries = ('模', 'STRASSE', '型甲', 'ALPHA', 'dsh / fixture / alpha / max',
+                   'fixture alpha', 'max')
+        for query in queries:
+            with self.subTest(query=query):
+                result = catalog_store.buddies(self.e, {'includeUnavailable': True, 'query': query})
+                self.assertIn('alpha', [row['model'] for row in result['buddies']])
+        self.assertEqual(catalog_store.buddies(self.e, {'includeUnavailable': True,
+                         'query': '模型乙'})['buddies'], [])
+        self.assertEqual(catalog_store.buddies(self.e, {'includeUnavailable': True,
+                         'query': 'Display Only'})['buddies'], [])
 
     def test_native_unavailable_content_survives_publication_and_readback(self):
         payload = catalog()

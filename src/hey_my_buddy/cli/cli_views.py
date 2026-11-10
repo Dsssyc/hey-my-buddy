@@ -26,7 +26,8 @@ _IDENTITY_FIELDS = frozenset({"harness", "provider", "model", "effort"})
 def _named_buddies(value: Any) -> Any:
     """Write every buddy identity in a response by its single Host-facing name."""
     if isinstance(value, dict):
-        if set(value) == _IDENTITY_FIELDS and all(isinstance(item, str) for item in value.values()):
+        if (_IDENTITY_FIELDS <= set(value) <= _IDENTITY_FIELDS | {"alias"}
+                and all(isinstance(value[key], str) for key in _IDENTITY_FIELDS)):
             return buddy_name(value)
         return {key: _named_buddies(item) for key, item in value.items()}
     if isinstance(value, list):

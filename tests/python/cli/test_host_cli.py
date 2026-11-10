@@ -53,7 +53,8 @@ class HelpTests(unittest.TestCase):
                                      ("continue and its helper packets", help_text("continue"), 2)):
             self.assertEqual(detail.count("'harness / provider / model / effort'"), count,
                              f"{label} help must state the buddy name writing")
-        self.assertIn("console's Buddy page", submit)
+        self.assertIn("alias (case-insensitive)", submit)
+        self.assertIn("both parts must identify the same buddy", submit)
         self.assertIn("checkout none forbids inputs and writeScope", submit)
         self.assertNotIn("creationKey", submit)
         self.assertNotIn("controlFile", submit)

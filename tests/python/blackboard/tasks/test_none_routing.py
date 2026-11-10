@@ -54,7 +54,7 @@ class NoneRoutingTests(WorkflowTestCase):
         self.select(board, claimed)
         selected = board.call('workflow_get', {'runId': run['runId']})
         self.assertEqual(selected['routing']['status'], 'completed', selected['routing'])
-        self.assertEqual(selected['buddy'], BUDDY)
+        self.assertEqual(selected['buddy'], {**BUDDY, 'alias': None})
         self.assertEqual(selected['checkout'], 'none')
         return selected
 

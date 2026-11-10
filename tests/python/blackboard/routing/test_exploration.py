@@ -6,7 +6,7 @@ import json
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_decision import (DecisionTestCase, CATALOG_BUDDY, SECOND_BUDDY,
                                          THIRD_BUDDY, THIRD_BUDDY_ID, BUDDY_ID, SECOND_BUDDY_ID)
-from blackboard.tasks.test_workflow import NONCE, WorkflowTestCase
+from blackboard.tasks.test_workflow import BUDDY, NONCE, WorkflowTestCase
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.errors import BoardError
@@ -197,7 +197,8 @@ class ExplorationRoutingTests(WorkflowTestCase):
                      if item["decisionId"] == second["routing"]["decisionId"])
         self.assertEqual(entry["exploration"], {"quota": True, "reselected": True,
                                                 "preferredBuddyId": BUDDY_ID})
-        self.assertEqual(entry["selectedBuddy"]["buddyId"], SECOND_BUDDY_ID)
+        self.assertEqual(entry["selectedBuddy"],
+                         {**{key: SECOND_BUDDY[key] for key in BUDDY}, "alias": None})
 
     def test_a_less_sampled_group_need_not_be_the_least_sampled(self):
         board = self.board()

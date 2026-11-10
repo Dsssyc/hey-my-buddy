@@ -34,10 +34,10 @@ class RouterListHealthTestCase(BoardTestCase):
     # -- fixtures ------------------------------------------------------------
     def add_buddy(self, buddy_id, *, harness="dsh", provider="fixture", available=1, enabled=1):
         with self.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,?,?,?)",
-                       (buddy_id, buddy_id, harness, provider, buddy_id, "max", available, enabled,
+                       " VALUES(?,?,?,?,?,?,?,?)",
+                       (buddy_id, harness, provider, buddy_id, "max", available, enabled,
                         canonical_json([])))
             ensure_model_service(db, harness, provider, buddy_id, self.board_.store.now())
 

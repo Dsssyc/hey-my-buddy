@@ -93,7 +93,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         board = self.board()
         submitted = self.submit(board)
         self.assertEqual(submitted["routing"]["status"], "explicit")
-        self.assertEqual(submitted["buddy"], BUDDY)
+        self.assertEqual(submitted["buddy"], {**BUDDY, "alias": None})
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
         with board.store.db.read() as connection:
@@ -143,7 +143,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertNotIn("turn", claim["claim"])
         self.select(board, claim)
         selected = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
-        self.assertEqual(selected["buddy"], BUDDY)
+        self.assertEqual(selected["buddy"], {**BUDDY, "alias": None})
         with board.store.db.read() as connection:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (submitted["runId"],)).fetchone()
             self.assertNotIn("adapter", json.loads(task["spec_json"]))
@@ -190,7 +190,7 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.continue_run(board, submitted)
         self.assertEqual(raised.exception.code, "BUDDY_REQUIRED")
         recovered = self.continue_run(board, submitted, buddy=BUDDY, note="Host selected an installed buddy after routing had no selector")
-        self.assertEqual(recovered["buddy"], BUDDY)
+        self.assertEqual(recovered["buddy"], {**BUDDY, "alias": None})
         self.assertFalse(recovered["awaitingHost"])
         replay = self.continue_run(board, submitted, requestId=submitted["activeRequest"]["requestId"], buddy=BUDDY, note="Host selected an installed buddy after routing had no selector")
         self.assertTrue(replay["alreadyResponded"])
@@ -210,7 +210,7 @@ class TestWorkflowRouting(WorkflowTestCase):
                                    buddy="route", note="Use the now available selector")
         self.assertTrue(replay["alreadyResponded"])
         self.select(board, self.router_claim(board, continued))
-        self.assertEqual(board.call("workflow_get", {"runId": submitted["runId"]})["buddy"], BUDDY)
+        self.assertEqual(board.call("workflow_get", {"runId": submitted["runId"]})["buddy"], {**BUDDY, "alias": None})
 
     def test_catalog_drift_at_dispatch_is_attention_and_other_work_claims(self):
         board = self.board()
@@ -457,7 +457,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(run_next(board.client()), "ran")
         selected = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(selected["routing"]["status"], "completed")
-        self.assertEqual(selected["buddy"], {key: SECOND_BUDDY[key] for key in BUDDY})
+        self.assertEqual(selected["buddy"], {**{key: SECOND_BUDDY[key] for key in BUDDY}, "alias": None})
         self.assertEqual(selected["counts"]["turns"], 0)
         decision_task = board.call("task_get", {"runId": selected["routing"]["taskId"]})["task"]
         self.assertTrue(decision_task["shutdownConfirmed"])
@@ -486,7 +486,8 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
         pass  # Admission is owned by the service.
         claimed = self.claim(board, run_id=submitted["runId"], claim_request_id="authorized-coding-turn")
-        self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["buddy"], selected["buddy"])
+        self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["buddy"],
+                         {key: selected["buddy"][key] for key in BUDDY})
 
     def test_large_micro_task_reaches_router_whole(self):
         board = self.board()

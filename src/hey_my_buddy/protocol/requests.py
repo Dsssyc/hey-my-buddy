@@ -77,9 +77,9 @@ def _buddy(value: str) -> str:
     return value
 
 
-BUDDY_NAME_DESCRIPTION = ("'route', or one buddy's complete name 'harness / provider / model / effort'"
-                          " with ' / ' between the four parts, as the console's Buddy page lists each buddy;"
-                          " `get` with buddies reads every enabled buddy's name")
+BUDDY_NAME_DESCRIPTION = ("'route', a buddy's alias (case-insensitive), or its complete name"
+                          " 'harness / provider / model / effort', optionally followed by ' [alias]';"
+                          " both parts must identify the same buddy; `get` with buddies reads enabled names")
 
 Title = Annotated[str, Field(min_length=1, max_length=200, description="Nonempty title, at most 200 characters"), AfterValidator(_title)]
 Text = Annotated[str, Field(json_schema_extra={"x-maxUtf8Bytes": MAX_TEXT_BYTES}),
@@ -224,7 +224,7 @@ class GetRequest(Request):
     routingHistory: RoutingHistoryRequest | None = None
     rules: ClassVar[tuple[str, ...]] = (
         "exactly one of runId, macroTaskId, cwd, buddies is required",
-        "buddies accepts only true and lists every enabled buddy by its complete name with whether it can take work now",
+        "buddies accepts only true and lists every enabled buddy by its complete name and current alias with whether it can take work now",
         "includeAudit and routingHistory apply only to a run; limit and before apply only to a collection",
     )
 

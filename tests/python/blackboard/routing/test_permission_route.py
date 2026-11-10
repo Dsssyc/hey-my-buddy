@@ -50,19 +50,19 @@ class PermissionCandidateTests(BoardTestCase):
         zcode_id = 'zcode:fixture:full:high'
         with board.store.db.write() as connection:
             connection.execute(
-                'INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,'
+                'INSERT INTO buddies(buddy_id,harness,provider,model,effort,'
                 'available,enabled,capabilities_json)'
-                ' VALUES(?,?,?,?,?,?,1,1,?)',
-                (codex_id, codex_id, 'codex', 'fixture', 'full', 'high',
+                ' VALUES(?,?,?,?,?,1,1,?)',
+                (codex_id, 'codex', 'fixture', 'full', 'high',
                  canonical_json([])),
             )
             ensure_model_service(connection, 'codex', 'fixture', 'full', board.store.now())
             connection.execute("UPDATE harness_health SET status='ready' WHERE harness='codex'")
             connection.execute(
-                'INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,'
+                'INSERT INTO buddies(buddy_id,harness,provider,model,effort,'
                 'available,enabled,capabilities_json)'
-                ' VALUES(?,?,?,?,?,?,1,1,?)',
-                (zcode_id, zcode_id, 'zcode', 'fixture', 'full', 'high',
+                ' VALUES(?,?,?,?,?,1,1,?)',
+                (zcode_id, 'zcode', 'fixture', 'full', 'high',
                  canonical_json([])),
             )
             ensure_model_service(connection, 'zcode', 'fixture', 'full', board.store.now())

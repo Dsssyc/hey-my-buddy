@@ -30,10 +30,10 @@ class RouterListConfigurationTests(BoardTestCase):
         self.board_.service.register_console_authority(self.session)
         with self.board_.store.db.write() as db:
             for buddy_id in (A, B):
-                db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
+                db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
                            "available,enabled,capabilities_json)"
-                           " VALUES(?,?,?,?,?,?,1,1,?)",
-                           (buddy_id, buddy_id, "dsh", "fixture", buddy_id, "max",
+                           " VALUES(?,?,?,?,?,1,1,?)",
+                           (buddy_id, "dsh", "fixture", buddy_id, "max",
                             canonical_json([])))
                 ensure_model_service(db, "dsh", "fixture", buddy_id, self.board_.store.now())
 
@@ -147,23 +147,23 @@ class RouterListConfigurationTests(BoardTestCase):
         # Disabled, catalog-unavailable and mode-ineligible buddies may all be saved;
         # the resolver explains them per item later.
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,?,1,?)",
-                       ("disabled", "disabled", "dsh", "fixture", "disabled", "max", 1,
+                       " VALUES(?,?,?,?,?,?,1,?)",
+                       ("disabled", "dsh", "fixture", "disabled", "max", 1,
                         canonical_json([])))
             ensure_model_service(db, "dsh", "fixture", "disabled", self.board_.store.now())
             db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id='disabled'")
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,0,1,?)",
-                       ("offline", "offline", "dsh", "fixture", "offline", "max",
+                       " VALUES(?,?,?,?,?,0,1,?)",
+                       ("offline", "dsh", "fixture", "offline", "max",
                         canonical_json([])))
             ensure_model_service(db, "dsh", "fixture", "offline", self.board_.store.now())
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,1,1,?)",
-                       ("reviewonly", "reviewonly", "zcode", "fixture", "reviewonly", "max",
+                       " VALUES(?,?,?,?,?,1,1,?)",
+                       ("reviewonly", "zcode", "fixture", "reviewonly", "max",
                         canonical_json([])))
             ensure_model_service(db, "zcode", "fixture", "reviewonly", self.board_.store.now())
         self.publish({"routerBuddyIds": [A, "disabled", "offline", "reviewonly"], "defaultRoutingMode": "review"})
@@ -172,10 +172,10 @@ class RouterListConfigurationTests(BoardTestCase):
 
     def test_interval_and_wait_patches_do_not_require_availability(self):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,0,1,?)",
-                       ("offline", "offline", "dsh", "fixture", "offline", "max",
+                       " VALUES(?,?,?,?,?,0,1,?)",
+                       ("offline", "dsh", "fixture", "offline", "max",
                         canonical_json([])))
             ensure_model_service(db, "dsh", "fixture", "offline", self.board_.store.now())
         self.publish({"routerBuddyIds": ["offline"]})

@@ -357,9 +357,9 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             first = "dsh:deepseek-official:deepseek-flash:max"
             with store.db.write() as db:
                 for buddy_id, model in ((first, "deepseek-flash"), (candidate, "deepseek-v4-pro")):
-                    db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
-                               "available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,1,1,?)",
-                               (buddy_id, buddy_id, "dsh", "deepseek-official", model, "max",
+                    db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
+                               "available,enabled,capabilities_json) VALUES(?,?,?,?,?,1,1,?)",
+                               (buddy_id, "dsh", "deepseek-official", model, "max",
                                 canonical_json([])))
                     ensure_model_service(db, "dsh", "deepseek-official", model, store.now())
                 settings = {**router.configuration(db), "routerBuddyIds": [first],
@@ -421,9 +421,9 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             store.initialize()
             with store.db.write() as db:
                 for buddy_id, harness, provider, model, effort in (*routers, candidate):
-                    db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
-                               "available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,1,1,?)",
-                               (buddy_id, buddy_id, harness, provider, model, effort, canonical_json([])))
+                    db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
+                               "available,enabled,capabilities_json) VALUES(?,?,?,?,?,1,1,?)",
+                               (buddy_id, harness, provider, model, effort, canonical_json([])))
                     ensure_model_service(db, harness, provider, model, store.now())
                 settings = {**router.configuration(db), "routerBuddyIds": [item[0] for item in routers],
                             "defaultRoutingMode": "fast"}

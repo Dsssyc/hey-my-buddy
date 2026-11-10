@@ -35,10 +35,10 @@ class CurrentRouterTestCase(BoardTestCase):
     # -- fixtures ------------------------------------------------------------
     def add_buddy(self, buddy_id, *, harness="dsh", provider="fixture", available=1, enabled=1, model=None):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,?,?,?)",
-                       (buddy_id, buddy_id, harness, provider, model or buddy_id, "max",
+                       " VALUES(?,?,?,?,?,?,?,?)",
+                       (buddy_id, harness, provider, model or buddy_id, "max",
                         available, enabled, canonical_json([])))
             ensure_model_service(db, harness, provider, model or buddy_id, self.board_.store.now())
 

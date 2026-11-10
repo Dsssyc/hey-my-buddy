@@ -652,13 +652,13 @@ class CatalogView:
                     capabilities = ([f"execution:{entry['harness']}", f"effort:{effort}"]
                                     + [f"input:{item}" for item in model["inputModalities"]])
                     proposals.append({
-                        "buddyId": buddy_id, "label": f"{model['name']} · {effort}"[:200],
+                        "buddyId": buddy_id,
                         "harness": entry["harness"], "provider": entry["provider"], "model": model["id"], "effort": effort,
                         "available": model["available"], "unavailableReason": model["unavailableReason"],
                         "unavailableContent": model["unavailableContent"], "enabled": False,
                         "capabilities": capabilities,
                         "contextWindow": model["contextWindow"],
-                        "description": (model["description"] or f"{model['name']} via {entry['displayName']}")[:4000],
+                        "description": model["description"][:4000],
                         "source": f"catalog:{self.discovery_id or self.source}"[:256],
                     })
         return proposals

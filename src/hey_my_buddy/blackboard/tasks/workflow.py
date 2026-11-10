@@ -178,29 +178,45 @@ def repository_candidates(db, manifest: dict) -> tuple[str, ...]:
 
 
 def named_buddy(connection, name: str) -> dict | None:
-    """Resolve the Host-facing buddy name against the catalog's four identity columns.
-
-    The name is the console's writing, 'harness / provider / model / effort'
-    with ' / ' between the four parts. A value never contains that separator,
-    so the split is unambiguous and a wrong or partial name simply matches
-    nothing. This is the one parsing every reader of a named buddy shares;
-    an unrecognized name is refused exactly as submit refuses it.
-    """
+    """Resolve a complete name, alias, or complete name with its current alias."""
     if name == "route":
         return None
-    parts = name.split(" / ")
-    row = None
+    complete, marker, alias = name.rpartition(" [") if name.endswith("]") else (name, "", "")
+    if marker:
+        alias = alias[:-1]
+    else:
+        complete = name
+    parts = complete.split(" / ")
+    by_name = None
     if len(parts) == len(schemas.BUDDY_FIELDS) and all(parts):
-        row = connection.execute(
+        by_name = connection.execute(
             "SELECT harness,provider,model,effort FROM buddies"
             " WHERE harness=? AND provider=? AND model=? AND effort=?", parts).fetchone()
+    by_alias = next((row for row in connection.execute(
+        "SELECT harness,provider,model,effort,alias FROM buddies WHERE alias IS NOT NULL")
+        if row["alias"].casefold() == (alias if marker else name).casefold()), None)
+    if marker and (by_name is None or by_alias is None or
+                   any(by_name[key] != by_alias[key] for key in schemas.BUDDY_FIELDS)):
+        raise BoardError("INVALID_ARGUMENT", "The complete buddy name and alias must name the same buddy",
+                         buddy=name,
+                         completeBuddy=dict(by_name) if by_name is not None else None,
+                         aliasBuddy={key: by_alias[key] for key in schemas.BUDDY_FIELDS} if by_alias is not None else None)
+    row = by_name if marker or by_name is not None else by_alias
     if row is None:
         raise BoardError("INVALID_ARGUMENT",
-                         "buddy must be 'route' or one recorded buddy written"
-                         " 'harness / provider / model / effort'; read the enabled"
-                         " names with `get` and its buddies selector",
-                         buddy=name)
-    return dict(row)
+                         "buddy must be 'route', one recorded alias, or a complete name"
+                         " 'harness / provider / model / effort' optionally followed by ' [alias]';"
+                         " read the enabled names with `get` and its buddies selector", buddy=name)
+    return {key: row[key] for key in schemas.BUDDY_FIELDS}
+
+
+def buddy_view(connection, identity: dict | None) -> dict | None:
+    """Project an identity with its current user setting, never into a record."""
+    if identity is None:
+        return None
+    row = connection.execute("SELECT alias FROM buddies WHERE harness=? AND provider=? AND model=? AND effort=?",
+                             tuple(identity[key] for key in schemas.BUDDY_FIELDS)).fetchone()
+    return {**{key: identity[key] for key in schemas.BUDDY_FIELDS}, "alias": row["alias"] if row else None}
 
 
 def _turn_input_context(input_json: str) -> dict:
@@ -347,7 +363,7 @@ class WorkflowCoordinator:
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
             # This turn's own frozen buddy, never the current run's.
-            "buddy": buddy,
+            "buddy": buddy_view(connection, buddy),
             # This turn's own frozen routing identity. An older turn input that
             # predates the binding stays null: it is never inferred from the current
             # run, wall-clock timestamps or a matching model name.
@@ -890,7 +906,7 @@ class WorkflowCoordinator:
             "executionWorkspace": json.loads(run_row["execution_workspace_json"]),
             "access": json.loads(run_row["execution_workspace_json"])["access"],
             "accessNote": json.loads(run_row["execution_workspace_json"]).get("accessNote"),
-            "buddy": self._buddy(run_row),
+            "buddy": buddy_view(connection, self._buddy(run_row)),
             "delegationAuthority": bool(run_row["delegation_authority"]),
             "leadOwnership": ({"leadRunId": ownership["lead_run_id"], "leadTurnId": ownership["lead_turn_id"],
                                "createdAt": ownership["created_at"]} if ownership is not None else None),
@@ -994,7 +1010,7 @@ class WorkflowCoordinator:
             "artifactCount": decorated["artifactCount"],
             "inquiries": decorated["inquiries"],
             "activity": decorated["activity"],
-            "lineage": decorated["lineage"],
+            "lineage": {**decorated["lineage"], "buddy": buddy_view(connection, decorated["lineage"]["buddy"])},
             "createdAt": decorated["createdAt"],
             "updatedAt": decorated["updatedAt"],
         }
@@ -1444,7 +1460,7 @@ class WorkflowCoordinator:
         view = {
             "status": status, "decisionId": decision["decision_id"], "taskId": decision["decision_task_id"],
             "attemptId": decision["decision_attempt_id"], "generation": decision["decision_generation"],
-            "selectedBuddy": json.loads(decision["selected_json"]) if decision["selected_json"] else None,
+            "selectedBuddy": buddy_view(connection, json.loads(decision["selected_json"])) if decision["selected_json"] else None,
             "reason": current["reason"],
             "note": current["note"],
             "constraints": requested.get("constraints", schemas.buddy_constraints(micro_task)),
@@ -1457,6 +1473,10 @@ class WorkflowCoordinator:
             ) if key in current},
             "routingBasis": requested.get("routingBasis"),
         }
+        view["routerBuddy"] = buddy_view(connection, view["routerBuddy"])
+        if view["routerIdentities"] is not None:
+            view["routerIdentities"] = [buddy_view(connection, identity) for identity in view["routerIdentities"]]
+        view["routerTrials"] = [{**trial, "identity": buddy_view(connection, trial["identity"])} for trial in view["routerTrials"]]
         boundary = self._routing_boundary(connection, decision, run, now=now)
         if boundary is not None:
             view["routingBoundary"] = boundary
@@ -1850,7 +1870,7 @@ class WorkflowCoordinator:
             result.setdefault("artifactId" if fixed else "turnId",fixed[0] if fixed else run["current_turn_id"])
         if already_exists is not None:
             choice = json.loads(run["execution_workspace_json"])
-            result.update(alreadyExists=already_exists, access=choice["access"], buddy=self._buddy(run), checkout=choice["kind"])
+            result.update(alreadyExists=already_exists, access=choice["access"], buddy=buddy_view(connection, self._buddy(run)), checkout=choice["kind"])
         return result
 
     def _actions(self, connection, run):
@@ -2026,7 +2046,7 @@ class WorkflowCoordinator:
                         else {"resolved": "completed", "needs-host": "needs-host", "fenced": "fenced"}[row["state"]]
                     ),
                     "taskId": row["decision_task_id"],
-                    "selectedBuddy": json.loads(row["selected_json"]) if row["selected_json"] else None,
+                    "selectedBuddy": buddy_view(connection, json.loads(row["selected_json"])) if row["selected_json"] else None,
                     "source": selection_source(routing_request),
                     "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
                     "note": row["note"],
@@ -2042,6 +2062,10 @@ class WorkflowCoordinator:
                     **routing_facts(routing_request, actor=dispatch(connection, row["decision_task_id"]) if row["decision_task_id"] else None),
                 }
             )
+        for entry in entries:
+            entry["routerBuddy"] = buddy_view(connection, entry["routerBuddy"])
+            if entry["routerIdentities"] is not None:
+                entry["routerIdentities"] = [buddy_view(connection, identity) for identity in entry["routerIdentities"]]
         next_cursor = None
         if len(rows) == limit:
             last_rowid = int(rows[-1]["route_rowid"])
@@ -2156,6 +2180,12 @@ class WorkflowCoordinator:
             if "targetRunId" in params:
                 self._target_run(connection, owner, params["targetRunId"])
             request = self._request_row(connection, run_id, request_id)
+            if "helpers" in payload:
+                canonical_helpers = []
+                for helper in payload["helpers"]:
+                    identity = named_buddy(connection, helper["buddy"])
+                    canonical_helpers.append({**helper, "buddy": schemas.buddy_name(identity) if identity is not None else "route"})
+                payload["helpers"] = canonical_helpers
             replay = self._decision_replay(connection, owner, request, payload)
             if replay is not None:
                 return replay
@@ -2563,6 +2593,9 @@ class WorkflowCoordinator:
         continuation = connection.execute("SELECT * FROM workflow_continuations WHERE continuation_id=?", (row["response_id"],)).fetchone()
         requested = {"runId": params["runId"], "targetRunId": params.get("targetRunId",params["runId"]),
                      **{k:v for k,v in params.items() if k not in ("runId","targetRunId")}}
+        if "buddy" in requested:
+            resolved = named_buddy(connection, requested["buddy"])
+            requested["buddy"] = schemas.buddy_name(resolved) if resolved is not None else "route"
         recorded = {"runId": continuation["controlling_run_id"], "targetRunId":continuation["run_id"],
                     "input":continuation["input_text"]}
         for public,column in (("requestId","request_id"),("artifactId","artifact_id"),("turnId","response_turn_id"),
@@ -2753,7 +2786,7 @@ class WorkflowCoordinator:
             "input_text,note,helper_policy,helper_outcomes_json,buddy_selection_json,access_selection_json,resolution_json,"
             "workspace_facts_role,state,created_at) VALUES(?,?,?,'manual',?,?,?,?,?,?,?,?,?,?,?,'queued',?)",
             (identifier,run_id,owner["run_id"],params.get("requestId"),params.get("artifactId"),params.get("turnId"),params["input"],params.get("note"),policy,
-             canonical_json(self._helper_outcomes(connection,run_id)),canonical_json(params["buddy"]) if "buddy" in params else None,
+             canonical_json(self._helper_outcomes(connection,run_id)),canonical_json(schemas.buddy_name(buddy) if buddy is not None else "route") if "buddy" in params else None,
              canonical_json(selection) if selection else None,
              canonical_json({k:params[k] for k in ("resolution","observedFingerprint","paths") if k in params}) if "resolution" in params else None,"none" if target["checkout"]=="none" else "pending",now))
         task=connection.execute("SELECT * FROM tasks WHERE task_id=?",(run_id,)).fetchone()

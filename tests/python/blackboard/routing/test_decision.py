@@ -132,6 +132,8 @@ class SelectionRequestTests(DecisionTestCase):
     def test_candidate_facts_are_frozen_once_for_the_router(self):
         board = self.board()
         self.seed(board)
+        with board.store.db.write() as connection:
+            connection.execute('UPDATE buddies SET alias=? WHERE buddy_id=?', ('Router must not see this', BUDDY_ID))
         facts = {"billing": {"kind": "metered", "source": "fixture", "observedAt": "now"},
                  "load": {"active": 1, "limit": 2, "queued": 0,
                           "wait": {"seconds": 0, "atLeast": False, "overdue": 0}},
@@ -151,6 +153,8 @@ class SelectionRequestTests(DecisionTestCase):
                          [facts["statistics"], facts["statistics"]])
         self.assertEqual([buddy["billing"] for buddy in frozen["buddies"]],
                          [facts["billing"], facts["billing"]])
+        self.assertTrue(all('label' not in buddy and 'alias' not in buddy
+                            for buddy in frozen['buddies']))
         with board.store.db.read() as connection:
             from hey_my_buddy.blackboard.routing.router_sequence import request_snapshot
             self.assertEqual(request_snapshot(connection, request["decisionId"])["baseInput"]["buddies"],

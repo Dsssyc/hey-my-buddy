@@ -259,7 +259,7 @@ class CoreContractTests(WorkflowTestCase):
         self.assertTrue(replay["alreadyExists"])
         self.assertEqual(replay["access"], "read")
         self.assertEqual(replay["checkout"], "existing")
-        self.assertEqual(replay["buddy"], BUDDY)
+        self.assertEqual(replay["buddy"], {**BUDDY, "alias": None})
         self.assertEqual(len(self.workspace.prepare_calls), prepared)
 
     def test_request_is_consumed_by_only_one_decision(self):

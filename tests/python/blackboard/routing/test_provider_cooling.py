@@ -150,7 +150,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
                                         (first["claim"]["attempt"]["attemptId"],)).fetchone()[0], "revoked")
         after = self.board_.call("workflow_get", {"runId": run["runId"]})
         self.assertEqual(after["state"], "executing")
-        self.assertEqual(after["buddy"], self.identities[1])
+        self.assertEqual(after["buddy"], {**self.identities[1], "alias": None})
         self.assertNotEqual(after["routing"]["decisionId"], first_decision)
         self.assertEqual(after["workspace"], run["workspace"])
         second = self.claim(self.board_, run_id=run["runId"])
@@ -218,7 +218,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
     def test_explicit_buddy_stays_with_host_and_shows_cooling(self):
         run = self.assert_host_failure(explicit=True)
         view = self.board_.call("workflow_get", {"runId": run["runId"]})
-        self.assertEqual(view["buddy"], self.identities[0])
+        self.assertEqual(view["buddy"], {**self.identities[0], "alias": None})
         self.assertEqual(view["providerCooling"]["coolingUntil"], moment(1800))
 
     def test_rate_limit_is_not_a_quota_reroute_or_cooldown(self):
@@ -231,7 +231,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
         settled = self.reject_turn(first, code="overloaded")
         self.assertTrue(settled["workflow"]["autoContinued"])
         current = self.board_.call("workflow_get", {"runId": run["runId"]})
-        self.assertEqual(current["buddy"], self.identities[1])
+        self.assertEqual(current["buddy"], {**self.identities[1], "alias": None})
         self.assertEqual(current["workspace"], run["workspace"])
         self.assertEqual(current["turns"][0]["providerRejection"]["code"], "overloaded")
         self.assertEqual(current["routing"]["routingBasis"]["overloadedModelServices"], [{
@@ -282,7 +282,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
         pending = self.continue_run(self.board_, failed, buddy="route")
         self.board_.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
         current = self.board_.call("workflow_get", {"runId": run["runId"]})
-        self.assertEqual(current["buddy"], {**self.identities[0], "model": "spare"})
+        self.assertEqual(current["buddy"], {**self.identities[0], "model": "spare", "alias": None})
         basis = current["routing"]["routingBasis"]
         excluded = basis["overloadedModelServices"]
         self.assertEqual(len(excluded), 1)

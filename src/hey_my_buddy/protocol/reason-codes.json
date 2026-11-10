@@ -9,6 +9,9 @@
   "UPGRADE_IN_PROGRESS": [],
   "account.login-required": [],
   "account.not-checked": [],
+  "alias.conflict": ["buddyId", "conflictingBuddyId"],
+  "alias.invalid": ["buddyId", "violation"],
+  "alias.reserved": ["buddyId"],
   "all-candidates-cooling": [
     "retryAt"
   ],

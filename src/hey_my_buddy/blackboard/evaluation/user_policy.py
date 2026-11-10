@@ -1,7 +1,10 @@
 """User-owned field patches; never a source of model or catalog facts."""
 from __future__ import annotations
 
+import unicodedata
+
 from ...protocol import schemas
+from ...protocol.reasons import reason
 from ...errors import BoardError
 from . import models
 
@@ -13,6 +16,31 @@ PATCH_FIELDS = frozenset({'buddySettings', 'preferenceChanges', 'modelCorrespond
 #: never input. There is no effort dimension — effort variants share one model service.
 MODEL_SERVICE_CONCURRENCY_FIELDS = frozenset({'harness', 'provider', 'model', 'limit'})
 SQLITE_INTEGER_MAX = 2 ** 63 - 1
+
+
+def _alias(value: object, buddy_id: str) -> str | None:
+    """Validate the console's alias input once, before storing its trimmed form."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        violation = 'type'
+    elif any(unicodedata.category(char) == 'Cc' for char in value):
+        violation = 'format'
+    else:
+        value = value.strip()
+        if not value:
+            violation = 'empty'
+        elif len(value) > 64:
+            violation = 'length'
+        elif ' / ' in value or '[' in value or ']' in value:
+            violation = 'format'
+        elif value.casefold() == 'route':
+            raise BoardError('ALIAS_RESERVED', 'Alias is reserved', buddyId=buddy_id,
+                             reason=reason('alias.reserved', buddyId=buddy_id))
+        else:
+            return value
+    raise BoardError('ALIAS_INVALID', 'Alias has an invalid form', buddyId=buddy_id,
+                     reason=reason('alias.invalid', buddyId=buddy_id, violation=violation))
 
 
 def _model_service_concurrency_changes(params: dict) -> list[dict]:
@@ -85,7 +113,7 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     provided = set(params) & PATCH_FIELDS
     if not provided:
         raise BoardError('INVALID_ARGUMENT', 'A user publication must contain a field patch')
-    settings = _changes(params, 'buddySettings', {'buddyId', 'enabled'})
+    settings = _changes(params, 'buddySettings', {'buddyId', 'enabled', 'alias'})
     preferences = _changes(params, 'preferenceChanges', {'buddyId', 'mode', 'note'})
     correspondence_count, lost_references = models.apply_user_changes(
         connection, params.get('modelCorrespondenceChanges', []), now)
@@ -100,13 +128,33 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             buddies[buddy_id] = dict(row)
             buddies[buddy_id]['available'] = bool(row['available']) and read_health(connection, row['harness'])['status'] == 'ready'
     for entry in settings:
-        if type(entry.get('enabled')) is not bool:
-            raise BoardError('INVALID_ARGUMENT', 'enabled must be a boolean')
-        buddy = buddies[entry['buddyId']]
-        if entry['enabled'] and not buddy['available']:
-            raise BoardError('BUDDY_UNAVAILABLE', 'This buddy is not currently available', buddyId=entry['buddyId'])
-        buddy['enabled'] = int(entry['enabled'])
-        connection.execute('UPDATE buddies SET enabled=? WHERE buddy_id=?', (buddy['enabled'], entry['buddyId']))
+        buddy_id = entry['buddyId']
+        if 'enabled' not in entry and 'alias' not in entry:
+            raise BoardError('INVALID_ARGUMENT', 'buddySettings requires enabled or alias', buddyId=buddy_id)
+        buddy = buddies[buddy_id]
+        if 'enabled' in entry:
+            if type(entry['enabled']) is not bool:
+                raise BoardError('INVALID_ARGUMENT', 'enabled must be a boolean', buddyId=buddy_id)
+            if entry['enabled'] and not buddy['available']:
+                raise BoardError('BUDDY_UNAVAILABLE', 'This buddy is not currently available', buddyId=buddy_id)
+            buddy['enabled'] = int(entry['enabled'])
+            connection.execute('UPDATE buddies SET enabled=? WHERE buddy_id=?', (buddy['enabled'], buddy_id))
+        if 'alias' in entry:
+            connection.execute('UPDATE buddies SET alias=? WHERE buddy_id=?',
+                               (_alias(entry['alias'], buddy_id), buddy_id))
+    if any('alias' in entry for entry in settings):
+        aliases: dict[str, str] = {}
+        changed = {entry['buddyId'] for entry in settings if 'alias' in entry}
+        for row in connection.execute('SELECT buddy_id,alias FROM buddies WHERE alias IS NOT NULL ORDER BY buddy_id'):
+            folded = row['alias'].casefold()
+            other = aliases.get(folded)
+            if other is not None:
+                buddy_id, conflicting = (row['buddy_id'], other) if row['buddy_id'] in changed else (other, row['buddy_id'])
+                raise BoardError('ALIAS_CONFLICT', 'Alias is already used by another buddy',
+                                 buddyId=buddy_id, conflictingBuddyId=conflicting,
+                                 reason=reason('alias.conflict', buddyId=buddy_id,
+                                               conflictingBuddyId=conflicting))
+            aliases[folded] = row['buddy_id']
     for entry in preferences:
         if 'mode' not in entry or entry['mode'] not in (None, 'pin', 'prefer', 'exclude'):
             raise BoardError('INVALID_ARGUMENT', 'mode must be pin, prefer, exclude or null')

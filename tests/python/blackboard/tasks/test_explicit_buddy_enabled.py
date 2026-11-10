@@ -36,7 +36,7 @@ class ExplicitSubmitTests(RealWorkspaceTestCase):
         self.assertEqual(after, before)
         enable_fixture_buddy(board.store, BUDDY)
         admitted = board.call("workflow_submit", params)
-        self.assertEqual(admitted["buddy"], BUDDY)
+        self.assertEqual(admitted["buddy"], {**BUDDY, "alias": None})
         self.assertTrue((board.directory / "workspaces").exists())
 
 

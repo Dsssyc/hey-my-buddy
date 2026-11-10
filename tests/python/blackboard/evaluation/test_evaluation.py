@@ -372,9 +372,9 @@ class EffortRankTests(EvaluationTestCase):
             for model, effort in (("retired-model", "max"), ("deepseek-flash", "ultra")):
                 buddy_id = f"dsh:deepseek-official:{model}:{effort}"
                 db.execute(
-                    "INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json)"
-                    " VALUES(?,?,?,?,?,?,?,?,?)",
-                    (buddy_id, buddy_id, "dsh", "deepseek-official", model, effort, 1, 1, "[]"),
+                    "INSERT INTO buddies(buddy_id,harness,provider,model,effort,available,enabled,capabilities_json)"
+                    " VALUES(?,?,?,?,?,?,?,?)",
+                    (buddy_id, "dsh", "deepseek-official", model, effort, 1, 1, "[]"),
                 )
                 ensure_model_service(db, "dsh", "deepseek-official", model, board.store.now())
         expected.update({("retired-model", "max"): None, ("deepseek-flash", "ultra"): None})

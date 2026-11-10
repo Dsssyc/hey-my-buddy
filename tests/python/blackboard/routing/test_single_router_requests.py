@@ -330,7 +330,7 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.assertEqual(json.loads(request_row["payload_json"]), {"source": "routing"})
         continued = self.continue_run(board, view, buddy=BUDDY)
         self.assertEqual(continued["runId"], view["runId"])
-        self.assertEqual(continued["buddy"], BUDDY)
+        self.assertEqual(continued["buddy"], {**BUDDY, "alias": None})
         self.assertFalse(continued["awaitingHost"])
         self.register(board)
         self.assertEqual(self.claim(board, run_id=view["runId"])["claim"]["task"]["spec"]["model"], BUDDY["model"])
@@ -356,7 +356,7 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("complete buddy must not resolve")):
             view = self.submit(board)
         self.assertEqual(view["routing"]["status"], "explicit")
-        self.assertEqual(view["buddy"], BUDDY)
+        self.assertEqual(view["buddy"], {**BUDDY, "alias": None})
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM decision_requests").fetchone()[0], 0)
 

@@ -75,6 +75,16 @@ function actor(value: unknown, what: string): Actor {
   return actorOrNull(value, what) ?? refuse(what);
 }
 
+const selectedBuddySchema = z.object({
+  harness: z.string(), provider: z.string(), model: z.string(), effort: z.string(), alias: z.string().nullable(),
+}).strict();
+
+function parseSelectedBuddy(value: unknown, what: string): RoutingEntry["selectedBuddy"] {
+  if (value === null || value === undefined) return null;
+  const parsed = selectedBuddySchema.safeParse(value);
+  return parsed.success ? parsed.data : refuse(what);
+}
+
 function parseBuddy(value: unknown, what: string): Buddy | null {
   const buddy = recOrNull(value, what);
   return buddy && {
@@ -386,7 +396,7 @@ function parseRoutingEntry(value: unknown): RoutingEntry {
       preferredBuddyId: strOrNull(exploration.preferredBuddyId, "routingHistory.exploration.preferredBuddyId"),
     },
     source: strOrNull(entry.source, "routingHistory.source"),
-    selectedBuddy: parseBuddy(entry.selectedBuddy, "routingHistory.selectedBuddy"),
+    selectedBuddy: parseSelectedBuddy(entry.selectedBuddy, "routingHistory.selectedBuddy"),
     routerBuddy: parseBuddy(entry.routerBuddy, "routingHistory.routerBuddy"),
     routingMode: (mode === null || mode === undefined ? null : oneOf(mode, ["fast", "review"] as const, "routingHistory.routingMode")) as RoutingMode | null,
     reason: reasonOrNull(entry.reason, "routingHistory.reason"),

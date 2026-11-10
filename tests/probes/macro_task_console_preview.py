@@ -465,7 +465,7 @@ def routing(decision_id: str, task_id: str, status: str, selected: dict | None, 
             program_reason: dict | None = None) -> dict:
     """One recorded routing decision, shaped like ``workflow._routing_view``."""
     return {"status": status, "decisionId": decision_id, "taskId": task_id, "attemptId": attempt_id,
-            "generation": 1, "selectedBuddy": selected, "reason": program_reason, "note": note,
+            "generation": 1, "selectedBuddy": ({**{key: selected[key] for key in ("harness", "provider", "model", "effort")}, "alias": None} if selected else None), "reason": program_reason, "note": note,
             "routerBuddyIds": [ROUTER_BUDDY_ID], "routerIdentities": [ROUTER_BUDDY],
             "routerBuddyId": ROUTER_BUDDY_ID, "routerBuddy": ROUTER_BUDDY, "routerIndex": 0,
             "exploration": {"quota": False, "reselected": False, "preferredBuddyId": None},
@@ -2781,8 +2781,8 @@ def kind_evaluation_views(domains: list[dict]) -> list[dict]:
               row["createdAt"], row["source"], row["evidenceUrl"], row["evidenceDate"])
              for row in facts["modelCorrespondences"]])
         connection.executemany(
-            "INSERT INTO buddies(buddy_id,label,harness,provider,model,effort) VALUES(?,?,?,?,?,?)",
-            [(row["buddyId"], row["label"], row["harness"], row["provider"], row["model"], row["effort"])
+            "INSERT INTO buddies(buddy_id,harness,provider,model,effort) VALUES(?,?,?,?,?)",
+            [(row["buddyId"], row["harness"], row["provider"], row["model"], row["effort"])
              for row in buddy_views()])
         now = instant(8, 0)
         project = PROJECTS["alpha"]

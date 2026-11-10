@@ -280,8 +280,9 @@ class RolePromptTests(unittest.TestCase):
         role = resource_path("roles.lead").read_text(encoding="utf-8")
         commands = next(line for line in role.splitlines() if line.startswith("- Your commands are "))
         self.assertEqual(set(re.findall(r"`([^`]+)`", commands.split(". Run", 1)[0])), set(ROLE_REQUESTS))
-        self.assertIn("On `submit`, give a complete buddy name: 'harness / provider / model / effort'"
-                      " with ' / ' between the four parts, as the console's Buddy page lists each buddy.", role)
+        self.assertIn("On `submit`, give a buddy's alias (case-insensitive)", role)
+        self.assertIn("'harness / provider / model / effort [alias]'", role)
+        self.assertIn("complete name and alias must identify the same buddy", role)
         self.assertIn("derives your macro task and ownership from the execution credential", role)
         self.assertIn("help role <method>", role)
         self.assertNotIn("hostId", role)

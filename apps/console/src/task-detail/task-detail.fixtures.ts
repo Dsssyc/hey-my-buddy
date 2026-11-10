@@ -12,8 +12,8 @@ import type { Audit, Basis, Buddy, Inquiries, Inquiry, ResultTurn, RoutingEntry,
  * run by Codex, held for its Host, continued with a different buddy and run
  * again, and delivered. Each builder takes the parts a test changes.
  */
-export const CODEX: Buddy = { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" };
-export const OPUS: Buddy = { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+export const CODEX = { alias: null, harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" };
+export const OPUS = { alias: null, harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
 const ROUTER: Buddy = { harness: "codex", provider: "openai", model: "gpt-6-luna", effort: "high" };
 export const HOST = { role: "host" as const };
 

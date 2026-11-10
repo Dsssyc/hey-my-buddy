@@ -81,7 +81,7 @@ class LeadGrantTests(WorkflowTestCase):
         board = self.board()
         submitted = self.grant(board)
         self.assertTrue(submitted["delegationAuthority"])
-        self.assertEqual(submitted["buddy"], BUDDY)
+        self.assertEqual(submitted["buddy"], {**BUDDY, "alias": None})
         claim = self.claim(board)["claim"]
         self.assertTrue(claim["turn"]["input"]["context"]["delegationAuthority"])
         self.assertEqual(turn_manifest(self.directory, claim["turn"]["input"])["access"], "full")
@@ -125,7 +125,7 @@ class LeadGrantTests(WorkflowTestCase):
         replacement = {**BUDDY, "effort": "high"}
         continued = self.continue_run(board, current, buddy=replacement)
         self.assertTrue(continued["delegationAuthority"])
-        self.assertEqual(continued["buddy"], replacement)
+        self.assertEqual(continued["buddy"], {**replacement, "alias": None})
         claimed = self.claim(board, claim_request_id="next")["claim"]
         self.assertTrue(claimed["turn"]["input"]["context"]["delegationAuthority"])
         self.assertEqual(claimed["turn"]["input"]["context"]["buddy"], replacement)

@@ -268,7 +268,7 @@ class LifecycleTests(WorkflowTestCase):
                     connection.execute('UPDATE attempts SET adapter=? WHERE attempt_id=?', (adapter, attempt_id))
                     connection.execute('UPDATE workflow_turns SET input_json=? WHERE turn_id=?', (raw, turn_id))
                 view = board.call('workflow_get', {'runId': submitted['runId'], 'includeAudit': True})
-                expected = BUDDY if adapter == 'dsh' else None
+                expected = {**BUDDY, 'alias': None} if adapter == 'dsh' else None
                 self.assertEqual(view['currentTurn']['buddy'], expected)
                 self.assertEqual(view['audit']['turns'][0]['buddy'], expected)
                 self.assertEqual(view['audit']['turns'][0]['input'], payload)

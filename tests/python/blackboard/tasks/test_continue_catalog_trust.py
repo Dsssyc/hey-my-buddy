@@ -89,7 +89,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         enable_fixture_buddy(self.board.store, override)
         continued = self.continue_with(submitted, override)
         self.assertEqual(calls, ["dsh"], "Exactly one bounded re-read of exactly that harness")
-        self.assertEqual(continued["buddy"], override)
+        self.assertEqual(continued["buddy"], {**override, "alias": None})
         self.assertEqual(self.overridden_event()["buddy"], override)
 
     def test_missing_route_without_recovery_still_rejects_with_catalog_facts(self):
@@ -152,7 +152,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.enable_buddy("dsh:fixture:alpha:max")
         continued = self.continue_with(submitted, IDENTITY)
         self.assertEqual(calls, ["dsh"])
-        self.assertEqual(continued["buddy"], IDENTITY)
+        self.assertEqual(continued["buddy"], {**IDENTITY, "alias": None})
 
     def test_unavailable_and_disabled_route_reports_catalog_reason_first(self):
         submitted = self.seed()
@@ -248,4 +248,4 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         # Enabling it afterwards is the user's act, and only then does the override pass.
         self.enable_buddy("dsh:fixture:beta:max")
         continued = self.continue_with(submitted, override)
-        self.assertEqual(continued["buddy"], override)
+        self.assertEqual(continued["buddy"], {**override, "alias": None})

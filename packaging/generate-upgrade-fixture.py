@@ -2397,6 +2397,7 @@ def main():
     parser.add_argument("--workspace-growth-stock-for", type=Path, help="Generate schema-33 workspace reference stock on an upgraded private floor")
     parser.add_argument("--legacy-stock-for", type=Path, help="Derive retained v1/v2 profiles from the fixed floor; never rewrite the base")
     parser.add_argument("--model-stock-for", type=Path, help="Generate schema-36 model stock through historical catalog, policy and maintenance writers")
+    parser.add_argument("--alias-stock-for", type=Path, help="Derive schema-39 alias migration cases from the fixed floor stock")
     parser.add_argument("--populate-model-floor", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--populate-model-maintenance", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--populate-schema33", action="store_true", help=argparse.SUPPRESS)
@@ -2407,9 +2408,9 @@ def main():
         parser.error("--work-dir is required for this mode")
     if args.output_dir is None:
         args.output_dir = (args.work_dir.with_name(args.work_dir.name + "-generated")
-                           if (args.cleanup_stock_for or args.reservation_stock_for or args.delivered_stock_for or args.workspace_growth_stock_for or args.legacy_stock_for) and not args.verify else Path("tests/fixtures/upgrade-floor"))
+                           if (args.cleanup_stock_for or args.reservation_stock_for or args.delivered_stock_for or args.workspace_growth_stock_for or args.legacy_stock_for or args.alias_stock_for) and not args.verify else Path("tests/fixtures/upgrade-floor"))
     if any(fixed and args.output_dir.resolve() == fixed.resolve()
-           for fixed in (args.cleanup_stock_for, args.reservation_stock_for, args.delivered_stock_for, args.workspace_growth_stock_for, args.legacy_stock_for)):
+           for fixed in (args.cleanup_stock_for, args.reservation_stock_for, args.delivered_stock_for, args.workspace_growth_stock_for, args.legacy_stock_for, args.alias_stock_for)):
         parser.error("supplements require a separate output-dir to preserve the fixed floor payloads")
     if args.populate_model_floor:
         populate_model_floor(args)
@@ -2417,6 +2418,36 @@ def main():
         populate_model_maintenance(args)
     elif args.model_stock_for:
         derive_schema36_model_stock(args)
+    elif args.alias_stock_for:
+        floor = args.alias_stock_for
+        with sqlite3.connect(':memory:') as connection:
+            connection.executescript((floor / 'board.sql').read_text(encoding='utf-8'))
+            assert connection.execute('SELECT COUNT(*) FROM buddies WHERE label IS NOT NULL').fetchone()[0] >= 3
+            assert connection.execute("SELECT COUNT(*) FROM evaluation_catalog WHERE discovery_id='cat-89b5b236ee44be1428bb5c86'").fetchone()[0] == 1
+        sql = """-- Derived on a private schema-39 copy from the three floor-written buddy rows.
+-- Alpha retains its proven synthetic description. Beta gets a recorded native
+-- description; Gamma loses its current catalog provenance but remains proven
+-- by an older payload. An orphan derived from Gamma has no catalog model.
+INSERT INTO evaluation_catalog(discovery_id,payload_json)
+SELECT 'fixture-native-beta',
+       json_set(payload_json, '$.providers[0].models[1].description', 'Native beta description')
+FROM evaluation_catalog WHERE discovery_id='cat-89b5b236ee44be1428bb5c86';
+UPDATE buddies SET source='catalog:fixture-native-beta',
+                   description='Native beta description'
+WHERE buddy_id='codex:openai:fixture-beta:high';
+UPDATE buddies SET source='catalog:fixture-missing-gamma'
+WHERE buddy_id='codex:openai:fixture-gamma:high';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,
+                    enabled,capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:fixture-orphan:high','fixture-orphan · high',harness,
+       provider,'fixture-orphan',effort,available,enabled,capabilities_json,
+       context_window,'fixture-orphan via openai','catalog:fixture-missing-orphan',
+       unavailable_code,unavailable_params_json,unavailable_content
+FROM buddies WHERE buddy_id='codex:openai:fixture-gamma:high';
+"""
+        args.output_dir.mkdir(parents=True, exist_ok=False)
+        (args.output_dir / 'schema-39-alias-stock.sql').write_text(sql, encoding='utf-8')
     elif args.legacy_stock_for:
         derive_legacy_stock(args)
     elif args.verify:

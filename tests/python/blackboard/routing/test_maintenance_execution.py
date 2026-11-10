@@ -72,9 +72,9 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.finish_turn(self.board_, self.claim(self.board_, run_id=self.evidence_id))
         self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": self.evidence_id}))
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
-                       "available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,1,1,?)",
-                       (BUDDY_ID, "Maintenance", "dsh", "fixture", "maintenance", "off", canonical_json([])))
+            db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
+                       "available,enabled,capabilities_json) VALUES(?,?,?,?,?,1,1,?)",
+                       (BUDDY_ID, "dsh", "fixture", "maintenance", "off", canonical_json([])))
             ensure_model_service(db, "dsh", "fixture", "maintenance", self.board_.store.now())
 
     def configure(self, *, buddy_id=BUDDY_ID, interval=3600, wait=60):

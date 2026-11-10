@@ -2,6 +2,7 @@
 from contextlib import closing
 import ast
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import sqlite3
@@ -24,8 +25,8 @@ def digest(value):
 
 class FrozenUpgradeTests(unittest.TestCase):
     def test_new_step_has_no_current_package_imports(self):
-        for step in (schema_32_33, schema_34_35, schema_35_36):
-            source = ast.parse(Path(step.__file__).read_text(encoding='utf-8'))
+        for step in upgrade.STEPS.values():
+            source = ast.parse(Path(inspect.getmodule(step).__file__).read_text(encoding='utf-8'))
             self.assertFalse([node for node in ast.walk(source) if isinstance(node, (ast.Import, ast.ImportFrom))
                               and (any(alias.name.startswith('hey_my_buddy') for alias in node.names)
                                    if isinstance(node, ast.Import) else node.module is not None
@@ -287,6 +288,47 @@ class UpgradeChainTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM workspace_reservations w JOIN workflow_runs r"
                                         " ON r.run_id=w.holder_task_id WHERE w.state='held'"
                                         " AND r.state IN ('accepted','concluded')").fetchone()[0], 0)
+        self.assert_current_structure()
+
+    def test_alias_step_uses_catalog_proof_and_rolls_back_on_failure(self):
+        self.schema31()
+        with self.db:
+            for version in range(31, 39):
+                upgrade.STEPS[version](self.db)
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '39')
+        # This supplement derives native, historical-payload and orphan cases
+        # from the floor writer's labeled buddy and catalog rows.
+        self.db.executescript((FIXTURE / 'schema-39-alias-stock.sql').read_text(encoding='utf-8'))
+        original = {row['model']: row['description'] for row in self.db.execute(
+            'SELECT model,description FROM buddies')}
+        self.assertEqual(original, {'fixture-alpha': 'fixture-alpha via openai',
+                                    'fixture-beta': 'Native beta description',
+                                    'fixture-gamma': 'fixture-gamma via openai',
+                                    'fixture-orphan': 'fixture-orphan via openai'})
+        frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+                  for table in ('router_requests', 'decision_requests')}
+
+        actual_step = upgrade.STEPS[39]
+        def fail_after_step(connection):
+            actual_step(connection)
+            raise RuntimeError('injected failure before commit')
+        with mock.patch.dict(upgrade.STEPS, {39: fail_after_step}):
+            with self.assertRaisesRegex(RuntimeError, 'injected failure'):
+                upgrade.upgrade_state(self.state)
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '39')
+        self.assertIn('label', [row['name'] for row in self.db.execute('PRAGMA table_info(buddies)')])
+
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 39, 'targetSchema': 40})
+        self.assertEqual({row['model']: row['description'] for row in self.db.execute(
+            'SELECT model,description FROM buddies')},
+            {'fixture-alpha': '', 'fixture-beta': 'Native beta description',
+             'fixture-gamma': '', 'fixture-orphan': 'fixture-orphan via openai'})
+        columns = [row['name'] for row in self.db.execute('PRAGMA table_info(buddies)')]
+        self.assertIn('alias', columns)
+        self.assertNotIn('label', columns)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM buddies WHERE alias IS NOT NULL').fetchone()[0], 0)
+        for table, before in frozen.items():
+            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT * FROM {table} ORDER BY rowid')], before)
         self.assert_current_structure()
 
     def test_schema36_model_stock_preserves_every_rekeyed_form(self):

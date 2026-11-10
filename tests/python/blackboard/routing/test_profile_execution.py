@@ -33,9 +33,9 @@ class ProfileExecutionTests(BoardTestCase):
         with self.board_.store.db.write() as db:
             for buddy_id, service in ((PROFILE_BUDDY, PROFILE_SERVICE), (TARGET_BUDDY, TARGET_SERVICE),
                                       (CANDIDATE_BUDDY, CANDIDATE_SERVICE)):
-                db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
-                           "available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,1,1,'[]')",
-                           (buddy_id, buddy_id, service["harness"], service["provider"], service["model"], "off"))
+                db.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,"
+                           "available,enabled,capabilities_json) VALUES(?,?,?,?,?,1,1,'[]')",
+                           (buddy_id, service["harness"], service["provider"], service["model"], "off"))
                 ensure_model_service(db, *service.values(), self.board_.store.now())
             self.model_id = current_model(db, *TARGET_SERVICE.values())
             self.candidate_id = current_model(db, *CANDIDATE_SERVICE.values())

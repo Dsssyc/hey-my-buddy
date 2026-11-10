@@ -207,6 +207,9 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(view.efforts_for("zcode", "deepseek-official", "deepseek-flash"), ["low", "high"])
         self.assertIsNone(view.lookup("command", "deepseek-official", "deepseek-flash"))
         proposals = view.proposed_buddies()
+        self.assertTrue(all('label' not in item for item in proposals))
+        self.assertTrue(all(item['description'] == '' for item in proposals
+                            if item['harness'] == 'zcode'))
         zcode = [item for item in proposals if item["harness"] == "zcode"]
         self.assertEqual({item["effort"] for item in zcode if item["model"] == "deepseek-flash"}, {"low", "high"})
         self.assertTrue(all(item["buddyId"].startswith("zcode:") for item in zcode))

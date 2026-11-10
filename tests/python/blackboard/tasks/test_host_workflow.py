@@ -36,7 +36,7 @@ class HostWorkflowTests(WorkflowTestCase):
         self.assertEqual(replay["runId"], first["runId"])
         self.assertTrue(replay["alreadyExists"])
         self.assertEqual(replay["access"], "read")
-        self.assertEqual(replay["buddy"], BUDDY)
+        self.assertEqual(replay["buddy"], {**BUDDY, "alias": None})
         self.assertEqual(len(self.workspace.prepare_calls), original_count)
         self.assertEqual(board.store.count_tasks(), 1)
 
@@ -113,13 +113,13 @@ class HostWorkflowTests(WorkflowTestCase):
         identity = {**BUDDY, "model": "fixture/model"}
         buddy_id = re.sub(r"[^A-Za-z0-9._:-]", "-", ":".join(identity.values()))
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,enabled,available)"
-                               " VALUES(?,?,?,?,?,?,1,1)",
-                               (buddy_id, "Sanitized fixture", *identity.values()))
+            connection.execute("INSERT INTO buddies(buddy_id,harness,provider,model,effort,enabled,available)"
+                               " VALUES(?,?,?,?,?,1,1)",
+                               (buddy_id, *identity.values()))
             ensure_model_service(connection, identity["harness"], identity["provider"],
                                  identity["model"], board.store.now())
         submitted = self.submit(board, buddy=" / ".join(identity.values()), request_id="quad-name")
-        self.assertEqual(submitted["buddy"], identity)
+        self.assertEqual(submitted["buddy"], {**identity, "alias": None})
         for name in (buddy_id, ":".join(identity.values()), "dsh / deepseek-official / absent-model / off"):
             with self.subTest(name=name), self.assertRaises(BoardError) as raised:
                 self.submit(board, buddy=name, request_id="refused")
@@ -161,6 +161,12 @@ class GetBuddiesTests(WorkflowTestCase):
             self.assertEqual(set(entry), {"name", "available"})
             self.assertTrue(entry["available"])
         self.assertIsNone(reply["nextCursor"])
+
+    def test_names_include_current_alias(self):
+        with self.enabled_board.store.db.write() as connection:
+            connection.execute("UPDATE buddies SET alias='便捷名' WHERE buddy_id=?", (self.ENABLED[0],))
+        names = self.names(self.enabled_board.call("workflow_get", {"buddies": True}))
+        self.assertIn("dsh / deepseek-official / deepseek-flash / high [便捷名]", names)
 
     def test_pages_by_limit_and_before_and_refuses_a_cursor_that_names_no_buddy(self):
         first = self.enabled_board.call("workflow_get", {"buddies": True, "limit": 2})

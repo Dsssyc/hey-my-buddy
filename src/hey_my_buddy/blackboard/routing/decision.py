@@ -210,7 +210,6 @@ class DecisionCoordinator:
     def _buddy_input(self, row: sqlite3.Row) -> dict:
         entry = {
             "buddyId": row["buddy_id"],
-            "label": row["label"],
             "harness": row["harness"],
             "provider": row["provider"],
             "model": row["model"],
