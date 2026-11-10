@@ -1,8 +1,6 @@
 import { expect } from "@playwright/test";
-import { fileURLToPath } from "node:url";
-import { expectNoSidewaysScroll, open, settle, test } from "./preview";
+import { expectNoSidewaysScroll, open, screenshots, settle, test } from "./preview";
 
-const shots = fileURLToPath(new URL("../../../tmp/redo-b2/", import.meta.url));
 const CODEX = "codex / openai / gpt-5-codex";
 
 for (const theme of ["light", "dark"]) for (const locale of ["zh-CN", "en-US"]) {
@@ -18,7 +16,7 @@ for (const theme of ["light", "dark"]) for (const locale of ["zh-CN", "en-US"]) 
       const capture = async (name: string) => {
         await settle(page);
         await expectNoSidewaysScroll(page);
-        await page.screenshot({ path: `${shots}${name}-${locale}-${theme}.png`, fullPage: true });
+        await page.screenshot({ path: `${screenshots}/${name}-${locale}-${theme}.png`, fullPage: true });
       };
       const pending = page.getByRole("button", { name: "zcode / zai / glm-5", exact: true });
       const missing = pending.getByText(zh ? "待确认" : "Pending", { exact: true });
@@ -28,7 +26,7 @@ for (const theme of ["light", "dark"]) for (const locale of ["zh-CN", "en-US"]) 
       await page.mouse.move(0, 0);
       const mini = page.getByRole("button", { name: "codex / openai / gpt-5-mini", exact: true });
       await expect(mini.locator("[data-slot=usage-mark]")).toHaveAttribute("aria-label", zh ? "已启用；尚未构建画像。" : "Enabled; no model profile yet.");
-      await expect(mini).toContainText("— / 2");
+      await expect(mini.getByLabel(zh ? "占用未知" : "In use: unknown", { exact: true })).toHaveText("—");
       const dsh = page.getByRole("region", { name: "DSH", exact: true });
       await expect(dsh.locator("[data-slot=model-provider]")).toHaveText(["deepseek-official", "deepseek-partner", "deepseek-official"]);
       await expect(dsh.locator("[data-slot=harness-header] [data-slot=cooling-status]")).toHaveCount(1);

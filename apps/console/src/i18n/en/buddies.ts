@@ -51,7 +51,6 @@ export default {
     columns: {
       buddy: "Buddy",
       effort: "Reasoning effort",
-      concurrency: "Concurrency",
     },
     fold: "Fold {{name}}",
     unfold: "Unfold {{name}}",

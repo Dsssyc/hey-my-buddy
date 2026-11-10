@@ -21,10 +21,7 @@ export function HarnessHeader({ block, health, state, gate, onRetry }: {
     <b className="text-base font-semibold">{block.name}</b>
     <CoolingHeaderProviders names={block.providers} providers={health?.providers ?? []} gate={gate} onRetry={onRetry} />
     {state && <span className="text-xs text-ink3">{harnessStateText(state, t)}</span>}
-    <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-4 gap-y-1">
-      {block.folded && <span className="text-xs text-ink3 tabular-nums">{t("models.modelCount", { n: block.modelCount })} · {t("models.enabled")} {block.enabled} / {block.total}</span>}
-      {!block.folded && <span className="hidden w-16 text-right text-xs text-ink3 sm:inline">{t("models.columns.concurrency")}</span>}
-    </span>
+    {block.folded && <span className="ml-auto text-xs text-ink3 tabular-nums">{t("models.modelCount", { n: block.modelCount })} · {t("models.enabled")} {block.enabled} / {block.total}</span>}
   </>;
   return <div data-slot="harness-header" className="group/header relative flex min-h-12 items-stretch">
     <CollapsibleTrigger type="button" data-slot="fold-handle" aria-label={t(block.folded ? "models.unfold" : "models.fold", { name: block.name })}

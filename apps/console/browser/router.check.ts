@@ -1,16 +1,12 @@
-import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
-import { expectNoSidewaysScroll, open, settle, test } from "./preview";
+import { expectNoSidewaysScroll, open, screenshots, settle, test } from "./preview";
 
-const captures = fileURLToPath(new URL("../../../tmp/redo-b3/", import.meta.url));
 async function captureWork(page: Page, name: string) {
   const contentHeight = await page.locator('[data-slot="router-detail"]').evaluate(node => node.scrollHeight);
   await page.setViewportSize({ width: 1440, height: Math.max(900, contentHeight + 160) });
   await settle(page);
-  await mkdir(captures, { recursive: true });
-  await page.screenshot({ path: join(captures, name), fullPage: true });
+  await page.screenshot({ path: join(screenshots, name), fullPage: true });
 }
 const words = [
   { locale: "zh-CN", jobs: "Router 的工作", routing: "路由", maintenance: "维护", profiles: "画像", maintenanceBuddy: "维护 buddy", profileBuddy: "画像 buddy", settings: "设置", records: "记录", list: "Router 列表", wait: "开始作答时限", errors: "最近的失败", choose: "选择 buddy" },

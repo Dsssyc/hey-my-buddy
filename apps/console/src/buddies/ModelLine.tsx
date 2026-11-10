@@ -24,7 +24,7 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
   return <div data-slot="model-row" className="border-t">
     <CollapsibleTrigger asChild>
       <button type="button" aria-label={modelIdentity(row.modelService)} aria-description={enabled.length > 0 ? t("models.enabled") : undefined} onClick={onSelect}
-        className="grid min-h-10 w-full cursor-pointer grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 px-3 py-2 text-left outline-none transition-colors duration-150 hover:bg-sunk focus-visible:ring-2 focus-visible:ring-ring aria-[expanded=true]:bg-past-wash motion-reduce:transition-none sm:grid-cols-[20px_minmax(0,1fr)_minmax(0,1.5fr)_64px] sm:px-4">
+        className="grid min-h-10 w-full cursor-pointer grid-cols-[20px_minmax(0,1fr)_max-content] items-center gap-x-2 gap-y-1 px-3 py-2 text-left outline-none transition-colors duration-150 hover:bg-sunk focus-visible:ring-2 focus-visible:ring-ring aria-[expanded=true]:bg-past-wash motion-reduce:transition-none sm:grid-cols-[20px_minmax(0,1fr)_minmax(0,1.5fr)_max-content] sm:px-4">
         {enabled.length > 0 ? <Hint text={noProfile ? t("models.noProfile") : undefined}><span data-slot="usage-mark" aria-label={noProfile ? t("models.noProfile") : undefined} className={cn("mx-auto size-2 rounded-full", noProfile ? "border border-foreground" : "bg-foreground")} /></Hint> : <span className="mx-auto size-2" aria-hidden="true" />}
         <span className={cn("flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1", !enabled.length && "text-ink3")}>
           <span className="wrap-anywhere font-medium">{member.model}</span>
@@ -42,8 +42,13 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
             {chip.preference && <span className="text-ink2">{t(`preference.${chip.preference}`)}</span>}
           </span>)}
         </span>
-        <span className="col-start-3 row-start-1 whitespace-nowrap text-right text-xs text-ink2 tabular-nums sm:col-start-auto sm:row-start-auto" aria-label={occupancy}>
-          {row.occupancy ?? "—"} / {Number.isNaN(row.limit) ? "—" : row.limit}
+        <span className="col-start-3 row-start-1 inline-flex items-center justify-end gap-2 whitespace-nowrap text-right text-xs text-ink2 tabular-nums sm:col-start-auto sm:row-start-auto" aria-label={occupancy}>
+          {row.occupancy === null ? "—" : <>
+            <span data-slot="model-occupancy-meter" aria-hidden="true" className="h-1.5 w-12 shrink-0 bg-line">
+              {!Number.isNaN(row.limit) && row.limit > 0 && <span className="block h-full bg-ink2 transition-[width] duration-150 motion-reduce:transition-none" style={{ width: `${Math.min(100, row.occupancy / row.limit * 100)}%` }} />}
+            </span>
+            <span>{row.occupancy} / {Number.isNaN(row.limit) ? "—" : row.limit}</span>
+          </>}
         </span>
       </button>
     </CollapsibleTrigger>

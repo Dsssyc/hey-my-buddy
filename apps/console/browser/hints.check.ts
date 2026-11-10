@@ -1,10 +1,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { expectNoSidewaysScroll, open, settle, test } from "./preview";
+import { expectNoSidewaysScroll, open, screenshots, settle, test } from "./preview";
 import { settingsFixture, storagePlan } from "./settings-fixtures";
 
-const captures = fileURLToPath(new URL("../../../tmp/console-hints/pages", import.meta.url));
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 
 async function quiet(page: Page, targets: Locator[]) {
@@ -18,8 +15,7 @@ async function quiet(page: Page, targets: Locator[]) {
 async function capture(page: Page, name: string) {
   await page.mouse.move(0, 0);
   await settle(page);
-  await mkdir(captures, { recursive: true });
-  await page.screenshot({ path: `${captures}/${name}-zh-dark-1280.png` });
+  await page.screenshot({ path: `${screenshots}/${name}-zh-dark-1280.png` });
 }
 async function consequenceLine(target: Locator, singleLine = true, colorToken = "--ink3") {
   await expect(target).toBeVisible();
@@ -228,9 +224,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
       await expect(buttons.nth(index)).toHaveAttribute("aria-expanded", "true");
       await expectHelpPlacement(buttons.nth(index), dialog, width);
       if (zh && theme === "dark" && width === 1440 && index === 1) {
-        const destination = fileURLToPath(new URL("../../../tmp/layout/", import.meta.url));
-        await mkdir(destination, { recursive: true });
-        await page.screenshot({ path: `${destination}router-help-dark-1440.png` });
+        await page.screenshot({ path: `${screenshots}/router-help-dark-1440.png` });
       }
       const label = buttons.nth(index).locator('xpath=ancestor::*[@data-slot="popover-anchor"][1]').locator("[id]").first();
       await label.click();

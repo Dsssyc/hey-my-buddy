@@ -1,21 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
 import { expect } from "@playwright/test";
-import { expectNoSidewaysScroll, expectTextUncut, open, settle, test } from "./preview";
+import { expectNoSidewaysScroll, expectTextUncut, open, screenshots, settle, test } from "./preview";
 
 const repository = fileURLToPath(new URL("../../..", import.meta.url));
-const destination = join(repository, "tmp/buddy-fix");
 // Use the same synthetic generator as the manual `--scenario domains` preview.
 const denseTree = JSON.parse(execFileSync("uv", ["run", "--frozen", "python", "-c",
   "import json,sys; sys.path.insert(0,'tests/probes'); import macro_task_console_preview as p; print(json.dumps(p.large_domain_tree()))"],
 { cwd: repository, encoding: "utf8" }));
 async function capture(page: Page, name: string, theme: string) {
   await settle(page);
-  await mkdir(destination, { recursive: true });
-  await page.screenshot({ path: join(destination, `${name}-${theme}-1440.png`), fullPage: true });
+  await page.screenshot({ path: join(screenshots, `${name}-${theme}-1440.png`), fullPage: true });
 }
 for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${theme}`, () => {
   test.use({ locale: "zh-CN", viewport: { width: 1440, height: 1100 }, reducedMotion: "reduce" });

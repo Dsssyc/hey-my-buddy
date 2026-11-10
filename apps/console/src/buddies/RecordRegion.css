@@ -72,5 +72,5 @@
 }
 
 @media (min-width: 1280px) {
-  .router-settings { grid-template-columns: repeat(2, minmax(0, 1fr) minmax(0, 3fr)); }
+  .router-settings { grid-template-columns: repeat(2, max-content minmax(0, 1fr)); }
 }

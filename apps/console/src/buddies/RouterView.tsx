@@ -27,7 +27,7 @@ export function RouterView({ snapshot, editor, location, onNavigate, attention, 
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => setScrolled(false), [work]);
   return <section hidden={hidden} aria-label={t("sections.router")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-    <nav data-slot="router-works" data-scrolled={scrolled} aria-label={t("routerWork.jobs")} className={cn("flex h-16 shrink-0 items-center gap-6 border-b px-8 text-ink3 transition-colors duration-150 motion-reduce:transition-none", scrolled ? "border-border" : "border-transparent")}>
+    <nav data-slot="router-works" data-scrolled={scrolled} aria-label={t("routerWork.jobs")} className={cn("flex shrink-0 items-center gap-6 border-b px-8 pt-6 pb-4 text-ink3 transition-colors duration-150 motion-reduce:transition-none", scrolled ? "border-border" : "border-transparent")}>
       {ROUTER_WORK.map(job => {
         const reason = job === "routing" && attention.roles ? t(`attention.${attention.roles}`) : undefined;
         const description = [t(`routerWork.description.${job}`), reason].filter(Boolean).join("\n");
@@ -41,7 +41,7 @@ export function RouterView({ snapshot, editor, location, onNavigate, attention, 
     </nav>
     {/* The vertical viewport keeps its width; each record region owns horizontal scrolling. */}
     <ScrollArea className="min-h-0 min-w-0 flex-1" key={work} viewportProps={{ className: "[&>div]:block!", onScroll: event => setScrolled(event.currentTarget.scrollTop > 0) }}>
-      <div className="min-w-0 px-8 pt-4 pb-10" data-slot="router-detail">
+      <div className="min-w-0 px-8 pb-10" data-slot="router-detail">
         {work === "routing" ? <RoutingView snapshot={snapshot} editor={editor} onNavigate={onNavigate} />
           : work === "maintenance" ? <MaintenanceView snapshot={snapshot} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && !hidden} />
             : <ProfileSettingsView snapshot={snapshot} editor={editor} profileRunId={location.profileRunId} />}

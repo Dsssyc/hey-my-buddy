@@ -52,7 +52,6 @@ export default {
     columns: {
       buddy: "Buddy",
       effort: "推理强度",
-      concurrency: "并发",
     },
     fold: "收起 {{name}}",
     unfold: "展开 {{name}}",

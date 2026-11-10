@@ -1,11 +1,8 @@
 import { expect } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
-import { open, test } from "./preview";
+import { open, screenshots, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const captures = fileURLToPath(new URL("../../../tmp/readability-r13", import.meta.url));
 test.use({ locale: "en-US", timezoneId: "America/New_York", reducedMotion: "reduce" });
 test("starts time statistics with both dated local record instants, including last activity while running", async ({ page }) => {
   await open(page, `#tasks/${macro}`);
@@ -20,8 +17,12 @@ test("starts time statistics with both dated local record instants, including la
       localStorage.setItem("hey-my-buddy.language", language);
     }, { theme, language });
     await page.setViewportSize({ width, height: 1000 });
-    const read = page.waitForResponse(response => new URL(response.url()).pathname === `/api/macro-tasks/${macro}/timeline` && response.ok());
-    await page.reload();
+    const navigation = page.waitForRequest(request => request.isNavigationRequest() && request.frame() === page.mainFrame());
+    const reload = page.reload();
+    const startedAt = (await navigation).timing().startTime;
+    const read = page.waitForResponse(response => new URL(response.url()).pathname === `/api/macro-tasks/${macro}/timeline`
+      && response.ok() && response.request().timing().startTime >= startedAt);
+    await reload;
     const timeline = await (await read).json() as MacroTaskTimeline;
     expect(timeline.macroTask.counts.active).toBeGreaterThan(0);
     const recorded = [timeline.macroTask.createdAt!, timeline.macroTask.lastActivityAt!];
@@ -43,8 +44,7 @@ test("starts time statistics with both dated local record instants, including la
     }
     const card = (await dialog.boundingBox())!;
     expect(card.x).toBeGreaterThanOrEqual(0); expect(card.x + card.width).toBeLessThanOrEqual(width);
-    await mkdir(captures, { recursive: true });
-    await page.screenshot({ path: `${captures}/stats-${theme}-${width}.png` });
+    await page.screenshot({ path: `${screenshots}/stats-${theme}-${width}.png` });
     await page.keyboard.press("Escape");
   }
 });

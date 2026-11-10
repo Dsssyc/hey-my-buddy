@@ -110,9 +110,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Router cards ${th
     await expect(settings).toHaveCSS("grid-template-columns", /.+ .+/);
     await expect(settings).toHaveCSS("column-gap", "32px");
     await expect(readings).toHaveCSS("column-gap", "32px");
-    const settingCells = await settings.locator(':scope > [data-slot="router-field"]').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
     const readingCells = await readings.locator(":scope > *").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
-    expect(settingCells[1]).toBeCloseTo(readingCells[2], 0);
     const failureCells = await detail.locator('[data-slot="routing-failures-region"] tbody > tr').first().locator("td").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
     expect(failureCells).toHaveLength(3);
     for (let index = 0; index < 3; index++) expect(failureCells[index]).toBeCloseTo(readingCells[index], 0);

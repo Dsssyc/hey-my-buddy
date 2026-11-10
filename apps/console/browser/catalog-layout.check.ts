@@ -1,11 +1,9 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import { fileURLToPath } from "node:url";
 import type { Buddy, Snapshot } from "../src/types";
-import { expectNoSidewaysScroll, open, settle, test } from "./preview";
+import { expectNoSidewaysScroll, open, screenshots, settle, test } from "./preview";
 
 const CODEX = "codex / openai / gpt-5-codex";
 const OPUS = "claude / anthropic / claude-opus-5-5";
-const shots = fileURLToPath(new URL("../../../tmp/catalog-cards/shots/", import.meta.url));
 const frame = async (target: Locator) => (await target.boundingBox())!;
 
 /** Five ordered efforts exercise overflow without changing the shared synthetic preview. */
@@ -95,7 +93,7 @@ for (const theme of ["dark", "light"] as const) {
       const note = await frame(drawer.getByRole("textbox"));
       expect(note.width).toBeLessThanOrEqual(448);
       await expectNoSidewaysScroll(page);
-      if (width === 1440) await page.screenshot({ path: `${shots}catalog-drawer-1440-${theme}.png` });
+      if (width === 1440) await page.screenshot({ path: `${screenshots}/catalog-drawer-1440-${theme}.png` });
     });
 
     test("keeps harness facts beside the list or below it while the whole header folds models", async ({ page }) => {
@@ -114,7 +112,7 @@ for (const theme of ["dark", "light"] as const) {
         const header = await frame(firstSection.locator("[data-slot=harness-header]"));
         expect(title.height).toBe(48);
         expect(Math.abs(title.height - header.height)).toBeLessThanOrEqual(1);
-        if (width === 1440) await page.screenshot({ path: `${shots}catalog-rest-1440-${theme}.png` });
+        if (width === 1440) await page.screenshot({ path: `${screenshots}/catalog-rest-1440-${theme}.png` });
         const before = await models.locator(":scope > [data-slot=scroll-area-viewport]").evaluate(node => node.scrollTop);
         await sidebar.locator(":scope > [data-slot=scroll-area-viewport]").evaluate(node => { node.scrollTop = node.scrollHeight; });
         expect(await models.locator(":scope > [data-slot=scroll-area-viewport]").evaluate(node => node.scrollTop)).toBe(before);
@@ -141,7 +139,7 @@ for (const theme of ["dark", "light"] as const) {
       await expectNoSidewaysScroll(page);
       if (width === 390 && theme === "dark") {
         await models.scrollIntoViewIfNeeded();
-        await page.screenshot({ path: `${shots}catalog-390-dark.png` });
+        await page.screenshot({ path: `${screenshots}/catalog-390-dark.png` });
       }
     });
 
@@ -199,7 +197,7 @@ for (const theme of ["dark", "light"] as const) {
       })).toBeGreaterThan(1);
       expect(await longPath.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
       await expectNoSidewaysScroll(page);
-      await page.screenshot({ path: `${shots}catalog-paths-${theme}.png` });
+      await page.screenshot({ path: `${screenshots}/catalog-paths-${theme}.png` });
     });
 
     test("keeps a buddy-only unavailable hint after the evaluation count", async ({ page }) => {
@@ -236,7 +234,7 @@ for (const theme of ["dark", "light"] as const) {
       expect(await drawer.locator("[data-slot=scroll-area-scrollbar]").evaluate(node => getComputedStyle(node).opacity)).toBe("1");
       await selectedIsInside(drawer);
       await contentSizedList(drawer);
-      if (theme === "dark") await page.screenshot({ path: `${shots}catalog-opus-five-1440-dark.png` });
+      if (theme === "dark") await page.screenshot({ path: `${screenshots}/catalog-opus-five-1440-dark.png` });
       // Keyboard selection remains local: focus the first row without scrolling ancestors,
       // then activate it through the same native button used by a pointer.
       const pageScroll = await page.locator("[data-slot=catalog-models] > [data-slot=scroll-area-viewport]").evaluate(node => node.scrollTop);

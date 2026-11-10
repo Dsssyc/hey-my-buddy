@@ -178,7 +178,7 @@ describe("the selected model", () => {
     expect(within(modelRow(SONNET)).getByLabelText("占用 0 / 2").textContent).toBe("0 / 2");
     await selectModel(user, SOL, "Codex");
     // The board reported no entry for this model: the limit is the default, the occupancy unknown.
-    expect(within(modelRow(SOL)).getByLabelText("占用未知").textContent).toBe("— / 2");
+    expect(within(modelRow(SOL)).getByLabelText("占用未知").textContent).toBe("—");
     expect(within(pane()).getByLabelText("占用未知", { selector: "span[id]" })).toBeTruthy();
   });
 });

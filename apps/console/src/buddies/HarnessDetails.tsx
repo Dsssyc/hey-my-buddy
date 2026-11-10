@@ -18,7 +18,7 @@ const buttons = "mt-4 flex flex-wrap gap-2";
 type Gate = { canWrite: boolean; refusal: string; busy: boolean };
 
 function Block({ title, head, children }: { title: string; head?: ReactNode; children: ReactNode }) {
-  return <div role="group" aria-label={title} className="min-w-0 px-5 py-4">
+  return <div role="group" aria-label={title} className="min-w-0 px-5 py-4 first:pt-0">
     <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
       <h4 className="text-xs font-medium text-ink2">{title}</h4>
       <span className="flex flex-wrap items-center gap-x-1.5 text-xs text-ink3">{head}</span>
