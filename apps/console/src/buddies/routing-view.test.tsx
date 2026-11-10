@@ -586,7 +586,10 @@ describe("the settings of the role", () => {
     await user.click(modeOption("快速"));
     expect(modeOption("快速").getAttribute("aria-checked")).toBe("true");
     await user.click(modeHelp);
-    expect(screen.getByRole("dialog", { name: "关于默认模式" }).textContent).toMatch(/^需要 Router 判断时，任务的文字会发给 Router 的模型提供方。 快速用任务文字/);
+    expect([...screen.getByRole("dialog", { name: "关于默认模式" }).querySelectorAll("p")].map(paragraph => paragraph.textContent)).toEqual([
+      "需要 Router 判断时，任务的文字会发给 Router 的模型提供方。",
+      expect.stringMatching(/^快速用任务文字/),
+    ]);
     await user.click(modeHelp);
     expect(unsavedIn("默认模式")).toHaveLength(1);
     expect(unsavedIn("列表")).toHaveLength(0);

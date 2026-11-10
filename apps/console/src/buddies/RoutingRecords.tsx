@@ -47,7 +47,7 @@ export function RoutingRecords({ health }: { health?: RoutingHealth }) {
         <span>{t("roles.records.lastSuccess")} <Moment at={health.lastSuccessAt} /></span>
       </>}
     </div>
-    {!!health.routers?.length && <table className="w-full table-fixed border-collapse" aria-label={t("roles.records.routers.label")}>
+    {!!health.routers?.length && <div className="max-w-full overflow-x-auto" role="region" tabIndex={0} aria-label={t("roles.records.routers.label")} data-slot="routing-routers-region"><table className="w-full min-w-[700px] table-fixed border-collapse" aria-label={t("roles.records.routers.label")}>
       <thead><tr><th className={`${head} w-[34%]`}>{t("roles.records.routers.buddy")}</th><th className={`${head} w-[30%]`}>{t("routerWork.answers")}</th><th className={`${head} w-[17%]`}>{t("roles.records.routers.lastAnswered")}</th><th className={head}>{t("roles.records.routers.lastError")}</th></tr></thead>
       <tbody>{health.routers.map(row => <tr key={row.buddyId}>
         <td className={`${cell} font-mono wrap-anywhere`}>{row.identity ? buddyQuad(row.identity) : row.buddyId}</td>
@@ -58,11 +58,11 @@ export function RoutingRecords({ health }: { health?: RoutingHealth }) {
         <td className={cell}><Moment at={row.lastAnsweredAt} /></td>
         <td className={`${cell} wrap-anywhere`}>{row.lastError?.code ? <RouterFailure failure={row.lastError.code} /> : t("roles.records.unknown")}</td>
       </tr>)}</tbody>
-    </table>}
+    </table></div>}
     {!!failures.length && <div>
       <h4 className="pb-2 text-sm font-medium">{t("roles.records.failures.label")}</h4>
       <div className="record-region record-region--routing" role="region" tabIndex={0} aria-label={t("roles.records.failures.label")} data-slot="routing-failures-region">
-      <table className="w-full table-fixed border-collapse" aria-label={t("roles.records.failures.label")}>
+      <table className="w-full min-w-[620px] table-fixed border-collapse" aria-label={t("roles.records.failures.label")}>
       <thead><tr><th className={`${head} w-[20%]`}>{t("roles.records.failures.at")}</th><th className={`${head} w-[30%]`}>{t("roles.records.failures.code")}</th><th className={head}>{t("roles.records.failures.run")}</th></tr></thead>
       <tbody>{failures.map(row => <tr key={row.decisionId}>
         <td className={cell}><Moment at={row.at} /></td>

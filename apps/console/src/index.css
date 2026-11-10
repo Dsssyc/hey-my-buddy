@@ -156,47 +156,54 @@
   }
 }
 
-/* The green line grows from beneath the goal button to the sheet's lower edge. */
-@property --goal-progress {
+/* Only the edge grows sideways; the card always reveals at its full width. */
+@property --reveal-progress {
   syntax: "<number>";
   inherits: true;
   initial-value: 1;
 }
-.goal-card {
-  --goal-progress: 1;
-  transition: --goal-progress 200ms ease-out;
-  position: absolute;
-  z-index: 45;
-  left: 12px;
-  width: max-content;
-  max-width: calc(100% - 24px);
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  max-height: min(24rem, calc(100dvh - var(--goal-top) - 16px));
-  border: 1px solid var(--line2);
-  border-radius: var(--radius-overlay);
-  background: var(--popover-ground);
-  color: var(--ink);
-  box-shadow: 0 14px 40px rgb(0 0 0 / 30%);
-  outline: none;
-  clip-path: inset(0 0 calc((100% - 2px) * (1 - var(--goal-progress))) 0 round var(--radius-overlay));
-  transform: translateY(calc(var(--goal-start-y) * (1 - var(--goal-progress))));
+.popover-reveal {
+  --reveal-progress: 0;
+  transition: --reveal-progress 200ms ease-out;
+  --reveal-color: var(--ink2);
+  --reveal-start-y: 0px;
+  --reveal-left: 0px;
+  --reveal-right: 0px;
+  transform: translateY(calc(var(--reveal-start-y) * (1 - var(--reveal-progress))));
+  clip-path: inset(0 0 calc((100% - 2px) * (1 - var(--reveal-progress))) 0 round var(--radius-overlay));
 }
-.goal-card::after {
+.popover-reveal:not([data-reveal-ready]) { opacity: 0; }
+.popover-reveal[data-side="top"] { clip-path: inset(calc((100% - 2px) * (1 - var(--reveal-progress))) 0 0 0 round var(--radius-overlay)); }
+.popover-reveal::after {
   content: "";
   position: absolute;
   z-index: 1;
+  pointer-events: none;
   height: 2px;
-  top: calc((100% - 2px) * var(--goal-progress));
-  left: calc(var(--goal-left) * (1 - var(--goal-progress)));
-  right: calc(var(--goal-right) * (1 - var(--goal-progress)));
-  background: var(--goal);
+  top: calc((100% - 2px) * var(--reveal-progress));
+  left: calc(var(--reveal-left) * (1 - var(--reveal-progress)));
+  right: calc(var(--reveal-right) * (1 - var(--reveal-progress)));
+  background: var(--reveal-color);
 }
-@starting-style { .goal-card[data-state="open"] { --goal-progress: 0; } }
-.goal-card[data-state="closed"] { --goal-progress: 0; animation: goal-close-presence 200ms; }
-/* Presence keeps the closing surface mounted while the reversible transition runs. */
-@keyframes goal-close-presence { from { opacity: 1; } to { opacity: 1; } }
+.popover-reveal[data-side="top"]::after { top: calc((100% - 2px) * (1 - var(--reveal-progress))); }
+.popover-reveal[data-reveal-ready][data-state="open"] { --reveal-progress: 1; }
+.popover-reveal[data-reveal-ready][data-state="closed"] { --reveal-progress: 0; animation: popover-close-presence 200ms; }
+/* Presence retains the closing card while the transition reverses from its current value. */
+@keyframes popover-close-presence { from { opacity: 1; } to { opacity: 1; } }
+.goal-card {
+  --reveal-color: var(--goal);
+  /* Radix's two 12px collision insets leave 576px at the old 600px panel breakpoint. */
+  --goal-history-room: calc((var(--radix-popover-content-available-width) - 576px) * 1000);
+  width: max-content;
+  max-width: var(--radix-popover-content-available-width);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(24rem, var(--radix-popover-content-available-height));
+  padding: 0;
+  border-color: var(--line2);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 30%);
+}
 .goal-scroll {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -204,24 +211,20 @@
   overflow: auto;
   overscroll-behavior: contain;
 }
-.goal-scroll[data-history="true"] { grid-template-columns: minmax(0, 1fr) 220px; }
+.goal-scroll[data-history="true"] { grid-template-columns: minmax(0, 1fr) clamp(110px, var(--goal-history-room), 220px); }
 .goal-main { min-width: 0; padding: 18px 24px 22px; }
 .goal-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-height: 22px; padding-right: 20px; }
 .goal-body { min-width: 0; width: 38em; max-width: 100%; margin-top: 12px; font-size: 14.5px; line-height: 1.85; }
 .goal-close { position: absolute; z-index: 2; top: 10px; right: 10px; }
-.goal-history { min-width: 0; padding: 18px 16px 22px 20px; background: var(--sunk); }
+.goal-history { min-width: 0; padding: 18px clamp(12px, var(--goal-history-room), 16px) 22px clamp(12px, var(--goal-history-room), 20px); background: var(--sunk); }
 .goal-versions { margin-top: 6px; }
 .goal-version { position: relative; display: block; width: calc(100% + 16px); margin: 0 -8px 2px; padding: 6px 8px 6px 30px; text-align: left; color: var(--ink3); outline: none; transition: color 150ms, background-color 150ms; }
 .goal-version-dot { position: absolute; left: 8px; top: 12px; width: 7px; height: 7px; border: 1.5px solid var(--ink3); border-radius: 50%; }
 .goal-version[data-current="true"] .goal-version-dot { background: var(--ink); border-color: var(--ink); }
 .goal-version:hover, .goal-version[aria-pressed="true"] { color: var(--ink); background: var(--selected-row); }
 .goal-version:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
-@container (width < 600px) {
-  .goal-scroll[data-history="true"] { grid-template-columns: minmax(0, 1fr) 110px; }
-  .goal-history { padding-left: 12px; padding-right: 12px; }
-}
 @media (prefers-reduced-motion: reduce) {
-  .goal-card[data-state] { animation: none; transition: none; }
+  .popover-reveal[data-reveal-ready][data-state] { animation: none; transition: none; }
   .goal-version { transition: none; }
 }
 

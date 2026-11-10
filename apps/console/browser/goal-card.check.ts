@@ -79,7 +79,7 @@ for (const scene of [
     for (const animation of element.getAnimations()) { animation.pause(); animation.currentTime = 100; }
   });
   await page.screenshot({ path: `${captures}/${name}-mid.png` });
-  const middle = await card.evaluate(element => ({ progress: Number(getComputedStyle(element).getPropertyValue("--goal-progress")), clip: getComputedStyle(element).clipPath }));
+  const middle = await card.evaluate(element => ({ progress: Number(getComputedStyle(element).getPropertyValue("--reveal-progress")), clip: getComputedStyle(element).clipPath }));
   expect(middle.progress).toBeGreaterThan(0); expect(middle.progress).toBeLessThan(1);
   // Only the bottom of the full-width sheet is revealed; the green line alone expands sideways.
   const insets = middle.clip.slice("inset(".length, -1).split(" round ")[0]!.match(/calc\([^)]*\)|[^\s]+/g)!;

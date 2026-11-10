@@ -60,6 +60,35 @@ async function keyboardToBottom(page: Page, region: Locator) {
   await expect.poll(() => region.evaluate(node => Math.abs(node.scrollHeight - node.clientHeight - node.scrollTop))).toBeLessThanOrEqual(1);
 }
 
+async function expectNarrowTable(page: Page, region: Locator) {
+  const geometry = await region.evaluate(node => {
+    const table = node.querySelector(":scope > table")!;
+    const cells = [...table.querySelectorAll("tbody > tr:first-child > td")].map(cell => cell.getBoundingClientRect());
+    const times = [...table.querySelectorAll("tbody time")].map(time => {
+      const range = document.createRange(); range.selectNodeContents(time);
+      const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
+      const cell = time.closest("td")!.getBoundingClientRect();
+      return { lines: new Set(rects.map(rect => rect.top)).size,
+        inside: rects.every(rect => rect.left >= cell.left - 1 && rect.right <= cell.right + 1) };
+    });
+    const frame = node.getBoundingClientRect();
+    return { times, frameRight: frame.right, viewport: document.documentElement.clientWidth,
+      visibleWidth: node.clientWidth, tableWidth: table.getBoundingClientRect().width,
+      gaps: cells.slice(1).map((cell, index) => cell.left - cells[index].right) };
+  });
+  expect(geometry.frameRight).toBeLessThanOrEqual(geometry.viewport + 1);
+  expect(geometry.tableWidth).toBeGreaterThan(geometry.visibleWidth);
+  for (const gap of geometry.gaps) expect(gap).toBeGreaterThanOrEqual(-1);
+  expect(geometry.times.length).toBeGreaterThan(0);
+  for (const time of geometry.times) {
+    expect(time.lines, "timestamps stay on one line").toBe(1);
+    expect(time.inside, "timestamps stay inside their own column").toBe(true);
+  }
+  await region.evaluate(node => { node.scrollLeft = node.scrollWidth; });
+  await expect.poll(() => region.evaluate(node => node.scrollLeft)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+}
+
 async function expectIdentifierTarget(target: Locator) {
   const hit = await target.evaluate(node => {
     const box = node.getBoundingClientRect(), x = box.left + box.width / 2;
@@ -116,6 +145,21 @@ for (const theme of ["dark", "light"]) test.describe(`Router bounded records ${t
     await expect(profiles.locator(":scope > table > tbody > tr").last().getByRole("table")).toHaveCount(2);
     await profiles.evaluate(node => { node.scrollTop = 0; });
     await capture(page, `profile-records-${theme}-1440.png`);
+  });
+
+  test("keeps record columns apart inside scrollable regions at 390px", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await longRecords(page);
+    await open(page, "#buddies/router/maintenance");
+    await expectNarrowTable(page, page.locator('[data-slot="maintenance-records-region"]'));
+
+    const nav = page.getByRole("navigation", { name: "Router 的工作" });
+    await nav.getByRole("link", { name: /^画像/ }).click();
+    await expectNarrowTable(page, page.locator('[data-slot="profile-records"]'));
+
+    await nav.getByRole("link", { name: /^路由/ }).click();
+    await expectNarrowTable(page, page.locator('[data-slot="routing-routers-region"]'));
+    await expectNarrowTable(page, page.locator('[data-slot="routing-failures-region"]'));
   });
 
   test("offers a full page refresh after a changed runtime", async ({ page }) => {

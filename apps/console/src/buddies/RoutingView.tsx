@@ -80,7 +80,7 @@ export function RoutingView({ snapshot, editor, onNavigate }: {
           onRemove={buddyId => editor.update(draft => removeRouter(draft, buddyId))} />
       </RouterSection>
 
-      <RouterSection name={t("routerWork.settings")}><RouterField name={t("roles.mode.name")} help={configuration ? `${t(`roles.mode.${configuration.defaultRoutingMode}Consequence`)} ${t("roles.mode.explanation")}` : t("roles.mode.explanation")} unsaved={mark(unsaved.mode)}>
+      <RouterSection name={t("routerWork.settings")}><RouterField name={t("roles.mode.name")} help={configuration ? <><p>{t(`roles.mode.${configuration.defaultRoutingMode}Consequence`)}</p><p className="mt-3">{t("roles.mode.explanation")}</p></> : t("roles.mode.explanation")} unsaved={mark(unsaved.mode)}>
         <Segmented aria-label={t("roles.mode.label")} value={configuration?.defaultRoutingMode ?? ""}
           onValueChange={value => change({ defaultRoutingMode: value as RoutingMode })}>
           {MODES.map(mode => <Hint key={mode} text={locked}>

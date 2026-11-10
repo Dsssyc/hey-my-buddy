@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
-import { Dialog } from "radix-ui";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Popover as PopoverPrimitive } from "radix-ui";
+import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
 import remarkBreaks from "remark-breaks";
 import { defaultRemarkPlugins } from "streamdown";
 import { Target, X } from "lucide-react";
@@ -15,7 +15,7 @@ import { Button } from "./components/ui/button";
 
 const goalRemarkPlugins = [...Object.values(defaultRemarkPlugins), remarkBreaks];
 
-/** A non-modal sheet stays over the lanes; Radix owns dismissal and focus return. */
+/** Radix owns placement, dismissal and focus return for the goal card. */
 export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
   macroTaskId: string; goal: MacroTaskGoal; readGoals: ConsoleApi["macroTaskGoals"]; active: boolean;
 }) {
@@ -24,9 +24,12 @@ export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
   const [goals, setGoals] = useState<MacroTaskGoal[] | null>(null);
   const [revision, setRevision] = useState(goal.revision);
   const [error, setError] = useState("");
-  const [geometry, setGeometry] = useState<CSSProperties>({});
+  const titleId = useId();
+  const [boundary, setBoundary] = useState<HTMLElement | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  const [content, setContent] = useState<HTMLDivElement | null>(null);
+  const attachTrigger = useCallback((node: HTMLButtonElement | null) => {
+    trigger.current = node; setBoundary(node?.closest<HTMLElement>('[data-slot="macro-detail"]') ?? null);
+  }, []);
   useEffect(() => { if (!active) setOpen(false); }, [active]);
   useEffect(() => {
     if (!open) return;
@@ -38,37 +41,19 @@ export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
     return () => controller.abort();
   }, [open, macroTaskId, goal.revision, readGoals]);
   const selected = goals?.find(item => item.revision === revision) ?? goal;
-  useLayoutEffect(() => {
-    if (!open || !content) return;
-    const card = content, button = trigger.current!, header = button.closest("header")!;
-    function measure() {
-      const anchor = button.getBoundingClientRect(), bounds = header.getBoundingClientRect();
-      const width = card.getBoundingClientRect().width;
-      const inset = parseFloat(getComputedStyle(header).paddingLeft);
-      const top = anchor.bottom + 4;
-      // Keep the trigger over the sheet even when a long title pushes it right.
-      const left = Math.max(inset, anchor.right - bounds.left - width);
-      setGeometry({ left, top: top - bounds.top, "--goal-top": `${top}px`, "--goal-left": `${Math.max(0, anchor.left - bounds.left - left)}px`,
-        "--goal-right": `${Math.max(0, left + width - (anchor.right - bounds.left))}px`,
-        "--goal-start-y": `${anchor.bottom - top}px` } as CSSProperties);
-    }
-    measure();
-    const observer = new ResizeObserver(measure); observer.observe(header); observer.observe(content);
-    window.addEventListener("resize", measure);
-    return () => { observer.disconnect(); window.removeEventListener("resize", measure); };
-  }, [open, content]);
-  return <Dialog.Root modal={false} open={open} onOpenChange={setOpen}>
-    <Hint text={t("goalHint")}><Dialog.Trigger asChild>
-      <Button ref={trigger} type="button" variant="ghost" size="icon-sm" data-slot="macro-goal-trigger" className="goal-trigger" aria-label={t("goalHint")}><Target aria-hidden="true"/></Button>
-    </Dialog.Trigger></Hint>
-    <Dialog.Content ref={setContent} data-slot="macro-goal-card" style={geometry} className="goal-card" aria-describedby={undefined}
+  return <Popover open={open} onOpenChange={setOpen}>
+    <Hint text={t("goalHint")}><PopoverTrigger asChild>
+      <Button ref={attachTrigger} type="button" variant="ghost" size="icon-sm" data-slot="macro-goal-trigger" className="goal-trigger" aria-label={t("goalHint")}><Target aria-hidden="true"/></Button>
+    </PopoverTrigger></Hint>
+    <PopoverContent data-slot="macro-goal-card" className="goal-card" aria-labelledby={titleId} aria-describedby={undefined}
+      align="end" collisionBoundary={boundary} collisionPadding={{ left: 12, right: 12, top: 0, bottom: 16 }}
       onOpenAutoFocus={event => { event.preventDefault(); (event.target as HTMLDivElement).focus(); }}
       onCloseAutoFocus={event => { event.preventDefault(); trigger.current?.focus(); }} tabIndex={-1}>
-      <Dialog.Close asChild><Button variant="ghost" size="icon-sm" aria-label={t("goalClose")} className="goal-close"><X aria-hidden="true"/></Button></Dialog.Close>
+      <PopoverPrimitive.Close asChild><Button variant="ghost" size="icon-sm" aria-label={t("goalClose")} className="goal-close"><X aria-hidden="true"/></Button></PopoverPrimitive.Close>
       <div data-slot="macro-goal-scroll" className="goal-scroll" data-history={!!goals && goals.length > 1}>
         <div className="goal-main">
           <div className="goal-heading">
-            <Dialog.Title className="text-base font-semibold">{t("goalTitle")}</Dialog.Title>
+            <h3 id={titleId} className="text-base font-semibold">{t("goalTitle")}</h3>
             <span className="text-xs text-ink3 tabular-nums">{t("goalRevision", { revision: selected.revision })} · {formatMomentMinutes(Date.parse(selected.createdAt), Date.now())}</span>
           </div>
           <div data-slot="macro-goal-body" className="goal-body"><MessageResponse remarkPlugins={goalRemarkPlugins}>{selected.body}</MessageResponse></div>
@@ -85,6 +70,6 @@ export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
           </div>
         </nav>}
       </div>
-    </Dialog.Content>
-  </Dialog.Root>;
+    </PopoverContent>
+  </Popover>;
 }

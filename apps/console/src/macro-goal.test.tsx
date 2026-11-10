@@ -56,23 +56,13 @@ it("copies the identifier in place, closes on outside click, rereads on reopen a
   expect(screen.queryByRole("dialog", { name: "目标说明" })).toBeNull();
 });
 
-it("uses the card's own width for the goal line origin and keeps a right-hand trigger over the card", async () => {
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-    const rect = this.matches("header") ? { x: 100, y: 40, width: 1200, height: 90 }
-      : this.matches('[data-slot="macro-goal-trigger"]') ? { x: 1100, y: 50, width: 28, height: 28 }
-      : { x: 124, y: 82, width: 601, height: 300 };
-    return DOMRect.fromRect(rect);
-  });
+it("omits history for a single revision and reads the available history again on reopen", async () => {
   const { user, readGoals } = harness();
   readGoals.mockResolvedValueOnce({ macroTaskId: "macro-1", goals: [goal] });
   await user.click(screen.getByRole("button", { name: "查看目标说明" }));
   const card = await screen.findByRole("dialog", { name: "目标说明" });
   await waitFor(() => expect(card.querySelector('[data-slot="macro-goal-scroll"]')?.getAttribute("data-history")).toBe("false"));
   expect(card.querySelector(".goal-history")).toBeNull();
-  expect(card.style.left).toBe("427px");
-  expect(card.style.top).toBe("42px");
-  expect(card.style.getPropertyValue("--goal-left")).toBe("573px");
-  expect(card.style.getPropertyValue("--goal-right")).toBe("0px");
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "查看目标说明" }));
   await waitFor(() => expect(screen.getByRole("dialog").querySelector('[data-slot="macro-goal-scroll"]')?.getAttribute("data-history")).toBe("true"));

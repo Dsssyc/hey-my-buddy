@@ -37,7 +37,8 @@ export function RouterView({ snapshot, editor, location, onNavigate, attention, 
         </a></Hint>;
       })}
     </nav>
-    <ScrollArea className="min-h-0 min-w-0 flex-1" key={work}>
+    {/* The vertical viewport keeps its width; each record region owns horizontal scrolling. */}
+    <ScrollArea className="min-h-0 min-w-0 flex-1" key={work} viewportProps={{ className: "[&>div]:block!" }}>
       <div className="min-w-0 px-8 pb-10" data-slot="router-detail">
         {work === "routing" ? <RoutingView snapshot={snapshot} editor={editor} onNavigate={onNavigate} />
           : work === "maintenance" ? <MaintenanceView snapshot={snapshot} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && !hidden} />
