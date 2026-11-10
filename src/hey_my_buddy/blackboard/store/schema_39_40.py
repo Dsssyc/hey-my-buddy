@@ -6,6 +6,7 @@ routing and execution evidence is left as written.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 
 MODEL_SERVICES_DDL = """
@@ -125,14 +126,21 @@ def _discovery_content(payloads, observation_discovery, current):
 
 def _confirmed_times(connection):
     confirmed = {}
-    for row in connection.execute("SELECT payload_json,created_at FROM events WHERE kind='catalog.model_unavailable' ORDER BY seq"):
+    for row in connection.execute("SELECT payload_json FROM events WHERE kind='catalog.model_unavailable' ORDER BY seq"):
         payload = json.loads(row['payload_json'])
         key = (payload.get('harness'), payload.get('provider'), payload.get('model'))
-        confirmed[key] = payload.get('confirmedAt') or row['created_at']
+        confirmed[key] = payload.get('confirmedAt')
     return confirmed
 
 
+def _retired(row, current_model, rank, pending):
+    return (row['unavailable_code'] == RETIRED
+            or (current_model is not None and row['effort'] not in rank)
+            or (pending is not None and row['effort'] not in json.loads(pending['efforts_json'])))
+
+
 def upgrade(connection):
+    upgraded_at = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
     payloads = _payloads(connection)
     proven = _proven_descriptions(payloads)
     source_sequence, observation_discovery = _observations(connection)
@@ -167,11 +175,19 @@ def upgrade(connection):
         rows = groups.get(key, [])
         current_model = current_models.get(key)
         rank = {effort: index for index, effort in enumerate(current_model['efforts'])} if current_model else {}
-        current_id = current.get(key[0], {}).get('discovery_id')
+        current_row = current.get(key[0], {})
+        current_id = current_row.get('discovery_id')
         current_source = f'catalog:{current_id}' if current_id else None
-        matching = [row for row in rows if current_model and row['source'] == current_source
+        active = [row for row in rows if not _retired(row, current_model, rank, pending.get(key))]
+        candidates = active or rows
+        matching = [row for row in candidates if current_model and row['source'] == current_source
                     and row['effort'] in rank]
-        selected = matching[0] if matching else (rows[-1] if rows else None)
+        selected = matching[0] if matching else (candidates[-1] if candidates else None)
+        confirmed_absent = (current_model is None and
+                            (any(row['unavailable_code'] == ABSENT for row in rows)
+                             or (current_id is not None and key not in pending)))
+        confirmed_at = ((confirmed_times.get(key) or current_row.get('read_at') or upgraded_at)
+                        if confirmed_absent else None)
         source = selected['source'] if selected else ''
         discovery = source.removeprefix('catalog:') if source.startswith('catalog:') else None
         model = current_model or _model_in_payload(payloads.get(discovery), key)
@@ -180,30 +196,21 @@ def upgrade(connection):
             description = ''
         modalities = ([capability[6:] for capability in json.loads(selected['capabilities_json'])
                        if capability.startswith('input:')] if selected else [])
-        unavailable_code = selected['unavailable_code'] if selected else None
-        unavailable_params = selected['unavailable_params_json'] if selected else None
-        unavailable_content = selected['unavailable_content'] if selected else None
-        # A current native reading is authoritative even if a later health
-        # update overwrote every buddy's old availability columns.
-        if model is not None:
+        # Membership/absence is independent of the chosen effort's cause.
+        # Retain a selected native cause as its own model fact; an old payload
+        # cannot replace a newer confirmed disappearance.
+        if model is not None and not confirmed_absent:
             native_reason = model.get('unavailableReason')
-            if native_reason and (current_model is not None or unavailable_code != ABSENT):
-                unavailable_code = native_reason['code']
-                unavailable_params = json.dumps(native_reason.get('params', {}), ensure_ascii=False,
-                                                sort_keys=True, separators=(',', ':'))
-                unavailable_content = model.get('unavailableContent')
-            elif current_model is not None or unavailable_code != ABSENT:
-                unavailable_code = unavailable_params = unavailable_content = None
-        elif unavailable_code not in (ABSENT, NATIVE):
-            unavailable_code = unavailable_params = unavailable_content = None
-        if unavailable_code == ABSENT:
-            current_row = current.get(key[0], {})
-            confirmed_at = confirmed_times.get(key) or current_row.get('read_at') or current_row.get('updated_at')
-            unavailable_code = unavailable_params = unavailable_content = None
+            unavailable_code = native_reason['code'] if native_reason else None
+            unavailable_params = (json.dumps(native_reason['params'], ensure_ascii=False,
+                                            sort_keys=True, separators=(',', ':')) if native_reason else None)
+            unavailable_content = model.get('unavailableContent') if native_reason else None
+        elif selected is not None and selected['unavailable_code'] == NATIVE:
+            unavailable_code = selected['unavailable_code']
+            unavailable_params = selected['unavailable_params_json']
+            unavailable_content = selected['unavailable_content']
         else:
-            confirmed_at = None
-        if unavailable_code is None:
-            unavailable_params = unavailable_content = None
+            unavailable_code = unavailable_params = unavailable_content = None
         sequence = source_sequence.get(discovery) if discovery in payloads else None
         connection.execute('''INSERT INTO model_services
             (harness,provider,model,description,context_window,input_modalities_json,
@@ -213,7 +220,7 @@ def upgrade(connection):
             (*key, description, selected['context_window'] if selected else None,
              json.dumps(modalities, ensure_ascii=False, separators=(',', ':')),
              unavailable_code, unavailable_params, unavailable_content,
-             pending[key]['since'] if key in pending else None,
+             pending[key]['since'] if key in pending and not confirmed_absent else None,
              confirmed_at, concurrency.get(key), sequence))
         # A historical health writer could overwrite an effort's retirement
         # reason. Current/pending native identities still prove which efforts
@@ -227,9 +234,7 @@ def upgrade(connection):
                 (rowid,buddy_id,alias,harness,provider,model,effort,effort_rank,retired,enabled)
                 VALUES(?,?,?,?,?,?,?,?,?,?)''',
                 (row['old_rowid'], row['buddy_id'], None, *key, row['effort'], effort_rank,
-                 int(row['unavailable_code'] == RETIRED
-                     or (current_model is not None and row['effort'] not in rank)
-                     or (key in pending and row['effort'] not in json.loads(pending[key]['efforts_json']))),
+                 int(_retired(row, current_model, rank, pending.get(key))),
                  row['enabled']))
     for harness, row in current.items():
         connection.execute('''INSERT INTO catalog_current

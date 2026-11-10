@@ -3,9 +3,9 @@
     "baseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
     "derivation": "The floor-written three buddy rows and catalog payloads are augmented on a private schema-39 copy: beta gains a native description, gamma loses source provenance, an orphan lacks any payload, alpha gains retired and health-overwritten efforts, and gamma yields native-unavailable and confirmed-absent model identities; concurrency is set through the schema-39 settings table.",
     "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/<new-private-dir> --output-dir tmp/<new-output-dir> --alias-stock-for tests/fixtures/upgrade-floor",
-    "generatorSha256": "ffd447d904c106c40c1467e170d02997e1d06dd835397e3a4d9dec5a5896c51f",
+    "generatorSha256": "51f1b6efb15c0008cacd2f4920b203f150515fe637f33f9825716c8cbefcd051",
     "schemaVersion": 39,
-    "sha256": "eca80b667f3b5b8854c42b1523bcd173713780f84c4db45312a2c15e3581a252",
+    "sha256": "b6a7bb8fe00c9e362a730c8d5d1d365e3b43d97a8328ac94b38b45ae16a7d28d",
     "sourceBuddyIds": [
       "codex:openai:fixture-alpha:high",
       "codex:openai:fixture-beta:high",
@@ -15,6 +15,16 @@
   },
   "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All stored rows come from base writers without SQL seeds or historical-form patches. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
   "catalogSha256": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
+  "catalogStock": {
+    "baseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
+    "derivation": "Derive multi-effort rows from floor-written alpha and copy its retained payload: native retirement leaves older metadata on xhigh; confirmation changes only available high; health masking leaves a separate row without an absence cause; pending retains high; a trusted reading omits health-only and all-retired models; a Claude absence has neither a current reading nor an event timestamp.",
+    "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/<new-private-dir> --output-dir tmp/<new-output-dir> --alias-stock-for tests/fixtures/upgrade-floor",
+    "generatorSha256": "51f1b6efb15c0008cacd2f4920b203f150515fe637f33f9825716c8cbefcd051",
+    "schemaVersion": 39,
+    "sha256": "bdb5d07eff9736a85ca1889b99c1a17dc0da4f5e6a18dafeb9ba041a6df0ba6f",
+    "sourceBuddyId": "codex:openai:fixture-alpha:high",
+    "sourceDiscoveryId": "cat-89b5b236ee44be1428bb5c86"
+  },
   "cleanupStockBaseSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
   "cleanupStockGenerationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir> --cleanup-stock-for tests/fixtures/upgrade-floor",
   "cleanupStockGeneratorSha256": "e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9",

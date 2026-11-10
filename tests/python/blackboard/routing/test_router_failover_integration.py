@@ -327,7 +327,8 @@ class FailoverTests(RouterDispatchTestCase):
     def test_cached_router_health_loss_does_not_veto_valid_other_candidate(self):
         request, first = self.start()
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
+            db.execute("UPDATE harness_health SET status='unhealthy',record_json=json_set(record_json,'$.reason',json(?)) WHERE harness='dsh'",
+                       ('{"code":"harness.probe-failed","params":{"operation":"probe"}}',))
         result = self.report(first, self.answer(first, buddy_id=B))
         self.assertEqual(result["decision"]["status"], "completed")
         self.assertEqual(self.outcomes()[0][0], "router.answered")

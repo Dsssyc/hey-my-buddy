@@ -309,14 +309,14 @@ class HarnessHealth:
         a streak of unknown readings never extends that deadline. A board with
         no confirmed reading yet — cold start, or an explicit upgrade —
         measures the shelf life from the last recorded observation instead, and
-        a harness with no observation at all has nothing stale to re-read.
+        a harness with no completed reading has nothing stale to re-read. An unread reservation is not an observation and never starts the shelf clock.
         """
         from ..catalog.catalog import CATALOG_SHELF_SECONDS, catalog_read_at
         from ..routing.quota_routing import _time
         with self.board.db.read() as db:
             read_at = catalog_read_at(db, name)
             if read_at is None:
-                row = db.execute('SELECT updated_at FROM catalog_current WHERE harness=?', (name,)).fetchone()
+                row = db.execute('SELECT updated_at FROM catalog_current WHERE harness=? AND status!="unread"', (name,)).fetchone()
                 read_at = row['updated_at'] if row is not None else None
         if read_at is None:
             return False

@@ -299,11 +299,15 @@ class HarnessHealthTests(BoardTestCase):
         self.health.catalog_refresh = lambda name, record, catalog_scan_claimed=False: readings.append(
             evaluation.record_catalog(catalog.canonical_payload(payload)))
         self.health.refresh('codex', preflight=True)
+        from hey_my_buddy.blackboard.catalog import buddy_state
+        with self.board.db.read() as db:
+            first_facts = buddy_state.rows(db)
         self.snapshot['candidates'][0]['fingerprint'] = {'mtimeNs': 2}
         self.health.refresh('codex', preflight=True)
+        with self.board.db.read() as db:
+            self.assertEqual(buddy_state.rows(db), first_facts)
         self.assertEqual(self.native.call_count, 2)
         self.assertEqual(len(readings), 2)
-        self.assertGreater(readings[1]['observationId'], readings[0]['observationId'])
         self.assertEqual(readings[1]['buddies'], readings[0]['buddies'])
 
     def test_ready_record_expires_without_a_location_change(self):
@@ -416,6 +420,25 @@ class CatalogShelfLifeTests(BoardTestCase):
             buddies = buddy_state.rows(db, harness='codex')
             read_at = db.execute("SELECT read_at FROM catalog_current WHERE harness='codex'").fetchone()
         return row, buddies, (read_at[0] if read_at else None)
+
+    def test_a_failed_first_read_does_not_start_the_catalog_shelf_clock(self):
+        from hey_my_buddy.blackboard.catalog import catalog_store
+        catalog_store.begin(self.board.evaluation)
+        with self.board.db.write() as db:
+            db.execute("UPDATE catalog_current SET updated_at=? WHERE harness='codex'", (_stamp(7 * 3600),))
+        self.assertFalse(self.health._catalog_expired('codex', _stamp(0)))
+        self.assertFalse(self.health._catalog_expired('codex', _stamp(-7 * 3600)))
+
+    def test_a_failed_new_read_does_not_postpone_the_last_successful_read(self):
+        from hey_my_buddy.blackboard.catalog import catalog_store
+        self.record_native('confirmed')
+        self.set_read_at(7 * 3600)
+        catalog_store.begin(self.board.evaluation)
+        self.assertTrue(self.health._catalog_expired('codex', _stamp(0)))
+        self.set_read_at(5 * 3600)
+        catalog_store.begin(self.board.evaluation)
+        self.assertFalse(self.health._catalog_expired('codex', _stamp(0)))
+        self.assertTrue(self.health._catalog_expired('codex', _stamp(-2 * 3600)))
 
     def test_throttled_scan_still_rereads_a_stale_catalog_once(self):
         self.health.refresh('codex')
@@ -727,7 +750,7 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         self.assertTrue(buddies['dsh:fixture:alpha:max']['available'],
                         'Recovery itself restores the retained reading, before any publication')
         self.assertFalse(buddies['dsh:fixture:alpha:high']['available'], 'A retired effort is a catalog fact')
-        self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason']['code'], catalog.RETIRED_EFFORT_REASON)
+        self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason']['code'], 'catalog.effort-retired')
         self.assertFalse(buddies['dsh:fixture:gamma:max']['available'], 'A native unavailable declaration stays down')
         with self.board.store.db.read() as db:
             self.assertEqual(([tuple(row) for row in db.execute("SELECT * FROM model_services ORDER BY harness,provider,model")],
@@ -789,10 +812,10 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         buddies = self.buddies()
         self.assertTrue(buddies['dsh:fixture:alpha:high']['available'])
         self.assertFalse(buddies['dsh:fixture:alpha:low']['available'])
-        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason']['code'], catalog.RETIRED_EFFORT_REASON)
+        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason']['code'], 'catalog.effort-retired')
         self.assertFalse(buddies['dsh:fixture:beta:high']['available'])
         self.assertEqual(buddies['dsh:fixture:beta:high']['catalogStatus'], 'unavailable')
-        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason']['code'], catalog.CONFIRMED_ABSENCE_REASON)
+        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason']['code'], 'catalog.model-absent')
         self.assertFalse(buddies['dsh:fixture:gamma:high']['available'], 'Native unavailable stays grounded')
         self.assertTrue(all(item['enabled'] for item in buddies.values()))
         self.assertEqual(set(buddies), set(self.before), 'Buddy identities survive')
@@ -810,8 +833,8 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         self.assertFalse(buddies['dsh:fixture:alpha:high']['available'])
         self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason'], probe_reason('not-checked'),
                          'A NULL reason must still receive the health write')
-        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason']['code'], catalog.RETIRED_EFFORT_REASON)
-        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason']['code'], catalog.CONFIRMED_ABSENCE_REASON)
+        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason']['code'], 'catalog.effort-retired')
+        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason']['code'], 'catalog.model-absent')
 
     def test_same_harness_path_recheck_preserves_confirmed_absence_and_retired_effort(self):
         # Reproduce the in-process cache stub boundary before a normal health

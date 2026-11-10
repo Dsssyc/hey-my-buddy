@@ -542,7 +542,8 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
     def test_unhealthy_router_records_preflight_failure_without_an_attempt(self):
         first = self.request()
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
+            db.execute("UPDATE harness_health SET status='unhealthy',record_json=json_set(record_json,'$.reason',json(?)) WHERE harness='dsh'",
+                       ('{"code":"harness.probe-failed","params":{"operation":"probe"}}',))
         response = self.claim("changed")
         self.assertIsNone(response["claim"])
         self.assertEqual(self.decision_row(first["decisionId"])["status"], "needs-host")

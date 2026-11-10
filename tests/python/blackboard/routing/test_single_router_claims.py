@@ -117,7 +117,8 @@ class SingleRouterClaimTests(DecisionTestCase):
                 frozen = self.decision(board, request['decisionId'])
                 if unavailable == 'health':
                     with board.store.db.write() as connection:
-                        connection.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
+                        connection.execute("UPDATE harness_health SET status='unhealthy',record_json=json_set(record_json,'$.reason',json(?)) WHERE harness='dsh'",
+                        ('{"code":"harness.probe-failed","params":{"operation":"probe"}}',))
                     self.assert_unclaimed(board, request, 'router-harness-unavailable', frozen)
                 else:
                     with patch('hey_my_buddy.blackboard.routing.quota_routing.cooling',

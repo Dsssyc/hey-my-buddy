@@ -107,9 +107,9 @@ class EvaluationStore:
             "modelCatalogDiscovery": bool(catalog.discovery_available()),
         }
 
-    def record_catalog(self, discovered: dict, observation_id=None) -> dict:
+    def record_catalog(self, discovered: dict, sequence=None) -> dict:
         from ..catalog import catalog_store
-        return catalog_store.record(self, discovered, observation_id)
+        return catalog_store.record(self, discovered, sequence)
 
     @staticmethod
     def _buddy_view(row: dict) -> dict:

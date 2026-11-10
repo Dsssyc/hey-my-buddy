@@ -221,7 +221,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_unknown_native_settings_never_enter_public_catalog_or_proposals(self):
         view = catalog.CatalogView(catalog.canonical_payload(self.payload()))
-        public = json.dumps([view.metadata(), view.proposed_buddies()])
+        public = json.dumps([view.payload, view.proposed_buddies()])
         for forbidden in ("apiKey", "requestHeaders", "Authorization", "private-provider-secret", "private-model-secret"):
             self.assertNotIn(forbidden, public)
 

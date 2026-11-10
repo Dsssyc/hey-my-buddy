@@ -39,12 +39,6 @@ CONFIRMATION_SECONDS = 3600
 #: is re-read at the next health check. Unknown readings do not extend it.
 CATALOG_SHELF_SECONDS = 6 * 3600
 
-#: ADR-027 rule 2: the unavailable reason of a model whose absence was confirmed.
-CONFIRMED_ABSENCE_REASON = "catalog.model-absent"
-
-#: The unavailable reason of one retired effort whose model remains in the reading.
-RETIRED_EFFORT_REASON = "catalog.effort-retired"
-
 #: ADR-027 rule 3: how an operator refreshes harness catalogs and their readings.
 
 #: The one reason every catalog-caused refusal carries. The user's independent
@@ -134,12 +128,6 @@ def _parse_time(value: Any) -> datetime | None:
         return None
 
 
-def pending_model_services(db) -> dict[tuple[str, str, str], str]:
-    """Pending model services and their first absence, scoped to the harness."""
-    return {(row["harness"], row["provider"], row["model"]): row["pending_since"]
-            for row in db.execute("SELECT harness,provider,model,pending_since FROM model_services WHERE pending_since IS NOT NULL")}
-
-
 def pending_model_efforts(db, harness: str, provider: str, model: str) -> list[str] | None:
     """Efforts retained at first absence; retirement is an independent fact."""
     row = db.execute("SELECT pending_since FROM model_services WHERE harness=? AND provider=? AND model=?",
@@ -155,12 +143,6 @@ def catalog_read_at(db, harness: str) -> str | None:
     """When an actual trusted catalog reading was applied."""
     row = db.execute("SELECT read_at FROM catalog_current WHERE harness=?", (harness,)).fetchone()
     return row['read_at'] if row is not None else None
-
-
-def catalog_account_status(db, harness: str) -> str:
-    """The account-status fact of the last trusted reading; unknown without one."""
-    row = db.execute("SELECT account_status FROM catalog_current WHERE harness=?", (harness,)).fetchone()
-    return row['account_status'] if row is not None else "unknown"
 
 
 def _text(value: Any, limit: int = MAX_TEXT) -> str:
@@ -521,12 +503,8 @@ def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: lis
 
 
 class CatalogView:
-    def __init__(self, payload: dict, *, discovery_id: str | None = None):
-        self.payload, self.discovery_id = payload, discovery_id
-
-    @property
-    def source(self) -> str:
-        return self.payload["source"]
+    def __init__(self, payload: dict):
+        self.payload = payload
 
     def lookup(self, harness: str, provider: str, model: str) -> dict | None:
         for entry in self.payload["providers"]:
@@ -548,10 +526,6 @@ class CatalogView:
             for model in entry["models"]
         }
 
-    def metadata(self) -> dict:
-        return {**self.payload, "discoveryId": self.discovery_id,
-                "discoveredAt": self.payload.get("discoveredAt")}
-
     def proposed_buddies(self) -> list[dict]:
         proposals = []
         for entry in self.payload["providers"]:
@@ -570,6 +544,5 @@ class CatalogView:
                         "capabilities": capabilities,
                         "contextWindow": model["contextWindow"],
                         "description": model["description"][:4000],
-                        "source": f"catalog:{self.discovery_id or self.source}"[:256],
                     })
         return proposals

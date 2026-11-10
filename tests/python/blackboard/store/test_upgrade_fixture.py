@@ -1215,6 +1215,12 @@ class UpgradeFixtureTests(unittest.TestCase):
             'codex:openai:fixture-beta:high',
             'codex:openai:fixture-gamma:high',
         })
+        catalog = metadata['catalogStock']
+        self.assertEqual(catalog['schemaVersion'], 39)
+        self.assertEqual(catalog['generatorSha256'], current_generator)
+        self.assertEqual(catalog['baseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(catalog['sha256'], _sha((FIXTURE / 'schema-39-catalog-stock.sql').read_bytes()))
+        self.assertEqual(catalog['sourceBuddyId'], 'codex:openai:fixture-alpha:high')
         self.assertEqual(metadata['issueStock']['writerCommit'], metadata['sourceCommit'])
         self.assertEqual(metadata['issueStock']['generatorSha256'], FROZEN_GENERATOR_SHA256)
         self.assertEqual(metadata['issueStock']['baseGeneratorSha256'], metadata['generatorSha256'])

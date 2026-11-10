@@ -81,7 +81,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
                                  confirmed_buddies)
                 self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM model_services WHERE harness='dsh' ORDER BY provider,model")],
                                  confirmed_services)
-                self.assertEqual(catalog.pending_model_services(db), {})
+                self.assertEqual({(row['harness'], row['provider'], row['model']): row['pending_since'] for row in db.execute('SELECT harness,provider,model,pending_since FROM model_services WHERE pending_since IS NOT NULL')}, {})
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind LIKE 'catalog.model_%'").fetchone()[0], 0)
 
     def test_confirmed_account_fact_publishes_the_catalog(self):
@@ -98,7 +98,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
         self.clock.advance(1)
         self.refresh_catalog("confirmed", models=("alpha", "gamma"))
         with self.board.store.db.read() as db:
-            self.assertEqual(catalog.pending_model_services(db), {("dsh", "fixture", "beta"): self.clock.value})
+            self.assertEqual({(row['harness'], row['provider'], row['model']): row['pending_since'] for row in db.execute('SELECT harness,provider,model,pending_since FROM model_services WHERE pending_since IS NOT NULL')}, {("dsh", "fixture", "beta"): self.clock.value})
         self.clock.advance(catalog.CONFIRMATION_SECONDS + 1)
         self.refresh_catalog("confirmed", models=("alpha", "gamma"))
         row, buddies, read_at = self.catalog_state()
@@ -113,8 +113,8 @@ class CatalogRefreshServiceTests(BoardTestCase):
             self.assertTrue(buddies["alpha"]["available"])
             self.assertTrue(buddies["gamma"]["available"])
             self.assertFalse(buddies["beta"]["available"])
-            self.assertEqual(buddies["beta"]["unavailable_code"], catalog.CONFIRMED_ABSENCE_REASON)
-            self.assertEqual(catalog.pending_model_services(db), {})
+            self.assertEqual(buddies["beta"]["unavailable_code"], 'catalog.model-absent')
+            self.assertEqual({(row['harness'], row['provider'], row['model']): row['pending_since'] for row in db.execute('SELECT harness,provider,model,pending_since FROM model_services WHERE pending_since IS NOT NULL')}, {})
 
     def test_missing_or_unknown_account_fact_replaces_nothing(self):
         for account_status in (None, "unknown"):

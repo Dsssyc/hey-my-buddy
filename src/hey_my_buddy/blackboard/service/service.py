@@ -485,7 +485,7 @@ class BoardService(_BaseResource):
             if native_fact is None:
                 raise BoardError('CATALOG_INVALID', 'Native discovery omitted its harness observation', harness=name)
             payload['discoveries'] = [native_fact]
-            catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
+            catalog_store.record(self.evaluation, payload, observation['sequence'], health_generation=(name, record['revision']))
         except BoardError as error:
             if error.code != 'UPGRADE_IN_PROGRESS':
                 self.harnesses.invalidate(name, record['revision'],
@@ -623,7 +623,7 @@ class BoardService(_BaseResource):
             observation = catalog_store.begin(self.evaluation)
             with bound(observation['harnesses']):
                 discovered = catalog.discover(directory=self.store.directory, harnesses=observation['harnesses'])
-            return self.evaluation.record_catalog(discovered, observation["observationId"])
+            return self.evaluation.record_catalog(discovered, observation["sequence"])
 
         return self._guard("model.catalog.refresh", request_json, handler)
 

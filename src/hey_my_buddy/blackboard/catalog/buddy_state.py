@@ -19,8 +19,11 @@ def _project(buddy, model, health, current) -> dict:
         cause = reason_from_json(model['unavailable_code'], model['unavailable_params_json'])
         content = model['unavailable_content']
     catalog_available = cause is None
-    if cause is None and health['status'] != 'ready':
-        cause = health['reason']
+    if health['status'] != 'ready':
+        if not health['reason']:
+            raise AssertionError('An unavailable harness must have a reason')
+        if cause is None:
+            cause = health['reason']
     value.update({
         'catalog_available': int(catalog_available),
         'available': int(cause is None),
@@ -38,12 +41,10 @@ def _project(buddy, model, health, current) -> dict:
         'pending_since': model['pending_since'],
         'catalog_status': ('pending' if model['pending_since'] is not None else
                            'available' if catalog_available else 'unavailable'),
-        'confirmed_absent_at': model['confirmed_absent_at'],
         'input_modalities_json': model['input_modalities_json'],
         'harness_status': health['status'],
         'catalog_state': current['status'] if current is not None and current['status'] != 'unread' else 'unknown',
         'catalog_reason': current['reason'] if current else None,
-        'model_unavailable_code': model['unavailable_code'],
     })
     return value
 

@@ -39,9 +39,22 @@ class BuddyStateTests(BoardTestCase):
                 self.assertEqual(actual['unavailable_content'], 'native restriction' if native and not (retired or absent) else None)
                 self.assertEqual(json.loads(actual['capabilities_json']), ['execution:dsh', 'effort:max', 'input:text'])
 
+    def test_unhealthy_harness_without_a_reason_fails_even_with_a_catalog_cause(self):
+        from unittest.mock import patch
+        for cause in (None, {}):
+            for retired in (0, 1):
+                with self.subTest(cause=cause, retired=retired):
+                    with self.e.db.write() as db:
+                        db.execute('UPDATE buddies SET retired=?', (retired,))
+                    with self.e.db.read() as db, patch(
+                            'hey_my_buddy.blackboard.service.harness_health.read_health',
+                            return_value={'status': 'unhealthy', 'reason': cause}):
+                        with self.assertRaisesRegex(AssertionError, 'must have a reason'):
+                            buddy_state.get(db, 'dsh:fixture:alpha:max')
+
     def test_earlier_read_cannot_publish_after_a_later_read_started(self):
-        slow = catalog_store.begin(self.e)['observationId']
-        later = catalog_store.begin(self.e)['observationId']
+        slow = catalog_store.begin(self.e)['sequence']
+        later = catalog_store.begin(self.e)['sequence']
         stale = self.e.record_catalog(reading(models=('old',)), slow)
         self.assertEqual(stale['staleHarnesses'], ['dsh'])
         with self.e.db.read() as db:

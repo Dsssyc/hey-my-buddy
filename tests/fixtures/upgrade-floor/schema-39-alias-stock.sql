@@ -19,7 +19,8 @@ SELECT 'codex:openai:fixture-orphan:high','fixture-orphan · high',harness,
        context_window,'fixture-orphan via openai','catalog:fixture-missing-orphan',
        unavailable_code,unavailable_params_json,unavailable_content
 FROM buddies WHERE buddy_id='codex:openai:fixture-gamma:high';
--- These cases are derived from Gamma's floor-written identity and columns.
+-- The next two efforts derive from Alpha's floor-written identity and columns;
+-- the native-unavailable and confirmed-absent models below derive from Gamma.
 -- The original floor writer supplied the catalog payload and buddy rows;
 -- schema-39 status writers could later overwrite their availability columns.
 INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,

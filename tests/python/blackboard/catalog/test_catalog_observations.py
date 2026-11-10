@@ -72,22 +72,22 @@ class CatalogObservationTests(BoardTestCase):
         self.record(unknown)
         with self.e.db.read() as db:
             current = catalog_store.current(db)
-        self.assertEqual(current.metadata()['discoveries'][0]['content'], 'Latest native diagnostic')
+        self.assertEqual(current.payload['discoveries'][0]['content'], 'Latest native diagnostic')
         self.assertIsNotNone(current.lookup('dsh', 'fixture', 'alpha'))
 
     def table_facts(self):
         with self.e.db.read() as db:
             return (db.execute('SELECT COUNT(*) FROM events').fetchone()[0],
-                    [{key: value for key, value in row.items() if key not in ('source', 'catalog_state', 'catalog_reason')} for row in buddy_state.rows(db)])
+                    [{key: value for key, value in row.items() if key not in ('catalog_state', 'catalog_reason')} for row in buddy_state.rows(db)])
 
     def test_begin_reserves_a_new_sequence_and_captures_harness_facts_each_time(self):
         first = catalog_store.begin(self.e, harnesses=[{'harness': 'dsh', 'revision': 1}])
         repeated = catalog_store.begin(self.e, harnesses=[{'harness': 'dsh', 'revision': 2}])
-        self.assertGreater(repeated['observationId'], first['observationId'])
+        self.assertGreater(repeated['sequence'], first['sequence'])
         self.assertEqual(first['harnesses'][0]['revision'], 1)
         self.assertEqual(repeated['harnesses'][0]['revision'], 2)
         with self.e.db.read() as db:
-            self.assertEqual(db.execute("SELECT sequence FROM catalog_current WHERE harness='dsh'").fetchone()[0], repeated['observationId'])
+            self.assertEqual(db.execute("SELECT sequence FROM catalog_current WHERE harness='dsh'").fetchone()[0], repeated['sequence'])
 
     def test_identical_read_records_observation_and_confirmed_time_without_event(self):
         first = self.record(catalog())
@@ -99,7 +99,10 @@ class CatalogObservationTests(BoardTestCase):
             second = self.record({**catalog(), 'discoveredAt': self.clock.value})
         self.assertEqual(self.table_facts(), facts)
         self.assertFalse(second['duplicate'])
-        self.assertGreater(second['observationId'], first['observationId'])
+        self.assertNotIn('discoveryId', second)
+        self.assertNotIn('observationId', second)
+        self.assertNotIn('discoveryId', second['catalog'])
+        self.assertNotIn('observationId', second['catalog'])
         notify.assert_not_called()
         with self.e.db.read() as db:
             self.assertEqual(tuple(db.execute('SELECT * FROM buddies').fetchone()), buddy)
@@ -125,10 +128,34 @@ class CatalogObservationTests(BoardTestCase):
         second = self.record({**catalog(), 'source': 'another-native-reading', 'harnessVersion': 'next'})
         self.assertEqual(self.table_facts(), facts)
         with self.e.db.read() as db:
-            self.assertEqual(db.execute('SELECT source_sequence FROM model_services').fetchone()[0], second['observationId'])
-        self.assertGreater(second['observationId'], first['observationId'])
-        listed = catalog_store.buddies(self.e, {'includeUnavailable': True})['buddies'][0]
-        self.assertEqual(second['buddies'][0]['source'], listed['source'])
+            self.assertEqual(db.execute('SELECT source_sequence FROM model_services').fetchone()[0], 1)
+        self.assertEqual(second['buddies'], first['buddies'])
+        self.assertNotIn('source', second['buddies'][0])
+        self.assertTrue(catalog_store.buddies(self.e, {'includeUnavailable': True})['buddies'][0]['source'])
+
+    def test_identical_read_does_not_write_buddy_or_model_facts(self):
+        self.record(catalog())
+        with self.e.db.write() as db:
+            db.execute("CREATE TRIGGER no_model_rewrite BEFORE UPDATE ON model_services BEGIN SELECT RAISE(ABORT,'model rewrite'); END")
+            db.execute("CREATE TRIGGER no_buddy_rewrite BEFORE UPDATE ON buddies BEGIN SELECT RAISE(ABORT,'buddy rewrite'); END")
+            before = [tuple(row) for row in db.execute('SELECT * FROM model_services')]
+        self.clock.advance(60)
+        self.record(catalog())
+        with self.e.db.read() as db:
+            self.assertEqual([tuple(row) for row in db.execute('SELECT * FROM model_services')], before)
+            self.assertEqual(db.execute("SELECT read_at FROM catalog_current WHERE harness='dsh'").fetchone()[0], self.clock.value)
+
+    def test_only_changed_model_facts_advance_their_source(self):
+        payload = catalog(models=('alpha', 'beta'))
+        self.record(payload)
+        with self.e.db.read() as db:
+            before = {row['model']: row['source'] for row in buddy_state.rows(db)}
+        payload['providers'][0]['models'][0]['description'] = 'Changed alpha facts'
+        self.record(payload)
+        with self.e.db.read() as db:
+            after = {row['model']: row['source'] for row in buddy_state.rows(db)}
+        self.assertNotEqual(after['alpha'], before['alpha'])
+        self.assertEqual(after['beta'], before['beta'])
 
     def test_applied_reading_keeps_current_buddies_and_pending_absence(self):
         payload = catalog(models=('alpha', 'beta'))
@@ -211,7 +238,8 @@ class CatalogObservationTests(BoardTestCase):
             current = catalog_store.current(db).lookup('dsh', 'fixture', 'alpha')
             self.assertEqual(current['unavailableContent'], model['unavailableContent'])
         with self.e.db.write() as db:
-            db.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
+            db.execute("UPDATE harness_health SET status='unhealthy',record_json=json_set(record_json,'$.reason',json(?)) WHERE harness='dsh'",
+                       (json.dumps({'code': 'harness.probe-failed', 'params': {'operation': 'probe'}}),))
         with self.e.db.read() as db:
             current = catalog_store.current(db).lookup('dsh', 'fixture', 'alpha')
             self.assertEqual(current['unavailableReason'], {'code': 'catalog.native-unavailable', 'params': {}})
@@ -258,7 +286,7 @@ class CatalogObservationTests(BoardTestCase):
         with self.e.db.read() as db:
             missing = next(row for row in buddy_state.rows(db) if row['model'] == 'alpha')
         self.assertEqual((missing['available'], missing['enabled'], missing['unavailable_code']),
-                         (0, 1, catalog_rules.CONFIRMED_ABSENCE_REASON))
+                         (0, 1, 'catalog.model-absent'))
 
     def test_effort_retirement_changes_buddy_once(self):
         payload = catalog()
@@ -275,7 +303,7 @@ class CatalogObservationTests(BoardTestCase):
         facts = self.table_facts()
         self.record(catalog(status='unknown'))
         self.assertEqual(self.table_facts(), facts)
-        slow = catalog_store.begin(self.e)['observationId']
+        slow = catalog_store.begin(self.e)['sequence']
         self.record(catalog())
         facts = self.table_facts()
         self.record(catalog(models=('too-late',)), slow)
@@ -329,7 +357,6 @@ class CatalogObservationTests(BoardTestCase):
         self.assertTrue(retired['buddies'][0]['enabled'])
         last = self.record(catalog())
         self.assertFalse(last['duplicate'])
-        self.assertGreater(last['observationId'], first['observationId'])
         current = self.e.snapshot({})
         self.assertTrue(current['buddies'][0]['available'])
         self.assertEqual(current['buddies'][0]['catalogStatus'], 'available')
@@ -355,8 +382,8 @@ class CatalogObservationTests(BoardTestCase):
             self.assertIsNotNone(view.lookup('zcode', 'fixture', 'beta'))
 
     def test_late_complete_result_cannot_replace_newer_observation(self):
-        slow = catalog_store.begin(self.e)['observationId']
-        fast = catalog_store.begin(self.e)['observationId']
+        slow = catalog_store.begin(self.e)['sequence']
+        fast = catalog_store.begin(self.e)['sequence']
         self.record(catalog(models=('new',)), fast)
         result = self.record(catalog(models=('old',)), slow)
         self.assertEqual(result['staleHarnesses'], ['dsh'])

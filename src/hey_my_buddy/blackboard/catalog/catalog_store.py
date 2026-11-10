@@ -7,7 +7,7 @@ from itertools import islice
 from ..evaluation import user_policy
 from . import buddy_state
 from .catalog import CatalogView
-from ..store.db import canonical_json, sha256_text
+from ..store.db import canonical_json
 from ...errors import BoardError
 from ...protocol.reasons import reason, reason_from_json
 
@@ -24,7 +24,7 @@ def begin(evaluation, *, harnesses=None):
             db.execute('INSERT INTO catalog_current(harness,sequence,status,reason,updated_at) VALUES(?,?,?,?,?) '
                        'ON CONFLICT(harness) DO UPDATE SET sequence=excluded.sequence',
                        (name, sequence, 'unread', None, evaluation._now()))
-        return {'observationId': sequence, 'harnesses': records}
+        return {'sequence': sequence, 'harnesses': records}
 
 
 def current(db):
@@ -72,7 +72,7 @@ def _content(db):
     return buddies, models
 
 
-def _response(db, *, observation_id, applied, stale):
+def _response(db, *, applied, stale):
     view = current(db)
     if view is None:
         from ..service.harness_health import read_health
@@ -82,31 +82,22 @@ def _response(db, *, observation_id, applied, stale):
                                 {'harness': name, 'status': 'unknown', 'accountStatus': 'unknown',
                                  'reason': read_health(db, name)['reason']} for name in HARNESS_NAMES], 'warnings': []})
     payload = view.payload
-    discovery_id = 'cat-' + sha256_text(canonical_json(payload))[:24]
-    sources = {tuple(row[key] for key in ('harness', 'provider', 'model')): row['source']
-               for row in buddy_state.rows(db)}
-    proposals = view.proposed_buddies()
-    for proposal in proposals:
-        proposal['source'] = sources[tuple(proposal[key] for key in ('harness', 'provider', 'model'))]
-    return {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': False,
-            'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id},
-            'buddies': proposals, 'appliedHarnesses': applied, 'staleHarnesses': stale}
+    return {'duplicate': False, 'catalog': payload, 'buddies': view.proposed_buddies(),
+            'appliedHarnesses': applied, 'staleHarnesses': stale}
 
 
 def response(evaluation):
     """Read the current refresh reply after native health refreshes finish."""
     with evaluation.db.read() as db:
-        sequence = db.execute('SELECT COALESCE(MAX(sequence),0) FROM catalog_current').fetchone()[0]
-        return _response(db, observation_id=sequence, applied=[], stale=[])
+        return _response(db, applied=[], stale=[])
 
 
-def record(evaluation, discovered, observation_id=None, *, health_generation=None):
-    if observation_id is None:
-        observation_id = begin(evaluation)['observationId']
+def record(evaluation, discovered, sequence=None, *, health_generation=None):
+    if sequence is None:
+        sequence = begin(evaluation)['sequence']
     from .catalog import CONFIRMATION_SECONDS, TRUSTED_ACCOUNT_STATUSES, _parse_time
     from ..evaluation.models import ensure_model_service
     from ..service.harness_health import read_health
-    from ...buddy.harnesses.runtime_selection import bound
     with evaluation.db.write() as db:
         if (evaluation.board.directory / 'upgrade.json').exists():
             raise BoardError('UPGRADE_IN_PROGRESS', 'Catalog publication is fenced until upgrade verification finishes')
@@ -121,7 +112,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         for result in discovered['discoveries']:
             name = result['harness']
             prior = db.execute('SELECT * FROM catalog_current WHERE harness=?', (name,)).fetchone()
-            if prior is None or prior['sequence'] != observation_id:
+            if prior is None or prior['sequence'] != sequence:
                 stale.append(name)
                 continue
             trusted = result['status'] == 'complete' and result.get('accountStatus') in TRUSTED_ACCOUNT_STATUSES
@@ -169,21 +160,35 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                                             'provider': key[0], 'model': key[1], 'pendingSince': old['pending_since'], 'confirmedAt': now})
             old_by_key = {(row['provider'], row['model']): row for row in existing}
             view = CatalogView({**discovered, 'providers': native})
-            with bound([read_health(db, name)]):
-                entries = view.proposed_buddies()
+            entries = view.proposed_buddies()
             for (provider, model), metadata in listed.items():
                 unavailable = metadata['unavailableReason']
-                db.execute('INSERT INTO model_services(harness,provider,model,description,context_window,input_modalities_json,'
-                           'unavailable_code,unavailable_params_json,unavailable_content,source_sequence) VALUES(?,?,?,?,?,?,?,?,?,?) '
-                           'ON CONFLICT(harness,provider,model) DO UPDATE SET description=excluded.description,context_window=excluded.context_window,'
-                           'input_modalities_json=excluded.input_modalities_json,unavailable_code=excluded.unavailable_code,'
-                           'unavailable_params_json=excluded.unavailable_params_json,unavailable_content=excluded.unavailable_content,'
-                           'pending_since=NULL,confirmed_absent_at=NULL,source_sequence=excluded.source_sequence',
-                           (name, provider, model, metadata['description'], metadata['contextWindow'], canonical_json(metadata['inputModalities']),
-                            unavailable['code'] if unavailable else None, canonical_json(unavailable['params']) if unavailable else None,
-                            metadata['unavailableContent'], observation_id))
-                db.execute('UPDATE buddies SET retired=1 WHERE harness=? AND provider=? AND model=?', (name, provider, model))
+                facts = {
+                    'description': metadata['description'], 'context_window': metadata['contextWindow'],
+                    'input_modalities_json': canonical_json(metadata['inputModalities']),
+                    'unavailable_code': unavailable['code'] if unavailable else None,
+                    'unavailable_params_json': canonical_json(unavailable['params']) if unavailable else None,
+                    'unavailable_content': metadata['unavailableContent'],
+                    'pending_since': None, 'confirmed_absent_at': None,
+                }
                 old = old_by_key.get((provider, model))
+                efforts = [row['effort'] for row in db.execute(
+                    'SELECT effort FROM buddies WHERE harness=? AND provider=? AND model=? AND retired=0 ORDER BY effort_rank,buddy_id',
+                    (name, provider, model))]
+                if (old is None or old['source_sequence'] is None
+                        or any(old[field] != value for field, value in facts.items())
+                        or efforts != metadata['efforts']):
+                    db.execute('INSERT INTO model_services(harness,provider,model,description,context_window,input_modalities_json,'
+                               'unavailable_code,unavailable_params_json,unavailable_content,pending_since,confirmed_absent_at,source_sequence) '
+                               'VALUES(?,?,?,?,?,?,?,?,?,?,?,?) '
+                               'ON CONFLICT(harness,provider,model) DO UPDATE SET description=excluded.description,context_window=excluded.context_window,'
+                               'input_modalities_json=excluded.input_modalities_json,unavailable_code=excluded.unavailable_code,'
+                               'unavailable_params_json=excluded.unavailable_params_json,unavailable_content=excluded.unavailable_content,'
+                               'pending_since=NULL,confirmed_absent_at=NULL,source_sequence=excluded.source_sequence',
+                               (name, provider, model, *facts.values(), sequence))
+                marks = ','.join('?' for _ in metadata['efforts'])
+                db.execute('UPDATE buddies SET retired=1 WHERE harness=? AND provider=? AND model=? '
+                           f'AND retired=0 AND effort NOT IN ({marks})', (name, provider, model, *metadata['efforts']))
                 if old is not None and (old['pending_since'] is not None or old['confirmed_absent_at'] is not None):
                     if metadata['available'] and read_health(db, name)['status'] == 'ready':
                         transition = {'kind': 'catalog.model_recovered', 'harness': name, 'provider': provider,
@@ -198,7 +203,8 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 if old is not None and tuple(old) != identity:
                     raise BoardError('CATALOG_INVALID', 'A native buddy ID collided with a different execution identity', buddyId=entry['buddyId'])
                 db.execute('INSERT INTO buddies(buddy_id,harness,provider,model,effort,effort_rank,retired,enabled) VALUES(?,?,?,?,?,?,0,0) '
-                           'ON CONFLICT(buddy_id) DO UPDATE SET effort_rank=excluded.effort_rank,retired=0',
+                           'ON CONFLICT(buddy_id) DO UPDATE SET effort_rank=excluded.effort_rank,retired=0 '
+                           'WHERE buddies.effort_rank!=excluded.effort_rank OR buddies.retired!=0',
                            (entry['buddyId'], *identity, ranks[identity[:3]][entry['effort']]))
                 ensure_model_service(db, *identity[:3], now)
             # Retired efforts follow all efforts in the current native order.
@@ -206,15 +212,14 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 offset = len(listed[(provider, model)]['efforts'])
                 retired = db.execute('SELECT buddy_id FROM buddies WHERE harness=? AND provider=? AND model=? AND retired=1 ORDER BY effort_rank,buddy_id', (name, provider, model)).fetchall()
                 for rank, old in enumerate(retired, offset):
-                    db.execute('UPDATE buddies SET effort_rank=? WHERE buddy_id=?', (rank, old['buddy_id']))
+                    db.execute('UPDATE buddies SET effort_rank=? WHERE buddy_id=? AND effort_rank!=?', (rank, old['buddy_id'], rank))
         changed = before != _content(db)
         for transition in transitions:
             kind = transition.pop('kind')
             evaluation.board._append_event(db, kind, payload=transition)
-        response = _response(db, observation_id=observation_id, applied=applied, stale=stale)
+        response = _response(db, applied=applied, stale=stale)
         if changed:
             evaluation.board._append_event(db, 'evaluation.catalog_discovered', payload={
-                'discoveryId': response['discoveryId'], 'observationId': observation_id,
                 'appliedHarnesses': applied, 'staleHarnesses': stale})
         head = evaluation.board._head_of(db)
     if changed:

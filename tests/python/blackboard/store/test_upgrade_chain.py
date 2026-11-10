@@ -397,6 +397,54 @@ class UpgradeChainTests(unittest.TestCase):
         self.assertEqual(buddy_state.get(self.db, 'codex:openai:fixture-absent:high')['unavailable_code'], 'catalog.model-absent')
         self.assert_current_structure()
 
+    def test_multi_effort_stock_preserves_model_absence_and_uses_active_facts(self):
+        from datetime import datetime, timezone
+        from hey_my_buddy.blackboard.store import schema_39_40
+        from hey_my_buddy.blackboard.catalog import buddy_state
+        from hey_my_buddy.blackboard.routing.candidate import candidate_bound
+        self.schema31()
+        with self.db:
+            for version in range(31, 39):
+                upgrade.STEPS[version](self.db)
+        self.db.executescript((FIXTURE / 'schema-39-alias-stock.sql').read_text(encoding='utf-8'))
+        self.db.executescript((FIXTURE / 'schema-39-catalog-stock.sql').read_text(encoding='utf-8'))
+        # These are facts of the old writers, before the conversion runs:
+        # confirmation touched available high, leaving retired/health xhigh;
+        # the pending legal list contains high while xhigh retains stale data.
+        causes = {row['effort']: row['unavailable_code'] for row in self.db.execute(
+            "SELECT effort,unavailable_code FROM buddies WHERE model='stock-absent-retired'")}
+        self.assertEqual(causes, {'high': 'catalog.model-absent', 'xhigh': 'catalog.effort-retired'})
+        self.assertEqual(self.db.execute("SELECT json_extract(payload_json,'$.providers[0].models[0].available') FROM evaluation_catalog WHERE discovery_id='catalog-stock-stale'").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT unavailable_code FROM buddies WHERE model='stock-confirmed-health' AND effort='xhigh'").fetchone()[0], 'harness.probe-failed')
+        now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+        with mock.patch.object(schema_39_40, 'datetime') as clock:
+            clock.now.return_value = now
+            upgrade.upgrade_state(self.state)
+        services = {row['model']: dict(row) for row in self.db.execute('SELECT * FROM model_services')}
+        self.assertEqual(services['stock-absent-retired']['confirmed_absent_at'], '2026-01-01T00:01:30.000Z')
+        for model in ('stock-confirmed-health', 'stock-health-only', 'stock-all-retired'):
+            self.assertEqual(services[model]['confirmed_absent_at'], '2026-01-01T00:02:00.000Z')
+        self.assertEqual(services['stock-no-time']['confirmed_absent_at'], '2026-11-11T12:00:00.000Z')
+        pending = services['stock-pending-retired']
+        self.assertEqual((pending['description'], pending['context_window'], pending['input_modalities_json']),
+                         ('Current pending detail', 32768, '["text","image"]'))
+        self.assertEqual((pending['pending_since'], pending['confirmed_absent_at'], pending['unavailable_code']),
+                         ('2026-01-01T00:02:00.000Z', None, None))
+        retired = services['stock-all-retired']
+        self.assertEqual((retired['description'], retired['context_window'], retired['input_modalities_json']),
+                         ('Last retired detail', 1024, '["audio"]'))
+        for model, harness in (('stock-absent-retired', 'codex'), ('stock-confirmed-health', 'codex'),
+                               ('stock-health-only', 'codex'), ('stock-no-time', 'claude')):
+            buddy = buddy_state.get(self.db, f'{harness}:openai:{model}:high')
+            self.assertFalse(buddy['available'])
+            self.assertEqual(buddy['unavailable_code'], 'catalog.model-absent')
+            self.assertEqual(candidate_bound(self.db, {**buddy, 'enabled': 1}, {'codingOnly': False},
+                                            '2026-11-11T12:00:00Z', require_health=False,
+                                            apply_preferences=False, check_cooling=False), 'unavailable')
+        self.assertEqual(buddy_state.get(self.db, 'codex:openai:stock-absent-retired:xhigh')['unavailable_code'],
+                         'catalog.effort-retired')
+        self.assert_current_structure()
+
     def test_schema36_model_stock_preserves_every_rekeyed_form(self):
         self.schema31()
         with self.db:
