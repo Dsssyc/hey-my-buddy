@@ -770,7 +770,7 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
         root_id = group_id[len("run:"):]
         root = next((row for row in members if row["task_id"] == root_id), None)
         title, title_source = _run_title(connection, root_id)
-        metadata = micro_task.metadata_from_row(root) if root is not None else {"project": None}
+        metadata = micro_task.metadata_from_row(connection, root) if root is not None else {"project": None}
         group_project = metadata["project"]
         created_at = root["created_at"] if root is not None else None
         run = connection.execute("SELECT activity_seq, activity_at FROM workflow_runs WHERE run_id=?", (root_id,)).fetchone()
@@ -886,7 +886,7 @@ def _tree_order(runs: list) -> list:
 
 
 def _timeline_row(connection, row, depth: int) -> dict:
-    metadata = micro_task.metadata_from_row(row)
+    metadata = micro_task.metadata_from_row(connection, row)
     title, title_source = _run_title(connection, row["task_id"])
     fix_relation = fixes.view(connection, row["task_id"])
     if "fixes" in fix_relation:

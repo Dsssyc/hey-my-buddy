@@ -35,7 +35,7 @@ class Schema38To39Tests(unittest.TestCase):
         self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '38')
         before = {table: [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
                   for table in ('models', 'model_correspondences', 'attempts', 'events')}
-        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 38, 'targetSchema': 39})
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 38, 'targetSchema': 40})
         self.assertEqual(connection.execute(
             "SELECT name FROM sqlite_master WHERE name IN ('model_notes','model_service_notes')").fetchall(), [])
         for table, rows in before.items():

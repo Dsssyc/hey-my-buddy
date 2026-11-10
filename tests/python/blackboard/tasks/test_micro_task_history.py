@@ -114,7 +114,7 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         self.assertEqual(metadata["rootRunId"], run_id)
         self.assertEqual(metadata["project"], {"id": f"repo:{source}", "kind": "git",
                                                "path": source, "label": "work"})
-        self.assertEqual(metadata["buddy"], BUDDY)
+        self.assertEqual(metadata["buddy"], {**BUDDY, "alias": None})
         self.assertEqual(view["workflowState"], "executing")
         for obsolete in ("sourceHostId", "currentHostId", "hostId"):
             self.assertNotIn(obsolete, metadata)
@@ -152,7 +152,7 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         self.assertEqual(helper["actor"], {"role": "host"})
         self.assertEqual(helper["project"], root["project"])
         self.assertNotEqual(helper_view["cwd"], helper["project"]["path"])
-        self.assertEqual(helper["buddy"], BUDDY)
+        self.assertEqual(helper["buddy"], {**BUDDY, "alias": None})
 
     def test_nested_helper_keeps_root_lineage(self):
         board = self.board()
@@ -222,8 +222,8 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
                                                    "title": "Verified implementation", "titleSource": "title",
                                                    "macroTaskId": submitted["macroTaskId"],
                                                    "macroTaskTitle": "Release work"})
-        self.assertEqual(router["buddy"], {key: CATALOG_BUDDY[key]
-                                            for key in ("harness", "provider", "model", "effort")})
+        self.assertEqual(router["buddy"], {**{key: CATALOG_BUDDY[key]
+                                            for key in ("harness", "provider", "model", "effort")}, "alias": None})
         self.assertEqual(next(item for item in self.history(board)["runs"]
                               if item["runId"] == router_id)["lineage"], router)
         self.assertEqual({row["runId"] for row in self.history(board, query="Verified implementation")["runs"]},
@@ -238,22 +238,28 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         board = self.board()
         submitted = self.submit(board, request_id="micro-task-1")
         run_id = submitted["runId"]
-        with board.store.db.read() as connection:
-            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-            resolved = micro_task.resolve(connection, task)
-            self.assertEqual(resolved, self.micro_task_of(board, run_id))
-            self.assertEqual(micro_task.resolve_many(connection, [run_id, "missing-run"]), {run_id: resolved})
-            self.assertEqual(micro_task.resolve_many(connection, []), {})
-        listed = self.history(board, limit=100)["runs"][0]["lineage"]
-        self.assertEqual(listed, self.micro_task_of(board, run_id))
-        timeline = board.call("macro_task_timeline", {"macroTaskId": f"run:{run_id}"})
-        self.assertEqual(timeline["rows"][0]["actor"], listed["actor"])
-        self.assertEqual(timeline["rows"][0]["kind"], listed["kind"])
-        self.assertEqual(self.task_view(board, run_id)["lineage"], listed)
-        compact_task = board.call("workflow_get", {"runId": run_id})["task"]
-        self.assertEqual(compact_task["lineage"], listed)
-        self.assertNotIn("task", compact_task)
-        self.assertNotIn("spec", compact_task)
+        for alias in (None, "当前别名", "另一个别名"):
+            with self.subTest(alias=alias):
+                with board.store.db.write() as connection:
+                    connection.execute("UPDATE buddies SET alias=? WHERE harness=? AND provider=? AND model=? AND effort=?",
+                                       (alias, *(BUDDY[key] for key in ("harness", "provider", "model", "effort"))))
+                with board.store.db.read() as connection:
+                    task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+                    resolved = micro_task.resolve(connection, task)
+                    self.assertEqual(resolved, self.micro_task_of(board, run_id))
+                    self.assertEqual(micro_task.resolve_many(connection, [run_id, "missing-run"]), {run_id: resolved})
+                    self.assertEqual(micro_task.resolve_many(connection, []), {})
+                listed = self.history(board, limit=100)["runs"][0]["lineage"]
+                self.assertEqual(listed["buddy"], {**BUDDY, "alias": alias})
+                self.assertEqual(listed, self.micro_task_of(board, run_id))
+                timeline = board.call("macro_task_timeline", {"macroTaskId": f"run:{run_id}"})
+                self.assertEqual(timeline["rows"][0]["actor"], listed["actor"])
+                self.assertEqual(timeline["rows"][0]["kind"], listed["kind"])
+                self.assertEqual(self.task_view(board, run_id)["lineage"], listed)
+                compact_task = board.call("workflow_get", {"runId": run_id})["task"]
+                self.assertEqual(compact_task["lineage"], listed)
+                self.assertNotIn("task", compact_task)
+                self.assertNotIn("spec", compact_task)
 
 
 class LeadHistoryFilterTests(MicroTaskTestCase):

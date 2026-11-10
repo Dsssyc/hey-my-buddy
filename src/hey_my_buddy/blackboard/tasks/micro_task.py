@@ -272,7 +272,16 @@ def _complete_buddy(value: Any) -> dict | None:
     return buddy
 
 
-def metadata_from_row(row: sqlite3.Row) -> dict:
+def buddy_view(connection, identity: dict | None) -> dict | None:
+    """Project an identity with its current user setting, never into a record."""
+    if identity is None:
+        return None
+    row = connection.execute("SELECT alias FROM buddies WHERE harness=? AND provider=? AND model=? AND effort=?",
+                             tuple(identity[key] for key in BUDDY_FIELDS)).fetchone()
+    return {**{key: identity[key] for key in BUDDY_FIELDS}, "alias": row["alias"] if row else None}
+
+
+def metadata_from_row(connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
     """Derive one task's micro task metadata from a resolved relation row."""
     micro_task = row["micro_task_run_id"] is not None
     if micro_task:
@@ -308,7 +317,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
         "parentRunId": parent_run,
         "rootRunId": root_run,
         "project": project,
-        "buddy": buddy,
+        "buddy": buddy_view(connection, buddy),
         "routingTask": routing_task,
         "delegationAuthority": bool(row["run_delegation_authority"]),
         "rootLeadRunId": row["root_lead_run_id"],
@@ -325,7 +334,7 @@ def resolve(connection: sqlite3.Connection, task: sqlite3.Row) -> dict:
     ).fetchone()
     if row is None:
         raise BoardError("NOT_FOUND", "The task row no longer resolves to a readable history record")
-    return metadata_from_row(row)
+    return metadata_from_row(connection, row)
 
 
 def resolve_many(connection: sqlite3.Connection, task_ids: Sequence[str]) -> dict[str, dict]:
@@ -337,7 +346,7 @@ def resolve_many(connection: sqlite3.Connection, task_ids: Sequence[str]) -> dic
     rows = connection.execute(
         f"{TASK_HISTORY_SQL} WHERE task_id IN ({placeholders})", identifiers
     ).fetchall()
-    return {row["task_id"]: metadata_from_row(row) for row in rows}
+    return {row["task_id"]: metadata_from_row(connection, row) for row in rows}
 
 
 def _escape_like(value: str) -> str:

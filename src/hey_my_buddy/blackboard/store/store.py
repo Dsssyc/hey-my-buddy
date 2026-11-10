@@ -1198,7 +1198,7 @@ class BoardStore:
             has_more = len(rows) > limit
             page = rows[:limit]
             tasks = [
-                self._decorate(connection, row, lineage_result=micro_task.metadata_from_row(row)) for row in page
+                self._decorate(connection, row, lineage_result=micro_task.metadata_from_row(connection, row)) for row in page
             ]
             next_cursor = (
                 micro_task.encode_cursor(page[-1]["created_at"], page[-1]["task_id"]) if page and has_more else None

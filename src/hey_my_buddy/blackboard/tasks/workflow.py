@@ -47,6 +47,7 @@ from . import macro_tasks, projects, fixes as task_fixes
 from . import host_conclusions
 from .path_views import MAX_OUTPUT_PATH_VIEW, _bounded_path_fields
 from . import micro_task
+from .micro_task import buddy_view
 from .request_reasons import request_reason
 from .macro_task_deletion_guard import reject_deleting_checkout, reject_deleting_run, reject_macro_task
 from ..store.db import canonical_json, sha256_text
@@ -208,15 +209,6 @@ def named_buddy(connection, name: str) -> dict | None:
                          " 'harness / provider / model / effort' optionally followed by ' [alias]';"
                          " read the enabled names with `get` and its buddies selector", buddy=name)
     return {key: row[key] for key in schemas.BUDDY_FIELDS}
-
-
-def buddy_view(connection, identity: dict | None) -> dict | None:
-    """Project an identity with its current user setting, never into a record."""
-    if identity is None:
-        return None
-    row = connection.execute("SELECT alias FROM buddies WHERE harness=? AND provider=? AND model=? AND effort=?",
-                             tuple(identity[key] for key in schemas.BUDDY_FIELDS)).fetchone()
-    return {**{key: identity[key] for key in schemas.BUDDY_FIELDS}, "alias": row["alias"] if row else None}
 
 
 def _turn_input_context(input_json: str) -> dict:
@@ -1010,7 +1002,7 @@ class WorkflowCoordinator:
             "artifactCount": decorated["artifactCount"],
             "inquiries": decorated["inquiries"],
             "activity": decorated["activity"],
-            "lineage": {**decorated["lineage"], "buddy": buddy_view(connection, decorated["lineage"]["buddy"])},
+            "lineage": decorated["lineage"],
             "createdAt": decorated["createdAt"],
             "updatedAt": decorated["updatedAt"],
         }
