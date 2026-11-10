@@ -1,4 +1,5 @@
 import { useId, type ReactNode } from "react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { StateMark } from "@/components/ui/state-mark";
 import { useViewPreference } from "../view-preferences";
 import "./QuantBar.css";
@@ -24,15 +25,19 @@ export function QuantBar({ parts, maximum, width = 144 }: {
 }
 
 /** The graphic itself opens its exact values; the saved state is a console view preference. */
-export function QuantBarDisclosure({ parts, maximum, width, label, preferenceKey, children }: {
-  parts: Part[]; maximum: number; width?: number; label: string; preferenceKey: string; children: ReactNode;
+export function QuantBarDisclosure({ parts, maximum, width, label, preferenceKey, children, floating = false }: {
+  parts: Part[]; maximum: number; width?: number; label: string; preferenceKey: string; children: ReactNode; floating?: boolean;
 }) {
   const detailId = useId();
   const [open, setOpen] = useViewPreference(`quant-bar.${preferenceKey}`);
   const hasFailure = parts.some(part => (part.tone === "pink" || part.tone === "sample-pink") && (part.value ?? 0) > 0);
+  const trigger = <button type="button" data-slot="quant-bar-trigger" aria-label={label} aria-expanded={open} aria-controls={open ? detailId : undefined}
+    className="quant-bar-trigger" onClick={floating ? undefined : () => setOpen(!open)}><QuantBar parts={parts} maximum={maximum} width={width} />{hasFailure && <StateMark kind="fail" />}</button>;
   return <div data-slot="quant-disclosure" className="inline-block max-w-full align-middle">
-    <button type="button" data-slot="quant-bar-trigger" aria-label={label} aria-expanded={open} aria-controls={open ? detailId : undefined}
-      className="quant-bar-trigger" onClick={() => setOpen(!open)}><QuantBar parts={parts} maximum={maximum} width={width} />{hasFailure && <StateMark kind="fail" />}</button>
-    {open && <div id={detailId} data-slot="quant-bar-detail" className="mt-2 text-xs tabular-nums text-ink2">{children}</div>}
+    {floating ? <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverContent id={detailId} data-slot="quant-bar-detail" aria-label={label} align="start" collisionPadding={16} onOpenAutoFocus={event => event.preventDefault()}
+        className="w-max max-w-[min(28rem,calc(100vw-2rem))] text-xs tabular-nums text-ink2">{children}</PopoverContent>
+    </Popover> : <>{trigger}{open && <div id={detailId} data-slot="quant-bar-detail" className="mt-2 text-xs tabular-nums text-ink2">{children}</div>}</>}
   </div>;
 }

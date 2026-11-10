@@ -217,7 +217,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
     await capture(page, "routing-default", theme);
     await bar.click();
     await expect(bar).toHaveAttribute("aria-expanded", "true");
-    await expect(routing.locator('[data-slot="quant-bar-detail"]').first()).toContainText("应答");
+    await expect(page.locator('[data-slot="quant-bar-detail"]').first()).toContainText("应答");
     await capture(page, "routing-expanded", theme);
     await page.reload();
     await expect(bar).toHaveAttribute("aria-expanded", "true");
@@ -227,7 +227,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
     const maintenanceBar = maintenance.first().locator('[data-slot="quant-bar-trigger"]');
     await expect(maintenanceBar).toHaveAttribute("aria-expanded", "false");
     await maintenanceBar.click();
-    await expect(maintenance.first().locator('[data-slot="quant-bar-detail"]')).toContainText("缓存输入");
+    await expect(page.locator('[data-slot="quant-bar-detail"]')).toContainText("缓存输入");
     await expect(maintenance.nth(1)).not.toContainText("summary-citation-outside-batch");
     await expect(maintenance.nth(1).locator('[aria-description*="summary-citation-outside-batch"]')).toContainText("本批次之外");
     await capture(page, "maintenance", theme);
@@ -236,8 +236,12 @@ for (const theme of ["dark", "light"] as const) test.describe(`Buddy graphics ${
     const profiles = page.locator('[data-slot="profile-records"]');
     const profileBars = profiles.locator('[data-slot="quant-bar-trigger"]');
     await expect(profileBars.first()).toHaveAttribute("aria-expanded", "false");
-    for (const profileBar of await profileBars.all()) await profileBar.click();
-    await expect(profiles.locator('[data-slot="quant-bar-detail"]').first()).toBeVisible();
+    for (const [index, profileBar] of (await profileBars.all()).entries()) {
+      await profileBar.click();
+      await expect(profileBar).toHaveAttribute("aria-expanded", "true");
+      if (index < await profileBars.count() - 1) await page.keyboard.press("Escape");
+    }
+    await expect(page.locator('[data-slot="quant-bar-detail"]').first()).toBeVisible();
     await capture(page, "profiles", theme);
     await expectNoSidewaysScroll(page);
   });

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { RouterList } from "./RouterList";
 import { RoutingRecords } from "./RoutingRecords";
 import { health, MEDIUM_ID } from "./roles.testing";
 import { routingCodeText } from "./routing-code";
@@ -19,9 +20,10 @@ describe("routing records", () => {
   });
   it("uses service counts and a shared segmented scale; each bar reveals counts on click", async () => {
     const user = userEvent.setup();
-    render(<RoutingRecords health={health({ failureCount: 2, sampleCount: 8, routers: [{ buddyId: MEDIUM_ID, index: 0, eligible: true, identity: null, answeredCount: 6, noAnswerCount: 2, consecutiveNoAnswers: 1,
-      lastAnsweredAt: "2026-11-09T01:01:00Z", lastError: { code: "router-not-responding", at: "2026-11-09T01:00:00Z" } }, { buddyId: "second", index: 1, eligible: true, answeredCount: 2, noAnswerCount: 0 }] })} />);
-    const table = screen.getByRole("table", { name: "各 Router 的记录" });
+    const records = health({ failureCount: 2, sampleCount: 8, routers: [{ buddyId: MEDIUM_ID, index: 0, eligible: true, identity: null, answeredCount: 6, noAnswerCount: 2, consecutiveNoAnswers: 1,
+      lastAnsweredAt: "2026-11-09T01:01:00Z", lastError: { code: "router-not-responding", at: "2026-11-09T01:00:00Z" } }, { buddyId: "second", index: 1, eligible: true, answeredCount: 2, noAnswerCount: 0 }] }).routers!;
+    render(<RouterList lines={records.map(row => ({buddyId: row.buddyId, buddy: undefined, status: null}))} records={records} buddies={[]} mode="review" locked={undefined} note={undefined} onAdd={vi.fn()} onMove={vi.fn()} onRemove={vi.fn()} onShow={vi.fn()} />);
+    const table = screen.getByRole("table", { name: "Router 列表" });
     expect(within(table).getAllByRole("row")).toHaveLength(3);
     expect(within(table).getByText("模型未开始作答")).toBeTruthy();
     expect(table.textContent).not.toContain("router-not-responding");
@@ -35,7 +37,7 @@ describe("routing records", () => {
     expect(first.querySelector('[data-kind="fail"]')).toBeTruthy();
     await user.click(first);
     expect(first.getAttribute("aria-expanded")).toBe("true");
-    expect(table.textContent).toContain("应答 6 次");
+    expect(screen.getByText("应答 6 次，未应答 2 次，连续未应答 1 次。")).toBeTruthy();
     first.focus();
     await user.keyboard("{Enter}");
     expect(first.getAttribute("aria-expanded")).toBe("false");
@@ -62,8 +64,8 @@ describe("routing records", () => {
       at: `2026-11-09T${String(index).padStart(2, "0")}:00:00Z`, code: "router-no-answer" }));
     render(<RoutingRecords health={health({ recentFailures })} />);
     const region = document.querySelector<HTMLElement>('[data-slot="routing-failures-region"]')!;
-    expect(region.tabIndex).toBe(0);
-    expect(region.classList.contains("record-region--routing")).toBe(true);
+    expect(region.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')!.tabIndex).toBe(0);
+    expect(region.classList.contains("bounded-records")).toBe(true);
     expect(within(region).getAllByRole("link").map(link => link.textContent)).toEqual(recentFailures.map(row => row.title).reverse());
   });
   it("keeps unknown historical codes readable without guessing their meaning", () => {

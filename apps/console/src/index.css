@@ -6,7 +6,7 @@
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-:root { --radius-overlay: 6px; }
+:root { --radius-card: 6px; }
 
 /* One palette: the utilities read the tokens of tokens.css. The first group is
    what the generated components expect; the second is the design's own names. */
@@ -62,7 +62,7 @@
   --color-brand-mark: var(--brand-mark);
   --color-bar-hand: var(--bar-hand);
   --color-bar-fail: var(--bar-fail);
-  /* Controls keep their own geometry; floating surfaces use --radius-overlay. */
+  /* Controls keep their own geometry; cards and floating surfaces use --radius-card. */
   --radius-sm: 2px;
   --radius-md: 4px;
   --radius-lg: 4px;
@@ -71,7 +71,7 @@
 
 /* Floating components own their shared shape, including renamed slot roots. */
 :root .overlay-surface {
-  border-radius: var(--radius-overlay);
+  border-radius: var(--radius-card);
 }
 
 @keyframes detail-refresh-turn {
@@ -170,10 +170,10 @@
   --reveal-left: 0px;
   --reveal-right: 0px;
   transform: translateY(calc(var(--reveal-start-y) * (1 - var(--reveal-progress))));
-  clip-path: inset(0 0 calc((100% - 2px) * (1 - var(--reveal-progress))) 0 round var(--radius-overlay));
+  clip-path: inset(0 0 calc((100% - 2px) * (1 - var(--reveal-progress))) 0 round var(--radius-card));
 }
 .popover-reveal:not([data-reveal-ready]) { opacity: 0; }
-.popover-reveal[data-side="top"] { clip-path: inset(calc((100% - 2px) * (1 - var(--reveal-progress))) 0 0 0 round var(--radius-overlay)); }
+.popover-reveal[data-side="top"] { clip-path: inset(calc((100% - 2px) * (1 - var(--reveal-progress))) 0 0 0 round var(--radius-card)); }
 .popover-reveal::after {
   content: "";
   position: absolute;

@@ -12,11 +12,17 @@ for (const locale of ["en-US", "zh-CN"]) for (const theme of ["light", "dark"] a
       const completed = records.getByRole("button", { name: "gpt-5-codex", exact: true });
       await completed.click();
       const completedDetail = records.locator('tr:has(> td > button:has-text("gpt-5-codex")) + tr');
+      const totals = locale === "en-US" ? "Cached input 900; Other input 3,300; Output 650" : "缓存输入 900; 其他输入 3,300; 输出 650";
+      let sawTotals = false;
       for (const bar of await completedDetail.locator('[data-slot="quant-bar-trigger"]').all()) {
         await expect(bar).toHaveAttribute("aria-expanded", "false");
         await bar.click();
+        const detail = page.locator('[data-slot="quant-bar-detail"]');
+        await expect(detail).toBeVisible();
+        sawTotals ||= (await detail.innerText()).includes(totals);
+        await page.keyboard.press("Escape");
       }
-      await expect(completedDetail).toContainText(locale === "en-US" ? "Cached input 900; Other input 3,300; Output 650" : "缓存输入 900; 其他输入 3,300; 输出 650");
+      expect(sawTotals).toBe(true);
       const tools = completedDetail.getByRole("table").first();
       await expect(tools).toContainText("web_search");
       await expect(tools).toContainText("web_fetch");
@@ -29,7 +35,7 @@ for (const locale of ["en-US", "zh-CN"]) for (const theme of ["light", "dark"] a
       await expect(failedDetail).toContainText(locale === "en-US" ? "All failed" : "全部失败");
       const failedTool = failedDetail.getByRole("row", { name: /web_fetch/ });
       await failedTool.locator('[data-slot="quant-bar-trigger"]').click();
-      await expect(failedTool).toContainText(locale === "en-US" ? "Succeeded 0 · Failed 8 · Unknown 0" : "成功 0 · 失败 8 · 未知 0");
+      await expect(page.locator('[data-slot="quant-bar-detail"]')).toContainText(locale === "en-US" ? "Succeeded 0 · Failed 8 · Unknown 0" : "成功 0 · 失败 8 · 未知 0");
       await expectNoSidewaysScroll(page);
     });
 
@@ -59,7 +65,7 @@ for (const locale of ["en-US", "zh-CN"]) for (const theme of ["light", "dark"] a
       await expect(trigger.locator('[data-tone="pink"]')).toHaveCount(1);
       await expect(trigger.locator('[data-tone="gray"]')).toHaveCount(1);
       await trigger.press("Enter");
-      await expect(toolRow).toContainText(locale === "en-US" ? "Succeeded 1 · Failed 1 · Unknown 1" : "成功 1 · 失败 1 · 未知 1");
+      await expect(page.locator('[data-slot="quant-bar-detail"]')).toContainText(locale === "en-US" ? "Succeeded 1 · Failed 1 · Unknown 1" : "成功 1 · 失败 1 · 未知 1");
     });
   });
 }

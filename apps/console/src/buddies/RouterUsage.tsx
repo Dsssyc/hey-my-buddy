@@ -29,7 +29,7 @@ export function routerUsageTotal(usage: TokenUsage | null): number | null {
 }
 
 /** A token track; the caller supplies one scale for the whole comparison group. */
-export function RouterUsage({ usage, maximum, preferenceKey, label }: { usage: TokenUsage | null; maximum?: number; preferenceKey: string; label: string }) {
+export function RouterUsage({ usage, maximum, preferenceKey, label, floating = false }: { usage: TokenUsage | null; maximum?: number; preferenceKey: string; label: string; floating?: boolean }) {
   const { t } = useTranslation("buddies");
   const cached = usage?.cachedInputTokens ?? null;
   const input = usage?.inputTokens ?? null;
@@ -43,7 +43,7 @@ export function RouterUsage({ usage, maximum, preferenceKey, label }: { usage: T
   const detail = parts.map((value, index) => `${labels[index]} ${value === null ? t("routerProfiles.unknown") : formatNumber(value)}`).join("; ");
   const total = routerUsageTotal(usage);
   const title = `${detail}; ${t("routerProfiles.total")} ${total === null ? t("routerProfiles.unknown") : formatNumber(total)}${usage?.completeness === "partial" || usage?.completeness === "unknown" ? `; ${t("routerProfiles.partial")}` : ""}`;
-  return <div data-slot="router-usage"><QuantBarDisclosure preferenceKey={`usage.${preferenceKey}`}
+  return <div data-slot="router-usage"><QuantBarDisclosure floating={floating} preferenceKey={`usage.${preferenceKey}`}
     label={`${label}: ${title}`} maximum={scale} width={112}
     parts={[{ value: cached, tone: "green-dark" }, { value: other, tone: "green" }, { value: output, tone: "orange" }]}>
     <span aria-label={title}>{title}</span>

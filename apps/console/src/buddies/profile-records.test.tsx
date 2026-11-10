@@ -38,7 +38,13 @@ describe("Router profile records", () => {
     await openRoles(fixture(data), "#buddies/router/profiles");
     const records = screen.getByRole("group", { name: "记录" });
     const failedButton = within(records).getByRole("button", { name: data.models[1].displayName });
+    expect(Array.from(document.querySelectorAll('[data-slot="profile-plane"] > [data-slot="router-card"]'), card => card.querySelector("h3")?.textContent)).toEqual(["设置", "记录"]);
+    const correctionsHeader = within(records).getByRole("columnheader", { name: "打回轮数" });
+    expect(correctionsHeader).toBeTruthy();
     expect(failedButton.getAttribute("aria-expanded")).toBe("true");
+    expect(failedButton.closest("tr")!.querySelectorAll("td")[2].textContent).toBe("1");
+    expect(within(failedButton.closest("tr")!).getByRole("cell", { name: "打回 1 轮" })).toBeTruthy();
+    expect(failedButton.closest("tr")!.querySelectorAll("td")[2].classList.contains("text-ink3")).toBe(false);
     const failed = failedButton.closest("tr")!.nextElementSibling! as HTMLElement;
     expect(within(failed).getByText(/Claims lack original sources/)).toBeTruthy();
     expect(within(failed).getByRole("rowheader", { name: /Page fetch.*全部失败/ })).toBeTruthy();
@@ -50,12 +56,12 @@ describe("Router profile records", () => {
     expect(within(failed).queryByText(/成功 0 · 失败 8/)).toBeNull();
     await userEvent.setup().click(toolBar);
     expect(toolBar.getAttribute("aria-expanded")).toBe("true");
-    expect(within(failed).getByText(/成功 0 · 失败 8/)).toBeTruthy();
+    expect(screen.getByText(/成功 0 · 失败 8/)).toBeTruthy();
     const usageBar = within(failed).getByRole("button", { name: /第 2 次尝试 · 用量/ });
     expect(usageBar.getAttribute("aria-expanded")).toBe("false");
     await userEvent.setup().click(usageBar);
     expect(usageBar.getAttribute("aria-expanded")).toBe("true");
-    expect(within(failed).getByText(/缓存输入 4,096/)).toBeTruthy();
+    expect(screen.getByText(/缓存输入 4,096/)).toBeTruthy();
   });
 
   it("keeps assignment restricted to buddies with enforced web permission", async () => {
@@ -84,8 +90,9 @@ describe("Router profile records", () => {
       latestProfileRun: { ...run("completed", `2026-11-08T${String(index).padStart(2, "0")}:00:00Z`), profileRunId: `profile-${index}` } }));
     await openRoles(fixture(data), "#buddies/router/profiles");
     const region = document.querySelector<HTMLElement>('[data-slot="profile-records"]')!;
-    expect(region.tabIndex).toBe(0);
-    expect(region.classList.contains("record-region--profile")).toBe(true);
+    expect(region.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')!.tabIndex).toBe(0);
+    expect(region.classList.contains("bounded-records")).toBe(true);
+    expect(region.querySelectorAll("tbody > tr")[0].querySelectorAll("td")[2].classList.contains("text-ink3")).toBe(true);
     expect(Array.from(region.querySelectorAll<HTMLButtonElement>("tbody > tr > td:nth-child(2) > button")).map(button => button.textContent)).toEqual(
       Array.from({ length: 8 }, (_, index) => `Profile model ${7 - index}`));
   });

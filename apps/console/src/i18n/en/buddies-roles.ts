@@ -83,11 +83,7 @@ export default {
     lastSuccess: "Last success",
     never: "None",
     routers: {
-      label: "Records of each Router",
       buddy: "Buddy",
-      answered: "Answered",
-      noAnswer: "No answer",
-      consecutive: "No answer in a row",
       lastAnswered: "Last answered",
       lastError: "Last error",
       none: "—",

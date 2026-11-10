@@ -18,7 +18,7 @@ import { MaintenanceActivity } from "./MaintenanceActivity";
 import { RouterSection, RouterField } from "./RouterSection";
 import { RouterFailure } from "./RouterFailure";
 import { RouterTimeRange, RouterUsage, sumRouterUsage, routerUsageTotal } from "./RouterUsage";
-import "./RecordRegion.css";
+import { RecordRegion } from "./RecordRegion";
 
 const liveT = i18n.getFixedT(null, "buddies");
 
@@ -62,17 +62,18 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
     setStopping(taskId);
     if (!await command("task_cancel", { runId: taskId })) setStopping(null);
   }
-  return <div data-slot="maintenance-plane" aria-busy={busy}>
-    <RouterSection name={t("maintenance.buddy")} help={t("maintenance.dataFlow")} unsaved={dirty ? t("unsaved") : undefined}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? buddyQuad(selected) : config?.maintenanceBuddyId ?? t("maintenance.none")}</span>
-        <Button variant="outline" size="sm" disabled={locked} onClick={() => setChoosing(true)}>{t("maintenance.choose")}</Button>
-      </div>
-      {!config?.maintenanceBuddyId && <p className="mt-2 text-xs text-ink2">{t("routerWork.notSet")}</p>}
-    </RouterSection>
+  return <div data-slot="maintenance-plane" aria-busy={busy} className="min-w-0 space-y-4">
     <RouterSection name={t("routerWork.settings")}>
+      <div className="router-settings">
+      <RouterField name={t("maintenance.buddy")} help={t("maintenance.dataFlow")} unsaved={dirty ? t("unsaved") : undefined} className="xl:col-span-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? buddyQuad(selected) : config?.maintenanceBuddyId ?? t("maintenance.none")}</span>
+          <Button variant="outline" size="sm" disabled={locked} onClick={() => setChoosing(true)}>{t("maintenance.choose")}</Button>
+          {!config?.maintenanceBuddyId && <span className="text-xs text-ink2">{t("routerWork.notSet")}</span>}
+        </div>
+      </RouterField>
       <RouterField name={t("maintenance.interval")} unsaved={dirtyInterval ? t("unsaved") : undefined}>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 whitespace-nowrap">
           <Input className="h-8 w-24 bg-card tabular-nums" type="number" min={1} step={1} aria-label={t("maintenance.interval")}
             value={config?.maintenanceIntervalSeconds === undefined || Number.isNaN(config.maintenanceIntervalSeconds) ? "" : config.maintenanceIntervalSeconds}
             readOnly={locked} aria-invalid={config?.maintenanceIntervalSeconds !== undefined && !validInterval || undefined}
@@ -82,28 +83,27 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
           {config?.maintenanceIntervalSeconds !== undefined && !validInterval && <p className="text-xs text-fail" role="alert">{t("maintenance.intervalInvalid")}</p>}
         </div>
       </RouterField>
+      </div>
     </RouterSection>
     <RouterSection name={t("roles.records.name")}>
       {feedbackScope === "maintenance" && note && <p role="status" className="mb-3 text-xs">{note}</p>}
       {feedbackScope === "maintenance" && error && <p role="alert" className="mb-3 text-xs text-fail">{error}</p>}
-      {!runs.length ? <p className="text-xs text-ink3">{t("maintenance.noRecords")}</p> : <div className="record-region record-region--maintenance" role="region" tabIndex={0} aria-label={t("maintenance.records")} data-slot="maintenance-records-region"><table className="w-full min-w-[700px] table-fixed text-xs" aria-label={t("maintenance.records")}>
-        <thead><tr className="border-b text-left text-ink3"><th className="w-7 py-3 font-normal" aria-label={t("maintenance.result")} /><th className="w-[31%] py-3 font-normal">{t("routerWork.timeRange")}</th><th className="w-[10%] py-3 font-normal">{t("maintenance.trigger")}</th><th className="py-3 font-normal">{t("routerWork.usage")}</th><th className="w-20" /></tr></thead>
-        <tbody>{runs.map(run => <tr key={run.maintenanceRunId} className={`border-b align-top ${run.state === "running" ? "record-region__running" : ""}`} data-slot="maintenance-record">
-          <td className="py-4"><span aria-label={t(`maintenance.${run.state}`)}><StateMark kind={run.state === "running" ? "live" : run.state === "failed" ? "fail" : "done"} /></span></td>
-          <td className="py-4 pr-3"><RouterTimeRange startedAt={run.startedAt} finishedAt={run.finishedAt} />
-            {run.state === "running" && active && <div className="mt-2"><MaintenanceActivity taskId={run.taskId} api={api} /></div>}
-          </td>
-          <td className="py-4 pr-3 text-ink2">{t(run.triggerType === "manual" ? "maintenance.manual" : "maintenance.intervalTrigger")}</td>
-          <td className="py-4 pr-2"><RouterUsage usage={sumRouterUsage(run.usage?.attempts ?? [])} maximum={maximum}
-            preferenceKey={`maintenance-run.${run.maintenanceRunId}`} label={`${t("maintenance.records")} ${formatShortDateTime(Date.parse(run.startedAt))}`} />
-            {run.reason && <p className="mt-2 wrap-anywhere text-fail"><RouterFailure failure={run.reason} /></p>}</td>
-          <td className="py-3 text-right">{run.state === "running" && <Button variant="ghost" size="sm" disabled={actionLocked || stopping === run.taskId}
+      {!runs.length ? <p className="text-xs text-ink3">{t("maintenance.noRecords")}</p> : <RecordRegion aria-label={t("maintenance.records")} data-slot="maintenance-records-region"><table className="w-full min-w-[980px] table-fixed text-xs" aria-label={t("maintenance.records")}>
+        <thead><tr className="router-record-row text-left text-ink3"><th className="w-8 font-normal" aria-label={t("maintenance.result")} /><th className="w-[27%] font-normal">{t("routerWork.timeRange")}</th><th className="w-[9%] font-normal">{t("maintenance.trigger")}</th><th className="w-[15%] font-normal">{t("routerWork.usage")}</th><th className="font-normal">{t("maintenance.reason")}</th><th className="w-20" /></tr></thead>
+        <tbody>{runs.map(run => <tr key={run.maintenanceRunId} className={`router-record-row ${run.state === "running" ? "running-record" : ""}`} data-slot="maintenance-record">
+          <td><span aria-label={t(`maintenance.${run.state}`)}><StateMark kind={run.state === "running" ? "live" : run.state === "failed" ? "fail" : "done"} /></span></td>
+          <td className="pr-3"><RouterTimeRange startedAt={run.startedAt} finishedAt={run.finishedAt} /></td>
+          <td className="pr-3 text-ink2">{t(run.triggerType === "manual" ? "maintenance.manual" : "maintenance.intervalTrigger")}</td>
+          <td className="pr-3"><RouterUsage floating usage={sumRouterUsage(run.usage?.attempts ?? [])} maximum={maximum}
+            preferenceKey={`maintenance-run.${run.maintenanceRunId}`} label={`${t("maintenance.records")} ${formatShortDateTime(Date.parse(run.startedAt))}`} /></td>
+          <td className="pr-3"><div className="truncate text-fail">{run.state === "failed" && run.reason && <RouterFailure failure={run.reason} />}{run.state === "running" && active && <MaintenanceActivity taskId={run.taskId} api={api} />}</div></td>
+          <td className="text-right">{run.state === "running" && <Button variant="ghost" size="sm" disabled={actionLocked || stopping === run.taskId}
             onClick={() => void stop(run.taskId)}>{stopping === run.taskId ? detailT("state.stopping") : t("maintenance.stop")}</Button>}</td>
         </tr>)}</tbody>
-      </table></div>}
-      <div className="pt-6"><h4 className="mb-4 text-sm font-medium">{t("maintenance.domains")}</h4>
-        <DomainTree nodes={snapshot.domainNodes ?? []} locked={actionLocked} command={command} error={feedbackScope === "domain" ? error : ""} note={feedbackScope === "domain" ? note : ""} clearFeedback={() => { setError(""); setNote(""); }} />
-      </div>
+      </table></RecordRegion>}
+    </RouterSection>
+    <RouterSection name={t("maintenance.domains")}>
+      <DomainTree nodes={snapshot.domainNodes ?? []} locked={actionLocked} command={command} error={feedbackScope === "domain" ? error : ""} note={feedbackScope === "domain" ? note : ""} clearFeedback={() => { setError(""); setNote(""); }} />
     </RouterSection>
     <Dialog open={choosing} onOpenChange={setChoosing}><DialogContent aria-describedby={undefined} className="sm:max-w-xl">
       <DialogTitle>{t("maintenance.choose")}</DialogTitle>

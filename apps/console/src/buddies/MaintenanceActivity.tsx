@@ -33,8 +33,8 @@ export function MaintenanceActivity({ taskId, api }: { taskId: string; api: Cons
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
   }, [taskId, api, visible]);
-  return <div>
-    <LiveActivity className="w-fit" activity={reading?.activity ?? null} stuck={false} nowMs={reading?.at ?? Date.now()} />
-    {error && <p role="alert" className="mt-1 text-fail">{error}</p>}
+  return <div className="min-w-0 overflow-hidden">
+    {error ? <p role="alert" className="truncate text-fail">{error}</p>
+      : <LiveActivity className="w-full flex-nowrap overflow-hidden whitespace-nowrap [&>span]:min-w-0 [&>span]:truncate" activity={reading?.activity ?? null} stuck={false} nowMs={reading?.at ?? Date.now()} />}
   </div>;
 }

@@ -64,10 +64,11 @@ test.describe("necessary hover hints and visible consequences", () => {
     await capture(page, "router-review");
     const responseWait = page.getByRole("group", { name: "开始作答时限", exact: true });
     const retry = page.getByRole("group", { name: "重试间隔", exact: true });
-    const list = page.getByRole("list", { name: "Router 列表" });
+    const list = page.getByRole("table", { name: "Router 列表" });
     await quiet(page, [mode.getByText("默认模式", { exact: true }), fast, review,
       responseWait.getByText("开始作答时限", { exact: true }), retry.getByText("重试间隔", { exact: true }),
-      list.getByRole("button").nth(1), list.getByRole("button").nth(2)]);
+      list.locator("tbody > tr").first().getByRole("button", { name: /下移/ }),
+      list.locator("tbody > tr").first().getByRole("button", { name: /移除/ })]);
     await page.getByRole("navigation", { name: "Router 的工作" }).getByRole("link", { name: /维护/ }).click();
     const maintenance = page.getByRole("group", { name: "维护 buddy", exact: true });
     await expect(maintenance.locator('[data-slot="maintenance-consequence"]')).toHaveCount(0);
@@ -271,7 +272,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
     await expect(waitDialog).toHaveCount(0);
 
     for (const [work, title] of [["maintenance", zh ? "维护 buddy" : "Maintenance buddy"], ["profiles", zh ? "画像 buddy" : "Profile buddy"]]) {
-      await page.locator(`[data-slot="router-work-toolbar"] a[href="#buddies/router/${work}"]`).click();
+      await page.locator(`[data-slot="router-works"] a[href="#buddies/router/${work}"]`).click();
       const group = page.getByRole("group", { name: title, exact: true });
       const button = group.locator('[data-slot="router-setting-help"]');
       await button.click();
@@ -281,7 +282,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
       await expect(dialog).toHaveCount(0);
       await expect(button).toBeFocused();
       await button.click();
-      await group.getByRole("heading").locator("[id]").click();
+      await group.locator("[id]").first().click();
       await expect(dialog).toHaveCount(0);
     }
 

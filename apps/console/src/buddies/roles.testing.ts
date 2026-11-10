@@ -125,11 +125,11 @@ export async function openRoles(f: ReturnType<typeof fixture>, hash = "#buddies/
 
 export const rolesRegion = () => screen.getByRole("region", { name: "Router" });
 export const section = (name: string) => within(rolesRegion()).getByRole("group", { name: name === "列表" ? "Router 列表" : name });
-export const routerList = () => within(rolesRegion()).getByRole("list", { name: "Router 列表" });
-export const queryRouterList = () => within(rolesRegion()).queryByRole("list", { name: "Router 列表" });
+export const routerList = () => within(rolesRegion()).getByRole("table", { name: "Router 列表" });
+export const queryRouterList = () => within(rolesRegion()).queryByRole("table", { name: "Router 列表" });
 /** The four-part names of the list's buddies, in the order of the list. */
-export const listed = () => (queryRouterList() ? within(routerList()).getAllByRole("listitem") : []).map(item => item.getAttribute("aria-label"));
-export const line = (quad: string) => within(rolesRegion()).getByRole("listitem", { name: quad });
+export const listed = () => (queryRouterList() ? within(routerList()).getAllByRole("row").filter(row => row.hasAttribute("aria-label")) : []).map(item => item.getAttribute("aria-label"));
+export const line = (quad: string) => within(rolesRegion()).getByRole("row", { name: quad });
 export const moveUp = (quad: string) => within(rolesRegion()).getByRole("button", { name: `上移 ${quad}` });
 export const moveDown = (quad: string) => within(rolesRegion()).getByRole("button", { name: `下移 ${quad}` });
 export const remove = (quad: string) => within(rolesRegion()).getByRole("button", { name: `移除 ${quad}` });

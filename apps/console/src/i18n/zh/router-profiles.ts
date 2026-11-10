@@ -24,6 +24,7 @@ export default {
   allFailed: "全部失败",
   calls: "共 {{n}} 次",
   corrections: "打回 {{n}} 轮",
+  correctionsColumn: "打回轮数",
   noUsage: "用量未知",
   noTools: "没有工具调用记录。",
   allUnknownTools: "工具调用的成败未知。",

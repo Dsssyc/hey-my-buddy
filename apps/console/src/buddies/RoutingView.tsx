@@ -67,20 +67,18 @@ export function RoutingView({ snapshot, editor, onNavigate }: {
   function change(patch: Partial<Configuration>) {
     if (!locked) editor.update(draft => withConfiguration(draft, patch));
   }
-  return <div data-slot="routing-work">
+  return <div data-slot="routing-work" className="space-y-4">
       {!configuration && <p className="mb-3 text-xs text-fail" role="alert">
         {t("roles.upgrade.title")}</p>}
 
-      <RouterSection name={t("roles.list.label")} unsaved={mark(unsaved.list)}>
-        <RouterList lines={lines} buddies={data.buddies} mode={configuration?.defaultRoutingMode} locked={locked}
+        <RouterList records={snapshot.routingHealth?.routers?.filter(row => recorded?.routerBuddyIds.includes(row.buddyId))} unsaved={mark(unsaved.list)} lines={lines} buddies={data.buddies} mode={configuration?.defaultRoutingMode} locked={locked}
           note={configuration ? noteText(routerNote(data, snapshot.routingHealth), data.buddies, t) : undefined}
           onShow={buddyId => onNavigate({ view: "models", target: buddyId })}
           onAdd={buddyId => editor.update(draft => addRouter(draft, buddyId))}
           onMove={(buddyId, by) => editor.update(draft => moveRouter(draft, buddyId, by))}
           onRemove={buddyId => editor.update(draft => removeRouter(draft, buddyId))} />
-      </RouterSection>
 
-      <RouterSection name={t("routerWork.settings")}><RouterField name={t("roles.mode.name")} help={configuration ? <><p>{t(`roles.mode.${configuration.defaultRoutingMode}Consequence`)}</p><p className="mt-3">{t("roles.mode.explanation")}</p></> : t("roles.mode.explanation")} unsaved={mark(unsaved.mode)}>
+      <RouterSection name={t("routerWork.settings")}><div className="router-settings"><RouterField name={t("roles.mode.name")} help={configuration ? <><p>{t(`roles.mode.${configuration.defaultRoutingMode}Consequence`)}</p><p className="mt-3">{t("roles.mode.explanation")}</p></> : t("roles.mode.explanation")} unsaved={mark(unsaved.mode)}>
         <Segmented aria-label={t("roles.mode.label")} value={configuration?.defaultRoutingMode ?? ""}
           onValueChange={value => change({ defaultRoutingMode: value as RoutingMode })}>
           {MODES.map(mode => <Hint key={mode} text={locked}>
@@ -143,7 +141,7 @@ export function RoutingView({ snapshot, editor, onNavigate }: {
         </div>
       </RouterField>
 
-      </RouterSection>
+      </div></RouterSection>
       <RouterSection name={t("roles.records.name")}>
         <RoutingRecords health={snapshot.routingHealth} />
       </RouterSection>

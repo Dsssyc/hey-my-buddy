@@ -41,28 +41,31 @@ async function longRecords(page: Page) {
 
 async function scrollHistory(page: Page, region: Locator, count: number) {
   await region.scrollIntoViewIfNeeded();
-  await expect(region).toHaveAttribute("tabindex", "0");
-  await expect(region.locator(":scope > table > tbody > tr")).toHaveCount(count);
-  const before = await region.evaluate(node => ({ height: node.clientHeight, scroll: node.scrollHeight,
+  const viewport = region.locator(':scope > [data-slot="scroll-area-viewport"]');
+  await expect(viewport).toHaveAttribute("tabindex", "0");
+  await expect(region.locator("table > tbody > tr")).toHaveCount(count);
+  const before = await viewport.evaluate(node => ({ height: node.clientHeight, scroll: node.scrollHeight,
     header: node.querySelector("th")!.getBoundingClientRect().top }));
-  expect(before.height).toBeLessThanOrEqual(424);
+  expect(before.height).toBeLessThanOrEqual(308);
   expect(before.scroll).toBeGreaterThan(before.height * 2);
-  await region.focus();
+  await viewport.focus();
   await page.keyboard.press("PageDown");
-  await expect.poll(() => region.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(() => viewport.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
   expect(Math.abs(await region.locator("th").first().evaluate(node => node.getBoundingClientRect().top) - before.header)).toBeLessThanOrEqual(1);
   return before;
 }
 
 async function keyboardToBottom(page: Page, region: Locator) {
-  await region.focus();
+  const viewport = region.locator(':scope > [data-slot="scroll-area-viewport"]');
+  await viewport.focus();
   for (let pageDown = 0; pageDown < 20; pageDown++) await page.keyboard.press("PageDown");
-  await expect.poll(() => region.evaluate(node => Math.abs(node.scrollHeight - node.clientHeight - node.scrollTop))).toBeLessThanOrEqual(1);
+  await expect.poll(() => viewport.evaluate(node => Math.abs(node.scrollHeight - node.clientHeight - node.scrollTop))).toBeLessThanOrEqual(1);
 }
 
 async function expectNarrowTable(page: Page, region: Locator) {
   const geometry = await region.evaluate(node => {
-    const table = node.querySelector(":scope > table")!;
+    const viewport = node.querySelector(':scope > [data-slot="scroll-area-viewport"]')!;
+    const table = viewport.querySelector("table")!;
     const cells = [...table.querySelectorAll("tbody > tr:first-child > td")].map(cell => cell.getBoundingClientRect());
     const times = [...table.querySelectorAll("tbody time")].map(time => {
       const range = document.createRange(); range.selectNodeContents(time);
@@ -73,7 +76,7 @@ async function expectNarrowTable(page: Page, region: Locator) {
     });
     const frame = node.getBoundingClientRect();
     return { times, frameRight: frame.right, viewport: document.documentElement.clientWidth,
-      visibleWidth: node.clientWidth, tableWidth: table.getBoundingClientRect().width,
+      visibleWidth: viewport.clientWidth, tableWidth: table.getBoundingClientRect().width,
       gaps: cells.slice(1).map((cell, index) => cell.left - cells[index].right) };
   });
   expect(geometry.frameRight).toBeLessThanOrEqual(geometry.viewport + 1);
@@ -84,8 +87,9 @@ async function expectNarrowTable(page: Page, region: Locator) {
     expect(time.lines, "timestamps stay on one line").toBe(1);
     expect(time.inside, "timestamps stay inside their own column").toBe(true);
   }
-  await region.evaluate(node => { node.scrollLeft = node.scrollWidth; });
-  await expect.poll(() => region.evaluate(node => node.scrollLeft)).toBeGreaterThan(0);
+  const viewport = region.locator(':scope > [data-slot="scroll-area-viewport"]');
+  await viewport.evaluate(node => { node.scrollLeft = node.scrollWidth; });
+  await expect.poll(() => viewport.evaluate(node => node.scrollLeft)).toBeGreaterThan(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 }
 
@@ -120,7 +124,7 @@ for (const theme of ["dark", "light"]) test.describe(`Router bounded records ${t
     const bounds = await running.boundingBox();
     await scrollHistory(page, region, 44);
     expect(Math.abs((await running.boundingBox())!.y - bounds!.y)).toBeLessThanOrEqual(1);
-    await region.evaluate(node => { node.scrollTop = (node.scrollHeight - node.clientHeight) / 2; });
+    await region.locator(':scope > [data-slot="scroll-area-viewport"]').evaluate(node => { node.scrollTop = (node.scrollHeight - node.clientHeight) / 2; });
     await capture(page, `maintenance-middle-${theme}-1440.png`);
     await keyboardToBottom(page, region);
     await expect(region.locator("tbody > tr").last().locator("time").first()).toHaveAttribute("datetime", instant(1));
@@ -131,7 +135,7 @@ for (const theme of ["dark", "light"]) test.describe(`Router bounded records ${t
     await expect(failures.locator("tbody > tr").first()).toContainText("合成失败 29");
     await keyboardToBottom(page, failures);
     await expect(failures.locator("tbody > tr").last().getByRole("link")).toHaveAttribute("href", /preview-run-a2$/);
-    await failures.evaluate(node => { node.scrollTop = 0; });
+    await failures.locator(':scope > [data-slot="scroll-area-viewport"]').evaluate(node => { node.scrollTop = 0; });
     await capture(page, `routing-records-${theme}-1440.png`);
 
     const nav = page.getByRole("navigation", { name: "Router 的工作" });
@@ -142,8 +146,8 @@ for (const theme of ["dark", "light"]) test.describe(`Router bounded records ${t
     await keyboardToBottom(page, profiles);
     await expect(profiles.locator("tbody > tr").last()).toContainText("synthetic-model-0");
     await profiles.locator("tbody > tr").last().getByRole("button", { name: "synthetic-model-0", exact: true }).click();
-    await expect(profiles.locator(":scope > table > tbody > tr").last().getByRole("table")).toHaveCount(2);
-    await profiles.evaluate(node => { node.scrollTop = 0; });
+    await expect(profiles.locator("table").first().locator(":scope > tbody > tr").last().getByRole("table")).toHaveCount(2);
+    await profiles.locator(':scope > [data-slot="scroll-area-viewport"]').evaluate(node => { node.scrollTop = 0; });
     await capture(page, `profile-records-${theme}-1440.png`);
   });
 

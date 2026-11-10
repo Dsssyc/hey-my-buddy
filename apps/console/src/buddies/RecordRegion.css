@@ -1,33 +1,76 @@
-.record-region {
-  height: 26.5rem;
-  overflow: auto;
+.bounded-records { --record-height: 308px; }
+.bounded-records--headless { --record-height: 264px; }
+
+.bounded-records [data-slot="scroll-area-viewport"] {
+  height: auto;
+  max-height: var(--record-height);
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
 }
 
-.record-region--routing {
-  height: 22.5rem;
+.bounded-records > [data-slot="scroll-area-scrollbar"] {
+  opacity: 1;
+  pointer-events: auto;
 }
 
-.record-region--maintenance {
-  height: 25rem;
+.bounded-records table {
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
-.record-region:focus-visible {
-  outline: 2px solid var(--ink);
-  outline-offset: -2px;
-}
-
-.record-region > table > thead > tr > th {
+.bounded-records [data-slot="scroll-area-viewport"] > div > table > thead > tr > th {
   position: sticky;
   top: 0;
   z-index: 2;
   background: var(--surface);
 }
 
-.record-region--maintenance .record-region__running {
+.bounded-records th,
+.bounded-records td {
+  height: 44px;
+  border: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  vertical-align: middle;
+}
+
+.bounded-records .running-record {
   position: sticky;
-  top: 2.5rem;
+  top: 44px;
   z-index: 1;
   background: var(--surface);
 }
+
+.router-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 32px;
+  padding-right: 10px;
+}
+
+.routing-readings {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  column-gap: 32px;
+  row-gap: 16px;
+  padding-right: 10px;
+}
+
+/* Native table cells keep their headers; each failure shares the readings' four tracks. */
+.routing-failures, .routing-failures > tbody { display: block; }
+.routing-failures > tbody > tr {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  column-gap: 32px;
+}
+.routing-failures > tbody > tr > td { display: flex; align-items: center; min-width: 0; }
+.routing-failures > tbody > tr > td:last-child { grid-column: span 2; }
+.routing-failures [data-slot="router-failure"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (min-width: 1280px) {
+  .router-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.router-field-content > div { flex-wrap: nowrap; }

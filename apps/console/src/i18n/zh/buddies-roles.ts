@@ -83,11 +83,7 @@ export default {
     lastSuccess: "最近成功",
     never: "无",
     routers: {
-      label: "各 Router 的记录",
       buddy: "Buddy",
-      answered: "应答",
-      noAnswer: "未应答",
-      consecutive: "连续未应答",
       lastAnswered: "最近应答",
       lastError: "最近错误",
       none: "—",

@@ -26,6 +26,7 @@ export default {
   allFailed: "All failed",
   calls: "{{n}} calls total",
   corrections: "{{n}} correction rounds",
+  correctionsColumn: "Correction rounds",
   noUsage: "Usage unknown",
   noTools: "No tool calls recorded.",
   allUnknownTools: "Tool call outcomes are unknown.",

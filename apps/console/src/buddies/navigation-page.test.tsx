@@ -302,7 +302,7 @@ describe("deep links", () => {
     await screen.findByRole("region", { name: "Router" });
     expect(within(screen.getByRole("navigation", { name: "Router 的工作" })).getByRole("link", { name: "路由" }).getAttribute("aria-current")).toBe("page");
     expect(modelsRegion()).toBeNull();
-    expect(within(screen.getByRole("listitem", { name: `${SOL} / medium` })).getByText("当前")).toBeTruthy();
+    expect(within(screen.getByRole("row", { name: `${SOL} / medium` })).getByText("当前")).toBeTruthy();
   });
 
   it("shows the directory without rewriting the removed roles address", async () => {
@@ -329,7 +329,7 @@ describe("deep links", () => {
     const user = userEvent.setup();
     renderBuddy("#buddies/router", f);
     await screen.findByRole("region", { name: "Router" });
-    const reviewLine = screen.getByRole("listitem", { name: `${SOL} / medium` });
+    const reviewLine = screen.getByRole("row", { name: `${SOL} / medium` });
     await user.click(within(reviewLine).getByRole("link", { name: `${SOL} / medium` }));
     expect(window.location.hash).toBe(`#buddies/catalog/buddy/${encodeURIComponent(solMediumId)}`);
     await waitFor(() => expect(modelsRegion()).toBeTruthy());

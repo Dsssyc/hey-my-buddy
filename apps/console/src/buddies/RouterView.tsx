@@ -1,4 +1,5 @@
-import { IdCard, Route, Wrench } from "lucide-react";
+import { useEffect, useState } from "react";
+import { cn } from "cn";
 import { Hint } from "@/components/hint";
 import type { BuddyAttention } from "./attention";
 import { useTranslation } from "react-i18next";
@@ -14,7 +15,7 @@ import type { BuddyLocation } from "./navigation";
 
 export const ROUTER_WORK = ["routing", "maintenance", "profiles"] as const;
 type Work = typeof ROUTER_WORK[number];
-const workIcons = { routing: Route, maintenance: Wrench, profiles: IdCard };
+
 
 /** The Router's three jobs share their draft, and show one selected job at a time. */
 export function RouterView({ snapshot, editor, location, onNavigate, attention, hidden, active, api, refresh, mutationsAvailable }: {
@@ -23,23 +24,24 @@ export function RouterView({ snapshot, editor, location, onNavigate, attention, 
 }) {
   const { t } = useTranslation("buddies");
   const work = (location.view === "router" ? location.target ?? "routing" : "routing") as Work;
-  return <section hidden={hidden} aria-label={t("sections.router")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
-    <nav data-slot="router-work-toolbar" aria-label={t("routerWork.jobs")} className="flex min-h-12 shrink-0 items-end gap-2 border-b bg-card px-6 pt-3 text-ink2">
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => setScrolled(false), [work]);
+  return <section hidden={hidden} aria-label={t("sections.router")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+    <nav data-slot="router-works" data-scrolled={scrolled} aria-label={t("routerWork.jobs")} className={cn("flex h-16 shrink-0 items-center gap-6 border-b px-8 text-ink3 transition-colors duration-150 motion-reduce:transition-none", scrolled ? "border-border" : "border-transparent")}>
       {ROUTER_WORK.map(job => {
-        const Icon = workIcons[job];
         const reason = job === "routing" && attention.roles ? t(`attention.${attention.roles}`) : undefined;
         const description = [t(`routerWork.description.${job}`), reason].filter(Boolean).join("\n");
         return <Hint key={job} text={description} side="bottom"><a href={buddyHash({ view: "router", target: job })} aria-current={work === job ? "page" : undefined}
-          className="flex h-9 items-center gap-2 rounded-t-sm px-3 text-sm whitespace-nowrap outline-none transition-colors duration-150 hover:bg-sunk aria-[current=page]:bg-past-wash aria-[current=page]:font-semibold aria-[current=page]:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+          className="flex items-center gap-2 rounded-sm text-lg whitespace-nowrap outline-none transition-colors duration-150 hover:text-foreground aria-[current=page]:font-semibold aria-[current=page]:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
           onClick={event => { event.preventDefault(); onNavigate({ view: "router", target: job }); }}>
-          <Icon size={16} aria-hidden="true" />{t(`routerWork.${job}`)}
+          {t(`routerWork.${job}`)}
           {reason && <span className="size-1.5 rounded-full bg-hand-mark" aria-hidden="true" />}
         </a></Hint>;
       })}
     </nav>
     {/* The vertical viewport keeps its width; each record region owns horizontal scrolling. */}
-    <ScrollArea className="min-h-0 min-w-0 flex-1" key={work} viewportProps={{ className: "[&>div]:block!" }}>
-      <div className="min-w-0 px-8 pb-10" data-slot="router-detail">
+    <ScrollArea className="min-h-0 min-w-0 flex-1" key={work} viewportProps={{ className: "[&>div]:block!", onScroll: event => setScrolled(event.currentTarget.scrollTop > 0) }}>
+      <div className="min-w-0 px-8 pt-4 pb-10" data-slot="router-detail">
         {work === "routing" ? <RoutingView snapshot={snapshot} editor={editor} onNavigate={onNavigate} />
           : work === "maintenance" ? <MaintenanceView snapshot={snapshot} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && !hidden} />
             : <ProfileSettingsView snapshot={snapshot} editor={editor} profileRunId={location.profileRunId} />}
