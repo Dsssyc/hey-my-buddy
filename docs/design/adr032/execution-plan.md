@@ -29,7 +29,7 @@ Host 提供的 2026-11-05 日常数据：900 个微任务的控制代均为 1，
 | submit | Host 动词；Lead 凭证变体 | W:1708–1860、buddy/roles/texts/lead.txt:3–11；改新显式字段、服务入口推出新建键及 none 分支。 |
 | get | Host 动词；Lead/Worker 限域读取；控制台共用 | W:1991–2026、CS:108、FE/task-detail/client.ts:30–39；新增宏任务/项目列表，角色凭证不能借这些选择器扩读。 |
 | decide | 删除 CLI 与旧命名操作，能力进 continue | W:2183–2290、SV:723–730；helper 审批、边界回答、autoContinue 进入 continue 分支。 |
-| continue | Host 动词；Lead 凭证变体 | W:2828–3010；合并边界、scope 与现场处置，换 buddy 统一 route 或完整名字。 |
+| continue | Host 动词；Lead 凭证变体 | W:2828–3010；合并边界、scope 与现场处置，换 buddy 统一 route 或四元组。 |
 | takeover | 删除入口、命名操作与恢复路径 | W:3330–3435、PC:157–158、CL:125；旧代令牌轮换保证由 ADR 明确放弃。 |
 | cancel | Host 动词；Lead 凭证变体 | W:3438–3469；保留有序收尾、后代停止、真实停止证据，删除 Host commandId。 |
 | accept | Host 动词；Lead 凭证变体 | W:3853–3970、FE/task-detail/AcceptancePane.tsx:68–72 的读取；绑定 artifactId，改交付整合提示与三方合并核验。 |
@@ -250,7 +250,7 @@ help 只讲当前受众的方法和模型事实，不启动服务；console 沿�
 
 ### submit 的合法组合
 
-公共边界沿用 title 的 200 字符、task 的 1 MiB、expectedSeconds 的 1–86400 整数上限；expectedSeconds 必填且只用于提醒/路由输入，不停止工作。buddy 必填 route 或完整名字；cwd 决定项目和 none 的执行位置，Git 两种检出仍区分源 cwd 与实际执行 cwd。依据 S:23–43,219–240,434–450,468–536、ADR:55–76。
+公共边界沿用 title 的 200 字符、task 的 1 MiB、expectedSeconds 的 1–86400 整数上限；expectedSeconds 必填且只用于提醒/路由输入，不停止工作。buddy 必填 route 或四元组；cwd 决定项目和 none 的执行位置，Git 两种检出仍区分源 cwd 与实际执行 cwd。依据 S:23–43,219–240,434–450,468–536、ADR:55–76。
 
 | 条件 | 必填及不适用字段 |
 | --- | --- |
@@ -270,7 +270,7 @@ inputs/writeScope 在提交边界沿用最多 256 项与现有越界校验；后
 | 打回交付/失败后续接 | runId + 对应 artifactId 或已有固定结果/turnId + 非空 input（最多 1 MiB）；省略 buddy 沿用当前，不自动重新路由。旧结果可读但不能再当本次待验收产物。 |
 | 回答边界 | runId+requestId+decision=approve/decline，可有 note；decline 不带 helpers/autoContinue。批准 helper 才带完整 helpers 包与必填 autoContinue，其他情形该字段不出现。 |
 | 批准 helper | 最多 8 个完整任务包：title/task/cwd/buddy/checkout/access/expectedSeconds 和适用 inputs/writeScope/accessNote；归属由父请求/凭证推出，不填 Host 名、提交 requestId 或宏任务。固定请求身份避免重发多建 helper。 |
-| 改派/换手 | buddy=route 或完整名字，删除 reroute；显式改派沿用 note 要求。带委派权的 Lead 仍需完整显式 buddy，不允许 route；普通显式选择不再有终身锁定。 |
+| 改派/换手 | buddy=route 或四元组，删除 reroute；显式改派沿用 note 要求。带委派权的 Lead 仍需完整显式 buddy，不允许 route；普通显式选择不再有终身锁定。 |
 | 换权限/范围 | 随新回合的 input 给 access、适用的 accessNote、writeScope；省略保留当前授权，变更只从本回合生效；read 不带 writeScope。历史 scope/输入/封存不改，相关执行停止仍要证明。 |
 | 活 helper | 有活 helper 时必填 helperPolicy=keep/cancel，无活 helper 不出现；cancel 后确认停止再复用共享检出。 |
 | 现场处置 | runId+requestId，resolution 指定 restore/adopt/abandon、observedFingerprint、适用 paths/note；只处置不带 input 不开回合，同时带 input 则先处置成功再续派。部分处置后剩余现场签发新 requestId，不在同一已回应请求上再写另一动作。 |
@@ -303,7 +303,7 @@ execution_issues/service_issues 当前按 stage 替换（DB:250–264），selec
 | expectedRevision、Host commandId | 回应请求/产物时改确切 requestId/artifactId，失败续接必要时用已有 turnId；cancel、无产物 conclude、amend 按各自自然事实重发，不新发 id。 |
 | expectedGoalRevision | amend 只比较当前 goal 的内容；相同回当前，不同追加。保留目标历史主键/排序，不再限制两个 Host 并发修订。依据 W:4919–4944。 |
 | expectedScopeVersion | 新范围与本次续派绑定，仅从该回合生效；scope_version 留作历史主键，Host 不填数字。依据 W:4973–5015。 |
-| harness/provider/model/effort | 合为 buddy，完整名字查目录仍得四元组与原有目录/启用校验，不接受部分约束。依据 S:516–524。 |
+| harness/provider/model/effort | 合为 buddy，以四元组查目录，仍有原有目录/启用校验，不接受部分约束。依据 S:516–524。 |
 | buddyLocked/buddy_locked | 全删字段、列、冲突及原约束继承分支：W:1444,1487,2846–2855,6957、routing/router_boundary_data.py:269。省略 buddy 仍沿用当前；显式 route 可换模型。 |
 | macroTask/macroTaskOf、宏任务归属默认 | create 独立创建；Host submit 明填 macroTaskId/standalone，Lead 从凭证推出。依据 S:434–451、W:1708–1718。 |
 | executionWorkspace、base.kind/ref | 平铺为 checkout/access/inputs/writeScope，检出从 Host 当前工作树开始，放弃任意 commit 起点；每回合固定输入仍保留。依据 S:316–371。 |
@@ -311,7 +311,7 @@ execution_issues/service_issues 当前按 stage 替换（DB:250–264），selec
 | submit.targetRef | 删除输入，源工作树事实最多给候选；accept 仍明确目标，旧封存中的字段不改。依据 S:369–371、W:583–616。 |
 | exclusiveResources | 删除 Host/helper 的外部资源互斥声明，放弃该保证，不另造机制；执行 cwd 准入与停止清理保留。依据 BS:835–859,1805–1810。 |
 | requiredCapabilities | 删除 Host/helper 字段；permission:access 由机制加，内部 Router 的 decision 等需求保留。依据 routing/decision.py:418–432、BS:1676–1682。 |
-| reroute | 换 buddy 一律 route 或完整名字；省略保持当前。依据 W:2912–2916。 |
+| reroute | 换 buddy 一律 route 或四元组；省略保持当前。依据 W:2912–2916。 |
 | targetRunId | 不再承载 Host 控制能力，但 helper 操作继续区分根/目标并核谱系；Lead 不能借根 Host 动名下任务。依据 W:2828–2844。 |
 | Host 自编 inquiryId | 提问改由 runId+question 推出，回复给 id；旧问询可按原 id 读取，不重写消息。依据 inquiry.py:70–90、BS:2702–2727。 |
 

@@ -95,7 +95,7 @@ SSL_CERT_FILE SSL_CERT_DIR REQUESTS_CA_BUNDLE CURL_CA_BUNDLE NODE_EXTRA_CA_CERTS
 
 核对 `native_run._catalog`、`_declared_model_value`、`_configure`、`check_preparation`、`adapter.py`、`registry.py`、ACP client 的 initialize/session 操作：没有按供应方、账户类型或登录方式的允许清单，没有第一方限定，没有 authenticate/登录流程；选定命令就绪与原生声明选项可用性的检查不是供应方封锁。`authMethods` 和账户状态没有被当成允许执行的门槛；目录的 `accountStatus=not-applicable` 是没有单独读取账户的事实。
 
-四段名字现在来自 `dsh` 加 ACP `configOptions.model` 每个选项 value 内原生 JSON 二元组的 provider/model，以及 `reasoning_effort` 的原生 value；group/display name 不改成供应方 ID，也不制造 unknown 供应方。官方 CLI 的 Shared deployment behavior 使用 `deepseek-official` 这个原生名字；本项目并不替 DSH 选择默认供应方。取消隔离后仍从同一 ACP 二元组和原生 effort value 取名，对未改设置的用户不应变化；这一结论还需要 Host 的真实无模型目录对比，不能用模拟程序保证。
+四元组现在来自 `dsh` 加 ACP `configOptions.model` 每个选项 value 内原生 JSON 二元组的 provider/model，以及 `reasoning_effort` 的原生 value；group/display name 不改成供应方 ID，也不制造 unknown 供应方。官方 CLI 的 Shared deployment behavior 使用 `deepseek-official` 这个原生名字；本项目并不替 DSH 选择默认供应方。取消隔离后仍从同一 ACP 二元组和原生 effort value 取名，对未改设置的用户不应变化；这一结论还需要 Host 的真实无模型目录对比，不能用模拟程序保证。
 
 `workflow.py` 继续以 DSH 的 `storageOwner=buddy-goal` 判断共享会话存储，没有改动。会话 root、绑定形式与归属均不变，已有微任务共享会话沿用一个原生读法；按尝试存放的更旧会话仍按既有 `private-native-home-required` 重建，没有兼容读取或同回合恢复失败后新建的机制。
 

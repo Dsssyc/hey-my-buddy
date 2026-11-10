@@ -75,7 +75,7 @@
 - `buddy/harnesses/discovery._discover` 原先丢掉候选握手的 billingByProvider，本批修在返回结果的根因处：保留被选中候选的已有计费事实，才会到达健康记录和 `billing.for_provider`。
 - `buddy/harnesses/runtime_selection.controller_environment` 与 `install/launcher` 的 allowlist 只清掉被删除的 Claude 策略与假 auth-status 控制变量，其他 harness 的运行模块和环境选择不变。
 
-`blackboard/catalog` 的归一化、lookup、提议四段名字、存储和配置选择原本已经不限定供应方，直接沿用并补模拟握手→目录→配置选择→执行的覆盖；其源码无需改。既有 `billing.for_provider` 按确切供应方读取计费、缺失返回 unknown 的公共函数也无需改。没有新增存储形式、schema 或旧名称别名。
+`blackboard/catalog` 的归一化、lookup、提议四元组、存储和配置选择原本已经不限定供应方，直接沿用并补模拟握手→目录→配置选择→执行的覆盖；其源码无需改。既有 `billing.for_provider` 按确切供应方读取计费、缺失返回 unknown 的公共函数也无需改。没有新增存储形式、schema 或旧名称别名。
 
 ## 假进程竞态
 

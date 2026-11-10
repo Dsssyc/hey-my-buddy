@@ -35,6 +35,14 @@ _Avoid_: `看板` (not the same word as page; it named both a page and a stored 
 A participant, normally an agent, that acts on the blackboard in the Host, Worker or Router role. A buddy is identified by its harness, provider, model and reasoning effort, for example `dsh / deepseek-official / deepseek-flash / off`; anything of that shape is a buddy, and one run of it is an execution of that buddy. Buddies are peers in standing and interact only through the blackboard.
 _Avoid_: Buddy (for the product or the blackboard), peer Buddy; configuration, profile, model or template (for a buddy); 伙伴 (Chinese text keeps the word buddy, as it keeps Host, Worker, Router and harness)
 
+**四元组 / complete name**:
+A buddy's four parts written together as `harness / provider / model / effort`, for example `claude / anthropic / fable-5.2 / max`; it names exactly one buddy wherever a buddy is named.
+_Avoid_: 四段名字, 完整名字, four-part name, full name
+
+**别名 / alias**:
+A short name the user gives one buddy, for example Claudea. Wherever the user names a buddy the alias stands for that buddy's complete name, and a list of buddies writes it in square brackets after the complete name, `claude / anthropic / fable-5.2 / max [Claudea]`. Records keep the buddy, never the alias, so renaming an alias changes no history. Decided by the developer on 2026-11-10; not built yet.
+_Avoid_: label (today the harness's display name of a model with its effort, which goes when aliases are built), nickname
+
 **同型 buddy / buddy kind**:
 The harness, model and reasoning effort of a buddy, without its provider. Buddies of one kind share one evaluation, so a change of provider keeps it and a change of harness does not. The console does not show the word: it names a buddy kind by its harness, model and reasoning effort.
 _Avoid_: buddy model, 型号 (for the kind; 型号 reads as a model)
