@@ -33,7 +33,11 @@ async function labelToUnderline(target: Locator, textSelector?: string): Promise
     const link = node.getBoundingClientRect();
     const after = getComputedStyle(node, "::after");
     const underlineTop = link.bottom - parseFloat(after.bottom) - parseFloat(after.height);
-    return underlineTop - words.bottom;
+    // A text Range measures the font's ink box. Include its half-leading to
+    // measure the line box requested by the layout contract.
+    const lineHeight = parseFloat(getComputedStyle(text instanceof Element ? text : node).lineHeight);
+    const lineBottom = (words.top + words.bottom + lineHeight) / 2;
+    return underlineTop - lineBottom;
   }, textSelector);
 }
 
@@ -390,37 +394,24 @@ for (const { locale, catalog } of languages) for (const width of [700, 800, 900,
   });
 }
 
+const underlinedViews = [
+  { name: "top navigation", hash: "#tasks", selector: 'header nav a[aria-current="page"]', height: "header" },
+  { name: "task filters", hash: "#tasks", selector: '[data-slot="macro-filter-tabs"] [data-slot="tabs-trigger"][data-state="active"]', textSelector: '[data-slot="macro-filter-name"]' },
+  { name: "Buddy sections", hash: "#buddies/catalog", selector: '[data-slot="buddy-header"] a[aria-current="page"]', height: '[data-slot="buddy-header"]' },
+  { name: "evaluation detail", hash: "#buddies/evaluation/codex/00000000-0000-4000-8000-000000000003/high", selector: '[data-slot="evaluation-detail"] nav a[aria-current="page"]' },
+];
 for (const { locale } of languages) for (const theme of ["dark", "light"] as const) for (const width of [1440, 390]) {
   test.describe(`underlined navigation at ${width}px in ${locale} ${theme}`, () => {
     test.use({ locale, viewport: { width, height: 900 }, reducedMotion: "reduce" });
-    test("keeps labels five to seven pixels above their underline", async ({ page }) => {
+    for (const view of underlinedViews) test(`keeps ${view.name} labels five to seven pixels above their underline`, async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
-      await open(page, "#tasks");
-      const top = page.getByRole("banner").first();
-      expect((await box(top)).height).toBe(36);
-      const topGap = await labelToUnderline(top.getByRole("navigation").locator('a[aria-current="page"]'));
-      expect(topGap).toBeGreaterThanOrEqual(5);
-      expect(topGap).toBeLessThanOrEqual(7);
-      const taskTab = page.locator('[data-slot="macro-filter-tabs"] [data-slot="tabs-trigger"][data-state="active"]');
-      await expect(taskTab).toBeVisible();
-      const taskGap = await labelToUnderline(taskTab, '[data-slot="macro-filter-name"]');
-      expect(taskGap).toBeGreaterThanOrEqual(5);
-      expect(taskGap).toBeLessThanOrEqual(7);
-
-      await open(page, "#buddies/catalog");
-      const header = page.locator('[data-slot="buddy-header"]');
-      expect((await box(header)).height).toBe(36);
-      const buddyGap = await labelToUnderline(header.locator('a[aria-current="page"]'));
-      expect(buddyGap).toBeGreaterThanOrEqual(5);
-      expect(buddyGap).toBeLessThanOrEqual(7);
-
-      await open(page, "#buddies/evaluation/codex/00000000-0000-4000-8000-000000000003/high");
-      const detail = page.locator('[data-slot="evaluation-detail"]');
-      const detailTab = detail.getByRole("navigation").locator('a[aria-current="page"]');
-      await expect(detailTab).toBeVisible();
-      const detailGap = await labelToUnderline(detailTab);
-      expect(detailGap).toBeGreaterThanOrEqual(5);
-      expect(detailGap).toBeLessThanOrEqual(7);
+      await open(page, view.hash);
+      const label = page.locator(view.selector);
+      await expect(label).toBeVisible();
+      if (view.height) expect((await box(page.locator(view.height))).height).toBe(36);
+      const gap = await labelToUnderline(label, view.textSelector);
+      expect(gap).toBeGreaterThanOrEqual(5);
+      expect(gap).toBeLessThanOrEqual(7);
       await expectNoSidewaysScroll(page);
     });
   });

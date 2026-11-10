@@ -28,7 +28,7 @@ export function RouterView({ snapshot, editor, location, onNavigate, attention, 
       {ROUTER_WORK.map(job => {
         const Icon = workIcons[job];
         const reason = job === "routing" && attention.roles ? t(`attention.${attention.roles}`) : undefined;
-        const description = [t(`routerWork.description.${job}`), reason].filter(Boolean).join(" ");
+        const description = [t(`routerWork.description.${job}`), reason].filter(Boolean).join("\n");
         return <Hint key={job} text={description} side="bottom"><a href={buddyHash({ view: "router", target: job })} aria-current={work === job ? "page" : undefined}
           className="flex h-8 items-center gap-2 rounded-sm px-3 text-sm whitespace-nowrap outline-none transition-colors duration-150 hover:bg-sunk aria-[current=page]:bg-past-wash aria-[current=page]:font-semibold aria-[current=page]:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
           onClick={event => { event.preventDefault(); onNavigate({ view: "router", target: job }); }}>
@@ -38,7 +38,7 @@ export function RouterView({ snapshot, editor, location, onNavigate, attention, 
       })}
     </nav>
     <ScrollArea className="min-h-0 min-w-0 flex-1" key={work}>
-      <div className="min-w-0 px-8 pt-6 pb-10" data-slot="router-detail">
+      <div className="min-w-0 px-8 pb-10" data-slot="router-detail">
         {work === "routing" ? <RoutingView snapshot={snapshot} editor={editor} onNavigate={onNavigate} />
           : work === "maintenance" ? <MaintenanceView snapshot={snapshot} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && !hidden} />
             : <ProfileSettingsView snapshot={snapshot} editor={editor} profileRunId={location.profileRunId} />}

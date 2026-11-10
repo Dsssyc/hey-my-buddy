@@ -115,6 +115,9 @@ for (const theme of ["dark", "light"] as const) for (const width of [1440, 390])
   expect(toolbarBox.x).toBe(catalogueBox.x);
   expect(toolbarBox.width).toBe(catalogueBox.width);
   expect(toolbarStyle).toEqual(catalogueStyle);
+  const detail = page.locator('[data-slot="router-detail"]');
+  const firstTitle = (await detail.getByRole("heading", { level: 3 }).first().boundingBox())!;
+  expect(firstTitle.y - toolbarBox.y - toolbarBox.height, "first section starts 24px below the toolbar").toBe(24);
   const links = toolbar.getByRole("link");
   for (const link of await links.all()) {
     const block = (await link.boundingBox())!;
@@ -127,6 +130,17 @@ for (const theme of ["dark", "light"] as const) for (const width of [1440, 390])
   expect(background).not.toBe(await links.nth(1).evaluate(node => getComputedStyle(node).backgroundColor));
   await links.nth(1).click();
   expect(await links.nth(1).evaluate(node => getComputedStyle(node).backgroundColor)).toBe(background);
+  const maintenanceTitle = (await detail.getByRole("heading", { level: 3 }).first().boundingBox())!;
+  expect(maintenanceTitle.y - toolbarBox.y - toolbarBox.height).toBe(24);
+  const viewport = toolbar.locator("..").locator(':scope > [data-slot="scroll-area"] > [data-slot="scroll-area-viewport"]');
+  await viewport.evaluate(node => { node.scrollTop = node.scrollHeight; });
+  expect((await toolbar.boundingBox())!.y).toBe(toolbarBox.y);
+  await links.nth(2).focus();
+  await page.keyboard.press("Enter");
+  await expect(links.nth(2)).toBeFocused();
+  expect(await viewport.evaluate(node => node.scrollTop)).toBe(0);
+  const profileTitle = (await detail.getByRole("heading", { level: 3 }).first().boundingBox())!;
+  expect(profileTitle.y - toolbarBox.y - toolbarBox.height).toBe(24);
   await expectNoSidewaysScroll(page);
   });
 });
@@ -183,6 +197,7 @@ for (const theme of ["dark", "light"] as const) for (const variant of ["success"
     }
     if (variant === "unset") {
       snapshot.configuration.routerBuddyIds = [];
+      snapshot.routingHealth.currentRouterBuddyId = null;
       snapshot.configuration.maintenanceBuddyId = null;
       snapshot.configuration.profileBuddyId = null;
     }
@@ -197,6 +212,26 @@ for (const theme of ["dark", "light"] as const) for (const variant of ["success"
   await expect(links.nth(1).locator(".bg-hand-mark")).toHaveCount(0);
   await expect(links.nth(2).locator(".bg-hand-mark")).toHaveCount(0);
   for (const link of await links.all()) await expect(link).not.toContainText(/最近|未设置|Latest|Not set|deepseek|dsh/);
+  if (variant !== "success") {
+    const description = (await links.first().getAttribute("aria-description"))!;
+    const [work, reason] = description.split("\n");
+    expect(work).toBe("在路由边界内，为一个微任务选择 Worker buddy。");
+    expect(reason.length).toBeGreaterThan(0);
+    await links.first().hover();
+    await expect(page.getByRole("tooltip")).toContainText(reason);
+    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCSS("white-space", "pre-line");
+    const lines = await page.locator('[data-slot="tooltip-content"]').evaluate((node, [work, reason]) => {
+      const text = node.firstChild!;
+      const range = document.createRange();
+      range.setStart(text, work.length - 1); range.setEnd(text, work.length);
+      const workBox = range.getBoundingClientRect();
+      range.setStart(text, work.length + 1); range.setEnd(text, work.length + 1 + reason.length);
+      return { workBottom: workBox.bottom, reasonTop: range.getBoundingClientRect().top };
+    }, [work, reason]);
+    expect(lines.reasonTop).toBeGreaterThanOrEqual(lines.workBottom);
+    await page.mouse.move(0, 0);
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
+  }
   await links.nth(1).hover();
   await expect(page.getByRole("tooltip")).toContainText("将已结束的微任务归入领域树与任务类型");
   const tip = (await page.getByRole("tooltip").boundingBox())!;
@@ -229,7 +264,7 @@ test.describe("maintenance domain outline", () => {
     for (let column = 1; column < 3; column++) expect(new Set(columns.map(row => Math.round(row[column]!)))).toHaveProperty("size", 1);
     expect(columns.every(row => row[0]! < row[1]! && row[1]! < row[2]!)).toBe(true);
     const rootNames = await rows.evaluateAll(nodes => nodes.filter(node => node.getAttribute("aria-level") === "1")
-      .map(node => node.querySelector(".domain-tree-name")!.lastElementChild!.getBoundingClientRect().x));
+      .map(node => node.querySelector(".domain-tree-name-text")!.getBoundingClientRect().x));
     expect(new Set(rootNames.map(Math.round)).size).toBe(1);
 
     const parentBar = tree.locator('[data-node="preview-domain-console"].domain-tree-row .domain-tree-bar');
@@ -253,6 +288,7 @@ test.describe("maintenance domain outline", () => {
     await expect(panel).toContainText("样式与排版");
     await page.keyboard.press("Escape");
     await expect(panel).toHaveCount(0);
+    await expect(childInfo).toBeFocused();
     const parent = rows.filter({ hasText: "控制台" }).first();
     await parent.focus();
     await expect(parent.locator(".domain-tree-info")).toHaveCSS("opacity", "1");

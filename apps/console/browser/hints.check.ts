@@ -191,9 +191,25 @@ test.describe("necessary hover hints and visible consequences", () => {
   });
 });
 
-for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) test.describe(`Router setting help ${locale} ${theme}`, () => {
-  test.use({ locale, viewport: { width: 1440, height: 1100 }, reducedMotion: "reduce" });
-  test("opens each explanation without covering inputs and closes by keyboard or outside click", async ({ page }) => {
+async function expectHelpPlacement(button: Locator, dialog: Locator, width: number) {
+  await expect(dialog).toBeVisible();
+  const placement = await button.evaluate(node => {
+    const anchor = node.closest('[data-slot="popover-anchor"]')!;
+    const label = anchor.querySelector("[id]")!.getBoundingClientRect();
+    const row = node.closest("h3") ?? node.closest('[role="group"]')!;
+    const ownContents = [label, node.getBoundingClientRect(), ...[...row.querySelectorAll('input, [role="radio"]')].map(control => control.getBoundingClientRect())];
+    return { left: label.left, bottom: Math.max(...ownContents.map(box => box.bottom)) };
+  });
+  const overlay = (await dialog.boundingBox())!;
+  expect(Math.abs(overlay.x - placement.left), "card starts at its own label").toBeLessThanOrEqual(1);
+  expect(overlay.y, "card clears its own label, question mark and controls").toBeGreaterThanOrEqual(placement.bottom - 1);
+  expect(overlay.x, "left viewport margin").toBeGreaterThanOrEqual(16);
+  expect(overlay.x + overlay.width, "right viewport margin").toBeLessThanOrEqual(width - 16);
+}
+
+for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.describe(`Router setting help ${locale} ${theme} ${width}px`, () => {
+  test.use({ locale, viewport: { width, height: 1100 }, reducedMotion: "reduce" });
+  test("anchors explanations below their own row with viewport margins and closes by keyboard or outside click", async ({ page }) => {
     const zh = locale === "zh-CN";
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await open(page, "#buddies/router/routing");
@@ -204,20 +220,23 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
     for (const [index, meaning] of meanings.entries()) {
       await expect(buttons.nth(index)).toHaveAttribute("data-size", "icon-sm");
       await expect(buttons.nth(index)).toHaveAttribute("aria-expanded", "false");
+      // Leave room for the preferred bottom placement; Radix may flip a card
+      // when its row is at the viewport edge.
+      await buttons.nth(index).locator('xpath=ancestor::*[@role="group"][1]').evaluate(node => node.scrollIntoView({ block: "center" }));
       await buttons.nth(index).click();
       const dialog = page.getByRole("dialog", { name: new RegExp(zh ? "关于" : "About") });
       await expect(dialog).toContainText(meaning);
       await expect(buttons.nth(index)).toHaveAttribute("aria-expanded", "true");
-      const overlay = await dialog.boundingBox();
-      for (const input of await page.locator('[data-slot="routing-work"] input, [data-slot="routing-work"] [role="radio"]').all()) {
-        const box = await input.boundingBox();
-        if (overlay && box) expect(overlay.x + overlay.width <= box.x || box.x + box.width <= overlay.x || overlay.y + overlay.height <= box.y || box.y + box.height <= overlay.y).toBe(true);
-      }
-      if (zh && index === 1) {
-        const destination = fileURLToPath(new URL("../../../tmp/router-ui/", import.meta.url));
+      await expectHelpPlacement(buttons.nth(index), dialog, width);
+      if (zh && theme === "dark" && width === 1440 && index === 1) {
+        const destination = fileURLToPath(new URL("../../../tmp/layout/", import.meta.url));
         await mkdir(destination, { recursive: true });
-        await page.screenshot({ path: `${destination}router-help-${theme}-1440.png` });
+        await page.screenshot({ path: `${destination}router-help-dark-1440.png` });
       }
+      const label = buttons.nth(index).locator('xpath=ancestor::*[@data-slot="popover-anchor"][1]').locator("[id]").first();
+      await label.click();
+      await expect(dialog).toHaveCount(0);
+      await buttons.nth(index).click();
       await buttons.nth(index).click();
       await expect(dialog).toHaveCount(0);
       await buttons.nth(index).click();
@@ -252,6 +271,21 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
     await expect(waitDialog).toBeVisible();
     await wait.click();
     await expect(waitDialog).toHaveCount(0);
+
+    for (const [work, title] of [["maintenance", zh ? "维护 buddy" : "Maintenance buddy"], ["profiles", zh ? "画像 buddy" : "Profile buddy"]]) {
+      await page.locator(`[data-slot="router-work-toolbar"] a[href="#buddies/router/${work}"]`).click();
+      const group = page.getByRole("group", { name: title, exact: true });
+      const button = group.locator('[data-slot="router-setting-help"]');
+      await button.click();
+      const dialog = page.getByRole("dialog", { name: `${zh ? "关于" : "About "}${title}`, exact: true });
+      await expectHelpPlacement(button, dialog, width);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(button).toBeFocused();
+      await button.click();
+      await group.getByRole("heading").locator("[id]").click();
+      await expect(dialog).toHaveCount(0);
+    }
 
     await expect(page.locator('[data-slot="routing-mode-consequence"]')).toHaveCount(0);
     await expectNoSidewaysScroll(page);
