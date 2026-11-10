@@ -1,7 +1,8 @@
+import { Joined } from "../i18n/Message";
 import { BuddyName } from "../components/AliasTag";
 import { useTranslation } from "react-i18next";
 import { CopyableIdentifier } from "../components/CopyableIdentifier";
-import { reasonText } from "../i18n/reason";
+import { ReasonMessage } from "../i18n/ReasonMessage";
 import { formatDuration } from "../i18n/format";
 import { Ask } from "./ask";
 import { BasisFold, endingText } from "./facts";
@@ -65,11 +66,12 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
       <span>{t("activity.toolCalls", { n: attempt.activity.toolCalls ?? t("unknown") })}</span>
     </span>
     : <Usage usage={turn?.tokenUsage ?? null} />;
+  const notes = [attempt?.releaseReason ? <ReasonMessage reason={attempt.releaseReason} /> : null,
+    attempt?.ending ? endingText(attempt.ending, t) : rejectionCode ? t(`providerRejection.${rejectionCode}`) : null,
+    failed && span.error ? span.error : null].filter(Boolean);
   const note = inputFailure ? t(`inputFailure.stage.${inputFailure.stage}`)
     : rejected && rejectionCode ? [t(`providerRejection.${rejectionCode}`), t("turn.rerouted")].join(" · ")
-    : [attempt?.releaseReason ? reasonText(attempt.releaseReason) : null,
-      attempt?.ending ? endingText(attempt.ending, t) : rejectionCode ? t(`providerRejection.${rejectionCode}`) : null,
-      failed && span.error ? span.error : null].filter(Boolean).join(" · ");
+    : notes.length ? <Joined items={notes} /> : undefined;
   return <Pane tabs={tabs} footer={running ? <LiveActivity className="border-t px-6 py-2.5" activity={attempt?.activity ?? null} stuck={reminders.possiblyStuck} nowMs={ctx.nowMs} /> : undefined} title={
     <PaneTitle title={t("step.turn", { n: index })}
       state={rejected ? t("turn.rejected") : running ? t("state.running") : failed ? t("state.failed") : unknown ? t("state.unknown") : t("state.ended")}

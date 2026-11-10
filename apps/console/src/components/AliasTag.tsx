@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, Fragment } from "react";
 import type { ReactNode } from "react";
 import type { Buddy } from "../types";
 
@@ -30,5 +30,16 @@ export function AliasTag({ alias }: { alias: string | null | undefined }) {
 /** A complete or abbreviated name followed by the same current alias everywhere. */
 export function BuddyName({ buddy, children }: { buddy: BuddyIdentity | null | undefined; children: ReactNode }) {
   const named = useNamedBuddy()(buddy);
-  return <span className="inline-flex items-center">{children}<AliasTag alias={named?.alias} /></span>;
+  return <span data-slot="buddy-name" className="inline">{children}<AliasTag alias={named?.alias} /></span>;
+}
+
+/** The same recorded four fields, with each word kept whole while separators can wrap. */
+export function BuddyIdentityName({ buddy, empty = "" }: { buddy: BuddyIdentity | null | undefined; empty?: string }) {
+  const parts = buddy ? [buddy.harness, buddy.provider, buddy.model, buddy.effort].filter(Boolean) : [];
+  return <BuddyName buddy={buddy}>{parts.length ? parts.map((part, index) => <Fragment key={index}>{index > 0 && " / "}<span className="whitespace-nowrap">{part}</span></Fragment>) : empty}</BuddyName>;
+}
+
+/** Square brackets belong only to nonvisual accessibility text in the console. */
+export function accessibleBuddyName(name: string | null, buddy: BuddyIdentity | null | undefined): string | null {
+  return name && buddy?.alias ? `${name} [${buddy.alias}]` : name;
 }

@@ -1,11 +1,12 @@
-import { BuddyName, useBuddies } from "../components/AliasTag";
+import { BuddyName, BuddyIdentityName, accessibleBuddyName, useBuddies } from "../components/AliasTag";
 import { useTranslation } from "react-i18next";
-import { reasonText } from "../i18n/reason";
+import { ReasonMessage } from "../i18n/ReasonMessage";
+import { Message } from "../i18n/Message";
 import { formatDuration } from "../i18n/format";
 import { Hint } from "@/components/hint";
 import { BasisFold } from "./facts";
 import { Band, Fold, Section, MomentRange, Pane, PaneTitle } from "./parts";
-import { quad, namedQuad } from "./names";
+import { quad } from "./names";
 import { parseTokenUsage } from "./parse";
 import type { ContentTabs } from "./parts";
 import type { Step } from "./steps";
@@ -50,12 +51,12 @@ export function RoutingPane({ step, ctx, tabs }: { step: Step; ctx: Context; tab
       </span>} />
     <Section name={t("routing.chosen")}><div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <span className="font-mono text-xs"><BuddyName buddy={span.routing?.selectedBuddy}>{quad(span.routing?.selectedBuddy) ?? unrecorded}</BuddyName></span>
-      {entry?.exploration.quota && entry.exploration.reselected && <Hint text={t("routing.preferredBuddy", { buddy: namedQuad(preferred) ?? unrecorded })}>
+      {entry?.exploration.quota && entry.exploration.reselected && <Hint text={<Message ns="taskDetail" id="routing.preferredBuddy" values={{ buddy: <BuddyIdentityName buddy={preferred} empty={unrecorded} /> }} />} description={t("routing.preferredBuddy", { buddy: accessibleBuddyName(quad(preferred), preferred) ?? unrecorded })}>
         <span tabIndex={0} className="border border-border px-1.5 py-0.5 text-xs text-ink2 focus-visible:outline focus-visible:outline-ring">{t("routing.exploration")}</span>
       </Hint>}
     </div></Section>
     <Section name={t("routing.reason")}>
-      <Fold text={[span.routing?.reason ? reasonText(span.routing.reason, buddies) : null, span.routing?.note].filter(Boolean).join("\n") || unrecorded} />
+      <Fold text={span.routing?.note ?? (span.routing?.reason ? "" : unrecorded)}>{span.routing?.reason && <div><ReasonMessage reason={span.routing.reason} /></div>}</Fold>
       {basis && <BasisFold basis={basis} />}
     </Section>
     {entry?.taskType !== undefined && <>

@@ -1,4 +1,7 @@
-import { reasonText } from "../i18n/reason";
+import type { ReactNode } from "react";
+import { Message } from "../i18n/Message";
+import { ReasonMessage } from "../i18n/ReasonMessage";
+import { BuddyIdentityName } from "../components/AliasTag";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
@@ -12,24 +15,24 @@ import type { Editor } from "../use-editor";
 import { RoutingRecords } from "./RoutingRecords";
 import { RouterList } from "./RouterList";
 import type { BuddyLocation } from "./navigation";
-import { addRouter, buddyQuad, moveRouter, removeRouter, routerLines, routerNote, withConfiguration } from "./roles";
+import { addRouter, moveRouter, removeRouter, routerLines, routerNote, withConfiguration } from "./roles";
 import type { RouterNote } from "./roles";
 
 const MODES = ["fast", "review"] as const satisfies readonly RoutingMode[];
 
 
 /** The note under the list, written out. */
-function noteText(note: RouterNote | null, buddies: Buddy[], t: TFunction<"buddies">): string | undefined {
+function noteText(note: RouterNote | null, buddies: Buddy[], t: TFunction<"buddies">): ReactNode {
   switch (note?.kind) {
     case undefined: return undefined;
     case "nobody": return t("roles.list.attention.none");
     case "head": {
       const buddy = buddies.find(candidate => candidate.buddyId === note.buddyId);
-      return t("roles.list.attention.head", {
-        name: buddy ? buddyQuad(buddy) : note.buddyId, reason: note.refusal ? t(`roles.refusal.${note.refusal}`) : t("roles.list.attention.gone"),
-      });
+      return <Message ns="buddies" id="roles.list.attention.head" values={{
+        name: buddy ? <BuddyIdentityName buddy={buddy} /> : note.buddyId, reason: note.refusal ? t(`roles.refusal.${note.refusal}`) : t("roles.list.attention.gone"),
+      }} />;
     }
-    case "unavailable": return note.reason ? reasonText(note.reason) : t("roles.list.attention.unavailable");
+    case "unavailable": return note.reason ? <ReasonMessage reason={note.reason} /> : t("roles.list.attention.unavailable");
     case "failing": return t("roles.list.attention.failing", { n: note.count });
   }
 }

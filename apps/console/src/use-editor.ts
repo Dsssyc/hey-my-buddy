@@ -1,3 +1,5 @@
+import { createElement, type ReactNode } from "react";
+import { Joined, Message } from "./i18n/Message";
 import { isReason } from "./reason";
 import type { Reason } from "./reason";
 import i18n from "i18next";
@@ -41,7 +43,7 @@ export function useEditor(
   const [aliasRefusal, setAliasRefusal] = useState<{ buddyId: string; reason: Reason } | null>(null);
   const [saving, setSaving] = useState(false);
   const [auxiliaryBusy, setAuxiliaryBusy] = useState(false);
-  const [error, setError] = useCopyState();
+  const [error, setError] = useCopyState<ReactNode>();
   const [blocked, setBlocked] = useCopyState();
   const [noticeCopy, setNoticeCopy] = useCopyState();
   const [noticeFading, setNoticeFading] = useState(false);
@@ -248,7 +250,7 @@ export function useEditor(
     setBlocked(""); setError(""); setNotice("");
     const blockedIssues = blockingIssues(base, current);
     if (blockedIssues.length) {
-      setError(() => i18n.t("console:cannotSaveItems", { v0: blockedIssues.length, v1: blockingIssues(base, current).map(issue => issue.message).join(" ") }));
+      setError(() => createElement(Message, { ns: "console", id: "cannotSaveItems", values: { v0: blockedIssues.length, v1: createElement(Joined, { items: blockingIssues(base, current).map(issue => issue.message), separator: " " }) } }));
       return;
     }
     setSaving(true);

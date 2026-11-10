@@ -1,3 +1,4 @@
+import { modelServiceSearchText } from "../buddy-display";
 import { BuddyName } from "../components/AliasTag";
 import i18n from "i18next";
 import { useState } from "react";
@@ -13,7 +14,7 @@ import { useCopyState } from "../i18n/use-copy-state";
 import { formatShortDateTime } from "../i18n/format";
 import type { Configuration, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
-import { buddyQuad, withConfiguration } from "./roles";
+import { withConfiguration } from "./roles";
 import { DomainTree } from "./DomainTree";
 import { MaintenanceActivity } from "./MaintenanceActivity";
 import { RouterSection, RouterField } from "./RouterSection";
@@ -111,7 +112,7 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
       <Input type="search" aria-label={t("maintenance.search")} value={query} onChange={e => setQuery(e.target.value)} />
       <ScrollArea className="h-72"><ul className="divide-y divide-line">
         <li><button className="w-full px-2 py-3 text-left hover:bg-sunk transition-colors duration-150 motion-reduce:transition-none" disabled={locked} onClick={() => { change({ maintenanceBuddyId: null }); setChoosing(false); }}>{t("maintenance.none")}</button></li>
-        {candidates.filter(b => buddyQuad(b).toLowerCase().includes(query.trim().toLowerCase())).map(b => <li key={b.buddyId}><button disabled={locked} className="w-full px-2 py-3 text-left font-mono text-xs wrap-anywhere hover:bg-sunk transition-colors duration-150 motion-reduce:transition-none" onClick={() => { change({ maintenanceBuddyId: b.buddyId }); setChoosing(false); }}><BuddyName buddy={b}>{[b.harness, b.provider, b.model, b.effort].join(" / ")}</BuddyName></button></li>)}
+        {candidates.filter(b => modelServiceSearchText(b).includes(query.trim().toLowerCase())).map(b => <li key={b.buddyId}><button disabled={locked} className="w-full px-2 py-3 text-left font-mono text-xs wrap-anywhere hover:bg-sunk transition-colors duration-150 motion-reduce:transition-none" onClick={() => { change({ maintenanceBuddyId: b.buddyId }); setChoosing(false); }}><BuddyName buddy={b}>{[b.harness, b.provider, b.model, b.effort].join(" / ")}</BuddyName></button></li>)}
         {candidates.length === 0 && <li className="px-2 py-3 text-xs text-ink3">{t("maintenance.noCandidates")}</li>}
       </ul></ScrollArea>
     </DialogContent></Dialog>

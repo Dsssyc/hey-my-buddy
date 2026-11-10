@@ -1,5 +1,5 @@
 import { Tooltip as TooltipPrimitive, Slot } from "radix-ui";
-import { useEffect, useRef, useState, type ReactElement, type ComponentProps } from "react";
+import { useEffect, useRef, useState, type ReactElement, type ReactNode, type ComponentProps } from "react";
 import { Tooltip, TooltipContent, TOOLTIP_DELAY_MS } from "@/components/ui/tooltip";
 
 /** Tooltip state belongs to the tooltip; the target may have its own state (tabs, disclosures). */
@@ -18,13 +18,13 @@ function HintTarget({ children, "data-state": tooltipState, ...props }: Componen
  * Focus that a dialog or a script moves to the control does not show them: only
  * focus the keyboard brought, which the browser draws a ring for.
  */
-export function Hint({ text, children, delayFocus = false, side = "top" }: { text?: string; children: ReactElement; delayFocus?: boolean; side?: "top" | "bottom" }) {
+export function Hint({ text, description, children, delayFocus = false, side = "top" }: { text?: ReactNode; description?: string; children: ReactElement; delayFocus?: boolean; side?: "top" | "bottom" }) {
   const [open, setOpen] = useState(false);
   const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelFocus = () => { if (focusTimer.current !== null) clearTimeout(focusTimer.current); focusTimer.current = null; };
   useEffect(() => cancelFocus, []);
   return <Tooltip {...(delayFocus ? { open, onOpenChange: setOpen } : {})}>
-    <TooltipPrimitive.Trigger asChild aria-description={text || undefined}
+    <TooltipPrimitive.Trigger asChild aria-description={description ?? (typeof text === "string" ? text || undefined : undefined)}
       onFocus={event => {
         if (!(event.target as Element).matches(":focus-visible")) event.preventDefault();
         else if (delayFocus) {

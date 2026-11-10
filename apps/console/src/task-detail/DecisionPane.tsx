@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { reasonText } from "../i18n/reason";
+import { ReasonMessage } from "../i18n/ReasonMessage";
 import { actorText } from "../actor";
 import type { Actor } from "../types";
 import { BasisFold } from "./facts";
@@ -60,7 +60,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
       {request && <Quote>
         <p data-slot="request-kind" className="mb-1 text-xs text-ink3">{t(`decision.kind.${kindKey(request)}`)}</p>
         {full ? <>
-          {inputFailure ? <InputFailureFacts failure={inputFailure} /> : <Fold text={reason ? reasonText(reason) : full.summary ?? t("unrecorded")} />}
+          {inputFailure ? <InputFailureFacts failure={inputFailure} /> : <Fold text={reason ? "" : full.summary ?? t("unrecorded")}>{reason && <ReasonMessage reason={reason} />}</Fold>}
           <div className="mt-2"><Facts items={[
             ...(full.attempted ? [[t("decision.attempted"), <Fold key="attempted" text={full.attempted} />] as [string, ReactNode]] : []),
             ...(full.neededWork.length ? [[t("decision.needed"), <Lines key="needed" items={full.neededWork} />] as [string, ReactNode]] : []),
@@ -70,7 +70,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
           {full.childTaskId && <p className="mt-2"><LinkButton onClick={() => ctx.open(full.childTaskId!)}>{t("decision.child")}</LinkButton></p>}
           {more > 0 && <p className="mt-2 text-xs text-ink3">{t("decision.more", { n: more })}</p>}
           {full.preparationError && <p className="mt-2 text-fail"><code className="font-mono text-xs">{full.preparationError.code}</code> · {full.preparationError.message}</p>}
-        </> : inputFailure ? <InputFailureFacts failure={inputFailure} /> : <p className="text-ink3">{reason ? reasonText(reason) : audit ? t("unrecorded") : t("loading")}</p>}
+        </> : inputFailure ? <InputFailureFacts failure={inputFailure} /> : <p className="text-ink3">{reason ? <ReasonMessage reason={reason} /> : audit ? t("unrecorded") : t("loading")}</p>}
         {basis && <BasisFold basis={basis} />}
         {entry?.source && entry.source !== "model-selection" && <p className="mt-2 text-xs text-ink3">{t(`routing.sources.${entry.source}`, { defaultValue: entry.source })}</p>}
       </Quote>}

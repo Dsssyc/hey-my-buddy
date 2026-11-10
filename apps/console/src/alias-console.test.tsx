@@ -1,3 +1,4 @@
+import { ReasonMessage } from "./i18n/ReasonMessage";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
@@ -60,7 +61,7 @@ for (const language of ["zh", "en"]) for (const reason of reasons) it(`keeps ${r
   const refusal = await screen.findByRole("alert");
   input = await screen.findByRole("textbox", { name: language === "zh" ? "别名" : "Alias" });
   expect(refusal.textContent).toBe(reasonText(reason));
-  expect(refusal.closest('[data-slot=buddy-alias]')).toBe(input.closest('[data-slot=buddy-alias]'));
+  expect(refusal.closest('[data-slot=buddy-panel]')).toBe(input.closest('[data-slot=buddy-panel]'));
   expect(input.getAttribute("aria-describedby")).toBe(refusal.id);
   expect(input.getAttribute("aria-invalid")).toBe("true");
   expect((input as HTMLInputElement).value).toBe("duplicate");
@@ -98,7 +99,7 @@ it("searches aliases and four-part names in both catalogue and Router candidates
   expect(modelServiceSearchText(buddy)).toContain("review desk");
   expect(modelServiceSearchText(buddy)).toContain(MEDIUM.toLowerCase());
   expect(routerCandidates([buddy], [], "review", "REVIEW DESK")[0].buddy).toBe(buddy);
-  expect(buddyQuad(buddy)).toBe(`${MEDIUM} [Review desk]`);
+  expect(buddyQuad(buddy)).toBe(MEDIUM);
 });
 
 it("resolves aliases by identity fields and draws no tag for an unset alias", () => {
@@ -112,6 +113,25 @@ it("resolves aliases by identity fields and draws no tag for an unset alias", ()
 it("adds the current alias to buddy identities nested in routing reasons", () => {
   const buddy = { ...snapshot().buddies[0], alias: "Review desk" };
   const identity = { harness: buddy.harness, provider: buddy.provider, model: buddy.model, effort: buddy.effort };
-  expect(reasonText({ code: "alias.conflict", params: { conflictingBuddy: identity } }, [buddy]))
-    .toBe(`这个别名已被 ${MEDIUM} [Review desk] 使用。`);
+  const { container } = render(<BuddyNamesProvider buddies={[buddy]}><ReasonMessage reason={{ code: "alias.conflict", params: { conflictingBuddy: identity } }} /></BuddyNamesProvider>);
+  expect(container.textContent).toBe(`这个别名已被 ${MEDIUM}Review desk 使用。`);
+  expect(container.querySelector('[data-slot=alias-tag]')?.textContent).toBe("Review desk");
+});
+
+it("uses the Buddy draft alias in the page-wide blocked-save explanation", async () => {
+  const state = snapshot();
+  state.buddies[0].enabled = false;
+  const f = fixture(state);
+  window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(MEDIUM_ID)}`;
+  render(<App suppliedApi={f.api} />);
+  const user = userEvent.setup();
+  await user.type(await screen.findByRole("textbox", { name: "别名" }), "Draft desk");
+  await user.click(screen.getByRole("switch", { name: "启用 medium" }));
+  state.buddies[0].available = false;
+  await waitFor(() => expect(document.querySelector('[data-slot=model-drawer] [role=alert]')?.textContent).toContain("无法启用"), { timeout: 4500 });
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  const explanation = screen.getAllByRole("alert")[0];
+  expect(explanation.querySelector('[data-slot=alias-tag]')?.textContent).toBe("Draft desk");
+  expect(explanation.textContent).not.toMatch(/[\[\]]/);
+  expect(f.command).not.toHaveBeenCalled();
 });

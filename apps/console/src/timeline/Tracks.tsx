@@ -1,4 +1,5 @@
-import { AliasTag, useNamedBuddy } from "../components/AliasTag";
+import { Joined } from "../i18n/Message";
+import { AliasTag, BuddyName, accessibleBuddyName, useNamedBuddy } from "../components/AliasTag";
 import { buddyUsesLightInk, leadingBuddyColor, runningBuddyColor } from "./buddyColors";
 import { IsolatedStatusMark } from "./IsolatedStatusMark";
 import { HarnessLogo } from "../buddies/HarnessLogo";
@@ -8,7 +9,7 @@ import i18n from "i18next";
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 import { clockTime, spanOutcome, outcomeLabel, buddyLabel, buddyNameParts, buddyColorKey, displayTitle, eventDetails, eventName } from "../macro-task-display";
-import type { TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
+import type { TimelineBuddy, TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
 import type { TimelineScale } from "./scale";
 import { parseTimelineInstant as instant } from "./instant";
 import { formatClock, formatClockMinutes, formatDuration } from "../i18n/format";
@@ -46,7 +47,8 @@ export function markerReadout(marker: TimelineMarker): string {
   });
 }
 
-export function spanReadout(span: TimelineSpan, nowMs: number, row?: TimelineRow): string {
+type ReadoutPart = string | { buddy: TimelineBuddy; name: string };
+function spanReadoutParts(span: TimelineSpan, nowMs: number, row?: TimelineRow): ReadoutPart[] {
   const outcome = spanOutcome(span);
   const start = instant(span.startAt);
   const end = instant(span.endAt) ?? (outcome === "running" || outcome === "open" || outcome === "unknown" ? nowMs : null);
@@ -55,13 +57,25 @@ export function spanReadout(span: TimelineSpan, nowMs: number, row?: TimelineRow
       : span.kind === "host" ? i18n.t(row?.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost") : i18n.t(`tasks:kind.${span.kind}`);
   const reminders = span.reminders;
   return [head, start === null ? null : clockTime(start), end === null ? null : clockTime(end),
-    start !== null && end !== null && end >= start ? formatDuration(end - start) : null, buddyLabel(span.buddy),
-    span.buddy && !span.buddy.alias ? [span.buddy.harness, span.buddy.provider, span.buddy.model, span.buddy.effort].map(value => value ?? i18n.t("tasks:unknown")).join(" / ") : null,
+    start !== null && end !== null && end >= start ? formatDuration(end - start) : null,
+    span.buddy ? { buddy: span.buddy, name: buddyLabel(span.buddy) } : buddyLabel(null),
+    span.buddy ? { buddy: span.buddy, name: [span.buddy.harness, span.buddy.provider, span.buddy.model, span.buddy.effort].map(value => value ?? i18n.t("tasks:unknown")).join(" / ") } : null,
     outcome === "unknown" ? i18n.t("tasks:drawing.stopUnconfirmed") : outcomeLabel(span, outcome),
     span.expectedSeconds === null ? null : i18n.t("tasks:drawing.expected", { duration: formatDuration(span.expectedSeconds * 1000) }),
     reminders?.possiblyStuck ? i18n.t("tasks:drawing.silent", { duration: formatDuration(nowMs - instant(reminders.lastNativeEventAt ?? span.startAt)!) }) : null,
     ...(span.inquiries ?? []).map(inquiry => i18n.t("tasks:drawing.inquiryReadout", { at: clockTime(inquiry.createdAt), state: i18n.t(`taskDetail:inquiry.${inquiry.state}`) })),
-  ].filter(Boolean).join(" · ");
+  ].filter((part): part is ReadoutPart => part !== null && part !== "");
+}
+
+/** A plain accessibility label, separate from the visible readout's React elements. */
+export function spanReadout(span: TimelineSpan, nowMs: number, row?: TimelineRow): string {
+  return spanReadoutParts(span, nowMs, row).map(part => typeof part === "string" ? part : accessibleBuddyName(part.name, part.buddy)).join(" · ");
+}
+
+export function SpanReadout({ span, nowMs, row }: { span: TimelineSpan; nowMs: number; row?: TimelineRow }) {
+  const named = useNamedBuddy();
+  const parts = spanReadoutParts(span, nowMs, row);
+  return <Joined items={parts.map(part => typeof part === "string" ? part : <BuddyName buddy={named(part.buddy)}>{part.name}</BuddyName>)} />;
 }
 
 /** The same scale draws the one axis and all rows; waits cross every break. */

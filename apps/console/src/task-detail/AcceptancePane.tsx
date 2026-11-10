@@ -1,4 +1,4 @@
-import { reasonText } from "../i18n/reason";
+import { ReasonMessage } from "../i18n/ReasonMessage";
 import { useTranslation } from "react-i18next";
 import type { ReactNode } from "react";
 import { useContext } from "react";
@@ -77,7 +77,7 @@ export function AcceptancePane({ step, ctx }: { step: Step; ctx: Context }) {
           ...(conclusion.attemptId ? [[t("acceptance.attempt"), conclusion.attemptId, true] as [string, string, boolean]] : []),
           ...(conclusion.artifactId ? [[t("acceptance.artifactRef"), conclusion.artifactId, true] as [string, string, boolean]] : []),
         ]} />
-        <Fold text={conclusion.reason ? reasonText(conclusion.reason) : conclusion.note ?? unrecorded} />
+        <Fold text={conclusion.reason ? "" : conclusion.note ?? unrecorded}>{conclusion.reason && <ReasonMessage reason={conclusion.reason} />}</Fold>
       </div>
     </Section></DetailItem>}
     {(unconfirmed || ending?.cause) && <Section name={t("acceptance.exception")}>

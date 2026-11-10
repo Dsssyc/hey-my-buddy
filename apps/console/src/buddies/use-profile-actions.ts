@@ -1,12 +1,13 @@
 import i18n from "i18next";
 import { useTranslation } from "react-i18next";
-import { useEffect, useRef, useState } from "react";
+import { createElement, useEffect, useRef, useState, type ReactNode } from "react";
 import { z } from "zod";
 import { ApiError, errorText, isSessionExpiredRefusal } from "../api";
 import type { ConsoleApi } from "../api";
 import { isReason } from "../reason";
 import type { Reason } from "../reason";
 import { reasonText } from "../i18n/reason";
+import { ReasonMessage } from "../i18n/ReasonMessage";
 import type { Model, ProfileRun, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 
@@ -14,7 +15,7 @@ const startReply = z.discriminatedUnion("status", [
   z.object({ status: z.literal("unavailable"), reason: z.custom<Reason>(isReason) }),
   z.object({ status: z.literal("running"), profileRunId: z.string().min(1), runId: z.string().min(1), buddyId: z.string().min(1), usesQuota: z.literal(true).optional() }),
 ]);
-export type ProfileNotice = { id: number; model: string; run?: ProfileRun; message?: () => string };
+export type ProfileNotice = { id: number; model: string; run?: ProfileRun; message?: () => ReactNode };
 export const PROFILE_NOTICE_MS = 6000;
 
 /** Observe transitions in recorded runs, with one short-lived notice per model. */
@@ -51,7 +52,9 @@ export function useProfileActions({ snapshot, editor, api, refresh, mutationsAva
   const generalLock = !editor.sessionWritable ? i18n.t("buddies:pane.locked.session") : !mutationsAvailable ? i18n.t("buddies:models.refused")
     : !editor.editing || busy ? i18n.t("buddies:pane.locked.saving") : editor.changeCount ? i18n.t("buddies:modelProfile.saveFirst") : undefined;
   const profileLock = generalLock ?? (!snapshot.configuration?.profileBuddyId ? i18n.t("buddies:modelProfile.noBuddy")
-    : snapshot.configuration.profileUnavailableReason ? reasonText(snapshot.configuration.profileUnavailableReason) : undefined);
+    : snapshot.configuration.profileUnavailableReason ? createElement(ReasonMessage, { reason: snapshot.configuration.profileUnavailableReason }) : undefined);
+  const profileLockDescription = typeof profileLock === "string" ? profileLock
+    : snapshot.configuration?.profileUnavailableReason ? reasonText(snapshot.configuration.profileUnavailableReason) : undefined;
   const maintenanceLock = generalLock ?? (!snapshot.configuration?.maintenanceBuddyId ? t("evaluation.noMaintenanceBuddy")
     : undefined);
   async function build(models: Model[]) {
@@ -64,7 +67,7 @@ export function useProfileActions({ snapshot, editor, api, refresh, mutationsAva
           const parsed = startReply.safeParse(await api.command("profile_start", { modelId: model.modelId }, snapshot.csrfToken));
           if (!parsed.success) throw new ApiError("INVALID_RESPONSE", () => i18n.t("buddies:modelProfile.invalidReply"));
           if (parsed.data.status === "running") tracked.current.add(parsed.data.profileRunId);
-          else { const reason = parsed.data.reason; notice(model.displayName, { message: () => reasonText(reason) }); }
+          else { const reason = parsed.data.reason; notice(model.displayName, { message: () => createElement(ReasonMessage, { reason }) }); }
         } catch (failure) {
           notice(model.displayName, { message: () => errorText(failure) });
           if (isSessionExpiredRefusal(failure)) break;
@@ -83,5 +86,5 @@ export function useProfileActions({ snapshot, editor, api, refresh, mutationsAva
     } catch (failure) { notice("", { message: () => errorText(failure) }); }
     finally { running.current = false; setBusy(false); editor.setAuxiliaryBusy(false); }
   }
-  return { busy, notices, profileLock, maintenanceLock, build, maintain };
+  return { busy, notices, profileLock, profileLockDescription, maintenanceLock, build, maintain };
 }

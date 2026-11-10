@@ -7,7 +7,7 @@ import { ScrollArea } from "./components/ui/scroll-area";
 import { StateMark } from "./components/ui/state-mark";
 import { displayTitle } from "./macro-task-display";
 import { formatNumber } from "./i18n/format";
-import { reasonText } from "./i18n/reason";
+import { ReasonMessage } from "./i18n/ReasonMessage";
 import { byteText } from "./settings/storage-display";
 import type { MacroTaskSummary } from "./macro-task-types";
 import type { DeletionBlocker, DeletionBlockerKind, DeletionFailure } from "./macro-task-deletion";
@@ -81,7 +81,7 @@ function DeletionFailures({ failures }: { failures: DeletionFailure[] }) {
       return <li key={`${failure.objectKind}-${failure.path}-${index}`} className="border-t py-2.5 last:border-b">
       <p className="font-medium">{t(`deletion.objects.${failure.objectKind}`)}</p>
       {failure.path !== null && <p className="mt-1 wrap-anywhere font-mono text-xs text-ink2">{failure.path}</p>}
-      <p className="mt-1 text-xs leading-relaxed text-ink2">{reasonText(failure.reason)}</p>
+      <p className="mt-1 text-xs leading-relaxed text-ink2">{<ReasonMessage reason={failure.reason} />}</p>
       {message && <p className="mt-1 wrap-anywhere text-xs leading-relaxed text-ink2">{t("deletion.failureError", { message })}</p>}
       {resolutionKey && <p className="mt-1 text-xs leading-relaxed text-ink3">{t(resolutionKey)}</p>}
     </li>})}

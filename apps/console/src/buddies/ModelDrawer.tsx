@@ -1,5 +1,7 @@
-import { AliasTag, useBuddies } from "../components/AliasTag";
+import { AliasTag } from "../components/AliasTag";
 import { reasonText } from "../i18n/reason";
+import { ReasonMessage, ReasonMessages } from "../i18n/ReasonMessage";
+import { Joined } from "../i18n/Message";
 import { cn } from "cn";
 import { useId, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
@@ -42,7 +44,6 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigat
   const editing = editor.editing;
   const id = useId();
   const { buddy, effort } = chip;
-  const buddies = useBuddies();
   const preference = data.preferences.find(entry => entry.buddyId === buddy.buddyId);
   const published = recorded.preferences.find(entry => entry.buddyId === buddy.buddyId);
   const baselineMode = (editor.baseline ?? recorded).preferences.find(entry => entry.buddyId === buddy.buddyId)?.mode;
@@ -54,7 +55,7 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigat
   const noteUnsaved = (preference?.note ?? "") !== (published?.note ?? "");
   const modelId = data.modelCorrespondences.find(entry => modelServiceKey(entry) === modelServiceKey(buddy))?.modelId;
   const evaluation = data.kindEvaluations?.find(entry => entry.harness === buddy.harness && entry.modelId === modelId && entry.effort === buddy.effort);
-  const unavailableReason = reasonTexts(buddy.unavailableReason ? [buddy.unavailableReason] : [], t).join(" · ");
+  const unavailableReason = buddy.unavailableReason ? <ReasonMessage reason={buddy.unavailableReason} /> : null;
   const name = (text: string, unsaved: boolean, target: { id: string } | { htmlFor: string }) =>
     <span className="col-start-1 flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
       <label {...target}>{text}</label>{unsaved && <UnsavedMark label={t("unsaved")} />}
@@ -70,7 +71,7 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigat
     className="min-w-0 border-t border-line pt-3 min-[900px]:border-t-0 min-[900px]:border-l min-[900px]:pt-0 min-[900px]:pl-7 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
     <div className="grid grid-cols-[max-content_minmax(0,max-content)_minmax(0,1fr)] items-center gap-x-4 gap-y-3">
       <span className="flex h-5 items-center text-xs text-ink3">{t("pane.samples")}</span><span className="col-span-2 flex min-h-5 flex-wrap items-center gap-3 text-sm"><span data-slot="buddy-samples" className="tabular-nums">{modelId ? <a className="underline decoration-line2 underline-offset-4 hover:decoration-foreground" href={buddyHash({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } })} onClick={event => { event.preventDefault(); onNavigate({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } }); }}>{t("pane.sampleCount", { n: evaluation ? evaluation.statistics.overall.samples : 0 })}</a> : "—"}</span>
-        {modelAvailable && !buddy.available && <Hint text={unavailableReason}><span className="text-xs text-ink3">{t("pane.unavailable")}</span></Hint>}</span>
+        {modelAvailable && !buddy.available && <Hint text={unavailableReason} description={buddy.unavailableReason ? reasonText(buddy.unavailableReason) : undefined}><span className="text-xs text-ink3">{t("pane.unavailable")}</span></Hint>}</span>
       <div className="contents">
         {name(t("pane.preference"), preferenceUnsaved, { id: `${id}-preference` })}
         <Segmented value={preference?.mode ?? ""} aria-label={t("pane.buddyPreference", { effort })} onValueChange={setBuddyPreference}
@@ -91,8 +92,8 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigat
               if (editing) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId
                 ? { ...entry, alias: event.target.value === "" ? null : event.target.value } : entry) }));
             }} /></Hint>
-          {aliasError && <p id={`${id}-alias-error`} data-slot="alias-error" className="mt-1 text-xs text-fail" role="alert">{reasonText(aliasError, buddies)}</p>}
         </div>
+        {aliasError && <p id={`${id}-alias-error`} data-slot="alias-error" className="col-span-2 col-start-2 -mt-2 w-full max-w-[28rem] text-xs text-fail break-normal [overflow-wrap:normal]" role="alert"><ReasonMessage reason={aliasError} /></p>}
       </div>
       <div className="contents">
         {name(t("pane.note"), noteUnsaved, { htmlFor: `${id}-note` })}
@@ -164,7 +165,9 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
   const blocking = editor.blocking.filter(issue => mine(issue) && !(limitInvalid && issue.modelService === key));
   const attention = editor.attention.filter(issue => !issue.router && mine(issue));
   const state = !row.available ? "unavailable" : row.pending ? "pending" : "available";
-  const reasons = [harnessState, ...reasonTexts(row.reasons, t, !!harnessState)].filter(Boolean).join(" · ");
+  const visibleReasons = row.reasons.filter(reason => !harnessState || !reason.code.startsWith("harness."));
+  const reasons = harnessState || visibleReasons.length
+    ? <Joined items={[...(harnessState ? [harnessState] : []), ...(visibleReasons.length ? [<ReasonMessages reasons={visibleReasons} />] : [])]} /> : undefined;
   const editingLock = !editor.sessionWritable ? t("pane.locked.session") : !editing ? t("pane.locked.saving") : undefined;
   const name = (text: string, unsaved: boolean, target: { id: string } | { htmlFor: string }) =>
     <div className="flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
@@ -173,14 +176,14 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
 
   return <section role="region" aria-label={modelIdentity(modelService)} data-slot="model-drawer"
     className="border-t border-l-2 border-t-line border-l-foreground bg-sunk px-4 py-3 min-[900px]:pl-14">
-    {blocking.length > 0 && <p className="mb-3 border-l-2 border-fail pl-3 text-xs text-fail" role="alert">{blocking.map(issue => issue.message).join(" ")}</p>}
-    {attention.length > 0 && <p className="mb-3 border-l-2 border-hand-mark pl-3 text-xs text-hand" role="status">{attention.map(issue => issue.message).join(" ")}</p>}
+    {blocking.length > 0 && <p className="mb-3 border-l-2 border-fail pl-3 text-xs text-fail" role="alert"><Joined items={blocking.map(issue => issue.message)} separator=" " /></p>}
+    {attention.length > 0 && <p className="mb-3 border-l-2 border-hand-mark pl-3 text-xs text-hand" role="status"><Joined items={attention.map(issue => issue.message)} separator=" " /></p>}
     <div data-slot="model-service" className="border-b border-line pb-3">
       <div data-slot="model-service-line" className="flex flex-wrap items-center gap-x-8 gap-y-3">
         <h3 className="text-xs font-medium text-ink2">{t("pane.model")}</h3>
         <div className="flex items-center gap-3">
           <span className="text-xs text-ink3">{t("pane.status")}</span>
-          <Hint text={row.pending ? pendingHint(row, t) : !row.available ? reasons : undefined}><span className="flex items-center gap-1.5 text-sm">
+          <Hint text={row.pending ? pendingHint(row, t) : !row.available ? reasons : undefined} description={row.pending ? pendingHint(row, t) : !row.available ? [harnessState, ...reasonTexts(row.reasons, t, !!harnessState)].filter(Boolean).join(" · ") : undefined}><span className="flex items-center gap-1.5 text-sm">
             <StateMark kind={row.available && !row.pending ? "live" : "idle"} className="!animate-none" />{t(`pane.${state}`)}
           </span></Hint>
         </div>

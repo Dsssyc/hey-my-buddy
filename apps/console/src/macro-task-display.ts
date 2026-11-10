@@ -157,7 +157,6 @@ export function buddyNameParts(buddy: TimelineBuddy | null | undefined): BuddyNa
 /** One consistent model id and effort form for task rows and timeline spans. */
 export function buddyLabel(buddy: TimelineBuddy | null | undefined): string {
   const { name, effort } = buddyNameParts(buddy);
-  if (buddy?.alias) return [buddy.harness, buddy.provider, buddy.model, buddy.effort].filter(Boolean).join(" / ") + ` [${buddy.alias}]`;
   return [name, effort].filter(Boolean).join(" · ") || i18n.t("console:buddyNotRecorded");
 }
 

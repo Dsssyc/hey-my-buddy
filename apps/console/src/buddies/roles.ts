@@ -4,7 +4,7 @@ import type { Configuration, Draft, Buddy, RouterHealthEntry, RouterHealthIdenti
 
 /** The complete name of a buddy: `harness / provider / model / effort`. */
 export function buddyQuad(identity: RouterHealthIdentity & { alias?: string | null }): string {
-  return `${identity.harness} / ${identity.provider} / ${identity.model} / ${identity.effort}${identity.alias ? ` [${identity.alias}]` : ""}`;
+  return `${identity.harness} / ${identity.provider} / ${identity.model} / ${identity.effort}`;
 }
 
 /** What the recorded window says is wrong with routing; the user has something to do about either. */
@@ -81,7 +81,7 @@ type RouterCandidate = { buddy: Buddy; refusal: RouterRefusal | null };
 export function routerCandidates(buddies: Buddy[], list: string[], mode: RoutingMode, query: string): RouterCandidate[] {
   const needle = query.trim().toLowerCase();
   const candidates = buddies
-    .filter(buddy => !list.includes(buddy.buddyId) && buddyQuad(buddy).toLowerCase().includes(needle))
+    .filter(buddy => !list.includes(buddy.buddyId) && [buddyQuad(buddy), buddy.alias].join(" ").toLowerCase().includes(needle))
     .map(buddy => ({ buddy, refusal: routerRefusalOf(buddy, mode) }));
   return [...candidates.filter(entry => !entry.refusal), ...candidates.filter(entry => entry.refusal)];
 }

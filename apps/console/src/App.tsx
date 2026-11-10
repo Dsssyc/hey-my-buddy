@@ -201,7 +201,7 @@ function Connected({ api, snapshot, refresh, connectionError, verifiedAt, runtim
             onClick={() => void editor.reloadLatest()}>{t("draft.reload")}</Button>
         </Notice>}
         {draftTab && editor.blocked && <Notice tone="plain" role="status">{editor.blocked}</Notice>}
-        {draftTab && editor.error && !editor.confirming && <Notice tone="fail" role="alert">{editor.error}</Notice>}
+        {draftTab && editor.error && !editor.confirming && <BuddyNamesProvider buddies={editor.view.buddies}><Notice tone="fail" role="alert">{editor.error}</Notice></BuddyNamesProvider>}
         {draftTab && editor.notice && <Notice tone="plain" role="status" fading={editor.notice.fading}>{editor.notice.text}</Notice>}
       </div>
       {saveRefusal && <p id="editor-save-reason" className="sr-only">{saveRefusal}</p>}

@@ -22,5 +22,8 @@ for (const buddyId of ["codex:team-remote:model-rev:max", "codex:team-remote:mod
   const mark = screen.getByText("探索", { exact: true });
   expect(mark.getAttribute("aria-description")).toBe("首选：codex / team/remote / model:rev / max [Review desk]");
   await userEvent.setup().hover(mark);
-  expect((await screen.findByRole("tooltip")).textContent).toContain("codex / team/remote / model:rev / max [Review desk]");
+  const tooltip = await screen.findByRole("tooltip");
+  expect(tooltip.textContent).toContain("codex / team/remote / model:rev / maxReview desk");
+  expect(tooltip.textContent).not.toMatch(/[\[\]]/);
+  expect(tooltip.querySelector('[data-slot=alias-tag]')?.textContent).toBe("Review desk");
 });

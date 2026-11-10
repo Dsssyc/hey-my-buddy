@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
-import { reasonText } from "../i18n/reason";
+import { ReasonMessage } from "../i18n/ReasonMessage";
+import { Message } from "../i18n/Message";
 import { sessionContentKinds, type SessionPage } from "./types";
 
 export function SessionCoverage({ harness, coverage }: { harness: string; coverage: SessionPage["coverage"] }) {
@@ -14,7 +15,7 @@ export function SessionCoverage({ harness, coverage }: { harness: string; covera
           const declaration = coverage[kind];
           return <tr key={kind}>
             <th scope="row" className="w-24 py-0.5 pr-4 align-top font-normal text-ink">{t(`sessionView.coverage.kinds.${kind}`)}</th>
-            <td className="py-0.5">{declaration.status === "unavailable" ? t("sessionView.coverage.unavailable", { reason: reasonText(declaration.reason) }) : declaration.status === "evidenced" ? t("sessionView.coverage.evidenced", { version: declaration.version }) : t("sessionView.coverage.unverified")}</td>
+            <td className="py-0.5">{declaration.status === "unavailable" ? <Message ns="taskDetail" id="sessionView.coverage.unavailable" values={{ reason: <ReasonMessage reason={declaration.reason} /> }} /> : declaration.status === "evidenced" ? t("sessionView.coverage.evidenced", { version: declaration.version }) : t("sessionView.coverage.unverified")}</td>
           </tr>;
         })}</tbody>
       </table>

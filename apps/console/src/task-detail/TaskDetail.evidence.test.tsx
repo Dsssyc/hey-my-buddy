@@ -192,7 +192,7 @@ describe("a route", () => {
     await ready();
     await waitFor(() => expect(f.reads.basis).toHaveBeenCalledWith("decision-1"));
     await f.user.click(within(pane()).getByRole("button", { name: "提交时的约束" }));
-    const tip = (await screen.findAllByText(/硬约束：dsh/))[0]!.closest("ul")!.textContent!;
+    const tip = (await screen.findAllByText((_, node) => node?.tagName === "LI" && node.textContent === "硬约束：dsh"))[0]!.closest("ul")!.textContent!;
     expect(tip).toContain("所需能力：execution:dsh");
     expect(tip).toMatch(/用户排除 1 个：m \(提交时排除低推理强度\)/);
     expect(tip).toContain("固定选择 dsh:p:m:max：当时固定此 buddy");
@@ -528,7 +528,7 @@ describe("what a turn says of its session, its usage and its buddy's origin", ()
     open({ step: 7, replies: { workflow: found } });
     await ready();
     await userEvent.setup().click(within(pane()).getByRole("button", { name: "提交时的约束" }));
-    expect((await screen.findAllByText(/硬约束：claude \/ claude-opus-5-5/))[0]).toBeTruthy();
+    expect((await screen.findAllByText((_, node) => node?.tagName === "LI" && node.textContent === "硬约束：claude / claude-opus-5-5"))[0]).toBeTruthy();
   });
 });
 

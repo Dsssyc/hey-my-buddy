@@ -1,4 +1,3 @@
-import type { Buddy } from "../types";
 import i18n from "i18next";
 import type zh from "./zh/reasons";
 import { isReason } from "../reason";
@@ -41,12 +40,12 @@ function maintenanceValidationError(value: unknown): string {
   return i18n.t(`shell:maintenanceValidation.${key}`);
 }
 
-function parameter(value: unknown, key: string, code: string, buddies: readonly Buddy[]): string {
-  if (isReason(value)) return reasonText(value, buddies);
+export function reasonParameterText(value: unknown, key: string, code: string): string {
+  if (isReason(value)) return reasonText(value);
   if (Array.isArray(value)) {
     if (!value.length && (key === "processes" || key === "unreadableProcesses")) return i18n.t("shell:reasonNoProcesses");
     return formatList(value.map(item => key === "errors" && code === "maintenance-answer-invalid"
-      ? maintenanceValidationError(item) : parameter(item, key, code, buddies)));
+      ? maintenanceValidationError(item) : reasonParameterText(item, key, code)));
   }
   if (typeof value === "number") return formatNumber(value);
   if (typeof value === "boolean") return i18n.t(`shell:reasonValue.${value ? "yes" : "no"}`);
@@ -56,10 +55,7 @@ function parameter(value: unknown, key: string, code: string, buddies: readonly 
     if ((key === "processes" || key === "unreadableProcesses") && "pid" in row && "executable" in row)
       return i18n.t("shell:reasonProcess", { executable: row.executable, pid: String(row.pid) });
     if ("model" in row) {
-      const current = buddies.find(buddy => buddy.harness === row.harness && buddy.provider === row.provider
-        && buddy.model === row.model && buddy.effort === row.effort);
-      const alias = current ? current.alias : row.alias;
-      return [row.harness, row.provider, row.model, row.effort].join(" / ") + (alias ? ` [${alias}]` : "");
+      return [row.harness, row.provider, row.model, row.effort].join(" / ");
     }
     if ("runId" in row) return `${row.runId} (${i18n.t(`shell:reasonValue.state.${row.state}`)})`;
     return JSON.stringify(value);
@@ -71,9 +67,9 @@ function parameter(value: unknown, key: string, code: string, buddies: readonly 
 }
 
 /** The single formatter for every program reason, evaluated in the active language. */
-export function reasonText(reason: Reason, buddies: readonly Buddy[] = []): string {
+export function reasonText(reason: Reason): string {
   const template = i18n.getResource(i18n.resolvedLanguage!, "reasons", reason.code, { keySeparator: false }) as string;
-  const values = Object.fromEntries(Object.entries(reason.params).map(([key, value]) => [key, parameter(value, key, reason.code, buddies)]));
+  const values = Object.fromEntries(Object.entries(reason.params).map(([key, value]) => [key, reasonParameterText(value, key, reason.code)]));
   const text = i18n.t(reason.code as keyof typeof zh, { ns: "reasons", keySeparator: false, ...values });
   const facts = Object.entries(values).filter(([key]) => !template.includes(`{{${key}}}`))
     .map(([key, value]) => i18n.t("shell:reasonFact", { name: i18n.t(`shell:reasonParam.${key}`), value }));

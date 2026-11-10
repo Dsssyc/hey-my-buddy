@@ -95,7 +95,20 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       await page.getByRole("button", { name: saveName, exact: true }).click();
       const error = drawer.locator('[data-slot=alias-error]');
       await expect(error).toHaveText(zh ? "这个别名已被 claude / anthropic / claude-opus-5-5 / high 使用。" : "This alias is already used by claude / anthropic / claude-opus-5-5 / high.");
-      expect((await error.boundingBox())!.y).toBeGreaterThan((await field.boundingBox())!.y);
+      const errorBox = (await error.boundingBox())!;
+      const fieldBox = (await field.boundingBox())!;
+      const noteBox = (await drawer.getByRole("textbox", { name: zh ? "high 的偏好理由" : "Reason for the preference of high", exact: true }).boundingBox())!;
+      expect(errorBox.y).toBeGreaterThan(fieldBox.y + fieldBox.height);
+      expect(errorBox.x).toBe(fieldBox.x);
+      expect(Math.abs(errorBox.width - noteBox.width)).toBeLessThanOrEqual(1);
+      const words = error.locator('[data-slot=buddy-name] > .whitespace-nowrap');
+      await expect(words).toHaveCount(4);
+      expect(await words.evaluateAll(nodes => nodes.every(node => {
+        const range = document.createRange(); range.selectNodeContents(node);
+        return new Set([...range.getClientRects()].filter(rect => rect.width > 0).map(rect => rect.y)).size === 1;
+      }))).toBe(true);
+      await expect(error).not.toContainText("[");
+      await expect(error).not.toContainText("]");
       await expect(field).toHaveAttribute("aria-invalid", "true");
       await expect(field).toHaveValue("duplicate");
       if (width === 1440) {

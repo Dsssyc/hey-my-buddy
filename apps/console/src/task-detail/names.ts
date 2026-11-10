@@ -4,17 +4,11 @@ type Named = { harness?: string | null; provider?: string | null; model?: string
 /** Model and effort: the part of a buddy's name that a line can hold. */
 export function modelEffort(buddy: Named | null | undefined): string | null {
   if (!buddy || (!buddy.model && !buddy.effort)) return null;
-  return buddy.alias ? namedQuad(buddy) : [buddy.model, buddy.effort].filter(Boolean).join(" / ");
+  return [buddy.model, buddy.effort].filter(Boolean).join(" / ");
 }
 
 /** A buddy's complete name, `harness / provider / model / effort`, as far as they are recorded. */
 export function quad(buddy: Named | null | undefined): string | null {
   const parts = buddy ? [buddy.harness, buddy.provider, buddy.model, buddy.effort].filter(Boolean) : [];
   return parts.length ? parts.join(" / ") : null;
-}
-
-/** Plain text contexts cannot carry an AliasTag. */
-export function namedQuad(buddy: Named | null | undefined): string | null {
-  const name = quad(buddy);
-  return name && buddy?.alias ? `${name} [${buddy.alias}]` : name;
 }

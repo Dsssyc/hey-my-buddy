@@ -7,7 +7,8 @@ import { ApiError } from "../api";
 import { Button } from "../components/ui/button";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { sessionRows } from "./rows";
-import { reasonText } from "../i18n/reason";
+import { ReasonMessage } from "../i18n/ReasonMessage";
+import { Message } from "../i18n/Message";
 import { sessionBlocks } from "./blocks";
 import { SessionBlocks } from "./SessionBlocks";
 import { useSession } from "./use-session";
@@ -93,7 +94,7 @@ export default function SessionPanel({ routingMode, taskText, checkoutRoot, clie
                   // The disclosure keeps the viewport where the reader is interacting.
                   stopScroll();
                 } }}/> : <p className="text-sm text-ink2">{t("sessionView.empty")}</p>}
-                {data.stopped && <p data-slot="session-stopped" role="status" className="mt-6 border-t pt-3 text-xs leading-relaxed text-fail">{t("sessionView.recordingStopped", { reason: reasonText(data.stopped) })}</p>}
+                {data.stopped && <p data-slot="session-stopped" role="status" className="mt-6 border-t pt-3 text-xs leading-relaxed text-fail">{<Message ns="taskDetail" id="sessionView.recordingStopped" values={{ reason: <ReasonMessage reason={data.stopped} /> }} />}</p>}
               </div>
             </ScrollArea>
             {earlierBusy && <p data-slot="session-loading-earlier" role="status" className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 bg-card px-3 py-1 text-xs text-ink3">{t("sessionView.loadingEarlier")}</p>}

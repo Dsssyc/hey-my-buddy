@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
-import { reasonText } from "../i18n/reason";
+import { ReasonMessage } from "../i18n/ReasonMessage";
 import reasons from "../i18n/zh/reasons";
 import type { Reason } from "../reason";
 import { routingCodeText } from "./routing-code";
@@ -16,6 +16,6 @@ export function RouterFailure({ failure }: { failure: string | Reason }) {
       ? reason.params.errors.map(String).join("; ") : undefined
     : code;
   return <Hint text={detail}><span data-slot="router-failure" tabIndex={detail ? 0 : undefined}>
-    {registered ? reasonText(reason) : routingCodeText(code)}
+    {registered ? <ReasonMessage reason={reason} /> : routingCodeText(code)}
   </span></Hint>;
 }

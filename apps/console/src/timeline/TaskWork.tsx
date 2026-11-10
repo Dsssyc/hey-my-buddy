@@ -1,4 +1,5 @@
-import { useNamedBuddy } from "../components/AliasTag";
+import { Joined, Message } from "../i18n/Message";
+import { BuddyName } from "../components/AliasTag";
 import { retainEqual } from "../retain-equal";
 import { cn } from "cn";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -29,7 +30,7 @@ import { markerAt, markerHasKey, markerKey } from "./MarkerCluster";
 import { eventActions } from "./events";
 import type { TimelineMarker } from "./MarkerCluster";
 import { NowLine } from "./NowLine";
-import { Axis, Track, spanReadout, markerReadout } from "./Tracks";
+import { Axis, Track, SpanReadout, markerReadout } from "./Tracks";
 import { TIMELINE_OUTSET_PX as SLACK_PX } from "./trackMarks";
 import { useViewPreference } from "../view-preferences";
 import { visibleTimeline } from "./visibleTimeline";
@@ -58,7 +59,6 @@ const NO_EVENTS: MacroTaskTimeline["events"] = [];
  */
 export function TaskWork(props: TaskWorkProps) {
   const { t } = useTranslation(["tasks", "taskDetail"]);
-  const named = useNamedBuddy();
   const { timeline, openedRunId, displayObservedAt } = props;
   const [unfinished, setUnfinished] = useViewPreference("timeline-unfinished");
   const visible = useMemo(() => timeline ? visibleTimeline(timeline, unfinished) : null, [timeline, unfinished]);
@@ -166,7 +166,7 @@ export function TaskWork(props: TaskWorkProps) {
     const lastEnd = row.state === "delivered" && spans.filter(span => span.kind === "execution").every(span => span.shutdownConfirmed === true)
       ? Math.max(0, ...spans.filter(span => span.kind === "execution").map(span => instant(span.endAt) ?? 0)) : 0;
     const start = wait ? instant(wait.startAt) : lastEnd || null;
-    const own = [rowStateInfo(row, rows).label, start !== null ? t("openWait", { duration: formatDuration(Math.max(0, nowMs - start)) }) : null, t("turnCount", { n: turns }), buddyLabel(named(row.buddy))].filter(Boolean).join(" · ");
+    const own = <Joined items={[rowStateInfo(row, rows).label, ...(start !== null ? [t("openWait", { duration: formatDuration(Math.max(0, nowMs - start)) })] : []), t("turnCount", { n: turns }), <BuddyName buddy={row.buddy}>{buddyLabel(row.buddy)}</BuddyName>]} />;
     const summary = laneSummaries.get(row.runId);
     return summary ? <span className="inline-flex max-w-full items-center"><span data-slot="timeline-lane-summary" className="shrink-0">{[
       t("laneMicroTasks", { n: summary.count }),
@@ -180,7 +180,7 @@ export function TaskWork(props: TaskWorkProps) {
   const pointerGap = scale?.breaks.find(gap => pointerX !== null && pointerX >= gap.startX && pointerX <= gap.endX);
   const pointerLine = pointerGap ? t("drawing.gap", { start: clockTime(pointerGap.startMs), end: clockTime(pointerGap.endMs), duration: formatDuration(pointerGap.endMs - pointerGap.startMs) }) : null;
   const marker = activeMarker ?? (!hoveredRow && !hoveredSpan && !focusedRow && !focusedSpan ? selectedMarker : null);
-  const facts = marker ? markerReadout(marker) : activeSpan ? t("segment", { label: spanReadout({ ...activeSpan, buddy: named(activeSpan.buddy) ?? null }, nowMs, rows.find(row => row.runId === activeSpan.runId)) }) : activeRow ? rowLine(activeRow)
+  const facts = marker ? markerReadout(marker) : activeSpan ? <Message ns="tasks" id="segment" values={{ label: <SpanReadout span={activeSpan} nowMs={nowMs} row={rows.find(row => row.runId === activeSpan.runId)} /> }} /> : activeRow ? rowLine(activeRow)
     : input?.domain ? t("range", { start: clockTime(input.domain.startMs), end: clockTime(input.domain.endMs), n: rows.length }) : t("noTime");
   const readout = activeMarker || hoveredSpan || focusedSpan ? facts : pointerLine ?? facts;
   const incomplete = timeline && (timeline.filtered || !timeline.scopeComplete || Object.values(timeline.truncated).some(Boolean));

@@ -85,7 +85,7 @@ describe("evaluation navigation and gates", () => {
     const f = fixture(data, { profile_start: params => { starts.push(params.modelId); return { status: "running", profileRunId: `run-${params.modelId}`, runId: `task-${params.modelId}`, buddyId: MEDIUM_ID }; } });
     await open(f); await userEvent.click(within(list()).getByRole("button", { name: "批量构建" }));
     const dialog = screen.getByRole("dialog", { name: "确认构建画像" });
-    expect(within(dialog).getByText(/claude \/ anthropic \/ claude-sonnet-5 \/ medium/)).toBeTruthy();
+    expect(dialog.querySelector("[data-slot=dialog-description]")?.textContent).toContain("claude / anthropic / claude-sonnet-5 / medium");
     const models = within(dialog).getAllByRole("listitem").map(item => item.textContent!);
     expect(new Set(models).size).toBe(models.length);
     expect(within(dialog).getByText(`为以上每个模型各构建一次，共 ${models.length} 次。`)).toBeTruthy();
@@ -220,4 +220,13 @@ describe("the language's list separators in the evaluation detail", () => {
     expect(detail().textContent).toContain("Shared by anthropic and bedrock");
     expect(f.operations).toEqual([]);
   });
+});
+
+it("keeps the accessibility description for a rich profile refusal", async () => {
+  const data = state();
+  data.configuration!.profileUnavailableReason = { code: "profile-not-configured", params: {} };
+  await open(fixture(data));
+  const button = within(list()).getByRole("button", { name: "批量构建" });
+  expect(button).toHaveProperty("disabled", true);
+  expect(button.getAttribute("aria-description")).toBe("尚未指定画像 buddy。");
 });

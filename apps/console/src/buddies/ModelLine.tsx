@@ -1,3 +1,4 @@
+import { ReasonMessages } from "../i18n/ReasonMessage";
 import { BuddyName } from "../components/AliasTag";
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
@@ -30,7 +31,7 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
         <span className={cn("flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1", !enabled.length && "text-ink3")}>
           <span className="wrap-anywhere font-medium">{member.model}</span>
           {showProvider && <span data-slot="model-provider" className="text-xs text-ink3">{member.provider}</span>}
-          {!row.available && !harnessState && <Hint text={reasonTexts(row.reasons, t).join(" · ") || undefined}>
+          {!row.available && !harnessState && <Hint text={row.reasons.length ? <ReasonMessages reasons={row.reasons} /> : undefined} description={reasonTexts(row.reasons, t).join(" · ") || undefined}>
             <span className="text-xs text-ink3">{t("models.unavailable")}</span>
           </Hint>}
           {row.pending && <Hint text={pendingHint(row, t)}><span className="text-xs text-ink3">{t("models.pending")}</span></Hint>}

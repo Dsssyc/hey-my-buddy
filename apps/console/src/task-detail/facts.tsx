@@ -1,12 +1,13 @@
-import { useBuddies, useNamedBuddy } from "../components/AliasTag";
+import { BuddyIdentityName, useBuddies } from "../components/AliasTag";
 import type { BuddyIdentity } from "../components/AliasTag";
 import { useState } from "react";
+import type { ReactNode } from "react";
+import { Joined, Message } from "../i18n/Message";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { actorText, stopActorText } from "../actor";
 import { formatCoolingTime, formatList } from "../i18n/format";
-import { namedQuad } from "./names";
 import { Paths } from "./parts";
 import type { Basis, Ending } from "./types";
 
@@ -25,23 +26,23 @@ export function endingText(ending: Ending, t: TFunction<"taskDetail">): string {
 }
 
 /** What a routing decision was bound by, one fact to a line. */
-function basisLines(basis: Basis, t: TFunction<"taskDetail">, named: (buddy: BuddyIdentity) => string, byId: (buddyId: string) => string): string[] {
+function basisLines(basis: Basis, t: TFunction<"taskDetail">, named: (buddy: BuddyIdentity) => ReactNode, byId: (buddyId: string) => ReactNode): ReactNode[] {
   return [
-    ...(Object.keys(basis.constraints).length > 0 ? [t("basis.constraints", { buddy: named(basis.constraints) })] : []),
+    ...(Object.keys(basis.constraints).length > 0 ? [<Message ns="taskDetail" id="basis.constraints" values={{ buddy: named(basis.constraints) }} />] : []),
     ...(basis.requiredCapabilities.length > 0 ? [t("basis.capabilities", { list: formatList(basis.requiredCapabilities) })] : []),
     ...(basis.candidateCount !== null ? [t("basis.candidates", { n: basis.candidateCount })] : []),
     ...(basis.excluded.length > 0
-      ? [t("basis.excluded", { n: basis.excluded.length, list: basis.excluded.map(item => item.note ? `${named(item.buddy)} (${item.note})` : named(item.buddy)).join("; ") })]
+      ? [<Message ns="taskDetail" id="basis.excluded" values={{ n: basis.excluded.length, list: <Joined separator="; " items={basis.excluded.map(item => <>{named(item.buddy)}{item.note && <> ({item.note})</>}</>)} /> }} />]
       : []),
     ...(basis.overloadedModelServices.length > 0
       ? [t("basis.overloaded", { n: basis.overloadedModelServices.length,
         list: basis.overloadedModelServices.map(item => [item.harness, item.provider, item.model].join(" / ")).join("; ") })] : []),
     ...(basis.cooling.length > 0
-      ? [t("basis.cooling", { n: basis.cooling.length,
-        list: basis.cooling.map(item => t("basis.coolingBuddy", { buddy: named(item.buddy),
-          time: item.coolingUntil ? formatCoolingTime(Date.parse(item.coolingUntil)) : t("unrecorded") })).join("; ") })]
+      ? [<Message ns="taskDetail" id="basis.cooling" values={{ n: basis.cooling.length,
+        list: <Joined separator="; " items={basis.cooling.map(item => <Message ns="taskDetail" id="basis.coolingBuddy" values={{ buddy: named(item.buddy),
+          time: item.coolingUntil ? formatCoolingTime(Date.parse(item.coolingUntil)) : t("unrecorded") }} />)} /> }} />]
       : []),
-    ...basis.preferences.map(item => t(`basis.${item.mode}`, { buddy: byId(item.buddyId), note: item.note ?? t("unrecorded") })),
+    ...basis.preferences.map(item => <Message ns="taskDetail" id={`basis.${item.mode}`} values={{ buddy: byId(item.buddyId), note: item.note ?? t("unrecorded") }} />),
   ];
 }
 
@@ -49,9 +50,8 @@ function basisLines(basis: Basis, t: TFunction<"taskDetail">, named: (buddy: Bud
 export function BasisFold({ basis }: { basis: Basis }) {
   const { t } = useTranslation("taskDetail");
   const [open, setOpen] = useState(false);
-  const current = useNamedBuddy();
   const buddies = useBuddies();
-  const named = (buddy: BuddyIdentity) => namedQuad(current(buddy)) ?? t("unrecorded");
+  const named = (buddy: BuddyIdentity) => <BuddyIdentityName buddy={buddy} empty={t("unrecorded")} />;
   const lines = basisLines(basis, t, named, buddyId => {
     const buddy = buddies.find(entry => entry.buddyId === buddyId);
     return buddy ? named(buddy) : buddyId;

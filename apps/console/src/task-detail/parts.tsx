@@ -93,7 +93,7 @@ export function Facts({ items }: { items: [name: string, value: ReactNode, mono?
 }
 
 /** Keep the complete Markdown tree mounted; fold its rendered height after about eight lines. */
-export function Fold({ text, className }: { text: string; className?: string }) {
+export function Fold({ text = "", children, className }: { text?: string; children?: ReactNode; className?: string }) {
   const { t } = useTranslation("taskDetail");
   const [open, setOpen] = useState(false);
   const [long, setLong] = useState(false);
@@ -111,6 +111,7 @@ export function Fold({ text, className }: { text: string; className?: string }) 
   return <Collapsible data-slot="fold" open={open} onOpenChange={setOpen} className={cn("min-w-0 text-sm leading-[1.7]", className)}>
     <div id={contentId} data-slot="fold-body" data-folded={long && !open} ref={body}
       className={cn("min-w-0 wrap-anywhere", long && !open && "max-h-[13.6em] overflow-hidden [mask-image:linear-gradient(#000_70%,transparent)]")}>
+      {children}
       <MessageResponse className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm">{text}</MessageResponse>
     </div>
     {long && <CollapsibleTrigger aria-controls={contentId} className="mt-1 inline-flex items-center gap-1 rounded-sm text-xs text-ink2">
@@ -138,7 +139,7 @@ export function Lines({ items, className }: { items: string[]; className?: strin
 }
 
 /** Paths are product facts and never interpreted as Markdown. */
-export function Paths({ items }: { items: string[] }) {
+export function Paths({ items }: { items: ReactNode[] }) {
   return <ul className="space-y-1 font-mono text-xs">{items.map((item, index) => <li key={index} className="wrap-anywhere">{item}</li>)}</ul>;
 }
 

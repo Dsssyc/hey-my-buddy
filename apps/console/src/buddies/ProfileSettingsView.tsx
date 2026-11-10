@@ -1,3 +1,4 @@
+import { modelServiceSearchText } from "../buddy-display";
 import { BuddyName } from "../components/AliasTag";
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
@@ -9,10 +10,10 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatDuration, formatNumber } from "../i18n/format";
-import { reasonText } from "../i18n/reason";
+import { ReasonMessage } from "../i18n/ReasonMessage";
 import type { Configuration, Model, ProfileRun, ProfileToolSummary, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
-import { buddyQuad, withConfiguration } from "./roles";
+import { withConfiguration } from "./roles";
 import { QuantBarDisclosure } from "./QuantBar";
 import { RouterField, RouterSection } from "./RouterSection";
 import { RouterFailure } from "./RouterFailure";
@@ -127,7 +128,7 @@ export function ProfileSettingsView({ snapshot, editor, profileRunId }: { snapsh
           <div className="flex min-w-0 flex-wrap items-center gap-3"><span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? <BuddyName buddy={selected}>{[selected.harness, selected.provider, selected.model, selected.effort].join(" / ")}</BuddyName> : config?.profileBuddyId ?? t("profile.none")}</span>
             <Hint text={locked}><Button variant="outline" size="sm" disabled={!!locked} onClick={() => setChoosing(true)}>{t("profile.choose")}</Button></Hint>
             {!config?.profileBuddyId && <span className="text-xs text-ink2">{t("routerWork.notSet")}</span>}
-            {snapshot.configuration?.profileUnavailableReason && config?.profileBuddyId && config.profileBuddyId === snapshot.configuration.profileBuddyId && <span role="status" className="text-xs text-ink2">{reasonText(snapshot.configuration.profileUnavailableReason)}</span>}
+            {snapshot.configuration?.profileUnavailableReason && config?.profileBuddyId && config.profileBuddyId === snapshot.configuration.profileBuddyId && <span role="status" className="text-xs text-ink2">{<ReasonMessage reason={snapshot.configuration.profileUnavailableReason} />}</span>}
           </div>
         </RouterField>
       </div>
@@ -138,7 +139,7 @@ export function ProfileSettingsView({ snapshot, editor, profileRunId }: { snapsh
       <Input type="search" aria-label={t("profile.search")} value={query} onChange={event => setQuery(event.target.value)} />
       <ScrollArea className="h-72"><ul className="divide-y divide-line">
         <li><button disabled={!!locked} className="w-full px-2 py-3 text-left transition-colors duration-150 hover:bg-sunk motion-reduce:transition-none" onClick={() => { change({ profileBuddyId: null }); setChoosing(false); }}>{t("profile.none")}</button></li>
-        {candidates.filter(buddy => buddyQuad(buddy).toLowerCase().includes(query.trim().toLowerCase())).map(buddy => <li key={buddy.buddyId}>
+        {candidates.filter(buddy => modelServiceSearchText(buddy).includes(query.trim().toLowerCase())).map(buddy => <li key={buddy.buddyId}>
           <button disabled={!!locked} className="w-full px-2 py-3 text-left font-mono text-xs wrap-anywhere transition-colors duration-150 hover:bg-sunk motion-reduce:transition-none" onClick={() => { change({ profileBuddyId: buddy.buddyId }); setChoosing(false); }}><BuddyName buddy={buddy}>{[buddy.harness, buddy.provider, buddy.model, buddy.effort].join(" / ")}</BuddyName></button>
         </li>)}
         {candidates.length === 0 && <li className="px-2 py-3 text-xs text-ink3">{t("profile.noCandidates")}</li>}
