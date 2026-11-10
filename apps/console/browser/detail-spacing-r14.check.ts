@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const captures = fileURLToPath(new URL("../../../tmp/console-hints/detail-groups", import.meta.url));
+const captures = fileURLToPath(new URL("../test-results/shots/detail-groups", import.meta.url));
 for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.describe(`detail groups ${theme} ${width}`, () => {
   test.use({ locale: "zh-CN", viewport: { width, height: 1000 }, reducedMotion: "reduce" });
   test("groups the strip into a paper band beside the ruled header bar", async ({ page }) => {
@@ -56,7 +56,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     // the session coverage control sits at the right end.
     const coverage = tabs.getByRole("button", { name: "会话内容", exact: true });
     await expect(coverage).toBeVisible();
-    const viewport = page.locator('[data-slot=session-view] [data-slot=message-scroller-viewport]');
+    const viewport = page.locator('[data-slot=session-view] [data-slot=scroll-area-viewport]');
     await expect(viewport).toBeVisible();
     expect(await viewport.evaluate((node, list) => node.getBoundingClientRect().top - list.getBoundingClientRect().bottom, await tabs.elementHandle())).toBeLessThan(20);
     await page.screenshot({ path: `${captures}/session-${theme}-${width}.png` });

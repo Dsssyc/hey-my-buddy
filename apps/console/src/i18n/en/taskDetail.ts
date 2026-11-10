@@ -68,7 +68,6 @@ export default {
     routerAnswer: { domainNodeId: "Domain node", taskType: "Task type", buddyId: "Selected buddy", note: "Explanation", evidence: "Evidence" },
     task: "Task", answer: "Answer", fullPrompt: "Expand full text sent to buddy (role and result format included) · {{count}} characters",
     moreLines: "Show remaining {{count}} lines", collapseOutput: "Collapse output", groupSeparator: " · ", failures_one: "{{count}} failure", failures_other: "{{count}} failures",
-    scrollEnd: "Scroll to latest content", scrollStart: "Scroll to start",
     blackboard: { checkpoint: "Check Host questions", answer_inquiry: "Answer Host questions", finish_turn: "Return result" },
     counts: { read_one: "Read {{count}} file", read_other: "Read {{count}} files", edit_one: "Edited {{count}} file", edit_other: "Edited {{count}} files", delete_one: "Deleted {{count}} file", delete_other: "Deleted {{count}} files", move_one: "Moved {{count}} file", move_other: "Moved {{count}} files", search_one: "Searched {{count}} time", search_other: "Searched {{count}} times", execute_one: "Ran {{count}} command", execute_other: "Ran {{count}} commands", fetch_one: "Fetched {{count}} URL", fetch_other: "Fetched {{count}} URLs", think_one: "Reasoned {{count}} time", think_other: "Reasoned {{count}} times", switch_mode_one: "Switched mode {{count}} time", switch_mode_other: "Switched mode {{count}} times", other_one: "Made {{count}} call", other_other: "Made {{count}} calls" },
     highlightFailed: "Code highlighting could not be loaded",

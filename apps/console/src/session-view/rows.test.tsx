@@ -6,7 +6,6 @@ import { createInstance } from "i18next";
 import zh from "../i18n/zh/taskDetail";
 import en from "../i18n/en/taskDetail";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { MessageScrollerProvider } from "../components/ui/message-scroller";
 import { SessionBlocks, CallSummary } from "./SessionBlocks";
 import { Answer } from "./Answer";
 import { MessageResponse } from "./Markdown";
@@ -31,7 +30,7 @@ describe("session rows", () => {
   it("opens the first call independently while its group stays open", () => {
     const expanded = new Set<string>();
     const result = rows([tool("first"), tool("second")]);
-    const view = () => <TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(expanded), toggle: (key, open) => { if (open) expanded.add(key); else expanded.delete(key); rerender(view()); } }}/></MessageScrollerProvider></TooltipProvider>;
+    const view = () => <TooltipProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(expanded), toggle: (key, open) => { if (open) expanded.add(key); else expanded.delete(key); rerender(view()); } }}/></TooltipProvider>;
     const { rerender } = render(view());
     const group = screen.getByRole("button", { name: "读取 2 个文件已完成" });
     fireEvent.click(group);
@@ -64,7 +63,7 @@ describe("session rows", () => {
     const text = "[turn/diff/updated]\ndiff --git a/test.py b/test.py\n--- a/test.py\n+++ b/test.py\n@@ -1 +1 @@\n- old\n+ **literal** <img src=x>";
     const result = rows([message(text, { _meta: { nativeItemId: "turn", contentSegment: "turn/diff/0", marker: true, nativeType: "turn/diff/updated", replace: true } })]);
     const expanded = new Set<string>();
-    const view = () => <TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(expanded), toggle: (key, open) => { if (open) expanded.add(key); else expanded.delete(key); rerender(view()); } }}/></MessageScrollerProvider></TooltipProvider>;
+    const view = () => <TooltipProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(expanded), toggle: (key, open) => { if (open) expanded.add(key); else expanded.delete(key); rerender(view()); } }}/></TooltipProvider>;
     const { container, rerender } = render(view());
     expect(container.textContent).not.toContain("diff --git");
     fireEvent.click(screen.getByRole("button", { name: "本回合的改动" }));
@@ -76,7 +75,7 @@ describe("session rows", () => {
   });
   it("shows command output without decomposed commandActions, cwd or other input fields", () => {
     const result = rows([tool("run", "execute", { rawInput: { command: "echo done", cwd: project, commandActions: [{ type: "unknown", command: "echo done" }] }, content: [{ type: "content", content: { type: "text", text: "done" } }] })]);
-    const { container } = render(<TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:run"]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider>);
+    const { container } = render(<TooltipProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:run"]), toggle: () => {} }}/></TooltipProvider>);
     expect(container.textContent).toContain("done");
     expect(container.textContent).not.toContain("commandActions");
     expect(container.textContent).not.toContain("cwd");
@@ -89,14 +88,14 @@ describe("session rows", () => {
     ["ZCode content", "read", { content: "unique result", lineCount: 1, truncated: false }],
   ] as const) it(`renders only the body for ${shape} results`, () => {
     const result = rows([tool("one", kind, { rawOutput, content: [{ type: "content", content: { type: "text", text: "unique result" } }] })]);
-    const { container } = render(<TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:one"]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider>);
+    const { container } = render(<TooltipProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:one"]), toggle: () => {} }}/></TooltipProvider>);
     expect(container.querySelectorAll('[data-slot="session-output"]')).toHaveLength(1);
     expect(container.querySelector('[data-slot="session-output"]')?.textContent).toBe("unique result");
     expect(container.querySelector('[data-slot="session-result"]')).toBeNull();
   });
   it("shows non-null result fields only when a command has no body, preserving zero and false", () => {
     const result = rows([tool("empty", "execute", { rawInput: { command: "true" }, rawOutput: { aggregatedOutput: null, exitCode: 0, durationMs: 17, truncated: false, error: null } })]);
-    const { container } = render(<TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:empty"]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider>);
+    const { container } = render(<TooltipProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:empty"]), toggle: () => {} }}/></TooltipProvider>);
     expect(container.querySelector('[data-slot="session-output"]')).toBeNull();
     expect([...container.querySelectorAll('[data-slot="session-result"] dt')].map(node => node.textContent)).toEqual(["exitCode", "durationMs", "truncated"]);
     expect([...container.querySelectorAll('[data-slot="session-result"] dd')].map(node => node.textContent)).toEqual(["0", "17", "false"]);
@@ -108,7 +107,7 @@ describe("session rows", () => {
     expect(commandFirstLine("first\r\nsecond")).toBe("first");
     expect(unwrappedCommand("sh -cl 'echo '\\''quoted'\\'''" )).toBe("echo 'quoted'");
     const result = rows([tool("multiline", "execute", { rawInput: { command } })]);
-    const { container } = render(<TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:multiline"]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider>);
+    const { container } = render(<TooltipProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:multiline"]), toggle: () => {} }}/></TooltipProvider>);
     expect(screen.getByRole("button", { name: "printf first已完成" }).textContent).toBe("printf first");
     expect(container.textContent).toContain("$ printf first\nprintf second");
     expect(container.textContent).not.toContain("/bin/zsh");
@@ -117,7 +116,7 @@ describe("session rows", () => {
     const i18n = createInstance(); await i18n.init({ lng: language, resources: { zh: { taskDetail: zh }, en: { taskDetail: en } } });
     const marker = (type: string, id: number, text = `[${type}]`) => message(text, { _meta: { nativeItemId: `${id}`, contentSegment: "main", marker: true, nativeType: type } });
     const result = rows([tool("a"), marker("subAgentActivity", 1), tool("b", "search", { rawInput: { pattern: "0\\.48\\.0|no-tools", glob: "!src/assets/**" } }), marker("subAgentActivity", 2), marker("contextCompaction", 3), marker("newNativeType", 4), message("Next"), tool("single"), marker("subAgentActivity", 5), marker("contextCompaction", 6, "[contextCompaction]\nRetained body")]);
-    const { container } = render(<I18nextProvider i18n={i18n}><TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set([result[0].key, "tool:single"]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider></I18nextProvider>);
+    const { container } = render(<I18nextProvider i18n={i18n}><TooltipProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set([result[0].key, "tool:single"]), toggle: () => {} }}/></TooltipProvider></I18nextProvider>);
     const names = language === "zh" ? ["子代理活动", "上下文压缩", "标记 · newNativeType"] : ["Subagent activity", "Context compaction", "Marker · newNativeType"];
     const summary = container.querySelector('[data-session-row="calls"] button')!;
     expect(summary.textContent).toContain(`${names[0]} 2 ${language === "zh" ? "次" : "times"}`);
@@ -150,7 +149,7 @@ describe("session rows", () => {
     const result = rows([{ ...message(prompt), sessionUpdate: "user_message_chunk" }, message(JSON.stringify({ evidence: ["Allowed"], note: "Fits", buddyId: "chosen", extra: { empty: [], other: {} } }))]);
     const first = result[0];
     if (first.type !== "task") throw Error("Expected task");
-    const { container } = render(<TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="# Micro task title\nOpening" checkoutRoot={project} routingMode="review" expansion={{ expanded: new Set([first.key]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider>);
+    const { container } = render(<TooltipProvider><SessionBlocks rows={result} taskText="# Micro task title\nOpening" checkoutRoot={project} routingMode="review" expansion={{ expanded: new Set([first.key]), toggle: () => {} }}/></TooltipProvider>);
     expect(container.textContent).toContain("为此微任务选择 buddy（审阅模式）");
     expect(container.textContent).toContain("Micro task title");
     for (const line of prompt.split("\n")) expect(container.textContent).toContain(line);
@@ -187,7 +186,7 @@ describe("session rows", () => {
   it("renders one disclosure per call with direct fields and a lossless output preview", async () => {
     const result = rows([tool("search", "search", { rawInput: { pattern: "main", glob: "**/*.py", path: project }, content: [{ type: "content", content: { type: "text", text: Array.from({ length: 20 }, (_, n) => `line ${n}`).join("\n") } }] })]);
     const expanded = new Set(["tool:search"]);
-    const view = (next: Set<string>) => <TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="# Task\nOpening" checkoutRoot={project} expansion={{ expanded: next, toggle: (key, open) => { if (open) expanded.add(key); else expanded.delete(key); rerender(view(new Set(expanded))); } }}/></MessageScrollerProvider></TooltipProvider>;
+    const view = (next: Set<string>) => <TooltipProvider><SessionBlocks rows={result} taskText="# Task\nOpening" checkoutRoot={project} expansion={{ expanded: next, toggle: (key, open) => { if (open) expanded.add(key); else expanded.delete(key); rerender(view(new Set(expanded))); } }}/></TooltipProvider>;
     const { container, rerender } = render(view(expanded));
     expect(screen.getByText("pattern")).toBeTruthy();
     expect(screen.getByText(".")).toBeTruthy();

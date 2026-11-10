@@ -44,6 +44,14 @@ const page = (before: number, count: number, hasEarlier: boolean) => ({ state: "
 let i18n: ReturnType<typeof createInstance>;
 beforeEach(async () => {
   vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+  // jsdom has no layout. Publish the short initial content measurement so the
+  // library can finish positioning before the panel observes earlier history.
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) { queueMicrotask(() => this.callback([{ target, contentRect: { height: 0 } } as ResizeObserverEntry], this as unknown as ResizeObserver)); }
+    unobserve() {}
+    disconnect() {}
+  });
   i18n = createInstance();
   await i18n.init({ lng: "zh", resources: { zh: { taskDetail: zh } } });
 });
@@ -79,24 +87,7 @@ describe("reaching the top of the transcript", () => {
     expect(session).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the reading position when the earlier page is inserted above", async () => {
-    const session = vi.fn().mockResolvedValueOnce(page(3, 2, true)).mockResolvedValueOnce(page(0, 3, false));
-    renderPanel({ session });
-    const blocks = await screen.findByText("第 4 条记录").then(() => document.querySelector('[data-slot="session-blocks"]')!);
-    const viewport = document.querySelector('[data-slot="message-scroller-viewport"]') as HTMLElement;
-    // One rendered row measures 100px of transcript: the anchor sees the transcript
-    // grow from two rows to five and shifts scrollTop by exactly that difference.
-    vi.spyOn(blocks, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      const rows = this.querySelectorAll("[data-session-block]").length;
-      return { x: 0, y: 0, width: 800, height: rows * 100, top: 0, left: 0, right: 800, bottom: rows * 100 } as DOMRect;
-    });
-    viewport.scrollTop = 120;
-    await reachTop();
-    await act(async () => { await Promise.resolve(); });
-    expect(viewport.scrollTop).toBe(120 + 3 * 100);
-  });
-
-  it("keeps following additions when the session has no earlier page", async () => {
+  it("polls additions without observing history when no earlier page exists", async () => {
     const session = vi.fn().mockResolvedValueOnce(page(0, 2, false)).mockResolvedValueOnce(page(2, 2, false));
     renderPanel({ session });
     expect(await screen.findByText("第 1 条记录")).toBeTruthy();
@@ -107,6 +98,5 @@ describe("reaching the top of the transcript", () => {
     expect(session).toHaveBeenCalledTimes(2);
     expect(session.mock.calls[1][2]).toEqual({ after: 2, limit: SESSION_PAGE_SIZE });
     expect(screen.getByText("第 3 条记录")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "有新内容" })).toBeNull();
   });
 });

@@ -2,7 +2,6 @@ import { useTranslation } from "react-i18next";
 import { ChevronRight, Brain, Minus } from "lucide-react";
 import { Message, MessageContent } from "../components/ui/message";
 import { Marker, MarkerContent } from "../components/ui/marker";
-import { MessageScrollerItem } from "../components/ui/message-scroller";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceLine, TraceIcon } from "../components/ui/trace";
 import { CodeBlockCopyButton } from "../components/ui/code-block";
 import { MessageResponse } from "./Markdown";
@@ -65,7 +64,7 @@ export function SessionBlocks({ rows, expansion, taskText, checkoutRoot, routing
           <div className={`absolute right-0 top-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100`}><CodeBlockCopyButton value={text}/></div>
         </div>;
       }
-      return <MessageScrollerItem key={key} messageId={key} data-session-block={key} data-session-row={row.type} className="[content-visibility:visible]">{body}</MessageScrollerItem>;
+      return <div key={key} data-session-block={key} data-session-row={row.type} className="min-w-0 shrink-0">{body}</div>;
     })}
   </div>;
 }
