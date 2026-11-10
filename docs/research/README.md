@@ -70,5 +70,6 @@
 | 2026-11-05 | [Antigravity 与 Gemini CLI 从哪里读用户级的 skill](2026-11-05-antigravity-skill-locations.md) | 安装时给 Antigravity 放 skill 链接的待办（ADR-015） |
 | 2026-11-06 | [ZCode 有没有只读模式，能不能预先放行黑板自己的工具](2026-11-06-zcode-read-only-mode.md) | 0.61.2 的 ZCode 权限档位（ADR-023） |
 | 2026-11-09 | [DSH 经 ACP 什么时候把模型的输出送出来](2026-11-09-dsh-acp-step-delivery.md) | ADR-021 第 2 条 2026-11-09 的修改：看不到模型开始的 harness 不套开始等待 |
+| 2026-11-10 | [第三层导航：不叠页签栏的做法，与 Router 分区的三个原型](2026-11-10-third-level-navigation.md) | Router 分区里三项工作的放法，待开发者定 |
 
 2026-10-11 之前的四份是从各自的决定里移过来的，当时没有按上面的写法记录读到哪里为止，这一点在各份记录里照实写明。
