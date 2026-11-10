@@ -52,6 +52,8 @@
 
 ## 安装与存储
 
+**现在的形式从冻结的升级步骤里取定义。**（2026-11-11 Host 整理 architecture.md 的表清单时读代码记下） `blackboard/store/db.py` 建新板用的 `ROUTER_SETTINGS_DDL` 从 `schema_37_38.py` 导入，`routing/router_settings.py` 的 `DEFAULT_MODEL_RESPONSE_WAIT_SECONDS` 与 `MAX_MODEL_RESPONSE_WAIT_SECONDS` 也从那里导入。`AGENTS.md` 要求每一步带着自己的定义、不导入现在的代码；反过来的依赖没有写明，却一样会卡住以后的改动：哪天改 `router_settings` 的形式或这两个默认值，要么去改一个已经在真实黑板上跑过的步骤，要么先把定义搬回来。现在的代码只在这两处导入冻结的步骤。建议：下一个动到路由设置的批次把这三个定义搬回现在的代码，步骤保留它自己的一份。
+
 **从 schema 37 以前的黑板导出样本时，统计按升级下限的规则重算。**（2026-11-06，0.64.0 存储设计的盲审提出，Host 读代码核对过） `tools/export_board_sample.py` 对 37 以前的源改用 30→31 那一步冻结的 `backfill` 重算样本的统计，它不认后来的整合记录格式，判一次通过的依据与源黑板当时的不同。日常黑板已是 37，只影响从更旧的黑板导出。
 
 **删除路径按回合找仓库时，按 `attempt_id` 查事件没有索引。**（2026-11-05 ADR-032 的 P5 验收时 Host 读代码记下，未量） `blackboard/tasks/projects.py` 的 `known_repository_paths` 为每个候选回合执行 `SELECT seq FROM events WHERE attempt_id=? AND kind IN (...) ORDER BY seq DESC LIMIT 1`；`events` 上只有 `(task_id, seq)` 与 `(kind, seq DESC)` 两个索引，这一句大概走 kind 的索引往回扫。删除宏任务与回收时它按项目只算一次，日常还没有觉得慢。建议：先在导出的样本上量一次删除一个大宏任务的耗时，量出问题再改成按 `task_id` 加回合条件查，或者加索引；加索引是存储形式的变化，要随存储批次。
