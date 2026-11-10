@@ -10,8 +10,8 @@ import { expectNoSidewaysScroll, open, settle, test } from "./preview";
  */
 
 const languages = [
-  { locale: "zh-CN", account: "账户", settings: "设置", catalog: "目录", fold: /^(展开|收起) / },
-  { locale: "en-US", account: "account", settings: "settings", catalog: "Catalog", fold: /^(Fold|Unfold) / },
+  { locale: "zh-CN", settings: "设置", catalog: "目录", fold: /^(展开|收起) / },
+  { locale: "en-US", settings: "settings", catalog: "Catalog", fold: /^(Fold|Unfold) / },
 ];
 const CODEX = "codex / openai / gpt-5-codex";
 
@@ -59,30 +59,23 @@ async function expectColourTransition(target: Locator, label: string) {
   }
 }
 
-for (const { locale, account, settings, fold } of languages) {
+for (const { locale, settings, fold } of languages) {
   test.describe(`the catalogue's gestures in ${locale} at 1280px`, () => {
     test.use({ locale, viewport: { width: 1280, height: 900 } });
 
-    test("keeps the chevron and details button separate from provider retries", async ({ page }) => {
+    test("keeps the fold handle separate from provider retries", async ({ page }) => {
       await open(page, "#buddies/catalog");
       for (const section of await page.locator("[data-slot=harness-section]").all()) {
         const name = (await section.getAttribute("aria-label"))!;
         const header = head(page, name);
-        await expect(header.getByRole("button")).toHaveCount(name === "DSH" ? 3 : 2);
+        await expect(header.getByRole("button")).toHaveCount(name === "DSH" ? 2 : 1);
         const chevron = header.getByRole("button", { name: new RegExp(`${fold.source}${name}$`) });
-        const row = header.getByRole("button", { name: `${name} ${account}`, exact: true });
-        const [outer, small, wide] = [await box(header), await box(chevron), await box(row)];
-        // Large enough to see and to hit, at the left; the row takes all the rest of the head.
+        const small = await box(chevron);
         expect(small.width, `${name}: chevron width`).toBeGreaterThanOrEqual(28);
         expect(small.height, `${name}: chevron height`).toBeGreaterThanOrEqual(28);
         const shape = await box(chevron.locator("[data-slot=disclosure]"));
         expect(Math.min(shape.width, shape.height), `${name}: the chevron is drawn large enough to see`).toBeGreaterThanOrEqual(14);
-        expect(small.x + small.width, `${name}: the buttons do not overlap`).toBeLessThanOrEqual(wide.x + 0.5);
-        expect(wide.x + wide.width, `${name}: the row reaches the right edge`).toBeGreaterThanOrEqual(outer.x + outer.width - 0.5);
-        expect(wide.height, `${name}: the row is as tall as the head`).toBeGreaterThanOrEqual(outer.height - 0.5);
-        // The provider action is a sibling of the settings button, never nested inside it.
         expect(await chevron.locator("button").count()).toBe(0);
-        expect(await row.locator("button, a, [tabindex]").count()).toBe(0);
         expect(await header.locator("button button").count()).toBe(0);
         if (name === "DSH") {
           const provider = header.locator("[data-slot=header-provider]").filter({ hasText: "deepseek-official" });
@@ -94,48 +87,30 @@ for (const { locale, account, settings, fold } of languages) {
       }
     });
 
-    test("opens the account from any point of the row and folds the models from the chevron alone, each with its own state, by pointer and by keyboard", async ({ page }) => {
+    test("folds models while sidebar details stay visible, by pointer and keyboard", async ({ page }) => {
       await open(page, "#buddies/catalog");
       const header = head(page, "Codex");
       const chevron = header.getByRole("button", { name: new RegExp(`${fold.source}Codex$`) });
-      const row = header.getByRole("button", { name: `Codex ${account}`, exact: true });
       const models = page.locator("[data-slot=harness-section][aria-label=Codex] [data-slot=model-row]");
       const details = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
       await expect(chevron).toHaveAttribute("aria-expanded", "true");
-      await expect(row).toHaveAttribute("aria-expanded", "false");
-      // The far end of the row opens details.
-      const wide = await box(row);
-      await row.click({ position: { x: wide.width - 8, y: wide.height / 2 } });
-      await expect(row).toHaveAttribute("aria-expanded", "true");
-      await expect(chevron).toHaveAttribute("aria-expanded", "true");
       await expect(details).toBeVisible();
+      await expect(details.locator("xpath=ancestor::*[@data-slot='harness-sidebar'][1]")).toBeVisible();
       const blocks = await details.locator(":scope > [role=group]").all();
-      expect(blocks).toHaveLength(3);
+      expect(blocks).toHaveLength(2);
       const columns = await Promise.all(blocks.map(box));
-      expect(columns[0].x).toBeLessThan(columns[1].x);
-      expect(columns[1].x).toBeLessThan(columns[2].x);
-      expect(Math.max(...columns.map(column => column.y)) - Math.min(...columns.map(column => column.y))).toBeLessThan(2);
+      expect(columns[0].y).toBeLessThan(columns[1].y);
       await expect(models.first()).toBeVisible();
       await chevron.click();
       await expect(chevron).toHaveAttribute("aria-expanded", "false");
-      await expect(row).toHaveAttribute("aria-expanded", "true");
       await expect(models).toHaveCount(0);
       await expect(details).toBeVisible();
-      await row.click();
-      await expect(row).toHaveAttribute("aria-expanded", "false");
-      await expect(chevron).toHaveAttribute("aria-expanded", "false");
-      // Keyboard: the chevron first, then the row, each answering Enter and Space.
       await chevron.focus();
       await page.keyboard.press("Enter");
       await expect(chevron).toHaveAttribute("aria-expanded", "true");
       await page.keyboard.press("Space");
       await expect(chevron).toHaveAttribute("aria-expanded", "false");
-      await page.keyboard.press("Tab");
-      await expect(row).toBeFocused();
-      await page.keyboard.press("Enter");
-      await expect(row).toHaveAttribute("aria-expanded", "true");
-      await page.keyboard.press("Space");
-      await expect(row).toHaveAttribute("aria-expanded", "false");
+      await expect(details).toBeVisible();
       await expectNoSidewaysScroll(page);
     });
 
@@ -164,17 +139,10 @@ for (const { locale, account, settings, fold } of languages) {
       await expect(section.locator("[data-slot=model-row]")).toHaveCount(0);
       const opened = await chevron.evaluate(motion, id) as { state: string; name: string; duration: string; running: string[] };
       expect(opened).toMatchObject({ state: "open", name: "disclosure-down", duration: "0.2s", running: ["disclosure-down"] });
-      // The harness details and a model's drawer use the same Collapsible.
-      await head(page, "Codex").getByRole("button", { name: `Codex ${account}`, exact: true }).click();
+      // Sidebar details stay visible while a model drawer uses the Collapsible.
       const block = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
       await expect(block).toBeVisible();
-      const blockStyle = await block.locator("xpath=ancestor::*[@data-slot='collapsible-content'][1]").evaluate(node => {
-        const style = getComputedStyle(node);
-        return { name: style.animationName, duration: style.animationDuration, overflowX: style.overflowX, overflowY: style.overflowY };
-      });
-      expect(blockStyle.duration).toBe("0.2s");
-      expect(blockStyle.overflowX).toBe("visible");
-      expect(blockStyle.overflowY).toBe("clip");
+      await expect(block.locator("xpath=ancestor::*[@data-slot='collapsible-content']")).toHaveCount(0);
       await page.getByRole("button", { name: CODEX, exact: true }).click();
       const drawer = page.getByRole("region", { name: CODEX, exact: true });
       await expect(drawer).toBeVisible();
@@ -194,7 +162,6 @@ for (const { locale, account, settings, fold } of languages) {
 
     test("keeps the service drawer scoped to service and buddy settings with usable controls", async ({ page }) => {
       await open(page, "#buddies/catalog");
-      for (const summary of await page.locator("[data-slot=account-summary]").all()) await summary.click();
       await page.getByRole("button", { name: CODEX, exact: true }).click();
       const drawer = page.getByRole("region", { name: CODEX, exact: true });
       await expect(drawer).toBeVisible();
@@ -214,18 +181,16 @@ for (const { locale, account, settings, fold } of languages) {
       await open(page, "#buddies/catalog");
       await expectColourTransition(page.locator("[data-slot=model-row] > button").first(), "a model row's button");
       await expectColourTransition(page.locator("[data-slot=fold-handle]").first(), "a chevron");
-      await expectColourTransition(page.locator("[data-slot=account-summary]").first(), "a head's row");
       await expectColourTransition(page.locator("[data-slot=catalogue-actions] > button").first(), "a toolbar button");
       await expectColourTransition(page.locator("[data-slot=checkbox]").first(), "a filter");
       await expectColourTransition(page.getByRole("main").getByRole("navigation").getByRole("link").first(), "a section link");
       await expectColourTransition(page.getByRole("banner").getByRole("navigation").getByRole("link").first(), "a top bar link");
       await page.getByRole("button", { name: CODEX, exact: true }).click();
       const drawer = page.getByRole("region", { name: CODEX, exact: true });
-      await expectColourTransition(drawer.locator("[data-slot=buddy-stop]").first(), "a scale cell");
-      await expectColourTransition(drawer.locator("[data-slot=buddy-pointer]").first(), "the scale's pointer");
+      await expectColourTransition(drawer.locator("[data-slot=buddy-choice]").first(), "a buddy choice");
       await expectColourTransition(drawer.getByRole("switch").first(), "a switch");
       await expectColourTransition(drawer.locator("[data-slot=segmented-item]").first(), "a segmented choice");
-      // The selection moves along the scale on that transition and not by a jump.
+      // The selection moves between buddy rows on that transition.
       // Cells are taken by place: a locator by `aria-pressed` would follow the state it changes.
       const cells = drawer.locator("[data-slot=buddy-stop]");
       const pressed = await cells.evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-pressed") === "true"));
@@ -245,7 +210,6 @@ for (const { locale, account, settings, fold } of languages) {
       for (const [label, target] of [
         ["a model row's button", page.locator("[data-slot=model-row] > button").first()],
         ["a chevron", page.locator("[data-slot=fold-handle]").first()],
-        ["a head's row", page.locator("[data-slot=account-summary]").first()],
         ["a toolbar button", page.locator("[data-slot=catalogue-actions] > button").first()],
         ["a section link", page.getByRole("main").getByRole("navigation").getByRole("link").first()],
         ["a chevron's shape", page.locator("[data-slot=disclosure]").first()],
@@ -262,12 +226,9 @@ for (const { locale, account, settings, fold } of languages) {
       }, id);
       // Not even a frame of closing: nothing runs, and the content is already gone.
       expect(closing).toEqual({ animations: 0, hidden: true, display: "none", children: 0 });
-      await page.getByRole("button", { name: `Codex ${account}`, exact: true }).click();
       const block = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
       await expect(block).toBeVisible();
-      expect(await block.locator("xpath=ancestor::*[@data-slot='collapsible-content'][1]").evaluate(node => getComputedStyle(node).animationName)).toBe("none");
-      await page.getByRole("button", { name: `Codex ${account}`, exact: true }).click();
-      await expect(block).toHaveCount(0);
+      await expect(block.locator("xpath=ancestor::*[@data-slot='collapsible-content']")).toHaveCount(0);
     });
   });
 
@@ -278,7 +239,7 @@ for (const { locale, account, settings, fold } of languages) {
         await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       });
 
-      test("keeps an open model row selected under the pointer and preserves the scale selection", async ({ page }) => {
+      test("keeps an open model row and selected buddy visible under the pointer", async ({ page }) => {
         await open(page, "#buddies/catalog");
         await page.getByRole("button", { name: CODEX, exact: true }).click();
         const row = page.locator("[data-slot=model-row]").filter({ has: page.getByRole("button", { name: CODEX, exact: true }) });
@@ -313,26 +274,23 @@ for (const { locale, account, settings, fold } of languages) {
         expect(otherHover.background).not.toBe(buttonHover.background);
         expect((await settled(other)).border).toBe(rowAt.border);
         expect((await settled(button)).background).toBe(buttonAt.background);
-        // The same for the scale: the selected cell keeps its outline and its pointer under the pointer.
+        // The selected row keeps its full background under the pointer.
         const drawer = page.getByRole("region", { name: CODEX, exact: true });
         const selected = drawer.locator("[data-slot=buddy-stop][aria-pressed=true]");
         const unselected = drawer.locator("[data-slot=buddy-stop][aria-pressed=false]").first();
-        const pointer = selected.locator("xpath=following-sibling::*[@data-slot='buddy-pointer']");
         await page.mouse.move(0, 0);
-        const selectedAt = await settled(selected), pointerAt = await settled(pointer), unselectedAt = await settled(unselected);
-        expect(selectedAt.shadow).not.toBe("none");
-        expect(pointerAt.opacity).toBe("1");
+        const selectedChoice = selected.locator("xpath=ancestor::*[@data-slot='buddy-choice'][1]");
+        const unselectedChoice = unselected.locator("xpath=ancestor::*[@data-slot='buddy-choice'][1]");
+        const selectedAt = await settled(selectedChoice), unselectedAt = await settled(unselectedChoice);
+        await expect(selectedChoice).toHaveAttribute("data-selected", "true");
+        expect(selectedAt.background).not.toBe("rgba(0, 0, 0, 0)");
         await selected.hover();
-        const selectedHover = await settled(selected);
-        expect(selectedHover.shadow).toBe(selectedAt.shadow);
-        expect((await settled(pointer)).opacity).toBe("1");
+        const selectedHover = await settled(selectedChoice);
+        expect(selectedHover.background).toBe(selectedAt.background);
         await unselected.hover();
-        expect((await settled(unselected)).background).not.toBe(unselectedAt.background);
-        expect((await settled(unselected)).shadow).toBe(unselectedAt.shadow);
-        expect((await settled(selected)).shadow).toBe(selectedAt.shadow);
-        // Every other pointer is hidden while its cell is not selected.
-        const hidden = await drawer.locator("[data-slot=buddy-pointer]").evaluateAll(nodes => nodes.map(node => getComputedStyle(node).opacity));
-        expect(hidden.filter(value => value === "1")).toHaveLength(1);
+        expect((await settled(unselectedChoice)).background).not.toBe(unselectedAt.background);
+        expect((await settled(selectedChoice)).background).toBe(selectedAt.background);
+        await expect(drawer.locator("[data-slot=buddy-pointer]")).toHaveCount(0);
       });
     });
   }
@@ -446,7 +404,6 @@ test.describe("the Buddy page in English", () => {
     await open(page, "#buddies/catalog");
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
     expect(await chinese(page)).toEqual([]);
-    for (const summary of await page.locator("[data-slot=account-summary]").all()) await summary.click();
     const folded = page.locator("[data-slot=fold-handle][aria-expanded=false]");
     while (await folded.count() > 0) await folded.first().click();
     expect(await chinese(page)).toEqual([]);

@@ -306,14 +306,14 @@ describe("direct editing and the save bar", () => {
     expect(chip(FLASH, "off").textContent).toBe("off优先");
     await user.click(levelSwitch("off"));
     expect(levelSwitch("off").getAttribute("aria-checked")).toBe("false");
-    expect(within(level("off")).getByRole("img", { name: "未保存" })).toBeTruthy();
+    expect(within(effortCell("off")).getByRole("img", { name: "未保存" })).toBeTruthy();
     expect(within(saveBar()!).getByText("1 项未保存")).toBeTruthy();
     // The table's row follows the draft immediately, with the same mark.
     expect(modelRow(FLASH).querySelector('[data-slot="enabled-effort"]')).toBeNull();
     expect(within(effortCell("off")).getByRole("img", { name: "未保存" })).toBeTruthy();
     await user.click(save());
     await screen.findByText(PUBLISHED);
-    expect(within(level("off")).queryByRole("img", { name: "未保存" })).toBeNull();
+    expect(within(effortCell("off")).queryByRole("img", { name: "未保存" })).toBeNull();
     expect(within(effortCell("off")).queryByRole("img", { name: "未保存" })).toBeNull();
     // A disable publishes one enablement patch and nothing program-owned.
     expect(f.published.at(-1)!.buddySettings).toEqual([{ buddyId: flashOff, enabled: false }]);

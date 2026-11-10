@@ -8,7 +8,6 @@ import { StateMark } from "@/components/ui/state-mark";
 import type { HarnessHealth } from "../types";
 import { harnessDetailsView, statusText } from "./harness";
 import type { HarnessDetailsView } from "./harness";
-import { CoolingDetails } from "./cooling";
 import { HarnessPathDialog } from "./HarnessPathDialog";
 
 const hintTarget = "rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
@@ -21,7 +20,7 @@ type Gate = { canWrite: boolean; refusal: string; busy: boolean };
 function Block({ title, head, children }: { title: string; head?: ReactNode; children: ReactNode }) {
   return <div role="group" aria-label={title} className="min-w-0 px-5 py-4">
     <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-      <h3 className="text-xs font-medium text-ink2">{title}</h3>
+      <h4 className="text-xs font-medium text-ink2">{title}</h4>
       <span className="flex flex-wrap items-center gap-x-1.5 text-xs text-ink3">{head}</span>
     </div>
     {children}
@@ -100,18 +99,17 @@ function AccountBlock({ view }: { view: HarnessDetailsView }) {
   </Block>;
 }
 
-/** The account expansion belongs to its harness header, independent of model drawers. */
-export function HarnessDetails({ row, name, canWrite, refusal, busy, onCheck, onSavePath, onRetry }: {
+/** Location and account facts stay visible in the harness sidebar. */
+export function HarnessDetails({ row, name, canWrite, refusal, busy, onCheck, onSavePath }: {
   row: HarnessHealth; name: string;
-  onCheck: () => void; onSavePath: (path: string | null) => void; onRetry: (provider: string) => void;
+  onCheck: () => void; onSavePath: (path: string | null) => void;
 } & Gate) {
   const { t } = useTranslation("buddies");
   const view = harnessDetailsView(row, t);
   const gate = { canWrite, refusal, busy };
   return <div role="group" aria-label={t("harness.detailsLabel", { name })} data-slot="harness-details"
-    className="grid border-b-2 border-ink3 bg-card text-sm min-[1100px]:pl-[38px] min-[1100px]:grid-cols-3 min-[1100px]:divide-x max-[1099px]:divide-y">
+    className="text-sm">
     <LocationBlock row={row} name={name} view={view} gate={gate} onCheck={onCheck} onSavePath={onSavePath} />
     <AccountBlock view={view} />
-    <Block title={t("harness.cooling.name")}><CoolingDetails providers={row.providers ?? []} gate={gate} onClear={onRetry} /></Block>
   </div>;
 }

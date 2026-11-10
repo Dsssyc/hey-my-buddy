@@ -7,12 +7,13 @@ import type { ProviderCooling } from "../types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CoolingHeaderProviders, activeCooling } from "./cooling";
 import { fixture, harness, openHarness } from "./harness.fixtures";
-import { harnessButton, paneBlock } from "./harness.testing";
+import { harnessSection } from "./harness.testing";
 
 const deadline = new Date(Date.now() + 3600000).toISOString();
 const record = (extra: Partial<ProviderCooling> = {}): ProviderCooling => ({ provider: "zai", coolingUntil: deadline, consecutiveRejections: 2, ...extra });
 const rows = () => [harness({ harness: "dsh", status: "ready", providers: [record(), record({ provider: "deepseek", coolingUntil: null }), record({ provider: "expired", coolingUntil: "2020-01-01T00:00:00Z" })] })];
-const clear = () => within(paneBlock("冷却", "DSH")).getByRole("button", { name: "开放重试" });
+const header = () => harnessSection("DSH").querySelector<HTMLElement>("[data-slot=harness-header]")!;
+const clear = () => within(header()).getByRole("button", { name: "开放重试" });
 const reply = (cleared: boolean, duplicate = false) => ({ harness: "dsh", provider: "zai", cleared, duplicate });
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); sessionStorage.clear(); localStorage.clear(); window.location.hash = ""; });
@@ -20,14 +21,11 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); sessionSt
 describe("provider cooldown", () => {
   it("shows only active providers with a neutral status and one clear action each", async () => {
     await openHarness(fixture({ harnesses: rows() }));
-    const block = paneBlock("冷却", "DSH");
-    expect(within(block).getByText("zai")).toBeTruthy();
-    expect(within(block).getByText(`冷却中 · 约 ${formatCoolingTime(Date.parse(deadline))} 结束`).className).toContain("text-ink3");
-    expect(within(block).getAllByRole("button")).toHaveLength(1);
-    const header = harnessButton("DSH").closest("[data-slot=harness-header]")!;
-    expect(header.textContent).toContain("zai冷却中");
-    expect(within(header as HTMLElement).getByRole("button", { name: "开放重试" })).toBeTruthy();
-    expect(header.querySelector("button button")).toBeNull();
+    const provider = within(header()).getByText("zai").closest("[data-slot=header-provider]")!;
+    expect(within(provider as HTMLElement).getByText(`冷却中 · 约 ${formatCoolingTime(Date.parse(deadline))} 结束`).className).toContain("text-ink3");
+    expect(within(header()).getAllByRole("button")).toHaveLength(2);
+    expect(within(header()).getByRole("button", { name: "开放重试" })).toBeTruthy();
+    expect(header().querySelector("button button")).toBeNull();
     expect(activeCooling(rows()[0].providers!).map(record => record.provider)).toEqual(["zai"]);
   });
 
@@ -42,14 +40,12 @@ describe("provider cooldown", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("opens the same provider retry from the header without opening settings", async () => {
+  it("retries from the header while details stay visible", async () => {
     const user = userEvent.setup();
     const f = fixture({ harnesses: rows(), replies: { quota_redetect: () => reply(true) } });
-    await openHarness(f, "#buddies", false);
-    const summary = harnessButton("DSH");
-    const header = summary.closest("[data-slot=harness-header]")!;
-    await user.click(within(header as HTMLElement).getByRole("button", { name: "开放重试" }));
-    expect(summary.getAttribute("aria-expanded")).toBe("false");
+    await openHarness(f, "#buddies");
+    await user.click(clear());
+    expect(document.querySelector("[data-slot=harness-sidebar] #harness-title-dsh")?.closest("[data-slot=harness-card]")?.querySelector("[data-slot=harness-details]")).toBeTruthy();
     expect(f.calls).toEqual([{ operation: "quota_redetect", params: expect.objectContaining({ harness: "dsh", provider: "zai" }) }]);
   });
 

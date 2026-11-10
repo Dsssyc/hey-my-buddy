@@ -1,4 +1,3 @@
-import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
@@ -11,12 +10,10 @@ import type { HarnessBlock } from "./models";
 const row = "flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-left sm:px-4";
 
 /**
- * The chevron folds models. A separate button covers the rest of the row to open
- * its details; provider retry buttons sit above that button, never inside it.
+ * Only the chevron folds models; provider retries remain in the section header.
  */
-export function HarnessHeader({ block, health, state, accountOpen, onToggleAccount, gate, onRetry }: {
+export function HarnessHeader({ block, health, state, gate, onRetry }: {
   block: HarnessBlock & { modelCount: number }; health: HarnessHealth | undefined; state: string | null;
-  accountOpen: boolean; onToggleAccount: () => void;
   gate: { canWrite: boolean; refusal: string; busy: boolean }; onRetry: (provider: string) => void;
 }) {
   const { t } = useTranslation("buddies");
@@ -37,11 +34,6 @@ export function HarnessHeader({ block, health, state, accountOpen, onToggleAccou
         <Disclosure open={!block.folded} />
       </Button>
     </CollapsibleTrigger>
-    <div className={cn(row, "relative")}>
-      {health && <button id={`account-summary-${block.harness}`} type="button" data-slot="account-summary"
-        aria-label={t("harness.summaryLabel", { name: block.name })} aria-expanded={accountOpen}
-        onClick={onToggleAccount} className="disclosure-trigger absolute inset-0 z-0 w-full motion-reduce:transition-none" />}
-      <span className="pointer-events-none relative z-10 flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">{content}</span>
-    </div>
+    <div className={row}>{content}</div>
   </div>;
 }

@@ -39,10 +39,9 @@ for (const theme of ["light", "dark"]) for (const locale of ["zh-CN", "en-US"]) 
       const drawer = page.getByRole("region", { name: CODEX, exact: true });
       await expect(drawer.getByRole("meter")).toHaveAttribute("aria-valuenow", "1");
       await expect(drawer.locator("[data-slot=buddy-samples]")).toHaveCount(1);
-      await expect(drawer.locator("[data-slot=buddy-infrastructure-failures]")).toHaveCount(1);
+      await expect(drawer.locator("[data-slot=buddy-panel] [data-slot=buddy-infrastructure-failures]")).toHaveCount(0);
       await expect(drawer.getByRole("note")).toHaveCount(0);
-      const cells = await drawer.locator("[data-slot=buddy-stop]").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
-      expect(Math.max(...cells) - Math.min(...cells)).toBeLessThanOrEqual(1);
+      await expect(drawer.locator("[data-slot=buddy-choice] [role=switch]")).toHaveCount(await drawer.locator("[data-slot=buddy-stop]").count());
       await capture("drawer");
       await drawer.getByRole("spinbutton").fill("3");
       await expect(drawer.getByRole("note")).toBeVisible();
@@ -51,11 +50,9 @@ for (const theme of ["light", "dark"]) for (const locale of ["zh-CN", "en-US"]) 
       await expect(drawer.getByRole("note")).toHaveCount(0);
       await page.getByRole("button", { name: CODEX, exact: true }).click();
 
-      await page.getByRole("button", { name: zh ? "DSH 账户" : "DSH account", exact: true }).click();
-      await page.getByRole("button", { name: zh ? "ZCode 账户" : "ZCode account", exact: true }).click();
       const details = page.getByRole("group", { name: zh ? "DSH 设置" : "DSH settings", exact: true });
       await expect(details).toContainText("0.2.2-rc.1");
-      await expect(details.locator(":scope > [role=group]")).toHaveCount(3);
+      await expect(details.locator(":scope > [role=group]")).toHaveCount(2);
       const zcode = page.getByRole("group", { name: zh ? "ZCode 设置" : "ZCode settings", exact: true });
       await expect(zcode).toContainText(zh ? "未核对" : "Not verified");
       await expect(zcode).toContainText(zh ? "不能构建模型画像" : "cannot build model profiles");

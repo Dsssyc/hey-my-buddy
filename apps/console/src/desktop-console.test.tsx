@@ -151,7 +151,8 @@ describe("desktop console", () => {
     expect(levelSwitch("off")).toBeTruthy();
     await user.click(effortCell("low"));
     expect(levelSwitch("low")).toBeTruthy();
-    expect(within(detail).queryByRole("switch", { name: "启用 off" })).toBeNull();
+    expect(within(detail.querySelector<HTMLElement>("[data-slot=buddy-panel]")!).queryByRole("switch")).toBeNull();
+    expect(within(detail).getByRole("switch", { name: "启用 off" })).toBeTruthy();
     expect(within(detail).queryByRole("checkbox")).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });

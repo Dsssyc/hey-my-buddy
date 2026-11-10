@@ -101,9 +101,8 @@ describe("the catalogue in English", () => {
     const user = userEvent.setup();
     const catalog = await openCatalog(world());
     expect(chinese()).toEqual([]);
-    // Every section open on its account, location and cooldown; every section's models unfolded.
+    // Every section's models are unfolded; location and account details stay in the sidebar.
     for (const fold of [...catalog.querySelectorAll<HTMLElement>("[data-slot=fold-handle]")]) if (fold.getAttribute("aria-expanded") === "false") await user.click(fold);
-    for (const summary of [...catalog.querySelectorAll<HTMLElement>("[data-slot=account-summary]")]) await user.click(summary);
     expect(catalog.querySelectorAll("[data-slot=harness-details]").length).toBeGreaterThan(0);
     expect(chinese()).toEqual([]);
     // Every model row open in turn, with every effort of its strip selected.
@@ -117,7 +116,7 @@ describe("the catalogue in English", () => {
     // The model's own settings and the buddy's: an edit raises the save bar, with its marks.
     const editableModel = within(catalog).getByRole("button", { name: "dsh / deepseek-official / deepseek-flash" });
     if (editableModel.getAttribute("aria-expanded") !== "true") await user.click(editableModel);
-    await user.click(within(document.querySelector<HTMLElement>("[data-slot=model-drawer]")!).getAllByRole("switch")[0]);
+    await user.click(document.querySelector<HTMLElement>("[data-slot=model-drawer] [data-slot=buddy-choice] [role=switch][aria-checked=true]")!);
     expect(screen.getByRole("region", { name: "Unsaved changes" })).toBeTruthy();
     expect(chinese()).toEqual([]);
     // The dialogs the sections open.
@@ -136,7 +135,6 @@ describe("the catalogue in English", () => {
     await user.click(within(catalog).getByRole("button", { name: "Discover models" }));
     expect(await within(catalog).findByText(/authorization has expired/i)).toBeTruthy();
     await user.click(within(catalog).getByRole("button", { name: "Check all" }));
-    for (const summary of [...catalog.querySelectorAll<HTMLElement>("[data-slot=account-summary]")]) await user.click(summary);
     await user.click(catalog.querySelector<HTMLElement>("[data-slot=model-row] > button")!);
     expect(chinese()).toEqual([]);
     expect(within(catalog).queryByRole("button", { name: "Manage account" })).toBeNull();
@@ -146,7 +144,7 @@ describe("the catalogue in English", () => {
     const user = userEvent.setup();
     const catalog = await openCatalog(world());
     await user.click(catalog.querySelector<HTMLElement>("[data-slot=model-row] > button")!);
-    await user.click(within(document.querySelector<HTMLElement>("[data-slot=model-drawer]")!).getAllByRole("switch")[0]);
+    await user.click(document.querySelector<HTMLElement>("[data-slot=model-drawer] [data-slot=buddy-choice] [role=switch][aria-checked=true]")!);
     const bar = screen.getByRole("region", { name: "Unsaved changes" });
     expect(within(bar).getByRole("button", { name: "Save" })).toBeTruthy();
     expect(within(bar).getByRole("button", { name: "Discard" })).toBeTruthy();

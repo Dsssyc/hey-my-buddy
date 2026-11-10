@@ -5,11 +5,11 @@ const FLASH = "dsh / deepseek-official / deepseek-flash";
 const CODEX = "codex / openai / gpt-5-codex";
 
 const languages = [
-  { locale: "zh-CN", catalog: "目录", unsaved: "未保存的修改", settings: "设置", account: "账户", check: "检测", checked: "已检测 Codex：已找到", cooling: "冷却中", clear: "开放重试", unavailable: /^显示不可用/ },
-  { locale: "en-US", catalog: "Catalog", unsaved: "Unsaved changes", settings: "settings", account: "account", check: "Check", checked: "Checked Codex: Found", cooling: "Cooling down", clear: "Open retry", unavailable: /^Show unavailable/ },
+  { locale: "zh-CN", catalog: "目录", unsaved: "未保存的修改", settings: "设置", check: "检测", checked: "已检测 Codex：已找到", cooling: "冷却中", clear: "开放重试", unavailable: /^显示不可用/ },
+  { locale: "en-US", catalog: "Catalog", unsaved: "Unsaved changes", settings: "settings", check: "Check", checked: "Checked Codex: Found", cooling: "Cooling down", clear: "Open retry", unavailable: /^Show unavailable/ },
 ];
 
-for (const { locale, catalog, unsaved, settings, account, check, checked, cooling, clear, unavailable } of languages)
+for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear, unavailable } of languages)
   for (const width of [1440]) for (const theme of ["light", "dark"] as const) {
     test.describe(`the catalogue in ${locale} at ${width}px in ${theme}`, () => {
       // The contrast is measured at rest: under reduced motion the page makes no transitions.
@@ -64,8 +64,8 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
         await expect(header.getByRole("link").first()).toHaveAccessibleName(catalog);
         await expect(toolbar.getByRole("status")).toHaveCount(0);
         await expect(page.locator("[data-slot=unsaved-mark]")).toHaveCount(0);
-        const metered = page.getByRole("button", { name: `DSH ${account}`, exact: true });
-        await expect(metered.locator("..").locator("[data-slot=cooling-status]")).toContainText(cooling);
+        const metered = page.locator("[data-slot=harness-section][aria-label=DSH] [data-slot=harness-header]");
+        await expect(metered.locator("[data-slot=cooling-status]")).toContainText(cooling);
         await expect(metered).not.toContainText("%");
         const logo = page.locator("[data-slot=harness-section][aria-label=ZCode] [data-slot=harness-logo]");
         const mask = await logo.evaluate(node => {
@@ -80,13 +80,11 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
           await expectWholeAndApart(row, row.locator(":scope > button"));
           await expectTextUncut(row.locator(":scope > button"));
         }
-        for (const summary of await page.locator("[data-slot=harness-section]").getByRole("button", { name: new RegExp(` ${account}$`) }).all()) {
+        for (const summary of await page.locator("[data-slot=harness-header]").all()) {
           await expectTextUncut(summary);
-          // The row remains the button, and the cooldown summary belongs to it.
-          await expect(summary.locator("..").locator("[data-slot=cooling-status]")).toHaveCount(await summary.getAttribute("aria-label") === `DSH ${account}` ? 1 : 0);
           expect(await contrastOf(summary)).toBeGreaterThanOrEqual(4.5);
         }
-        const zcode = page.getByRole("button", { name: `ZCode ${account}`, exact: true });
+        const zcode = page.locator("[data-slot=harness-section][aria-label=ZCode] [data-slot=harness-header]");
         await expect(zcode.locator("[data-slot=cooling-status]")).toHaveCount(0);
         await expectTextUncut(zcode);
         // The available sections precede the recorded login failure.
@@ -124,68 +122,54 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
           path: testInfo.outputPath(`buddy-inline-${locale}-${width}-${theme}.png`) });
       });
 
-      test("shows one cooling provider and a quiet non-cooling provider in the account details", async ({ page }, testInfo) => {
+      test("shows cooling retry in the head and two sidebar detail blocks", async ({ page }, testInfo) => {
         await open(page, "#buddies/catalog");
-        await page.getByRole("button", { name: `DSH ${account}`, exact: true }).click();
-        await page.getByRole("button", { name: `Codex ${account}`, exact: true }).click();
         const dsh = page.getByRole("group", { name: `DSH ${settings}`, exact: true });
         const codex = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
-        await expect(dsh.locator("[data-slot=cooling-details]")).toContainText("deepseek-official");
-        await expect(dsh.locator("[data-slot=cooling-details]")).not.toContainText("deepseek-partner");
-        await expect(dsh.getByRole("button", { name: clear })).toHaveCount(1);
-        await expect(codex.locator("[data-slot=cooling-details]")).toHaveText(locale === "zh-CN" ? "当前无冷却" : "No active cooldown");
-        await expect(codex.getByRole("button", { name: clear })).toHaveCount(0);
+        await expect(dsh.locator(":scope > [role=group]")).toHaveCount(2);
+        await expect(codex.locator(":scope > [role=group]")).toHaveCount(2);
+        const dshHeader = page.locator("[data-slot=harness-section][aria-label=DSH] [data-slot=harness-header]");
+        await expect(dshHeader).toContainText("deepseek-official");
+        await expect(dshHeader.getByRole("button", { name: clear })).toHaveCount(1);
+        await expect(page.locator("[data-slot=harness-section][aria-label=Codex] [data-slot=harness-header]").getByRole("button", { name: clear })).toHaveCount(0);
         await expectNoSidewaysScroll(page);
         await page.screenshot({ path: testInfo.outputPath(`catalogue-cooling-and-clear-${locale}-${width}-${theme}.png`), fullPage: true });
         await dsh.screenshot({ path: testInfo.outputPath(`buddy-cooling-${locale}-${width}-${theme}.png`) });
         await codex.screenshot({ path: testInfo.outputPath(`buddy-clear-${locale}-${width}-${theme}.png`) });
       });
 
-      test("aligns the effort strip and selected panel, stacking the same drawer on narrow screens", async ({ page }) => {
+      test("places model service above a buddy list and selected panel", async ({ page }) => {
         await open(page, "#buddies/catalog");
         await page.getByRole("button", { name: CODEX, exact: true }).click();
         const drawer = page.getByRole("region", { name: CODEX, exact: true });
-        const strip = drawer.getByRole("group", { name: /^(推理强度|Reasoning effort)$/ });
+        const service = drawer.locator("[data-slot=model-service]");
+        const columns = drawer.locator("[data-slot=buddy-columns]");
+        const list = columns.locator("[data-slot=buddy-list]");
         const panel = drawer.locator("[data-slot=buddy-panel]");
-        const widths = await strip.getByRole("button").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
-        expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
+        await expect(service.locator("[data-slot=model-service-line]")).toHaveCount(1);
+        await expect(list.locator("[data-slot=buddy-choice]")).toHaveCount(await list.locator("[data-slot=buddy-stop]").count());
+        const choices = list.locator("[data-slot=buddy-choice]");
+        await expect(choices.first().getByRole("switch")).toHaveCount(1);
         await expect(drawer.getByRole("radiogroup", { name: /^(默认偏好|Default preference)$/ })).toHaveCount(0);
         await expect(panel.getByRole("radiogroup", { name: /的偏好$|^Preference of / })).toHaveCount(1);
         await expect(panel.getByRole("radio", { name: locale === "zh-CN" ? "不设" : "None" })).toBeVisible();
-        await expectWholeAndApart(drawer, drawer.locator(":scope > div > div"));
-        await expectWholeAndApart(strip, strip.getByRole("button"));
-        await expectWholeAndApart(panel, panel.locator("input, [role=radiogroup], [role=switch]"));
+        await expectWholeAndApart(drawer, service);
+        await expectWholeAndApart(columns, list);
+        await expectWholeAndApart(columns, panel);
+        await expect(panel.getByRole("switch")).toHaveCount(0);
+        await expect(panel.locator("[data-slot=buddy-infrastructure-failures]")).toHaveCount(0);
         await expectTextUncut(drawer.locator("button, [role=radio]"));
         for (const heading of await drawer.locator("h3").all())
           expect(await heading.evaluate(node => getComputedStyle(node).fontSize)).toBe("12px");
         for (const input of await drawer.locator("input").all())
           expect(await input.evaluate(node => getComputedStyle(node).fontSize)).toBe("14px");
-        const [stripBox, panelBox] = [await strip.boundingBox(), await panel.boundingBox()];
-        expect(Math.round(stripBox!.x)).toBe(Math.round(panelBox!.x));
-        expect(Math.round(stripBox!.width)).toBe(Math.round(panelBox!.width));
-        if (Number(width) === 390) {
-          expect(await strip.evaluate(node => getComputedStyle(node).gridTemplateColumns.split(" ").length)).toBe(3);
-          const [model, buddy] = await drawer.locator(":scope > div > div").all();
-          const [modelBox, buddyBox] = [await model.boundingBox(), await buddy.boundingBox()];
-          expect(modelBox!.y + modelBox!.height).toBeLessThanOrEqual(buddyBox!.y);
-        }
-        const enabled = panel.getByRole("switch");
-        const wasEnabled = await enabled.getAttribute("aria-checked");
-        await strip.getByRole("button", { name: "medium", exact: true }).click();
-        await expect(panel.getByRole("switch")).toHaveAttribute("aria-checked", "false");
-        await strip.getByRole("button", { name: "high", exact: true }).click();
-        await expect(panel.getByRole("switch")).toHaveAttribute("aria-checked", wasEnabled!);
-        const selected = strip.getByRole("button", { pressed: true });
-        const point = await selected.locator("..").locator("[data-slot=buddy-pointer]").evaluate(node => {
-          const shape = getComputedStyle(node);
-          const style = getComputedStyle(node.previousElementSibling!);
-          return { display: shape.display, border: shape.borderRightColor, color: style.color };
-        });
-        if (Number(width) === 390) expect(point.display).toBe("none");
-        else {
-          expect(point.display).not.toBe("none");
-          expect(point.border).toBe(point.color);
-        }
+        const [serviceBox, listBox, panelBox] = [await service.boundingBox(), await list.boundingBox(), await panel.boundingBox()];
+        expect(serviceBox!.y + serviceBox!.height).toBeLessThanOrEqual(listBox!.y);
+        expect(listBox!.x + listBox!.width).toBeLessThanOrEqual(panelBox!.x + 1);
+        const selected = choices.locator("[data-slot=buddy-stop][aria-pressed=true]");
+        await expect(selected).toHaveCount(1);
+        await choices.locator("[data-slot=buddy-stop][aria-pressed=false]").first().click();
+        await expect(list.locator("[data-slot=buddy-choice][data-selected=true]")).toHaveCount(1);
         // A hint-wrapped Radix control renders its choice from aria-checked.
         const fill = (checked: boolean) => drawer.getByRole("radio", { checked }).first().evaluate(node => getComputedStyle(node).backgroundColor);
         expect(await fill(true)).not.toBe(await fill(false));
@@ -198,7 +182,7 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
         await open(page, "#buddies/catalog");
         await page.getByRole("button", { name: FLASH, exact: true }).click();
         const drawer = page.getByRole("region", { name: FLASH, exact: true });
-        await drawer.getByRole("switch").click();
+        await drawer.locator("[data-slot=buddy-choice] [role=switch]").first().click();
         const bar = page.getByRole("region", { name: unsaved });
         const box = await bar.boundingBox();
         expect(box!.x).toBe(0);
@@ -214,16 +198,14 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
         await expectNoSidewaysScroll(page);
       });
 
-      test("expands accounts independently and keeps checks and hints inside the window", async ({ page }) => {
+      test("keeps sidebar checks and hints inside the window", async ({ page }) => {
         // The hint opens with its motion, as a user without the setting sees it.
         await page.emulateMedia({ reducedMotion: "no-preference" });
         await open(page, "#buddies/catalog");
-        await page.getByRole("button", { name: `Codex ${account}`, exact: true }).click();
-        await page.getByRole("button", { name: `DSH ${account}`, exact: true }).click();
         const codex = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
         await expect(page.getByRole("group", { name: `DSH ${settings}`, exact: true })).toBeVisible();
         await expectWholeAndApart(codex, codex.locator(":scope > [role=group]"));
-        for (const heading of await codex.locator("h3").all())
+        for (const heading of await codex.locator("h4").all())
           expect(await heading.evaluate(node => getComputedStyle(node).fontSize)).toBe("12px");
         await codex.getByRole("button", { name: check, exact: true }).click();
         await expect(page.locator("[data-slot=harness-feedback]")).toHaveText(checked);

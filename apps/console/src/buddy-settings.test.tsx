@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import {
-  catalogue, chip, choosePreference, effortCell, foldHandle, level, levelPreference, listed, modelButton, modelRow, pane,
+  catalogue, chip, choosePreference, effortCell, foldHandle, levelSwitch, levelPreference, listed, modelButton, modelRow, pane,
   queryFoldHandle, queryModel, search, selectModel,
 } from "./buddies/page.testing";
 import type { ConsoleApi, HarnessHealth } from "./api";
@@ -340,12 +340,12 @@ describe("a level's own preference", () => {
     await openBuddy(f.api);
     await selectModel(user, SONNET, "Claude Code");
     await user.click(effortCell("high"));
-    await user.click(within(level("high")).getByRole("switch"));
+    await user.click(levelSwitch("high"));
     await selectModel(user, SOL, "Codex");
     await user.click(effortCell("medium"));
-    await user.click(within(level("medium")).getByRole("switch"));
+    await user.click(levelSwitch("medium"));
     await user.click(effortCell("low"));
-    await user.click(within(level("low")).getByRole("switch"));
+    await user.click(levelSwitch("low"));
     const chips = [chip(SONNET, "high"), chip(SOL, "medium"), chip(SOL, "low")];
     expect(chips.map(item => item.textContent)).toEqual(["high优先", "medium固定", "low排除"]);
     expect(new Set(chips.map(item => item.className)).size).toBe(1);

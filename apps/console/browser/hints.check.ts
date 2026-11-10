@@ -100,7 +100,6 @@ test.describe("necessary hover hints and visible consequences", () => {
   test("keeps ordinary marks, folds and preferences quiet and explains missing reads and unavailable reasons", async ({ page }) => {
     await open(page, "#buddies/catalog");
     await quiet(page, [page.locator('[data-slot="fold-handle"]').first(),
-      page.getByRole("button", { name: "Codex 账户", exact: true }),
       page.locator('[data-slot="model-row"] .rounded-full').first()]);
     const missing = page.locator('[data-slot="model-row"]').getByText("待确认", { exact: true });
     await missing.hover();
@@ -112,7 +111,6 @@ test.describe("necessary hover hints and visible consequences", () => {
     const drawer = page.locator('[data-slot="model-drawer"]');
     await quiet(page, [drawer.getByRole("radio", { name: "优先", exact: true }),
       drawer.getByRole("radio", { name: "固定", exact: true }), drawer.getByRole("radio", { name: "排除", exact: true })]);
-    await page.getByRole("button", { name: "Claude Code 账户", exact: true }).click();
     const account = page.getByRole("group", { name: "Claude Code 设置", exact: true });
     const reason = account.locator('[aria-description]').filter({ hasText: "未登录" }).first();
     await reason.hover();

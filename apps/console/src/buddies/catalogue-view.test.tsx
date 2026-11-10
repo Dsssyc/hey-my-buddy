@@ -126,12 +126,11 @@ describe("the harness sections", () => {
     expect(section.textContent).toContain("1 个模型");
     expect(section.textContent).toContain("启用 1 / 2");
     expect(section.querySelector("[data-slot=model-row]")).toBeNull();
-    await user.click(within(section).getByRole("button", { name: "Claude Code 账户" }));
-    expect(within(section).getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
+    expect(within(catalogue()).getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
     await user.type(search(), "no-such-model");
     await listed(0, 0);
     expect(within(catalogue()).getByRole("region", { name: "Claude Code" })).toBe(section);
-    expect(within(section).getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
+    expect(within(catalogue()).getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
     await user.clear(search());
     await user.click(screen.getByRole("checkbox", { name: "仅显示已启用" }));
     await listed(0, 0);
@@ -432,9 +431,9 @@ describe("model-keyed evaluation links", () => {
     open(fixture(state));
     await listed(2, 2);
     await selectModel(user, SOL, "Codex");
-    expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("30");
-    expect(pane().querySelector("[data-slot=buddy-infrastructure-failures]")!.textContent).toBe("2");
-    const currentLink = within(pane()).getByRole("link", { name: "30" });
+    expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("30 次");
+    expect(pane().querySelector("[data-slot=buddy-infrastructure-failures]")).toBeNull();
+    const currentLink = within(pane()).getByRole("link", { name: "30 次" });
     expect(currentLink.getAttribute("href")).toBe("#buddies/evaluation/codex/current-generation/medium");
     await user.click(currentLink);
     expect(window.location.hash).toBe(currentLink.getAttribute("href"));
@@ -446,9 +445,9 @@ describe("model-keyed evaluation links", () => {
     }
     await user.click(screen.getByRole("link", { name: "目录" }));
     await selectModel(user, "codex / partner / gpt-6-sol", "Codex");
-    expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("4");
-    expect(pane().querySelector("[data-slot=buddy-infrastructure-failures]")!.textContent).toBe("0");
-    const partnerLink = within(pane()).getByRole("link", { name: "4" });
+    expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("4 次");
+    expect(pane().querySelector("[data-slot=buddy-infrastructure-failures]")).toBeNull();
+    const partnerLink = within(pane()).getByRole("link", { name: "4 次" });
     expect(partnerLink.getAttribute("href")).toBe("#buddies/evaluation/codex/partner-generation/medium");
     await user.click(partnerLink);
     expect(within(document.querySelector<HTMLElement>("[data-slot=evaluation-detail]")!).getByText("Partner evaluation")).toBeTruthy();

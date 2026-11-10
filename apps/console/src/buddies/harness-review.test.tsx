@@ -16,7 +16,7 @@ describe("declared review level", () => {
     const location = paneBlock("位置");
     expect(fieldValue(location, "已安装版本").textContent).toBe("0.4.2");
     expect(fieldValue(location, "核实时的版本").textContent).toBe("未核对");
-    expect(screen.getByRole("group", { name: "DSH 设置" }).querySelectorAll(":scope > [role=group]")).toHaveLength(3);
+    expect(screen.getByRole("group", { name: "DSH 设置" }).querySelectorAll(":scope > [role=group]")).toHaveLength(2);
     expect(within(paneBlock("账户")).queryByRole("button")).toBeNull();
   });
 

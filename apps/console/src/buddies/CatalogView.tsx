@@ -18,6 +18,7 @@ import type { Editor } from "../use-editor";
 import { MAX_HISTORY_BUDDIES, BUDDY_PAGE_SIZE, historySourceKey, useBuddyHistory } from "../use-buddy-history";
 import { useViewPreference } from "../view-preferences";
 import { HarnessDetails } from "./HarnessDetails";
+import { HarnessLogo } from "./HarnessLogo";
 import { HarnessHeader } from "./HarnessHeader";
 import { ModelDrawer, buddyRowId } from "./ModelDrawer";
 import { ModelLine } from "./ModelLine";
@@ -30,7 +31,7 @@ import { useHarnessActions } from "./use-harness-actions";
 const liveT = i18n.getFixedT(null, "buddies");
 
 /**
- * One directory, grouped by harness, with independent account expansions and one model drawer.
+ * One directory, grouped by harness, with a harness sidebar and one model drawer.
  */
 export function CatalogView({ snapshot, editor, api, refresh, active, mutationsAvailable, location, onNavigate, hidden }: {
   snapshot: Snapshot; editor: Editor; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
@@ -40,9 +41,8 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
 }) {
   const { t } = useTranslation("buddies");
   const [selected, setSelected] = useState<string | null>(null);
-  /** The buddy chosen on each model's strip; a model keeps its choice while its drawer closes. */
+  /** The buddy chosen on each model's list; a model keeps its choice while its drawer closes. */
   const [chosen, setChosen] = useState<Record<string, string>>({});
-  const [accounts, setAccounts] = useState<Record<string, boolean>>({});
   const actions = useHarnessActions({ snapshot, api, refresh, mutationsAvailable, sessionWritable: editor.sessionWritable });
   const [query, setQuery] = useState("");
   const [enabledOnly, setEnabledOnly, setEnabledOnlyForView] = useViewPreference("models.enabledOnly");
@@ -97,8 +97,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     if (!active || !location.target || handledLocation.current === buddyHash(location)) return;
     if (location.targetKind === "harness") {
       if (!actions.rows.some(row => row.harness === location.target)) return;
-      setAccounts(previous => ({ ...previous, [location.target!]: true }));
-      setFocusRequest(previous => ({ id: `account-summary-${location.target}`, n: (previous?.n ?? 0) + 1 }));
+      setFocusRequest(previous => ({ id: `harness-title-${location.target}`, n: (previous?.n ?? 0) + 1 }));
       setQuery(""); setEnabledOnlyForView(false);
     } else {
       const target = data.buddies.find(buddy => location.targetKind === "model" ? modelServiceKey(buddy) === location.target : buddy.buddyId === location.target);
@@ -117,7 +116,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   useEffect(() => {
     if (!active || !focusRequest) return;
     const target = document.getElementById(focusRequest.id);
-    target?.focus(); target?.scrollIntoView?.({ block: "nearest" });
+    target?.focus({ preventScroll: true }); target?.scrollIntoView?.({ block: "nearest" });
   }, [focusRequest, active]);
 
   function selectModel(row: ModelRow) {
@@ -139,14 +138,6 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     handledLocation.current = buddyHash(next);
     onNavigate(next);
   }
-  function toggleAccount(harness: string) {
-    const opening = !accounts[harness];
-    setAccounts(previous => ({ ...previous, [harness]: opening }));
-    const next: BuddyLocation = opening ? { view: "models", targetKind: "harness", target: harness } : { view: "models" };
-    handledLocation.current = buddyHash(next);
-    onNavigate(next);
-  }
-
   const refusal = !editor.sessionWritable ? t("loginExpired") : !mutationsAvailable ? t("models.refused") : "";
   async function discover() {
     if (busy) return;
@@ -214,26 +205,18 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
           {actions.retry && <Button variant="outline" size="sm" onClick={() => void actions.run(actions.retry!)}>{t("harness.retry")}</Button>}</p>}
         {actions.note && <p role="status">{actions.note}</p>}
       </div>}
-      <ScrollArea className="min-h-0 flex-1" viewportProps={{ className: "[&>div]:!block" }}>
+      <ScrollArea className="min-h-0 flex-1" viewportProps={{ className: "[&>div]:block! min-[1100px]:[&>div]:h-full" }}>
+      <div className="min-[1100px]:flex min-[1100px]:h-full min-[1100px]:min-h-0">
+      <ScrollArea data-slot="catalog-models" className="min-h-0 min-w-0 flex-1 max-[1100px]:overflow-visible!" viewportProps={{ className: "[&>div]:block! max-[1100px]:h-auto max-[1100px]:overflow-visible!" }}>
         <div className="space-y-3 p-3 sm:p-6">
           {sections.map(block => {
             const health = actions.rows.find(row => row.harness === block.harness);
             return <Collapsible asChild key={block.harness} open={!block.folded}
               onOpenChange={open => setFolded(previous => ({ ...previous, [block.harness]: !open }))}>
               <section aria-label={block.name} data-slot="harness-section" className="border bg-card">
-                <HarnessHeader block={block} health={health} state={block.state} accountOpen={!!accounts[block.harness]}
-                  onToggleAccount={() => toggleAccount(block.harness)}
+                <HarnessHeader block={block} health={health} state={block.state}
                   gate={{ canWrite: !actions.refusal, refusal: actions.refusal, busy: actions.busy }}
                   onRetry={provider => void actions.run({ kind: "retry", harness: block.harness, provider })} />
-                <Collapsible open={!!health && !!accounts[block.harness]}>
-                  <CollapsibleContent>
-                    {health && active && <HarnessDetails row={health} name={block.name}
-                      canWrite={!actions.refusal} refusal={actions.refusal} busy={actions.busy}
-                      onCheck={() => void actions.run({ kind: "check", harness: block.harness })}
-                      onSavePath={path => void actions.run({ kind: "set", harness: block.harness, path })}
-                      onRetry={provider => void actions.run({ kind: "retry", harness: block.harness, provider })} />}
-                  </CollapsibleContent>
-                </Collapsible>
                 <CollapsibleContent>
                   {block.models.map(row => <Collapsible key={row.key} open={selected === row.key}>
                     <ModelLine showProvider={block.providers.length > 1} row={row} harnessState={block.state} recorded={recorded} data={data} expanded={selected === row.key} onSelect={() => selectModel(row)} />
@@ -253,6 +236,27 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
           </div>}
         </div>
         <ScrollBar orientation="horizontal" />
+      </ScrollArea>
+      <ScrollArea data-slot="harness-sidebar" className="min-h-0 border-t bg-card min-[1100px]:w-[340px] min-[1100px]:shrink-0 min-[1100px]:border-t-0 min-[1100px]:border-l max-[1100px]:overflow-visible!"
+        viewportProps={{ className: "[&>div]:block! max-[1100px]:h-auto max-[1100px]:overflow-visible!" }}>
+        <h2 className="px-5 pt-4 text-xs font-medium text-ink2">{t("harness.sideTitle")}</h2>
+        <div className="divide-y">
+          {sections.map(block => {
+            const health = actions.rows.find(row => row.harness === block.harness);
+            return health && active ? <div key={block.harness} data-slot="harness-card" aria-labelledby={`harness-title-${block.harness}`}>
+              <h3 id={`harness-title-${block.harness}`} tabIndex={-1}
+                className="flex items-center gap-2 px-5 pt-4 text-sm font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset">
+                <HarnessLogo harness={block.harness} />{block.name}
+              </h3>
+              <HarnessDetails row={health} name={block.name}
+                canWrite={!actions.refusal} refusal={actions.refusal} busy={actions.busy}
+                onCheck={() => void actions.run({ kind: "check", harness: block.harness })}
+                onSavePath={path => void actions.run({ kind: "set", harness: block.harness, path })} />
+            </div> : null;
+          })}
+        </div>
+      </ScrollArea>
+      </div>
       </ScrollArea>
   </section>;
 }

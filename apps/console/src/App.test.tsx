@@ -128,7 +128,7 @@ describe("console interactions", () => {
     // The effort selector stays local; the sample count carries a stable evaluation address.
     expect(within(pane()).getAllByRole("button").filter(button => button.getAttribute("aria-label") !== null).map(button => button.getAttribute("aria-label"))).toEqual(["off"]);
     expect(within(pane()).queryByRole("button", { name: /评价与领域经验/ })).toBeNull();
-    const samples = within(pane()).getByRole("link", { name: "0" });
+    const samples = within(pane()).getByRole("link", { name: "0 次" });
     expect(samples.getAttribute("href")).toBe("#buddies/evaluation/dsh/deepseek-flash/off");
     await user.click(samples);
     expect(window.location.hash).toBe(samples.getAttribute("href"));

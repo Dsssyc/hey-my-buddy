@@ -51,18 +51,3 @@ export function CoolingHeaderProviders({ names, providers, gate, onRetry }: {
     </span>;
   })}</>;
 }
-
-export function CoolingDetails({ providers, gate, onClear }: {
-  providers: ProviderCooling[]; gate: Gate; onClear: (provider: string) => void;
-}) {
-  const { t } = useTranslation("buddies");
-  const cooling = useCooling(providers);
-  if (!cooling.length) return <p data-slot="cooling-details" className="text-xs text-ink3">{t("harness.cooling.none")}</p>;
-  return <div data-slot="cooling-details" className="min-w-0">
-      {cooling.map(record => <div key={record.provider} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 pb-3">
-        <span className="font-mono text-xs wrap-anywhere">{record.provider}</span>
-        <span className="col-start-1 text-xs text-ink3">{t("harness.cooling.status", { time: formatCoolingTime(Date.parse(record.coolingUntil!)) })}</span>
-        <span className="col-start-2 row-start-1 row-span-2"><RetryButton provider={record.provider} gate={gate} onRetry={onClear} /></span>
-      </div>)}
-  </div>;
-}

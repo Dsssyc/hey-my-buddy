@@ -187,7 +187,7 @@ describe("the Buddy page's sections and tables", () => {
     expect(current(sectionsNav())).toEqual(["目录"]);
     expect(modelsRegion()).toBeTruthy();
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
-    expect(document.querySelector("[data-slot=harness-details]")).toBeNull();
+    expect(document.querySelectorAll("[data-slot=harness-sidebar] [data-slot=harness-details]")).toHaveLength(4);
     expect(screen.queryByRole("navigation", { name: "目录的内容" })).toBeNull();
     await user.click(sectionLink(/^Router/));
     expect(window.location.hash).toBe("#buddies/router");

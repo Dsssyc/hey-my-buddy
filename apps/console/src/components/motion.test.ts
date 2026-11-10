@@ -56,9 +56,14 @@ describe("the colour changes of the Buddy page", () => {
     for (const [path, view] of Object.entries(views).filter(([path]) => !support.test(path))) {
       if (path === "../buddies/DomainTree.tsx") continue;
       const checked = path === "../task-detail/parts.tsx"
-        ? view.replace(/export function Fold\([\s\S]*?\n\}/, "") : view;
+        ? view.replace(/export function Fold\([\s\S]*?\n\}/, "")
+        : path === "../buddies/ModelDrawer.tsx"
+          ? view.replace(/useLayoutEffect\(\(\) => \{[\s\S]*?\n  \}, \[selectedBuddyId\]\);/, "") : view;
       expect(checked, path).not.toMatch(/getBoundingClientRect|scrollHeight|offsetHeight|ResizeObserver/);
     }
+    const drawer = views["../buddies/ModelDrawer.tsx"];
+    expect(drawer).toContain("viewport.scrollTop");
+    expect(drawer).not.toMatch(/scrollHeight|offsetHeight|ResizeObserver/);
   });
   it("allows only Fold to observe its own overflow, without a measured height animation", () => {
     const fold = views["../task-detail/parts.tsx"].match(/export function Fold\([\s\S]*?\n\}/)![0];

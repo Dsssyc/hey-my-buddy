@@ -1,7 +1,7 @@
 /** Recorded harness settings within the directory. */
 export default {
+  sideTitle: "Harness",
   detailsLabel: "{{name}} 设置",
-  summaryLabel: "{{name}} 账户",
 
   check: "检测",
   checkAll: "全部检测",
@@ -85,11 +85,9 @@ export default {
     },
   },
   cooling: {
-    name: "冷却",
     status: "冷却中 · 约 {{time}} 结束",
     clear: "开放重试",
     retryHint: "开放一次重试机会，不代表提供方已恢复。",
-    none: "当前无冷却",
     done: { cleared: "已解除冷却", none: "当前未在冷却" },
     storageUnavailable: "无法保留请求 ID；请允许页面使用会话存储后重试。",
     unknownResult: "解除冷却的结果未知；请重放此请求。",
