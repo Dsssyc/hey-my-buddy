@@ -9,14 +9,19 @@ to selected attempts are exported, together with the catalog's current state:
 every row of each catalog table (buddies, model_services, catalog_current,
 evaluation_catalog, catalog_observations, catalog_pending,
 model_service_concurrency, harness_health) that the source schema has, so buddy
-availability can be compared on real data across versions. Each selected micro
-task's applied cleanup plans travel with it, so the private service reading the
-sample never plans a reclamation inside the source state; a run whose checkout
-the source has not reclaimed is left out rather than pointing maintenance at a
-live checkout. The one judge is the staged sample itself, upgraded as an
-install would upgrade it: what the product's own candidate query still names
-there decides the exclusion, and the destination retains the source schema and
-is published only after that query falls silent and the stop checks pass.
+availability can be compared on real data across versions. No buddy travels
+enabled: a private service started on the sample launches no harness until
+someone enables a buddy there. Every model service the catalog names travels
+with its whole correspondence history and the models rows that history
+references, so the model identity the routing path reads never goes missing.
+Each selected micro task's applied cleanup plans travel with it, so the private
+service reading the sample never plans a reclamation inside the source state; a
+run whose checkout the source has not reclaimed is left out rather than
+pointing maintenance at a live checkout. The one judge is the staged sample
+itself, upgraded as an install would upgrade it: what the product's own
+candidate query still names there decides the exclusion, and the destination
+retains the source schema and is published only after that query falls silent
+and the stop checks pass.
 """
 from __future__ import annotations
 
@@ -155,15 +160,6 @@ def _select(connection, source_schema: int,
         records[table] = _rows(connection, table, 'decision_id', decisions)
     for table in ('tasks', 'attempts', 'messages', 'artifacts', 'events', 'router_outcomes'):
         records[table] = _rows(connection, table, 'task_id', task_ids)
-    if source_schema >= 37:
-        model_ids = {row['model_id'] for row in records['attempts'] if row['model_id'] is not None}
-        services = {(row['model_harness'], row['model_provider'], row['model_model'])
-                    for row in records['attempts'] if row['model_id'] is not None}
-        records['model_correspondences'] = [dict(row) for row in connection.execute(
-            'SELECT * FROM model_correspondences ORDER BY rowid')
-            if (row['harness'], row['provider'], row['model']) in services]
-        model_ids.update(row['model_id'] for row in records['model_correspondences'])
-        records['models'] = _rows(connection, 'models', 'model_id', model_ids)
     attempts = {row['attempt_id'] for row in records['attempts']}
     for table in ('attempt_process_identities', 'attempt_interruptions', 'attempt_shutdown_evidence',
                   'execution_issues', 'attempt_activity', 'attempt_reminders', 'router_claims'):
@@ -204,6 +200,28 @@ def _select(connection, source_schema: int,
         if table in tables:
             records[table] = [dict(row) for row in connection.execute(
                 f'SELECT * FROM "{table}" ORDER BY rowid')]
+    # The recorded health of a real harness is evidence, but no sample may act
+    # on it: every buddy travels disabled, so a private service on the sample
+    # starts no harness until someone enables a buddy there.
+    for buddy in records['buddies']:
+        buddy['enabled'] = 0
+    if source_schema >= 37:
+        # Every model service the catalog names keeps its current
+        # correspondence, and the history is append-only with undo deleting
+        # only the latest row, so all rows of each service travel in source
+        # rowid order, merged with the services the selected attempts
+        # recorded. A schema before 40 names its services through buddies.
+        services = {(row['model_harness'], row['model_provider'], row['model_model'])
+                    for row in records['attempts'] if row['model_id'] is not None}
+        services.update((row['harness'], row['provider'], row['model'])
+                        for row in (records['model_services'] if source_schema >= 40
+                                    else records['buddies']))
+        records['model_correspondences'] = [dict(row) for row in connection.execute(
+            'SELECT * FROM model_correspondences ORDER BY rowid')
+            if (row['harness'], row['provider'], row['model']) in services]
+        model_ids = {row['model_id'] for row in records['attempts'] if row['model_id'] is not None}
+        model_ids.update(row['model_id'] for row in records['model_correspondences'])
+        records['models'] = _rows(connection, 'models', 'model_id', model_ids)
     for run in records['workflow_runs']:
         group = groups[run['run_id']]
         if not group.startswith('run:'):

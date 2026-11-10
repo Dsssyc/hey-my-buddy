@@ -65,6 +65,16 @@ class ExportBoardSampleTests(WorkflowTestCase):
         self.assert_source_unchanged(before, {name: value for name, value in after.items()
                                              if name not in {ref, blob}})
 
+    def assert_buddies_travel_disabled(self, source, sample):
+        """Every buddy the source has enabled travels disabled, other columns as written."""
+        columns = [row[1] for row in sample.execute('PRAGMA table_info(buddies)')]
+        compared = ','.join(f'"{column}"' for column in columns if column != 'enabled')
+        self.assertTrue(source.execute('SELECT 1 FROM buddies WHERE enabled=1 LIMIT 1').fetchone(),
+                        'The source must have an enabled buddy for the guard to mean anything')
+        self.assertEqual(sample.execute('SELECT COUNT(*) FROM buddies WHERE enabled!=0').fetchone()[0], 0)
+        self.assertEqual([tuple(row) for row in sample.execute(f'SELECT {compared} FROM buddies ORDER BY rowid')],
+                         [tuple(row) for row in source.execute(f'SELECT {compared} FROM buddies ORDER BY rowid')])
+
     def source_board(self):
         board = InProcessBoard(self.directory / 'source')
         self._stack.append(board)
@@ -371,11 +381,70 @@ class ExportBoardSampleTests(WorkflowTestCase):
                     (table,)).fetchone() is not None, exists is not None, table)
                 if exists is None:
                     continue
+                if table == 'buddies':
+                    self.assert_buddies_travel_disabled(source, sample)
+                    continue
                 rows = [tuple(row) for row in source.execute(f'SELECT * FROM "{table}" ORDER BY rowid')]
                 if table in inserted:
                     self.assertTrue(rows, table)
                 self.assertEqual([tuple(row) for row in sample.execute(
                     f'SELECT * FROM "{table}" ORDER BY rowid')], rows, table)
+        self.assert_source_unchanged(before, files(board.directory))
+
+    def test_sample_disables_every_enabled_buddy_of_the_source(self):
+        board = self.source_board()
+        self.accepted(board, 'enabled-buddy-sample')
+        enable_fixture_buddy(board.store, {'harness': 'codex', 'provider': 'openai',
+                                           'model': 'fixture', 'effort': 'low'})
+        board.store.db.close()
+        before = files(board.directory)
+        output = export_sample(board.directory, self.directory / 'disabled-buddy-sample')
+        with closing(sqlite3.connect((board.directory / DB_FILE).as_uri() + '?mode=ro', uri=True)) as source, \
+                closing(sqlite3.connect(output / DB_FILE)) as sample:
+            self.assert_buddies_travel_disabled(source, sample)
+        self.assert_source_unchanged(before, files(board.directory))
+
+    def test_sample_carries_each_catalog_model_services_whole_correspondence_history(self):
+        from hey_my_buddy.blackboard.evaluation.models import (append_correspondence, create_model,
+                                                               current_model, ensure_model_service)
+        board = self.source_board()
+        self.accepted(board, 'correspondence-sample')
+        with board.store.db.write() as connection:
+            # Two services no selected attempt references: one keeps the
+            # correspondence its admission wrote, one was remapped by its user,
+            # so the append-only history of a service must travel whole.
+            for harness, provider, model in (('zcode', 'fixture', 'untouched-model'),
+                                             ('claude', 'fixture', 'remapped-model')):
+                connection.execute(
+                    'INSERT INTO model_services(harness,provider,model,description) VALUES(?,?,?,?)',
+                    (harness, provider, model, 'Fixture service no attempt used'))
+                ensure_model_service(connection, harness, provider, model, '2026-11-01T00:00:00.000Z')
+            append_correspondence(connection, ('claude', 'fixture', 'remapped-model'),
+                                  create_model(connection, 'Remapped by its user'),
+                                  '2026-11-02T00:00:00.000Z', 'user')
+        board.store.db.close()
+        before = files(board.directory)
+        output = export_sample(board.directory, self.directory / 'correspondence-sample')
+        with closing(sqlite3.connect((board.directory / DB_FILE).as_uri() + '?mode=ro', uri=True)) as source, \
+                closing(sqlite3.connect(output / DB_FILE)) as sample:
+            self.assertEqual(source.execute(
+                "SELECT COUNT(*) FROM model_correspondences WHERE model='remapped-model'").fetchone()[0], 2)
+            services = [tuple(row) for row in sample.execute(
+                'SELECT harness,provider,model FROM model_services ORDER BY rowid')]
+            self.assertTrue(services)
+            for service in services:
+                history = [tuple(row) for row in source.execute(
+                    'SELECT * FROM model_correspondences WHERE harness=? AND provider=? AND model=? ORDER BY rowid',
+                    service)]
+                self.assertTrue(history, service)
+                self.assertEqual([tuple(row) for row in sample.execute(
+                    'SELECT * FROM model_correspondences WHERE harness=? AND provider=? AND model=? ORDER BY rowid',
+                    service)], history, service)
+            self.assertEqual(sample.execute('PRAGMA foreign_key_check').fetchall(), [])
+            for service in services:
+                # The routing path's own read: a service without its current
+                # correspondence raises here instead of returning a model.
+                self.assertIsNotNone(current_model(sample, *service))
         self.assert_source_unchanged(before, files(board.directory))
 
     def test_source_schema_without_a_catalog_table_exports_the_rest(self):
@@ -405,6 +474,9 @@ class ExportBoardSampleTests(WorkflowTestCase):
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_services'").fetchone())
             for table in CATALOG_TABLES:
                 if table == 'model_services':
+                    continue
+                if table == 'buddies':
+                    self.assert_buddies_travel_disabled(origin, sample)
                     continue
                 rows = [tuple(row) for row in origin.execute(f'SELECT * FROM "{table}" ORDER BY rowid')]
                 self.assertTrue(rows, table)
