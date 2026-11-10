@@ -330,7 +330,8 @@ describe("the inline model drawer", () => {
     expect(effortCell("high").getAttribute("aria-pressed")).toBe("true");
     expect(levelSwitch("high").getAttribute("aria-checked")).toBe("false");
     expect(within(pane()).queryByRole("group", { name: "medium" })).toBeNull();
-    expect(within(pane()).getByText("claude / anthropic / claude-sonnet-5 /", { exact: false })).toBeTruthy();
+    expect(within(pane()).queryByText("claude / anthropic / claude-sonnet-5 /", { exact: false })).toBeNull();
+    expect(within(level("high")).getByText("计入评价")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });

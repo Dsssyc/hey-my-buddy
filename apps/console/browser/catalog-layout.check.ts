@@ -5,7 +5,7 @@ import { expectNoSidewaysScroll, open, settle, test } from "./preview";
 
 const CODEX = "codex / openai / gpt-5-codex";
 const OPUS = "claude / anthropic / claude-opus-5-5";
-const shots = fileURLToPath(new URL("../../../tmp/catalog/", import.meta.url));
+const shots = fileURLToPath(new URL("../../../tmp/catalog-cards/shots/", import.meta.url));
 const frame = async (target: Locator) => (await target.boundingBox())!;
 
 /** Five ordered efforts exercise overflow without changing the shared synthetic preview. */
@@ -67,6 +67,17 @@ for (const theme of ["dark", "light"] as const) {
         expect(Math.abs(list.height - panel.height)).toBeLessThanOrEqual(0.5);
         expect(Math.abs(list.x + list.width - panel.x)).toBeLessThanOrEqual(0.5);
         await contentSizedList(drawer);
+        const heading = await frame(drawer.locator("[data-slot=buddy-list] > div").first());
+        const samples = await frame(drawer.locator("[data-slot=buddy-samples]").locator(".."));
+        expect(Math.abs(heading.y - samples.y)).toBeLessThanOrEqual(1);
+        expect(Math.abs(heading.height - samples.height)).toBeLessThanOrEqual(1);
+        const clearance = await drawer.locator("[data-slot=buddy-list]").evaluate(list => {
+          const rows = [...list.querySelectorAll('[data-slot="buddy-stop"]')];
+          const widest = rows.reduce((a, b) => a.lastElementChild!.getBoundingClientRect().right > b.lastElementChild!.getBoundingClientRect().right ? a : b);
+          const scrollbar = list.querySelector('[data-slot="scroll-area-scrollbar"]')!;
+          return scrollbar.getBoundingClientRect().left - widest.lastElementChild!.getBoundingClientRect().right;
+        });
+        expect(clearance, "the widest effort's preference clears the scrollbar").toBeGreaterThanOrEqual(28);
         const controls = await drawer.locator("[data-slot=model-service-line] > *").evaluateAll(nodes => nodes.map(node => {
           const box = node.getBoundingClientRect(); return { top: box.top, bottom: box.bottom };
         }));
@@ -77,13 +88,14 @@ for (const theme of ["dark", "light"] as const) {
         expect(await viewport.evaluate(node => node.scrollHeight - node.clientHeight)).toBeLessThanOrEqual(1);
         expect(await viewport.evaluate(node => getComputedStyle(node).overflowY)).toBe("visible");
       }
+      await expect(drawer).not.toContainText(`${CODEX} /`);
       await expect(drawer.locator("[data-slot=buddy-panel]").getByRole("switch")).toHaveCount(0);
       await expect(drawer.getByText("基础设施失败", { exact: true })).toHaveCount(0);
       await expect(drawer.locator("[data-slot=buddy-samples]")).toContainText("次");
       const note = await frame(drawer.getByRole("textbox"));
       expect(note.width).toBeLessThanOrEqual(448);
       await expectNoSidewaysScroll(page);
-      if (width === 1440 && theme === "dark") await page.screenshot({ path: `${shots}catalog-drawer-1440-dark.png` });
+      if (width === 1440) await page.screenshot({ path: `${shots}catalog-drawer-1440-${theme}.png` });
     });
 
     test("keeps harness facts beside the list or below it while the whole header folds models", async ({ page }) => {
@@ -94,12 +106,26 @@ for (const theme of ["dark", "light"] as const) {
       if (width >= 1100) {
         expect(side.x).toBeGreaterThanOrEqual(list.x + list.width - 0.5);
         expect(Math.abs(side.y - list.y)).toBeLessThanOrEqual(0.5);
-        expect(side.width).toBe(340);
+        expect(side.width).toBe(384);
+        const firstCard = sidebar.locator("[data-slot=harness-card]").first();
+        const firstSection = models.locator("[data-slot=harness-section]").first();
+        expect(Math.abs((await frame(firstCard)).y - (await frame(firstSection)).y)).toBeLessThanOrEqual(1);
+        const title = await frame(firstCard.locator("h3"));
+        const header = await frame(firstSection.locator("[data-slot=harness-header]"));
+        expect(title.height).toBe(48);
+        expect(Math.abs(title.height - header.height)).toBeLessThanOrEqual(1);
+        if (width === 1440) await page.screenshot({ path: `${shots}catalog-rest-1440-${theme}.png` });
         const before = await models.locator(":scope > [data-slot=scroll-area-viewport]").evaluate(node => node.scrollTop);
         await sidebar.locator(":scope > [data-slot=scroll-area-viewport]").evaluate(node => { node.scrollTop = node.scrollHeight; });
         expect(await models.locator(":scope > [data-slot=scroll-area-viewport]").evaluate(node => node.scrollTop)).toBe(before);
       } else expect(side.y).toBeGreaterThanOrEqual(list.y + list.height - 0.5);
       await expect(sidebar.getByRole("heading", { name: "Harness", exact: true })).toHaveCount(1);
+      expect(await sidebar.getByRole("heading", { name: "Harness", exact: true }).evaluate(node => node.getBoundingClientRect().width)).toBe(1);
+      for (const card of await page.locator("[data-slot=harness-card], [data-slot=harness-section]").all()) {
+        const radius = await card.evaluate(node => ({ actual: getComputedStyle(node).borderRadius, token: getComputedStyle(node).getPropertyValue("--radius-card").trim() }));
+        expect(radius.actual).toBe(radius.token);
+      }
+      for (const section of await models.locator("[data-slot=harness-section]").all()) await expect(section).toHaveCSS("overflow", "clip");
       expect(await sidebar.locator("[data-slot=harness-card] h3").allTextContents()).toEqual(await page.locator("[data-slot=harness-section]").evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-label"))));
       const header = page.locator('[data-slot=harness-section][aria-label="Codex"] [data-slot=harness-header]');
       const folded = await header.getByRole("button").getAttribute("aria-expanded");
@@ -134,6 +160,68 @@ for (const theme of ["dark", "light"] as const) {
 
   test.describe(`five effort drawer ${theme}`, () => {
     test.use({ viewport: { width: 1440, height: 1000 }, locale: "zh-CN", reducedMotion: "reduce" });
+    test("wraps POSIX and Windows paths between complete segments, and splits only oversized segments", async ({ page }) => {
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      const posix = "~/.nvm/versions/node/v24.21.0/bin/console-harness-with-hyphens";
+      const windows = "C:\\Program Files\\Harness Tools\\verified-version\\console-harness.exe";
+      const oversized = `~/harnesses/${"long-name".repeat(18)}/bin/runner`;
+      await page.route("**/api/console", async route => {
+        const response = await route.fetch();
+        const snapshot: Snapshot = await response.json();
+        snapshot.harnesses = snapshot.harnesses!.map(row => row.harness === "codex" ? { ...row, executable: posix }
+          : row.harness === "zcode" ? { ...row, status: "missing", executable: windows,
+            candidates: [{ path: windows, status: "missing" }, { path: oversized, status: "missing" }] } : row);
+        await route.fulfill({ response, json: snapshot });
+      });
+      await open(page, "#buddies/catalog");
+      const paths = page.locator("[data-slot=harness-path]");
+      for (const path of [posix, windows]) {
+        const matches = paths.filter({ hasText: path });
+        expect(await matches.count()).toBe(path === posix ? 1 : 2);
+        for (const target of await matches.all()) {
+          const lines = await target.evaluate(node => {
+            const segments = [...node.children];
+            return segments.map(segment => {
+              const range = document.createRange();
+              range.selectNodeContents(segment.firstChild!);
+              return [...range.getClientRects()].map(rect => rect.y);
+            });
+          });
+          expect(new Set(lines.flat()).size, "the path must actually wrap").toBeGreaterThan(1);
+          for (const segment of lines) expect(new Set(segment).size, "each fitting segment stays whole").toBe(1);
+        }
+      }
+      const longPath = paths.filter({ hasText: oversized });
+      const longSegment = longPath.locator(":scope > span").filter({ hasText: "long-name" });
+      expect(await longSegment.evaluate(node => {
+        const range = document.createRange(); range.selectNodeContents(node.firstChild!);
+        return new Set([...range.getClientRects()].map(rect => rect.y)).size;
+      })).toBeGreaterThan(1);
+      expect(await longPath.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+      await expectNoSidewaysScroll(page);
+      await page.screenshot({ path: `${shots}catalog-paths-${theme}.png` });
+    });
+
+    test("keeps a buddy-only unavailable hint after the evaluation count", async ({ page }) => {
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      await page.route("**/api/console", async route => {
+        const response = await route.fetch();
+        const snapshot: Snapshot = await response.json();
+        snapshot.buddies = snapshot.buddies.map(buddy => buddy.model === "gpt-5-codex" && buddy.effort === "medium"
+          ? { ...buddy, available: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } } : buddy);
+        await route.fulfill({ response, json: snapshot });
+      });
+      await open(page, "#buddies/catalog");
+      await page.getByRole("button", { name: CODEX, exact: true }).click();
+      const drawer = page.getByRole("region", { name: CODEX, exact: true });
+      await drawer.getByRole("button", { name: "medium", exact: true }).click();
+      const samples = drawer.locator("[data-slot=buddy-samples]");
+      const unavailable = drawer.locator("[data-slot=buddy-panel]").getByText("不可用", { exact: true });
+      await expect(unavailable).toHaveAttribute("aria-description", /.+/);
+      expect((await frame(unavailable)).x).toBeGreaterThanOrEqual((await frame(samples)).x + (await frame(samples)).width);
+      expect(Math.abs((await frame(unavailable)).y + (await frame(unavailable)).height / 2 - ((await frame(samples)).y + (await frame(samples)).height / 2))).toBeLessThanOrEqual(1);
+    });
+
     test("scrolls just the left list to the selected buddy on opening and on selection", async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await fiveEfforts(page);

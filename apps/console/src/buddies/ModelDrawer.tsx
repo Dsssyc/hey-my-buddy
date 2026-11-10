@@ -62,14 +62,10 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigat
   }
 
   return <div id={buddyRowId(buddy.buddyId)} role="group" aria-label={effort} tabIndex={-1} data-slot="buddy-panel"
-    className="min-w-0 border-t border-line pt-4 min-[900px]:border-t-0 min-[900px]:border-l min-[900px]:pt-0 min-[900px]:pl-7 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
-    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2 text-xs">
-      <span className="min-w-0 font-mono wrap-anywhere text-ink2">
-        {buddy.harness} / {buddy.provider} / {buddy.model} / <strong className="font-semibold text-foreground">{effort}</strong>
-      </span>
-      {modelAvailable && !buddy.available && <Hint text={unavailableReason}><span className="text-ink3">{t("pane.unavailable")}</span></Hint>}
-    </div>
-    <div className="mt-3 grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-4 gap-y-3">
+    className="min-w-0 border-t border-line pt-3 min-[900px]:border-t-0 min-[900px]:border-l min-[900px]:pt-0 min-[900px]:pl-7 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+    <div className="grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-4 gap-y-3">
+      <span className="flex h-5 items-center text-xs text-ink3">{t("pane.samples")}</span><span className="flex min-h-5 flex-wrap items-center gap-3 text-sm"><span data-slot="buddy-samples" className="tabular-nums">{modelId ? <a className="underline decoration-line2 underline-offset-4 hover:decoration-foreground" href={buddyHash({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } })} onClick={event => { event.preventDefault(); onNavigate({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } }); }}>{t("pane.sampleCount", { n: evaluation ? evaluation.statistics.overall.samples : 0 })}</a> : "—"}</span>
+        {modelAvailable && !buddy.available && <Hint text={unavailableReason}><span className="text-xs text-ink3">{t("pane.unavailable")}</span></Hint>}</span>
       <div className="contents">
         {name(t("pane.preference"), preferenceUnsaved, { id: `${id}-preference` })}
         <Segmented value={preference?.mode ?? ""} aria-label={t("pane.buddyPreference", { effort })} onValueChange={setBuddyPreference}
@@ -91,7 +87,6 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigat
             }} />
         </Hint>
       </div>
-      <span className="text-xs text-ink3">{t("pane.samples")}</span><span data-slot="buddy-samples" className="text-sm tabular-nums">{modelId ? <a className="underline decoration-line2 underline-offset-4 hover:decoration-foreground" href={buddyHash({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } })} onClick={event => { event.preventDefault(); onNavigate({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } }); }}>{t("pane.sampleCount", { n: evaluation ? evaluation.statistics.overall.samples : 0 })}</a> : "—"}</span>
     </div>
   </div>;
 }
@@ -114,7 +109,7 @@ function EffortRow({ chip, selected, onSelect, editor }: {
         if (canToggle) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId ? { ...entry, enabled } : entry) }));
       }} /></Hint>
     <button type="button" aria-pressed={selected} data-slot="buddy-stop" aria-label={effort} onClick={onSelect}
-      className="flex h-10 w-full items-center gap-2 pr-5 pl-12 text-left text-sm whitespace-nowrap outline-none transition-[color,background-color,box-shadow] duration-150 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none">
+      className="flex h-10 w-full items-center gap-2 pr-10 pl-12 text-left text-sm whitespace-nowrap outline-none transition-[color,background-color,box-shadow] duration-150 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none">
       <span className={cn(buddy.enabled ? "text-foreground" : "text-ink3", selected && "font-medium")}>{effort}</span>
       {chip.preference && <span className="text-xs text-ink2">{t(`preference.${chip.preference}`)}</span>}
       {chip.unsaved && <UnsavedMark label={t("unsaved")} />}
@@ -159,10 +154,10 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
     </div>;
 
   return <section role="region" aria-label={modelIdentity(modelService)} data-slot="model-drawer"
-    className="border-t border-l-2 border-t-line border-l-foreground bg-sunk p-4 min-[900px]:pl-14">
+    className="border-t border-l-2 border-t-line border-l-foreground bg-sunk px-4 py-3 min-[900px]:pl-14">
     {blocking.length > 0 && <p className="mb-3 border-l-2 border-fail pl-3 text-xs text-fail" role="alert">{blocking.map(issue => issue.message).join(" ")}</p>}
     {attention.length > 0 && <p className="mb-3 border-l-2 border-hand-mark pl-3 text-xs text-hand" role="status">{attention.map(issue => issue.message).join(" ")}</p>}
-    <div data-slot="model-service" className="border-b border-line pb-4">
+    <div data-slot="model-service" className="border-b border-line pb-3">
       <div data-slot="model-service-line" className="flex flex-wrap items-center gap-x-8 gap-y-3">
         <h3 className="text-xs font-medium text-ink2">{t("pane.model")}</h3>
         <div className="flex items-center gap-3">
@@ -196,9 +191,9 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
       {limitInvalid && <p id={`${id}-range`} className="mt-2 text-xs text-fail" role="alert">{t("pane.range")}</p>}
       {raised && <div className="mt-3 max-w-2xl"><ConcurrencyNotice id={`${id}-concurrency-notice`} /></div>}
     </div>
-    <div data-slot="buddy-columns" className="grid grid-cols-[minmax(0,1fr)] gap-y-4 pt-4 min-[900px]:grid-cols-[max-content_minmax(0,1fr)]">
+    <div data-slot="buddy-columns" className="grid grid-cols-[minmax(0,1fr)] gap-y-4 pt-3 min-[900px]:grid-cols-[max-content_minmax(0,1fr)]">
       <div data-slot="buddy-list" className="flex min-h-0 min-w-0 flex-col min-[900px]:h-0 min-[900px]:min-h-full">
-        <div className="mb-3 flex items-baseline gap-3 pr-5 text-xs whitespace-nowrap">
+        <div className="mb-3 flex h-5 shrink-0 items-center gap-3 pr-10 text-xs whitespace-nowrap">
           <h3 className="text-xs font-medium text-ink2">{t("models.columns.buddy")}</h3>
           <span className="text-ink3 tabular-nums">{row.chips.length} · {t("models.enabled")} {row.chips.filter(chip => chip.buddy.enabled).length}</span>
         </div>

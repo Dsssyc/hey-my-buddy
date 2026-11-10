@@ -38,7 +38,9 @@ for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear,
         await expect(row).toHaveAttribute("aria-expanded", "true");
         const contentId = await row.getAttribute("aria-controls");
         expect(contentId).toBeTruthy();
-        await expect(page.locator(`[id="${contentId}"]`)).toContainText("gpt-5-codex");
+        const content = page.locator(`[id="${contentId}"]`);
+        await expect(content.locator("[data-slot=buddy-panel]")).toBeVisible();
+        await expect(content).not.toContainText("gpt-5-codex");
         const selected = await row.evaluate(node => {
           const reference = document.createElement("div");
           reference.style.backgroundColor = "var(--past-wash)";

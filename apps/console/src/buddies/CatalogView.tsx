@@ -163,7 +163,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const readFailure = showUnavailable ? history.error : "";
   const guard = refused ? refusal : "";
   return <section hidden={hidden} aria-label={t("sections.catalog")}
-    className="flex min-h-0 flex-1 flex-col bg-sunk">
+    className="flex min-h-0 flex-1 flex-col bg-background">
       <div data-slot="catalogue-toolbar" className="min-h-12 shrink-0 border-b bg-card px-6 py-2 text-ink2">
         <div data-slot="catalogue-controls" className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2">
           <Input type="search" className="h-8 w-full max-w-full bg-card text-sm text-foreground shadow-none sm:w-[200px]" aria-label={t("models.search")} placeholder={t("models.search")}
@@ -213,7 +213,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
             const health = actions.rows.find(row => row.harness === block.harness);
             return <Collapsible asChild key={block.harness} open={!block.folded}
               onOpenChange={open => setFolded(previous => ({ ...previous, [block.harness]: !open }))}>
-              <section aria-label={block.name} data-slot="harness-section" className="border bg-card">
+              <section aria-label={block.name} data-slot="harness-section" className="overflow-clip rounded-(--radius-card) border bg-card">
                 <HarnessHeader block={block} health={health} state={block.state}
                   gate={{ canWrite: !actions.refusal, refusal: actions.refusal, busy: actions.busy }}
                   onRetry={provider => void actions.run({ kind: "retry", harness: block.harness, provider })} />
@@ -237,15 +237,15 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
         </div>
         <ScrollBar orientation="horizontal" />
       </ScrollArea>
-      <ScrollArea data-slot="harness-sidebar" className="min-h-0 border-t bg-card min-[1100px]:w-[340px] min-[1100px]:shrink-0 min-[1100px]:border-t-0 min-[1100px]:border-l max-[1100px]:overflow-visible!"
+      <ScrollArea data-slot="harness-sidebar" className="min-h-0 border-t bg-sunk min-[1100px]:w-[384px] min-[1100px]:shrink-0 min-[1100px]:border-t-0 min-[1100px]:border-l max-[1100px]:overflow-visible!"
         viewportProps={{ className: "[&>div]:block! max-[1100px]:h-auto max-[1100px]:overflow-visible!" }}>
-        <h2 className="px-5 pt-4 text-xs font-medium text-ink2">{t("harness.sideTitle")}</h2>
-        <div className="divide-y">
+        <h2 className="sr-only">{t("harness.sideTitle")}</h2>
+        <div className="space-y-3 px-3 pt-6 pb-3">
           {sections.map(block => {
             const health = actions.rows.find(row => row.harness === block.harness);
-            return health && active ? <div key={block.harness} data-slot="harness-card" aria-labelledby={`harness-title-${block.harness}`}>
+            return health && active ? <div key={block.harness} data-slot="harness-card" aria-labelledby={`harness-title-${block.harness}`} className="rounded-(--radius-card) border bg-card">
               <h3 id={`harness-title-${block.harness}`} tabIndex={-1}
-                className="flex items-center gap-2 px-5 pt-4 text-sm font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset">
+                className="flex h-12 items-center gap-2 px-5 text-sm font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset">
                 <HarnessLogo harness={block.harness} />{block.name}
               </h3>
               <HarnessDetails row={health} name={block.name}

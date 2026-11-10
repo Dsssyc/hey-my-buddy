@@ -27,6 +27,11 @@ function Block({ title, head, children }: { title: string; head?: ReactNode; chi
   </div>;
 }
 
+/** Keep each path segment together; an oversized segment can wrap within itself. */
+function PathText({ path }: { path: string }) {
+  return <>{path.split(/(?<=[\\/])/).map((part, index) => <span key={index} className="inline-block max-w-full align-bottom wrap-anywhere">{part}<wbr /></span>)}</>;
+}
+
 function Exception({ exception }: { exception: NonNullable<HarnessDetailsView["location"]["exception"]> }) {
   const { t } = useTranslation("buddies");
   return <div className={cn(fields, "mt-3")}>
@@ -35,7 +40,7 @@ function Exception({ exception }: { exception: NonNullable<HarnessDetailsView["l
     {exception.tried.length > 0 && <>
       <span className={cn(label, "col-span-2")}>{t("harness.pane.tried")}</span>
       {exception.tried.map((tried, index) => <div key={`${tried.path ?? ""}:${index}`} className="col-span-2 flex flex-col gap-0.5">
-        <code className="font-mono text-xs break-all">{tried.path ?? t("harness.pane.noPath")}</code>
+        <code data-slot="harness-path" className="font-mono text-xs wrap-anywhere">{tried.path === null ? t("harness.pane.noPath") : <PathText path={tried.path} />}</code>
         <span className="text-xs text-ink3">{[tried.source, tried.result].filter(Boolean).join(" · ")}</span>
       </div>)}
     </>}
@@ -61,7 +66,7 @@ function LocationBlock({ row, name, view, gate, onCheck, onSavePath }: {
       <span className={label}>{t("harness.pane.verifiedVersion")}</span>
       <span className="tabular-nums">{row.permissionsVerifiedVersion ?? t("harness.notVerified")}</span>
       <span className={label}>{t("harness.pane.path")}</span>
-      <span className="font-mono text-xs break-all">{location.path ?? t("harness.unrecorded")}</span>
+      <span data-slot="harness-path" className="font-mono text-xs wrap-anywhere">{location.path === null ? t("harness.unrecorded") : <PathText path={location.path} />}</span>
       <span className={label}>{t("harness.pane.source")}</span><span>{location.source}</span>
       <span className={label}>{t("harness.pane.checked")}</span>
       <span className="tabular-nums">{location.checked ?? t("harness.unrecorded")}</span>

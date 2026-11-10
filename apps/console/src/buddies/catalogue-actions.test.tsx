@@ -109,9 +109,8 @@ describe("the location block", () => {
     expect(within(location).getByText("未找到").getAttribute("aria-description")).toBe(reasonText({ code: "harness.not-found", params: { operation: "probe" } }));
     expect(fieldValue(location, "路径").textContent).toBe("未记录");
     const tried = within(location).getByText("已尝试的位置").parentElement!;
-    expect(within(tried).getByText("/Applications/ZCode.app/Contents/MacOS/zcode")).toBeTruthy();
+    expect([...tried.querySelectorAll("[data-slot=harness-path]")].map(path => path.textContent)).toEqual(["/Applications/ZCode.app/Contents/MacOS/zcode", "/opt/homebrew/bin/zcode"]);
     expect(within(tried).getByText("应用包 · " + reasonText({ code: "harness.not-found", params: { operation: "probe" } }))).toBeTruthy();
-    expect(within(tried).getByText("/opt/homebrew/bin/zcode")).toBeTruthy();
     expect(within(tried).getByText("Homebrew · 未找到")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
   });
