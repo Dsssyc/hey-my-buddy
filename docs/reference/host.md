@@ -12,6 +12,7 @@ Act on the reply's `outcome`, using the ids it carries:
 - `waiting-host`: answer its `requestId` with `continue`.
 - `expected-duration` or `native-silence` is a reminder: look at `get`, then wait again.
 - `issue`: a new execution or service issue, given first in `executionIssues` or `serviceIssues`; tell the user when it needs them, then wait again.
+- `paused`: the user paused the macro task in the console and its turn was interrupted; the micro task keeps running state and continues on its own when the user resumes it, so wait again. Pausing and resuming decide nothing about the micro task ([ADR-033](../decisions/033-macro-task-pause-resume-end.md)).
 - `wait-timeout` or `unavailable` ends only that wait: wait again for the same `runId`.
 - Any other outcome is a stopped micro task: read the full `get` and act on its `actions`.
 

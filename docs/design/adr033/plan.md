@@ -69,6 +69,10 @@
 2. 宏任务列表与页头显示“暂停中”（还有执行没确认停下）与“已暂停”（带暂停的时刻）。时间轴上，被暂停中断的回合照有序收尾的画法标出结束。
 3. 文字走 i18n，只加开发者定过的那几处。
 4. 被取代的停止对话框、文案与检查一并删去。
+5. 服务补两项视图事实（2026-11-11 第二个微任务开工时发现：第一个微任务的视图只有 `pausedAt`，被暂停的微任务仍是 `executing`，计数分不出“暂停中”与“已暂停”；这是计划漏掉的，不是第一个微任务的缺陷）：
+   - `paused` 改为 `{pausedAt, shutdownConfirmed}`：单位里的每个执行，连同 helper、Lead 名下的微任务与它们的 Router 调用，都已证明停下时为真。停止证明只用 `unconfirmed_stops` 这一套定义。
+   - `counts.unfinished` 是结束会了结的成员数，取代只为旧停止对话框而设的 `stoppableRoots`、`stoppableHelpers` 与 `awaitingHost`。
+   - 动作的回复不冒充视图：暂停的回复只带 `pausedAt`，继续的回复不带 `paused`。
 
 ## Host 做的
 

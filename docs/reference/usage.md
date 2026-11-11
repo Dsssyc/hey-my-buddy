@@ -105,6 +105,8 @@ Observation and inquiry do not continue or cancel a turn. The service derives th
 
 `cancel` uses `runId` and an optional note. It records ordered cancellation across the owned graph, including routing and helpers; its reply never proves every process stopped. `get.shutdown` separates self and descendant confirmation. Unknown is not stopped. `cancel` is for work another turn or buddy will continue: continue only after the required stop evidence holds. To end work, call `conclude` directly. [Operations](operations.md#cancellation-and-recovery) owns service restart and process recovery.
 
+When the user asks you to pause, `inquire` each running micro task asking it to deliver what it has done so far, and `continue` the delivered work when the user wants it carried on. This is cooperative: the Worker acts when it reads the question, and queued work in the macro task still starts. To stop a macro task for certain, the user pauses it in the [console](console.md); `await` then returns `paused` for each interrupted turn, and the micro task continues on its own when the user resumes the macro task ([ADR-033](../decisions/033-macro-task-pause-resume-end.md)). Pausing and resuming decide nothing about the micro task; when the user ends a macro task in the console, its unfinished micro tasks carry the user's conclusion and delivered ones are left for you to accept or conclude.
+
 ## Waiting from your Host
 
 Follow [host.md](host.md), which owns the wait loop for every Host and links to the Codex and Claude Code instructions for their native waiting mechanisms.
