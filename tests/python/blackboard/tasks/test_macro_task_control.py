@@ -138,6 +138,8 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         self.control(board, 'pause', target)
         self.control(board, 'resume', target)
         self.assertIsNone(self.claim(board, run_id=run['runId'])['claim'])
+        with board.store.db.write() as connection:
+            connection.execute("DELETE FROM events WHERE kind='macro_task.paused'")
         self.pause_result(board, first)
         self.assertEqual(board.call('workflow_get', {'runId':run['runId']})['state'], 'executing')
         self.assertIsNotNone(self.claim(board, run_id=run['runId'])['claim'])
@@ -158,6 +160,27 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         current = board.call('workflow_get', {'runId':run['runId']})
         self.assertNotEqual(current['routing']['taskId'], old)
         self.assertEqual(current['state'], 'executing')
+
+    def test_running_router_attempt_records_pause_then_end_purpose(self):
+        board = self.board()
+        self.catalog_fixture()
+        DecisionTestCase.use_helper(self)
+        DecisionTestCase.seed(self, board)
+        run = self.submit(board, request_id='active-router-control', buddy='route',
+                          create_macro={'title':'Router control','goal':'Work'})
+        router_id = run['routing']['taskId']
+        claim = self.claim(board, run_id=router_id)['claim']
+        self.assertIsNotNone(claim)
+        self.control(board, 'pause', run['macroTaskId'])
+        with board.store.db.read() as connection:
+            attempt = board.store._attempt_row(connection, claim['attempt']['attemptId'])
+            self.assertEqual((attempt['stop_initiator'],attempt['stop_purpose']), ('console','pause'))
+        with patch.object(board.store.workflow, 'END_WAIT_SECONDS', 0):
+            result = self.control(board, 'end', run['macroTaskId'])
+        self.assertFalse(result['results'][0]['concluded'])
+        with board.store.db.read() as connection:
+            attempt = board.store._attempt_row(connection, claim['attempt']['attemptId'])
+            self.assertEqual((attempt['stop_initiator'],attempt['stop_purpose']), ('console','end'))
 
     def test_end_concludes_queued_routing_work_and_stops_its_router(self):
         board = self.board()
@@ -263,23 +286,76 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         self.assertTrue(result['results'][0]['concluded'], result)
         self.control(board, 'pause', target, 'pause-closed-unit')
 
-    def test_end_fences_a_host_replay_during_stop_confirmation(self):
-        board = self.board(max_concurrent=4)
-        run = self.submit(board, kind='worktree', create_macro={'title':'Ending','goal':'Work'})
+    def test_end_reports_unconcluded_when_host_continues_before_conclusion_commits(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
         self.finish_turn(board, self.claim(board), disposition='attention')
         waiting = board.call('workflow_get', {'runId':run['runId']})
         params = {'runId':run['runId'], 'requestId':waiting['activeRequest']['requestId'], 'input':'Continue'}
         board.call('workflow_continue', params)
-        active = self.submit(board, kind='worktree', request_id='active-end', macroTaskId=run['macroTaskId'])
-        claim = self.claim(board, run_id=active['runId'])
-        def observe_stop(_params):
-            with self.assertRaises(BoardError) as caught:
-                board.call('workflow_continue', params)
-            self.assertEqual(caught.exception.code, 'CONFLICT')
-            self.finish_turn(board, claim, runner_status='cancelled', seal=False)
+        seal = board.store.workflow._seal_conclusion
+        continued = []
+        def host_wins(run_id, work):
+            sealed = seal(run_id, work)
+            continued.append(board.call('workflow_continue', params))
+            return sealed
+        with patch.object(board.store.workflow, '_seal_conclusion', side_effect=host_wins):
+            result = self.control(board, 'end', 'run:'+run['runId'])
+        self.assertEqual(len(continued), 1)
+        item = result['results'][0]
+        self.assertFalse(item['concluded'], result)
+        self.assertEqual(item['error']['code'], 'CONFLICT')
+        view = board.call('workflow_get', {'runId':run['runId']})
+        self.assertEqual(view['state'], 'executing')
+        self.assertIsNone(view['hostConclusion'])
+        self.assertIsNotNone(self.claim(board, run_id=run['runId'])['claim'])
+
+    def test_end_keeps_a_host_turn_that_returns_during_another_stop_wait(self):
+        board = self.board(max_concurrent=4)
+        first = self.submit(board, kind='worktree', create_macro={'title':'End race','goal':'Work'})
+        self.finish_turn(board, self.claim(board), disposition='attention')
+        waiting = board.call('workflow_get', {'runId':first['runId']})
+        params = {'runId':first['runId'], 'requestId':waiting['activeRequest']['requestId'], 'input':'Continue'}
+        board.call('workflow_continue', params)
+        other = self.submit(board, kind='worktree', request_id='stop-wait', macroTaskId=first['macroTaskId'])
+        active = self.claim(board, run_id=other['runId'])
+        continued = []
+        def host_finishes(_params):
+            continued.append(board.call('workflow_continue', params))
+            self.finish_turn(board, self.claim(board, run_id=first['runId']), disposition='attention')
+            self.finish_turn(board, active, runner_status='cancelled', seal=False)
             return {}
-        with patch.object(board.store, 'events_wait', side_effect=observe_stop):
-            result = self.control(board, 'end', run['macroTaskId'])
+        with patch.object(board.store, 'events_wait', side_effect=host_finishes):
+            result = self.control(board, 'end', first['macroTaskId'])
+        self.assertEqual(len(continued), 1)
+        item = next(item for item in result['results'] if item['runId'] == first['runId'])
+        self.assertFalse(item['concluded'], result)
+        self.assertEqual(item['error']['code'], 'CONFLICT')
+        view = board.call('workflow_get', {'runId':first['runId']})
+        self.assertEqual(view['state'], 'awaiting-host')
+        self.assertIsNotNone(view['activeRequest'])
+        self.assertIsNone(view['hostConclusion'])
+
+    def test_retry_without_end_receipt_recomputes_unfinished_scope(self):
+        board = self.board()
+        first = self.submit(board, kind='worktree', create_macro={'title':'Retry end','goal':'Work'})
+        second = self.submit(board, kind='worktree', request_id='second-end', macroTaskId=first['macroTaskId'])
+        params = {'macroTaskId':first['macroTaskId'], 'commandId':'lost-end'}
+        seal = board.store.workflow._seal_conclusion
+        sealed_runs = []
+        def stop_after_one(run_id, work):
+            if sealed_runs:
+                raise RuntimeError('service loss')
+            sealed_runs.append(run_id)
+            return seal(run_id, work)
+        with patch.object(board.store.workflow, '_seal_conclusion', side_effect=stop_after_one):
+            with self.assertRaises(RuntimeError):
+                board.store.workflow.end_macro_task(params, console_authority={'sessionId':'browser'})
+        self.assertEqual(board.call('workflow_get', {'runId':sealed_runs[0]})['state'], 'concluded')
+        late = self.submit(board, kind='worktree', request_id='later-end', macroTaskId=first['macroTaskId'])
+        result = self.control(board, 'end', first['macroTaskId'], 'lost-end')
+        self.assertEqual({item['runId'] for item in result['results']},
+                         {first['runId'],second['runId'],late['runId']} - set(sealed_runs))
         self.assertTrue(all(item['concluded'] for item in result['results']), result)
 
     def test_pause_keeps_host_boundary_and_blocks_helpers_in_the_standalone_tree(self):
@@ -320,6 +396,8 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         run = self.submit(board, kind='worktree')
         claim = self.claim(board)
         self.control(board, 'pause', 'run:'+run['runId'])
+        with board.store.db.write() as connection:
+            connection.execute("DELETE FROM events WHERE kind='macro_task.paused'")
         self.interrupted(board, claim)
         view = board.call('workflow_get', {'runId':run['runId']})
         self.assertEqual((view['state'],view['currentTurn']['state'],view['queueReason']), ('executing','interrupted','paused'))
@@ -354,13 +432,17 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?', (run['runId'],)).fetchone()[0], 0)
 
-    def test_scheduler_derives_pause_after_resume_and_forces_at_the_grace_deadline(self):
+    def test_scheduler_reads_persisted_pause_after_resume_and_forces_at_the_grace_deadline(self):
         board = self.board()
         run = self.submit(board, kind='worktree')
         claim = self.claim(board)
         target = 'run:'+run['runId']
         self.control(board, 'pause', target)
         self.control(board, 'resume', target)
+        with board.store.db.write() as connection:
+            connection.execute("DELETE FROM events WHERE kind='macro_task.paused'")
+            attempt = board.store._attempt_row(connection, claim['claim']['attempt']['attemptId'])
+            self.assertEqual(attempt['stop_purpose'], 'pause')
         scheduler = ExecutionScheduler(board.service, live_registry=board.service.live_registry)
         view = board.call('task_get', {'runId':run['runId']})['task']
         handle = SimpleNamespace(budget_path=self.directory/'no-budget')
@@ -369,6 +451,33 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         with patch.object(scheduler, '_deadline', return_value=0):
             intent, _ = scheduler._stop_intent(view, handle)
         self.assertEqual((intent[0],intent[2],intent[3]), ('pause', True, 'pause'))
+
+    def test_end_overrides_pause_at_the_same_clock_instant(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        claim = self.claim(board)
+        target = 'run:'+run['runId']
+        instant = board.store.now()
+        with patch.object(board.store.workflow, 'now', return_value=instant):
+            self.control(board, 'pause', target)
+            with patch.object(board.store.workflow, 'END_WAIT_SECONDS', 0):
+                result = self.control(board, 'end', target)
+        self.assertFalse(result['results'][0]['concluded'])
+        with board.store.db.read() as connection:
+            attempt = board.store._attempt_row(connection, claim['claim']['attempt']['attemptId'])
+            self.assertEqual(attempt['cancel_requested_at'], instant)
+            self.assertEqual(attempt['stop_purpose'], 'end')
+        scheduler = ExecutionScheduler(board.service, live_registry=board.service.live_registry)
+        view = board.call('task_get', {'runId':run['runId']})['task']
+        intent, _ = scheduler._stop_intent(view, SimpleNamespace(budget_path=self.directory/'no-budget'))
+        self.assertEqual((intent[0],intent[2],intent[3]), ('console',True,'console-stop'))
+        self.interrupted(board, claim)
+        view = board.call('workflow_get', {'runId':run['runId']})
+        self.assertEqual(view['state'], 'cancelled')
+        self.assertEqual(view['task']['terminationReason'], 'console-stop')
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?',
+                                               (run['runId'],)).fetchone()[0], 0)
 
     def test_controls_require_console_authority_and_receipts_reject_changed_requests(self):
         board = self.board()

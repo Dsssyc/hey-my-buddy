@@ -166,7 +166,19 @@ class UpgradeChainTests(unittest.TestCase):
             for version in range(30, 40):
                 upgrade.STEPS[version](self.db)
         self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '40')
+        # Schema 40 console cancellations have no pause/end purpose to infer.
+        with self.db:
+            self.db.execute("UPDATE attempts SET stop_initiator='console',cancel_requested_at='2026-11-11T11:00:00.000Z'"
+                            " WHERE rowid=(SELECT MIN(rowid) FROM attempts)")
+        previous = [dict(row) for row in self.db.execute('SELECT rowid,* FROM attempts ORDER BY rowid')]
         self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 40, 'targetSchema': 41})
+        self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM attempts ORDER BY rowid')],
+                         [{**row, 'stop_purpose':None} for row in previous])
+        for purpose in ('pause','end',None):
+            with self.db:
+                self.db.execute('UPDATE attempts SET stop_purpose=? WHERE rowid=(SELECT MIN(rowid) FROM attempts)', (purpose,))
+        with self.assertRaises(sqlite3.IntegrityError), self.db:
+            self.db.execute("UPDATE attempts SET stop_purpose='cancel' WHERE rowid=(SELECT MIN(rowid) FROM attempts)")
         self.assert_current_structure()
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM work_pauses').fetchone()[0], 0)
         self.db.execute('PRAGMA foreign_keys=ON')

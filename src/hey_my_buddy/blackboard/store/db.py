@@ -187,6 +187,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,
     cancel_requested_at TEXT,
     stop_initiator      TEXT CHECK (stop_initiator IN ('host','lead','console','service','unknown')),
+    stop_purpose        TEXT CHECK (stop_purpose IN ('pause','end')),
     grace_deadline      TEXT,
     force_reason        TEXT,
     force_requested_at  TEXT,

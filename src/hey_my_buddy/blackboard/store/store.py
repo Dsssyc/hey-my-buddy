@@ -2148,8 +2148,7 @@ class BoardStore:
                 raise BoardError("INVALID_ARGUMENT", "Wrap-up requires a durable grace deadline",
                                  field="terminationReason")
             if termination_reason == "pause":
-                from ..tasks.work_pauses import stop_request
-                if stop_request(connection, attempt) is None:
+                if attempt["stop_purpose"] != "pause":
                     raise BoardError("INVALID_ARGUMENT", "pause requires a durable console pause", field="terminationReason")
             if termination_reason == "console-stop" and attempt["stop_initiator"] != "console":
                 raise BoardError("INVALID_ARGUMENT", "console-stop requires a durable console stop",

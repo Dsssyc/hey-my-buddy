@@ -596,17 +596,16 @@ class ExecutionScheduler:
 
     def _stop_intent(self, view: dict, handle) -> tuple[tuple | None, float | None]:
         attempt = view.get("selectedAttempt") or {}
-        if attempt.get("forceRequestedAt") is not None:
-            reason = attempt["forceReason"]
-            initiator = reason if reason in ("deadline", "pause") else view.get("stopInitiator") or "service"
-            return (initiator, None, True, reason), None
         initiator = view.get("stopInitiator") if view.get("cancelRequested") else None
         if initiator == "console":
-            from ..tasks.work_pauses import stop_request
             with self.store.db.read() as connection:
                 row = self.store._attempt_row(connection, attempt["attemptId"])
-                if stop_request(connection, row) is not None:
+                if row["stop_purpose"] == "pause":
                     initiator = "pause"
+        if attempt.get("forceRequestedAt") is not None:
+            reason = attempt["forceReason"]
+            initiator = reason if reason in ("deadline", "pause") else initiator or "service"
+            return (initiator, None, True, reason), None
         deadline = self._deadline(view.get("graceDeadline")) if initiator else None
         try:
             budget_deadline = self._budget_deadline(handle)

@@ -33,13 +33,17 @@ class Schema38To39Tests(unittest.TestCase):
         connection = self.connection
         self.assertEqual(connection.execute('SELECT COUNT(*) FROM model_notes').fetchone()[0], 1)
         self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '38')
-        before = {table: [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
-                  for table in ('models', 'model_correspondences', 'attempts', 'events')}
+        # Freeze the schema-38 columns: later steps may add facts such as
+        # attempts.stop_purpose while every old value must stay unchanged.
+        columns = {table: ','.join(['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info({table})'))])
+                   for table in ('models', 'model_correspondences', 'attempts', 'events')}
+        before = {table: [tuple(row) for row in connection.execute(f'SELECT {names} FROM {table} ORDER BY rowid')]
+                  for table, names in columns.items()}
         self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 38, 'targetSchema': SCHEMA_VERSION})
         self.assertEqual(connection.execute(
             "SELECT name FROM sqlite_master WHERE name IN ('model_notes','model_service_notes')").fetchall(), [])
         for table, rows in before.items():
-            self.assertEqual([tuple(row) for row in connection.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
+            self.assertEqual([tuple(row) for row in connection.execute(f'SELECT {columns[table]} FROM {table} ORDER BY rowid')], rows)
         self.assertEqual(list(connection.execute('PRAGMA foreign_key_check')), [])
         fresh = Database(self.root / 'fresh')
         self.addCleanup(fresh.close)

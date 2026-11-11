@@ -2730,7 +2730,6 @@ class WorkflowCoordinator:
         run_id=target["run_id"]
         self._assert_lineage_open(connection,run_id)
         reject_deleting_run(connection,run_id)
-        work_pauses.reject_ending(connection, run_id)
         self._require_routing_stopped(connection,run_id)
         if target["state"] in ("accepted","concluded"):
             raise BoardError("CONFLICT","A finished micro task cannot continue")
@@ -2924,7 +2923,6 @@ class WorkflowCoordinator:
         continuation_id: str | None = None,
     ) -> None:
         self._assert_lineage_open(connection, run_row["run_id"])
-        work_pauses.reject_ending(connection, run_row["run_id"])
         connection.execute("UPDATE workspace_cleanup_plans SET state='blocked', reasons_json='[\"continued\"]' WHERE run_id=? AND state='planned'", (run_row["run_id"],))
         spec = json.loads(task["spec_json"])
         attempt = self.board._selected_attempt(connection, task)
@@ -3027,7 +3025,7 @@ class WorkflowCoordinator:
         self.board._notify(head)
         return response
 
-    def _control_unit(self, connection, identifier, *, allow_ending=False):
+    def _control_unit(self, connection, identifier):
         if identifier.startswith("macro-"):
             reject_macro_task(connection, identifier)
             if connection.execute("SELECT 1 FROM macro_tasks WHERE macro_task_id=?", (identifier,)).fetchone() is None:
@@ -3047,9 +3045,6 @@ class WorkflowCoordinator:
             f"SELECT r.* FROM workflow_runs r JOIN ({macro_tasks.RUN_GROUPS_SQL}) u ON u.run_id=r.run_id"
             " WHERE u.group_id=? ORDER BY r.created_at,r.run_id", (identifier,),
         ).fetchall()
-        if not allow_ending:
-            for row in rows:
-                work_pauses.reject_ending(connection, row["run_id"])
         # Parents precede their owned descendants even when timestamps are equal.
         ids = {row["run_id"] for row in rows}
         descendants = {row[0] for row in connection.execute(
@@ -3113,11 +3108,16 @@ class WorkflowCoordinator:
                                 timespec="milliseconds").replace("+00:00", "Z")
                                 if self._execution_adapter(attempt["adapter"]).interrupted_resume else None)
                             connection.execute(
-                                "UPDATE attempts SET cancel_requested_at=?,stop_initiator='console',grace_deadline=?,"
+                                "UPDATE attempts SET cancel_requested_at=?,stop_initiator='console',stop_purpose='pause',grace_deadline=?,"
                                 "updated_at=?,revision=revision+1 WHERE attempt_id=?", (now, grace, now, attempt["attempt_id"]))
                     if run["state"] == "executing":
                         fenced = self._cancel_routes(connection, run["run_id"], make_reason("work-paused"), now,
                                                      actor=actor, initiator="console")
+                        for router in self._routing_tasks(connection, run["run_id"]):
+                            connection.execute(
+                                "UPDATE attempts SET cancel_requested_at=?,stop_initiator='console',stop_purpose='pause',"
+                                "grace_deadline=NULL,updated_at=?,revision=revision+1 WHERE task_id=?"
+                                " AND (execution_state!='finished' OR shutdown_confirmed!=1)", (now, now, router["task_id"]))
                         if fenced:
                             # The old Router decision may never publish a selection.
                             # A fresh one is made after its shutdown is proven.
@@ -3171,34 +3171,27 @@ class WorkflowCoordinator:
                 connection, command_id, "macro_task.end", request))
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            # Keep the initially selected scope across a reply lost before its
-            # receipt was written. New submissions are a later unit of work.
-            started = connection.execute(
-                "SELECT * FROM events WHERE kind='macro_task.ended' AND json_extract(payload_json,'$.commandId')=?",
-                (command_id,),).fetchone()
-            if started is not None:
-                frozen = json.loads(started["payload_json"])
-                if frozen["request"] != request:
-                    raise BoardError("CONFLICT", "commandId belongs to a different end request")
-                scope = [self._run_row(connection, item) for item in frozen["runIds"]]
-                actor = {"role": started["actor_role"], "id": started["actor_id"]}
-            else:
-                scope = [run for run in self._control_unit(connection, identifier, allow_ending=True)
-                         if run["state"] not in ("accepted", "concluded", "delivered")]
-                for run in scope:
-                    task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run["run_id"],)).fetchone()
-                    self._cancel_owned_run(connection, task, now, explicit=run["state"] not in ("failed", "cancelled"),
-                                           actor=actor, initiator="console")
-                    # End always supersedes a graceful stop, including a pause
-                    # whose stop request used the same recorded clock instant.
-                    owned_tasks = [run["run_id"], *(item["task_id"] for item in self._routing_tasks(connection, run["run_id"]))]
-                    for task_id in owned_tasks:
-                        connection.execute("UPDATE attempts SET force_requested_at=?,force_reason='console-stop',"
-                                           "stop_initiator='console',grace_deadline=NULL,updated_at=?,revision=revision+1 WHERE task_id=?"
-                                           " AND (execution_state!='finished' OR shutdown_confirmed!=1)", (now, now, task_id))
-                self.board._append_event(connection, "macro_task.ended", payload={
-                    "macroTaskId": identifier, "commandId": command_id, "request": request,
-                    "runIds": [run["run_id"] for run in scope], "actor": actor})
+            # An interrupted end has no receipt. Select the still-unfinished
+            # work again; the event records history, never an in-progress fence.
+            scope = [run for run in self._control_unit(connection, identifier)
+                     if run["state"] not in ("accepted", "concluded", "delivered")]
+            for run in scope:
+                task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run["run_id"],)).fetchone()
+                self._cancel_owned_run(connection, task, now, explicit=run["state"] not in ("failed", "cancelled"),
+                                       actor=actor, initiator="console")
+                # End replaces the live attempt's previous stop purpose.
+                owned_tasks = [run["run_id"], *(item["task_id"] for item in self._routing_tasks(connection, run["run_id"]))]
+                for task_id in owned_tasks:
+                    connection.execute("UPDATE attempts SET force_requested_at=?,force_reason='console-stop',"
+                                       "stop_initiator='console',stop_purpose='end',grace_deadline=NULL,updated_at=?,"
+                                       "revision=revision+1 WHERE task_id=?"
+                                       " AND (execution_state!='finished' OR shutdown_confirmed!=1)", (now, now, task_id))
+            # The stop transaction's identities live only in this call. A Host
+            # continuation during the wait supersedes this end for that item.
+            scope = [self._run_row(connection, run["run_id"]) for run in scope]
+            self.board._append_event(connection, "macro_task.ended", payload={
+                "macroTaskId": identifier, "commandId": command_id, "request": request,
+                "runIds": [run["run_id"] for run in scope], "actor": actor})
             connection.execute("DELETE FROM work_pauses WHERE macro_task_id=? OR run_id=?",
                                (identifier, identifier[4:] if identifier.startswith("run:") else None))
             head = self.board._head_of(connection)
@@ -3221,6 +3214,7 @@ class WorkflowCoordinator:
                     if run["state"] in ("accepted", "concluded", "delivered"):
                         results.append({"runId": run_id, "state": run["state"], "concluded": run["state"] == "concluded"})
                         continue
+                    self._expect_current(run, original)
                     task = self._conclude_precheck(connection, run, None)
                     work = self._conclude_seal_work(connection, run, task)
                 sealed = self._seal_conclusion(run_id, work)
@@ -3490,7 +3484,7 @@ class WorkflowCoordinator:
                 deadline = (datetime.fromisoformat(now) + timedelta(seconds=WRAP_UP_SECONDS)).isoformat(
                     timespec="milliseconds").replace("+00:00", "Z")
             connection.execute(
-                "UPDATE attempts SET cancel_requested_at=COALESCE(cancel_requested_at,?),stop_initiator=?,"
+                "UPDATE attempts SET cancel_requested_at=COALESCE(cancel_requested_at,?),stop_initiator=?,stop_purpose=NULL,"
                 " grace_deadline=?,updated_at=?,revision=revision+1 WHERE attempt_id=?",
                 (now, initiator, deadline, now, attempt["attempt_id"]),
             )
@@ -6252,8 +6246,7 @@ class WorkflowCoordinator:
         return route["state"] == "resolved"
 
     def _settle_pause(self, connection, run, turn, attempt, payload, now, shared_refs):
-        pause = work_pauses.stop_request(connection, attempt)
-        if (pause is None or attempt["force_reason"] == "console-stop" or run["state"] != "executing"
+        if (attempt["stop_purpose"] != "pause" or run["state"] != "executing"
                 or not attempt["shutdown_confirmed"] or payload.get("status") == "ok"):
             return None
         from importlib.resources import files
@@ -6267,12 +6260,14 @@ class WorkflowCoordinator:
             "workspace_facts_role,state,created_at) VALUES(?,?,?,'manual',?,?,?,'recorded',?)",
             (identifier, run["run_id"], run["run_id"], turn["turn_id"], text,
              "none" if run["checkout"] == "none" else "pending", now))
-        actor = {"role": "console", "id": pause["actor_id"]}
+        # This automatic continuation represents the console pause action;
+        # the original browser identity stays on macro_task.paused's audit event.
+        actor = {"role": "console", "id": "pause"}
         self._requeue(connection, self.board._task_row(connection, {"runId": run["run_id"]}), run,
                       actor=actor, now=now, continuation_id=identifier)
         connection.execute("UPDATE workflow_runs SET current_attempt_id=NULL WHERE run_id=?", (run["run_id"],))
         self.board._append_event(connection, "workflow.paused", task_id=run["run_id"], attempt_id=attempt["attempt_id"],
-            payload={"continuationId": identifier, "pausedAt": json.loads(pause["payload_json"])["pausedAt"], "actor": actor})
+            payload={"continuationId": identifier, "pausedAt": attempt["cancel_requested_at"], "actor": actor})
         return {"accepted": False, "state": "executing", "autoContinued": True, "paused": True,
                 "continuationId": identifier, "sharedStash": self._shared_refs_summary(shared_refs)}
 
