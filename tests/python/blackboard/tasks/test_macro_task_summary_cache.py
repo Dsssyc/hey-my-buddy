@@ -136,6 +136,55 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assertEqual(derive.call_count, 1)
             self.assertEqual(derive.call_args.args[1], [group])
 
+    def test_warm_list_cache_recomputes_pause_and_resume(self):
+        group = self.fixture.macros[0]
+        self.assertIsNone(self.rows()[group]["paused"])
+        with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
+            self.sql("INSERT INTO work_pauses(macro_task_id,paused_at) VALUES(?,?)",
+                     (group, "2026-11-11T00:00:00Z"))
+            self.assertEqual(self.rows()[group]["paused"],
+                             {"pausedAt": "2026-11-11T00:00:00Z", "shutdownConfirmed": True})
+            self.assert_recomputed(counter, [group])
+            self.sql("DELETE FROM work_pauses WHERE macro_task_id=?", (group,))
+            self.assertIsNone(self.rows()[group]["paused"])
+            self.assert_recomputed(counter, [group])
+
+    def test_warm_list_cache_tracks_router_attempt_stop_proof(self):
+        with self.store.db.read() as connection:
+            router = connection.execute(
+                "SELECT route.run_id,run.macro_task_id,dispatch.task_id,attempt.attempt_id"
+                " FROM router_dispatches dispatch"
+                " JOIN workflow_routes route ON route.decision_id=dispatch.decision_id"
+                " JOIN workflow_runs run ON run.run_id=route.run_id"
+                " JOIN attempts attempt ON attempt.task_id=dispatch.task_id"
+                " WHERE run.macro_task_id IS NOT NULL AND attempt.execution_state='finished'"
+                " AND attempt.shutdown_confirmed=1 LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(router)
+        group, attempt = router["macro_task_id"], router["attempt_id"]
+        self.sql("INSERT INTO work_pauses(macro_task_id,paused_at) VALUES(?,?)",
+                 (group, "2026-11-11T00:00:00Z"))
+        self.assertTrue(self.rows()[group]["paused"]["shutdownConfirmed"])
+        with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
+            self.sql("UPDATE attempts SET shutdown_confirmed=0 WHERE attempt_id=?", (attempt,))
+            self.assertFalse(self.rows()[group]["paused"]["shutdownConfirmed"])
+            self.assert_recomputed(counter, [group])
+            self.sql("UPDATE attempts SET shutdown_confirmed=1 WHERE attempt_id=?", (attempt,))
+            self.assertTrue(self.rows()[group]["paused"]["shutdownConfirmed"])
+            self.assert_recomputed(counter, [group])
+
+    def test_warm_standalone_list_cache_recomputes_pause(self):
+        root = self.root_for(self.fixture.macros[0])
+        self.sql("UPDATE workflow_runs SET standalone_project_id=(SELECT project_id FROM macro_tasks"
+                 " WHERE macro_task_id=workflow_runs.macro_task_id),macro_task_id=NULL WHERE run_id=?", (root,))
+        group = "run:" + root
+        self.assertIsNone(self.rows()[group]["paused"])
+        with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
+            self.sql("INSERT INTO work_pauses(run_id,paused_at) VALUES(?,?)",
+                     (root, "2026-11-11T00:00:00Z"))
+            self.assertEqual(self.rows()[group]["paused"]["pausedAt"], "2026-11-11T00:00:00Z")
+            self.assert_recomputed(counter, [group])
+
     def test_timeline_derives_summary_members_and_matches_together(self):
         with patch.object(macro_tasks, "_summary_inputs", wraps=macro_tasks._summary_inputs) as derive, \
                 patch.object(macro_tasks, "_members", side_effect=AssertionError("repeated history read")):

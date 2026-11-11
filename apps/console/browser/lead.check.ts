@@ -137,9 +137,16 @@ for (const { locale, language, tasks } of [
       const reply = (await response.json()).result;
       expect(reply.results).toHaveLength(summary.counts.unfinished);
       const concluded = reply.results.filter((result: { concluded: boolean }) => result.concluded).length;
-      const unconfirmed = reply.results.length - concluded;
+      const unconfirmed = reply.results.filter((result: { concluded: boolean; error?: { code: string } }) =>
+        !result.concluded && result.error?.code === "SHUTDOWN_UNCONFIRMED").length;
+      const delivered = reply.results.filter((result: { concluded: boolean; state?: string }) =>
+        !result.concluded && (result.state === "delivered" || result.state === "accepted")).length;
+      const conflicted = reply.results.filter((result: { concluded: boolean; error?: { code: string } }) =>
+        !result.concluded && result.error?.code === "CONFLICT").length;
       expect(concluded).toBeGreaterThan(0);
       expect(unconfirmed).toBeGreaterThan(0);
+      expect(delivered).toBeGreaterThan(0);
+      expect(conflicted).toBeGreaterThan(0);
       expect(commands).toEqual([{ operation: "macro_task_end", params: { macroTaskId: MACRO, commandId: expect.any(String) } }]);
       expect(commands[0]!.params.commandId).not.toBe("");
       const status = page.locator("[data-slot=macro-work-state]");
@@ -147,6 +154,12 @@ for (const { locale, language, tasks } of [
       await expect(status).toContainText(zh
         ? `${unconfirmed} 个微任务的停止未确认，没有写结论，可以重试`
         : `${unconfirmed} micro tasks are not confirmed stopped, so no conclusion was recorded; you can retry`);
+      await expect(status).toContainText(zh
+        ? `${delivered} 个微任务在结束前已交付，没有结束`
+        : `${delivered} micro tasks were delivered before they could be ended`);
+      await expect(status).toContainText(zh
+        ? `${conflicted} 个微任务没有结束：记录冲突；请刷新核对后重试。`
+        : `${conflicted} micro tasks were not ended: The records conflict; refresh, check them and try again.`);
       await expectReadableStart(row(page, LEAD).getByText(zh ? "等待名下的微任务" : "Waiting for owned micro tasks", { exact: true }), zh ? "等待名下的微任务" : "Waiting for owned micro tasks");
       await expectNoSidewaysScroll(page);
       expect(errors.page).toEqual([]);

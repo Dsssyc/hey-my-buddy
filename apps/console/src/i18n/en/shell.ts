@@ -160,6 +160,8 @@ export default {
     scopeUnfinished: "End {{count}} micro tasks", scopeDelivered: "Keep {{count}} delivered micro tasks",
     ending: "Ending", ended: "Ended {{count}} micro tasks",
     unconfirmed: "{{count}} micro tasks are not confirmed stopped, so no conclusion was recorded; you can retry", retryEnd: "Retry end",
+    delivered: "{{count}} micro tasks were delivered before they could be ended",
+    notEnded: "{{count}} micro tasks were not ended: {{reason}}",
     pauseUnknown: "The pause result is unknown and may have taken effect; retry the same request or refresh to check.",
     resumeUnknown: "The resume result is unknown and may have taken effect; retry the same request or refresh to check.",
     endUnknown: "The end result is unknown and may have taken effect; retry the same request or refresh to check.",

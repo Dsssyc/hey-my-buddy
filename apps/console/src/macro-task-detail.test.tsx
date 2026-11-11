@@ -5,6 +5,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTasks } from "./MacroTasks";
+import { setLanguageChoice } from "./i18n";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task } from "./types";
 import { listSummary, macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
@@ -124,7 +125,7 @@ function stubViewport(narrow: boolean) {
   window.matchMedia = vi.fn().mockImplementation(() => ({ matches: narrow, addEventListener: () => {}, removeEventListener: () => {} })) as unknown as typeof window.matchMedia;
 }
 
-afterEach(() => { cleanup(); delete (window as { matchMedia?: unknown }).matchMedia; window.history.replaceState(null, "", "#"); });
+afterEach(() => { cleanup(); setLanguageChoice("browser"); delete (window as { matchMedia?: unknown }).matchMedia; window.history.replaceState(null, "", "#"); });
 
 const detailOf = () => screen.getByRole("region", { name: "微任务详情" });
 const stripOf = () => screen.getByRole("group", { name: "微任务步骤" });
@@ -352,7 +353,7 @@ describe("macro task pause, resume and end", () => {
     await waitFor(() => expect(resume).toHaveBeenCalledWith("macro_task_resume", { macroTaskId: "macro-1", commandId: expect.any(String) }, "csrf"));
   });
 
-  it("confirms the unfinished scope and keeps delivered work, then retries an unconfirmed end with the same request", async () => {
+  it("confirms the unfinished scope and keeps delivered work, then waits for fresh list facts before confirming a new end", async () => {
     const f = harness(); await openMacroTask(f);
     f.timeline.macroTask.counts.unfinished = 2;
     const pending = deferred();
@@ -374,9 +375,82 @@ describe("macro task pause, resume and end", () => {
       { runId: "r4", state: "concluded", concluded: true, reclaim: {} },
       { runId: "r5", concluded: false, error: { code: "SHUTDOWN_UNCONFIRMED" } },
     ] };
+    const pageRead = deferred();
+    (f.api.macroTasks as ReturnType<typeof vi.fn>).mockImplementationOnce(() => pageRead.promise);
+    f.refresh.mockRejectedValueOnce(new Error("snapshot offline"));
     await act(async () => pending.resolve(partial));
-    await screen.findByText("已结束 1 个微任务 · 1 个微任务的停止未确认，没有写结论，可以重试");
+    await screen.findByText("已结束 1 个微任务");
+    await screen.findByText("1 个微任务的停止未确认，没有写结论，可以重试");
+    const retry = screen.getByRole("button", { name: "重试结束" }) as HTMLButtonElement;
+    expect(retry.disabled).toBe(true);
+    await f.user.click(retry);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(command).toHaveBeenCalledTimes(1);
+    const fresh = { ...f.listed[0]!, counts: { ...f.listed[0]!.counts, unfinished: 5, delivered: 3 } };
+    await act(async () => pageRead.resolve({ groups: macroTaskGroups([fresh]), totals: { all: 1, active: 1, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 42, changed: false }));
+    await waitFor(() => expect(retry.disabled).toBe(false));
     command.mockResolvedValueOnce({ ...partial, duplicate: true });
+    await f.user.click(screen.getByRole("button", { name: "重试结束" }));
+    dialog = await screen.findByRole("dialog", { name: "结束宏任务" });
+    expect(command).toHaveBeenCalledTimes(1);
+    expect(within(dialog).getByText("结束 5 个微任务")).toBeTruthy();
+    expect(within(dialog).getByText("保留 3 个已交付微任务")).toBeTruthy();
+    await f.user.click(within(dialog).getByRole("button", { name: "确认结束" }));
+    await waitFor(() => expect(command).toHaveBeenCalledTimes(2));
+    expect(command.mock.calls[0]![1].commandId).not.toBe(command.mock.calls[1]![1].commandId);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("renders every end outcome in separate translated rows, without exposing reclaim details", async () => {
+    const f = harness(); await openMacroTask(f);
+    const reply = { macroTaskId: "macro-1", duplicate: false, results: [
+      { runId: "1", state: "concluded", concluded: true, reclaim: {} },
+      { runId: "2", state: "concluded", concluded: true, reclaimError: { code: "STORAGE_INCOMPLETE", message: "private reclaim detail" } },
+      { runId: "3", state: "concluded", concluded: true },
+      { runId: "4", state: "delivered", concluded: false },
+      { runId: "5", state: "accepted", concluded: false },
+      { runId: "6", concluded: false, error: { code: "SHUTDOWN_UNCONFIRMED" } },
+      { runId: "7", concluded: false, error: { code: "CONFLICT", message: "private conflict detail" } },
+      { runId: "8", concluded: false, error: { code: "CONFLICT" } },
+      { runId: "9", concluded: false, error: { code: "FUTURE_ERROR", message: "private unknown detail" } },
+    ] };
+    (f.api.command as ReturnType<typeof vi.fn>).mockResolvedValue(reply);
+    await menu(f); await f.user.click(screen.getByRole("menuitem", { name: "结束" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "结束宏任务" })).getByRole("button", { name: "确认结束" }));
+    await screen.findByText("已结束 3 个微任务");
+    for (const [lang, expected] of [["zh", ["已结束 3 个微任务", "2 个微任务在结束前已交付，没有结束",
+      "1 个微任务的停止未确认，没有写结论，可以重试", "2 个微任务没有结束：记录冲突；请刷新核对后重试。", "1 个微任务没有结束：请求未成功。"]],
+      ["en", ["Ended 3 micro tasks", "2 micro tasks were delivered before they could be ended", "1 micro tasks are not confirmed stopped, so no conclusion was recorded; you can retry",
+      "2 micro tasks were not ended: The records conflict; refresh, check them and try again.", "1 micro tasks were not ended: The request did not succeed."]]] as const) {
+      act(() => setLanguageChoice(lang));
+      expect([...document.querySelectorAll('[data-slot="macro-work-line"]')].map(node => node.textContent)).toEqual(expected);
+      expect(document.querySelector('[data-slot="macro-work-state"]')?.textContent).not.toMatch(/private|STORAGE_INCOMPLETE|FUTURE_ERROR/);
+    }
+  });
+
+  it("hides retry end when the current view has no unfinished members, while retaining the partial result", async () => {
+    const f = harness(); await openMacroTask(f);
+    (f.api.command as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      f.listed[0] = { ...f.listed[0]!, counts: { ...f.listed[0]!.counts, unfinished: 0 } };
+      return { macroTaskId: "macro-1", duplicate: false, results: [{ runId: "r4", concluded: false, error: { code: "SHUTDOWN_UNCONFIRMED" } }] };
+    });
+    await menu(f); await f.user.click(screen.getByRole("menuitem", { name: "结束" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "结束宏任务" })).getByRole("button", { name: "确认结束" }));
+    await screen.findByText("1 个微任务的停止未确认，没有写结论，可以重试");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "重试结束" })).toBeNull());
+    await menu(f);
+    expect(screen.queryByRole("menuitem", { name: "重试结束" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "结束" })).toBeNull();
+  });
+
+  it("replays an unknown end without confirmation using the retained request", async () => {
+    const f = harness(); await openMacroTask(f);
+    const command = f.api.command as ReturnType<typeof vi.fn>;
+    command.mockRejectedValueOnce(new Error("lost reply"));
+    await menu(f); await f.user.click(screen.getByRole("menuitem", { name: "结束" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "结束宏任务" })).getByRole("button", { name: "确认结束" }));
+    await screen.findByText("结束的结果未知，可能已生效；可以重试同一请求或刷新核对。");
+    command.mockResolvedValueOnce({ macroTaskId: "macro-1", duplicate: true, results: [] });
     await f.user.click(screen.getByRole("button", { name: "重试结束" }));
     await waitFor(() => expect(command).toHaveBeenCalledTimes(2));
     expect(command.mock.calls[0]).toEqual(command.mock.calls[1]);

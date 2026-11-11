@@ -147,7 +147,31 @@ def dependencies(connection, members):
                 for group in owners[row[0]]:
                     groups[group].append((kind, *tuple(row)))
     reusable = dict.fromkeys(groups, True)
+    from .work_pauses import TASK_UNITS_SQL
     for group in groups:
+        if group.startswith("macro-"):
+            pause = connection.execute(
+                "SELECT paused_at FROM work_pauses WHERE macro_task_id=?", (group,),
+            ).fetchone()
+        else:
+            pause = connection.execute(
+                "SELECT paused_at FROM work_pauses WHERE run_id=?", (group[4:],),
+            ).fetchone()
+        groups[group].append(("pause", pause["paused_at"] if pause else None))
+        if pause is not None:
+            # Match paused()'s full work-unit scope, including Router tasks and
+            # every attempt. The shared predicate supplies the stop proof.
+            for row in connection.execute(
+                f"SELECT unit.task_id,task.state,task.active_attempt_id,task.selected_attempt_id,"
+                " attempt.attempt_id,attempt.generation,attempt.execution_state,"
+                " attempt.shutdown_confirmed,unconfirmed.task_id IS NOT NULL"
+                f" FROM ({TASK_UNITS_SQL}) unit JOIN tasks task ON task.task_id=unit.task_id"
+                " LEFT JOIN attempts attempt ON attempt.task_id=unit.task_id"
+                f" LEFT JOIN ({micro_task.UNCONFIRMED_STOPS_SQL}) unconfirmed"
+                " ON unconfirmed.task_id=unit.task_id"
+                " WHERE unit.group_id=? ORDER BY unit.task_id,attempt.generation", (group,),
+            ):
+                groups[group].append(("pause-unit", *tuple(row)))
         if group.startswith("macro-"):
             row = connection.execute(
                 "SELECT macro_task_id,title,project_id,project_cwd,repository_path,created_at,activity_seq,activity_at"

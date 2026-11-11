@@ -41,6 +41,8 @@ for (const locale of ["zh-CN", "en-US"] as const) {
   test.describe(`macro work controls in ${locale}`, () => {
     test.use({ locale, viewport: { width: 1440, height: 960 }, reducedMotion: "reduce" });
     test.beforeEach(async () => { await mkdir(shots, { recursive: true }); });
+    // Finish any routed polling read before releasing the page fixture.
+    test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: "wait" }); });
     const zh = locale === "zh-CN";
 
     test("pauses and resumes immediately with distinct command identities", async ({ page }) => {
@@ -120,7 +122,7 @@ for (const locale of ["zh-CN", "en-US"] as const) {
       await expect(page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true })).toBeVisible();
     });
 
-    test("retries an unconfirmed end with the same command identity", async ({ page }) => {
+    test("starts a new end after a known partial result and confirms the current scope", async ({ page }) => {
       const commands: Command[] = [];
       let release!: () => void;
       const held = new Promise<void>(resolve => { release = resolve; });
@@ -158,10 +160,122 @@ for (const locale of ["zh-CN", "en-US"] as const) {
         : "2 micro tasks are not confirmed stopped, so no conclusion was recorded; you can retry");
       await page.screenshot({ path: join(shots, `end-partial-${locale}.png`) });
       const retry = page.getByRole("button", { name: zh ? "重试结束" : "Retry end" });
+      await retry.click();
+      const secondDialog = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task" });
+      await expect(secondDialog).toBeVisible();
+      await expect(secondDialog.locator("#end-macro-task-counts")).toContainText(zh ? "结束 4 个微任务" : "End 4 micro tasks");
+      await expect(secondDialog.locator("#end-macro-task-counts")).toContainText(zh ? "保留 1 个已交付微任务" : "Keep 1 delivered micro tasks");
+      expect(commands).toHaveLength(1);
+      const secondResponse = page.waitForResponse(response => response.request().postDataJSON()?.operation === "macro_task_end");
+      await secondDialog.getByRole("button", { name: zh ? "确认结束" : "End", exact: true }).click();
+      const second = (await (await secondResponse).json()).result;
+      expect(second).toEqual({ ...first, duplicate: false });
+      expect(commands).toHaveLength(2);
+      expect(commands[1]!.params.commandId).not.toBe(commands[0]!.params.commandId);
+      await expect(secondDialog).toHaveCount(0);
+    });
+
+    test("renders every real end outcome and confirms the refreshed scope", async ({ page }) => {
+      const commands: Command[] = [];
+      let afterFirstEnd = false;
+      let releaseRead!: () => void;
+      const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
+      await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
+        const response = await route.fetch();
+        const data = await response.json();
+        if (afterFirstEnd) {
+          await readGate;
+          const row = data.groups.flatMap((group: { macroTasks: { macroTaskId: string }[] }) => group.macroTasks)
+            .find((item: { macroTaskId: string }) => item.macroTaskId === B);
+          row.counts = { ...row.counts, unfinished: 2, delivered: 2 };
+        }
+        await route.fulfill({ response, json: data });
+      });
+      await page.route("**/api/command", async route => {
+        if (route.request().postDataJSON().operation === "macro_task_end") afterFirstEnd = true;
+        await route.fallback();
+      });
+      page.on("request", request => {
+        if (request.method() === "POST" && new URL(request.url()).pathname === "/api/command"
+          && request.postDataJSON().operation === "macro_task_end") commands.push(request.postDataJSON());
+      });
+      await open(page, `#tasks/${B}`);
+      await more(page, B).click();
+      await page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task" });
+      await expect(dialog.locator("#end-macro-task-counts")).toContainText(zh ? "结束 6 个微任务" : "End 6 micro tasks");
+      const firstResponse = page.waitForResponse(response => response.request().postDataJSON()?.operation === "macro_task_end");
+      await dialog.getByRole("button", { name: zh ? "确认结束" : "End", exact: true }).click();
+      const first = (await (await firstResponse).json()).result;
+      expect(first.results).toHaveLength(6);
+      const status = page.locator('[data-slot=macro-work-state][data-action=end]');
+      await expect(status.locator('[data-slot=macro-work-line]')).toHaveCount(4);
+      await expect(status).toContainText(zh ? "已结束 3 个微任务" : "Ended 3 micro tasks");
+      await expect(status).toContainText(zh ? "1 个微任务在结束前已交付，没有结束" : "1 micro tasks were delivered before they could be ended");
+      await expect(status).toContainText(zh ? "1 个微任务的停止未确认，没有写结论，可以重试"
+        : "1 micro tasks are not confirmed stopped, so no conclusion was recorded; you can retry");
+      await expect(status).toContainText(zh ? "1 个微任务没有结束：记录冲突；请刷新核对后重试。"
+        : "1 micro tasks were not ended: The records conflict; refresh, check them and try again.");
+      await expect(status).not.toContainText("Synthetic checkout cleanup is blocked");
+      await expect(status).not.toContainText("STORAGE_INCOMPLETE");
+      await page.screenshot({ path: join(shots, `end-mixed-${locale}.png`) });
+      const retry = page.getByRole("button", { name: zh ? "重试结束" : "Retry end" });
+      try {
+        await expect(retry).toBeDisabled();
+      } finally { releaseRead(); }
+      await expect(retry).toBeEnabled();
+      await retry.click();
+      const again = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task" });
+      await expect(again.locator("#end-macro-task-counts")).toContainText(zh ? "结束 2 个微任务" : "End 2 micro tasks");
+      await expect(again.locator("#end-macro-task-counts")).toContainText(zh ? "保留 2 个已交付微任务" : "Keep 2 delivered micro tasks");
+      await page.screenshot({ path: join(shots, `end-mixed-again-${locale}.png`) });
+      expect(commands).toHaveLength(1);
+      await again.getByRole("button", { name: zh ? "取消" : "Cancel", exact: true }).click();
+      expect(commands).toHaveLength(1);
+    });
+
+    test("replays an unknown end with its original identity even after no work remains", async ({ page }) => {
+      const commands: Command[] = [];
+      let unknown = true;
+      let noUnfinished = false;
+      await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
+        const response = await route.fetch();
+        const data = await response.json();
+        if (noUnfinished) {
+          const row = data.groups.flatMap((group: { macroTasks: { macroTaskId: string }[] }) => group.macroTasks)
+            .find((item: { macroTaskId: string }) => item.macroTaskId === A);
+          row.counts.unfinished = 0;
+        }
+        await route.fulfill({ response, json: data });
+      });
+      await page.route("**/api/command", async route => {
+        if (route.request().postDataJSON().operation === "macro_task_end" && unknown) {
+          unknown = false;
+          const response = await route.fetch(); // The synthetic service now owns the first receipt.
+          expect(response.status()).toBe(200);
+          noUnfinished = true;
+          await route.fulfill({ response, json: { ok: true, result: { macroTaskId: A, results: "malformed", duplicate: false } } });
+        } else await route.fallback();
+      });
+      page.on("request", request => {
+        if (request.method() === "POST" && new URL(request.url()).pathname === "/api/command"
+          && request.postDataJSON().operation === "macro_task_end") commands.push(request.postDataJSON());
+      });
+      await open(page, `#tasks/${A}`);
+      await more(page).click();
+      await page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task" });
+      await dialog.getByRole("button", { name: zh ? "确认结束" : "End", exact: true }).click();
+      const status = page.locator('[data-slot=macro-work-state][data-action=end]');
+      await expect(status).toContainText(zh ? "结束的结果未知" : "The end result is unknown");
+      await more(page).click();
+      await expect(page.getByRole("menuitem", { name: zh ? "重试结束" : "Retry end", exact: true })).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      const retry = page.getByRole("button", { name: zh ? "结束" : "End", exact: true });
+      await expect(retry).toBeVisible();
       const replayResponse = page.waitForResponse(response => response.request().postDataJSON()?.operation === "macro_task_end");
       await retry.click();
-      const replay = (await (await replayResponse).json()).result;
-      expect(replay).toEqual({ ...first, duplicate: true });
+      expect((await (await replayResponse).json()).result.duplicate).toBe(true);
       expect(commands).toHaveLength(2);
       expect(commands[1]).toEqual(commands[0]);
       await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -213,6 +327,7 @@ for (const locale of ["zh-CN", "en-US"] as const) {
 for (const locale of ["zh-CN", "en-US"] as const) for (const [width, theme] of [[320, "dark"], [800, "light"]] as const) {
   test.describe(`paused header geometry in ${locale} at ${width}px`, () => {
     test.use({ locale, viewport: { width, height: 900 }, colorScheme: theme, reducedMotion: "reduce" });
+    test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: "wait" }); });
     test("keeps counts, pause state and action inside the header", async ({ page }) => {
       await mkdir(shots, { recursive: true });
       await pausedViews(page, { [A]: true });

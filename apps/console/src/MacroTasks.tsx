@@ -206,10 +206,9 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     ?? (summarySnapshot?.macroTaskId === selected ? summarySnapshot : null);
   // Receipts retain their command identity independently of current view facts.
   const reload = async () => {
-    const result = await refresh();
-    list.reset();
+    list.retry();
     void timeline.retry();
-    return result;
+    return refresh();
   };
   const control = useMacroTaskControl(api, snapshot, writesAvailable && !connectionError && !list.error, authority, reload);
   const selectedEntries = selected ? control.entries.get(selected) : undefined;
@@ -241,15 +240,19 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const pauseControl = paused && <span data-slot="macro-pause-state" className="text-xs text-ink2" role="status">{paused}</span>;
   const feedback = currentSummary && (["pause", "resume", "end"] as WorkAction[]).map(action => {
     const entry = selectedEntries?.[action];
-    const label = entry && workFeedback(entry);
-    if (!entry || !label) return null;
-    const retry = entry.phase === "unknown" || action === "end" && canRetryEnd(entry);
+    const lines = entry && workFeedback(entry);
+    if (!entry || !lines) return null;
+    const replay = entry.phase === "unknown";
+    const retry = replay || action === "end" && currentSummary.counts.unfinished > 0 && canRetryEnd(entry);
     return <div key={action} data-slot="macro-work-state" data-action={action} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-sm sm:px-6">
-      <span role={entry.phase === "refused" ? "alert" : "status"} className={cn("min-w-0 flex-1 wrap-anywhere", entry.phase === "refused" ? "text-fail" : "text-ink2")}>{label}</span>
-      {retry && <Button variant="outline" size="sm" disabled={!control.writable || control.busy(currentSummary.macroTaskId)} onClick={() => control.run(currentSummary, action)}>{t(action === "end" ? "shell:macroWork.retryEnd" : `shell:macroWork.${action}`)}</Button>}
+      <div role={entry.phase === "refused" ? "alert" : "status"} className={cn("min-w-0 flex-1 wrap-anywhere", entry.phase === "refused" ? "text-fail" : "text-ink2")}>{lines.map((line, index) => <p data-slot="macro-work-line" key={index}>{line}</p>)}</div>
+      {retry && <Button variant="outline" size="sm" disabled={!control.writable || list.loading || control.busy(currentSummary.macroTaskId)} onClick={event => {
+        if (replay) control.run(currentSummary, action);
+        else { menuButtonRef.current = event.currentTarget; control.requestEnd(currentSummary); }
+      }}>{t(action === "end" && currentSummary.counts.unfinished > 0 ? "shell:macroWork.retryEnd" : `shell:macroWork.${action}`)}</Button>}
     </div>;
   });
-  const entryActions = (summary: MacroTaskSummary) => <MacroTaskEntryMenu summary={summary} entries={control.entries.get(summary.macroTaskId)} writable={control.writable} busy={control.busy(summary.macroTaskId)} active={active}
+  const entryActions = (summary: MacroTaskSummary) => <MacroTaskEntryMenu summary={summary} entries={control.entries.get(summary.macroTaskId)} writable={control.writable} busy={list.loading || control.busy(summary.macroTaskId)} active={active}
     onAction={control.run} onEnd={(row, button) => { menuButtonRef.current = button; control.requestEnd(row); }}
     onDelete={(row, button) => { menuButtonRef.current = button; setDeleteTarget(row); }}/>;
   const listPane = <MacroTaskList

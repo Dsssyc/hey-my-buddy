@@ -151,12 +151,18 @@ export const macroTaskTimelineSchema = z.object({
 // projection fields retain their types without imposing new acceptance rules.
 export type MacroTaskTimeline = z.infer<typeof macroTaskTimelineSchema>;
 /** Action receipts acknowledge commands; only view facts describe the current pause. */
+const workErrorSchema = z.looseObject({ code: z.string().min(1), message: z.string().optional() });
+const concludedEntrySchema = z.strictObject({
+  runId: z.string().min(1), state: z.literal("concluded"), concluded: z.literal(true),
+  reclaim: z.record(z.string(), z.unknown()).optional(), reclaimError: workErrorSchema.optional(),
+}).refine(entry => !(entry.reclaim && entry.reclaimError));
 export const workActionReplySchemas = {
   pause: z.strictObject({ macroTaskId: z.string().min(1), pausedAt: dateString, duplicate: z.boolean() }),
   resume: z.strictObject({ macroTaskId: z.string().min(1), duplicate: z.boolean() }),
   end: z.strictObject({ macroTaskId: z.string().min(1), duplicate: z.boolean(), results: z.array(z.union([
-    z.strictObject({ runId: z.string().min(1), state: z.literal("concluded"), concluded: z.literal(true), reclaim: z.record(z.string(), z.unknown()) }),
-    z.strictObject({ runId: z.string().min(1), concluded: z.literal(false), error: z.looseObject({ code: z.literal("SHUTDOWN_UNCONFIRMED") }) }),
+    concludedEntrySchema,
+    z.strictObject({ runId: z.string().min(1), state: z.enum(["delivered", "accepted"]), concluded: z.literal(false) }),
+    z.strictObject({ runId: z.string().min(1), concluded: z.literal(false), error: workErrorSchema }),
   ])).refine(results => new Set(results.map(result => result.runId)).size === results.length) }),
 };
 export type WorkAction = keyof typeof workActionReplySchemas;

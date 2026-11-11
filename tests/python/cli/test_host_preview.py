@@ -655,6 +655,27 @@ class PreviewDeletionTest(unittest.TestCase):
                 self.assertEqual(set(item), {"runId", "concluded", "error"})
                 self.assertEqual(item["error"]["code"], "SHUTDOWN_UNCONFIRMED")
                 self.assertGreater(item["error"]["unconfirmedCount"], 0)
+            status, envelope = self.call(server, "/api/command", "macro_task_end",
+                                        {"macroTaskId": preview.MACRO_B, "commandId": "end-mixed"})
+            self.assertEqual(status, 200, envelope)
+            mixed = {item["runId"]: item for item in envelope["result"]["results"]}
+            self.assertEqual(set(mixed), {"preview-run-b3", "preview-run-b4", "preview-run-b5",
+                                          "preview-run-b6", "preview-run-b7", "preview-run-b8"})
+            self.assertEqual(mixed["preview-run-b3"], {"runId": "preview-run-b3", "state": "concluded",
+                                                        "concluded": True, "reclaimError": {
+                                                            "code": "STORAGE_INCOMPLETE", "message": "Synthetic checkout cleanup is blocked"}})
+            self.assertEqual(mixed["preview-run-b4"], {"runId": "preview-run-b4", "state": "concluded", "concluded": True})
+            self.assertEqual(mixed["preview-run-b5"]["reclaim"]["removed"], False)
+            self.assertEqual(mixed["preview-run-b6"], {"runId": "preview-run-b6", "state": "delivered", "concluded": False})
+            self.assertEqual(mixed["preview-run-b7"]["error"]["code"], "SHUTDOWN_UNCONFIRMED")
+            self.assertEqual(mixed["preview-run-b8"]["error"]["code"], "CONFLICT")
+            replay = self.call(server, "/api/command", "macro_task_end",
+                               {"macroTaskId": preview.MACRO_B, "commandId": "end-mixed"})
+            self.assertEqual(replay, (200, {"ok": True, "result": {**envelope["result"], "duplicate": True}}))
+            second = self.call(server, "/api/command", "macro_task_end",
+                               {"macroTaskId": preview.MACRO_B, "commandId": "end-again"})
+            self.assertEqual(second[0], 200)
+            self.assertFalse(second[1]["result"]["duplicate"])
             self.assertEqual(self.call(server, "/api/macro-tasks")[1], before)
             for group in before["groups"]:
                 for item in group["macroTasks"]:

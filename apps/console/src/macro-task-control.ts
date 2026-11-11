@@ -26,16 +26,26 @@ export function pauseLabel(paused: MacroTaskSummary["paused"]): string | null {
     : i18n.t("shell:macroWork.pausing");
 }
 
-export function workFeedback(entry: WorkEntry): string | null {
-  if (entry.phase === "unknown") return i18n.t(`shell:macroWork.${entry.action}Unknown`);
-  if (entry.phase === "refused") return entry.error!();
+export function workFeedback(entry: WorkEntry): string[] | null {
+  if (entry.phase === "unknown") return [i18n.t(`shell:macroWork.${entry.action}Unknown`)];
+  if (entry.phase === "refused") return [entry.error!()];
   if (entry.action !== "end") return null;
-  if (entry.phase === "pending") return i18n.t("shell:macroWork.ending");
-  const results = entry.result!.results;
-  const ended = results.filter(result => result.concluded).length;
-  const unconfirmed = results.length - ended;
+  if (entry.phase === "pending") return [i18n.t("shell:macroWork.ending")];
+  let ended = 0, delivered = 0, unconfirmed = 0;
+  const errors = new Map<string, number>();
+  for (const result of entry.result!.results) {
+    if (result.concluded) ++ended;
+    else if ("state" in result) ++delivered;
+    else if (result.error.code === "SHUTDOWN_UNCONFIRMED") ++unconfirmed;
+    else errors.set(result.error.code, (errors.get(result.error.code) ?? 0) + 1);
+  }
   return [i18n.t("shell:macroWork.ended", { count: ended }),
-    unconfirmed ? i18n.t("shell:macroWork.unconfirmed", { count: unconfirmed }) : null].filter(Boolean).join(" · ");
+    ...(delivered ? [i18n.t("shell:macroWork.delivered", { count: delivered })] : []),
+    ...(unconfirmed ? [i18n.t("shell:macroWork.unconfirmed", { count: unconfirmed })] : []),
+    ...[...errors].map(([code, count]) => i18n.t("shell:macroWork.notEnded", { count,
+      reason: i18n.exists(`common:error.codes.${code}`) ? i18n.t(`common:error.codes.${code}`) : i18n.t("common:error.refused"),
+    })),
+  ];
 }
 
 export function canRetryEnd(entry: WorkEntry | undefined): boolean {
@@ -68,21 +78,25 @@ export function useMacroTaskControl(api: ConsoleApi, snapshot: Snapshot, writesA
     if (inFlight.current.has(id)) return;
     inFlight.current.add(id);
     patch(id, entry.action, { ...entry, phase: "pending", error: null });
+    let acknowledged = false;
     try {
       const reply = parseWorkReply(entry.action, id, await api.command(`macro_task_${entry.action}`, {
         macroTaskId: id, commandId: entry.commandId,
       }, snapshot.csrfToken));
       patch(id, entry.action, { ...entry, phase: "acknowledged", error: null,
         result: entry.action === "end" ? reply as MacroTaskEndResult : null });
-      // A failed read cannot undo a durable acknowledgement; polling retries it.
-      try { await refresh(); } catch { /* The next view read supplies current facts. */ }
+      acknowledged = true;
     } catch (reason) {
       const unknown = uncertainResponse(reason) || entry.phase === "unknown" && isSessionExpiredRefusal(reason);
       patch(id, entry.action, { ...entry, phase: unknown ? "unknown" : "refused", error: () => errorText(reason) });
     } finally { inFlight.current.delete(id); }
+    // View reads have their own pending state; they never extend a command lock.
+    if (acknowledged) {
+      try { await refresh(); } catch { /* Polling retries reads without undoing the receipt. */ }
+    }
   }, [api, patch, refresh, snapshot.csrfToken]);
 
-  const run = useCallback((summary: MacroTaskSummary, action: WorkAction) => {
+  const run = useCallback((summary: MacroTaskSummary, action: WorkAction, fresh = false) => {
     if (inFlight.current.has(summary.macroTaskId)) return;
     const existing = entries.get(summary.macroTaskId)?.[action];
     if (!writable) {
@@ -90,7 +104,7 @@ export function useMacroTaskControl(api: ConsoleApi, snapshot: Snapshot, writesA
       patch(summary.macroTaskId, action, { action, commandId: "", phase: "refused", result: null, error: LOGIN_EXPIRED_ACTION_REFUSAL });
       return;
     }
-    const reusable = existing && existing.commandId !== "" && (existing.phase === "unknown" || existing.phase === "refused" || action === "end" && canRetryEnd(existing));
+    const reusable = !fresh && existing && existing.commandId !== "" && existing.phase === "unknown";
     const entry: WorkEntry = reusable ? existing : { action, commandId: crypto.randomUUID(), phase: "pending", result: null, error: null };
     void dispatch(summary, entry);
   }, [dispatch, entries, patch, writable]);
@@ -101,7 +115,7 @@ export function useMacroTaskControl(api: ConsoleApi, snapshot: Snapshot, writesA
   const confirmEnd = useCallback(() => {
     const target = confirming!;
     setConfirming(null);
-    run(target, "end");
+    run(target, "end", true);
   }, [confirming, run]);
   const busy = (id: string) => actions.some(action => entries.get(id)?.[action]?.phase === "pending");
   return { entries, confirming, writable, busy, run, requestEnd, confirmEnd, cancelConfirm: () => setConfirming(null) };

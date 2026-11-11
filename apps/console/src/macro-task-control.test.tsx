@@ -24,7 +24,7 @@ describe("macro task control identities and receipts", () => {
     const { result } = renderHook(() => useMacroTaskControl(api, snapshot, true, undefined, async () => { throw new Error("read failed"); }));
     await act(async () => result.current.run(summary, action));
     expect(result.current.entries.get(summary.macroTaskId)?.[action]?.phase).toBe("unknown");
-    expect(workFeedback(result.current.entries.get(summary.macroTaskId)![action]!)).toContain("结果未知");
+    expect(workFeedback(result.current.entries.get(summary.macroTaskId)![action]!)!.join(" ")).toContain("结果未知");
     await act(async () => result.current.run(summary, action));
     expect(command.mock.calls[0]).toEqual(command.mock.calls[1]);
     expect(command.mock.calls[0]).toEqual([`macro_task_${action}`, { macroTaskId: summary.macroTaskId, commandId: expect.any(String) }, "csrf"]);
@@ -44,7 +44,7 @@ describe("macro task control identities and receipts", () => {
     expect(retained.phase).toBe("unknown");
     expect(retained.commandId).toBe(id);
     act(() => setLanguageChoice("en"));
-    expect(workFeedback(retained)).toBe("The pause result is unknown and may have taken effect; retry the same request or refresh to check.");
+    expect(workFeedback(retained)).toEqual(["The pause result is unknown and may have taken effect; retry the same request or refresh to check."]);
     expect(command).toHaveBeenCalledTimes(3);
   });
 
@@ -75,7 +75,7 @@ describe("macro task control identities and receipts", () => {
     expect(command.mock.calls[0]![1].commandId).not.toBe("");
   });
 
-  it("retries only unconfirmed end results with the same receipt identity", async () => {
+  it("confirms a current scope and sends a new end after a known partial result", async () => {
     const partial = { macroTaskId: summary.macroTaskId, duplicate: false, results: [
       { runId: "a", state: "concluded", concluded: true, reclaim: {} },
       { runId: "b", concluded: false, error: { code: "SHUTDOWN_UNCONFIRMED", unconfirmedCount: 1 } },
@@ -85,10 +85,14 @@ describe("macro task control identities and receipts", () => {
     const { result } = renderHook(() => useMacroTaskControl(api, snapshot, true, undefined, async () => {}));
     await act(async () => result.current.run(summary, "end"));
     const entry = result.current.entries.get(summary.macroTaskId)!.end!;
-    expect(workFeedback(entry)).toBe("已结束 1 个微任务 · 1 个微任务的停止未确认，没有写结论，可以重试");
+    expect(workFeedback(entry)).toEqual(["已结束 1 个微任务", "1 个微任务的停止未确认，没有写结论，可以重试"]);
     expect(canRetryEnd(entry)).toBe(true);
-    await act(async () => result.current.run(summary, "end"));
-    expect(command.mock.calls[0]).toEqual(command.mock.calls[1]);
+    const current = macroTaskSummary({ counts: { ...summary.counts, unfinished: 4, delivered: 3 } });
+    act(() => result.current.requestEnd(current));
+    expect(result.current.confirming).toBe(current);
+    expect(command).toHaveBeenCalledTimes(1);
+    await act(async () => result.current.confirmEnd());
+    expect(command.mock.calls[0]![1].commandId).not.toBe(command.mock.calls[1]![1].commandId);
   });
 
   it("leaves a malformed acknowledgement unknown and replayable", async () => {
@@ -106,9 +110,36 @@ describe("macro task control identities and receipts", () => {
     expect(() => parseWorkReply("resume", summary.macroTaskId, { ...receipt("resume"), paused: null })).toThrow(ApiError);
     for (const results of [
       [{ runId: "r1", concluded: true, state: "cancelled", reclaim: {} }],
-      [{ runId: "r1", concluded: false, error: { code: "OTHER" } }],
+      [{ runId: "r1", concluded: false, error: { code: "" } }],
+      [{ runId: "r1", concluded: false, state: "cancelled" }],
+      [{ runId: "r1", concluded: true, state: "concluded", reclaim: {}, reclaimError: { code: "CONFLICT" } }],
+      [{ runId: "r1", concluded: false, state: "delivered", error: { code: "CONFLICT" } }],
       [{ runId: "r1", concluded: true, state: "concluded", reclaim: {} }, { runId: "r1", concluded: false, error: { code: "SHUTDOWN_UNCONFIRMED" } }],
     ]) expect(() => parseWorkReply("end", summary.macroTaskId, { macroTaskId: summary.macroTaskId, duplicate: false, results })).toThrow(ApiError);
+  });
+
+  it("accepts every service end result shape and groups its feedback by meaning and error code in both languages", () => {
+    const reply = { macroTaskId: summary.macroTaskId, duplicate: false, results: [
+      { runId: "a", state: "concluded", concluded: true, reclaim: { removed: true } },
+      { runId: "b", state: "concluded", concluded: true, reclaimError: { code: "STORAGE_INCOMPLETE", message: "raw cleanup failure" } },
+      { runId: "c", state: "concluded", concluded: true },
+      { runId: "d", state: "delivered", concluded: false },
+      { runId: "e", state: "accepted", concluded: false },
+      { runId: "f", concluded: false, error: { code: "SHUTDOWN_UNCONFIRMED" } },
+      { runId: "g", concluded: false, error: { code: "CONFLICT", message: "raw conflict" } },
+      { runId: "h", concluded: false, error: { code: "CONFLICT", message: "another conflict" } },
+      { runId: "i", concluded: false, error: { code: "FUTURE_ERROR", message: "raw unknown" } },
+    ] };
+    const parsed = parseWorkReply("end", summary.macroTaskId, reply);
+    expect(parsed).toEqual(reply);
+    for (const [language, expected] of [["zh", ["已结束 3 个微任务", "2 个微任务在结束前已交付，没有结束",
+      "1 个微任务的停止未确认，没有写结论，可以重试", "2 个微任务没有结束：记录冲突；请刷新核对后重试。", "1 个微任务没有结束：请求未成功。"]],
+    ["en", ["Ended 3 micro tasks", "2 micro tasks were delivered before they could be ended",
+      "1 micro tasks are not confirmed stopped, so no conclusion was recorded; you can retry",
+      "2 micro tasks were not ended: The records conflict; refresh, check them and try again.", "1 micro tasks were not ended: The request did not succeed."]]] as const) {
+      act(() => setLanguageChoice(language));
+      expect(workFeedback({ action: "end", commandId: "cmd", phase: "acknowledged", result: reply as import("./macro-task-types").MacroTaskEndResult, error: null })).toEqual(expected);
+    }
   });
 
   it("reads pause evidence and time from view facts in both languages", () => {

@@ -28,7 +28,7 @@ export function MacroTaskEntryMenu({ summary, entries, writable, busy, active, o
     }}>
       <Hint text={reason}><DropdownMenuItem data-slot={`macro-${action}-action`} disabled={!writable || busy} aria-busy={entries?.[action]?.phase === "pending" || undefined} onSelect={() => onAction(summary, action)}>{t(`shell:macroWork.${action}`)}</DropdownMenuItem></Hint>
       {summary.counts.unfinished > 0 && <Hint text={reason}><DropdownMenuItem data-slot="macro-end-action" disabled={!writable || busy} onSelect={() => {
-        if (canRetryEnd(entries?.end)) onAction(summary, "end");
+        if (entries?.end?.phase === "unknown") onAction(summary, "end");
         else { openingDialog.current = true; onEnd(summary, button.current!); }
       }}>{t(canRetryEnd(entries?.end) ? "shell:macroWork.retryEnd" : "shell:macroWork.end")}</DropdownMenuItem></Hint>}
       <DropdownMenuSeparator/>

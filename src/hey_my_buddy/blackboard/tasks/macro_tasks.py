@@ -688,11 +688,6 @@ SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
             lambda item=item: _summary(connection, item, summary_inputs[item]),
             reusable=reusable[item],
         ) for item in page}
-        # A pause can change without member activity. Keep this live scalar in
-        # the same read snapshot even when the rest of a summary is cached.
-        for item in page:
-            if cached[item] is not None:
-                summaries[item]["paused"] = paused(connection, item)
         issued_head = before[2] if before is not None else head
         result_groups = []
         for project_id, project_row in projects.items():

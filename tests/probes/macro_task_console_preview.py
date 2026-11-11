@@ -3117,6 +3117,23 @@ def work_control_reply(operation: str, params: dict, state: PreviewState | None)
             entry = FIXTURES["runs"][run_id]
             if entry["state"] in ("accepted", "concluded", "delivered"):
                 continue
+            # Six independent outcomes exercise the service's real end-reply
+            # variants without changing the invented timeline or its scope.
+            if group == MACRO_B:
+                if run_id == "preview-run-b3":
+                    results.append({"runId": run_id, "state": "concluded", "concluded": True,
+                                    "reclaimError": {"code": "STORAGE_INCOMPLETE", "message": "Synthetic checkout cleanup is blocked"}})
+                    continue
+                if run_id == "preview-run-b4":
+                    results.append({"runId": run_id, "state": "concluded", "concluded": True})
+                    continue
+                if run_id == "preview-run-b6":
+                    results.append({"runId": run_id, "state": "delivered", "concluded": False})
+                    continue
+                if run_id == "preview-run-b8":
+                    results.append({"runId": run_id, "concluded": False,
+                                    "error": {"code": "CONFLICT", "message": "Synthetic Host continuation raced with end"}})
+                    continue
             shutdown = shutdown_view(entry)
             if shutdown["selfConfirmed"] and shutdown["descendantsConfirmed"]:
                 results.append({"runId": run_id, "state": "concluded", "concluded": True,
