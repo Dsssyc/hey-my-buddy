@@ -13,6 +13,7 @@ import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "./components/ui/collapsible";
 import { useFadingText } from "./components/use-fading-text";
+import { pauseLabel } from "./macro-task-control";
 import { ScrollingTitle } from "./components/ScrollingTitle";
 
 export type MacroTaskListProps = {
@@ -59,13 +60,14 @@ function GroupHeading({ label, count, open, standalone, sort, onSortChange }: { 
 const Entry = memo(function Entry({ row, selected, onSelect, actions }: { row: MacroTaskSummary; selected: boolean; onSelect: (id: string) => void; actions?: (row: MacroTaskSummary) => ReactNode }) {
   const { t } = useTranslation("tasks");
   const text = row.titleSource === "none" ? t("unnamed") : row.title!;
+  const paused = pauseLabel(row.paused);
   const waiting = row.counts.host + row.counts.review > 0;
   const mark = row.counts.host > 0 ? "hand" : row.counts.review > 0 ? "review" : row.counts.active > 0 ? "live" : row.counts.failed > 0 ? "fail" : null;
   const status = row.counts.roots + row.counts.helpers === 0 ? null : waiting ? row.counts.host > 0 ? "host" : "review" : row.counts.active > 0 ? "active" : row.counts.failed > 0 ? "failed" : row.counts.roots > 0 && row.counts.accepted === row.counts.roots ? "accepted" : "ended";
   return <li data-macro-task-id={row.macroTaskId} data-selected={selected} className="group/entry relative">
-    <button type="button" data-slot="macro-entry" className={cn("grid h-7 w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-12 pl-3 text-left text-[13px] text-ink2 hover:text-ink aria-pressed:text-ink hover:bg-selected-row aria-pressed:hover:bg-selection transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", selected ? "bg-selection" : "bg-transparent")} aria-pressed={selected} onClick={() => onSelect(row.macroTaskId)}>
+    <button type="button" data-slot="macro-entry" className={cn("grid min-h-7 w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-12 pl-3 text-left text-[13px] text-ink2 hover:text-ink aria-pressed:text-ink hover:bg-selected-row aria-pressed:hover:bg-selection transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", selected ? "bg-selection" : "bg-transparent")} aria-pressed={selected} onClick={() => onSelect(row.macroTaskId)}>
       <span className="flex items-center justify-center">{mark && <span className="flex"><StateMark kind={mark} className="size-2.5"/></span>}</span>
-      <span data-slot="macro-entry-title" className="min-w-0"><ScrollingTitle text={text}/></span>{status && <span className="sr-only">{t(status)}</span>}
+      <span data-slot="macro-entry-title" className="min-w-0"><ScrollingTitle text={text}/>{paused && <span data-slot="macro-pause-state" className="block pb-1 text-xs text-ink3">{paused}</span>}</span>{status && <span className="sr-only">{t(status)}</span>}
     </button>
   <div className="absolute top-0.5 right-4 opacity-0 pointer-events-none group-hover/entry:opacity-100 group-hover/entry:pointer-events-auto group-focus-within/entry:opacity-100 group-focus-within/entry:pointer-events-auto group-data-[selected=true]/entry:opacity-100 group-data-[selected=true]/entry:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto">{actions?.(row)}</div></li>;
 });

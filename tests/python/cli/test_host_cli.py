@@ -69,6 +69,7 @@ class HelpTests(unittest.TestCase):
         self.assertIn("true is the only value", get_help)
         self.assertIn("exactly one of runId, macroTaskId, cwd, buddies is required", get_help)
         self.assertIn("limit and before apply only to a collection", get_help)
+        self.assertIn("paused: {pausedAt, shutdownConfirmed}", get_help)
         self.assertIn("maxUtf8Bytes", help_text("role", "suggest"))
         self.assertNotIn("creationKey", help_text("role", "submit"))
         self.assertNotIn("import ast", Path(cli_help.__file__).read_text())

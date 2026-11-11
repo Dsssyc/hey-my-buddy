@@ -31,7 +31,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
         await expect(page.getByRole("tooltip")).toHaveCount(0);
         await more.click();
         await expect(page.locator('[data-slot="macro-entry-menu"]')).toHaveCSS("border-radius", "6px");
-        await page.getByRole("menuitem", { name: "停止宏任务", exact: true }).click();
+        await page.getByRole("menuitem", { name: "结束", exact: true }).click();
         await page.getByRole("dialog").waitFor();
       }
       await settle(page);

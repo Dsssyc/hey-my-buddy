@@ -95,93 +95,67 @@ for (const { locale, language, tasks } of [
 
     });
 
-    test("confirms the Lead's macro task stop scope and shows the synthetic preview refusal", async ({ page }) => {
+    test("confirms the Lead macro task end scope and reports the synthetic result", async ({ page }) => {
       const errors = observeErrors(page);
-      const commands: unknown[] = [];
+      const commands: { operation: string; params: { macroTaskId: string; commandId: string } }[] = [];
       page.on("request", request => {
         if (request.method() === "POST" && new URL(request.url()).pathname === "/api/command"
-          && request.postDataJSON().operation === "macro_task_stop") commands.push(request.postDataJSON());
+          && request.postDataJSON().operation === "macro_task_end") commands.push(request.postDataJSON());
       });
-      const { timeline, body } = await openLeadMacro(page, language, tasks);
+      const { timeline } = await openLeadMacro(page, language, tasks);
       const zh = language === "zh-CN";
-      const stopName = zh ? "停止宏任务" : "Stop macro task";
-      const cancelName = zh ? "取消" : "Cancel";
-      const confirmName = zh ? "确认停止宏任务" : "Confirm stop";
       const more = page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-menu-button]`);
       await more.click();
-      const stop = page.getByRole("menuitem", { name: stopName, exact: true });
-      await expect(stop).toBeEnabled();
-      await stop.click();
-      const dialog = page.getByRole("dialog", { name: stopName, exact: true });
+      await page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task", exact: true });
       const summary = timeline.macroTask;
-      await expect(dialog.locator("#stop-macro-task-name")).not.toHaveAttribute("aria-description");
-      await expect(dialog.locator("#stop-macro-task-name")).toHaveText(summary.title!);
-      await expect(dialog.locator("#stop-macro-task-counts li")).toHaveCount(5);
-      await expect(dialog.locator("#stop-macro-task-body")).not.toContainText(summary.title!);
-      await expect(dialog.locator("#stop-macro-task-counts")).toContainText(zh
-        ? `停止 ${summary.counts.stoppableRoots} 个微任务`
-        : `Micro tasks to stop ${summary.counts.stoppableRoots}`);
-      await expect(dialog.locator("#stop-macro-task-counts")).toContainText(zh
-        ? `停止 ${summary.counts.stoppableHelpers} 个协助任务`
-        : `Helper tasks to stop ${summary.counts.stoppableHelpers}`);
-      await expect(dialog.getByRole("button", { name: cancelName, exact: true })).toBeFocused();
+      await expect(dialog.locator("#end-macro-task-name")).toHaveText(summary.title!);
+      await expect(dialog.locator("#end-macro-task-counts li")).toHaveCount(2);
+      await expect(dialog.locator("#end-macro-task-counts")).toContainText(zh
+        ? `结束 ${summary.counts.unfinished} 个微任务`
+        : `End ${summary.counts.unfinished} micro tasks`);
+      await expect(dialog.locator("#end-macro-task-counts")).toContainText(zh
+        ? `保留 ${summary.counts.delivered} 个已交付微任务`
+        : `Keep ${summary.counts.delivered} delivered micro tasks`);
+      await expect(dialog.getByRole("button", { name: zh ? "取消" : "Cancel", exact: true })).toBeFocused();
       await settle(page);
-      await expectWholeAndApart(page.locator("body"), dialog);
-      await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > [data-slot=stop-dialog-actions]"));
-      await expectWholeAndApart(dialog.locator("[data-slot=stop-dialog-actions]"), dialog.getByRole("button"));
-      await expectTextUncut(dialog.locator("h2, #stop-macro-task-body, li, button"));
+      await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > [data-slot=end-dialog-actions]"));
+      await expectWholeAndApart(dialog.locator("[data-slot=end-dialog-actions]"), dialog.getByRole("button"));
+      await expectTextUncut(dialog.locator("h2, #end-macro-task-body, li, button"));
       await dialog.press("Escape");
       await expect(dialog).toBeHidden();
       expect(commands).toEqual([]);
 
       await more.click();
-      await stop.click();
-      await dialog.getByRole("button", { name: cancelName, exact: true }).press("Tab");
-      const confirm = dialog.getByRole("button", { name: confirmName, exact: true });
-      await expect(confirm).toBeFocused();
-      const refusal = page.waitForResponse(response => response.request().method() === "POST"
+      await page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
+      const responsePromise = page.waitForResponse(response => response.request().method() === "POST"
         && new URL(response.url()).pathname === "/api/command"
-        && response.request().postDataJSON().operation === "macro_task_stop");
-      await confirm.press("Enter");
-      const response = await refusal;
-      expect(response.status()).toBe(403);
-      expect(response.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
-      expect(await response.json()).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-      expect(commands).toEqual([{ operation: "macro_task_stop", params: { macroTaskId: MACRO, commandId: expect.any(String) } }]);
-      expect(response.request().postDataJSON().params.commandId).not.toBe("");
-      await expect(dialog).toBeHidden();
-      const status = page.locator("[data-slot=macro-stop-state]");
-      await expect(status).toHaveText(zh ? "停止请求被拒绝" : "Stop request was refused");
-      await expect(status).toHaveAttribute("aria-description", zh
-        ? "无操作权限；请重新打开控制台。" : "Not permitted; reopen the console.");
-      await expectTextUncut(status);
-      await expect(page.getByText(zh ? "已停止" : "Stopped", { exact: true })).toHaveCount(0);
-
-      const unchanged = await page.request.get(TIMELINE);
-      expect(unchanged.status()).toBe(200);
-      expect(unchanged.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
-      expect(await unchanged.text()).toBe(body);
+        && response.request().postDataJSON().operation === "macro_task_end");
+      await dialog.getByRole("button", { name: zh ? "确认结束" : "End", exact: true }).click();
+      const response = await responsePromise;
+      expect(response.status()).toBe(200);
+      const reply = (await response.json()).result;
+      expect(reply.results).toHaveLength(summary.counts.unfinished);
+      const concluded = reply.results.filter((result: { concluded: boolean }) => result.concluded).length;
+      const unconfirmed = reply.results.length - concluded;
+      expect(concluded).toBeGreaterThan(0);
+      expect(unconfirmed).toBeGreaterThan(0);
+      expect(commands).toEqual([{ operation: "macro_task_end", params: { macroTaskId: MACRO, commandId: expect.any(String) } }]);
+      expect(commands[0]!.params.commandId).not.toBe("");
+      const status = page.locator("[data-slot=macro-work-state]");
+      await expect(status).toContainText(zh ? `已结束 ${concluded} 个微任务` : `Ended ${concluded} micro tasks`);
+      await expect(status).toContainText(zh
+        ? `${unconfirmed} 个微任务的停止未确认，没有写结论，可以重试`
+        : `${unconfirmed} micro tasks are not confirmed stopped, so no conclusion was recorded; you can retry`);
       await expectReadableStart(row(page, LEAD).getByText(zh ? "等待名下的微任务" : "Waiting for owned micro tasks", { exact: true }), zh ? "等待名下的微任务" : "Waiting for owned micro tasks");
-      await expectReadableStart(row(page, WAITING).getByText(zh ? "等待 Lead" : "Waiting for Lead", { exact: true }), zh ? "等待 Lead" : "Waiting for Lead");
-      await more.click();
-      await expect(page.getByRole("menuitem", { name: zh ? "重试停止" : "Retry stop", exact: true })).toHaveCount(0);
-      await page.getByRole("menuitem", { name: zh ? "关闭" : "Dismiss", exact: true }).click();
-      // Dismissing this browser's refusal leaves the earlier recorded Lead stop visible.
-      await expect(status).toHaveText(zh ? "正在停止" : "Stopping");
-      await expect(status).toHaveAttribute("aria-description", zh ? "仍有 1 项停止未确认" : "Stops unconfirmed 1");
-      await more.click();
-      await expect(stop).toBeEnabled();
       await expectNoSidewaysScroll(page);
       expect(errors.page).toEqual([]);
-      // Chromium may log the actual 403 as a resource error. The response above
-      // proves that this one expected refusal is from the read-only preview.
-      expect(errors.console.length).toBeLessThanOrEqual(1);
-      for (const message of errors.console) expect(message).toMatch(/^Failed to load resource:.*403/);
+      expect(errors.console).toEqual([]);
     });
   });
 }
 
-for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${locale} at narrow width`, () => {
+for (const locale of ["zh-CN", "en-US"]) test.describe(`a long end title in ${locale} at narrow width`, () => {
   test.use({ locale, viewport: { width: 390, height: 844 } });
   test("wraps the title and keeps the scope and controls readable", async ({ page }) => {
     const title = "核对完整范围与全部已交付结果的宏任务标题：".repeat(10);
@@ -197,9 +171,9 @@ for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${l
     await page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-entry]`).click();
     await page.locator("[data-slot=macro-overview-header]").getByRole("button", { name: locale === "zh-CN" ? "‹ 宏任务" : "‹ Macro tasks", exact: true }).click();
     await page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-menu-button]`).click();
-    await page.getByRole("menuitem", { name: locale === "zh-CN" ? "停止宏任务" : "Stop macro task", exact: true }).click();
+    await page.getByRole("menuitem", { name: locale === "zh-CN" ? "结束" : "End", exact: true }).click();
     const dialog = page.getByRole("dialog");
-    const titleLine = dialog.locator("#stop-macro-task-name");
+    const titleLine = dialog.locator("#end-macro-task-name");
     await settle(page);
     await expect(titleLine).not.toHaveAttribute("aria-description");
     await expect(titleLine).toHaveText(title);
@@ -211,8 +185,8 @@ for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${l
     await titleLine.hover();
     await page.waitForTimeout(700);
     await expect(page.getByRole("tooltip")).toHaveCount(0);
-    await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > [data-slot=stop-dialog-actions]"));
-    await expectTextUncut(dialog.locator("h2, #stop-macro-task-body, li, button"));
+    await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > [data-slot=end-dialog-actions]"));
+    await expectTextUncut(dialog.locator("h2, #end-macro-task-body, li, button"));
     await expectNoSidewaysScroll(page);
   });
 });

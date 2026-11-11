@@ -23,7 +23,7 @@ class PauseProjectionTests(WorkflowTestCase):
                        (run_id, paused_at))
             db.execute("UPDATE tasks SET queue_reason='paused' WHERE task_id IN (?,?)",
                        (grouped['runId'], run_id))
-        pause = {'pausedAt': paused_at}
+        pause = {'pausedAt': paused_at, 'shutdownConfirmed': True}
         self.assertEqual(board.call('workflow_get', {'macroTaskId': macro_id})['paused'], pause)
         summaries = board.call('macro_task_list', {})
         groups = [item for project in summaries['groups'] for item in project['macroTasks']]

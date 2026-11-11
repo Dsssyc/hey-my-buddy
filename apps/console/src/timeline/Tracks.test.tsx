@@ -2,6 +2,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { cleanup, render as testingRender, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setLanguageChoice } from "../i18n";
 import { buddyColorKey } from "../macro-task-display";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 import type { TimelineBuddy, TimelineEvent, TimelineSpan } from "../macro-task-types";
@@ -10,7 +11,7 @@ import { fitLabel } from "./labels";
 import { Axis, Track, spanReadout } from "./Tracks";
 
 const render = (node: React.ReactNode) => testingRender(<TooltipProvider>{node}</TooltipProvider>);
-afterEach(cleanup);
+afterEach(() => { cleanup(); setLanguageChoice("browser"); });
 const at = (minutes: number) => new Date(Date.UTC(2026, 9, 17, 8, minutes)).toISOString();
 const scale = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, 800);
 const base = macroTaskTimelineFixture();
@@ -35,6 +36,21 @@ describe("measured timeline labels", () => {
 });
 
 describe("timeline drawings follow recorded facts", () => {
+  it("marks a confirmed paused turn at its end and names the interruption in both languages", () => {
+    const paused = execution({ resultStatus: "cancelled", terminationReason: "pause" });
+    for (const [language, words] of [["zh", "用户在控制台暂停，回合已中断。"], ["en", "The user paused this work in the console; the turn was interrupted."]] as const) {
+      cleanup(); setLanguageChoice(language); track([paused]);
+      expect(slot("pause-end-mark")?.getAttribute("data-span-id")).toBe("e");
+      expect(spanReadout(paused, Date.parse(at(40)))).toContain(words);
+      expect(document.querySelector('[data-key="span:e"]')?.getAttribute("aria-label")).toContain(words);
+    }
+    cleanup(); track([execution({ resultStatus: "failed", terminationReason: "pause", error: "seal failed" })]);
+    expect(slot("pause-end-mark")).toBeTruthy();
+    cleanup(); track([execution({ resultStatus: "cancelled", terminationReason: "forced-stop" })]);
+    expect(slot("pause-end-mark")).toBeNull();
+    cleanup(); track([execution({ resultStatus: "cancelled", terminationReason: "pause", uncertain: true, shutdownConfirmed: false })]);
+    expect(slot("pause-end-mark")).toBeNull();
+  });
   it("looks up settled bar colours by all four parts of each historical buddy", () => {
     const buddy = execution().buddy!;
     const identities = [buddy, { ...buddy, harness: "other-harness" }, { ...buddy, provider: "other-provider" },

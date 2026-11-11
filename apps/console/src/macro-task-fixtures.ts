@@ -43,6 +43,7 @@ export function macroTaskSummary(overrides: Partial<MacroTaskSummary> = {}): Mac
   return {
     macroTaskId: "macro-1",
     kind: "macro-task",
+    paused: null,
     title: "宏任务时间轴：设计、接口与实现",
     titleSource: "macro-task",
     project: project("p1", "hey-my-buddy", "~/projects/hey-my-buddy"),
@@ -51,7 +52,7 @@ export function macroTaskSummary(overrides: Partial<MacroTaskSummary> = {}): Mac
     lastActivitySeq: 41,
     state: "active",
     counts: { roots: 5, helpers: 1, accepted: 2, failed: 0, active: 1, host: 0, review: 1, ended: 4,
-      stoppableRoots: 1, stoppableHelpers: 0, delivered: 1, awaitingHost: 0 },
+      unfinished: 3, delivered: 1 },
     matchingRuns: 6,
     rootRunIds: ["r1", "r2", "r5", "r4", "r6"],
     ...overrides,
@@ -189,16 +190,16 @@ export function listFixture(): MacroTaskSummary[] {
     macroTaskSummary({ macroTaskId: "macro-2", title: "0.13 控制台入口候选版最后整理与文档", lastActivitySeq: 30,
       lastActivityAt: "2026-09-26T04:40:00Z", state: "review",
       counts: { roots: 6, helpers: 0, accepted: 5, failed: 0, active: 0, host: 0, review: 1, ended: 5,
-        stoppableRoots: 0, stoppableHelpers: 0, delivered: 1, awaitingHost: 0 } }),
+        unfinished: 0, delivered: 1 } }),
     macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone", title: "修复标题回退在 CRLF 输入下的显示，补充回归测试并核对两处相关调用的输出稳定性与提示文案",
       titleSource: "task", lastActivitySeq: 22, lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
       counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
-        stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 } }),
+        unfinished: 0, delivered: 0 } }),
     macroTaskSummary({ macroTaskId: "macro-4", title: "DSH 插件在 Windows 路径下的沙箱回归排查",
       project: project("p2", "dsh-harness", "~/projects/dsh-harness"),
       lastActivitySeq: 39, lastActivityAt: "2026-09-26T08:11:00Z", state: "host",
       counts: { roots: 2, helpers: 0, accepted: 0, failed: 0, active: 1, host: 1, review: 0, ended: 0,
-        stoppableRoots: 1, stoppableHelpers: 0, delivered: 0, awaitingHost: 1 } }),
+        unfinished: 2, delivered: 0 } }),
   ];
 }
 

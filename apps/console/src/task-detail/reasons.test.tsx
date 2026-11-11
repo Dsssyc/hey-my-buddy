@@ -10,11 +10,44 @@ import { RoutingPane } from "./RoutingPane";
 import { parseTask } from "./parse";
 import { buildSteps } from "./steps";
 import { at, audit, event, inquiry, row, routing, task, timeline, workflow } from "./task-detail.fixtures";
+import { open, pane, ready } from "./task-detail.testing";
 import type { Context } from "./types";
 
 afterEach(() => { cleanup(); setLanguageChoice("browser"); });
 
 describe("program reasons alongside authored notes", () => {
+  it("shows work pause, pause interruption and macro task end reasons in their corresponding panes in both languages", async () => {
+    for (const [language, words] of [["zh", {
+      route: "用户在控制台暂停了此工作。", pause: "用户在控制台暂停，回合已中断。", end: "用户在控制台结束了此工作。",
+    }], ["en", {
+      route: "The user paused this work in the console.", pause: "The user paused this work in the console; the turn was interrupted.", end: "The user ended this work in the console.",
+    }]] as const) {
+      setLanguageChoice(language);
+      const pausedRoute = timeline();
+      pausedRoute.spans.find(span => span.kind === "routing")!.routing!.reason = { code: "work-paused", params: {} };
+      pausedRoute.spans.find(span => span.kind === "routing")!.routing!.note = null;
+      open({ step: 2, timeline: pausedRoute });
+      await ready();
+      expect(pane().textContent).toContain(words.route);
+      cleanup();
+
+      open({ step: 7, replies: { task: task({ state: "cancelled", selectedAttempt: { result: { terminationReason: "pause" } } }), workflow: workflow({ state: "cancelled" }) } });
+      await ready();
+      expect(pane().textContent).toContain(words.pause);
+      cleanup();
+
+      const ended = timeline();
+      ended.events.push(event(4, "conclude", at("11:07")));
+      ended.rows = [row({ state: "concluded", status: "cancelled", conclusionStatus: "cancelled" })];
+      open({ step: 8, timeline: ended, replies: { workflow: workflow({ state: "concluded", hostConclusion: {
+        conclusionId: "c1", reason: { code: "macro-task-ended", params: {} }, executionStatus: "cancelled", note: null,
+        artifactId: null, attemptId: "att-2", actor: { role: "console", id: "console" }, createdAt: at("11:07"),
+      } }) } });
+      await ready();
+      expect(pane().textContent).toContain(words.end);
+      cleanup();
+    }
+  });
   it("distinguishes a queued checkpoint delivery from both kinds of ended inquiry in both languages", () => {
     const queued = inquiry({ state: "queued", deliveryMode: "cooperative-checkpoint", deliveredAt: null });
     const beforeQueue = { code: "inquiry-root-turn-ended", params: {} };

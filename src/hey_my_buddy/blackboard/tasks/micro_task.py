@@ -114,6 +114,22 @@ SELECT dispatch.task_id, dispatch.decision_id, route.run_id,
   LEFT JOIN workflow_routes route ON route.decision_id = dispatch.decision_id
 """
 
+# Equivalent to WorkflowCoordinator._stop_proven for existing tasks. Reuse this
+# predicate for every grouped stop proof, including the paused macro view.
+UNCONFIRMED_STOPS_SQL = """
+SELECT task.task_id FROM tasks task
+ WHERE EXISTS (SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
+                AND (attempt.execution_state <> 'finished' OR attempt.shutdown_confirmed <> 1))
+    OR (task.active_attempt_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
+          AND attempt.attempt_id = task.active_attempt_id))
+    OR (task.selected_attempt_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
+          AND attempt.attempt_id = task.selected_attempt_id))
+    OR (task.state IN ('running','cancelling','reconciliation-needed') AND NOT EXISTS (
+        SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id))
+"""
+
 #: One row per task: the full task row plus its derived micro task facts.
 #:
 #: ``roots`` looks up a child and walks ``workflow_children`` upward; its terminal
@@ -155,22 +171,7 @@ owned_executions(owner_run_id, task_id) AS (
     SELECT owned.owner_run_id, routing.task_id FROM owned_runs owned
       JOIN routing_tasks routing ON routing.run_id = owned.run_id
 ),
-unconfirmed_stops AS (
-    -- Equivalent to WorkflowCoordinator._stop_proven: all attempts must be
-    -- finished and confirmed; dangling attempt identities and never-observed
-    -- active tasks cannot serve as termination evidence.
-    SELECT task.task_id FROM tasks task
-     WHERE EXISTS (SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
-                    AND (attempt.execution_state <> 'finished' OR attempt.shutdown_confirmed <> 1))
-        OR (task.active_attempt_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
-              AND attempt.attempt_id = task.active_attempt_id))
-        OR (task.selected_attempt_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
-              AND attempt.attempt_id = task.selected_attempt_id))
-        OR (task.state IN ('running','cancelling','reconciliation-needed') AND NOT EXISTS (
-            SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id))
-)
+unconfirmed_stops AS ({UNCONFIRMED_STOPS_SQL})
 SELECT
     t.*,
     r.run_id AS micro_task_run_id,

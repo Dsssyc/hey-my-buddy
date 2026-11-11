@@ -3125,7 +3125,7 @@ class WorkflowCoordinator:
                                                "validated_buddy_revision=NULL WHERE run_id=?", (run["run_id"],))
                             connection.execute("UPDATE tasks SET adapter='unresolved' WHERE task_id=?", (run["run_id"],))
             self._pause_queued(connection)
-            response = {"macroTaskId": identifier, "paused": {"pausedAt": paused_at}, "duplicate": False}
+            response = {"macroTaskId": identifier, "pausedAt": paused_at, "duplicate": False}
             self.board._store_receipt(connection, command_id, "macro_task.pause", request, response)
             head = self.board._head_of(connection)
         self.board._notify(head)
@@ -3149,7 +3149,7 @@ class WorkflowCoordinator:
                     connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?",
                                        (reason or "awaiting-execution", self.now(), task["task_id"]))
             self.board._append_event(connection, "macro_task.resumed", payload={"macroTaskId": identifier, "actor": actor})
-            response = {"macroTaskId": identifier, "paused": None, "duplicate": False}
+            response = {"macroTaskId": identifier, "duplicate": False}
             self.board._store_receipt(connection, command_id, "macro_task.resume", request, response)
             head = self.board._head_of(connection)
         self.board._notify(head)

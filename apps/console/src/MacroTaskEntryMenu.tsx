@@ -4,22 +4,21 @@ import { useTranslation } from "react-i18next";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/hint";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
-import type { MacroTaskSummary } from "./macro-task-types";
-import { stopScope, type MacroTaskStopEntry } from "./macro-task-stop";
+import type { MacroTaskSummary, WorkAction } from "./macro-task-types";
+import { canRetryEnd, type WorkEntries } from "./macro-task-control";
 
-export function MacroTaskEntryMenu({ summary, entry, writable, active, onStop, onRetry, onDismiss, onDelete }: {
-  summary: MacroTaskSummary; entry?: MacroTaskStopEntry; writable: boolean; active: boolean;
-  onStop: (summary: MacroTaskSummary, button: HTMLButtonElement) => void;
-  onRetry: (summary: MacroTaskSummary) => void; onDismiss: (id: string) => void;
+export function MacroTaskEntryMenu({ summary, entries, writable, busy, active, onAction, onEnd, onDelete }: {
+  summary: MacroTaskSummary; entries?: WorkEntries; writable: boolean; busy: boolean; active: boolean;
+  onAction: (summary: MacroTaskSummary, action: WorkAction) => void;
+  onEnd: (summary: MacroTaskSummary, button: HTMLButtonElement) => void;
   onDelete: (summary: MacroTaskSummary, button: HTMLButtonElement) => void;
 }) {
   const { t } = useTranslation(["tasks", "shell", "macroHeader"]);
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null), openingDialog = useRef(false);
   useEffect(() => { if (!active) setOpen(false); }, [active]);
-  const stopping = entry?.phase === "stopping";
-  const scope = stopScope(summary);
-  const reason = !writable ? t("tasks:readonly") : stopping ? t("tasks:stopping") : scope.roots + scope.helpers === 0 ? t("shell:macroStop.noActive") : undefined;
+  const action = summary.paused === null ? "pause" : "resume";
+  const reason = !writable ? t("tasks:readonly") : undefined;
   return <DropdownMenu modal={false} open={open && active} onOpenChange={setOpen}>
     <DropdownMenuTrigger asChild>
       <Button ref={button} data-slot="macro-menu-button" className="size-6!" variant="ghost" size="icon-sm" aria-label={t("tasks:more")}><Ellipsis aria-hidden="true"/></Button>
@@ -27,11 +26,11 @@ export function MacroTaskEntryMenu({ summary, entry, writable, active, onStop, o
     <DropdownMenuContent data-slot="macro-entry-menu" onCloseAutoFocus={event => {
       if (openingDialog.current) { event.preventDefault(); openingDialog.current = false; }
     }}>
-      <Hint text={reason}><DropdownMenuItem data-slot="macro-stop-action" aria-label={t("shell:macroStop.title")} disabled={!!reason} onSelect={() => {
-        openingDialog.current = true; onStop(summary, button.current!);
-      }}>{t("tasks:stop")}</DropdownMenuItem></Hint>
-      {entry?.phase === "unknown" && writable && <DropdownMenuItem onSelect={() => onRetry(summary)}>{t("shell:macroStop.retry")}</DropdownMenuItem>}
-      {entry?.phase === "refused" && <DropdownMenuItem onSelect={() => onDismiss(summary.macroTaskId)}>{t("shell:macroStop.dismiss")}</DropdownMenuItem>}
+      <Hint text={reason}><DropdownMenuItem data-slot={`macro-${action}-action`} disabled={!writable || busy} aria-busy={entries?.[action]?.phase === "pending" || undefined} onSelect={() => onAction(summary, action)}>{t(`shell:macroWork.${action}`)}</DropdownMenuItem></Hint>
+      {summary.counts.unfinished > 0 && <Hint text={reason}><DropdownMenuItem data-slot="macro-end-action" disabled={!writable || busy} onSelect={() => {
+        if (canRetryEnd(entries?.end)) onAction(summary, "end");
+        else { openingDialog.current = true; onEnd(summary, button.current!); }
+      }}>{t(canRetryEnd(entries?.end) ? "shell:macroWork.retryEnd" : "shell:macroWork.end")}</DropdownMenuItem></Hint>}
       <DropdownMenuSeparator/>
       <DropdownMenuItem data-slot="macro-delete-action" className="text-fail" onSelect={() => {
         openingDialog.current = true; onDelete(summary, button.current!);

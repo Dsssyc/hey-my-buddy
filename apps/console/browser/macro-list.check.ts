@@ -11,8 +11,8 @@ const captures = fileURLToPath(new URL("../../../tmp/filter-row", import.meta.ur
 const groupCaptures = fileURLToPath(new URL("../../../tmp/macro-list-groups", import.meta.url));
 
 const words = [
-  { locale: "zh-CN", list: "宏任务列表", macro: "宏任务", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目或 ID", noMatch: "没有匹配的宏任务", empty: "暂无宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，更新排序" },
-  { locale: "en-US", list: "Macro task list", macro: "Macro tasks", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search titles, projects or IDs", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", stop: "Stop macro task", time: "Time statistics", update: "New activity; update order" },
+  { locale: "zh-CN", list: "宏任务列表", macro: "宏任务", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目或 ID", noMatch: "没有匹配的宏任务", empty: "暂无宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", end: "结束", time: "时间统计", update: "有新的活动，更新排序" },
+  { locale: "en-US", list: "Macro task list", macro: "Macro tasks", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search titles, projects or IDs", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", end: "End", time: "Time statistics", update: "New activity; update order" },
 ] as const;
 
 const countGroups = [
@@ -349,11 +349,11 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       if (width === 390 && !await list.isVisible()) await header.getByRole("button", { name: new RegExp(w.macro) }).click();
       const selected = list.locator(`[data-macro-task-id="${A}"][data-selected="true"]`);
       await selected.locator('[data-slot="macro-menu-button"]').click();
-      await expect(page.getByRole("menuitem", { name: w.stop })).toBeVisible();
+      await expect(page.getByRole("menuitem", { name: w.end })).toBeVisible();
       await photograph(page, "menu", w.locale, width, theme);
-      await page.getByRole("menuitem", { name: w.stop }).click();
+      await page.getByRole("menuitem", { name: w.end }).click();
       await expect(page.getByRole("dialog")).toBeVisible();
-      await photograph(page, "stop-confirm", w.locale, width, theme);
+      await photograph(page, "end-confirm", w.locale, width, theme);
       await page.keyboard.press("Escape");
       await expect(page.getByRole("dialog")).toBeHidden();
 
@@ -667,10 +667,10 @@ test.describe("macro list reduced motion", () => {
     const actionRow = list.locator(`[data-macro-task-id="${A}"]`);
     await actionRow.hover();
     await actionRow.locator('[data-slot="macro-menu-button"]').click();
-    const stopAction = page.getByRole("menuitem", { name: "Stop macro task" });
-    await expect(stopAction).toBeVisible();
+    const endAction = page.getByRole("menuitem", { name: "End" });
+    await expect(endAction).toBeVisible();
     expect(await page.locator('[data-slot="macro-entry-menu"]').evaluate(node => getComputedStyle(node).animationName)).toBe("none");
-    await stopAction.click();
+    await endAction.click();
     const confirmation = page.getByRole("dialog");
     await expect(confirmation).toBeVisible();
     expect(await confirmation.evaluate(node => getComputedStyle(node).animationName)).toBe("none");

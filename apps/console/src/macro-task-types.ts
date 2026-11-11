@@ -12,11 +12,11 @@ const macroTaskSummaryFields = z.looseObject({
   macroTaskId: z.string().min(1), kind: z.enum(["macro-task", "standalone"]), title: z.string().nullable(),
   titleSource: z.enum(["macro-task", "title", "task", "none"]),
   project: z.looseObject({ id: z.string(), kind: z.enum(["git", "folder"]), path: z.string().nullable(), label: z.string() }).nullable(),
+  paused: z.object({ pausedAt: dateString, shutdownConfirmed: z.boolean() }).nullable(),
   createdAt: z.string().nullable(),
   lastActivityAt: z.string().nullable(), lastActivitySeq: safeCount, state: z.enum(["host", "active", "review", "ended", "empty"]),
   counts: z.looseObject({ roots: safeCount, helpers: safeCount, accepted: safeCount, failed: safeCount,
-    active: safeCount, host: safeCount, review: safeCount, ended: safeCount, stoppableRoots: safeCount,
-    stoppableHelpers: safeCount, delivered: safeCount, awaitingHost: safeCount }),
+    active: safeCount, host: safeCount, review: safeCount, ended: safeCount, unfinished: safeCount, delivered: safeCount }),
   matchingRuns: safeCount, rootRunIds: z.array(z.string()),
 });
 const macroTaskSummarySchema = macroTaskSummaryFields.refine(summary => !Object.hasOwn(summary, "goal"));
@@ -121,6 +121,7 @@ export type TimelineSpan = z.infer<typeof timelineSpanSchema> & {
   requestId: string | null; buddy: TimelineBuddy | null;
   shutdownConfirmed: boolean | null; uncertain: boolean; clockSkew: boolean;
   generation?: number; disposition?: string; error?: string;
+  terminationReason?: string | null;
   /** Own durable attempt receipt; a model turn disposition is not the execution result. */
   resultStatus?: "ok" | "failed" | "cancelled";
   requestKind?: string; reason?: Reason | null; decisionTaskId?: string;
@@ -149,10 +150,14 @@ export const macroTaskTimelineSchema = z.object({
 // Only a subset of each row/span was checked by the boundary. Their remaining
 // projection fields retain their types without imposing new acceptance rules.
 export type MacroTaskTimeline = z.infer<typeof macroTaskTimelineSchema>;
-/** Reply of `macro_task_stop`: one result for every member of the macro task. */
-export type MacroTaskStopResult = {
-  macroTaskId: string;
-  duplicate: boolean;
-  /** Acknowledgement is not shutdown evidence; the timeline proves each stop. */
-  results: ReadonlyArray<{ runId: string; state: string; stopped: boolean }>;
+/** Action receipts acknowledge commands; only view facts describe the current pause. */
+export const workActionReplySchemas = {
+  pause: z.strictObject({ macroTaskId: z.string().min(1), pausedAt: dateString, duplicate: z.boolean() }),
+  resume: z.strictObject({ macroTaskId: z.string().min(1), duplicate: z.boolean() }),
+  end: z.strictObject({ macroTaskId: z.string().min(1), duplicate: z.boolean(), results: z.array(z.union([
+    z.strictObject({ runId: z.string().min(1), state: z.literal("concluded"), concluded: z.literal(true), reclaim: z.record(z.string(), z.unknown()) }),
+    z.strictObject({ runId: z.string().min(1), concluded: z.literal(false), error: z.looseObject({ code: z.literal("SHUTDOWN_UNCONFIRMED") }) }),
+  ])).refine(results => new Set(results.map(result => result.runId)).size === results.length) }),
 };
+export type WorkAction = keyof typeof workActionReplySchemas;
+export type MacroTaskEndResult = z.infer<typeof workActionReplySchemas.end>;

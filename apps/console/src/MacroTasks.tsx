@@ -24,8 +24,8 @@ import { TASKS_ROOT, tasksHash, tasksLocation } from "./task-detail/location";
 import type { TasksLocation } from "./task-detail/location";
 import { useMacroTaskList } from "./use-macro-task-list";
 import { useMacroTaskTimeline } from "./use-macro-task-timeline";
-import { stopScope, stopStatus, useMacroTaskStop } from "./macro-task-stop";
-import type { StopScope } from "./macro-task-stop";
+import { canRetryEnd, pauseLabel, workFeedback, useMacroTaskControl } from "./macro-task-control";
+import type { WorkAction } from "./macro-task-types";
 import type { AuthorityLatch } from "./console-session";
 
 import { displayTitle } from "./macro-task-display";
@@ -42,10 +42,9 @@ function ConnectionStrip({ error, verifiedAtMs, retry, busy }: { error: string; 
   </div>;
 }
 
-/** The macroTask stop's explicit confirmation: names the macroTask and its scope. */
-function StopDialog({ summary, scope, onConfirm, onCancel, returnFocus }: {
+/** Ending names the exact unfinished and delivered scope before dispatch. */
+function EndDialog({ summary, onConfirm, onCancel, returnFocus }: {
   summary: MacroTaskSummary;
-  scope: StopScope;
   onConfirm: () => void;
   onCancel: () => void;
   returnFocus: RefObject<HTMLButtonElement | null>;
@@ -54,20 +53,17 @@ function StopDialog({ summary, scope, onConfirm, onCancel, returnFocus }: {
   const cancelRef = useRef<HTMLButtonElement>(null);
   const title = summary.titleSource === "none" ? t("tasks:unnamed") : displayTitle(summary.titleSource, summary.title).text;
   return <Dialog open onOpenChange={open => { if (!open) onCancel(); }}>
-    <DialogContent className="text-sm" onCloseAutoFocus={event => { event.preventDefault(); returnFocus.current?.focus(); }} onOpenAutoFocus={event => { event.preventDefault(); cancelRef.current?.focus(); }} aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
-      <DialogTitle>{t("macroStop.title")}</DialogTitle>
-      <p id="stop-macro-task-name" className="wrap-anywhere text-sm font-medium">{summary.titleSource === "none" ? title : summary.title}</p>
-      <DialogDescription id="stop-macro-task-body">{t("macroStop.scope")}</DialogDescription>
-      <ul id="stop-macro-task-counts" className="grid gap-1 text-sm tabular-nums">
-        <li>{t("macroStop.scopeRoots", { count: scope.roots })}</li>
-        <li>{t("macroStop.scopeHelpers", { count: scope.helpers })}</li>
-        <li>{t("macroStop.scopeDelivered", { count: scope.delivered })}</li>
-        <li>{t("macroStop.scopeAwaitingHost", { count: scope.awaitingHost })}</li>
-        <li>{t("macroStop.scopeAccepted", { count: summary.counts.accepted })}</li>
+    <DialogContent className="text-sm" onCloseAutoFocus={event => { event.preventDefault(); returnFocus.current?.focus(); }} onOpenAutoFocus={event => { event.preventDefault(); cancelRef.current?.focus(); }} aria-describedby="end-macro-task-name end-macro-task-body end-macro-task-counts">
+      <DialogTitle>{t("macroWork.title")}</DialogTitle>
+      <p id="end-macro-task-name" className="wrap-anywhere text-sm font-medium">{summary.titleSource === "none" ? title : summary.title}</p>
+      <DialogDescription id="end-macro-task-body">{t("macroWork.scope")}</DialogDescription>
+      <ul id="end-macro-task-counts" className="grid gap-1 text-sm tabular-nums">
+        <li>{t("macroWork.scopeUnfinished", { count: summary.counts.unfinished })}</li>
+        <li>{t("macroWork.scopeDelivered", { count: summary.counts.delivered })}</li>
       </ul>
-      <div data-slot="stop-dialog-actions" className="flex justify-end gap-2">
-        <Button ref={cancelRef} variant="outline" onClick={onCancel}>{t("macroStop.cancel")}</Button>
-        <Button variant="destructive" onClick={onConfirm}>{t("macroStop.confirm")}</Button>
+      <div data-slot="end-dialog-actions" className="flex justify-end gap-2">
+        <Button ref={cancelRef} variant="outline" onClick={onCancel}>{t("macroWork.cancel")}</Button>
+        <Button variant="destructive" onClick={onConfirm}>{t("macroWork.confirm")}</Button>
       </div>
     </DialogContent>
   </Dialog>;
@@ -208,17 +204,17 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }, [listedSummary, selected]);
   const selectedSummary = listedSummary
     ?? (summarySnapshot?.macroTaskId === selected ? summarySnapshot : null);
-  // MacroTask-level stop, with its explicit
-  // confirmation and a retained command identity. Nothing here locks browsing.
+  // Receipts retain their command identity independently of current view facts.
   const reload = async () => {
     const result = await refresh();
     list.reset();
     void timeline.retry();
     return result;
   };
-  const stop = useMacroTaskStop(api, snapshot, writesAvailable, authority, reload);
-  const stopEntry = selected ? stop.entries.get(selected) : undefined;
-  const stopState = stopStatus(stopEntry, timeline.timeline);
+  const control = useMacroTaskControl(api, snapshot, writesAvailable && !connectionError && !list.error, authority, reload);
+  const selectedEntries = selected ? control.entries.get(selected) : undefined;
+  const currentSummary = selectedSummary;
+  const paused = currentSummary ? pauseLabel(currentSummary.paused) : null;
 
   const deleted = (macroTaskId: string, summary: MacroTaskSummary) => {
     if (!live.current) return;
@@ -242,10 +238,19 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const openRun = (runId: string, from: string | null = null) => go({ macroTaskId: selected, runId, step: null }, "push", from);
   const backToTimeline = () => go({ macroTaskId: selected, runId: null, step: null }, "push");
 
-  const stopControl = stopState && <Hint text={stopState.detail}><span data-slot="macro-stop-state" tabIndex={0} className={cn("shrink-0 whitespace-nowrap text-xs", stopState.phase === "refused" ? "text-fail" : stopState.phase === "stopping" || stopState.phase === "in-progress" ? "text-foreground state-breathe" : stopState.phase === "stopped" || stopState.phase === "acknowledged" ? "text-past" : "text-hand")} role="status">{stopState.label}</span></Hint>;
-  const entryActions = (summary: MacroTaskSummary) => <MacroTaskEntryMenu summary={summary} entry={stop.entries.get(summary.macroTaskId)} writable={stop.writable} active={active}
-    onStop={(row, button) => { menuButtonRef.current = button; stop.requestStop(row, stopScope(row)); }}
-    onRetry={stop.retryStop} onDismiss={stop.dismissStop}
+  const pauseControl = paused && <span data-slot="macro-pause-state" className="text-xs text-ink2" role="status">{paused}</span>;
+  const feedback = currentSummary && (["pause", "resume", "end"] as WorkAction[]).map(action => {
+    const entry = selectedEntries?.[action];
+    const label = entry && workFeedback(entry);
+    if (!entry || !label) return null;
+    const retry = entry.phase === "unknown" || action === "end" && canRetryEnd(entry);
+    return <div key={action} data-slot="macro-work-state" data-action={action} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-sm sm:px-6">
+      <span role={entry.phase === "refused" ? "alert" : "status"} className={cn("min-w-0 flex-1 wrap-anywhere", entry.phase === "refused" ? "text-fail" : "text-ink2")}>{label}</span>
+      {retry && <Button variant="outline" size="sm" disabled={!control.writable || control.busy(currentSummary.macroTaskId)} onClick={() => control.run(currentSummary, action)}>{t(action === "end" ? "shell:macroWork.retryEnd" : `shell:macroWork.${action}`)}</Button>}
+    </div>;
+  });
+  const entryActions = (summary: MacroTaskSummary) => <MacroTaskEntryMenu summary={summary} entries={control.entries.get(summary.macroTaskId)} writable={control.writable} busy={control.busy(summary.macroTaskId)} active={active}
+    onAction={control.run} onEnd={(row, button) => { menuButtonRef.current = button; control.requestEnd(row); }}
     onDelete={(row, button) => { menuButtonRef.current = button; setDeleteTarget(row); }}/>;
   const listPane = <MacroTaskList
     groups={groups} totals={totals} loading={list.loading} error={list.error}
@@ -269,7 +274,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         go({ ...(item === undefined ? location : overview), macroTaskId: selected, runId, step }, "replace", item ?? origin);
       }}
       onBack={backToTimeline} onOpenRun={next => openRun(next)} />}
-    headerActions={<>{stopControl}{selectedSummary && entryActions(selectedSummary)}</>} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
+    headerActions={<>{pauseControl}{currentSummary && entryActions(currentSummary)}</>} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
     onOpen={(runId, key) => openRun(runId, key)} onClose={backToTimeline}
     onRetry={() => void timeline.retry()}
     onBackToList={() => { setShowNarrowList(true); if (listCollapsed) onExpandList(); }} /> : null;
@@ -294,6 +299,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         {(deletionNotice.refreshFailed || list.error) && <p role="alert" className="text-fail">{t("macroHeader:deletion.refreshFailed")}</p>}
         <Button variant="ghost" size="sm" onClick={() => setDeletionNotice(null)}>{t("macroHeader:deletion.dismiss")}</Button>
       </div>}
+      {feedback}
       {disconnected && <ConnectionStrip busy={!connectionError && list.loading} error={connectionError || list.error} verifiedAtMs={lastRead} retry={() => { if (connectionError) void refresh(); else list.retry(); }}/>}
       <Collapsible open={!listCollapsed} onOpenChange={open => open ? onExpandList() : onCollapseList()} className="flex min-h-0 flex-1 flex-col">
         {narrow ? <div data-slot="macro-workspace" className="flex min-h-0 flex-1 flex-col">
@@ -312,9 +318,9 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         </Grid>}
       </Collapsible>
     </div>
-    {stop.confirming && <StopDialog summary={stop.confirming.summary} scope={stop.confirming.scope}
-      onConfirm={() => stop.confirmStop(stop.confirming!.summary)}
-      onCancel={stop.cancelConfirm} returnFocus={menuButtonRef} />}
+    {control.confirming && <EndDialog summary={control.confirming}
+      onConfirm={control.confirmEnd}
+      onCancel={control.cancelConfirm} returnFocus={menuButtonRef} />}
     {deleteTarget && <MacroTaskDeleteDialog key={deleteTarget.macroTaskId} summary={deleteTarget}
       open={active} returnFocus={menuButtonRef}
       api={api} snapshot={snapshot} authority={authority} writesAvailable={writesAvailable && !connectionError}

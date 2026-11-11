@@ -624,8 +624,9 @@ class PreviewDeletionTest(unittest.TestCase):
                         params = {"macroTaskId": group, "commandId": action + group}
                         status, envelope = self.call(server, "/api/command", operation, params)
                         self.assertEqual(status, 200, envelope)
-                        expected = {"macroTaskId": group, "duplicate": False,
-                                    "paused": {"pausedAt": preview.OBSERVED_AT} if action == "pause" else None}
+                        expected = {"macroTaskId": group, "duplicate": False}
+                        if action == "pause":
+                            expected["pausedAt"] = preview.OBSERVED_AT
                         self.assertEqual(envelope["result"], expected)
                         replay = self.call(server, "/api/command", operation, params)
                         self.assertEqual(replay, (200, {"ok": True, "result": {**expected, "duplicate": True}}))
@@ -655,6 +656,15 @@ class PreviewDeletionTest(unittest.TestCase):
                 self.assertEqual(item["error"]["code"], "SHUTDOWN_UNCONFIRMED")
                 self.assertGreater(item["error"]["unconfirmedCount"], 0)
             self.assertEqual(self.call(server, "/api/macro-tasks")[1], before)
+            for group in before["groups"]:
+                for item in group["macroTasks"]:
+                    self.assertIn("paused", item)
+                    self.assertIsNone(item["paused"])
+                    self.assertEqual(item["counts"]["unfinished"],
+                                     sum(preview.FIXTURES["runs"][run_id]["state"]
+                                         not in ("accepted", "concluded", "delivered")
+                                         for run_id in preview.FIXTURES["groups"].get(item["macroTaskId"], [])))
+                    self.assertTrue({"stoppableRoots", "stoppableHelpers", "awaitingHost"}.isdisjoint(item["counts"]))
         # Receipts belong to their one synthetic server, independently of another instance.
         with self.server() as server:
             status, envelope = self.call(server, "/api/command", "macro_task_pause",

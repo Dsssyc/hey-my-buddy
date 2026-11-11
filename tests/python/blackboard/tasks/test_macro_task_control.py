@@ -13,6 +13,7 @@ from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionSchedul
 from types import SimpleNamespace
 from console.test_console import ConsoleTestCase
 from hey_my_buddy.blackboard.tasks.macro_tasks import pending_root_count
+from support import macro_summaries
 from hey_my_buddy.buddy.roles.turn_io import input_hash
 from hey_my_buddy.errors import BoardError
 
@@ -64,11 +65,53 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         self.assertIsNotNone(self.claim(board, run_id=other['runId'])['claim'])
         restarted = self.board()
         restarted.store.reconcile_startup()
-        self.assertEqual(restarted.call('workflow_get', {'macroTaskId':target})['paused'], paused['paused'])
+        self.assertEqual(restarted.call('workflow_get', {'macroTaskId':target})['paused'],
+                         {'pausedAt': paused['pausedAt'], 'shutdownConfirmed': True})
         self.assertIsNone(self.claim(restarted, run_id=late['runId'])['claim'])
         self.control(board, 'resume', target)
         for run in (first, late):
             self.assertIsNotNone(self.claim(board, run_id=run['runId'])['claim'])
+
+    def test_pause_views_keep_equal_time_and_counts_but_distinct_stop_proof(self):
+        board = self.board(max_concurrent=4)
+        settled = self.submit(board, request_id='settled', create_macro={'title':'Settled pause','goal':'Work'})
+        running = self.submit(board, request_id='running', cwd=str(self.workdir('other-pause')),
+                              create_macro={'title':'Running pause','goal':'Work'})
+        active = self.claim(board, run_id=running['runId'])
+        instant = board.store.now()
+        with patch.object(board.store.workflow, 'now', return_value=instant):
+            first = self.control(board, 'pause', settled['macroTaskId'])
+            second = self.control(board, 'pause', running['macroTaskId'])
+        self.assertEqual(first, {'macroTaskId': settled['macroTaskId'], 'pausedAt': instant, 'duplicate': False})
+        self.assertEqual(second, {'macroTaskId': running['macroTaskId'], 'pausedAt': instant, 'duplicate': False})
+        expected = {settled['macroTaskId']: True, running['macroTaskId']: False}
+        list_rows = {row['macroTaskId']: row for row in macro_summaries(board.call('macro_task_list', {}))}
+        for target, confirmed in expected.items():
+            pause = {'pausedAt': instant, 'shutdownConfirmed': confirmed}
+            summary = list_rows[target]
+            self.assertEqual(summary['paused'], pause)
+            self.assertEqual(summary['counts']['unfinished'], 1)
+            self.assertEqual(board.call('workflow_get', {'macroTaskId':target})['paused'], pause)
+            self.assertEqual(board.call('macro_task_timeline', {'macroTaskId':target})['macroTask']['paused'], pause)
+            project = board.call('workflow_get', {'cwd':summary['project']['path']})
+            item = next(item for item in project['items'] if item.get('macroTaskId') == target)
+            self.assertEqual(item['paused'], pause)
+        self.pause_result(board, active)
+        self.assertTrue(board.call('workflow_get', {'macroTaskId':running['macroTaskId']})['paused']['shutdownConfirmed'])
+        spans = board.call('macro_task_timeline', {'macroTaskId':running['macroTaskId']})['spans']
+        self.assertEqual(next(span for span in spans if span['kind'] == 'execution')['terminationReason'], 'pause')
+        self.assertEqual(self.control(board, 'resume', settled['macroTaskId']),
+                         {'macroTaskId': settled['macroTaskId'], 'duplicate': False})
+        self.assertIsNone(board.call('workflow_get', {'macroTaskId':settled['macroTaskId']})['paused'])
+
+    def test_paused_running_task_without_attempt_has_no_stop_proof(self):
+        board = self.board()
+        run = self.submit(board, request_id='missing-attempt')
+        target = 'run:' + run['runId']
+        self.control(board, 'pause', target)
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET state='running' WHERE task_id=?", (run['runId'],))
+        self.assertEqual(board.call('macro_task_timeline', {'macroTaskId':target})['macroTask']['paused']['shutdownConfirmed'], False)
 
     def test_interruption_queues_one_console_continuation_and_native_resume_by_capability(self):
         board = self.board(max_concurrent=8)
@@ -172,6 +215,7 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         claim = self.claim(board, run_id=router_id)['claim']
         self.assertIsNotNone(claim)
         self.control(board, 'pause', run['macroTaskId'])
+        self.assertFalse(board.call('workflow_get', {'macroTaskId':run['macroTaskId']})['paused']['shutdownConfirmed'])
         with board.store.db.read() as connection:
             attempt = board.store._attempt_row(connection, claim['attempt']['attemptId'])
             self.assertEqual((attempt['stop_initiator'],attempt['stop_purpose']), ('console','pause'))
@@ -212,8 +256,14 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
             if state == 'accepted':
                 self.accept_run(board, board.call('workflow_get', {'runId':run['runId']}))
         before = {name:board.call('workflow_get', {'runId':run['runId']}) for name,run in runs.items()}
+        counts = board.call('workflow_get', {'macroTaskId':queued['macroTaskId']})['counts']
+        self.assertEqual(counts['unfinished'], 4)
+        self.assertEqual(counts['delivered'], 1)
+        for retired in ('stoppableRoots', 'stoppableHelpers', 'awaitingHost'):
+            self.assertNotIn(retired, counts)
         result = self.control(board, 'end', queued['macroTaskId'])
         self.assertTrue(all(item['concluded'] for item in result['results']), result)
+        self.assertEqual(len(result['results']), counts['unfinished'])
         for state, run in runs.items():
             view = board.call('workflow_get', {'runId':run['runId']})
             if state in ('delivered','accepted'):
@@ -377,18 +427,51 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         self.control(board, 'resume', 'run:'+run['runId'])
         self.assertIsNotNone(self.claim(board, run_id=helper)['claim'])
 
+    def test_unfinished_counts_unconcluded_failed_and_cancelled_helpers(self):
+        board = self.board(max_concurrent=4)
+        run = self.submit(board, kind='worktree')
+        self.finish_turn(board, self.claim(board), disposition='assistance')
+        view = board.call('workflow_get', {'runId':run['runId']})
+        approved = self.decide(board, view, view['activeRequest']['requestId'], autoContinue=False, helpers=[{
+            'title':name, 'task':'Assist', 'cwd':str(self.workdir('end-helper-'+name)),
+            'workspace':{'kind':'worktree','access':'write'}} for name in ('failed','cancelled','delivered')])
+        children = dict(zip(('failed','cancelled','delivered'),
+                            (child['taskId'] for child in approved['children'])))
+        for name, child in children.items():
+            self.finish_turn(board, self.claim(board, run_id=child),
+                             runner_status='ok' if name == 'delivered' else name, seal=name == 'delivered')
+        target = 'run:'+run['runId']
+        counts = board.call('macro_task_timeline', {'macroTaskId':target})['macroTask']['counts']
+        self.assertEqual(counts['unfinished'], 3)
+        self.assertEqual(counts['delivered'], 1)
+        ended = self.control(board, 'end', target)
+        self.assertEqual({item['runId'] for item in ended['results']},
+                         {run['runId'], children['failed'], children['cancelled']})
+        self.assertTrue(all(item['concluded'] for item in ended['results']), ended)
+        self.assertEqual(board.call('workflow_get', {'runId':children['delivered']})['state'], 'delivered')
+
     def test_end_preserves_delivered_owned_work_below_the_lead(self):
         board = self.board(max_concurrent=4)
         lead, claim = self.lead(board, create_macro={'title':'Lead end','goal':'Work'})
         delivered = self.owned(board, claim, 'delivered-owned')
         pending = self.owned(board, claim, 'pending-owned')
+        failed = self.owned(board, claim, 'failed-owned')
+        cancelled = self.owned(board, claim, 'cancelled-owned')
         self.finish_owned(board, delivered, worker='w2')
+        self.finish_owned(board, failed, worker='w3', runner_status='failed', seal=False)
+        self.finish_owned(board, cancelled, worker='w4', runner_status='cancelled', seal=False)
         self.finish_turn(board, {'claim':claim}, outcome={
             'disposition':'waiting','summary':'Wait for owned work','remaining':[], 'decisions':[], 'artifacts':[], 'request':None})
+        counts = board.call('workflow_get', {'macroTaskId':lead['macroTaskId']})['counts']
+        self.assertEqual(counts['unfinished'], 4)
+        self.assertEqual(counts['delivered'], 1)
         result = self.control(board, 'end', lead['macroTaskId'])
+        self.assertEqual(len(result['results']), counts['unfinished'])
         self.assertTrue(all(item['concluded'] for item in result['results']), result)
         self.assertEqual(board.call('workflow_get', {'runId':delivered['runId']})['state'], 'delivered')
         self.assertEqual(board.call('workflow_get', {'runId':pending['runId']})['state'], 'concluded')
+        self.assertEqual(board.call('workflow_get', {'runId':failed['runId']})['state'], 'concluded')
+        self.assertEqual(board.call('workflow_get', {'runId':cancelled['runId']})['state'], 'concluded')
         self.assertEqual(board.call('workflow_get', {'runId':lead['runId']})['state'], 'concluded')
 
     def test_recovery_without_receipt_keeps_pause_intent_and_queues_continuation(self):
@@ -489,7 +572,11 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
             self.assertEqual(caught.exception.code, 'UNAUTHORIZED')
         first = self.control(board, 'pause', target, 'same')
         self.assertTrue(self.control(board, 'pause', target, 'same')['duplicate'])
-        self.assertIsNotNone(first['paused'])
+        self.assertEqual(set(first), {'macroTaskId', 'pausedAt', 'duplicate'})
+        resumed = self.control(board, 'resume', target, 'resume-once')
+        self.assertEqual(resumed, {'macroTaskId': target, 'duplicate': False})
+        self.assertEqual(self.control(board, 'resume', target, 'resume-once'),
+                         {'macroTaskId': target, 'duplicate': True})
         browser = self._control_browser
         self.assertEqual(browser.command('macro_task_pause', {'macroTaskId':target,'commandId':'same','note':'changed'},
                                         csrf=browser.bootstrap()['csrfToken'])[0], 409)

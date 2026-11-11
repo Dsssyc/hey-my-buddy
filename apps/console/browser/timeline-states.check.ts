@@ -85,10 +85,8 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       const stopping = zh ? "正在停止" : "Stopping";
       expect(data.macroTask.state).toBe("host");
       expect(data.macroTask.counts.host).toBe(1);
-      await expect(page.locator("[data-slot=macro-stop-state]")).toHaveText(stopping);
       await expect(page.locator("[data-slot=macro-overview-counts]")).toContainText(zh ? "进行中" : "Running");
       const live = await page.locator('[data-slot=task-work]').evaluate(node => getComputedStyle(node).color);
-      await expect(page.locator("[data-slot=macro-stop-state]")).toHaveCSS("color", live);
       for (const id of ["preview-run-b7", "preview-run-b8"]) {
         await expect(row(page, id).getByText(stopping, { exact: true })).toHaveCSS("color", live);
         await expect(row(page, id).locator("[data-slot=state-mark]")).toHaveAttribute("data-kind", "live");
@@ -131,7 +129,6 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(page.locator("[data-slot=detail-status]")).toHaveCSS("color", live);
       await expect(page.locator("[data-slot=detail-status]")).toHaveAttribute("aria-description",
         zh ? "停止未确认 · 待核实执行 1 项" : "Stop unconfirmed · executions to verify: 1");
-      await expect(page.locator("[data-slot=macro-stop-state]")).toHaveText(stopping);
       const hostStop = zh ? "由 Host 停止" : "Stopped by Host";
       await page.locator("[data-slot=detail-strip]").getByRole("button", { name: new RegExp(hostStop) }).click();
       await expect(page.locator("[data-slot=detail-pane]").getByRole("heading", { level: 3, name: hostStop, exact: true })).toBeVisible();

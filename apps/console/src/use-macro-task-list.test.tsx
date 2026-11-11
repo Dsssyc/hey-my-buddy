@@ -9,10 +9,10 @@ import { useMacroTaskList } from "./use-macro-task-list";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 
 const summary = (macroTaskId: string, lastActivitySeq: number, overrides: Partial<MacroTaskSummary> = {}): MacroTaskSummary => ({
-  macroTaskId, kind: "macro-task", title: macroTaskId, titleSource: "macro-task", summary: null,
+  paused: null,  macroTaskId, kind: "macro-task", title: macroTaskId, titleSource: "macro-task", summary: null,
   project: { kind: "git" as const, id: "p1", label: "项目一", path: "/p1" }, createdAt: "2026-09-26T01:00:00Z", lastActivityAt: "2026-09-26T01:00:00Z", lastActivitySeq,
   state: "active", counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 1, host: 0, review: 0, ended: 0,
-    stoppableRoots: 1, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 },
+    unfinished: 1, delivered: 0 },
   matchingRuns: 1, rootRunIds: [macroTaskId], ...overrides,
 });
 const project = (id: string) => ({ id, kind: "git" as const, label: id, path: `/${id}` });

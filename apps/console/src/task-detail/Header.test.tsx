@@ -74,6 +74,7 @@ for (const language of ["zh", "en"] as const) describe(`micro task state in ${la
     };
     expect(reason("cwd-overlap")).toBe(expected.directory);
     expect(reason("model-capacity")).toBe(`${expected.model} · claude / anthropic / claude-opus-5-5`);
+    expect(reason("paused")).toBe(language === "zh" ? "工作已暂停，等待用户在控制台继续。" : "Work is paused, waiting for the user to resume it in the console.");
     expect(reason("future-blocker")).toBe(expected.unknown);
     expect(reason(null)).toBe(expected.unknown);
   });

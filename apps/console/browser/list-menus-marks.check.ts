@@ -26,11 +26,8 @@ for (const [locale, theme] of [["zh-CN", "dark"], ["zh-CN", "light"], ["en-US", 
       await mkdir(shots, { recursive: true });
     });
 
-    test("reserves the entry button, swaps the project count, and keeps stop results read-only", async ({ page }) => {
+    test("reserves the entry button, swaps the project count, and opens end confirmation", async ({ page }) => {
       const zh = locale === "zh-CN", suffix = `${zh ? "zh" : "en"}-${theme}-1440.png`;
-      await page.route("**/api/command", route => route.request().postDataJSON().operation === "macro_task_stop"
-        ? route.fulfill({ json: { ok: false, error: { code: "FORBIDDEN", message: "Synthetic stop refusal" } } })
-        : route.fallback());
       await open(page, `#tasks/${A}`);
       const selected = entry(page, A), selectedButton = selected.locator("[data-slot=macro-menu-button]");
       await expect(selected).toHaveAttribute("data-selected", "true");
@@ -77,24 +74,16 @@ for (const [locale, theme] of [["zh-CN", "dark"], ["zh-CN", "light"], ["en-US", 
       await selected.hover(); await selectedButton.click();
       const menu = page.locator("[data-slot=macro-entry-menu]");
       await aligned(page, selectedButton, menu);
-      await expect(menu.getByRole("menuitem")).toHaveCount(2);
+      await expect(menu.getByRole("menuitem")).toHaveCount(3);
       await page.screenshot({ path: `${shots}/entry-menu-${suffix}` });
       const header = page.locator("[data-slot=macro-detail]");
       await expect(header.locator("[data-slot=macro-menu-button]")).toHaveCount(1);
-      await expect(header.locator("[data-slot=macro-stop-action], [data-slot=macro-delete-action]")).toHaveCount(0);
-      await menu.getByRole("menuitem", { name: zh ? "停止宏任务" : "Stop macro task", exact: true }).click();
-      const dialog = page.getByRole("dialog", { name: zh ? "停止宏任务" : "Stop macro task", exact: true });
-      await dialog.getByRole("button", { name: zh ? "确认停止宏任务" : "Confirm stop", exact: true }).click();
-      const status = page.locator("[data-slot=macro-stop-state]");
-      await expect(status).toHaveText(zh ? "停止请求被拒绝" : "Stop request was refused");
-      await expect(status.locator("button")).toHaveCount(0);
-      await expect(header.getByRole("button", { name: zh ? "关闭" : "Dismiss", exact: true })).toHaveCount(0);
-      await page.mouse.move(1400, 900); await settle(page);
-      await page.screenshot({ path: `${shots}/stop-state-${suffix}` });
-      await selectedButton.click();
-      await expect(menu.getByRole("menuitem", { name: zh ? "关闭" : "Dismiss", exact: true })).toBeVisible();
-      await menu.getByRole("menuitem", { name: zh ? "关闭" : "Dismiss", exact: true }).click();
-      await expect(status).toHaveCount(0);
+      await expect(header.locator("[data-slot=macro-pause-action], [data-slot=macro-end-action], [data-slot=macro-delete-action]")).toHaveCount(0);
+      await menu.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task", exact: true });
+      await expect(dialog).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
     });
 
     test("distinguishes both orange diamonds in counts, rows, tracks, legend and micro task detail", async ({ page }) => {

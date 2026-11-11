@@ -60,6 +60,8 @@ function spanReadoutParts(span: TimelineSpan, nowMs: number, row?: TimelineRow):
     start !== null && end !== null && end >= start ? formatDuration(end - start) : null,
     span.buddy ? { buddy: span.buddy, name: [span.buddy.harness, span.buddy.provider, span.buddy.model, span.buddy.effort].map(value => value ?? i18n.t("tasks:unknown")).join(" / ") } : buddyLabel(null),
     outcome === "unknown" ? i18n.t("tasks:drawing.stopUnconfirmed") : outcomeLabel(span, outcome),
+    span.kind === "execution" && span.terminationReason === "pause"
+      ? i18n.t("taskDetail:termination.pause") : null,
     span.expectedSeconds === null ? null : i18n.t("tasks:drawing.expected", { duration: formatDuration(span.expectedSeconds * 1000) }),
     reminders?.possiblyStuck ? i18n.t("tasks:drawing.silent", { duration: formatDuration(nowMs - instant(reminders.lastNativeEventAt ?? span.startAt)!) }) : null,
     ...(span.inquiries ?? []).map(inquiry => i18n.t("tasks:drawing.inquiryReadout", { at: clockTime(inquiry.createdAt), state: i18n.t(`taskDetail:inquiry.${inquiry.state}`) })),
@@ -355,6 +357,9 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, onOpen
 
       {cross && <IsolatedStatusMark slot="execution-failed" d={`M${cross.left} ${middle - 3}l6 6m0-6l-6 6`} paper={paper} stroke="stroke-fail" width={1.8}/>}
       {outcome === "unknown" && <IsolatedStatusMark slot="unconfirmed-end" d={`M${end - 4} ${middle - 11}l4 6-4 5 4 5-4 6`} paper={paper} stroke="stroke-hand-mark"/>}
+      {span.kind === "execution" && span.terminationReason === "pause" && span.shutdownConfirmed === true && outcome !== "unknown" && <g pointerEvents="none" data-slot="pause-end-mark" data-span-id={span.spanId} className="stroke-ink3" strokeWidth={1.8}>
+        <path d={`M${end - 5} ${middle - 5}v10M${end - 1} ${middle - 5}v10`}/>
+      </g>}
       <rect aria-hidden="true" data-slot="fragment-focus" x={Math.max(-6, start - 5)} y={middle - 17} width={Math.max(12, end - start + 10)} height={34} fill="none" strokeWidth={2} className={cn("pointer-events-none stroke-ink opacity-0", !isHighlighted(`span:${span.spanId}`) && "group-focus/fragment:opacity-100")}/>
     </g>;
     })}

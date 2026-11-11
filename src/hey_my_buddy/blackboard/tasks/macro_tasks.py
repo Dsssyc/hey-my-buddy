@@ -255,7 +255,7 @@ def project(connection, macro_task_id: str) -> dict:
 
 
 def paused(connection, group_id: str) -> dict | None:
-    """The current pause of a macro task or standalone micro task tree."""
+    """The current pause and stop proof of a macro or standalone tree."""
     if group_id.startswith("run:"):
         row = connection.execute(
             "SELECT paused_at FROM work_pauses WHERE run_id=?", (group_id[4:],)
@@ -264,7 +264,15 @@ def paused(connection, group_id: str) -> dict | None:
         row = connection.execute(
             "SELECT paused_at FROM work_pauses WHERE macro_task_id=?", (group_id,)
         ).fetchone()
-    return {"pausedAt": row["paused_at"]} if row is not None else None
+    if row is None:
+        return None
+    from .work_pauses import TASK_UNITS_SQL
+    pending = connection.execute(
+        f"SELECT 1 FROM ({TASK_UNITS_SQL}) unit"
+        f" JOIN ({micro_task.UNCONFIRMED_STOPS_SQL}) unconfirmed ON unconfirmed.task_id=unit.task_id"
+        " WHERE unit.group_id=? LIMIT 1", (group_id,),
+    ).fetchone()
+    return {"pausedAt": row["paused_at"], "shutdownConfirmed": pending is None}
 
 
 def _macro_task_get(connection, identifier: str, *, limit: int = 100, before: str | None = None,
@@ -297,7 +305,7 @@ def _macro_task_get(connection, identifier: str, *, limit: int = 100, before: st
     deleting = connection.execute("SELECT 1 FROM macro_task_deletions"
                                   " WHERE target_kind='macro-task' AND target_id=?", (identifier,)).fetchone()
     result = {"macroTaskId": identifier, "title": row["title"],
-            "paused": paused(connection, identifier),
+            "paused": summary["paused"],
             "goalRevision": goal_revision,
             "project": project(connection, identifier), "createdAt": row["created_at"],
             "lastActivityAt": row["activity_at"], "state": summary["state"],
@@ -680,6 +688,11 @@ SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
             lambda item=item: _summary(connection, item, summary_inputs[item]),
             reusable=reusable[item],
         ) for item in page}
+        # A pause can change without member activity. Keep this live scalar in
+        # the same read snapshot even when the rest of a summary is cached.
+        for item in page:
+            if cached[item] is not None:
+                summaries[item]["paused"] = paused(connection, item)
         issued_head = before[2] if before is not None else head
         result_groups = []
         for project_id, project_row in projects.items():
@@ -760,14 +773,10 @@ SELECT h.*, ownership.group_id, conclusion.execution_status AS conclusion_status
 def _summary(connection, group_id: str, inputs: dict) -> dict:
     members, matching, failed_conclusions = inputs["members"], inputs["matching"], inputs["failed"]
     counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0,
-              "failed": 0,
-              "stoppableRoots": 0, "stoppableHelpers": 0, "delivered": 0, "awaitingHost": 0}
-    from .workflow import IN_PROGRESS_STATES
+              "failed": 0, "unfinished": 0, "delivered": 0}
     for row in members:
-        if row["run_state"] in IN_PROGRESS_STATES:
-            counts["stoppableHelpers" if row["child_parent_run_id"] is not None else "stoppableRoots"] += 1
+        counts["unfinished"] += int(row["run_state"] not in ("accepted", "concluded", "delivered"))
         counts["delivered"] += int(row["run_state"] == "delivered")
-        counts["awaitingHost"] += int(row["run_state"] == "awaiting-host")
         counts[_state(row)] += 1
         counts["accepted"] += int(row["child_parent_run_id"] is None and row["run_state"] == "accepted")
         counts["failed"] += int(row["child_parent_run_id"] is None and row["task_id"] in failed_conclusions)
@@ -1065,6 +1074,7 @@ def _run_spans(store, connection, row) -> list[dict]:
             inquiries=inquiries_by_attempt.get(attempt["attempt_id"], []),
             generation=attempt["generation"], disposition=attempt["disposition"],
             resultStatus=attempt["result_status"],
+            terminationReason=receipt.get("terminationReason"),
             tokenUsage=(receipt.get("result") or {}).get("tokenUsage"),
             error=(str(error)[:ERROR_LIMIT] if error else None),
         ))

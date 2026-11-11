@@ -2268,16 +2268,14 @@ def timeline_row(entry: dict, depth: int) -> dict:
 def macro_task_summary(group: str, matching: set[str]) -> dict:
     entries = [FIXTURES["runs"][run_id] for run_id in FIXTURES["groups"][group]]
     counts = {"roots": 0, "helpers": 0, "accepted": 0, "failed": 0, "active": 0, "host": 0, "review": 0, "ended": 0,
-              "stoppableRoots": 0, "stoppableHelpers": 0, "delivered": 0, "awaitingHost": 0}
+              "unfinished": 0, "delivered": 0}
     for entry in entries:
         counts[entry["category"]] += 1
         counts["helpers" if entry["parentRunId"] else "roots"] += 1
-        if entry["state"] in ("executing", "waiting-helpers", "waiting-owned"):
-            counts["stoppableHelpers" if entry["kind"] == "helper" else "stoppableRoots"] += 1
+        if entry["state"] not in ("accepted", "concluded", "delivered"):
+            counts["unfinished"] += 1
         if entry["state"] == "delivered":
             counts["delivered"] += 1
-        elif entry["state"] == "awaiting-host":
-            counts["awaitingHost"] += 1
         # 0.15.1 Host correction: accepted counts accepted ROOTS only; helpers
         # count through their root's acceptance, and the denominator is roots.
         if entry["parentRunId"] is None and entry["acceptedAt"] is not None:
@@ -2300,6 +2298,7 @@ def macro_task_summary(group: str, matching: set[str]) -> dict:
         "project": PROJECTS[project],
         "createdAt": created, "lastActivityAt": at, "lastActivitySeq": seq,
         "state": "empty" if not entries and kind == "macro-task" else state,
+        "paused": None,
         "counts": counts, "matchingRuns": len(matching), "rootRunIds": roots,
     }
 
@@ -2325,6 +2324,8 @@ def span_views(entry: dict) -> list[dict]:
             "inquiries": [{key: message[key] for key in ("inquiryId", "createdAt", "author", "state")}
                           for message in entry["messages"] if message["attemptId"] == attempt["attemptId"]]
             if attempt is not None else None,
+            **({"terminationReason": attempt["result"]["terminationReason"]}
+               if execution and attempt is not None and attempt["result"] is not None else {}),
             **({"tokenUsage": usage_attempt["usage"]} if usage_attempt is not None else {}),
         })
     return views
@@ -2427,8 +2428,7 @@ def preview_list_rows(applied: dict, state: PreviewState | None) -> list[dict]:
                "lastActivitySeq": index + 1, "state": "ended", "matchingRuns": 1,
                "rootRunIds": [], "counts": {**template["counts"], "roots": 1, "helpers": 0,
                                             "accepted": 1, "failed": 0, "active": 0, "host": 0,
-                                            "review": 0, "ended": 1, "stoppableRoots": 0,
-                                            "stoppableHelpers": 0, "delivered": 0, "awaitingHost": 0}}
+                                            "review": 0, "ended": 1, "unfinished": 0, "delivered": 0}}
         if applied.get("query") and applied["query"].casefold() not in (row["title"] + " " + row["project"]["path"]).casefold():
             continue
         if applied.get("filter") in ("active", "host", "review"):
@@ -3108,9 +3108,9 @@ def work_control_reply(operation: str, params: dict, state: PreviewState | None)
     if group not in FIXTURES["groups"] or group in state.deleted:
         raise PreviewError("NOT_FOUND", "Unknown macroTaskId")
     if operation == "macro_task_pause":
-        reply = {"macroTaskId": group, "paused": {"pausedAt": OBSERVED_AT}, "duplicate": False}
+        reply = {"macroTaskId": group, "pausedAt": OBSERVED_AT, "duplicate": False}
     elif operation == "macro_task_resume":
-        reply = {"macroTaskId": group, "paused": None, "duplicate": False}
+        reply = {"macroTaskId": group, "duplicate": False}
     else:
         results = []
         for run_id in FIXTURES["groups"][group]:
@@ -3527,9 +3527,9 @@ REQUIRED_KEYS = {
     "MacroTaskGroup": {"id", "project", "total", "macroTasks", "nextCursor"},
     "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "project",
                          "createdAt", "lastActivityAt", "lastActivitySeq",
-                         "state", "counts", "matchingRuns", "rootRunIds"},
+                         "state", "paused", "counts", "matchingRuns", "rootRunIds"},
     "MacroTaskCounts": {"roots", "helpers", "accepted", "failed", "active", "host", "review", "ended",
-                        "stoppableRoots", "stoppableHelpers", "delivered", "awaitingHost"},
+                        "unfinished", "delivered"},
     "TimelineSpan": {"spanId", "runId", "kind", "startAt", "endAt", "state", "attemptId", "turnId",
                      "turnIndex", "requestId", "buddy", "shutdownConfirmed", "uncertain",
                      "clockSkew", "expectedSeconds", "reminders", "inquiries"},
@@ -3795,6 +3795,10 @@ def validate_fixtures() -> list[str]:
             problems.append(f"{item['macroTaskId']}: accepted exceeds roots")
         if item["macroTaskId"] not in FIXTURES["groups"]:
             continue
+        expected_unfinished = sum(FIXTURES["runs"][run_id]["state"] not in ("accepted", "concluded", "delivered")
+                                  for run_id in FIXTURES["groups"][item["macroTaskId"]])
+        if item["counts"]["unfinished"] != expected_unfinished:
+            problems.append(f"{item['macroTaskId']}: unfinished does not match end scope")
         expected_failed = sum(1 for run_id in FIXTURES["groups"][item["macroTaskId"]]
                               if FIXTURES["runs"][run_id]["parentRunId"] is None
                               and (FIXTURES["runs"][run_id]["hostConclusion"] or {}).get("executionStatus") == "failed")
@@ -4465,8 +4469,9 @@ def smoke(assets: Path, scenario: str) -> int:
             params = {"macroTaskId": MACRO_A, "commandId": "synthetic-" + action}
             status, envelope, _headers = call("POST", "/api/command", payload={"operation": operation, "params": params})
             reply = envelope.get("result", {})
+            expected_keys = {"macroTaskId", "duplicate"} | ({"results"} if action == "end" else {"pausedAt"} if action == "pause" else set())
             check(operation + " returns a synthetic control reply", status == 200
-                  and set(reply) == {"macroTaskId", "duplicate", "results" if action == "end" else "paused"}
+                  and set(reply) == expected_keys
                   and reply["macroTaskId"] == MACRO_A and reply["duplicate"] is False, f"status={status}")
             status, envelope, _headers = call("POST", "/api/command", payload={"operation": operation, "params": params})
             check(operation + " replays its receipt", status == 200

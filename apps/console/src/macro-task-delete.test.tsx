@@ -489,37 +489,5 @@ describe("macro task deletion workspace integration", () => {
     expect(window.location.hash).toBe("#tasks/macro-2");
   });
 
-  it("keeps a micro task cancelled after console stop and allows deleting its whole macro task without a Host conclusion", async () => {
-    const f = workspaceHarness();
-    const row = { ...f.timeline.rows.find(row => row.runId === "r4")!, rootLeadRunId: null };
-    const summary = macroTaskSummary({ counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 1, host: 0, review: 0, ended: 0,
-      stoppableRoots: 1, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 }, rootRunIds: [row.runId] });
-    Object.assign(f.timeline, { macroTask: macroTaskDetail(summary), rows: [row], spans: [], events: [], totals: { rows: 1, allRows: 1, events: 0, spans: 0 } } satisfies Partial<MacroTaskTimeline>);
-    f.setRows([summary]);
-    f.command.mockImplementation(async (operation: string): Promise<unknown> => {
-      if (operation === "macro_task_stop") {
-        const stopped = { ...summary, state: "ended" as const, counts: { ...summary.counts, active: 0, ended: 1, stoppableRoots: 0 } };
-        f.timeline.rows = [{ ...row, state: "cancelled", status: "cancelled", shutdownConfirmed: true }];
-        f.timeline.macroTask = macroTaskDetail(stopped);
-        f.setRows([stopped]);
-        return { macroTaskId: "macro-1", duplicate: false, results: [{ runId: row.runId, state: "cancelled", stopped: true }] };
-      }
-      if (operation === "macro_task_deletion_preview") return preview({ microTaskCount: 1, unconcludedFailureCount: 1 });
-      if (operation === "macro_task_delete") { f.setRows([]); return receipt({ microTaskCount: 1 }); }
-      throw new Error(`Unexpected fixture operation: ${operation}`);
-    });
-    await waitFor(() => expect(document.querySelector('[data-macro-task-id="macro-1"]')).toBeTruthy());
-    const macroEntry = document.querySelector('[data-macro-task-id="macro-1"]') as HTMLElement;
-    within(macroEntry).getByRole("button", { name: "更多" }).focus();
-    await f.user.keyboard("{Enter}");
-    await f.user.click(screen.getByRole("menuitem", { name: "停止宏任务" }));
-    const stop = await screen.findByRole("dialog", { name: "停止宏任务" });
-    await f.user.click(within(stop).getByRole("button", { name: "确认停止宏任务" }));
-    await waitFor(() => expect(document.querySelector("[data-slot=timeline-row-name]")?.getAttribute("aria-label")).toContain("已取消"));
-    const dialog = await openDelete(f);
-    await within(dialog).findByText("1 个，其中 1 个已取消或失败且无结论");
-    await confirm();
-    await waitFor(() => expect(window.location.hash).toBe("#tasks"));
-    expect(f.command).toHaveBeenLastCalledWith("macro_task_delete", { macroTaskId: "macro-1", microTaskCount: 1, confirm: true }, "synthetic-csrf");
-  });
+
 });

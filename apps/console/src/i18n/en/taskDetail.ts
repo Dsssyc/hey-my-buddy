@@ -29,6 +29,7 @@ export default {
     "router-dispatch-unfinished": "Waiting for the previous Router dispatch to finish",
     "decision-dispatch-superseded": "The routing dispatch was superseded",
     "decision-dispatch-advanced": "The routing dispatch advanced",
+    "paused": "Work is paused, waiting for the user to resume it in the console.",
   },
   back: "Close detail",
   label: "Micro task detail",
@@ -96,6 +97,7 @@ export default {
   },
   ending: { cause: "End cause: {{cause}}", unrecorded: "Cause not recorded" },
   termination: {
+    pause: "The user paused this work in the console; the turn was interrupted.",
     "wrap-up": "Host wrap-up finished", "grace-expired": "Stopped after the wrap-up grace period expired", "forced-stop": "Forced stop",
     "service-stop": "Service stopped", "unknown-stop": "Stopped (initiator unknown)", deadline: "The Router's model did not start responding in time", "harness-error": "Harness error",
     "transport-error": "Transport failure", "workspace-error": "Workspace error", completed: "Completed normally", wrapUpLead: "Lead wrap-up finished",

@@ -2,7 +2,6 @@ import { expect } from "@playwright/test";
 import { contrastOf, open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const stoppingMacro = "macro-22222222-2222-4222-8222-222222222222";
 
 test.describe("shared readability", () => {
   test.use({ locale: "zh-CN", viewport: { width: 1280, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" });
@@ -83,18 +82,4 @@ test.describe("shared readability", () => {
     expect(await model.evaluate(node => getComputedStyle(node).boxShadow)).not.toBe("none");
   });
 
-  test("stop facts appear on pointer and keyboard focus", async ({ page }) => {
-    await open(page, `#tasks/${stoppingMacro}`);
-    const status = page.locator("[data-slot=macro-stop-state]");
-    await expect(status).toHaveText("正在停止");
-    await expect(status).toHaveAttribute("aria-description", /停止未确认/);
-    const detail = await status.getAttribute("aria-description");
-    await status.hover();
-    await expect(page.getByRole("tooltip")).toHaveText(detail!);
-    await page.mouse.move(0, 0);
-    await expect(page.getByRole("tooltip")).toHaveCount(0);
-    await page.keyboard.press("Tab");
-    await status.focus();
-    await expect(page.getByRole("tooltip")).toHaveText(detail!);
-  });
 });

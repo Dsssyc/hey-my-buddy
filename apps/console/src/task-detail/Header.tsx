@@ -28,6 +28,7 @@ const queueReasons = [
   "harness-probe-unknown", "workflow-routing-fenced", "workflow-accepted",
   "workflow-concluded", "workflow-cancelled", "workflow-failed", "router-retry-in-progress",
   "router-dispatch-unfinished", "decision-dispatch-superseded", "decision-dispatch-advanced",
+  "paused",
 ] as const;
 type QueueReasonKey = (typeof queueReasons)[number] | "workflow-ancestor" | "unknown";
 

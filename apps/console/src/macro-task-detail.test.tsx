@@ -6,10 +6,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
-import { ApiError } from "./api";
 import type { Snapshot, Task } from "./types";
-import { listSummary, macroTaskDetail, macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
-import type { MacroTaskStopResult, MacroTaskTimeline } from "./macro-task-types";
+import { listSummary, macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
 
 function render(ui: ReactElement, options?: RenderOptions) {
   return baseRender(ui, { wrapper: TooltipProvider, ...options });
@@ -54,33 +52,20 @@ function deferred(): Pending {
   return { promise, resolve };
 }
 
-type StopOptions = { writesAvailable?: boolean; stopError?: Error; secondMacroTask?: boolean; secondStoppable?: boolean; stoppedTimeline?: MacroTaskTimeline; title?: string };
+type HarnessOptions = { writesAvailable?: boolean; secondMacroTask?: boolean; title?: string };
 
-function harness(options: StopOptions = {}) {
+function harness(options: HarnessOptions = {}) {
   const snapshot = snapshotFixture();
   const timeline = macroTaskTimelineFixture();
   if (options.title!) timeline.macroTask.title = options.title!;
-  const listed = options.secondStoppable
-    ? [listSummary(timeline.macroTask), macroTaskSummary({ macroTaskId: "macro-2", title: "另一个进行中的目标",
-        lastActivitySeq: 30, lastActivityAt: "2026-09-26T07:40:00Z", state: "active",
-        counts: { roots: 2, helpers: 0, accepted: 0, failed: 0, active: 1, host: 0, review: 1, ended: 0,
-          stoppableRoots: 1, stoppableHelpers: 0, delivered: 1, awaitingHost: 0 } })]
-    : options.secondMacroTask
+  const listed = options.secondMacroTask
     ? [listSummary(timeline.macroTask), macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone",
         title: "修复标题回退在 CRLF 输入下的显示", titleSource: "task", lastActivitySeq: 20,
         lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
         counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
-          stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 } })]
+          unfinished: 0, delivered: 0 } })]
     : [listSummary(timeline.macroTask)];
   const tasks = new Map(["r1", "r2", "r3", "r4", "r7"].map(id => [id, taskFixture(id)]));
-  let stopAttempts = 0;
-  const stopReply: MacroTaskStopResult = {
-    macroTaskId: "macro-1", duplicate: false,
-    results: [{ runId: "r1", state: "accepted", stopped: false },
-      { runId: "r2", state: "accepted", stopped: false },
-      { runId: "r4", state: "cancelled", stopped: true },
-      { runId: "r6", state: "delivered", stopped: false }],
-  };
   const command = vi.fn(async (operation: string, params: Record<string, unknown>) => {
     if (operation === "workflow_get") {
       const task = tasks.get(String(params.runId));
@@ -91,14 +76,9 @@ function harness(options: StopOptions = {}) {
         : workflowFixture(task);
     }
     if (operation === "message_list") return { messages: [], cursor: 41 };
-    if (operation === "macro_task_stop") {
-      stopAttempts += 1;
-      if (options.stopError) throw options.stopError;
-      return structuredClone(stopReply);
-    }
     throw new Error(`Unexpected command: ${operation}`);
   });
-  const timelineReader = vi.fn(async () => ({ timeline: options.stoppedTimeline ?? timeline, verifiedAtMs: null }));
+  const timelineReader = vi.fn(async () => ({ timeline: timeline, verifiedAtMs: null }));
   const api = {
     snapshot: vi.fn(async () => structuredClone(snapshot)),
     command,
@@ -111,7 +91,7 @@ function harness(options: StopOptions = {}) {
   const user = userEvent.setup();
   const view = render(<MacroTasks snapshot={snapshot} api={api} refresh={refresh}
     active writesAvailable={options.writesAvailable ?? true} />);
-  return { ...view, api, refresh, tasks, timeline, user, listed, stopAttempts: () => stopAttempts };
+  return { ...view, api, refresh, tasks, timeline, user, listed };
 }
 
 async function openMacroMenu(f: ReturnType<typeof harness>) {
@@ -123,26 +103,10 @@ async function openMacroMenu(f: ReturnType<typeof harness>) {
   await f.user.keyboard("{Enter}");
 }
 
-async function openStopMenu(f: ReturnType<typeof harness>) {
+async function openPauseMenu(f: ReturnType<typeof harness>) {
   await openMacroMenu(f);
-  return screen.findByRole("menuitem", { name: "停止宏任务" });
+  return screen.findByRole("menuitem", { name: "暂停" });
 }
-
-async function requestStop(f: ReturnType<typeof harness>) {
-  await f.user.click(await openStopMenu(f));
-}
-
-async function retryStop(f: ReturnType<typeof harness>) {
-  await openMacroMenu(f);
-  await f.user.click(await screen.findByRole("menuitem", { name: "重试停止" }));
-}
-
-const stopCalls = (f: ReturnType<typeof harness>) =>
-  (f.api.command as unknown as ReturnType<typeof vi.fn>).mock.calls
-    .filter(([operation]) => operation === "macro_task_stop") as [string, Record<string, unknown>][];
-
-const stopReplyFor = (macroTaskId: string) => ({ macroTaskId, duplicate: false,
-  results: [{ runId: "r4", state: "cancelled", stopped: true }] });
 
 const openMacroTask = async (f: ReturnType<typeof harness>) => {
   await f.user.click(await screen.findByRole("button", { name: new RegExp(f.listed[0]!.title!.slice(0, 10)) }));
@@ -315,16 +279,16 @@ describe("the detail of a micro task in its macro task", () => {
     expect(document.querySelector("[data-slot=timeline-tracks]")).toBeTruthy();
   });
 
-  it("keeps every read working in a read-only session with the stop action disabled, and asks the board for reads alone", async () => {
+  it("keeps every read working in a read-only session with pause disabled, and asks the board for reads alone", async () => {
     stubViewport(true);
     const f = harness({ writesAvailable: false });
     await openMacroTask(f);
-    // The macro-task-level stop is the only write; a read-only session cannot use it.
-    const stop = await openStopMenu(f);
-    expect(stop.getAttribute("aria-disabled")).toBe("true");
-    expect(stop.getAttribute("aria-description")).toBe("当前会话只读");
-    stop.focus();
-    expect(document.activeElement).toBe(stop);
+    // A read-only session cannot use the macro-task actions.
+    const pause = await openPauseMenu(f);
+    expect(pause.getAttribute("aria-disabled")).toBe("true");
+    expect(pause.getAttribute("aria-description")).toBe("当前会话只读");
+    pause.focus();
+    expect(document.activeElement).toBe(pause);
     await openSpan(f, "s-r1-q");
     await waitFor(() => expect(f.api.command).toHaveBeenCalled());
     const operations = new Set((f.api.command as ReturnType<typeof vi.fn>).mock.calls.map(([operation]) => operation));
@@ -361,316 +325,83 @@ describe("the detail of a micro task in its macro task", () => {
 
 });
 
-describe("macro-task-level stop (0.15.1 U4)", () => {
-  it("disables stop for delivered and awaiting-Host work without active descendants", async () => {
-    stubViewport(true);
-    const f = harness();
-    Object.assign(f.timeline.macroTask.counts, { stoppableRoots: 0, stoppableHelpers: 0,
-      delivered: 2, awaitingHost: 1 });
-    await openMacroTask(f);
-    const stop = await openStopMenu(f);
-    expect(stop.getAttribute("aria-disabled")).toBe("true");
-    expect(stop.getAttribute("aria-description")).toContain("没有进行中的");
-    stop.focus();
-    expect(document.activeElement).toBe(stop);
+describe("macro task pause, resume and end", () => {
+  const menu = async (f: ReturnType<typeof harness>) => {
+    const header = document.querySelector('[data-slot="macro-overview-header"]')!;
+    const button = within(header as HTMLElement).getByRole("button", { name: "更多" });
+    button.focus(); await f.user.keyboard("{Enter}");
+  };
+
+  it("pauses and resumes immediately while an action acknowledgement alone never supplies pause state", async () => {
+    const f = harness(); await openMacroTask(f);
+    const command = f.api.command as ReturnType<typeof vi.fn>;
+    command.mockResolvedValue({ macroTaskId: "macro-1", pausedAt: "2026-11-11T09:00:00Z", duplicate: false });
+    await menu(f); await f.user.click(screen.getByRole("menuitem", { name: "暂停" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(command).toHaveBeenCalledWith("macro_task_pause", { macroTaskId: "macro-1", commandId: expect.any(String) }, "csrf"));
+    expect(document.querySelector('[data-slot="macro-pause-state"]')).toBeNull();
+    cleanup();
+    const g = harness();
+    g.timeline.macroTask.paused = { pausedAt: "2026-11-11T09:00:00Z", shutdownConfirmed: true };
+    g.listed[0]!.paused = g.timeline.macroTask.paused;
+    await openMacroTask(g);
+    const resume = g.api.command as ReturnType<typeof vi.fn>;
+    resume.mockResolvedValue({ macroTaskId: "macro-1", duplicate: false });
+    await menu(g); await g.user.click(screen.getByRole("menuitem", { name: "继续" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(resume).toHaveBeenCalledWith("macro_task_resume", { macroTaskId: "macro-1", commandId: expect.any(String) }, "csrf"));
   });
 
-  it("offers stop for an active helper below a preserved parent", async () => {
-    stubViewport(true);
-    const f = harness();
-    Object.assign(f.timeline.macroTask.counts, { stoppableRoots: 0, stoppableHelpers: 1,
-      delivered: 1, awaitingHost: 1 });
-    await openMacroTask(f);
-    const stop = await openStopMenu(f);
-    expect(stop.getAttribute("aria-disabled")).toBeNull();
-    await f.user.click(stop);
-    expect((await screen.findByRole("dialog", { name: "停止宏任务" })).textContent)
-      .toContain("停止 0 个微任务停止 1 个协助任务");
-  });
-
-  it("requires the explicit confirmation naming the macroTask and its scope before dispatching", async () => {
-    stubViewport(true);
-    const f = harness();
-    await openMacroTask(f);
-    await requestStop(f);
-    const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
-    // The confirmation names the macroTask and the honest scope.
-    expect(dialog.textContent).toContain("宏任务时间轴：设计、接口与实现");
-    expect(dialog.querySelector("#stop-macro-task-name")?.getAttribute("title")).toBeNull();
-    expect(dialog.querySelector("#stop-macro-task-name")?.textContent).toBe("宏任务时间轴：设计、接口与实现");
-    expect(dialog.textContent).toContain("停止 1 个微任务");
-    expect(dialog.textContent).toContain("停止 0 个协助任务");
-    expect(dialog.textContent).toContain("保留 1 个已交付微任务");
-    expect(dialog.textContent).toContain("保留 0 个等待 Host 的微任务");
-    expect(dialog.textContent).toContain("保留 2 个已验收微任务");
-    expect(f.api.command).not.toHaveBeenCalled();
-    // Cancel submits nothing.
+  it("confirms the unfinished scope and keeps delivered work, then retries an unconfirmed end with the same request", async () => {
+    const f = harness(); await openMacroTask(f);
+    f.timeline.macroTask.counts.unfinished = 2;
+    const pending = deferred();
+    const command = f.api.command as ReturnType<typeof vi.fn>;
+    command.mockImplementationOnce(() => pending.promise);
+    await menu(f); await f.user.click(screen.getByRole("menuitem", { name: "结束" }));
+    let dialog = await screen.findByRole("dialog", { name: "结束宏任务" });
+    expect(within(dialog).getByText("结束 2 个微任务")).toBeTruthy();
+    expect(within(dialog).getByText("保留 1 个已交付微任务")).toBeTruthy();
+    expect(command).not.toHaveBeenCalled();
     await f.user.click(within(dialog).getByRole("button", { name: "取消" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(f.api.command).not.toHaveBeenCalled();
-    // Confirm dispatches macro_task_stop with a fresh command identity.
-    await requestStop(f);
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
-    await waitFor(() => expect(f.api.command).toHaveBeenCalledWith("macro_task_stop",
-      expect.objectContaining({ macroTaskId: "macro-1" }), "csrf"));
-    const params = (f.api.command as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as { commandId: string };
-    expect(typeof params.commandId).toBe("string");
+    expect((document.activeElement as HTMLElement).getAttribute("data-slot")).toBe("macro-menu-button");
+    await menu(f); await f.user.click(screen.getByRole("menuitem", { name: "结束" }));
+    dialog = await screen.findByRole("dialog", { name: "结束宏任务" });
+    await f.user.click(within(dialog).getByRole("button", { name: "确认结束" }));
+    await screen.findByText("结束中");
+    const partial = { macroTaskId: "macro-1", duplicate: false, results: [
+      { runId: "r4", state: "concluded", concluded: true, reclaim: {} },
+      { runId: "r5", concluded: false, error: { code: "SHUTDOWN_UNCONFIRMED" } },
+    ] };
+    await act(async () => pending.resolve(partial));
+    await screen.findByText("已结束 1 个微任务 · 1 个微任务的停止未确认，没有写结论，可以重试");
+    command.mockResolvedValueOnce({ ...partial, duplicate: true });
+    await f.user.click(screen.getByRole("button", { name: "重试结束" }));
+    await waitFor(() => expect(command).toHaveBeenCalledTimes(2));
+    expect(command.mock.calls[0]).toEqual(command.mock.calls[1]);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("keeps a long macro task title in its own titled line", async () => {
-    stubViewport(true);
-    const title = "核对范围很长的宏任务标题：".repeat(12);
-    const f = harness({ title });
-    await openMacroTask(f);
-    await requestStop(f);
-    const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
-    expect(dialog.querySelector("#stop-macro-task-name")?.textContent).toBe(title);
-    expect(dialog.querySelector("#stop-macro-task-name")?.getAttribute("title")).toBeNull();
-    expect(dialog.getAttribute("aria-describedby")?.split(" ")).toContain("stop-macro-task-body");
-    expect(dialog.querySelector("#stop-macro-task-body")?.textContent).not.toContain(title);
+  it("uses refreshed list pause facts if the timeline read fails", async () => {
+    const f = harness(); await openMacroTask(f);
+    const command = f.api.command as ReturnType<typeof vi.fn>;
+    command.mockImplementation(async () => {
+      f.listed[0] = { ...f.listed[0]!, paused: { pausedAt: "2026-11-11T09:00:00Z", shutdownConfirmed: true } };
+      (f.api.macroTaskTimeline as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("timeline offline"));
+      return { macroTaskId: "macro-1", pausedAt: "2026-11-11T09:00:00Z", duplicate: false };
+    });
+    await menu(f); await f.user.click(screen.getByRole("menuitem", { name: "暂停" }));
+    await waitFor(() => expect(document.querySelector('[data-slot="macro-overview-header"] [data-slot="macro-pause-state"]')?.textContent).toContain("已暂停"));
+    expect(document.querySelector('[data-slot="macro-entry"] [data-slot="macro-pause-state"]')?.textContent).toContain("已暂停");
+    await menu(f);
+    expect(screen.getByRole("menuitem", { name: "继续" })).toBeTruthy();
   });
 
-  it("shows 正在停止 from refreshed evidence and settles once stops are confirmed", async () => {
-    const stopped = macroTaskTimelineFixture();
-    const r4 = stopped.rows.find(row => row.runId === "r4")!;
-    Object.assign(r4, { state: "cancelled", status: "cancelled", category: "ended", shutdownConfirmed: true });
-    const r6 = stopped.rows.find(row => row.runId === "r6")!;
-    Object.assign(r6, { state: "cancelled", status: "cancelled", category: "ended", shutdownConfirmed: true });
-    const f = harness();
-    // The read right after the stop still shows live, unconfirmed work; the
-    // next poll carries the confirmed stop evidence.
-    let readsAfterStop = 0;
-    (f.api.macroTaskTimeline as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      if (f.stopAttempts() > 0) {
-        readsAfterStop += 1;
-        return { timeline: readsAfterStop <= 1 ? f.timeline : stopped, verifiedAtMs: null };
-      }
-      return { timeline: f.timeline, verifiedAtMs: null };
-    });
-    stubViewport(true);
-    await openMacroTask(f);
-    await requestStop(f);
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
-    await waitFor(() => expect(f.stopAttempts()).toBe(1));
-    const status = await screen.findByText("正在停止");
-    expect(status.textContent).toBe("正在停止");
-    // The next refreshed read reports confirmed stops for the whole scope.
-    await waitFor(() => expect(screen.getByText("已停止").textContent).toBe("已停止"), { timeout: 5000 });
-  });
-
-  it("regression: a replay refused with a 401 keeps the earlier unknown outcome", async () => {
-    stubViewport(true);
-    const f = harness();
-    let attempts = 0;
-    (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string) => {
-      if (operation === "workflow_get") return workflowFixture(f.tasks.get("r2") ?? taskFixture("r2"));
-      if (operation === "message_list") return { messages: [], cursor: 41 };
-      if (operation === "macro_task_stop") {
-        attempts += 1;
-        throw attempts === 1 ? new ApiError("NETWORK", "lost reply") : new ApiError("CONSOLE_SESSION_EXPIRED", "login expired");
-      }
-      throw new Error(`Unexpected command: ${operation}`);
-    });
-    await openMacroTask(f);
-    await requestStop(f);
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
-    await waitFor(() => expect(attempts).toBe(1));
-    expect((await screen.findByText("停止未确认")).textContent).toContain("停止未确认");
-    // The replay is refused, but that refusal proves nothing about attempt #1.
-    await retryStop(f);
-    await waitFor(() => expect(attempts).toBe(2));
-    await waitFor(() => expect((f.api.command as ReturnType<typeof vi.fn>).mock.calls
-      .filter(([operation]) => operation === "macro_task_stop").length).toBe(2));
-    expect(screen.getByText("停止未确认").textContent).toContain("停止未确认");
-    expect(screen.queryByText("停止请求被拒绝")).toBeNull();
-  });
-
-  it("regression: an acknowledged stop survives a failed refresh without becoming refused or unknown", async () => {
-    stubViewport(true);
-    const f = harness();
-    let refreshShouldFail = false;
-    f.refresh.mockImplementation(async () => {
-      if (refreshShouldFail) throw new Error("refresh lost");
-      return structuredClone(snapshotFixture());
-    });
-    (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string, params: Record<string, unknown>) => {
-      if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
-      if (operation === "message_list") return { messages: [], cursor: 41 };
-      if (operation === "macro_task_stop") {
-        refreshShouldFail = true;
-        return stopReplyFor("macro-1");
-      }
-      throw new Error(`Unexpected command: ${operation}`);
-    });
-    await openMacroTask(f);
-    await requestStop(f);
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
-    // The reply arrived (cancellation intent known); the refresh failed after
-    // it — the status must derive from the live rows, never claim a refusal.
-    expect(await screen.findByText("正在停止")).toBeTruthy();
-    expect(screen.queryByText("停止请求被拒绝")).toBeNull();
-    expect(screen.queryByText(/停止请求的回复丢失/)).toBeNull();
-    expect((f.api.command as ReturnType<typeof vi.fn>).mock.calls
-      .filter(([operation]) => operation === "macro_task_stop").length).toBe(1);
-  });
-
-  it("treats a lost stop reply as unknown, replays the same command identity and never locks navigation", async () => {
-    stubViewport(true);
-    let fail = true;
-    const f = harness();
-    (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string, params: Record<string, unknown>) => {
-      if (operation === "macro_task_stop") {
-        if (fail) throw new ApiError("NETWORK", "lost reply");
-        return stopReplyFor("macro-1");
-      }
-      if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
-      if (operation === "message_list") return { messages: [], cursor: 41 };
-      throw new Error(`Unexpected command: ${operation}`);
-    });
-    await openMacroTask(f);
-    await requestStop(f);
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
-    const status = await screen.findByText("停止未确认", { exact: false });
-    expect(status.textContent).toContain("停止未确认");
-    // Navigation stays free while the reply is unknown: no lock note anywhere.
-    expect(document.querySelector(".lock-note")).toBeNull();
-    await f.user.click(screen.getByRole("button", { name: "‹ 宏任务" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ })).toBeTruthy());
-    await f.user.click(screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
-    // Replay keeps the exact command identity; the server deduplicates it.
-    fail = false;
-    await retryStop(f);
-    await waitFor(() => expect(f.api.command).toHaveBeenCalledTimes(2));
-    const calls = (f.api.command as ReturnType<typeof vi.fn>).mock.calls
-      .filter(([operation]) => operation === "macro_task_stop") as [string, Record<string, unknown>][];
-    expect(calls[1]![1]).toEqual(calls[0]![1]);
-    await waitFor(() => expect(screen.getByText("正在停止")).toBeTruthy());
+  it("hides end once the view has no unfinished members", async () => {
+    const f = harness(); f.timeline.macroTask.counts.unfinished = 0;
+    await openMacroTask(f); await menu(f);
+    expect(screen.queryByRole("menuitem", { name: "结束" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "暂停" })).toBeTruthy();
   });
 });
-
-  it("regression: two macroTasks stop concurrently — neither is skipped nor stuck", async () => {
-    stubViewport(true);
-    const f = harness({ secondStoppable: true });
-    const summaries = new Map(f.listed.map(summary => [summary.macroTaskId, summary]));
-    // Each macroTask's stop reply is deferred independently.
-    const pending = new Map<string, Pending>();
-    (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string, params: Record<string, unknown>) => {
-      if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
-      if (operation === "macro_task_stop") {
-        const deferredReply = deferred();
-        pending.set(String(params.commandId), deferredReply);
-        return deferredReply.promise;
-      }
-      throw new Error(`Unexpected command: ${operation}`);
-    });
-    (f.api.macroTaskTimeline as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (macroTaskId: string) =>
-      ({ timeline: { ...f.timeline, macroTask: macroTaskDetail({ ...summaries.get(macroTaskId), macroTaskId }) }, verifiedAtMs: null }));
-    await openMacroTask(f);
-    // Confirm the first macroTask's stop; its reply stays pending.
-    await requestStop(f);
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
-    await waitFor(() => expect(stopCalls(f).length).toBe(1));
-    expect((await screen.findByText("正在停止")).textContent).toBe("正在停止");
-    // Navigate to the second macroTask and stop it while the first is pending.
-    await f.user.click(screen.getByRole("button", { name: "‹ 宏任务" }));
-    await f.user.click(screen.getByRole("button", { name: /另一个进行中的目标/ }));
-    await screen.findByRole("heading", { name: "另一个进行中的目标" });
-    await requestStop(f);
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
-    await waitFor(() => expect(stopCalls(f).length).toBe(2));
-    // Both dispatches carry their own macroTask and a distinct command identity.
-    const [first, second] = stopCalls(f);
-    expect((first![1] as { macroTaskId: string }).macroTaskId).toBe("macro-1");
-    expect((second![1] as { macroTaskId: string }).macroTaskId).toBe("macro-2");
-    expect((first![1] as { commandId: string }).commandId).not.toBe((second![1] as { commandId: string }).commandId);
-    expect((await screen.findByText("正在停止")).textContent).toBe("正在停止");
-    // Resolving both replies settles each macroTask without a stuck phase.
-    pending.get(String((first![1] as { commandId: string }).commandId))!.resolve({
-      ...stopReplyFor("macro-1"),
-    });
-    pending.get(String((second![1] as { commandId: string }).commandId))!.resolve({
-      ...stopReplyFor("macro-2"),
-    });
-    await waitFor(() => expect(screen.queryByText("停止请求被拒绝")).toBeNull(), { timeout: 3000 });
-    expect(stopCalls(f).length).toBe(2);
-    expect(screen.getByText("正在停止")).toBeTruthy();
-  });
-
-  it("regression: losing the writer at confirmation keeps an unknown's identity; fresh refusals never reuse it", async () => {
-    stubViewport(true);
-    const f = harness();
-    (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string, params: Record<string, unknown>) => {
-      if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
-      if (operation === "macro_task_stop") throw new ApiError("NETWORK", "lost reply");
-      throw new Error(`Unexpected command: ${operation}`);
-    });
-    await openMacroTask(f);
-    // A brand-new request whose writer vanishes between dialog and confirm
-    // becomes a plain refusal that was never dispatched.
-    await requestStop(f);
-    const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
-    const snapshot = snapshotFixture();
-    f.rerender(<MacroTasks snapshot={{ ...snapshot, consoleSession: undefined as unknown as Snapshot["consoleSession"] }}
-      api={f.api} refresh={f.refresh} active writesAvailable={false} />);
-    await f.user.click(within(dialog).getByRole("button", { name: "确认停止宏任务" }));
-    expect(await screen.findByText("停止请求被拒绝")).toBeTruthy();
-    expect(stopCalls(f).length).toBe(0);
-    // Writer back: confirming mints a FRESH identity (the refusal's empty one
-    // is never reused) and the lost reply keeps the entry unknown.
-    f.rerender(<MacroTasks snapshot={snapshot} api={f.api} refresh={f.refresh} active writesAvailable />);
-    await requestStop(f);
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
-    await waitFor(() => expect(stopCalls(f).length).toBe(1));
-    expect(typeof (stopCalls(f)[0]![1] as { commandId: string }).commandId).toBe("string");
-    expect(((stopCalls(f)[0]![1] as { commandId: string }).commandId).length).toBeGreaterThan(0);
-    expect(await screen.findByText("停止未确认")).toBeTruthy();
-    // Losing the writer again with the dialog open must NOT overwrite the
-    // unknown entry: its identity survives for the same-macroTask replay.
-    await requestStop(f);
-    const secondDialog = await screen.findByRole("dialog", { name: "停止宏任务" });
-    f.rerender(<MacroTasks snapshot={{ ...snapshot, consoleSession: undefined as unknown as Snapshot["consoleSession"] }}
-      api={f.api} refresh={f.refresh} active writesAvailable={false} />);
-    await f.user.click(within(secondDialog).getByRole("button", { name: "确认停止宏任务" }));
-    expect(screen.getByText("停止未确认")).toBeTruthy();
-    expect(screen.queryByText("停止请求被拒绝")).toBeNull();
-    expect(stopCalls(f).length).toBe(1);
-    // Writer back once more: the retry replays the EXACT retained identity.
-    f.rerender(<MacroTasks snapshot={snapshot} api={f.api} refresh={f.refresh} active writesAvailable />);
-    await retryStop(f);
-    await waitFor(() => expect(stopCalls(f).length).toBe(2));
-    expect(stopCalls(f)[1]![1]).toEqual(stopCalls(f)[0]![1]);
-  });
-
-  it("regression: a scope-incoherent reply stays an unknown outcome and replays safely", async () => {
-    stubViewport(true);
-    const f = harness();
-    let attempts = 0;
-    (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string, params: Record<string, unknown>) => {
-      if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
-      if (operation === "macro_task_stop") {
-        attempts += 1;
-        if (attempts === 1) {
-          // A running row cannot be reported as preserved.
-          return { macroTaskId: "macro-1", duplicate: false,
-            results: [{ runId: "r4", state: "executing", stopped: false }] };
-        }
-        return stopReplyFor("macro-1");
-      }
-      throw new Error(`Unexpected command: ${operation}`);
-    });
-    await openMacroTask(f);
-    await requestStop(f);
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
-    // The malformed reply is refused client-side as an unknown outcome.
-    await waitFor(() => expect(attempts).toBe(1));
-    expect(await screen.findByText("停止未确认")).toBeTruthy();
-    await openMacroMenu(f);
-    expect(screen.getByRole("menuitem", { name: "重试停止" })).toBeTruthy();
-    expect(screen.queryByText("停止请求被拒绝")).toBeNull();
-    // The replay keeps the identity; the coherent reply settles it.
-    await f.user.click(screen.getByRole("menuitem", { name: "重试停止" }));
-    await waitFor(() => expect(attempts).toBe(2));
-    expect(stopCalls(f)[1]![1]).toEqual(stopCalls(f)[0]![1]);
-    expect(await screen.findByText("正在停止")).toBeTruthy();
-  });
