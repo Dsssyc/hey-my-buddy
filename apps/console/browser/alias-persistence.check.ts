@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
 import type { Snapshot } from "../src/types";
-import { expectNoSidewaysScroll, expectWholeAndApart, open, test } from "./preview";
+import { expectNoSidewaysScroll, expectWholeAndApart, expectTextUncut, open, test } from "./preview";
 
 test.use({ headless: true });
 
@@ -48,7 +48,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
       const save = page.getByRole("button", { name: zh ? "保存" : "Save", exact: true });
       await expect(input).toBeVisible();
       const originalWidth = (await list.boundingBox())!.width;
-      if (width >= 900) expect(originalWidth).toBe(352);
+      if (width >= 900) expect(originalWidth).toBe(288);
       const stable = async () => {
         expect((await list.boundingBox())!.width).toBe(originalWidth);
         await expectWholeAndApart(selected, selected.locator(":scope > *"));
@@ -56,6 +56,20 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
         expect(await drawer.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
         expect(await drawer.locator('[data-slot=buddy-list-viewport]').evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
         await expectNoSidewaysScroll(page);
+      };
+      const contents = async (clipped: boolean) => {
+        const name = selected.locator(":scope > span").first();
+        await expectWholeAndApart(name, name.locator(":scope > *"));
+        await expectTextUncut(name.locator(":scope > span").first());
+        await expectTextUncut(selected.locator(":scope > span").nth(1));
+        await expect(selected.locator(":scope > span").nth(1)).toHaveText(zh ? "排除" : "Exclude");
+        const mark = selected.locator('[data-slot=unsaved-mark]');
+        await expect(mark).toBeVisible();
+        const box = (await mark.boundingBox())!;
+        expect(box.width).toBe(6); expect(box.height).toBe(6);
+        const scrollbar = (await list.locator('[data-slot=scroll-area-scrollbar]').boundingBox())!;
+        expect(box.x + box.width).toBeLessThanOrEqual(scrollbar.x);
+        expect(await tag.locator(":scope > span").evaluate(node => node.scrollWidth > node.clientWidth)).toBe(clipped);
       };
       const capture = async (kind: string) => {
         if (width !== 1440) return;
@@ -76,6 +90,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
         } else {
           await expect(tag).toHaveText(short);
           await expect(row.locator('[data-slot=alias-tag]')).toHaveText(short);
+          if (width >= 900) await contents(false);
         }
         await stable();
         await page.getByRole("link", { name: "Router", exact: true }).click();
@@ -101,6 +116,18 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
         expect(truncation.clipped).toBe(kind === "long");
         if (kind === "long") expect(truncation).toEqual({ ellipsis: "ellipsis", overflow: "hidden", clipped: true });
         await capture(kind);
+      }
+      if (!zh) {
+        // A wider alphabet may exceed the room left by an English preference.
+        const wide = "日常审查专用工作伙伴";
+        await input.fill(wide);
+        await save.click();
+        await expect(save).toHaveCount(0);
+        await expect(tag).toHaveText(wide);
+        await input.fill(`${wide} draft`);
+        await stable();
+        if (width >= 900) await contents(true);
+        await expect(input).toHaveValue(`${wide} draft`);
       }
     });
   });

@@ -129,8 +129,8 @@ function EffortRow({ chip, selected, onSelect, editor }: {
         if (canToggle) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId ? { ...entry, enabled } : entry) }));
       }} /></Hint>
     <button type="button" aria-pressed={selected} data-slot="buddy-stop" aria-label={effort} onClick={onSelect}
-      className="flex h-10 w-full items-center gap-2 pr-8 pl-12 text-left text-sm whitespace-nowrap outline-none transition-[color,background-color,box-shadow] duration-150 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none">
-      <span className={cn("inline-flex min-w-0 items-center", buddy.enabled ? "text-foreground" : "text-ink3", selected && "font-medium")}><span className="shrink-0">{effort}</span><AliasTag alias={named?.alias} /></span>
+      className="flex h-10 w-full items-center gap-1 pr-3 pl-11 text-left text-sm whitespace-nowrap outline-none transition-[color,background-color,box-shadow] duration-150 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none">
+      <span className={cn("inline-flex min-w-0 items-center [&_[data-slot=alias-tag]]:ml-1 [&_[data-slot=alias-tag]]:min-w-0", buddy.enabled ? "text-foreground" : "text-ink3", selected && "font-medium")}><span className="shrink-0">{effort}</span><AliasTag alias={named?.alias} /></span>
       {chip.preference && <span className="shrink-0 text-xs text-ink2">{t(`preference.${chip.preference}`)}</span>}
       {chip.unsaved && <UnsavedMark label={t("unsaved")} />}
     </button>
@@ -213,14 +213,14 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
       {limitInvalid && <p id={`${id}-range`} className="mt-2 text-xs text-fail" role="alert">{t("pane.range")}</p>}
       {raised && <div className="mt-3 max-w-2xl"><ConcurrencyNotice id={`${id}-concurrency-notice`} /></div>}
     </div>
-    <div data-slot="buddy-columns" className="grid grid-cols-[minmax(0,1fr)] gap-y-4 pt-3 min-[900px]:grid-cols-[22rem_minmax(0,1fr)]">
+    <div data-slot="buddy-columns" className="grid grid-cols-[minmax(0,1fr)] gap-y-4 pt-3 min-[900px]:grid-cols-[18rem_minmax(0,1fr)]">
       <div data-slot="buddy-list" className="flex min-h-0 min-w-0 flex-col min-[900px]:h-0 min-[900px]:min-h-full">
         <div className="mb-3 flex h-5 shrink-0 items-center gap-3 pr-10 text-xs whitespace-nowrap">
           <h3 className="text-xs font-medium text-ink2">{t("models.columns.buddy")}</h3>
           <span className="text-ink3 tabular-nums">{row.chips.length} · {t("models.enabled")} {row.chips.filter(chip => chip.buddy.enabled).length}</span>
         </div>
         <ScrollArea type="always" className="min-[900px]:min-h-0 min-[900px]:flex-1 [&>[data-slot=scroll-area-scrollbar]]:pointer-events-auto [&>[data-slot=scroll-area-scrollbar]]:opacity-100 max-[900px]:overflow-visible! max-[900px]:[&>[data-slot=scroll-area-scrollbar]]:hidden"
-          viewportProps={{ ref: listViewport, "data-slot": "buddy-list-viewport", className: "max-[900px]:h-auto max-[900px]:overflow-visible!" }}>
+          viewportProps={{ ref: listViewport, "data-slot": "buddy-list-viewport", className: "[&>div]:block! max-[900px]:h-auto max-[900px]:overflow-visible!" }}>
           <div role="group" aria-label={t("models.columns.effort")}>
             {row.chips.map(chip => <EffortRow key={chip.buddy.buddyId} chip={chip} selected={chip.buddy.buddyId === selectedBuddyId}
               editor={editor} onSelect={() => onSelectBuddy(chip.buddy.buddyId)} />)}

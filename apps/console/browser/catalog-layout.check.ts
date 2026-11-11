@@ -29,7 +29,7 @@ async function selectedIsInside(drawer: Locator) {
 
 /** A stable column leaves the settings in place as buddy names change. */
 async function fixedWidthList(drawer: Locator) {
-  expect((await frame(drawer.locator("[data-slot=buddy-list]"))).width).toBe(352);
+  expect((await frame(drawer.locator("[data-slot=buddy-list]"))).width).toBe(288);
 }
 
 for (const theme of ["dark", "light"] as const) {
