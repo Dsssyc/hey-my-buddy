@@ -21,6 +21,8 @@ def message_kind(run: dict) -> str | None:
         return run["reminder"]["kind"]
     if run.get("issue"):
         return "issue"
+    if isinstance(run.get("pause"), dict):
+        return "paused"
     workflow = run.get("workflowState")
     if workflow == "awaiting-host":
         return "waiting-host"

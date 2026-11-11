@@ -388,7 +388,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
                         if all(row[key] == value for key, value in model_service.items()))
         self.assertEqual(capacity, {**model_service, "limit": 4, "active": 0})
         # Invalid input is a safe 4xx envelope, never a traceback.
-        status, _h, data = browser.command("macro_task_stop", {"macroTaskId": "run:" + run_id, "commandId": "invalid-stop", "nonsense": True}, csrf=csrf)
+        status, _h, data = browser.command("macro_task_pause", {"macroTaskId": "run:" + run_id, "commandId": "invalid-stop", "nonsense": True}, csrf=csrf)
         self.assertEqual(status, 400, data)
         payload = json.loads(data)
         self.assertFalse(payload["ok"])

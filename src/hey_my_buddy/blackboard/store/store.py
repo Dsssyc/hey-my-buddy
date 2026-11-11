@@ -2005,12 +2005,12 @@ class BoardStore:
         if termination_reason == "interrupted":
             raise BoardError("INVALID_ARGUMENT", "Only service recovery can record an interrupted result",
                              field="terminationReason")
-        stop_reasons = {"wrap-up", "grace-expired", "forced-stop", "console-stop", "service-stop", "unknown-stop"}
+        stop_reasons = {"pause", "wrap-up", "grace-expired", "forced-stop", "console-stop", "service-stop", "unknown-stop"}
         if termination_reason in stop_reasons and not shutdown_confirmed:
             raise BoardError("INVALID_ARGUMENT", "A stop termination reason requires confirmed shutdown",
                              field="terminationReason")
-        if termination_reason == "wrap-up" and status != "cancelled":
-            raise BoardError("INVALID_ARGUMENT", "wrap-up requires a cancelled result",
+        if termination_reason in ("pause", "wrap-up") and status != "cancelled":
+            raise BoardError("INVALID_ARGUMENT", "pause and wrap-up require a cancelled result",
                              field="terminationReason")
         schemas.optional_string(params, "error", max_length=4000)
         schemas.optional_string(params, "runtimeIdentity")
@@ -2147,6 +2147,10 @@ class BoardStore:
             if termination_reason in ("wrap-up", "grace-expired") and attempt["grace_deadline"] is None:
                 raise BoardError("INVALID_ARGUMENT", "Wrap-up requires a durable grace deadline",
                                  field="terminationReason")
+            if termination_reason == "pause":
+                from ..tasks.work_pauses import stop_request
+                if stop_request(connection, attempt) is None:
+                    raise BoardError("INVALID_ARGUMENT", "pause requires a durable console pause", field="terminationReason")
             if termination_reason == "console-stop" and attempt["stop_initiator"] != "console":
                 raise BoardError("INVALID_ARGUMENT", "console-stop requires a durable console stop",
                                  field="terminationReason")
@@ -2522,6 +2526,7 @@ class BoardStore:
                 connection, task=task_row, attempt=released_attempt, now=now,
                 seal_stash=seal_stash,
             )
+            task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             head = self._head_of(connection)
         self._notify(head)
         from ..tasks.interruption import _cleanup_dead_material

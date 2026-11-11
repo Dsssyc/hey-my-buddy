@@ -103,7 +103,7 @@ class WrapUpStopTests(WorkflowTestCase):
         self.assertEqual(self.attempt(board, claim)["graceDeadline"], stopped["graceDeadline"])
         self.assertEqual(self.attempt(board, claim)["cancelRequestedAt"], stopped["cancelRequestedAt"])
 
-    def test_console_cancel_and_macro_stop_are_immediate_and_keep_prior_deadline(self):
+    def test_console_cancel_is_immediate_and_keeps_prior_deadline(self):
         board = self.board(max_concurrent=2)
         self.register(board)
         self.register(board, "w2")
@@ -115,17 +115,6 @@ class WrapUpStopTests(WorkflowTestCase):
         upgraded = self.attempt(board, first_claim)
         self.assertEqual(upgraded["stopInitiator"], "console")
         self.assertIsNotNone(upgraded["graceDeadline"])
-
-        second = self.submit(board, kind="worktree", request_id="second")
-        second_claim = self.claim(board, worker_id="w2", claim_request_id="second-claim", run_id=second["runId"])
-        stopped = board.store.workflow.stop_macro_task(
-            {"macroTaskId": "run:" + second["runId"], "commandId": "browser-stop"},
-            console_authority={"sessionId": "browser"},
-        )
-        self.assertEqual(stopped["results"], [{"runId": second["runId"], "state": "cancelled", "stopped": True}])
-        immediate = self.attempt(board, second_claim)
-        self.assertEqual(immediate["stopInitiator"], "console")
-        self.assertIsNone(immediate["graceDeadline"])
 
     def test_host_cancel_passes_grace_to_active_helper(self):
         board = self.board()
@@ -183,7 +172,7 @@ class WrapUpStopTests(WorkflowTestCase):
 
     def test_stop_reasons_require_confirmed_shutdown_and_durable_matching_facts(self):
         self.assertEqual(set(TERMINATION_REASONS), {
-            "completed", "wrap-up", "grace-expired", "forced-stop", "console-stop",
+            "completed", "pause", "wrap-up", "grace-expired", "forced-stop", "console-stop",
             "service-stop", "unknown-stop", "deadline", "harness-error", "transport-error", "interrupted",
             "workspace-error",
         })
@@ -193,6 +182,8 @@ class WrapUpStopTests(WorkflowTestCase):
         claim = self.claim(board)
         for reason, status, shutdown in (
             ("invented", "cancelled", True),
+            ("pause", "ok", True),
+            ("pause", "cancelled", False),
             ("wrap-up", "ok", True),
             ("wrap-up", "cancelled", False),
             ("service-stop", "cancelled", False),

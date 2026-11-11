@@ -10,7 +10,7 @@ from unittest import mock
 
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import schema_38_39, upgrade
-from hey_my_buddy.blackboard.store.db import Database
+from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 
 
 class Schema38To39Tests(unittest.TestCase):
@@ -35,7 +35,7 @@ class Schema38To39Tests(unittest.TestCase):
         self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '38')
         before = {table: [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
                   for table in ('models', 'model_correspondences', 'attempts', 'events')}
-        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 38, 'targetSchema': 40})
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 38, 'targetSchema': SCHEMA_VERSION})
         self.assertEqual(connection.execute(
             "SELECT name FROM sqlite_master WHERE name IN ('model_notes','model_service_notes')").fetchall(), [])
         for table, rows in before.items():

@@ -185,7 +185,7 @@ class BuddyControl:
     def workflow_suggest(self, request_json: str) -> str:
         ...
 
-    # -- work macro tasks (reads and console-only stop/deletion) -------------
+    # -- work macro tasks (reads and console-only lifecycle/deletion) -------------
     def macro_task_list(self, request_json: str) -> str:
         ...
 
@@ -195,7 +195,13 @@ class BuddyControl:
     def macro_task_goal_history(self, request_json: str) -> str:
         ...
 
-    def macro_task_stop(self, request_json: str) -> str:
+    def macro_task_pause(self, request_json: str) -> str:
+        ...
+
+    def macro_task_resume(self, request_json: str) -> str:
+        ...
+
+    def macro_task_end(self, request_json: str) -> str:
         ...
 
     def macro_task_deletion_preview(self, request_json: str) -> str:

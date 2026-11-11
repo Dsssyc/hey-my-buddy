@@ -120,9 +120,13 @@ def _partial_result(board, attempt, identity, kind, *, confirmed):
     return result
 
 
-def _stop_reason(attempt):
+def _stop_reason(board, attempt):
     if attempt['force_reason'] is not None:
         return attempt['force_reason']
+    from .work_pauses import stop_request
+    with board.db.read() as connection:
+        if stop_request(connection, attempt) is not None:
+            return 'pause'
     initiator, deadline = attempt['stop_initiator'], attempt['grace_deadline']
     if deadline and initiator in ('host', 'lead'):
         if datetime.now(timezone.utc) >= datetime.fromisoformat(deadline):
@@ -205,7 +209,7 @@ def _recover_one(board, attempt, identity, stopped_evidence):
             evidence = {**(stopped_evidence or {}), 'kind': kind, 'execution': observed}
             original = json.loads(attempt['result_json'])
             if original['status'] == 'cancelled' and original.get('terminationReason') is None:
-                evidence['terminationReason'] = (_stop_reason(attempt) if attempt['stop_initiator'] is not None
+                evidence['terminationReason'] = (_stop_reason(board, attempt) if attempt['stop_initiator'] is not None
                                                  or attempt['cancel_requested_at'] is not None else 'unknown-stop')
             with board.db.read() as connection:
                 interrupted = connection.execute('SELECT evidence_kind FROM attempt_interruptions WHERE attempt_id=?',
@@ -269,7 +273,7 @@ def _recover_one(board, attempt, identity, stopped_evidence):
         if result is None:
             return None
         stopped = attempt['cancel_requested_at'] is not None or attempt['stop_initiator'] is not None
-        reason = _stop_reason(attempt) if stopped and refusal is None else 'interrupted'
+        reason = _stop_reason(board, attempt) if stopped and refusal is None else 'interrupted'
         result['partialOutput']['reason'] = reason
         if refusal is not None:
             result['receiptRejection'] = refusal

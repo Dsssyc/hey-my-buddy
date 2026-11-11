@@ -433,12 +433,14 @@ def _delete_rows(store, connection, scope, deletion):
             f"json_extract(CASE WHEN json_valid(response_json) THEN response_json END,'$.{field}')"
             " IN (SELECT value FROM json_each(?))")
         response_args.append(_ids(values))
-    clauses.append("((kind LIKE 'workflow.%' OR kind='macro_task.stop') AND (" + ' OR '.join(response_clauses) + '))')
+    clauses.append("((kind LIKE 'workflow.%' OR kind LIKE 'macro_task.%') AND (" + ' OR '.join(response_clauses) + '))')
     args.extend(response_args)
     commands = {row[0] for row in connection.execute(
         'SELECT command_id FROM commands WHERE ' + ' OR '.join(clauses),args)}
     clause,args = _in('command_id',commands)
     connection.execute(f'DELETE FROM commands WHERE {clause}',args)
+    connection.execute("DELETE FROM work_pauses WHERE macro_task_id=? OR run_id IN (SELECT value FROM json_each(?))",
+                       (deletion['target_id'], _ids(t)))
     def remove(table, *conditions):
         clauses,args = [],[]
         for column,values in conditions:

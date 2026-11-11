@@ -254,6 +254,19 @@ def project(connection, macro_task_id: str) -> dict:
             "label": project_records.label(row["project_cwd"], row["repository_path"])}
 
 
+def paused(connection, group_id: str) -> dict | None:
+    """The current pause of a macro task or standalone micro task tree."""
+    if group_id.startswith("run:"):
+        row = connection.execute(
+            "SELECT paused_at FROM work_pauses WHERE run_id=?", (group_id[4:],)
+        ).fetchone()
+    else:
+        row = connection.execute(
+            "SELECT paused_at FROM work_pauses WHERE macro_task_id=?", (group_id,)
+        ).fetchone()
+    return {"pausedAt": row["paused_at"]} if row is not None else None
+
+
 def _macro_task_get(connection, identifier: str, *, limit: int = 100, before: str | None = None,
                     include_runs: bool = True, include_goal: bool = True) -> dict:
     row = connection.execute("SELECT * FROM macro_tasks WHERE macro_task_id=?", (identifier,)).fetchone()
@@ -284,6 +297,7 @@ def _macro_task_get(connection, identifier: str, *, limit: int = 100, before: st
     deleting = connection.execute("SELECT 1 FROM macro_task_deletions"
                                   " WHERE target_kind='macro-task' AND target_id=?", (identifier,)).fetchone()
     result = {"macroTaskId": identifier, "title": row["title"],
+            "paused": paused(connection, identifier),
             "goalRevision": goal_revision,
             "project": project(connection, identifier), "createdAt": row["created_at"],
             "lastActivityAt": row["activity_at"], "state": summary["state"],
@@ -352,6 +366,7 @@ WITH items AS (
                                          (item["id"],)).fetchone()
                 rows.append({"kind": "standalone", "runId": run["run_id"], "title": run["title"],
                              "state": run["state"], "createdAt": run["created_at"],
+                             "paused": paused(connection, f"run:{run['run_id']}"),
                              "actions": store.workflow._actions(connection, run)})
         return {"project": project_view, "items": rows,
                 "nextCursor": visible[-1]["id"] if len(items) > limit else None}
@@ -788,6 +803,7 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
         "lastActivityAt": activity_at or created_at,
         "lastActivitySeq": int(activity_seq or 0),
         "state": "empty" if not members and kind == "macro-task" else state,
+        "paused": paused(connection, group_id),
         "counts": counts,
         "matchingRuns": int(matching),
         "rootRunIds": roots,
@@ -915,6 +931,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "createdAt": row["created_at"],
         "state": row["run_state"],
         "status": row["state"],
+        "queueReason": row["queue_reason"],
         "conclusionStatus": row["conclusion_status"],
         "category": _state(row),
         "shutdownConfirmed": attempts == confirmed and not unproven,

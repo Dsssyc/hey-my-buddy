@@ -810,19 +810,32 @@ class WorkerRunExecutor:
             status = "ok"
         seal_error = None
         payload["turnResultPath"] = str(context.turn_output_file())
+        paused_interruption = (handle.stop_initiator == "pause" and shutdown
+                               and result.end.status == "cancelled"
+                               and result.stop_evidence.interrupt is not None
+                               and result.stop_evidence.interrupt.requested is True
+                               and result.continuation is not None
+                               and result.continuation.resumable is True)
         session_id = payload.get("sessionId") or (record or {}).get("sessionId")
         if self.receipt_options.capture_session_from_turn:
             # This registered projection takes its session from the delivered
-            # record. The service validates that record in workflow._validate_turn.
-            session_id = (record or {}).get("sessionId")
+            # record. A paused, acknowledged interruption has no turn record;
+            # its native binding and continuation fact preserve that session.
+            session_id = ((record or {}).get("sessionId") or
+                          (result.native_identity.session_id if paused_interruption
+                           and result.native_identity is not None
+                           else None))
         facts = self.module.session_facts(Path(handle.role_run_control["nativeRoot"]), session_id)
         payload["nativeSession"] = {**facts, "resumeMode": context.turn_input.get("resumeMode"),
             "resumable": bool(facts.get("bindingPresent", True) and shutdown
                               and result.continuation is not None and result.continuation.resumable is True
                               and (record is not None or checkpoint is not None
-                                   and turn_io.checkpoint_resumable(payload, checkpoint)))}
+                                   and turn_io.checkpoint_resumable(payload, checkpoint)
+                                   or paused_interruption and facts.get("bindingPresent") is True))}
         if self.receipt_options.capture_session_from_turn:
-            payload["nativeSession"]["sessionIdSource"] = "turn-record" if session_id else "none"
+            payload["nativeSession"]["sessionIdSource"] = (
+                "turn-record" if record is not None and session_id else
+                "native-interruption" if session_id else "none")
         if error:
             payload["turnError"] = error
             if status == "ok":
@@ -842,7 +855,11 @@ class WorkerRunExecutor:
 
     def stop(self, handle: InlineRunHandle, *, stop_initiator: str,
              grace_deadline: float | None) -> None:
-        if (stop_initiator in WRAP_UP_INITIATORS and grace_deadline is not None
+        if (stop_initiator == "pause" and grace_deadline is not None
+                and self.description.interrupted_resume):
+            from .controller import start_pause
+            start_pause(handle, grace_deadline)
+        elif (stop_initiator in WRAP_UP_INITIATORS and grace_deadline is not None
                 and self.description.interrupted_resume):
             from .controller import start_wrap_up
             start_wrap_up(handle, grace_deadline, stop_initiator=stop_initiator)

@@ -110,21 +110,21 @@ class WorkflowDeletionCommandTests(WorkflowTestCase, ConsoleTestCase):
 
         _, browser = self.open_console(board)
         status, _, raw = browser.command(
-            "macro_task_stop", {"macroTaskId": first["macroTaskId"], "commandId": "commands-stop"},
+            "macro_task_end", {"macroTaskId": first["macroTaskId"], "commandId": "commands-stop"},
             csrf=browser.bootstrap()["csrfToken"],
         )
         self.assertEqual(status, 200, raw)
         self.assertFalse(any(row["kind"].startswith("workflow.") for row in receipt_rows(board).values()))
         before, after = assert_deleted_receipts(self, board, first["macroTaskId"],
-                                                {"macro_task.stop"}, set(), {first["runId"], second["runId"]})
+                                                {"macro_task.end"}, set(), {first["runId"], second["runId"]})
         self.assertNotIn("commands-stop", after)
-        self.assertEqual(before["commands-stop"]["kind"], "macro_task.stop")
+        self.assertEqual(before["commands-stop"]["kind"], "macro_task.end")
         status, _, raw = browser.command(
-            "macro_task_stop", {"macroTaskId": other["macroTaskId"], "commandId": "commands-stop"},
+            "macro_task_end", {"macroTaskId": other["macroTaskId"], "commandId": "commands-stop"},
             csrf=browser.bootstrap()["csrfToken"],
         )
         self.assertEqual(status, 200, raw)
-        self.assertEqual(receipt_rows(board)["commands-stop"]["kind"], "macro_task.stop")
+        self.assertEqual(receipt_rows(board)["commands-stop"]["kind"], "macro_task.end")
 
 
 class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):

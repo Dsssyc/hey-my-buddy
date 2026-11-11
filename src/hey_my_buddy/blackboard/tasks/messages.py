@@ -1,6 +1,8 @@
 """Durable message delivery and the minimal facts shared by await and Lead."""
 from __future__ import annotations
 
+import json
+
 from ...errors import BoardError
 from ...protocol.awaiting import message_kind
 
@@ -16,8 +18,23 @@ def pending_issue(connection, task_id: str):
     ).fetchone()
 
 
+def pending_pause(connection, task_id: str):
+    """An interrupted attempt whose pause has not yet reached a Host await."""
+    return connection.execute(
+        "SELECT p.* FROM events p WHERE p.task_id=? AND p.kind='workflow.paused'"
+        " AND p.attempt_id IS NOT NULL AND NOT EXISTS ("
+        " SELECT 1 FROM events d WHERE d.task_id=p.task_id AND d.kind='workflow.pause_delivered'"
+        " AND json_extract(d.payload_json,'$.pauseEventId')=p.seq)"
+        " ORDER BY p.seq LIMIT 1", (task_id,),
+    ).fetchone()
+
+
+def _pause_message(event) -> dict:
+    payload = json.loads(event['payload_json'])
+    return {'pause': {'pausedAt': payload['pausedAt'], 'eventId': event['seq']}}
+
+
 def _issue_message(connection, receipt) -> dict:
-    import json
     event = connection.execute('SELECT * FROM events WHERE seq=?', (receipt['observation_seq'],)).fetchone()
     payload = json.loads(event['payload_json'])
     detail = {key: payload[key] for key in ('stage', 'code', 'message')}
@@ -39,12 +56,35 @@ def consume(store, selector: dict) -> dict:
             if receipt['task_id'] != task['task_id']:
                 raise BoardError('CONFLICT', 'reminderWaitId belongs to a different run')
             return _issue_message(connection, receipt)
+        pause_receipt = connection.execute(
+            "SELECT * FROM events WHERE kind='workflow.pause_delivered'"
+            " AND json_extract(payload_json,'$.waitId')=? ORDER BY seq DESC LIMIT 1",
+            (selector['reminderWaitId'],),
+        ).fetchone()
+        if pause_receipt is not None:
+            if pause_receipt['task_id'] != task['task_id']:
+                raise BoardError('CONFLICT', 'reminderWaitId belongs to a different run')
+            pause_event = connection.execute(
+                'SELECT * FROM events WHERE seq=?',
+                (json.loads(pause_receipt['payload_json'])['pauseEventId'],),
+            ).fetchone()
+            return _pause_message(pause_event)
         reminder = reminders.consume(store, connection, task, selector['reminderWaitId'])
         if reminder is not None:
             return {'reminder': reminder}
         issue = pending_issue(connection, task['task_id'])
         if issue is None:
-            return {}
+            pause_event = pending_pause(connection, task['task_id'])
+            if pause_event is None:
+                return {}
+            store._append_event(
+                connection, 'workflow.pause_delivered', task_id=task['task_id'],
+                payload={'pauseEventId': pause_event['seq'], 'waitId': selector['reminderWaitId']},
+                wake_owned=False,
+            )
+            head = store._head_of(connection)
+            store.db.after_commit(connection, lambda: store._notify(head))
+            return _pause_message(pause_event)
         opening = connection.execute('SELECT * FROM events WHERE seq=?', (issue['occurrence_seq'],)).fetchone()
         # Freeze the latest observation at delivery, not the opening's old cause.
         observation = connection.execute(

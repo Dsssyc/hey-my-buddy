@@ -504,6 +504,33 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(json.loads(lines[-1]['update']['content']['text'])['outcome']['summary'],
                          'Stopped partial work summary')
 
+    def test_pause_interrupts_native_turn_without_a_summary(self):
+        from hey_my_buddy.buddy.runtime.execution import classify_termination
+
+        context = self.context("wrap-up", timeout=None)
+        self.adapter.prepare(context)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
+        started = self.wait_native_turn_start()
+        controller.worker_stop(self.adapter, handle, stop_initiator="pause",
+                               grace_deadline=time.monotonic() + 10)
+        self.assertIsNotNone(handle.wait(180), "Codex fixture pause did not settle")
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=True,
+                                              stop_initiator="pause"), "pause")
+        self.assertTrue(handle.result.stop_evidence.interrupt.requested)
+        self.assertTrue(outcome.result["nativeSession"]["resumable"])
+        self.assertEqual(outcome.result["nativeCheckpoint"]["nativeTurnStatus"], "interrupted")
+        self.assertNotIn("turn", outcome.result)
+        self.assertIs(outcome.result["wrapUpDelivered"], False)
+        state = json.loads(Path(self.environment["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
+        turns = state["threads"][started["threadId"]]["turns"]
+        self.assertEqual([(item["id"], item["status"]) for item in turns],
+                         [(started["turnId"], "interrupted")])
+        self.assertEqual(state["threads"][started["threadId"]].get("resumeRequests", []), [])
+
     def test_read_only_accepts_disabled_network_receipt(self):
         result, _context = self.review('readonly-network-disabled', index=41)
         self.assertEqual(result.status, 'ok', result.result)

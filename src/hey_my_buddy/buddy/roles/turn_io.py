@@ -160,5 +160,8 @@ def validated_checkpoint(payload: dict, turn_input: dict) -> dict | None:
 
 def checkpoint_resumable(payload: dict, checkpoint: dict) -> bool:
     process = payload.get("processState")
-    return (checkpoint.get("nativeTurnStatus") == "completed" and checkpoint.get("bindingSaved") is True
-            and isinstance(process, dict) and type(process.get("nativeExitCode")) is int and process["nativeExitCode"] == 0)
+    return (checkpoint.get("bindingSaved") is True and isinstance(process, dict)
+            and process.get("shutdownConfirmed") is True
+            and (checkpoint.get("nativeTurnStatus") == "interrupted" or
+                 checkpoint.get("nativeTurnStatus") == "completed"
+                 and type(process.get("nativeExitCode")) is int and process["nativeExitCode"] == 0))

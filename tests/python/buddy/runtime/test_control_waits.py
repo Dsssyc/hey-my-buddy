@@ -131,3 +131,11 @@ class ControlWaitTests(unittest.TestCase):
                 control.stop()
                 control.join(2)
         self.assertFalse(control.is_alive())
+
+    def test_retried_pause_keeps_the_first_deadline_and_one_interrupt(self):
+        control = _ExecutionControl(self.execution)
+        control.request_stop('pause', 100.0)
+        control.request_stop('pause', 200.0)
+        self.assertEqual(control.requests, 1)
+        self.assertEqual(control.deadline, 100.0)
+        self.assertEqual(control.cancel_view['stopInitiator'], 'pause')

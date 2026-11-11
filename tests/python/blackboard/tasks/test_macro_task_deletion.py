@@ -852,7 +852,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        ("owned-content-command", run["runId"], "workflow.fixture", "hash",
                         json.dumps({"runId": run["runId"], "private": "content"}), "host-1"))
             db.execute("INSERT INTO commands(command_id,kind,request_hash,response_json,subject)"
-                       " VALUES(?,?,?,?,?)", ("owned-stop-command", "macro_task.stop", "hash",
+                       " VALUES(?,?,?,?,?)", ("owned-stop-command", "macro_task.end", "hash",
                        json.dumps({"macroTaskId": run["macroTaskId"], "private": "content"}), "host-1"))
             self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertGreater(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions WHERE run_id=?",

@@ -245,33 +245,23 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
                              status=409, code='MACRO_TASK_NOT_SETTLED')
         self.assertEqual(error['details']['blockers'], preview['blockers'])
 
-    def test_console_stop_then_confirmed_cancelled_micro_tasks_can_delete_without_host_conclusion(self):
+    def test_console_end_then_concluded_micro_tasks_can_be_deleted(self):
         board = self.board()
-        first = self.create(board, settled=False, create_macro={'title': 'Stop then delete', 'goal': 'Stop then delete'})
-        claim = self.claim(board, run_id=first['runId'])
-        second = self.create(board, 'queued-to-stop', settled=False, macroTaskId=first['macroTaskId'])
+        first = self.create(board, settled=False, create_macro={'title': 'End then delete', 'goal': 'End then delete'})
+        second = self.create(board, 'queued-to-end', settled=False, macroTaskId=first['macroTaskId'])
         target = first['macroTaskId']
         _, browser = self.open_console(board)
-        stopped = self.command(browser, 'macro_task_stop', {'macroTaskId': target, 'commandId': 'stop-before-delete'})
-        self.assertEqual({entry['runId'] for entry in stopped['results']}, {first['runId'], second['runId']})
-        self.assertTrue(all(entry['state'] == 'cancelled' and entry['stopped'] for entry in stopped['results']))
-        # Console stop fences the active turn, but cannot invent its shutdown.
+        ended = self.command(browser, 'macro_task_end', {'macroTaskId': target, 'commandId': 'end-before-delete'})
+        self.assertEqual({entry['runId'] for entry in ended['results']}, {first['runId'], second['runId']})
+        self.assertTrue(all(entry['concluded'] for entry in ended['results']), ended)
+        self.command(browser, 'macro_task_pause', {'macroTaskId': target, 'commandId': 'pause-before-delete'})
         preview = self.command(browser, PREVIEW, {'macroTaskId': target})
-        self.assertIn('macro-task-deletion.stop-unconfirmed', {row['reason']['code'] for row in preview['blockers']})
-        self.command(browser, DELETE, {'macroTaskId': target, 'microTaskCount': 2, 'confirm': True},
-                     status=409, code='MACRO_TASK_NOT_SETTLED')
-        self.finish_turn(board, claim, runner_status='cancelled', seal=False)
-        for run in (first, second):
-            view = board.call('workflow_get', {'runId': run['runId']})
-            self.assertEqual((view['state'], view['status'], view['hostConclusion']), ('cancelled', 'cancelled', None))
-        preview = self.command(browser, PREVIEW, {'macroTaskId': target})
-        self.assertEqual((preview['microTaskCount'], preview['unconcludedFailureCount'], preview['blockerTotal']), (2, 2, 0))
-        with board.store.db.read() as connection:
-            self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_host_conclusions').fetchone()[0], 0)
+        self.assertEqual((preview['microTaskCount'], preview['unconcludedFailureCount'], preview['blockerTotal']), (2, 0, 0))
         deleted = self.command(browser, DELETE, {'macroTaskId': target, 'microTaskCount': 2, 'confirm': True})
         self.assertEqual(deleted['state'], 'deleted')
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_runs WHERE macro_task_id=?', (target,)).fetchone()[0], 0)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM work_pauses WHERE macro_task_id=?', (target,)).fetchone()[0], 0)
             self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
 
     def test_count_change_requires_a_new_preview_before_deletion(self):

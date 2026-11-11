@@ -97,6 +97,8 @@ def stop_termination_reason(*, shutdown_confirmed: bool, stop_initiator: str | N
     """Classify a stop once, separately from its initiator and shutdown evidence."""
     if shutdown_confirmed is not True:
         return None
+    if stop_initiator == "pause":
+        return "pause"
     if wrap_up_delivered:
         return "wrap-up"
     if grace_expired:
@@ -141,6 +143,15 @@ def start_wrap_up(handle: InlineRunHandle, deadline: float, *, stop_initiator: s
     """Interrupt the current native turn once, with its bounded wrap-up intent."""
     handle.stop_initiator = stop_initiator
     handle.wrap_up_started = True
+    handle.grace_deadline = deadline
+    handle.cancel_requested = True
+    handle.signalled_at = time.monotonic()
+    handle.cancelled.set()
+
+
+def start_pause(handle: InlineRunHandle, deadline: float) -> None:
+    """Interrupt the native turn and retain its session for a later continuation."""
+    handle.stop_initiator = "pause"
     handle.grace_deadline = deadline
     handle.cancel_requested = True
     handle.signalled_at = time.monotonic()

@@ -17,6 +17,7 @@ from ...private_dirs import ensure_private_dir
 from ...protocol.capabilities import select_input_limit
 from ...protocol.input_failure import INPUT_REJECTED, input_failure, is_input_too_large
 from ...protocol.input_limit import check_prompt_input
+from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.c_two_live import CTwoLiveEndpoint
 from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ..harnesses.registry import adapter, run_seam
@@ -310,7 +311,8 @@ def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
             stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
     wrap_up_candidate = False
     grace_expired = False
-    if (control["operation"] == "worker" and handle.cancelled.is_set()
+    if (control["operation"] == "worker" and handle.stop_initiator in WRAP_UP_INITIATORS
+            and handle.cancelled.is_set()
             and result.end.status == "cancelled" and adapter(control["harness"]).interrupted_resume):
         deadline = handle.grace_deadline if handle.wrap_up_started else None
         if deadline is not None:

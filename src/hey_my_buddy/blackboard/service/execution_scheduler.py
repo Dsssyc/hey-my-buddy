@@ -598,9 +598,15 @@ class ExecutionScheduler:
         attempt = view.get("selectedAttempt") or {}
         if attempt.get("forceRequestedAt") is not None:
             reason = attempt["forceReason"]
-            initiator = "deadline" if reason == "deadline" else view.get("stopInitiator") or "service"
+            initiator = reason if reason in ("deadline", "pause") else view.get("stopInitiator") or "service"
             return (initiator, None, True, reason), None
         initiator = view.get("stopInitiator") if view.get("cancelRequested") else None
+        if initiator == "console":
+            from ..tasks.work_pauses import stop_request
+            with self.store.db.read() as connection:
+                row = self.store._attempt_row(connection, attempt["attemptId"])
+                if stop_request(connection, row) is not None:
+                    initiator = "pause"
         deadline = self._deadline(view.get("graceDeadline")) if initiator else None
         try:
             budget_deadline = self._budget_deadline(handle)
@@ -641,6 +647,8 @@ class ExecutionScheduler:
 
     @staticmethod
     def _forced_reason(initiator: str | None, grace_deadline: str | None) -> str:
+        if initiator == "pause":
+            return "pause"
         if initiator == "deadline":
             return "deadline"
         if grace_deadline is not None:

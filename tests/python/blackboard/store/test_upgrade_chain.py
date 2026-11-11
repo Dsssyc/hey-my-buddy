@@ -161,6 +161,30 @@ class UpgradeChainTests(unittest.TestCase):
         self.assertEqual([r[0] for r in self.db.execute('PRAGMA integrity_check')], ['ok'])
         self.assertEqual(list(self.db.execute('PRAGMA foreign_key_check')), [])
 
+    def test_schema_40_to_41_adds_exclusive_pause_units(self):
+        with self.db:
+            for version in range(30, 40):
+                upgrade.STEPS[version](self.db)
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '40')
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 40, 'targetSchema': 41})
+        self.assert_current_structure()
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM work_pauses').fetchone()[0], 0)
+        self.db.execute('PRAGMA foreign_keys=ON')
+        macro_id = self.db.execute('SELECT macro_task_id FROM macro_tasks LIMIT 1').fetchone()[0]
+        standalone = self.db.execute('SELECT run_id FROM workflow_runs WHERE macro_task_id IS NULL LIMIT 1').fetchone()
+        self.assertIsNotNone(standalone)
+        with self.db:
+            self.db.execute('INSERT INTO work_pauses(macro_task_id,paused_at) VALUES(?,?)',
+                            (macro_id, '2026-11-11T12:00:00.000Z'))
+            self.db.execute('INSERT INTO work_pauses(run_id,paused_at) VALUES(?,?)',
+                            (standalone[0], '2026-11-11T12:01:00.000Z'))
+        for macro, run in ((None, None), (macro_id, standalone[0]), (macro_id, None), (None, standalone[0]),
+                           ('missing-macro', None), (None, 'missing-run')):
+            with self.subTest(macro=macro, run=run), self.assertRaises(sqlite3.IntegrityError):
+                with self.db:
+                    self.db.execute('INSERT INTO work_pauses(macro_task_id,run_id,paused_at) VALUES(?,?,?)',
+                                    (macro, run, '2026-11-11T12:02:00.000Z'))
+
     def test_all_dropped_facts_have_floor_stock_and_equal_the_frozen_spec(self):
         rows = list(self.db.execute('SELECT * FROM tasks'))
         metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
@@ -317,7 +341,7 @@ class UpgradeChainTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '39')
         self.assertIn('label', [row['name'] for row in self.db.execute('PRAGMA table_info(buddies)')])
 
-        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 39, 'targetSchema': 40})
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 39, 'targetSchema': SCHEMA_VERSION})
         self.assertEqual({row['model']: row['description'] for row in self.db.execute(
             'SELECT model,description FROM model_services')},
             {'fixture-alpha': '', 'fixture-beta': 'Native beta description',

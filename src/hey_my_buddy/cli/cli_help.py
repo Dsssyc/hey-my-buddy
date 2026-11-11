@@ -80,6 +80,10 @@ def _detail(name: str, audience: str) -> str:
     if model.rules:
         lines.append("Field combinations:")
         lines.extend(f"  {rule}" for rule in model.rules)
+    if audience == "host" and name == "await":
+        lines.append("A console pause interruption returns outcome paused once for that interruption; await again after resume.")
+    if audience == "host" and name == "get":
+        lines.append("A macro task view includes paused: {pausedAt} while paused, or null otherwise.")
     if name != "console" and audience in ("host", "operations"):
         lines.append("CLI-only output: brief (default) or full; omitted before service validation.")
     return "\n".join(lines)

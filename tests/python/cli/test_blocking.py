@@ -122,6 +122,22 @@ class AwaitTests(unittest.TestCase):
         self.assertEqual(answer["outcome"], "review-reminder")
         self.assertEqual(answer["actions"], run["actions"])
 
+    def test_pause_interruption_returns_once_without_treating_run_as_host_pending(self):
+        active = {"runId": "run-1", "state": "queued", "workflowState": "executing",
+                  "queueReason": "paused", "revision": 2, "actions": ["await", "get"]}
+        delivered = {**active, "pause": {"pausedAt": "2026-11-11T00:00:00Z", "eventId": 7}}
+        calls = []
+        def service(method, params, directory):
+            calls.append(method)
+            return active if method == 'task_get' else delivered
+        answer = await_run({"runId": "run-1"}, self.state_dir, service=service,
+                           clock=self.clock)
+        self.assertEqual(calls, ['task_get', 'task_wait'])
+        self.assertEqual(answer['outcome'], 'paused')
+        self.assertEqual(answer['queueReason'], 'paused')
+        self.assertEqual(answer['pause'], delivered['pause'])
+        self.assertNotIn('requestId', answer)
+
     def test_upgrade_handover_rearms_same_wait_inside_window(self):
         (self.state_dir / "upgrade.json").write_text("{}", encoding="utf-8")
         active = {"runId": "run-1", "state": "running", "workflowState": "executing",

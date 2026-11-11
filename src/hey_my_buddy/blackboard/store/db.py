@@ -20,7 +20,7 @@ from typing import Iterator
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 from .schema_37_38 import ROUTER_SETTINGS_DDL
 
-SCHEMA_VERSION = 40
+SCHEMA_VERSION = 41
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 AGENT_TOKEN_VERSION = 1
@@ -641,6 +641,16 @@ CREATE TABLE IF NOT EXISTS macro_task_goals (
     # The immutable submitted spec and fingerprint live in tasks; continuations
     # record their own effective input in workflow_continuations.
     WORKFLOW_RUNS_DDL,
+    """
+CREATE TABLE IF NOT EXISTS work_pauses (
+    macro_task_id TEXT REFERENCES macro_tasks(macro_task_id) ON DELETE RESTRICT,
+    run_id        TEXT REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    paused_at     TEXT NOT NULL,
+    CHECK ((macro_task_id IS NULL) <> (run_id IS NULL)),
+    UNIQUE (macro_task_id),
+    UNIQUE (run_id)
+);
+""",
     """
 CREATE INDEX IF NOT EXISTS workflow_runs_state_idx ON workflow_runs(state, updated_at);
 CREATE INDEX IF NOT EXISTS workflow_runs_macro_task_idx ON workflow_runs(macro_task_id, activity_seq DESC, run_id DESC);

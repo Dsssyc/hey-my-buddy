@@ -1,0 +1,1 @@
+The user paused this work in the console and has now resumed it. Continue the original task from the interrupted turn, preserving its scope, permissions and acceptance requirements. Inspect the retained context and partial work, then finish the remaining work and return the required structured outcome.

@@ -84,7 +84,9 @@ CONTROL_OPERATIONS = (
     "macro_task_list",
     "macro_task_timeline",
     "macro_task_goal_history",
-    "macro_task_stop",
+    "macro_task_pause",
+    "macro_task_resume",
+    "macro_task_end",
     "macro_task_deletion_preview",
     "macro_task_delete",
 )
@@ -723,10 +725,26 @@ class BoardService(_BaseResource):
             lambda params: macro_tasks.macro_task_goal_history(self.store, params),
         )
 
-    def macro_task_stop(self, request_json: str) -> str:
+    def macro_task_pause(self, request_json: str) -> str:
         return self._guard(
-            "macro_task.stop", request_json,
-            lambda params: self.store.workflow.stop_macro_task(
+            "macro_task.pause", request_json,
+            lambda params: self.store.workflow.pause_macro_task(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            ),
+        )
+
+    def macro_task_resume(self, request_json: str) -> str:
+        return self._guard(
+            "macro_task.resume", request_json,
+            lambda params: self.store.workflow.resume_macro_task(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            ),
+        )
+
+    def macro_task_end(self, request_json: str) -> str:
+        return self._guard(
+            "macro_task.end", request_json,
+            lambda params: self.store.workflow.end_macro_task(
                 params, console_authority=workflow_module.console_authority_from_scope()
             ),
         )

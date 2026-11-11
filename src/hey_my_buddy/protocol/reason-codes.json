@@ -179,6 +179,7 @@
   "macro-task-deletion.unsafe-path": [],
   "macro-task-deletion.unsealed-changes": [],
   "macro-task-deletion.unsealed-handoff": [],
+  "macro-task-ended": [],
   "micro-task-cancelled": [],
   "micro-task-not-found": [],
   "micro-task-not-owned": [],
@@ -263,5 +264,6 @@
   "workspace.continuation-prepare-failed": [
     "continuationId"
   ],
+  "work-paused": [],
   "workflow.input-rejected": ["harness"]
 }

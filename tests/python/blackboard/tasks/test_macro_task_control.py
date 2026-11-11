@@ -1,0 +1,388 @@
+"""Console pause/resume/end uses durable units, real admission and stopped evidence."""
+from __future__ import annotations
+
+import json
+import threading
+from unittest.mock import patch
+
+from blackboard.tasks.test_workflow import WorkflowTestCase, NONCE
+from blackboard.routing.test_decision import DecisionTestCase
+from blackboard.tasks import test_lead_owned as lead_helpers
+from blackboard.tasks import test_interrupted_continuation as interruption_fixtures
+from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
+from types import SimpleNamespace
+from console.test_console import ConsoleTestCase
+from hey_my_buddy.blackboard.tasks.macro_tasks import pending_root_count
+from hey_my_buddy.buddy.roles.turn_io import input_hash
+from hey_my_buddy.errors import BoardError
+
+
+class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
+    lead = lead_helpers.LeadOwnedTests.lead
+    owned = lead_helpers.LeadOwnedTests.owned
+    finish_owned = lead_helpers.LeadOwnedTests.finish_owned
+    interrupted = interruption_fixtures.InterruptedContinuationTests.interrupted
+    def control(self, board, action, target, command=None, **extra):
+        if not hasattr(self, '_control_browser'):
+            _, self._control_browser = self.open_console(board)
+        browser = self._control_browser
+        status, _, raw = browser.command('macro_task_' + action,
+            {'macroTaskId': target, 'commandId': command or action + target, **extra},
+            csrf=browser.bootstrap()['csrfToken'])
+        self.assertEqual(status, 200, raw)
+        return json.loads(raw)['result']
+
+    def pause_result(self, board, claim, *, shutdown=True, harness='dsh'):
+        document = claim['claim']['turn']['input']
+        result = {'processState': {'shutdownConfirmed': shutdown}}
+        if harness in ('codex', 'dsh'):
+            result['nativeSession'] = {
+                'harness': harness, 'sessionId': 'paused-session', 'resumable': True,
+                'storageOwner': 'harness-user-store' if harness == 'codex' else 'hey-my-buddy-micro-task'}
+        if harness == 'codex':
+            result.update(sessionId='paused-session', nativeTurnId='interrupted-native-turn')
+            result['nativeCheckpoint'] = {
+                'version': 1, **{key: document[key] for key in ('taskId','attemptId','generation','turnId')},
+                'inputSha256': input_hash(document), 'sessionId': 'paused-session',
+                'nativeTurnId': 'interrupted-native-turn', 'nativeTurnStarted': True,
+                'nativeTurnStatus': 'interrupted', 'eventSeq': 4, 'bindingSaved': True}
+        return board.call('execution_result', {
+            'attemptId': document['attemptId'], 'generation': document['generation'], 'nonce': NONCE,
+            'status': 'cancelled', 'result': result, 'shutdownConfirmed': shutdown,
+            'terminationReason': 'pause' if shutdown else None})
+
+    def test_pause_fences_existing_new_work_and_restart_resume_releases_both(self):
+        board = self.board()
+        first = self.submit(board, kind='worktree', create_macro={'title':'Pause unit','goal':'Work'})
+        target = first['macroTaskId']
+        paused = self.control(board, 'pause', target)
+        late = self.submit(board, kind='worktree', request_id='late', macroTaskId=target)
+        other = self.submit(board, kind='worktree', request_id='other')
+        for run in (first, late):
+            self.assertEqual(board.call('workflow_get', {'runId':run['runId']})['queueReason'], 'paused')
+            self.assertIsNone(self.claim(board, run_id=run['runId'])['claim'])
+        self.assertIsNotNone(self.claim(board, run_id=other['runId'])['claim'])
+        restarted = self.board()
+        restarted.store.reconcile_startup()
+        self.assertEqual(restarted.call('workflow_get', {'macroTaskId':target})['paused'], paused['paused'])
+        self.assertIsNone(self.claim(restarted, run_id=late['runId'])['claim'])
+        self.control(board, 'resume', target)
+        for run in (first, late):
+            self.assertIsNotNone(self.claim(board, run_id=run['runId'])['claim'])
+
+    def test_interruption_queues_one_console_continuation_and_native_resume_by_capability(self):
+        board = self.board(max_concurrent=8)
+        for harness, expected in (('codex','native-session'),('dsh','native-session'),
+                                  ('zcode','reconstructed-new-session'),('claude','reconstructed-new-session')):
+            with self.subTest(harness=harness):
+                self.executors[harness].native_resume = harness != 'claude'
+                run = self.submit(board, kind='worktree', request_id=harness, harness=harness)
+                first = self.claim(board, run_id=run['runId'])
+                target = 'run:' + run['runId']
+                self.control(board, 'pause', target)
+                attempt = board.call('task_get', {'runId':run['runId']})['task']['selectedAttempt']
+                self.assertEqual(attempt['stopInitiator'], 'console')
+                self.assertEqual(attempt['graceDeadline'] is not None, harness in ('codex','dsh'))
+                self.pause_result(board, first, harness=harness)
+                paused = board.call('workflow_get', {'runId':run['runId']})
+                self.assertEqual((paused['state'],paused['queueReason'],paused['currentTurn']['state']),
+                                 ('executing','paused','interrupted'))
+                self.assertFalse(paused['awaitingHost'])
+                self.assertEqual(pending_root_count(board.store), 0)
+                self.assertIsNone(self.claim(board, run_id=run['runId'])['claim'])
+                wait = {'runId':run['runId'],'timeoutMs':0,'consumeReminders':True,'reminderWaitId':'pause-'+harness}
+                self.assertIn('pause', board.call('task_wait', wait))
+                self.assertNotIn('pause', board.call('task_wait', {**wait,'reminderWaitId':'later-'+harness}))
+                self.control(board, 'resume', target)
+                second = self.claim(board, run_id=run['runId'])['claim']['turn']['input']
+                self.assertEqual(second['resumeMode'], expected)
+                self.assertIn('Continue the original task', second['context']['continuation']['input'])
+                with board.store.db.read() as connection:
+                    records = connection.execute('SELECT * FROM workflow_continuations WHERE run_id=?', (run['runId'],)).fetchall()
+                    self.assertEqual(len(records), 1)
+                    event = connection.execute("SELECT * FROM events WHERE task_id=? AND kind='workflow.paused'", (run['runId'],)).fetchone()
+                    self.assertEqual(event['actor_role'], 'console')
+
+    def test_host_continue_during_pause_is_recorded_then_starts_after_resume(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        self.finish_turn(board, self.claim(board), disposition='attention')
+        target = 'run:' + run['runId']
+        self.control(board, 'pause', target)
+        waiting = board.call('workflow_get', {'runId':run['runId']})
+        self.assertEqual(waiting['state'], 'awaiting-host')
+        self.continue_run(board, waiting)
+        self.assertEqual(board.call('workflow_get', {'runId':run['runId']})['queueReason'], 'paused')
+        self.assertIsNone(self.claim(board, run_id=run['runId'])['claim'])
+        self.control(board, 'resume', target)
+        self.assertIsNotNone(self.claim(board, run_id=run['runId'])['claim'])
+
+    def test_pause_does_not_cancel_queued_host_response(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        self.finish_turn(board, self.claim(board), disposition='attention')
+        continued = self.continue_run(board, board.call('workflow_get', {'runId':run['runId']}))
+        target = 'run:' + run['runId']
+        self.control(board, 'pause', target)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT state FROM workflow_continuations WHERE continuation_id=?',
+                                                (continued['continuationId'],)).fetchone()[0], 'queued')
+        self.control(board, 'resume', target)
+        self.assertIsNotNone(self.claim(board, run_id=run['runId'])['claim'])
+
+    def test_resume_before_stop_settlement_still_queues_the_interrupted_turn(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        first = self.claim(board)
+        target = 'run:' + run['runId']
+        self.control(board, 'pause', target)
+        self.control(board, 'resume', target)
+        self.assertIsNone(self.claim(board, run_id=run['runId'])['claim'])
+        self.pause_result(board, first)
+        self.assertEqual(board.call('workflow_get', {'runId':run['runId']})['state'], 'executing')
+        self.assertIsNotNone(self.claim(board, run_id=run['runId'])['claim'])
+
+    def test_router_is_fenced_and_resume_routes_again(self):
+        board = self.board()
+        self.catalog_fixture()
+        DecisionTestCase.use_helper(self)
+        DecisionTestCase.seed(self, board)
+        run = self.submit(board, request_id='routed', buddy='route',
+                          create_macro={'title':'Routing pause','goal':'Route'})
+        old = run['routing']['taskId']
+        self.control(board, 'pause', run['macroTaskId'])
+        self.assertEqual(board.call('task_get', {'runId':old})['task']['state'], 'cancelled')
+        self.assertIsNone(self.claim(board, run_id=old)['claim'])
+        self.control(board, 'resume', run['macroTaskId'])
+        self.claim(board, run_id=run['runId'])
+        current = board.call('workflow_get', {'runId':run['runId']})
+        self.assertNotEqual(current['routing']['taskId'], old)
+        self.assertEqual(current['state'], 'executing')
+
+    def test_end_concludes_queued_routing_work_and_stops_its_router(self):
+        board = self.board()
+        self.catalog_fixture()
+        DecisionTestCase.use_helper(self)
+        DecisionTestCase.seed(self, board)
+        run = self.submit(board, request_id='routing-end', buddy='route',
+                          create_macro={'title':'End routing','goal':'Route'})
+        router_id = run['routing']['taskId']
+        result = self.control(board, 'end', run['macroTaskId'])
+        self.assertTrue(result['results'][0]['concluded'], result)
+        self.assertEqual(board.call('workflow_get', {'runId':run['runId']})['state'], 'concluded')
+        self.assertEqual(board.call('task_get', {'runId':router_id})['task']['state'], 'cancelled')
+        self.assertIsNone(self.claim(board, run_id=router_id)['claim'])
+
+    def test_end_concludes_all_unfinished_states_and_preserves_delivered(self):
+        board = self.board(max_concurrent=8)
+        queued = self.submit(board, kind='worktree', request_id='queued', create_macro={'title':'End unit','goal':'Work'})
+        runs = {'queued':queued}
+        for state in ('awaiting-host','failed','cancelled','delivered','accepted'):
+            run = self.submit(board, kind='worktree', request_id=state, macroTaskId=queued['macroTaskId'])
+            runs[state] = run
+            if state == 'cancelled':
+                board.call('workflow_cancel', {'runId':run['runId']})
+                continue
+            self.finish_turn(board, self.claim(board, run_id=run['runId']),
+                disposition='attention' if state == 'awaiting-host' else 'completed',
+                runner_status='failed' if state == 'failed' else 'ok', seal=state != 'failed')
+            if state == 'accepted':
+                self.accept_run(board, board.call('workflow_get', {'runId':run['runId']}))
+        before = {name:board.call('workflow_get', {'runId':run['runId']}) for name,run in runs.items()}
+        result = self.control(board, 'end', queued['macroTaskId'])
+        self.assertTrue(all(item['concluded'] for item in result['results']), result)
+        for state, run in runs.items():
+            view = board.call('workflow_get', {'runId':run['runId']})
+            if state in ('delivered','accepted'):
+                self.assertEqual(view['state'], state)
+                self.assertEqual(view['task']['revision'], before[state]['task']['revision'])
+            else:
+                self.assertEqual(view['state'], 'concluded', view)
+                self.assertEqual(view['hostConclusion']['actor']['role'], 'console')
+                self.assertEqual(view['hostConclusion']['reason']['code'], 'macro-task-ended')
+                if state in ('failed','cancelled'):
+                    self.assertEqual(view['hostConclusion']['executionStatus'], state)
+        replay = self.control(board, 'end', queued['macroTaskId'])
+        self.assertTrue(replay['duplicate'])
+        self.assertEqual(replay['results'], result['results'])
+
+    def test_end_unknown_stop_records_no_conclusion_then_new_end_can_close_it(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        active = self.claim(board)
+        target = 'run:' + run['runId']
+        with patch.object(board.store.workflow, 'END_WAIT_SECONDS', 0):
+            result = self.control(board, 'end', target)
+        self.assertFalse(result['results'][0]['concluded'])
+        self.assertEqual(result['results'][0]['error']['code'], 'SHUTDOWN_UNCONFIRMED')
+        self.assertIsNone(board.call('workflow_get', {'runId':run['runId']})['hostConclusion'])
+        self.finish_turn(board, active, runner_status='cancelled', seal=False)
+        result = self.control(board, 'end', target, 'confirmed-end')
+        self.assertTrue(result['results'][0]['concluded'], result)
+
+    def test_end_waits_for_real_settlement_before_concluding(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        claim = self.claim(board)
+        def settle():
+            with board.store._condition:
+                board.store._condition.wait_for(lambda: self._end_recorded(board), timeout=5)
+            self.finish_turn(board, claim, runner_status='cancelled', seal=False)
+        thread = threading.Thread(target=settle)
+        thread.start()
+        try:
+            result = self.control(board, 'end', 'run:' + run['runId'])
+        finally:
+            thread.join(timeout=10)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(result['results'][0]['concluded'], result)
+
+    @staticmethod
+    def _end_recorded(board):
+        with board.store.db.read() as connection:
+            return connection.execute("SELECT 1 FROM events WHERE kind='macro_task.ended'").fetchone() is not None
+
+    def test_end_reports_a_recorded_conclusion_even_if_checkout_reclaim_is_blocked(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        with patch.object(board.store.workflow, '_reclaim_checkout', side_effect=BoardError('STORAGE_BUSY','Fixture cleanup is busy')):
+            result = self.control(board, 'end', 'run:'+run['runId'])
+        self.assertTrue(result['results'][0]['concluded'])
+        self.assertEqual(result['results'][0]['reclaimError']['code'], 'STORAGE_BUSY')
+        self.assertEqual(board.call('workflow_get', {'runId':run['runId']})['state'], 'concluded')
+
+    def test_new_end_can_settle_an_end_interrupted_before_its_receipt(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        target = 'run:'+run['runId']
+        with patch.object(board.store.workflow, '_seal_conclusion', side_effect=RuntimeError('simulated service loss')):
+            with self.assertRaises(RuntimeError):
+                board.store.workflow.end_macro_task({'macroTaskId':target, 'commandId':'lost-end'},
+                                                     console_authority={'sessionId':'browser'})
+        result = self.control(board, 'end', target, 'recover-end')
+        self.assertTrue(result['results'][0]['concluded'], result)
+        self.control(board, 'pause', target, 'pause-closed-unit')
+
+    def test_end_fences_a_host_replay_during_stop_confirmation(self):
+        board = self.board(max_concurrent=4)
+        run = self.submit(board, kind='worktree', create_macro={'title':'Ending','goal':'Work'})
+        self.finish_turn(board, self.claim(board), disposition='attention')
+        waiting = board.call('workflow_get', {'runId':run['runId']})
+        params = {'runId':run['runId'], 'requestId':waiting['activeRequest']['requestId'], 'input':'Continue'}
+        board.call('workflow_continue', params)
+        active = self.submit(board, kind='worktree', request_id='active-end', macroTaskId=run['macroTaskId'])
+        claim = self.claim(board, run_id=active['runId'])
+        def observe_stop(_params):
+            with self.assertRaises(BoardError) as caught:
+                board.call('workflow_continue', params)
+            self.assertEqual(caught.exception.code, 'CONFLICT')
+            self.finish_turn(board, claim, runner_status='cancelled', seal=False)
+            return {}
+        with patch.object(board.store, 'events_wait', side_effect=observe_stop):
+            result = self.control(board, 'end', run['macroTaskId'])
+        self.assertTrue(all(item['concluded'] for item in result['results']), result)
+
+    def test_pause_keeps_host_boundary_and_blocks_helpers_in_the_standalone_tree(self):
+        board = self.board(max_concurrent=4)
+        run = self.submit(board, kind='worktree')
+        self.finish_turn(board, self.claim(board), disposition='assistance')
+        view = board.call('workflow_get', {'runId':run['runId']})
+        approved = self.decide(board, view, view['activeRequest']['requestId'], autoContinue=False, helpers=[{
+            'title':'helper','task':'Assist','cwd':str(self.workdir('pause-helper')),
+            'workspace':{'kind':'worktree','access':'write'}}])
+        helper = approved['children'][0]['taskId']
+        before = board.call('workflow_get', {'runId':run['runId']})
+        self.control(board, 'pause', 'run:'+run['runId'])
+        self.assertIsNone(self.claim(board, run_id=helper)['claim'])
+        self.assertEqual(board.call('workflow_get', {'runId':helper})['queueReason'], 'paused')
+        current = board.call('workflow_get', {'runId':run['runId']})
+        self.assertEqual(current['activeRequest'], before['activeRequest'])
+        self.assertEqual(current['queueReason'], before['queueReason'])
+        self.control(board, 'resume', 'run:'+run['runId'])
+        self.assertIsNotNone(self.claim(board, run_id=helper)['claim'])
+
+    def test_end_preserves_delivered_owned_work_below_the_lead(self):
+        board = self.board(max_concurrent=4)
+        lead, claim = self.lead(board, create_macro={'title':'Lead end','goal':'Work'})
+        delivered = self.owned(board, claim, 'delivered-owned')
+        pending = self.owned(board, claim, 'pending-owned')
+        self.finish_owned(board, delivered, worker='w2')
+        self.finish_turn(board, {'claim':claim}, outcome={
+            'disposition':'waiting','summary':'Wait for owned work','remaining':[], 'decisions':[], 'artifacts':[], 'request':None})
+        result = self.control(board, 'end', lead['macroTaskId'])
+        self.assertTrue(all(item['concluded'] for item in result['results']), result)
+        self.assertEqual(board.call('workflow_get', {'runId':delivered['runId']})['state'], 'delivered')
+        self.assertEqual(board.call('workflow_get', {'runId':pending['runId']})['state'], 'concluded')
+        self.assertEqual(board.call('workflow_get', {'runId':lead['runId']})['state'], 'concluded')
+
+    def test_recovery_without_receipt_keeps_pause_intent_and_queues_continuation(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        claim = self.claim(board)
+        self.control(board, 'pause', 'run:'+run['runId'])
+        self.interrupted(board, claim)
+        view = board.call('workflow_get', {'runId':run['runId']})
+        self.assertEqual((view['state'],view['currentTurn']['state'],view['queueReason']), ('executing','interrupted','paused'))
+        result = board.call('task_get', {'runId':run['runId']})['task']
+        self.assertEqual(result['terminationReason'], 'pause')
+        self.assertTrue(any(item['kind']=='partial-output' for item in view['artifacts']))
+
+    def test_pause_release_before_process_creation_keeps_queued_work_and_ownership(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        claim = self.claim(board)
+        self.control(board, 'pause', 'run:'+run['runId'])
+        released = board.store.release_execution(claim['claim']['attempt']['attemptId'], reason='execution-process-not-created')
+        self.assertEqual(released['task']['state'], 'queued')
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT state FROM workspace_reservations WHERE holder_task_id=? ORDER BY rowid DESC", (run['runId'],)).fetchone()[0], 'held')
+        self.control(board, 'resume', 'run:'+run['runId'])
+        self.assertIsNotNone(self.claim(board, run_id=run['runId'])['claim'])
+
+    def test_pause_interrupts_an_existing_host_stop_without_reviving_cancelled_work(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        claim = self.claim(board)
+        board.call('workflow_cancel', {'runId':run['runId']})
+        self.control(board, 'pause', 'run:'+run['runId'])
+        scheduler = ExecutionScheduler(board.service, live_registry=board.service.live_registry)
+        view = board.call('task_get', {'runId':run['runId']})['task']
+        intent, _ = scheduler._stop_intent(view, SimpleNamespace(budget_path=self.directory/'no-budget'))
+        self.assertEqual(intent[0], 'pause')
+        self.pause_result(board, claim)
+        self.assertEqual(board.call('workflow_get', {'runId':run['runId']})['state'], 'cancelled')
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?', (run['runId'],)).fetchone()[0], 0)
+
+    def test_scheduler_derives_pause_after_resume_and_forces_at_the_grace_deadline(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        claim = self.claim(board)
+        target = 'run:'+run['runId']
+        self.control(board, 'pause', target)
+        self.control(board, 'resume', target)
+        scheduler = ExecutionScheduler(board.service, live_registry=board.service.live_registry)
+        view = board.call('task_get', {'runId':run['runId']})['task']
+        handle = SimpleNamespace(budget_path=self.directory/'no-budget')
+        intent, _ = scheduler._stop_intent(view, handle)
+        self.assertEqual((intent[0],intent[2]), ('pause', False))
+        with patch.object(scheduler, '_deadline', return_value=0):
+            intent, _ = scheduler._stop_intent(view, handle)
+        self.assertEqual((intent[0],intent[2],intent[3]), ('pause', True, 'pause'))
+
+    def test_controls_require_console_authority_and_receipts_reject_changed_requests(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        target = 'run:' + run['runId']
+        for action in ('pause','resume','end'):
+            with self.assertRaises(BoardError) as caught:
+                board.call('macro_task_'+action, {'macroTaskId':target,'commandId':action})
+            self.assertEqual(caught.exception.code, 'UNAUTHORIZED')
+        first = self.control(board, 'pause', target, 'same')
+        self.assertTrue(self.control(board, 'pause', target, 'same')['duplicate'])
+        self.assertIsNotNone(first['paused'])
+        browser = self._control_browser
+        self.assertEqual(browser.command('macro_task_pause', {'macroTaskId':target,'commandId':'same','note':'changed'},
+                                        csrf=browser.bootstrap()['csrfToken'])[0], 409)
+        self.assertEqual(browser.command('macro_task_stop', {'macroTaskId':target,'commandId':'retired'},
+                                        csrf=browser.bootstrap()['csrfToken'])[0], 404)

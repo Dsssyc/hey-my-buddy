@@ -57,7 +57,7 @@ PREFLIGHT_MAX_RETRY_SECONDS = 180.0
 (
     TERMINATION_COMPLETED, TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED,
     TERMINATION_FORCED_STOP, TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP,
-    TERMINATION_UNKNOWN_STOP, TERMINATION_DEADLINE, TERMINATION_HARNESS_ERROR,
+    TERMINATION_UNKNOWN_STOP, TERMINATION_PAUSE, TERMINATION_DEADLINE, TERMINATION_HARNESS_ERROR,
     TERMINATION_TRANSPORT_ERROR, TERMINATION_INTERRUPTED, TERMINATION_WORKSPACE_ERROR,
 ) = TERMINATION_REASONS
 
@@ -387,7 +387,7 @@ class _ExecutionLive:
 
     def stop(self, request_json: str) -> str:
         value = self._auth(request_json, {"initiator", "graceDeadline", "force"})
-        if value["initiator"] not in {"host", "lead", "console", "service", "deadline", "unknown"}:
+        if value["initiator"] not in {"host", "lead", "console", "pause", "service", "deadline", "unknown"}:
             raise BoardError("INVALID_ARGUMENT", "Unknown stop initiator")
         if type(value["force"]) is not bool:
             raise BoardError("INVALID_ARGUMENT", "Invalid stop force fact")
@@ -862,7 +862,8 @@ class Execution:
         if enrich(context, outcome) and termination_reason == TERMINATION_COMPLETED:
             termination_reason = TERMINATION_WORKSPACE_ERROR
         if termination_reason in (TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED, TERMINATION_FORCED_STOP,
-                                  TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP):
+                                  TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP,
+                                  TERMINATION_PAUSE):
             outcome.status = "cancelled"
         if "partialOutput" in outcome.result:
             outcome.result["partialOutput"]["reason"] = termination_reason
@@ -957,7 +958,8 @@ class _ExecutionControl(threading.Thread):
         # Signal handlers only update local facts; native cancellation runs on
         # this thread instead of re-entering locks from the main thread.
         if self.cancel_view is not None and not force:
-            if self.deadline is None or initiator in WRAP_UP_INITIATORS:
+            if (self.deadline is None or initiator in WRAP_UP_INITIATORS
+                    or initiator == self.cancel_view["stopInitiator"] == "pause"):
                 return
         self.requests += 2 if force else 1
         self.cancel_view = {"cancelRequested": True, "stopInitiator": initiator}

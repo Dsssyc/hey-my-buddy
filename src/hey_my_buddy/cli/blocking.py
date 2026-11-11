@@ -62,6 +62,8 @@ def _view(run: dict, *, outcome: str, started: float, wait_seconds: int,
                 'checkout', 'unsealedChanges'):
         if key in run:
             view[key] = run[key]
+    if isinstance(run.get('pause'), dict):
+        view['pause'] = run['pause']
     selected = run.get("selectedAttempt")
     if isinstance(selected, dict) and "issues" in selected:
         view["selectedAttempt"] = {"issues": selected["issues"]}
@@ -149,6 +151,9 @@ def await_run(
             if isinstance(reminder, dict):
                 return _view(run, outcome=reminder["kind"], started=started,
                              wait_seconds=wait_seconds, clock=clock, reminder=reminder)
+            if kind == 'paused':
+                return _view(run, outcome='paused', started=started,
+                             wait_seconds=wait_seconds, clock=clock)
             workflow_state = run.get("workflowState")
             if workflow_state == "awaiting-host":
                 try:

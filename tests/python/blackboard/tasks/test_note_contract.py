@@ -16,7 +16,7 @@ class HostNoteContractTests(BoardTestCase):
             "workflow_accept": {"runId": "missing", "artifactId": "missing-artifact",
                                 "notRequired": "no integration target"},
             "workflow_conclude": {"runId": "missing"},
-            "macro_task_stop": {"macroTaskId": "macro-missing", "commandId": "stop"},
+            "macro_task_pause": {"macroTaskId": "macro-missing", "commandId": "stop"},
             "task_cancel": {"runId": "missing"},
         }
         for operation, params in requests.items():

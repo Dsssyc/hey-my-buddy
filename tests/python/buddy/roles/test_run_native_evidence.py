@@ -151,7 +151,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
             handle = SimpleNamespace(role_run_control=control, role_run_identity=result.identity,
                                      role_run_original_identity=result.identity, result=result,
                                      role_run_active_control=control, role_run_active_identity=result.identity,
-                                     cancel_requested=False, turn_record=None, error=None,
+                                     cancel_requested=False, stop_initiator=None, turn_record=None, error=None,
                                      exit_code=0, shutdown_confirmed=lambda: True)
             partial = [{"kind": "partial-workspace", "location": directory}]
             with mock.patch.object(run_execution, "_read_request", return_value=self.request()), \
