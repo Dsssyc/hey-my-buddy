@@ -13,7 +13,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
     test.use({ locale, viewport: { width, height: 1000 }, reducedMotion: "reduce" });
     test("keeps draft aliases in the input and fits saved tags in a stable effort column", async ({ page }) => {
       const zh = locale === "zh-CN";
-      const short = "Review";
+      const short = zh ? "审查工作伙伴" : "Review";
       const long = zh ? "日常审查专用工作伙伴".repeat(4) : "Reviewdesk".repeat(4);
       let alias: string | null = null;
       let targetId = "";
@@ -132,7 +132,9 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
         if (!zh && width === 1440 && wide.length === 6) {
           await page.screenshot({ path: `${captures}/boundary-six-han-${locale}-${theme}.png` });
         }
-        await contents(wide.length === 6 ? false : width >= 900 ? true : undefined);
+        if (!zh) await contents();
+        else if (wide.length === 6) await contents(false);
+        else await contents(width >= 900 ? true : undefined);
         await expect(input).toHaveValue(`${wide} draft`);
       }
     });
