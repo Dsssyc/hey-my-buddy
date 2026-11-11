@@ -613,6 +613,79 @@ class PreviewDeletionTest(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_work_control_replies_match_the_current_service_shapes_and_replay(self) -> None:
+        preview = self.preview
+        with self.server() as server:
+            before = self.call(server, "/api/macro-tasks")[1]
+            for action in ("pause", "resume"):
+                for group in (preview.MACRO_A, preview.STANDALONE_GROUP):
+                    with self.subTest(action=action, group=group):
+                        operation = "macro_task_" + action
+                        params = {"macroTaskId": group, "commandId": action + group}
+                        status, envelope = self.call(server, "/api/command", operation, params)
+                        self.assertEqual(status, 200, envelope)
+                        expected = {"macroTaskId": group, "duplicate": False,
+                                    "paused": {"pausedAt": preview.OBSERVED_AT} if action == "pause" else None}
+                        self.assertEqual(envelope["result"], expected)
+                        replay = self.call(server, "/api/command", operation, params)
+                        self.assertEqual(replay, (200, {"ok": True, "result": {**expected, "duplicate": True}}))
+                        changed = self.call(server, "/api/command", operation, {**params, "note": "different"})
+                        self.assertEqual((changed[0], changed[1]["error"]["code"]), (409, "CONFLICT"))
+            status, envelope = self.call(server, "/api/command", "macro_task_end",
+                                        {"macroTaskId": preview.MACRO_C, "commandId": "end-settled"})
+            self.assertEqual(status, 200, envelope)
+            reply = envelope["result"]
+            self.assertEqual(set(reply), {"macroTaskId", "results", "duplicate"})
+            self.assertEqual({item["runId"] for item in reply["results"]}, {
+                "preview-run-d2", "preview-run-d3", "preview-run-d5-h1", "preview-run-d5-h2"})
+            for item in reply["results"]:
+                self.assertEqual(set(item), {"runId", "state", "concluded", "reclaim"})
+                self.assertEqual((item["state"], item["concluded"]), ("concluded", True))
+                self.assertEqual(item["reclaim"], {"removed": False, "reasons": ["repository-not-found"]})
+            replay = self.call(server, "/api/command", "macro_task_end",
+                               {"macroTaskId": preview.MACRO_C, "commandId": "end-settled"})
+            self.assertEqual(replay, (200, {"ok": True, "result": {**reply, "duplicate": True}}))
+            status, envelope = self.call(server, "/api/command", "macro_task_end",
+                                        {"macroTaskId": preview.MACRO_A, "commandId": "end-unconfirmed"})
+            self.assertEqual(status, 200, envelope)
+            unconfirmed = [item for item in envelope["result"]["results"] if not item["concluded"]]
+            self.assertTrue(unconfirmed)
+            for item in unconfirmed:
+                self.assertEqual(set(item), {"runId", "concluded", "error"})
+                self.assertEqual(item["error"]["code"], "SHUTDOWN_UNCONFIRMED")
+                self.assertGreater(item["error"]["unconfirmedCount"], 0)
+            self.assertEqual(self.call(server, "/api/macro-tasks")[1], before)
+        # Receipts belong to their one synthetic server, independently of another instance.
+        with self.server() as server:
+            status, envelope = self.call(server, "/api/command", "macro_task_pause",
+                                        {"macroTaskId": preview.MACRO_A, "commandId": "pause" + preview.MACRO_A})
+            self.assertEqual(status, 200, envelope)
+            self.assertFalse(envelope["result"]["duplicate"])
+
+    def test_work_controls_validate_inputs_and_discard_receipts_with_the_deleted_unit(self) -> None:
+        preview = self.preview
+        with self.server() as server:
+            for operation in ("macro_task_pause", "macro_task_resume", "macro_task_end"):
+                valid = {"macroTaskId": preview.MACRO_C, "commandId": operation}
+                for changes in ({"macroTaskId": "invalid"}, {"commandId": ""}, {"commandId": "x" * 129},
+                                {"note": 1}, {"note": "字" * 3334}, {"nonsense": True}):
+                    with self.subTest(operation=operation, changes=list(changes)):
+                        status, envelope = self.call(server, "/api/command", operation, {**valid, **changes})
+                        self.assertEqual((status, envelope["error"]["code"]), (400, "INVALID_ARGUMENT"))
+                missing = self.call(server, "/api/command", operation, {**valid, "macroTaskId": "macro-missing"})
+                self.assertEqual((missing[0], missing[1]["error"]["code"]), (404, "NOT_FOUND"))
+                status, envelope = self.call(server, "/api/command", operation, {**valid, "note": "字" * 3333})
+                self.assertEqual(status, 200, envelope)
+            reused = self.call(server, "/api/command", "macro_task_resume",
+                               {"macroTaskId": preview.MACRO_C, "commandId": "macro_task_pause", "note": "字" * 3333})
+            self.assertEqual((reused[0], reused[1]["error"]["code"]), (409, "CONFLICT"))
+            status, envelope = self.call(server, "/api/command", "macro_task_delete",
+                                        {"macroTaskId": preview.MACRO_C, "microTaskCount": 7, "confirm": True})
+            self.assertEqual(status, 200, envelope)
+            deleted = self.call(server, "/api/command", "macro_task_pause",
+                                {"macroTaskId": preview.MACRO_C, "commandId": "macro_task_pause", "note": "字" * 3333})
+            self.assertEqual((deleted[0], deleted[1]["error"]["code"]), (404, "NOT_FOUND"))
+
     def test_macro_task_list_sort_matches_requested_order(self) -> None:
         preview = self.preview
         with self.server() as server:

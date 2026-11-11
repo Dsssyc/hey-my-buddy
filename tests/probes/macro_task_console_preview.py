@@ -20,9 +20,11 @@ Safety boundary:
   unavailable reason without probing or starting anything. Operations the
   0.15.1 browser allowlist removed (decide/continue/acknowledge/takeover/
   per-run cancel/retry and friends) answer ``METHOD_NOT_FOUND`` exactly like
-  the real console; the still-allowed writes (settings operations and
-  ``macro_task_stop``) are refused here with ``FORBIDDEN``. The deletion
-  preview and confirmed deletion, plus provider cooldown clearing, operate only
+  the real console; settings writes are refused here with ``FORBIDDEN``.
+  ``macro_task_pause``, ``macro_task_resume`` and ``macro_task_end`` return canned
+  service-shaped replies with instance-local command receipts. Their replies
+  do not change the fixed read fixtures. The deletion preview and confirmed
+  deletion, plus provider cooldown clearing, operate only
   on an instance's in-memory synthetic records; no files, processes, sessions
   or Git objects are removed.
 * Fixture records reuse the same field names as the console DTOs
@@ -244,10 +246,11 @@ MARKER_EVENTS = {"dispatch": "task.submitted", "decide": "workflow.request_appro
                  "conclude": "workflow.host_concluded",
                  "cancel": "workflow.cancelled", "takeover": "workflow.takeover"}
 #: The preview's browser command allowlist: five reads, profile availability,
-#: settings operations and the two synthetic deletion operations.
+#: settings operations, synthetic work controls and the two deletion operations.
 ALLOWED_OPERATIONS = (
     "selection_get", "selection_list", "buddy_list", "workflow_get", "message_list", "user_policy_publish",
-    "model_catalog_refresh", "macro_task_stop", "capabilities", "reminder_settings_set",
+    "model_catalog_refresh", "macro_task_pause", "macro_task_resume", "macro_task_end",
+    "capabilities", "reminder_settings_set",
     "macro_task_deletion_preview", "macro_task_delete", "quota_redetect", "profile_start",
 )
 #: Operations the 0.15.1 read-only repair removed from the browser surface.
@@ -263,7 +266,7 @@ PREVIEW_READ_OPERATIONS = ("workflow_get", "message_list", "selection_get", "sel
 STATUS_BY_CODE = {"INVALID_ARGUMENT": 400, "METHOD_NOT_FOUND": 404, "NOT_FOUND": 404, "FORBIDDEN": 403,
                   "UNSUPPORTED": 501, "SERVICE_UNAVAILABLE": 503,
                   "INTERNAL_ERROR": 500, "MESSAGE_TOO_LARGE": 413,
-                  "REVISION_CONFLICT": 409, "MACRO_TASK_NOT_SETTLED": 409,
+                  "REVISION_CONFLICT": 409, "CONFLICT": 409, "MACRO_TASK_NOT_SETTLED": 409,
                   "SESSION_NOT_INTEGRATED": 501, "SESSION_NOT_RECORDED": 404,
                   "SESSION_DELETED": 410, "SESSION_INVALID_RECORD": 422, "SESSION_UNREADABLE": 500}
 
@@ -1541,6 +1544,7 @@ class PreviewState:
         self.removed_runs: set[str] = set()
         self.cleared_providers: set[tuple[str, str]] = set()
         self.clear_receipts: dict[str, dict] = {}
+        self.work_control_receipts: dict[str, tuple[str, dict, dict]] = {}
         self.session_after_polls = 0
         self.session_appends: list[dict] = []
         self.lock = threading.RLock()
@@ -1960,6 +1964,9 @@ def delete_macro_task(params: dict, state: PreviewState) -> dict:
               "microTaskCount": count, "state": "deleted", "deletedAt": OBSERVED_AT,
               "duplicate": False}
     state.deleted[group] = result
+    state.work_control_receipts = {
+        command_id: receipt for command_id, receipt in state.work_control_receipts.items()
+        if receipt[1]["macroTaskId"] != group}
     return result
 
 
@@ -3078,8 +3085,54 @@ def workflow_get(params: dict, state: PreviewState | None = None) -> dict:
     return view
 
 
+def work_control_reply(operation: str, params: dict, state: PreviewState | None) -> dict:
+    """Canned control replies over invented records, without executing or changing work."""
+    unknown = sorted(set(params) - {"macroTaskId", "commandId", "note"})
+    if unknown:
+        raise PreviewError("INVALID_ARGUMENT", f"Unknown parameter: {unknown[0]}")
+    group, command_id, note = params.get("macroTaskId"), params.get("commandId"), params.get("note")
+    if not isinstance(group, str) or not MACRO_TASK_ID.fullmatch(group):
+        raise PreviewError("INVALID_ARGUMENT", "macroTaskId must be a macro task or run:<rootRunId> identifier")
+    if not isinstance(command_id, str) or not command_id.strip() or len(command_id) > 128:
+        raise PreviewError("INVALID_ARGUMENT", "commandId must be a nonempty string of at most 128 characters")
+    if note is not None and (not isinstance(note, str) or len(note.encode("utf-8")) > 10000):
+        raise PreviewError("INVALID_ARGUMENT", "note must be text of at most 10000 UTF-8 bytes")
+    if state is None:
+        raise PreviewError("INVALID_ARGUMENT", "a server instance is required")
+    request = {"macroTaskId": group, "note": note}
+    previous = state.work_control_receipts.get(command_id)
+    if previous is not None:
+        if previous[:2] != (operation, request):
+            raise PreviewError("CONFLICT", "commandId belongs to a different request")
+        return {**previous[2], "duplicate": True}
+    if group not in FIXTURES["groups"] or group in state.deleted:
+        raise PreviewError("NOT_FOUND", "Unknown macroTaskId")
+    if operation == "macro_task_pause":
+        reply = {"macroTaskId": group, "paused": {"pausedAt": OBSERVED_AT}, "duplicate": False}
+    elif operation == "macro_task_resume":
+        reply = {"macroTaskId": group, "paused": None, "duplicate": False}
+    else:
+        results = []
+        for run_id in FIXTURES["groups"][group]:
+            entry = FIXTURES["runs"][run_id]
+            if entry["state"] in ("accepted", "concluded", "delivered"):
+                continue
+            shutdown = shutdown_view(entry)
+            if shutdown["selfConfirmed"] and shutdown["descendantsConfirmed"]:
+                results.append({"runId": run_id, "state": "concluded", "concluded": True,
+                                "reclaim": {"removed": False, "reasons": [
+                                    "no-checkout" if entry["checkout"] == "none" else "repository-not-found"]}})
+            else:
+                results.append({"runId": run_id, "concluded": False, "error": {
+                    "code": "SHUTDOWN_UNCONFIRMED", "message": "Synthetic execution shutdown is unconfirmed",
+                    "unconfirmedRunIds": shutdown["unconfirmedRunIds"], "unconfirmedCount": shutdown["unconfirmedCount"]}})
+        reply = {"macroTaskId": group, "results": results, "duplicate": False}
+    state.work_control_receipts[command_id] = (operation, request, reply)
+    return reply
+
+
 def command_result(scenario: str, operation: str, params: Any, state: PreviewState | None = None) -> dict:
-    """Serve synthetic facts and in-memory deletion; never invoke product operations."""
+    """Serve synthetic facts, replies and deletion; never invoke product operations."""
     if not isinstance(params, dict):
         raise PreviewError("INVALID_ARGUMENT", "params must be an object")
     if operation in REMOVED_OPERATIONS:
@@ -3137,16 +3190,8 @@ def command_result(scenario: str, operation: str, params: Any, state: PreviewSta
             return preview
         assert state is not None, "a synthetic deletion requires an instance's PreviewState"
         return delete_macro_task(params, state)
-    if operation == "macro_task_stop":
-        unknown = sorted(set(params) - {"macroTaskId", "commandId", "note"})
-        if unknown:
-            raise PreviewError("INVALID_ARGUMENT", f"Unknown parameter: {unknown[0]}")
-        if not isinstance(params.get("macroTaskId"), str) or not MACRO_TASK_ID.match(params.get("macroTaskId", "")):
-            raise PreviewError("INVALID_ARGUMENT", "macroTaskId must be a macro task or run:<rootRunId> identifier")
-        if not isinstance(params.get("commandId"), str) or not params.get("commandId"):
-            raise PreviewError("INVALID_ARGUMENT", "commandId is required")
-        if len(str(params.get("note") or "")) > 500:
-            raise PreviewError("INVALID_ARGUMENT", "note is too long")
+    if operation in ("macro_task_pause", "macro_task_resume", "macro_task_end"):
+        return work_control_reply(operation, params, state)
     # A check of the harnesses changes nothing here: it answers synthetic rows, and nothing is probed.
     checking = operation == "capabilities"
     if checking:
@@ -4415,15 +4460,20 @@ def smoke(assets: Path, scenario: str) -> int:
                                                                "params": {"runId": smoke_run}})
         check("removed Host operation is METHOD_NOT_FOUND", status == 404
               and denied["error"]["code"] == "METHOD_NOT_FOUND", f"status={status}")
-        status, stop, _headers = call("POST", "/api/command", payload={
-            "operation": "macro_task_stop",
-            "params": {"macroTaskId": MACRO_A, "commandId": "synthetic-stop-command-1"}})
-        check("macro_task_stop is allowed-but-refused by the preview", status == 403
-              and stop["error"]["code"] == "FORBIDDEN", f"status={status}")
-        status, _, _headers = call("POST", "/api/command", payload={
-            "operation": "macro_task_stop", "params": {"macroTaskId": "macro-not-a-real-group",
-                                                     "commandId": "synthetic-stop-command-2"}})
-        check("macro_task_stop validates its identifiers first", status in (400, 403), f"status={status}")
+        for action in ("pause", "resume", "end"):
+            operation = "macro_task_" + action
+            params = {"macroTaskId": MACRO_A, "commandId": "synthetic-" + action}
+            status, envelope, _headers = call("POST", "/api/command", payload={"operation": operation, "params": params})
+            reply = envelope.get("result", {})
+            check(operation + " returns a synthetic control reply", status == 200
+                  and set(reply) == {"macroTaskId", "duplicate", "results" if action == "end" else "paused"}
+                  and reply["macroTaskId"] == MACRO_A and reply["duplicate"] is False, f"status={status}")
+            status, envelope, _headers = call("POST", "/api/command", payload={"operation": operation, "params": params})
+            check(operation + " replays its receipt", status == 200
+                  and envelope.get("result") == {**reply, "duplicate": True}, f"status={status}")
+            status, _, _headers = call("POST", "/api/command", payload={
+                "operation": operation, "params": {**params, "macroTaskId": "invalid"}})
+            check(operation + " validates its identifiers", status == 400, f"status={status}")
         if scenario != "error":
             check("timeline rows carry the 0.15.1 taskSummary", any(
                 row.get("taskSummary") for row in timeline.get("rows", [])))
