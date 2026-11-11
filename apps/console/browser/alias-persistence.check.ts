@@ -13,7 +13,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
     test.use({ locale, viewport: { width, height: 1000 }, reducedMotion: "reduce" });
     test("keeps draft aliases in the input and fits saved tags in a stable effort column", async ({ page }) => {
       const zh = locale === "zh-CN";
-      const short = zh ? "日常审查专用工作伙伴" : "Reviewdesk";
+      const short = "Review";
       const long = zh ? "日常审查专用工作伙伴".repeat(4) : "Reviewdesk".repeat(4);
       let alias: string | null = null;
       let targetId = "";
@@ -57,7 +57,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
         expect(await drawer.locator('[data-slot=buddy-list-viewport]').evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
         await expectNoSidewaysScroll(page);
       };
-      const contents = async (clipped: boolean) => {
+      const contents = async (clipped?: boolean) => {
         const name = selected.locator(":scope > span").first();
         await expectWholeAndApart(name, name.locator(":scope > *"));
         await expectTextUncut(name.locator(":scope > span").first());
@@ -67,9 +67,14 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
         await expect(mark).toBeVisible();
         const box = (await mark.boundingBox())!;
         expect(box.width).toBe(6); expect(box.height).toBe(6);
-        const scrollbar = (await list.locator('[data-slot=scroll-area-scrollbar]').boundingBox())!;
-        expect(box.x + box.width).toBeLessThanOrEqual(scrollbar.x);
-        expect(await tag.locator(":scope > span").evaluate(node => node.scrollWidth > node.clientWidth)).toBe(clipped);
+        if (width >= 900) {
+          const scrollbar = (await list.locator('[data-slot=scroll-area-scrollbar]').boundingBox())!;
+          expect(box.x + box.width).toBeLessThanOrEqual(scrollbar.x);
+        }
+        const fit = await tag.locator(":scope > span").evaluate(node => ({
+          clipped: node.scrollWidth > node.clientWidth, requiredWidth: node.scrollWidth, availableWidth: node.clientWidth,
+        }));
+        if (clipped !== undefined) expect(fit, `alias: ${await tag.innerText()} ${JSON.stringify(fit)}`).toMatchObject({ clipped });
       };
       const capture = async (kind: string) => {
         if (width !== 1440) return;
@@ -90,7 +95,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
         } else {
           await expect(tag).toHaveText(short);
           await expect(row.locator('[data-slot=alias-tag]')).toHaveText(short);
-          if (width >= 900) await contents(false);
+          await contents(false);
         }
         await stable();
         await page.getByRole("link", { name: "Router", exact: true }).click();
@@ -117,16 +122,17 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
         if (kind === "long") expect(truncation).toEqual({ ellipsis: "ellipsis", overflow: "hidden", clipped: true });
         await capture(kind);
       }
-      if (!zh) {
-        // A wider alphabet may exceed the room left by an English preference.
-        const wide = "日常审查专用工作伙伴";
+      for (const wide of ["日常审查专用工作伙伴", "审查工作伙伴"]) {
         await input.fill(wide);
         await save.click();
         await expect(save).toHaveCount(0);
         await expect(tag).toHaveText(wide);
         await input.fill(`${wide} draft`);
         await stable();
-        if (width >= 900) await contents(true);
+        if (!zh && width === 1440 && wide.length === 6) {
+          await page.screenshot({ path: `${captures}/boundary-six-han-${locale}-${theme}.png` });
+        }
+        await contents(wide.length === 6 ? false : width >= 900 ? true : undefined);
         await expect(input).toHaveValue(`${wide} draft`);
       }
     });

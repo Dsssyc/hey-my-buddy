@@ -129,8 +129,8 @@ function EffortRow({ chip, selected, onSelect, editor }: {
         if (canToggle) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId ? { ...entry, enabled } : entry) }));
       }} /></Hint>
     <button type="button" aria-pressed={selected} data-slot="buddy-stop" aria-label={effort} onClick={onSelect}
-      className="flex h-10 w-full items-center gap-1 pr-3 pl-11 text-left text-sm whitespace-nowrap outline-none transition-[color,background-color,box-shadow] duration-150 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none">
-      <span className={cn("inline-flex min-w-0 items-center [&_[data-slot=alias-tag]]:ml-1 [&_[data-slot=alias-tag]]:min-w-0", buddy.enabled ? "text-foreground" : "text-ink3", selected && "font-medium")}><span className="shrink-0">{effort}</span><AliasTag alias={named?.alias} /></span>
+      className="flex h-10 w-full items-center gap-2 pr-8 pl-12 text-left text-sm whitespace-nowrap outline-none transition-[color,background-color,box-shadow] duration-150 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none">
+      <span className={cn("inline-flex min-w-0 items-center [&_[data-slot=alias-tag]]:min-w-0", buddy.enabled ? "text-foreground" : "text-ink3", selected && "font-medium")}><span className="shrink-0">{effort}</span><AliasTag alias={named?.alias} /></span>
       {chip.preference && <span className="shrink-0 text-xs text-ink2">{t(`preference.${chip.preference}`)}</span>}
       {chip.unsaved && <UnsavedMark label={t("unsaved")} />}
     </button>

@@ -81,7 +81,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       const rgb = (hex: string) => `rgb(${hex.slice(1).match(/../g)!.map(part => parseInt(part, 16)).join(", ")})`;
       expect([colors.ink, colors.line, colors.wash]).toEqual([colors.tokenInk, colors.tokenLine, colors.tokenWash].map(rgb));
       expect([colors.tokenInk, colors.tokenLine, colors.tokenWash]).toEqual(theme === "light" ? ["#104aee", "#104aee", "#dee6fd"] : ["#5593e6", "#5593e6", "#1f2837"]);
-      expect([colors.height, colors.radius, colors.margin, colors.size]).toEqual([20, "4px", "4px", "12px"]);
+      expect([colors.height, colors.radius, colors.margin, colors.size]).toEqual([20, "4px", "8px", "12px"]);
       await expect(page.locator('[data-slot=model-row] [data-slot=alias-tag]')).toHaveText("Review desk");
       await page.getByRole("searchbox").fill("review desk");
       await expect(page.getByRole("button", { name: model, exact: true })).toBeVisible();
