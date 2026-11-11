@@ -3090,8 +3090,7 @@ class WorkflowCoordinator:
             scope = self._control_unit(connection, identifier)
             column, value = (("macro_task_id", identifier) if identifier.startswith("macro-")
                              else ("run_id", identifier[4:]))
-            existing = connection.execute(f"SELECT paused_at FROM work_pauses WHERE {column}=?", (value,)).fetchone()
-            paused_at = existing["paused_at"] if existing else now
+            existing = connection.execute(f"SELECT 1 FROM work_pauses WHERE {column}=?", (value,)).fetchone()
             if existing is None:
                 connection.execute(f"INSERT INTO work_pauses({column},paused_at) VALUES(?,?)", (value, now))
                 self.board._append_event(connection, "macro_task.paused", payload={
@@ -3125,7 +3124,7 @@ class WorkflowCoordinator:
                                                "validated_buddy_revision=NULL WHERE run_id=?", (run["run_id"],))
                             connection.execute("UPDATE tasks SET adapter='unresolved' WHERE task_id=?", (run["run_id"],))
             self._pause_queued(connection)
-            response = {"macroTaskId": identifier, "pausedAt": paused_at, "duplicate": False}
+            response = {"macroTaskId": identifier, "duplicate": False}
             self.board._store_receipt(connection, command_id, "macro_task.pause", request, response)
             head = self.board._head_of(connection)
         self.board._notify(head)
@@ -3205,14 +3204,12 @@ class WorkflowCoordinator:
                 break
             head = self.board.head()
             self.board.events_wait({"after": head, "timeoutMs": max(1, int(min(1, deadline-time.monotonic())*1000)), "limit": 1})
-        results = []
         for original in reversed(scope):
             run_id = original["run_id"]
             try:
                 with self.db.read() as connection:
                     run = self._run_row(connection, run_id)
                     if run["state"] in ("accepted", "concluded", "delivered"):
-                        results.append({"runId": run_id, "state": run["state"], "concluded": run["state"] == "concluded"})
                         continue
                     self._expect_current(run, original)
                     task = self._conclude_precheck(connection, run, None)
@@ -3225,19 +3222,16 @@ class WorkflowCoordinator:
                         note=request["note"], reason=make_reason("macro-task-ended"), sealed_record=sealed)
                     head = self.board._head_of(connection)
                 self.board._notify(head)
-                entry = {"runId": run_id, "state": "concluded", "concluded": True}
-                try:
-                    entry["reclaim"] = self._reclaim_checkout(run_id=run_id)
-                except BoardError as error:
-                    entry["reclaimError"] = {"code": error.code, "message": error.message, **error.details}
-                results.append(entry)
-            except BoardError as error:
-                results.append({"runId": run_id, "concluded": False, "error": {"code": error.code, "message": error.message, **error.details}})
+                self._reclaim_checkout(run_id=run_id)
+            except BoardError:
+                # Missing stop proof or a Host race leaves this item unconcluded.
+                # Reclamation failures retain the conclusion for scheduled cleanup.
+                continue
         with self.db.write() as connection:
             receipt = self.board._receipt_response(connection, self.board._receipt_entry(connection, command_id, "macro_task.end", request))
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            response = {"macroTaskId": identifier, "results": list(reversed(results)), "duplicate": False}
+            response = {"macroTaskId": identifier, "duplicate": False}
             self.board._store_receipt(connection, command_id, "macro_task.end", request, response)
             head = self.board._head_of(connection)
         self.board._notify(head)

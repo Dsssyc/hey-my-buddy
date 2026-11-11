@@ -598,11 +598,13 @@ class PreviewDeletionTest(unittest.TestCase):
                 self.assertFalse(thread.is_alive(), "the private preview thread must stop")
 
     def call(self, server, path: str, operation: str | None = None, params: dict | None = None,
-             *, csrf: str | None = None) -> tuple[int, dict]:
+             *, csrf: str | None = None, case: str | None = None) -> tuple[int, dict]:
         connection = http.client.HTTPConnection(*server.server_address, timeout=10)
         headers = {"Origin": f"http://127.0.0.1:{server.server_address[1]}",
                    "X-Hey-My-Buddy-CSRF": self.preview.SYNTHETIC_CSRF if csrf is None else csrf,
                    "Content-Type": "application/json"}
+        if case is not None:
+            headers["X-HMB-Preview-Case"] = case
         body = json.dumps({"operation": operation, "params": params or {}}) if operation else None
         try:
             connection.request("POST" if operation else "GET", path, body=body, headers=headers)
@@ -612,6 +614,36 @@ class PreviewDeletionTest(unittest.TestCase):
             return response.status, json.loads(response.read())
         finally:
             connection.close()
+
+    def test_case_header_isolates_controls_and_default_state(self) -> None:
+        preview = self.preview
+        group = preview.MACRO_B
+        path = "/api/macro-tasks/" + group + "/timeline"
+        with self.server() as server:
+            initial = self.call(server, path)[1]
+            self.assertEqual(initial, self.call(server, path, case="first")[1])
+            params = {"macroTaskId": group, "commandId": "shared-command"}
+            self.assertEqual(self.call(server, "/api/command", "macro_task_pause", params,
+                                       case="first")[1]["result"],
+                             {"macroTaskId": group, "duplicate": False})
+            self.assertIsNotNone(self.call(server, path, case="first")[1]["macroTask"]["paused"])
+            self.assertIsNone(self.call(server, path, case="second")[1]["macroTask"]["paused"])
+            self.assertIsNone(self.call(server, path)[1]["macroTask"]["paused"])
+            duplicate = self.call(server, "/api/command", "macro_task_pause", params,
+                                  case="first")[1]["result"]
+            self.assertEqual(duplicate, {"macroTaskId": group, "duplicate": True})
+            self.assertEqual(self.call(server, "/api/command", "macro_task_end",
+                                       {"macroTaskId": group, "commandId": "end-first"},
+                                       case="first")[1]["result"]["duplicate"], False)
+            ended = self.call(server, path, case="first")[1]
+            self.assertLess(ended["macroTask"]["counts"]["unfinished"],
+                            initial["macroTask"]["counts"]["unfinished"])
+            self.assertEqual(self.call(server, path, case="second")[1], initial)
+            self.assertEqual(self.call(server, path)[1], initial)
+            self.assertEqual(self.call(server, "/api/command", "macro_task_pause", params,
+                                       case="second")[1]["result"]["duplicate"], False)
+            self.assertEqual(self.call(server, "/api/command", "macro_task_pause", params)[1]
+                             ["result"]["duplicate"], False)
 
     def test_work_control_replies_match_the_current_service_shapes_and_replay(self) -> None:
         preview = self.preview
@@ -625,9 +657,12 @@ class PreviewDeletionTest(unittest.TestCase):
                         status, envelope = self.call(server, "/api/command", operation, params)
                         self.assertEqual(status, 200, envelope)
                         expected = {"macroTaskId": group, "duplicate": False}
-                        if action == "pause":
-                            expected["pausedAt"] = preview.OBSERVED_AT
                         self.assertEqual(envelope["result"], expected)
+                        group_view = self.call(server, "/api/macro-tasks/" + group + "/timeline")[1]["macroTask"]
+                        if action == "pause":
+                            self.assertEqual(group_view["paused"]["pausedAt"], preview.OBSERVED_AT)
+                        else:
+                            self.assertIsNone(group_view["paused"])
                         replay = self.call(server, "/api/command", operation, params)
                         self.assertEqual(replay, (200, {"ok": True, "result": {**expected, "duplicate": True}}))
                         changed = self.call(server, "/api/command", operation, {**params, "note": "different"})
@@ -636,39 +671,43 @@ class PreviewDeletionTest(unittest.TestCase):
                                         {"macroTaskId": preview.MACRO_C, "commandId": "end-settled"})
             self.assertEqual(status, 200, envelope)
             reply = envelope["result"]
-            self.assertEqual(set(reply), {"macroTaskId", "results", "duplicate"})
-            self.assertEqual({item["runId"] for item in reply["results"]}, {
-                "preview-run-d2", "preview-run-d3", "preview-run-d5-h1", "preview-run-d5-h2"})
-            for item in reply["results"]:
-                self.assertEqual(set(item), {"runId", "state", "concluded", "reclaim"})
-                self.assertEqual((item["state"], item["concluded"]), ("concluded", True))
-                self.assertEqual(item["reclaim"], {"removed": False, "reasons": ["repository-not-found"]})
+            self.assertEqual(reply, {"macroTaskId": preview.MACRO_C, "duplicate": False})
+            settled = self.call(server, "/api/macro-tasks/" + preview.MACRO_C + "/timeline")[1]
+            self.assertEqual(settled["macroTask"]["counts"]["unfinished"], 0)
+            for row in settled["rows"]:
+                if row["runId"] in {"preview-run-d2", "preview-run-d3", "preview-run-d5-h1", "preview-run-d5-h2"}:
+                    self.assertEqual(row["state"], "concluded")
+                    task = self.call(server, "/api/tasks/" + row["runId"])[1]
+                    self.assertEqual(task["workflow"]["state"], "concluded")
+                    self.assertIn(task["state"], ("completed", "cancelled", "failed"))
+                    work = self.call(server, "/api/command", "workflow_get", {"runId": row["runId"]})[1]["result"]
+                    self.assertEqual(work["hostConclusion"]["reason"], {"code": "macro-task-ended", "params": {}})
             replay = self.call(server, "/api/command", "macro_task_end",
                                {"macroTaskId": preview.MACRO_C, "commandId": "end-settled"})
             self.assertEqual(replay, (200, {"ok": True, "result": {**reply, "duplicate": True}}))
             status, envelope = self.call(server, "/api/command", "macro_task_end",
                                         {"macroTaskId": preview.MACRO_A, "commandId": "end-unconfirmed"})
             self.assertEqual(status, 200, envelope)
-            unconfirmed = [item for item in envelope["result"]["results"] if not item["concluded"]]
-            self.assertTrue(unconfirmed)
-            for item in unconfirmed:
-                self.assertEqual(set(item), {"runId", "concluded", "error"})
-                self.assertEqual(item["error"]["code"], "SHUTDOWN_UNCONFIRMED")
-                self.assertGreater(item["error"]["unconfirmedCount"], 0)
+            self.assertEqual(envelope["result"], {"macroTaskId": preview.MACRO_A, "duplicate": False})
+            unconfirmed = self.call(server, "/api/macro-tasks/" + preview.MACRO_A + "/timeline")[1]
+            self.assertGreater(unconfirmed["macroTask"]["counts"]["unfinished"], 0)
+            self.assertTrue(any(row["state"] not in ("accepted", "concluded", "delivered")
+                                and not row["shutdownConfirmed"] for row in unconfirmed["rows"]))
             status, envelope = self.call(server, "/api/command", "macro_task_end",
                                         {"macroTaskId": preview.MACRO_B, "commandId": "end-mixed"})
             self.assertEqual(status, 200, envelope)
-            mixed = {item["runId"]: item for item in envelope["result"]["results"]}
-            self.assertEqual(set(mixed), {"preview-run-b3", "preview-run-b4", "preview-run-b5",
-                                          "preview-run-b6", "preview-run-b7", "preview-run-b8"})
-            self.assertEqual(mixed["preview-run-b3"], {"runId": "preview-run-b3", "state": "concluded",
-                                                        "concluded": True, "reclaimError": {
-                                                            "code": "STORAGE_INCOMPLETE", "message": "Synthetic checkout cleanup is blocked"}})
-            self.assertEqual(mixed["preview-run-b4"], {"runId": "preview-run-b4", "state": "concluded", "concluded": True})
-            self.assertEqual(mixed["preview-run-b5"]["reclaim"]["removed"], False)
-            self.assertEqual(mixed["preview-run-b6"], {"runId": "preview-run-b6", "state": "delivered", "concluded": False})
-            self.assertEqual(mixed["preview-run-b7"]["error"]["code"], "SHUTDOWN_UNCONFIRMED")
-            self.assertEqual(mixed["preview-run-b8"]["error"]["code"], "CONFLICT")
+            self.assertEqual(envelope["result"], {"macroTaskId": preview.MACRO_B, "duplicate": False})
+            mixed = {row["runId"]: row for row in
+                     self.call(server, "/api/macro-tasks/" + preview.MACRO_B + "/timeline")[1]["rows"]}
+            for run_id in ("preview-run-b3", "preview-run-b4", "preview-run-b5"):
+                self.assertEqual(mixed[run_id]["state"], "concluded")
+                view = self.call(server, "/api/command", "workflow_get", {"runId": run_id})[1]["result"]
+                self.assertEqual(view["hostConclusion"]["reason"]["code"], "macro-task-ended")
+                self.assertEqual(view["hostConclusion"]["executionStatus"],
+                                 "failed" if preview.FIXTURES["runs"][run_id]["state"] == "failed" else "cancelled")
+            self.assertEqual(mixed["preview-run-b6"]["state"], "delivered")
+            self.assertNotEqual(mixed["preview-run-b7"]["state"], "concluded")
+            self.assertNotEqual(mixed["preview-run-b8"]["state"], "concluded")
             replay = self.call(server, "/api/command", "macro_task_end",
                                {"macroTaskId": preview.MACRO_B, "commandId": "end-mixed"})
             self.assertEqual(replay, (200, {"ok": True, "result": {**envelope["result"], "duplicate": True}}))
@@ -676,15 +715,15 @@ class PreviewDeletionTest(unittest.TestCase):
                                {"macroTaskId": preview.MACRO_B, "commandId": "end-again"})
             self.assertEqual(second[0], 200)
             self.assertFalse(second[1]["result"]["duplicate"])
-            self.assertEqual(self.call(server, "/api/macro-tasks")[1], before)
-            for group in before["groups"]:
+            after = self.call(server, "/api/macro-tasks")[1]
+            for group in after["groups"]:
                 for item in group["macroTasks"]:
                     self.assertIn("paused", item)
                     self.assertIsNone(item["paused"])
                     self.assertEqual(item["counts"]["unfinished"],
-                                     sum(preview.FIXTURES["runs"][run_id]["state"]
-                                         not in ("accepted", "concluded", "delivered")
-                                         for run_id in preview.FIXTURES["groups"].get(item["macroTaskId"], [])))
+                                     sum(row["state"] not in ("accepted", "concluded", "delivered")
+                                         for row in self.call(server, "/api/macro-tasks/" + item["macroTaskId"] + "/timeline")[1]["rows"])
+                                     if item["macroTaskId"] in preview.FIXTURES["groups"] else 0)
                     self.assertTrue({"stoppableRoots", "stoppableHelpers", "awaitingHost"}.isdisjoint(item["counts"]))
         # Receipts belong to their one synthetic server, independently of another instance.
         with self.server() as server:

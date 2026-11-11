@@ -29,7 +29,6 @@ export default {
     "router-dispatch-unfinished": "Waiting for the previous Router dispatch to finish",
     "decision-dispatch-superseded": "The routing dispatch was superseded",
     "decision-dispatch-advanced": "The routing dispatch advanced",
-    "paused": "Work is paused, waiting for the user to resume it in the console.",
   },
   back: "Close detail",
   label: "Micro task detail",
@@ -41,7 +40,7 @@ export default {
   untitled: "Unnamed micro task",
   refresh: { label: "Read again" },
   header: { elapsed: "Elapsed", turns: "Turns" },
-  state: { stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", failedHost: "Failed, waiting for Host", cancelledHost: "Cancelled, waiting for Host", failedLead: "Failed, waiting for Lead", cancelledLead: "Cancelled, waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
+  state: { stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", paused: "Paused", host: "Waiting for Host", lead: "Waiting for Lead", failedHost: "Failed, waiting for Host", cancelledHost: "Cancelled, waiting for Host", failedLead: "Failed, waiting for Lead", cancelledLead: "Cancelled, waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
   wait: { since: "onward", queue: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
   strip: { label: "Micro task steps", position: "Step {{current}} / {{total}}", previous: "Previous step", next: "Next step", focusItem: "Select {{item}} in the step strip · {{time}}", truncated: "The read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {

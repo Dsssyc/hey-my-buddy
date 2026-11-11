@@ -28,7 +28,6 @@ export default {
     "router-dispatch-unfinished": "等待上一次 Router 派发结束",
     "decision-dispatch-superseded": "路由派发已被取代",
     "decision-dispatch-advanced": "路由派发已推进",
-    "paused": "工作已暂停，等待用户在控制台继续。",
   },
   back: "收起详情",
   label: "微任务详情",
@@ -40,7 +39,7 @@ export default {
   untitled: "未命名微任务",
   refresh: { label: "重新读取" },
   header: { elapsed: "历时", turns: "回合" },
-  state: { stopping: "正在停止", running: "进行中", unknown: "结束未确认", queued: "排队", host: "等待 Host", lead: "等待 Lead", failedHost: "失败，等待 Host", cancelledHost: "已取消，等待 Host", failedLead: "失败，等待 Lead", cancelledLead: "已取消，等待 Lead", review: "等待验收", accepted: "已验收", done: "已完成", ended: "已结束", failed: "失败" },
+  state: { stopping: "正在停止", running: "进行中", unknown: "结束未确认", queued: "排队", paused: "已暂停", host: "等待 Host", lead: "等待 Lead", failedHost: "失败，等待 Host", cancelledHost: "已取消，等待 Host", failedLead: "失败，等待 Lead", cancelledLead: "已取消，等待 Lead", review: "等待验收", accepted: "已验收", done: "已完成", ended: "已结束", failed: "失败" },
   wait: { since: "起", queue: "排队", host: "等待 Host", lead: "等待 Lead", acceptance: "等待验收" },
   strip: { label: "微任务步骤", position: "步骤 {{current}} / {{total}}", previous: "上一步", next: "下一步", focusItem: "在步骤条中选中{{item}} · {{time}}", truncated: "读取不完整，缺少此微任务的记录行；仅列出委派。" },
   step: {

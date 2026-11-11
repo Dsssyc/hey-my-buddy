@@ -24,6 +24,14 @@ describe("recorded model names", () => {
 });
 
 describe("recorded row state", () => {
+  it("shows a paused queued row as paused", async () => {
+    try {
+      for (const [language, label] of [["zh", "已暂停"], ["en", "Paused"]] as const) {
+        await i18n.changeLanguage(language);
+        expect(rowStateInfo({ state: "executing", status: "queued", queueReason: "paused" } as TimelineRow)).toMatchObject({ label, settled: false });
+      }
+    } finally { await i18n.changeLanguage("zh"); }
+  });
   it("attributes Host waits to a recorded Lead owner", () => {
     expect(rowStateInfo({ state: "awaiting-host", rootLeadRunId: "lead-1" } as TimelineRow).label).toBe("等待 Lead");
     expect(rowStateInfo({ state: "waiting-owned" } as TimelineRow).label).toBe("等待名下的微任务");

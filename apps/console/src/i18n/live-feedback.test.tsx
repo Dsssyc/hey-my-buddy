@@ -113,7 +113,7 @@ it("updates an already refused pause while preserving its request identity", asy
   expect(retained.phase).toBe("refused");
   act(() => setLanguageChoice("en"));
   expect(workFeedback(result.current.entries.get(summary.macroTaskId)!.pause!))
-    .toEqual(["The record was updated; refresh, check it and try again."]);
+    .toBe("The record was updated; refresh, check it and try again.");
   expect(result.current.entries.get(summary.macroTaskId)?.pause?.commandId).toBe(retained.commandId);
   expect(command).toHaveBeenCalledTimes(1);
 });

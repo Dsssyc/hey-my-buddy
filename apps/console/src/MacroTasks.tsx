@@ -24,7 +24,7 @@ import { TASKS_ROOT, tasksHash, tasksLocation } from "./task-detail/location";
 import type { TasksLocation } from "./task-detail/location";
 import { useMacroTaskList } from "./use-macro-task-list";
 import { useMacroTaskTimeline } from "./use-macro-task-timeline";
-import { canRetryEnd, pauseLabel, workFeedback, useMacroTaskControl } from "./macro-task-control";
+import { workFeedback, useMacroTaskControl } from "./macro-task-control";
 import type { WorkAction } from "./macro-task-types";
 import type { AuthorityLatch } from "./console-session";
 
@@ -43,8 +43,9 @@ function ConnectionStrip({ error, verifiedAtMs, retry, busy }: { error: string; 
 }
 
 /** Ending names the exact unfinished and delivered scope before dispatch. */
-function EndDialog({ summary, onConfirm, onCancel, returnFocus }: {
+function EndDialog({ summary, busy, onConfirm, onCancel, returnFocus }: {
   summary: MacroTaskSummary;
+  busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
   returnFocus: RefObject<HTMLButtonElement | null>;
@@ -52,7 +53,7 @@ function EndDialog({ summary, onConfirm, onCancel, returnFocus }: {
   const { t } = useTranslation(["shell", "tasks"]);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const title = summary.titleSource === "none" ? t("tasks:unnamed") : displayTitle(summary.titleSource, summary.title).text;
-  return <Dialog open onOpenChange={open => { if (!open) onCancel(); }}>
+  return <Dialog open onOpenChange={open => { if (!open && !busy) onCancel(); }}>
     <DialogContent className="text-sm" onCloseAutoFocus={event => { event.preventDefault(); returnFocus.current?.focus(); }} onOpenAutoFocus={event => { event.preventDefault(); cancelRef.current?.focus(); }} aria-describedby="end-macro-task-name end-macro-task-body end-macro-task-counts">
       <DialogTitle>{t("macroWork.title")}</DialogTitle>
       <p id="end-macro-task-name" className="wrap-anywhere text-sm font-medium">{summary.titleSource === "none" ? title : summary.title}</p>
@@ -62,8 +63,8 @@ function EndDialog({ summary, onConfirm, onCancel, returnFocus }: {
         <li>{t("macroWork.scopeDelivered", { count: summary.counts.delivered })}</li>
       </ul>
       <div data-slot="end-dialog-actions" className="flex justify-end gap-2">
-        <Button ref={cancelRef} variant="outline" onClick={onCancel}>{t("macroWork.cancel")}</Button>
-        <Button variant="destructive" onClick={onConfirm}>{t("macroWork.confirm")}</Button>
+        <Button ref={cancelRef} variant="outline" disabled={busy} onClick={onCancel}>{t("macroWork.cancel")}</Button>
+        <Button variant="destructive" disabled={busy} aria-busy={busy || undefined} onClick={onConfirm}>{busy && <StateMark kind="live"/>}{t("macroWork.confirm")}</Button>
       </div>
     </DialogContent>
   </Dialog>;
@@ -191,18 +192,18 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     else if (!selected && rows.length) go({ macroTaskId: rows[0].macroTaskId, runId: null, step: null }, "replace");
   }, [active, selected, list.rows, deletedIds]);
   const detailClient = useMemo(() => createTaskDetailClient(api, snapshot.csrfToken), [api, snapshot.csrfToken]);
-  // The list row is freshest, but a list refresh must never unmount an open
-  // detail: the timeline read's summary covers the gap, and a snapshot of the
-  // last seen summary covers the moments before the timeline read lands.
-  const listedSummary = rows.find(row => row.macroTaskId === selected)
-    ?? (timeline.timeline?.macroTask.macroTaskId === selected ? timeline.timeline.macroTask : null)
-    ?? null;
+  // Both views poll independently. Use the most recently completed successful
+  // read, keeping an open task visible while either view refreshes or fails.
+  const listSummary = rows.find(row => row.macroTaskId === selected);
+  const timelineSummary = timeline.timeline?.macroTask.macroTaskId === selected ? timeline.timeline.macroTask : null;
+  const observedSummary = timelineSummary && (!listSummary || timeline.readAtMs !== null && (list.readAtMs === null || timeline.readAtMs > list.readAtMs))
+    ? timelineSummary : listSummary ?? null;
   const [summarySnapshot, setSummarySnapshot] = useState<MacroTaskSummary | null>(null);
   useEffect(() => {
-    if (listedSummary) setSummarySnapshot(listedSummary);
+    if (observedSummary) setSummarySnapshot(observedSummary);
     else if (!selected) setSummarySnapshot(null);
-  }, [listedSummary, selected]);
-  const selectedSummary = listedSummary
+  }, [observedSummary, selected]);
+  const selectedSummary = observedSummary
     ?? (summarySnapshot?.macroTaskId === selected ? summarySnapshot : null);
   // Receipts retain their command identity independently of current view facts.
   const reload = async () => {
@@ -213,7 +214,6 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const control = useMacroTaskControl(api, snapshot, writesAvailable && !connectionError && !list.error, authority, reload);
   const selectedEntries = selected ? control.entries.get(selected) : undefined;
   const currentSummary = selectedSummary;
-  const paused = currentSummary ? pauseLabel(currentSummary.paused) : null;
 
   const deleted = (macroTaskId: string, summary: MacroTaskSummary) => {
     if (!live.current) return;
@@ -237,19 +237,13 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const openRun = (runId: string, from: string | null = null) => go({ macroTaskId: selected, runId, step: null }, "push", from);
   const backToTimeline = () => go({ macroTaskId: selected, runId: null, step: null }, "push");
 
-  const pauseControl = paused && <span data-slot="macro-pause-state" className="text-xs text-ink2" role="status">{paused}</span>;
   const feedback = currentSummary && (["pause", "resume", "end"] as WorkAction[]).map(action => {
     const entry = selectedEntries?.[action];
-    const lines = entry && workFeedback(entry);
-    if (!entry || !lines) return null;
-    const replay = entry.phase === "unknown";
-    const retry = replay || action === "end" && currentSummary.counts.unfinished > 0 && canRetryEnd(entry);
+    const notice = entry && workFeedback(entry);
+    if (!entry || !notice) return null;
     return <div key={action} data-slot="macro-work-state" data-action={action} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-sm sm:px-6">
-      <div role={entry.phase === "refused" ? "alert" : "status"} className={cn("min-w-0 flex-1 wrap-anywhere", entry.phase === "refused" ? "text-fail" : "text-ink2")}>{lines.map((line, index) => <p data-slot="macro-work-line" key={index}>{line}</p>)}</div>
-      {retry && <Button variant="outline" size="sm" disabled={!control.writable || list.loading || control.busy(currentSummary.macroTaskId)} onClick={event => {
-        if (replay) control.run(currentSummary, action);
-        else { menuButtonRef.current = event.currentTarget; control.requestEnd(currentSummary); }
-      }}>{t(action === "end" && currentSummary.counts.unfinished > 0 ? "shell:macroWork.retryEnd" : `shell:macroWork.${action}`)}</Button>}
+      <p role={entry.phase === "refused" ? "alert" : "status"} className={cn("min-w-0 flex-1 wrap-anywhere", entry.phase === "refused" ? "text-fail" : "text-ink2")}>{notice}</p>
+      {entry.phase === "unknown" && <Button variant="outline" size="sm" disabled={!control.writable || list.loading || control.busy(currentSummary.macroTaskId)} onClick={() => control.run(currentSummary, action)}>{t(`shell:macroWork.${action}`)}</Button>}
     </div>;
   });
   const entryActions = (summary: MacroTaskSummary) => <MacroTaskEntryMenu summary={summary} entries={control.entries.get(summary.macroTaskId)} writable={control.writable} busy={list.loading || control.busy(summary.macroTaskId)} active={active}
@@ -277,7 +271,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         go({ ...(item === undefined ? location : overview), macroTaskId: selected, runId, step }, "replace", item ?? origin);
       }}
       onBack={backToTimeline} onOpenRun={next => openRun(next)} />}
-    headerActions={<>{pauseControl}{currentSummary && entryActions(currentSummary)}</>} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
+    headerActions={currentSummary && entryActions(currentSummary)} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
     onOpen={(runId, key) => openRun(runId, key)} onClose={backToTimeline}
     onRetry={() => void timeline.retry()}
     onBackToList={() => { setShowNarrowList(true); if (listCollapsed) onExpandList(); }} /> : null;
@@ -321,7 +315,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         </Grid>}
       </Collapsible>
     </div>
-    {control.confirming && <EndDialog summary={control.confirming}
+    {control.confirming && <EndDialog summary={control.confirming} busy={control.busy(control.confirming.macroTaskId)}
       onConfirm={control.confirmEnd}
       onCancel={control.cancelConfirm} returnFocus={menuButtonRef} />}
     {deleteTarget && <MacroTaskDeleteDialog key={deleteTarget.macroTaskId} summary={deleteTarget}

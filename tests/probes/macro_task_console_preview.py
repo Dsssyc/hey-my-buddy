@@ -21,9 +21,9 @@ Safety boundary:
   0.15.1 browser allowlist removed (decide/continue/acknowledge/takeover/
   per-run cancel/retry and friends) answer ``METHOD_NOT_FOUND`` exactly like
   the real console; settings writes are refused here with ``FORBIDDEN``.
-  ``macro_task_pause``, ``macro_task_resume`` and ``macro_task_end`` return canned
-  service-shaped replies with instance-local command receipts. Their replies
-  do not change the fixed read fixtures. The deletion preview and confirmed
+  ``macro_task_pause``, ``macro_task_resume`` and ``macro_task_end`` return
+  service-shaped replies with instance-local command receipts and project their
+  synthetic effects through subsequent reads. The deletion preview and confirmed
   deletion, plus provider cooldown clearing, operate only
   on an instance's in-memory synthetic records; no files, processes, sessions
   or Git objects are removed.
@@ -31,8 +31,8 @@ Safety boundary:
   (``apps/console/src/macro-task-types.ts`` and the console snapshot/task views).
   The list includes six summary-only rows to exercise grouped paging, the
   original task timelines and ADR-032 empty, folder, none and Git delivery
-  scenes. Reads stay identical until a synthetic deletion,
-  which advances that instance's cursor and removes the target from later reads.
+  scenes. Reads reflect that server's synthetic controls and deletion. Those
+  actions advance its cursor; deletion removes the target from later reads.
 * Session content is an in-memory ACP-shaped fixture. Its byte offsets mimic grouped JSONL; reads never open a session file or inspect a harness home.
 
 Usage::
@@ -1537,7 +1537,7 @@ FIXTURES = build_runs()
 
 
 class PreviewState:
-    """One server's volatile synthetic receipts, never a connection to a board."""
+    """One synthetic case's volatile control state, never a connection to a board."""
 
     def __init__(self):
         self.deleted: dict[str, dict] = {}
@@ -1545,13 +1545,32 @@ class PreviewState:
         self.cleared_providers: set[tuple[str, str]] = set()
         self.clear_receipts: dict[str, dict] = {}
         self.work_control_receipts: dict[str, tuple[str, dict, dict]] = {}
+        self.paused_groups: set[str] = set()
+        self.ended_runs: set[str] = set()
+        self.delivered_runs: set[str] = set()
         self.session_after_polls = 0
         self.session_appends: list[dict] = []
         self.lock = threading.RLock()
 
     @property
     def cursor(self) -> int:
-        return FIXTURES["head"] + len(self.deleted)
+        return FIXTURES["head"] + len(self.deleted) + len(self.work_control_receipts)
+
+
+def projected_run(entry: dict, state: PreviewState | None) -> dict:
+    if state is None:
+        return entry
+    if entry["runId"] in state.delivered_runs:
+        return {**entry, "state": "delivered", "status": "completed", "category": "review"}
+    if entry["runId"] not in state.ended_runs:
+        return entry
+    conclusion = host_conclusion(f"console-end-{entry['runId']}",
+                                 attempt_id=entry["attempts"][-1]["attemptId"] if entry["attempts"] else None,
+                                 execution_status="failed" if entry["state"] == "failed" else "cancelled", note="", artifact_id=None,
+                                 actor={"role": "console", "id": SYNTHETIC_SESSION_ID}, created_at=OBSERVED_AT)
+    conclusion["reason"] = {"code": "macro-task-ended", "params": {}}
+    return {**entry, "state": "concluded", "status": "cancelled" if entry["status"] in ("queued", "running", "cancelling", "reconciliation-needed") else entry["status"], "category": "ended",
+            "hostConclusion": conclusion}
 
 
 def fixture_run(run_id: str, state: PreviewState | None = None) -> dict:
@@ -2265,8 +2284,8 @@ def timeline_row(entry: dict, depth: int) -> dict:
     return row
 
 
-def macro_task_summary(group: str, matching: set[str]) -> dict:
-    entries = [FIXTURES["runs"][run_id] for run_id in FIXTURES["groups"][group]]
+def macro_task_summary(group: str, matching: set[str], state: PreviewState | None = None) -> dict:
+    entries = [projected_run(FIXTURES["runs"][run_id], state) for run_id in FIXTURES["groups"][group]]
     counts = {"roots": 0, "helpers": 0, "accepted": 0, "failed": 0, "active": 0, "host": 0, "review": 0, "ended": 0,
               "unfinished": 0, "delivered": 0}
     for entry in entries:
@@ -2282,7 +2301,7 @@ def macro_task_summary(group: str, matching: set[str]) -> dict:
             counts["accepted"] += 1
         if entry["parentRunId"] is None and (entry["hostConclusion"] or {}).get("executionStatus") == "failed":
             counts["failed"] += 1
-    state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
+    category_state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
     if group.startswith("macro-"):
         meta = MACRO_TASKS[group]
         title, title_source, project = meta["title"], "macro-task", meta["project"]
@@ -2297,8 +2316,10 @@ def macro_task_summary(group: str, matching: set[str]) -> dict:
         "macroTaskId": group, "kind": kind, "title": title, "titleSource": title_source,
         "project": PROJECTS[project],
         "createdAt": created, "lastActivityAt": at, "lastActivitySeq": seq,
-        "state": "empty" if not entries and kind == "macro-task" else state,
-        "paused": None,
+        "state": "empty" if not entries and kind == "macro-task" else category_state,
+        "paused": ({"pausedAt": OBSERVED_AT, "shutdownConfirmed": all(
+            entry["shutdownConfirmed"] for entry in entries)}
+                   if state is not None and group in state.paused_groups else None),
         "counts": counts, "matchingRuns": len(matching), "rootRunIds": roots,
     }
 
@@ -2398,9 +2419,9 @@ def matches(entry: dict, applied: dict) -> bool:
     return entry["category"] == "review"
 
 
-def group_matching(group: str, applied: dict) -> set[str]:
+def group_matching(group: str, applied: dict, state: PreviewState | None = None) -> set[str]:
     return {run_id for run_id in FIXTURES["groups"][group]
-            if matches(FIXTURES["runs"][run_id], applied)}
+            if matches(projected_run(FIXTURES["runs"][run_id], state), applied)}
 
 
 def preview_list_rows(applied: dict, state: PreviewState | None) -> list[dict]:
@@ -2408,7 +2429,7 @@ def preview_list_rows(applied: dict, state: PreviewState | None) -> list[dict]:
     for group in FIXTURES["groups"]:
         if state is not None and group in state.deleted:
             continue
-        matching = group_matching(group, applied)
+        matching = group_matching(group, applied, state)
         meta = MACRO_TASKS.get(group)
         query = (applied.get("query") or "").casefold()
         macro_text = (" ".join((group, meta["title"], meta["goal"]["body"] if meta["goal"] else "",
@@ -2416,9 +2437,9 @@ def preview_list_rows(applied: dict, state: PreviewState | None) -> list[dict]:
                                  PROJECTS[meta["project"]]["path"])) if meta else "").casefold()
         macro_match = bool(meta and (not query or query in macro_text))
         filter_name = applied.get("filter", "all")
-        has_filtered_member = bool(group_matching(group, {"filter": filter_name}))
+        has_filtered_member = bool(group_matching(group, {"filter": filter_name}, state))
         if matching or macro_match and (filter_name == "all" or has_filtered_member):
-            rows.append(macro_task_summary(group, matching))
+            rows.append(macro_task_summary(group, matching, state))
     # These rows exercise a page boundary without changing the timeline fixtures.
     template = macro_task_summary(MACRO_C, set(FIXTURES["groups"][MACRO_C]))
     for index in range(LIST_PADDING_COUNT):
@@ -2517,8 +2538,8 @@ def macro_task_timeline(params: dict, scenario: str, state: PreviewState | None 
         raise PreviewError("NOT_FOUND", "Unknown macroTaskId")
     limit = parse_limit(params, 100, 200)
     applied = applied_filters(params)
-    entries = [FIXTURES["runs"][run_id] for run_id in FIXTURES["groups"][group]]
-    matching = group_matching(group, applied)
+    entries = [projected_run(FIXTURES["runs"][run_id], state) for run_id in FIXTURES["groups"][group]]
+    matching = group_matching(group, applied, state)
     selected = [(entry, depth) for entry, depth in tree_order(entries) if entry["runId"] in matching]
     row_cap, span_cap, event_cap = CAPS[scenario]
     shown = selected[:min(limit, row_cap)]
@@ -2530,7 +2551,7 @@ def macro_task_timeline(params: dict, scenario: str, state: PreviewState | None 
     truncated = {"rows": len(selected) > len(shown), "spans": span_total > len(spans),
                  "events": marker_total > len(markers)}
     return {
-        "macroTask": {**macro_task_summary(group, matching),
+        "macroTask": {**macro_task_summary(group, matching, state),
                       "goal": MACRO_TASKS[group]["goal"] if group.startswith("macro-") else None},
         "observedAt": OBSERVED_AT,
         "cursor": state.cursor if state is not None else FIXTURES["head"], "rows": [timeline_row(entry, depth) for entry, depth in shown],
@@ -3058,7 +3079,7 @@ def workflow_get(params: dict, state: PreviewState | None = None) -> dict:
         if params.get("routingHistory") is not None:
             view["routingHistory"] = {"entries": [], "nextCursor": None, "total": 0}
         return view
-    view = workflow_view(entry)
+    view = workflow_view(projected_run(entry, state))
     if params.get("includeAudit"):
         view["audit"] = audit_view(entry)
     history = params.get("routingHistory")
@@ -3086,7 +3107,7 @@ def workflow_get(params: dict, state: PreviewState | None = None) -> dict:
 
 
 def work_control_reply(operation: str, params: dict, state: PreviewState | None) -> dict:
-    """Canned control replies over invented records, without executing or changing work."""
+    """Project control effects over invented records without executing work."""
     unknown = sorted(set(params) - {"macroTaskId", "commandId", "note"})
     if unknown:
         raise PreviewError("INVALID_ARGUMENT", f"Unknown parameter: {unknown[0]}")
@@ -3108,42 +3129,25 @@ def work_control_reply(operation: str, params: dict, state: PreviewState | None)
     if group not in FIXTURES["groups"] or group in state.deleted:
         raise PreviewError("NOT_FOUND", "Unknown macroTaskId")
     if operation == "macro_task_pause":
-        reply = {"macroTaskId": group, "pausedAt": OBSERVED_AT, "duplicate": False}
+        state.paused_groups.add(group)
     elif operation == "macro_task_resume":
-        reply = {"macroTaskId": group, "duplicate": False}
+        state.paused_groups.discard(group)
     else:
-        results = []
+        state.paused_groups.discard(group)
         for run_id in FIXTURES["groups"][group]:
             entry = FIXTURES["runs"][run_id]
             if entry["state"] in ("accepted", "concluded", "delivered"):
                 continue
-            # Six independent outcomes exercise the service's real end-reply
-            # variants without changing the invented timeline or its scope.
-            if group == MACRO_B:
-                if run_id == "preview-run-b3":
-                    results.append({"runId": run_id, "state": "concluded", "concluded": True,
-                                    "reclaimError": {"code": "STORAGE_INCOMPLETE", "message": "Synthetic checkout cleanup is blocked"}})
-                    continue
-                if run_id == "preview-run-b4":
-                    results.append({"runId": run_id, "state": "concluded", "concluded": True})
-                    continue
-                if run_id == "preview-run-b6":
-                    results.append({"runId": run_id, "state": "delivered", "concluded": False})
-                    continue
-                if run_id == "preview-run-b8":
-                    results.append({"runId": run_id, "concluded": False,
-                                    "error": {"code": "CONFLICT", "message": "Synthetic Host continuation raced with end"}})
-                    continue
+            # Synthetic unknown stop and Host race remain visible in the rows.
+            if group == MACRO_B and run_id == "preview-run-b6":
+                state.delivered_runs.add(run_id)
+                continue
+            if group == MACRO_B and run_id == "preview-run-b8":
+                continue
             shutdown = shutdown_view(entry)
             if shutdown["selfConfirmed"] and shutdown["descendantsConfirmed"]:
-                results.append({"runId": run_id, "state": "concluded", "concluded": True,
-                                "reclaim": {"removed": False, "reasons": [
-                                    "no-checkout" if entry["checkout"] == "none" else "repository-not-found"]}})
-            else:
-                results.append({"runId": run_id, "concluded": False, "error": {
-                    "code": "SHUTDOWN_UNCONFIRMED", "message": "Synthetic execution shutdown is unconfirmed",
-                    "unconfirmedRunIds": shutdown["unconfirmedRunIds"], "unconfirmedCount": shutdown["unconfirmedCount"]}})
-        reply = {"macroTaskId": group, "results": results, "duplicate": False}
+                state.ended_runs.add(run_id)
+    reply = {"macroTaskId": group, "duplicate": False}
     state.work_control_receipts[command_id] = (operation, request, reply)
     return reply
 
@@ -3285,8 +3289,18 @@ class PreviewHTTPServer(ThreadingHTTPServer):
         self.assets = assets
         self.scenario = scenario
         self.state = PreviewState()
+        self.case_states: dict[str, PreviewState] = {}
+        self.case_states_lock = threading.Lock()
         self.verbose = verbose
         super().__init__(address, PreviewHandler)
+
+    def state_for_case(self, case: str | None) -> PreviewState:
+        if case is None:
+            return self.state
+        with self.case_states_lock:
+            if case not in self.case_states:
+                self.case_states[case] = PreviewState()
+            return self.case_states[case]
 
     def server_bind(self):
         # HTTPServer.server_bind resolves the bound host through socket.getfqdn,
@@ -3300,6 +3314,10 @@ class PreviewHTTPServer(ThreadingHTTPServer):
 class PreviewHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 30
+
+    @property
+    def state(self) -> PreviewState:
+        return self.server.state_for_case(self.headers.get("X-HMB-Preview-Case"))
 
     def date_time_string(self, timestamp=None):  # noqa: D401 - BaseHTTPRequestHandler API
         """Keep the synthetic clock fixed, independent of server age or shard order.
@@ -3364,11 +3382,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
 
     # -- read routes -------------------------------------------------------
     def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
-        with self.server.state.lock:
+        with self.state.lock:
             self._read()
 
     def do_HEAD(self):  # noqa: N802 - BaseHTTPRequestHandler API
-        with self.server.state.lock:
+        with self.state.lock:
             self._read()
 
     def _read(self) -> None:
@@ -3380,29 +3398,29 @@ class PreviewHandler(BaseHTTPRequestHandler):
             if path in ("", "/"):
                 return self._page()
             if path == "/api/console":
-                return self._json(200, console_snapshot(self.server.scenario, self._assets_ready(), self.server.state))
+                return self._json(200, console_snapshot(self.server.scenario, self._assets_ready(), self.state))
             if path == "/api/macro-tasks":
                 params = parse_query(query, frozenset({"limit", "query", "filter", "sort", "group", "before"}))
-                return self._json(200, macro_task_page(params, self.server.state))
+                return self._json(200, macro_task_page(params, self.state))
             if path == "/api/runtime-version":
                 return self._json(200, runtime_version_report())
             session_match = re.fullmatch(r"/api/tasks/([A-Za-z0-9._:-]{1,128})/attempts/"
                                          r"([A-Za-z0-9._:-]{1,128})/session", path)
             if session_match:
                 params = session_query(query)
-                with self.server.state.lock:
-                    page = session_read(*session_match.groups(), params, self.server.state)
+                with self.state.lock:
+                    page = session_read(*session_match.groups(), params, self.state)
                 return self._json(200, page)
             if path.startswith("/api/macro-tasks/") and path.endswith("/goals"):
                 identifier = path[len("/api/macro-tasks/"):-len("/goals")]
                 parse_query(query, frozenset())
-                if identifier not in MACRO_TASKS or identifier in self.server.state.deleted:
+                if identifier not in MACRO_TASKS or identifier in self.state.deleted:
                     return self._error(404, "NOT_FOUND", "Not found")
                 goal = MACRO_TASKS[identifier]["goal"]
                 return self._json(200, {"macroTaskId": identifier, "goals": [] if goal is None else [goal]})
             if path.startswith("/api/macro-tasks/") and path.endswith("/timeline"):
                 identifier = path[len("/api/macro-tasks/"):-len("/timeline")]
-                if not MACRO_TASK_ID.match(identifier) or identifier not in FIXTURES["groups"] or identifier in self.server.state.deleted:
+                if not MACRO_TASK_ID.match(identifier) or identifier not in FIXTURES["groups"] or identifier in self.state.deleted:
                     return self._error(404, "NOT_FOUND", "Not found")
                 params = parse_query(query, frozenset({"limit", "query", "filter"}))
                 params["macroTaskId"] = identifier
@@ -3410,12 +3428,12 @@ class PreviewHandler(BaseHTTPRequestHandler):
                     # A known group read fails; an unknown group or a bad parameter
                     # above still answers 404/400 instead of being masked by the 503.
                     return self._error(503, "SERVICE_UNAVAILABLE", ERROR_SCENARIO_MESSAGE)
-                return self._json(200, macro_task_timeline(params, self.server.scenario, self.server.state))
+                return self._json(200, macro_task_timeline(params, self.server.scenario, self.state))
             if path.startswith("/api/tasks/"):
                 run_id = path[len("/api/tasks/"):]
                 if not RUN_ID.match(run_id) or run_id not in FIXTURES["runs"]:
                     return self._error(404, "NOT_FOUND", "Not found")
-                return self._json(200, task_view(fixture_run(run_id, self.server.state)))
+                return self._json(200, task_view(projected_run(fixture_run(run_id, self.state), self.state)))
             if path.startswith("/api/"):
                 return self._error(404, "NOT_FOUND", "Not found")
             return self._asset(path)
@@ -3451,8 +3469,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if not isinstance(operation, str) or not operation:
             return self._error(400, "INVALID_ARGUMENT", "operation is required")
         try:
-            with self.server.state.lock:
-                result = command_result(self.server.scenario, operation, value.get("params", {}), self.server.state)
+            with self.state.lock:
+                result = command_result(self.server.scenario, operation, value.get("params", {}), self.state)
         except PreviewError as error:
             return self._preview_error(error)
         except Exception:  # noqa: BLE001 - no traceback crosses the boundary
@@ -4486,7 +4504,7 @@ def smoke(assets: Path, scenario: str) -> int:
             params = {"macroTaskId": MACRO_A, "commandId": "synthetic-" + action}
             status, envelope, _headers = call("POST", "/api/command", payload={"operation": operation, "params": params})
             reply = envelope.get("result", {})
-            expected_keys = {"macroTaskId", "duplicate"} | ({"results"} if action == "end" else {"pausedAt"} if action == "pause" else set())
+            expected_keys = {"macroTaskId", "duplicate"}
             check(operation + " returns a synthetic control reply", status == 200
                   and set(reply) == expected_keys
                   and reply["macroTaskId"] == MACRO_A and reply["duplicate"] is False, f"status={status}")

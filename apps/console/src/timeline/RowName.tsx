@@ -29,10 +29,11 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
   const title = displayTitle(row.titleSource, row.title);
   const repairTitle = row.fixes ? displayTitle(row.fixesTitleSource!, row.fixesTitle!).fullText : null;
   const repair = row.fixes ? t("fixes", { title: repairTitle }) : null;
+  const paused = row.status === "queued" && row.queueReason === "paused";
   const tone = row.status === "queued" ? null : state.tone === "green" ? "live"
     : state.tone === "amber" || row.category === "host" || row.state === "delivered" ? "hand"
     : row.category === "active" ? "live" : isFailedRow(row) ? "fail" : "past";
-  const mark = tone === "live" ? "live" : row.state === "delivered" ? "review"
+  const mark = paused ? "paused" : tone === "live" ? "live" : row.state === "delivered" ? "review"
     : row.state === "awaiting-host" || row.kind !== "helper" && (row.state === "failed" || row.state === "cancelled") && !["queued", "running", "reconciliation-needed"].includes(row.status) ? "hand"
       : null;
   const showState = !state.settled;
@@ -53,9 +54,9 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
       </span>
       {!!row.fixedBy?.length && <span data-slot="fixed-by" className="shrink-0 text-xs text-ink3" aria-label={t("fixedBy", { n: row.fixedBy.length })}>↩ {row.fixedBy.length}</span>}
       {fresh && <span aria-label={t("newMicroTask")} className="size-1.5 shrink-0 rounded-full bg-hand-mark"/>}
-      {!list && mark && <span data-slot="row-state" data-kind={mark} className="ml-auto flex size-5 shrink-0 items-center justify-center" aria-hidden="true"><StateMark kind={mark} className="size-2.5"/></span>}
+      {!list && mark && <span data-slot="row-state" data-kind={mark} className="ml-auto flex size-5 shrink-0 items-center justify-center" aria-hidden="true"><StateMark kind={mark} breathing={mark === "live" || mark === "paused" && !row.shutdownConfirmed} className="size-2.5"/></span>}
     </span>
-    <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{showState && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" ? "text-ink state-breathe" : !current && "text-ink3")}>{state.label}</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{ariaPrefix && <span>{ariaPrefix} · </span>}<BuddyName buddy={row.buddy}>{buddyLabel(row.buddy)}</BuddyName></span>
+    <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{showState && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" || paused ? "text-ink" : !current && "text-ink3", (mark === "live" || paused && !row.shutdownConfirmed) && "state-breathe")}>{state.label}</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{ariaPrefix && <span>{ariaPrefix} · </span>}<BuddyName buddy={row.buddy}>{buddyLabel(row.buddy)}</BuddyName></span>
   </button>;
 }));
 

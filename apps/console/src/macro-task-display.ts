@@ -100,6 +100,9 @@ const STATE_LABELS: Record<string, string> = {
 const SETTLED_STATES = new Set(["accepted", "concluded", "completed"]);
 
 export function rowStateInfo(row: TimelineRow, rows: readonly TimelineRow[] = []): { label: string; tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string; settled: boolean } {
+  if (row.status === "queued" && row.queueReason === "paused") return {
+    label: i18n.t("shell:macroWork.paused"), tone: "neutral", glyph: "Ⅱ", glyphClass: "muted", settled: false,
+  };
   const key = row.status === "cancelling" || row.state === "cancelled" && rows.some(owned => owned.rootLeadRunId === row.runId && !owned.shutdownConfirmed)
     ? "cancelling"
     : (row.state === "failed" || row.state === "cancelled") && ["queued", "running", "reconciliation-needed"].includes(row.status)

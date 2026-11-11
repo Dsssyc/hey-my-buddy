@@ -252,8 +252,9 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         target = first['macroTaskId']
         _, browser = self.open_console(board)
         ended = self.command(browser, 'macro_task_end', {'macroTaskId': target, 'commandId': 'end-before-delete'})
-        self.assertEqual({entry['runId'] for entry in ended['results']}, {first['runId'], second['runId']})
-        self.assertTrue(all(entry['concluded'] for entry in ended['results']), ended)
+        self.assertEqual(ended, {'macroTaskId': target, 'duplicate': False})
+        for run in (first, second):
+            self.assertEqual(board.call('workflow_get', {'runId': run['runId']})['state'], 'concluded')
         self.command(browser, 'macro_task_pause', {'macroTaskId': target, 'commandId': 'pause-before-delete'})
         preview = self.command(browser, PREVIEW, {'macroTaskId': target})
         self.assertEqual((preview['microTaskCount'], preview['unconcludedFailureCount'], preview['blockerTotal']), (2, 0, 0))

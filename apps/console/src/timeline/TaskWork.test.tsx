@@ -98,6 +98,19 @@ describe("the lanes and the detail workspace", () => {
     expect([...document.querySelectorAll('[data-slot=timeline-row-name]')].map(node => node.getAttribute("data-run-id"))).toEqual(timeline.rows.map(entry => entry.runId));
     expect(row("r3").style.paddingLeft).toBe("31px");
   });
+  it("shows a paused queued task with a pause mark and live stop evidence", () => {
+    const timeline = macroTaskTimelineFixture();
+    const index = timeline.rows.findIndex(item => item.runId === "r4");
+    timeline.rows[index] = { ...timeline.rows[index]!, state: "executing", status: "queued", queueReason: "paused", shutdownConfirmed: false };
+    const view = setup({ timeline });
+    const name = row("r4");
+    expect(name.getAttribute("aria-label")).toContain("已暂停");
+    expect(name.querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBe("paused");
+    expect(name.querySelector('[data-slot=state-mark]')?.classList.contains("state-breathe")).toBe(true);
+    expect(name.querySelector('[data-slot=row-state-edge]')).toBeNull();
+    view.rerender(<TooltipProvider><TaskWork {...view.props} timeline={{ ...timeline, rows: timeline.rows.map(item => item.runId === "r4" ? { ...item, shutdownConfirmed: true } : item) }}/></TooltipProvider>);
+    expect(row("r4").querySelector('[data-slot=state-mark]')?.classList.contains("state-breathe")).toBe(false);
+  });
   it("writes the state word only while someone must act or something runs; the settled band speaks alone", () => {
     const cancelledHelper = macroTaskTimelineFixture();
     const helper = cancelledHelper.rows.find(row => row.runId === "r5")!;

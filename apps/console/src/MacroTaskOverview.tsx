@@ -14,7 +14,7 @@ import { CopyableIdentifier } from "./components/CopyableIdentifier";
 import { MacroTaskGoal } from "./MacroTaskGoal";
 import type { ConsoleApi } from "./api";
 
-type Count = { key: "host" | "review" | "active" | "accepted" | "failed" | "ended"; mark: "hand" | "review" | "live" | "done" | "fail" | "idle"; value: number };
+type Count = { key: "host" | "review" | "active" | "paused" | "accepted" | "failed" | "ended"; mark: "hand" | "review" | "live" | "paused" | "done" | "fail" | "idle"; value: number };
 
 /** One macro task's title, context, state counts and expandable recorded facts. */
 export function MacroTaskOverview({ summary, timeline, loading, stale, active = true, nowMs, readGoals, onBackToList, listToggle, headerActions }: {
@@ -32,7 +32,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
   const { t, i18n: { language } } = useTranslation("macroHeader");
   const [statsOpen, setStatsOpen] = useState(false);
   const statsContent = useRef<HTMLDivElement>(null);
-  const shown = timeline?.macroTask ?? summary;
+  const shown = summary ?? timeline?.macroTask;
   useEffect(() => setStatsOpen(false), [active, shown?.macroTaskId]);
   const metrics = useMemo(() => timeline ? macroTaskMetrics(timeline) : null, [timeline, language]);
   if (!shown) return null;
@@ -50,7 +50,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
   const counts: Count[] = [
     { key: "host", mark: "hand", value: shown.counts.host },
     { key: "review", mark: "review", value: shown.counts.review },
-    { key: "active", mark: "live", value: shown.counts.active },
+    { key: shown.paused ? "paused" : "active", mark: shown.paused ? "paused" : "live", value: shown.counts.active },
     { key: "accepted", mark: "done", value: shown.counts.accepted },
     { key: "failed", mark: "fail", value: shown.counts.failed },
     { key: "ended", mark: "idle", value: shown.counts.ended - shown.counts.accepted - shown.counts.failed },
@@ -106,9 +106,9 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
     </div>
     <div className="flex min-w-0 shrink-0 items-start gap-4 @min-[761px]:col-start-2 @min-[761px]:row-start-1 @max-[761px]:w-full @max-[761px]:items-center @min-[761px]:gap-10">
       <dl data-slot="macro-overview-counts" className="flex flex-wrap gap-x-4 gap-y-1.5 @max-[761px]:min-w-0 @max-[761px]:flex-1 @min-[761px]:gap-x-5">
-        {counts.filter(count => count.value > 0).map(count => <div key={count.key} data-slot={`macro-overview-count-${count.key}`} className="flex flex-col items-end gap-0.5 whitespace-nowrap @max-[761px]:flex-row @max-[761px]:items-center @max-[761px]:gap-1.5">
-          <dd className={`text-lg font-semibold leading-tight tabular-nums @max-[761px]:text-sm ${count.mark === "hand" || count.mark === "review" ? "text-hand" : count.mark === "live" ? "text-foreground state-breathe" : count.mark === "fail" ? "text-fail" : "text-ink"}`}>{formatNumber(count.value)}</dd>
-          <dt className="flex items-center gap-1.5 text-xs text-ink2"><StateMark kind={count.mark} />{t(count.key === "host" ? "hostWait" : count.key)}</dt>
+        {counts.filter(count => count.value > 0 || count.key === "paused").map(count => <div key={count.key} data-slot={`macro-overview-count-${count.key}`} className="flex flex-col items-end justify-end gap-0.5 whitespace-nowrap @max-[761px]:flex-row @max-[761px]:items-center @max-[761px]:gap-1.5">
+          {count.value > 0 && <dd className={`text-lg font-semibold leading-tight tabular-nums @max-[761px]:text-sm ${count.mark === "hand" || count.mark === "review" ? "text-hand" : count.mark === "live" || count.mark === "paused" ? "text-foreground" : count.mark === "fail" ? "text-fail" : "text-ink"} ${count.mark === "live" || count.mark === "paused" && !shown.paused?.shutdownConfirmed ? "state-breathe" : ""}`}>{formatNumber(count.value)}</dd>}
+          <dt className="flex items-center gap-1.5 text-xs text-ink2"><StateMark kind={count.mark} breathing={count.mark === "live" || count.mark === "paused" && !shown.paused?.shutdownConfirmed} />{count.key === "paused" ? t(shown.paused!.shutdownConfirmed ? "macroWork.paused" : "macroWork.pausing", { ns: "shell" }) : t(count.key === "host" ? "hostWait" : count.key)}</dt>
         </div>)}
       </dl>
       {headerActions}

@@ -345,7 +345,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(await screen.findByRole("button", { name: /只读微任务/ }));
     await waitFor(() => expect(document.querySelector('[data-key="row:readonly-task"]')).toBeTruthy());
     await user.dblClick(document.querySelector('[data-key="row:readonly-task"]') as HTMLElement);
-    await screen.findByRole("heading", { name: /只读微任务/ });
+    await within(await screen.findByRole("region", { name: "微任务详情" })).findByRole("heading", { name: /只读微任务/ });
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
     // Discovery and task control never reached the board; detail reads remain available.

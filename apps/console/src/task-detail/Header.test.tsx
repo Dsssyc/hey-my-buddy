@@ -74,8 +74,21 @@ for (const language of ["zh", "en"] as const) describe(`micro task state in ${la
     };
     expect(reason("cwd-overlap")).toBe(expected.directory);
     expect(reason("model-capacity")).toBe(`${expected.model} · claude / anthropic / claude-opus-5-5`);
-    expect(reason("paused")).toBe(language === "zh" ? "工作已暂停，等待用户在控制台继续。" : "Work is paused, waiting for the user to resume it in the console.");
+    expect(reason("paused")).toBeUndefined();
     expect(reason("future-blocker")).toBe(expected.unknown);
     expect(reason(null)).toBe(expected.unknown);
+  });
+
+  it.each([false, true])("shows the queued pause with matching stop evidence motion (%s)", async shutdownConfirmed => {
+    await i18n.changeLanguage(language);
+    const view = render(<TooltipProvider><Header view={parseTask(task({ state: "queued", queueReason: "paused", shutdownConfirmed }), "m1")}
+      workflow={null} turns={null} endMs={Date.parse(at("11:05"))} error="" busy={false}
+      onRefresh={() => {}} onBack={() => {}}/></TooltipProvider>);
+    const status = view.container.querySelector('[data-slot="detail-status"]')!;
+    expect(status.textContent).toBe(language === "zh" ? "已暂停" : "Paused");
+    const mark = status.querySelector('[data-slot="state-mark"]')!;
+    expect(mark.getAttribute("data-kind")).toBe("paused");
+    expect(mark.classList.contains("state-breathe")).toBe(!shutdownConfirmed);
+    expect(view.container.querySelector('[data-slot="detail-queue-reason"]')).toBeNull();
   });
 });

@@ -1,6 +1,15 @@
+import { randomUUID } from "node:crypto";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
 import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle } from "./preview";
+
+const caseIds = new WeakMap<Page, string>();
+test.beforeEach(async ({ page }) => {
+  const id = randomUUID();
+  caseIds.set(page, id);
+  await page.context().setExtraHTTPHeaders({ "X-HMB-Preview-Case": id });
+});
+const caseHeaders = (page: Page) => ({ "X-HMB-Preview-Case": caseIds.get(page)! });
 
 const MACRO = "macro-22222222-2222-4222-8222-222222222222";
 const TIMELINE = `/api/macro-tasks/${MACRO}/timeline`;
@@ -95,7 +104,7 @@ for (const { locale, language, tasks } of [
 
     });
 
-    test("confirms the Lead macro task end scope and reports the synthetic result", async ({ page }) => {
+    test("confirms the Lead macro task end scope and reads its conclusion from the updated view", async ({ page }) => {
       const errors = observeErrors(page);
       const commands: { operation: string; params: { macroTaskId: string; commandId: string } }[] = [];
       page.on("request", request => {
@@ -134,33 +143,19 @@ for (const { locale, language, tasks } of [
       await dialog.getByRole("button", { name: zh ? "确认结束" : "End", exact: true }).click();
       const response = await responsePromise;
       expect(response.status()).toBe(200);
-      const reply = (await response.json()).result;
-      expect(reply.results).toHaveLength(summary.counts.unfinished);
-      const concluded = reply.results.filter((result: { concluded: boolean }) => result.concluded).length;
-      const unconfirmed = reply.results.filter((result: { concluded: boolean; error?: { code: string } }) =>
-        !result.concluded && result.error?.code === "SHUTDOWN_UNCONFIRMED").length;
-      const delivered = reply.results.filter((result: { concluded: boolean; state?: string }) =>
-        !result.concluded && (result.state === "delivered" || result.state === "accepted")).length;
-      const conflicted = reply.results.filter((result: { concluded: boolean; error?: { code: string } }) =>
-        !result.concluded && result.error?.code === "CONFLICT").length;
-      expect(concluded).toBeGreaterThan(0);
-      expect(unconfirmed).toBeGreaterThan(0);
-      expect(delivered).toBeGreaterThan(0);
-      expect(conflicted).toBeGreaterThan(0);
+      expect((await response.json()).result).toEqual({ macroTaskId: MACRO, duplicate: false });
       expect(commands).toEqual([{ operation: "macro_task_end", params: { macroTaskId: MACRO, commandId: expect.any(String) } }]);
       expect(commands[0]!.params.commandId).not.toBe("");
-      const status = page.locator("[data-slot=macro-work-state]");
-      await expect(status).toContainText(zh ? `已结束 ${concluded} 个微任务` : `Ended ${concluded} micro tasks`);
-      await expect(status).toContainText(zh
-        ? `${unconfirmed} 个微任务的停止未确认，没有写结论，可以重试`
-        : `${unconfirmed} micro tasks are not confirmed stopped, so no conclusion was recorded; you can retry`);
-      await expect(status).toContainText(zh
-        ? `${delivered} 个微任务在结束前已交付，没有结束`
-        : `${delivered} micro tasks were delivered before they could be ended`);
-      await expect(status).toContainText(zh
-        ? `${conflicted} 个微任务没有结束：记录冲突；请刷新核对后重试。`
-        : `${conflicted} micro tasks were not ended: The records conflict; refresh, check them and try again.`);
-      await expectReadableStart(row(page, LEAD).getByText(zh ? "等待名下的微任务" : "Waiting for owned micro tasks", { exact: true }), zh ? "等待名下的微任务" : "Waiting for owned micro tasks");
+      await expect(dialog).toBeHidden();
+      await expect(page.locator("[data-slot=macro-work-state]")).toHaveCount(0);
+      const updatedResponse = await page.request.get(TIMELINE, { headers: caseHeaders(page) });
+      expect(updatedResponse.status()).toBe(200);
+      const updated = await updatedResponse.json() as MacroTaskTimeline;
+      expect(updated.macroTask.counts.unfinished).toBeLessThan(summary.counts.unfinished);
+      expect(updated.rows.filter(item => item.state === "concluded").length)
+        .toBeGreaterThan(timeline.rows.filter(item => item.state === "concluded").length);
+      const concluded = updated.rows.find(item => item.state === "concluded")!;
+      await expect(row(page, concluded.runId)).toHaveAccessibleName(new RegExp(zh ? "已结束" : "Ended"));
       await expectNoSidewaysScroll(page);
       expect(errors.page).toEqual([]);
       expect(errors.console).toEqual([]);

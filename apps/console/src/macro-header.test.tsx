@@ -70,6 +70,24 @@ describe("the macro task header", () => {
     expect(review.querySelector("path")?.getAttribute("fill")).toBe("none");
     expect(review.querySelector("path")?.getAttribute("class")).toBe("stroke-hand-mark");
   });
+
+  it("replaces the active count with a pause mark using the latest summary", () => {
+    const timeline = macroTaskTimelineFixture();
+    const summary = { ...timeline.macroTask, paused: { pausedAt: timeline.observedAt, shutdownConfirmed: false } };
+    const view = render(<MacroTaskOverview readGoals={vi.fn()} summary={summary} timeline={timeline} loading={false}
+      stale={false} onBackToList={() => {}} />);
+    const paused = view.container.querySelector('[data-slot="macro-overview-count-paused"]')!;
+    expect(paused.textContent).toBe("1暂停中");
+    expect(paused.querySelector('[data-slot="state-mark"]')?.getAttribute("data-kind")).toBe("paused");
+    expect(paused.querySelector('[data-slot="state-mark"]')?.classList.contains("state-breathe")).toBe(true);
+    expect(view.container.querySelector('[data-slot="macro-overview-count-active"]')).toBeNull();
+    view.rerender(<TooltipProvider><MacroTaskOverview readGoals={vi.fn()} summary={{ ...summary, paused: { ...summary.paused, shutdownConfirmed: true }, counts: { ...summary.counts, active: 0 } }} timeline={timeline} loading={false}
+      stale={false} onBackToList={() => {}} /></TooltipProvider>);
+    const confirmed = view.container.querySelector('[data-slot="macro-overview-count-paused"]')!;
+    expect(confirmed.textContent).toBe("已暂停");
+    expect(confirmed.querySelector("dd")).toBeNull();
+    expect(confirmed.querySelector('[data-slot="state-mark"]')?.classList.contains("state-breathe")).toBe(false);
+  });
 });
 
 

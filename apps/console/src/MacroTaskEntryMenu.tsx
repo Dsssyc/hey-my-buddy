@@ -5,7 +5,7 @@ import { Button } from "./components/ui/button";
 import { Hint } from "./components/hint";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
 import type { MacroTaskSummary, WorkAction } from "./macro-task-types";
-import { canRetryEnd, type WorkEntries } from "./macro-task-control";
+import type { WorkEntries } from "./macro-task-control";
 
 export function MacroTaskEntryMenu({ summary, entries, writable, busy, active, onAction, onEnd, onDelete }: {
   summary: MacroTaskSummary; entries?: WorkEntries; writable: boolean; busy: boolean; active: boolean;
@@ -28,9 +28,8 @@ export function MacroTaskEntryMenu({ summary, entries, writable, busy, active, o
     }}>
       <Hint text={reason}><DropdownMenuItem data-slot={`macro-${action}-action`} disabled={!writable || busy} aria-busy={entries?.[action]?.phase === "pending" || undefined} onSelect={() => onAction(summary, action)}>{t(`shell:macroWork.${action}`)}</DropdownMenuItem></Hint>
       {summary.counts.unfinished > 0 && <Hint text={reason}><DropdownMenuItem data-slot="macro-end-action" disabled={!writable || busy} onSelect={() => {
-        if (entries?.end?.phase === "unknown") onAction(summary, "end");
-        else { openingDialog.current = true; onEnd(summary, button.current!); }
-      }}>{t(canRetryEnd(entries?.end) ? "shell:macroWork.retryEnd" : "shell:macroWork.end")}</DropdownMenuItem></Hint>}
+        openingDialog.current = true; onEnd(summary, button.current!);
+      }}>{t("shell:macroWork.end")}</DropdownMenuItem></Hint>}
       <DropdownMenuSeparator/>
       <DropdownMenuItem data-slot="macro-delete-action" className="text-fail" onSelect={() => {
         openingDialog.current = true; onDelete(summary, button.current!);

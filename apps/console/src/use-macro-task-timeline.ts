@@ -143,6 +143,7 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
 
   return {
     timeline: data,
+    readAtMs: anchor.current?.readAt ?? null,
     observedAt: data?.observedAt ?? null,
     displayObservedAt,
     loading, error,

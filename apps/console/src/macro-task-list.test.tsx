@@ -118,6 +118,24 @@ describe("macro task list", () => {
     expect(within(entries[1]!).getByText("等待验收", { selector: ".sr-only" })).toBeTruthy();
   });
 
+  it("uses the pause mark over member states and animates only while stopping", () => {
+    const p = props();
+    const base = row(p);
+    p.groups = macroTaskGroups([
+      { ...base, macroTaskId: "pausing", paused: { pausedAt: base.createdAt!, shutdownConfirmed: false } },
+      { ...base, macroTaskId: "paused", paused: { pausedAt: base.createdAt!, shutdownConfirmed: true } },
+    ]);
+    render(<MacroTaskList {...p}/>);
+    for (const [id, label, breathing] of [["pausing", "暂停中", true], ["paused", "已暂停", false]] as const) {
+      const entry = document.querySelector(`[data-macro-task-id="${id}"] [data-slot="macro-entry"]`)!;
+      const mark = entry.querySelector('[data-slot="state-mark"]')!;
+      expect(mark.getAttribute("data-kind")).toBe("paused");
+      expect(mark.classList.contains("state-breathe")).toBe(breathing);
+      expect(within(entry as HTMLElement).getByText(label, { selector: ".sr-only" })).toBeTruthy();
+      expect(entry.querySelector('[data-slot="macro-pause-state"]')).toBeNull();
+    }
+  });
+
   it("marks the selected row and keeps the full title without a hover description", () => {
     const p = props();
     const view = render(<MacroTaskList {...p}/>);
