@@ -30,7 +30,6 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
    * own `observedAt` is never rewritten.
    */
   const [displayObservedAt, setDisplayObservedAt] = useState<string | null>(null);
-  const anchor = useRef<{ verifiedAtMs: number; readAt: number } | null>(null);
   const generation = useRef(0), pending = useRef(false), request = useRef<AbortController | null>(null);
   const visible = useDocumentVisible();
   const dataRef = useRef<MacroTaskTimeline | null>(null);
@@ -59,9 +58,7 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
       // names a fresh verification instant even though `observedAt` still
       // carries the older source fact. Without a response date the local
       // clock at read completion stands in (justified: the console is local).
-      const readAt = Date.now();
-      const verifiedAt = verifiedAtMs ?? readAt;
-      anchor.current = { verifiedAtMs: verifiedAt, readAt };
+      const verifiedAt = verifiedAtMs ?? Date.now();
       setDisplayObservedAt(new Date(verifiedAt).toISOString());
       // Merge from the last accepted data before setData: the state updater may
       // be deferred by React, so new-row labels cannot depend on its output.
@@ -114,14 +111,12 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
     const cleanup = () => { ++generation.current; request.current?.abort(); pending.current = false; };
     if (!macroTaskId) {
       setData(null); setError(""); setNewRunIds(new Set());
-      anchor.current = null;
       setDisplayObservedAt(null);
       setLoading(false);
       return cleanup;
     }
     if (changed || dataRef.current === null) {
       setData(null); setError(""); setNewRunIds(new Set());
-      anchor.current = null;
       setDisplayObservedAt(null);
       if (active && visible) setLoading(true);
     }
@@ -143,7 +138,6 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
 
   return {
     timeline: data,
-    readAtMs: anchor.current?.readAt ?? null,
     observedAt: data?.observedAt ?? null,
     displayObservedAt,
     loading, error,

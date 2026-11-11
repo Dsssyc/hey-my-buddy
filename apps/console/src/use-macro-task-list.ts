@@ -35,7 +35,6 @@ export function useMacroTaskList(api: ConsoleApi, query: Pick<MacroTaskQuery, "q
   // Verification evidence advances even on 304, but has no visible effect until
   // an error needs the connection strip. It must not commit an unchanged list.
   const verifiedAt = useRef<number | null>(null);
-  const readAt = useRef<number | null>(null);
   const generation = useRef(0), pending = useRef(false), request = useRef<AbortController | null>(null);
   const visible = useDocumentVisible(), previousVisible = useRef(visible);
   const initialReadStarted = useRef(false), needsFirst = useRef(false);
@@ -93,7 +92,6 @@ export function useMacroTaskList(api: ConsoleApi, query: Pick<MacroTaskQuery, "q
         return result;
       }));
       if (version !== generation.current || controller.signal.aborted) return;
-      readAt.current = Date.now();
       verifiedAt.current = group ? verifiedAt.current === null || checked === null ? null : Math.min(verifiedAt.current, checked) : checked;
       setError("");
       if (group) {
@@ -148,7 +146,7 @@ export function useMacroTaskList(api: ConsoleApi, query: Pick<MacroTaskQuery, "q
       if (loadedScope.current !== scopeKey) {
         loadedScope.current = scopeKey;
         pageRef.current = emptyPage(); setPage(pageRef.current);
-        verifiedAt.current = null; readAt.current = null;
+        verifiedAt.current = null;
       }
       needsFirst.current = true;
       setReorder(null);
@@ -179,7 +177,7 @@ export function useMacroTaskList(api: ConsoleApi, query: Pick<MacroTaskQuery, "q
 
   const rows = useMemo(() => page.groups.flatMap(group => group.macroTasks), [page.groups]);
   return {
-    groups: page.groups, rows, verifiedAtMs: verifiedAt.current, readAtMs: readAt.current, totals: page.totals, loading, error, reorder, sortFor, changeSort,
+    groups: page.groups, rows, verifiedAtMs: verifiedAt.current, totals: page.totals, loading, error, reorder, sortFor, changeSort,
     more: (groupId: string) => void fetchPage("more", true, groupId),
     retry: () => void fetchPage(needsFirst.current || pageRef.current.groups.length === 0 ? "first" : "poll", true),
     reset: () => setRevision(value => value + 1), applyReorder,

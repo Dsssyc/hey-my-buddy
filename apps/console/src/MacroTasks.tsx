@@ -192,19 +192,11 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     else if (!selected && rows.length) go({ macroTaskId: rows[0].macroTaskId, runId: null, step: null }, "replace");
   }, [active, selected, list.rows, deletedIds]);
   const detailClient = useMemo(() => createTaskDetailClient(api, snapshot.csrfToken), [api, snapshot.csrfToken]);
-  // Both views poll independently. Use the most recently completed successful
-  // read, keeping an open task visible while either view refreshes or fails.
+  // The header and its menu share the selected timeline's summary. Before
+  // that first read completes, the list supplies the selected row.
   const listSummary = rows.find(row => row.macroTaskId === selected);
   const timelineSummary = timeline.timeline?.macroTask.macroTaskId === selected ? timeline.timeline.macroTask : null;
-  const observedSummary = timelineSummary && (!listSummary || timeline.readAtMs !== null && (list.readAtMs === null || timeline.readAtMs > list.readAtMs))
-    ? timelineSummary : listSummary ?? null;
-  const [summarySnapshot, setSummarySnapshot] = useState<MacroTaskSummary | null>(null);
-  useEffect(() => {
-    if (observedSummary) setSummarySnapshot(observedSummary);
-    else if (!selected) setSummarySnapshot(null);
-  }, [observedSummary, selected]);
-  const selectedSummary = observedSummary
-    ?? (summarySnapshot?.macroTaskId === selected ? summarySnapshot : null);
+  const selectedSummary = timelineSummary ?? listSummary ?? null;
   // Receipts retain their command identity independently of current view facts.
   const reload = async () => {
     list.retry();

@@ -32,7 +32,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
   const { t, i18n: { language } } = useTranslation("macroHeader");
   const [statsOpen, setStatsOpen] = useState(false);
   const statsContent = useRef<HTMLDivElement>(null);
-  const shown = summary ?? timeline?.macroTask;
+  const shown = timeline?.macroTask ?? summary;
   useEffect(() => setStatsOpen(false), [active, shown?.macroTaskId]);
   const metrics = useMemo(() => timeline ? macroTaskMetrics(timeline) : null, [timeline, language]);
   if (!shown) return null;

@@ -358,7 +358,7 @@ describe("macro task pause, resume and end", () => {
   it("keeps end confirmation busy until the receipt, then closes before the view read completes without a result banner", async () => {
     const f = harness(); await openMacroTask(f);
     f.timeline.macroTask.counts.unfinished = 2;
-    const pending = deferred(), pageRead = deferred();
+    const pending = deferred(), pageRead = deferred(), timelineRead = deferred();
     const command = f.api.command as ReturnType<typeof vi.fn>;
     command.mockImplementationOnce(() => pending.promise);
     await menu(f); await f.user.click(screen.getByRole("menuitem", { name: "结束" }));
@@ -382,12 +382,14 @@ describe("macro task pause, resume and end", () => {
     expect(screen.getByRole("dialog")).toBe(dialog);
     expect(command).toHaveBeenCalledTimes(1);
     (f.api.macroTasks as ReturnType<typeof vi.fn>).mockImplementationOnce(() => pageRead.promise);
+    (f.api.macroTaskTimeline as ReturnType<typeof vi.fn>).mockImplementationOnce(() => timelineRead.promise);
     f.refresh.mockRejectedValueOnce(new Error("snapshot offline"));
     await act(async () => pending.resolve(reply));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.querySelector('[data-slot="macro-work-state"]')).toBeNull();
     const fresh = { ...f.listed[0]!, counts: { ...f.listed[0]!.counts, unfinished: 0, active: 0, ended: 5 } };
     await act(async () => pageRead.resolve({ groups: macroTaskGroups([fresh]), totals: { all: 1, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 42, changed: false }));
+    await act(async () => timelineRead.resolve({ timeline: { ...f.timeline, macroTask: { ...f.timeline.macroTask, counts: fresh.counts } }, verifiedAtMs: null }));
     await menu(f);
     expect(screen.queryByRole("menuitem", { name: "结束" })).toBeNull();
   });
@@ -396,7 +398,9 @@ describe("macro task pause, resume and end", () => {
     const f = harness(); await openMacroTask(f);
     const command = f.api.command as ReturnType<typeof vi.fn>;
     command.mockImplementation(async () => {
-      f.listed[0] = { ...f.listed[0]!, counts: { ...f.listed[0]!.counts, unfinished: 5, delivered: 3 } };
+      const counts = { ...f.timeline.macroTask.counts, unfinished: 5, delivered: 3 };
+      f.listed[0] = { ...f.listed[0]!, counts };
+      (f.api.macroTaskTimeline as ReturnType<typeof vi.fn>).mockResolvedValue({ timeline: { ...f.timeline, macroTask: { ...f.timeline.macroTask, counts } }, verifiedAtMs: null });
       return reply;
     });
     await menu(f); await f.user.click(screen.getByRole("menuitem", { name: "结束" }));
@@ -455,17 +459,33 @@ describe("macro task pause, resume and end", () => {
     expect(f.listed[0]!.paused).toBeNull();
   });
 
-  it("uses refreshed list pause facts if the timeline read fails", async () => {
+  it("keeps the header and menu with the retained timeline after failure, then retries only that read", async () => {
     const f = harness(); await openMacroTask(f);
+    const original = structuredClone(f.timeline);
+    const paused = { pausedAt: "2026-11-11T09:00:00Z", shutdownConfirmed: true };
     (f.api.command as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      f.listed[0] = { ...f.listed[0]!, paused: { pausedAt: "2026-11-11T09:00:00Z", shutdownConfirmed: true } };
+      f.listed[0] = { ...f.listed[0]!, title: "列表的新标题", paused, counts: { ...f.listed[0]!.counts, unfinished: 0 } };
       (f.api.macroTaskTimeline as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("timeline offline"));
       return reply;
     });
     await menu(f); await f.user.click(screen.getByRole("menuitem", { name: "暂停" }));
-    await waitFor(() => expect(document.querySelector('[data-slot="macro-overview-header"] [data-kind="paused"]')).toBeTruthy());
-    expect(document.querySelector('[data-slot="macro-entry"] [data-kind="paused"]')).toBeTruthy();
-    expect(document.querySelector('[data-slot="macro-pause-state"]')).toBeNull();
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => expect(document.querySelector('[data-slot="macro-entry"] [data-kind="paused"]')).toBeTruthy());
+    const header = document.querySelector('[data-slot="macro-overview-header"]') as HTMLElement;
+    expect(within(header).getByRole("heading", { name: original.macroTask.title! })).toBeTruthy();
+    expect(header.querySelector('[data-kind="paused"]')).toBeNull();
+    await menu(f);
+    expect(screen.getByRole("menuitem", { name: "暂停" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "继续" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "结束" })).toBeTruthy();
+    await f.user.keyboard("{Escape}");
+    const listReads = vi.mocked(f.api.macroTasks).mock.calls.length;
+    const timelineReads = vi.mocked(f.api.macroTaskTimeline).mock.calls.length;
+    vi.mocked(f.api.macroTaskTimeline).mockResolvedValue({ timeline: { ...original, macroTask: { ...original.macroTask, paused } }, verifiedAtMs: null });
+    await f.user.click(within(alert).getByRole("button", { name: "重试连接" }));
+    await waitFor(() => expect(header.querySelector('[data-kind="paused"]')).toBeTruthy());
+    expect(f.api.macroTaskTimeline).toHaveBeenCalledTimes(timelineReads + 1);
+    expect(f.api.macroTasks).toHaveBeenCalledTimes(listReads);
     await menu(f);
     expect(screen.getByRole("menuitem", { name: "继续" })).toBeTruthy();
   });
