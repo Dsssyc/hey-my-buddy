@@ -198,7 +198,7 @@ Where a macro task's work belongs: a Git repository, or an ordinary folder known
 _Avoid_: 工作区, workspace (an execution workspace is a checkout, not a project); 仓库, repository (for every project: a project may be a folder)
 
 **宏任务 / macro task**:
-A user's overall piece of work: it carries a goal statement and groups the micro tasks submitted for it for browsing; it holds none until the first is submitted. It is the unit by which the user deletes records; a micro task that belongs to no macro task is deleted on its own. It does not schedule work or grant control authority.
+A user's overall piece of work: it carries a goal statement and groups the micro tasks submitted for it for browsing; it holds none until the first is submitted. It is the unit by which the user deletes records, pauses, resumes and ends work; a micro task that belongs to no macro task is deleted on its own. It grants no control authority and schedules nothing, except that a paused macro task holds its work until it is resumed.
 _Avoid_: 工作目标, objective
 
 **目标说明 / goal**:
@@ -248,6 +248,18 @@ _Avoid_: timeout, deadline, time limit (for delegated work)
 **有序收尾 / wrap-up**:
 Stopping a running micro task through the blackboard so that its Worker says what is done and what is not and delivers before it stops; a forced stop follows when the grace period ends. Either way a checkout's partial output is sealed, while a micro task without a checkout keeps only the result its Worker delivered.
 _Avoid_: graceful shutdown; cancel (for the summary itself); `收尾` on its own
+
+**暂停 / pause**:
+The user's stop of a whole macro task from the console: its running turns are interrupted through the harness and recorded so they can be continued, and its queued work does not start until it is resumed; nothing is concluded or reclaimed.
+_Avoid_: 停止 or 急停 (for this), suspend
+
+**继续 / resume**:
+The user's undoing of a pause from the console: the blackboard continues each micro task the pause interrupted, with the same buddy, access and scope, and releases the work it held.
+_Avoid_: 续接 / continue (the Host's verb for one micro task), restart
+
+**结束 / end**:
+The user's closing of a macro task from the console: each unfinished micro task is stopped and concluded as ended by the user, so its checkout is reclaimed; delivered micro tasks are left to the Host.
+_Avoid_: 删除 (which removes records), 取消 / cancel
 
 **权限档位 / permission level**:
 How far a buddy may go in one run, in five levels from narrow to wide: 不用工具 / no tools (it only answers), 只联网 / web only (it may search the web and fetch pages; it cannot touch local files or the user's other connected data, and runs no commands), 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout, or the folder it works in when it has none) and 放开 / full access (no limit on where files are modified). The first two say which tools exist; the last three say where files may be modified and nothing about the network. A Worker buddy's level is one of the last three, chosen by the Host when it delegates and changeable between turns; a Router buddy's level follows from what it is doing. A harness carries a level out either 强制 / enforced, when its sandbox or tool limits stop what the level excludes, or 约定 / by convention, when it is only asked to stay inside and the blackboard checks afterwards what it can.
