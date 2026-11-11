@@ -1,4 +1,4 @@
-import { BuddyName, accessibleBuddyName } from "../components/AliasTag";
+import { BuddyName, accessibleBuddyName, useNamedBuddy } from "../components/AliasTag";
 import { cn } from "cn";
 import { ChevronDownIcon, ChevronUpIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -70,6 +70,7 @@ export function RouterList({ lines, buddies, mode, locked, note, records, unsave
   onRemove: (buddyId: string) => void;
 }) {
   const { t } = useTranslation("buddies");
+  const named = useNamedBuddy();
   const [adding, setAdding] = useState(false);
   const added = useRef<string | null>(null);
   useEffect(() => {
@@ -93,7 +94,7 @@ export function RouterList({ lines, buddies, mode, locked, note, records, unsave
           <th className="pr-4 font-normal">{t("roles.records.routers.lastError")}</th><th />
         </tr></thead>
         <tbody>{lines.map(({ buddyId, buddy, status }, index) => {
-          const name = buddy ? accessibleBuddyName(buddyQuad(buddy), buddy)! : buddyId;
+          const name = buddy ? accessibleBuddyName(buddyQuad(buddy), named(buddy))! : buddyId;
           const record = records?.find(row => row.buddyId === buddyId);
           const answerHint = record ? t("routerWork.answerHint", { answered: record.answeredCount ?? t("roles.records.unknown"), missing: record.noAnswerCount ?? t("roles.records.unknown"), consecutive: record.consecutiveNoAnswers ?? t("roles.records.unknown") }) : none;
           return <tr key={buddyId} id={routerLineId(buddyId)} tabIndex={-1} aria-label={name} className="outline-none focus-visible:bg-sunk">

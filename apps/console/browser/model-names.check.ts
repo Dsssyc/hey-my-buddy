@@ -41,14 +41,15 @@ for (const theme of ["dark", "light"] as const) for (const aliased of [false, tr
       await name.click();
       const detail = page.locator('[data-slot=task-detail]');
       await expect(detail).toBeVisible();
-      const turn = detail.locator(`[data-slot=detail-strip] [role=button][aria-label*="${aliased ? "codex / openai / gpt-5-codex / high [Review desk]" : "gpt-5-codex · high"}"]`).first();
+      const turn = detail.locator(`[data-slot=detail-strip] [role=button][aria-label*="codex / openai / gpt-5-codex / high"]`).first();
       await expect(turn).toBeAttached();
-      // Each readout contains the short model/effort name and the complete name;
-      // check each separately so their intentional coexistence is preserved.
-      expect(await turn.getAttribute("aria-label")).toContain(aliased ? "codex / openai / gpt-5-codex / high [Review desk]" : "gpt-5-codex · high · codex / openai / gpt-5-codex / high");
+      const readout = (await turn.getAttribute("aria-label"))!;
+      expect(readout).toContain("codex / openai / gpt-5-codex / high");
+      expect(readout.split("gpt-5-codex")).toHaveLength(2);
+      expect(readout.split("[Review desk]")).toHaveLength(aliased ? 2 : 1);
       await turn.click();
       await expect(detail.locator('[data-slot=detail-band]').first()).toContainText("codex / openai / gpt-5-codex / high");
-      await expect(detail.locator('[data-slot=detail-band] [data-slot=alias-tag]').first()).toHaveCount(aliased ? 1 : 0);
+      await expect(detail.locator('[data-slot=detail-band] [data-slot=alias-tag]')).toHaveCount(aliased ? 1 : 0);
       await expect(name.locator(":scope > span:last-child")).toContainText("gpt-5-codex · high");
       await expect(name.locator('[data-slot=alias-tag]')).toHaveCount(aliased ? 1 : 0);
       if (aliased) await expect(name.locator('[data-slot=alias-tag]')).toHaveText("Review desk");

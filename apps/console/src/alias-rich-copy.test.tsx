@@ -68,8 +68,11 @@ it("keeps visible readout names stable while accessibility text can carry bracke
   expect(spanReadout(span, nowMs).replaceAll(` [${buddy.alias}]`, "")).toBe(plain);
   const { container } = render(<BuddyNamesProvider buddies={[buddy]}><SpanReadout span={span} nowMs={nowMs} /></BuddyNamesProvider>);
   expect(container.textContent).not.toMatch(/[\[\]]/);
-  expect(container.textContent).toContain(`${buddy.model} · ${buddy.effort}`);
-  expect(container.querySelectorAll('[data-slot=alias-tag]')).toHaveLength(2);
+  expect(container.textContent).toContain(buddyQuad(buddy));
+  expect(container.textContent?.split(buddy.model)).toHaveLength(2);
+  expect(spanReadout(span, nowMs).split(buddy.model)).toHaveLength(2);
+  expect(spanReadout(span, nowMs).split(`[${buddy.alias}]`)).toHaveLength(2);
+  expect(container.querySelectorAll('[data-slot=alias-tag]')).toHaveLength(1);
 });
 
 it("retains the recorded id form of a reason's buddyId parameter", () => {

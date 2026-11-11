@@ -23,8 +23,8 @@ export function useNamedBuddy() {
 }
 
 export function AliasTag({ alias }: { alias: string | null | undefined }) {
-  return alias ? <span data-slot="alias-tag" className="ml-2 inline-flex h-5 items-center rounded-[4px] border px-1.5 text-xs leading-none whitespace-nowrap"
-    style={{ color: "var(--alias)", borderColor: "var(--alias-line)", backgroundColor: "var(--alias-wash)" }}>{alias}</span> : null;
+  return alias ? <span data-slot="alias-tag" className="ml-2 inline-flex h-5 max-w-[8.5rem] items-center rounded-[4px] border px-1.5 text-xs leading-none whitespace-nowrap"
+    style={{ color: "var(--alias)", borderColor: "var(--alias-line)", backgroundColor: "var(--alias-wash)" }}><span className="truncate">{alias}</span></span> : null;
 }
 
 /** A complete or abbreviated name followed by the same current alias everywhere. */

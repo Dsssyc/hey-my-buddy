@@ -1,4 +1,4 @@
-import { AliasTag } from "../components/AliasTag";
+import { AliasTag, useNamedBuddy } from "../components/AliasTag";
 import { reasonText } from "../i18n/reason";
 import { ReasonMessage, ReasonMessages } from "../i18n/ReasonMessage";
 import { Joined } from "../i18n/Message";
@@ -115,6 +115,7 @@ function EffortRow({ chip, selected, onSelect, editor }: {
 }) {
   const { t } = useTranslation("buddies");
   const { buddy, effort } = chip;
+  const named = useNamedBuddy()(buddy);
   const editing = editor.editing;
   const editingLock = !editor.sessionWritable ? t("pane.locked.session") : !editing ? t("pane.locked.saving") : undefined;
   // A retired buddy can be switched off, but cannot be switched on again.
@@ -128,9 +129,9 @@ function EffortRow({ chip, selected, onSelect, editor }: {
         if (canToggle) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId ? { ...entry, enabled } : entry) }));
       }} /></Hint>
     <button type="button" aria-pressed={selected} data-slot="buddy-stop" aria-label={effort} onClick={onSelect}
-      className="flex h-10 w-full items-center gap-2 pr-10 pl-12 text-left text-sm whitespace-nowrap outline-none transition-[color,background-color,box-shadow] duration-150 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none">
-      <span className={cn("inline-flex items-center", buddy.enabled ? "text-foreground" : "text-ink3", selected && "font-medium")}>{effort}<AliasTag alias={buddy.alias} /></span>
-      {chip.preference && <span className="text-xs text-ink2">{t(`preference.${chip.preference}`)}</span>}
+      className="flex h-10 w-full items-center gap-2 pr-8 pl-12 text-left text-sm whitespace-nowrap outline-none transition-[color,background-color,box-shadow] duration-150 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none">
+      <span className={cn("inline-flex min-w-0 items-center", buddy.enabled ? "text-foreground" : "text-ink3", selected && "font-medium")}><span className="shrink-0">{effort}</span><AliasTag alias={named?.alias} /></span>
+      {chip.preference && <span className="shrink-0 text-xs text-ink2">{t(`preference.${chip.preference}`)}</span>}
       {chip.unsaved && <UnsavedMark label={t("unsaved")} />}
     </button>
   </div>;
@@ -212,7 +213,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
       {limitInvalid && <p id={`${id}-range`} className="mt-2 text-xs text-fail" role="alert">{t("pane.range")}</p>}
       {raised && <div className="mt-3 max-w-2xl"><ConcurrencyNotice id={`${id}-concurrency-notice`} /></div>}
     </div>
-    <div data-slot="buddy-columns" className="grid grid-cols-[minmax(0,1fr)] gap-y-4 pt-3 min-[900px]:grid-cols-[max-content_minmax(0,1fr)]">
+    <div data-slot="buddy-columns" className="grid grid-cols-[minmax(0,1fr)] gap-y-4 pt-3 min-[900px]:grid-cols-[22rem_minmax(0,1fr)]">
       <div data-slot="buddy-list" className="flex min-h-0 min-w-0 flex-col min-[900px]:h-0 min-[900px]:min-h-full">
         <div className="mb-3 flex h-5 shrink-0 items-center gap-3 pr-10 text-xs whitespace-nowrap">
           <h3 className="text-xs font-medium text-ink2">{t("models.columns.buddy")}</h3>

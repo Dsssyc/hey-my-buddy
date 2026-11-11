@@ -30,6 +30,8 @@ it("publishes setting and clearing an alias through the drawer without republish
   const input = await screen.findByRole("textbox", { name: "别名" });
   expect(document.querySelectorAll('[data-slot=alias-tag]')).toHaveLength(0);
   await user.type(input, "Daily reviewer");
+  expect(document.querySelectorAll('[data-slot=alias-tag]')).toHaveLength(0);
+  expect(document.querySelector('[data-slot=buddy-alias]')?.previousElementSibling?.querySelector('[data-slot=unsaved-mark]')).not.toBeNull();
   await user.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(f.command).toHaveBeenCalledTimes(1));
   expect(f.command.mock.calls[0][1].buddySettings).toEqual([{ buddyId: MEDIUM_ID, alias: "Daily reviewer" }]);
@@ -105,7 +107,7 @@ it("searches aliases and four-part names in both catalogue and Router candidates
 it("resolves aliases by identity fields and draws no tag for an unset alias", () => {
   const buddy = { ...snapshot().buddies[0], buddyId: "cleaned-and-hashed-6d3a", alias: "Reviewer" };
   const { rerender } = render(<BuddyNamesProvider buddies={[buddy]}><BuddyName buddy={{ harness: buddy.harness, provider: buddy.provider, model: buddy.model, effort: buddy.effort }}>{MEDIUM}</BuddyName></BuddyNamesProvider>);
-  expect(screen.getByText("Reviewer").getAttribute("data-slot")).toBe("alias-tag");
+  expect(screen.getByText("Reviewer").closest('[data-slot=alias-tag]')?.getAttribute("data-slot")).toBe("alias-tag");
   rerender(<BuddyNamesProvider buddies={[{ ...buddy, alias: null }]}><BuddyName buddy={buddy}>{MEDIUM}</BuddyName></BuddyNamesProvider>);
   expect(document.querySelector('[data-slot=alias-tag]')).toBeNull();
 });
@@ -118,20 +120,23 @@ it("adds the current alias to buddy identities nested in routing reasons", () =>
   expect(container.querySelector('[data-slot=alias-tag]')?.textContent).toBe("Review desk");
 });
 
-it("uses the Buddy draft alias in the page-wide blocked-save explanation", async () => {
+it("uses the saved alias in the page-wide blocked-save explanation", async () => {
   const state = snapshot();
   state.buddies[0].enabled = false;
+  state.buddies[0].alias = "Saved desk";
   const f = fixture(state);
   window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(MEDIUM_ID)}`;
   render(<App suppliedApi={f.api} />);
   const user = userEvent.setup();
-  await user.type(await screen.findByRole("textbox", { name: "别名" }), "Draft desk");
+  const input = await screen.findByRole("textbox", { name: "别名" });
+  await user.clear(input);
+  await user.type(input, "Draft desk");
   await user.click(screen.getByRole("switch", { name: "启用 medium" }));
   state.buddies[0].available = false;
   await waitFor(() => expect(document.querySelector('[data-slot=model-drawer] [role=alert]')?.textContent).toContain("无法启用"), { timeout: 4500 });
   await user.click(screen.getByRole("button", { name: "保存" }));
   const explanation = screen.getAllByRole("alert")[0];
-  expect(explanation.querySelector('[data-slot=alias-tag]')?.textContent).toBe("Draft desk");
+  expect(explanation.querySelector('[data-slot=alias-tag]')?.textContent).toBe("Saved desk");
   expect(explanation.textContent).not.toMatch(/[\[\]]/);
   expect(f.command).not.toHaveBeenCalled();
 });

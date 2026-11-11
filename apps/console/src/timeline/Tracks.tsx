@@ -58,8 +58,7 @@ function spanReadoutParts(span: TimelineSpan, nowMs: number, row?: TimelineRow):
   const reminders = span.reminders;
   return [head, start === null ? null : clockTime(start), end === null ? null : clockTime(end),
     start !== null && end !== null && end >= start ? formatDuration(end - start) : null,
-    span.buddy ? { buddy: span.buddy, name: buddyLabel(span.buddy) } : buddyLabel(null),
-    span.buddy ? { buddy: span.buddy, name: [span.buddy.harness, span.buddy.provider, span.buddy.model, span.buddy.effort].map(value => value ?? i18n.t("tasks:unknown")).join(" / ") } : null,
+    span.buddy ? { buddy: span.buddy, name: [span.buddy.harness, span.buddy.provider, span.buddy.model, span.buddy.effort].map(value => value ?? i18n.t("tasks:unknown")).join(" / ") } : buddyLabel(null),
     outcome === "unknown" ? i18n.t("tasks:drawing.stopUnconfirmed") : outcomeLabel(span, outcome),
     span.expectedSeconds === null ? null : i18n.t("tasks:drawing.expected", { duration: formatDuration(span.expectedSeconds * 1000) }),
     reminders?.possiblyStuck ? i18n.t("tasks:drawing.silent", { duration: formatDuration(nowMs - instant(reminders.lastNativeEventAt ?? span.startAt)!) }) : null,

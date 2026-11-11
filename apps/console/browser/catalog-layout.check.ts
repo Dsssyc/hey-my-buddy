@@ -27,21 +27,9 @@ async function selectedIsInside(drawer: Locator) {
   expect(row.y + row.height).toBeLessThanOrEqual(viewport.y + viewport.height + 0.5);
 }
 
-/** The list consumes its longest content and padding, including its title, without spare width. */
-async function contentSizedList(drawer: Locator) {
-  const sizing = await drawer.locator("[data-slot=buddy-list]").evaluate(list => {
-    const natural = (node: Element) => {
-      const style = getComputedStyle(node);
-      const children = [...node.children].filter(child => getComputedStyle(child).position !== "absolute");
-      return children.reduce((sum, child) => sum + child.getBoundingClientRect().width, 0)
-        + Math.max(0, children.length - 1) * parseFloat(style.columnGap)
-        + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-    };
-    return { actual: list.getBoundingClientRect().width,
-      content: Math.max(natural(list.firstElementChild!), ...[...list.querySelectorAll('[data-slot="buddy-stop"]')].map(natural)) };
-  });
-  expect(sizing.actual).toBeGreaterThanOrEqual(sizing.content - 1);
-  expect(sizing.actual, "left column follows content, rather than a fixed width or fraction").toBeLessThanOrEqual(sizing.content + 1);
+/** A stable column leaves the settings in place as buddy names change. */
+async function fixedWidthList(drawer: Locator) {
+  expect((await frame(drawer.locator("[data-slot=buddy-list]"))).width).toBe(352);
 }
 
 for (const theme of ["dark", "light"] as const) {
@@ -51,7 +39,7 @@ for (const theme of ["dark", "light"] as const) {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     });
 
-    test("places the service above the buddy list and settings, and sizes the left column to its content", async ({ page }) => {
+    test("places the service above the buddy list and settings, and keeps the left column fixed", async ({ page }) => {
       await open(page, "#buddies/catalog");
       await page.getByRole("button", { name: CODEX, exact: true }).click();
       const drawer = page.getByRole("region", { name: CODEX, exact: true });
@@ -64,7 +52,7 @@ for (const theme of ["dark", "light"] as const) {
         expect(Math.abs(list.y - panel.y)).toBeLessThanOrEqual(0.5);
         expect(Math.abs(list.height - panel.height)).toBeLessThanOrEqual(0.5);
         expect(Math.abs(list.x + list.width - panel.x)).toBeLessThanOrEqual(0.5);
-        await contentSizedList(drawer);
+        await fixedWidthList(drawer);
         const heading = await frame(drawer.locator("[data-slot=buddy-list] > div").first());
         const samples = await frame(drawer.locator("[data-slot=buddy-samples]").locator(".."));
         expect(Math.abs(heading.y - samples.y)).toBeLessThanOrEqual(1);
@@ -233,7 +221,7 @@ for (const theme of ["dark", "light"] as const) {
       await expect(drawer.locator("[data-slot=scroll-area-scrollbar]")).toBeVisible();
       expect(await drawer.locator("[data-slot=scroll-area-scrollbar]").evaluate(node => getComputedStyle(node).opacity)).toBe("1");
       await selectedIsInside(drawer);
-      await contentSizedList(drawer);
+      await fixedWidthList(drawer);
       if (theme === "dark") await page.screenshot({ path: `${screenshots}/catalog-opus-five-1440-dark.png` });
       // Keyboard selection remains local: focus the first row without scrolling ancestors,
       // then activate it through the same native button used by a pointer.

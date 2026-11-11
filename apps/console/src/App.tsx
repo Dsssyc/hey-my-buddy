@@ -201,7 +201,7 @@ function Connected({ api, snapshot, refresh, connectionError, verifiedAt, runtim
             onClick={() => void editor.reloadLatest()}>{t("draft.reload")}</Button>
         </Notice>}
         {draftTab && editor.blocked && <Notice tone="plain" role="status">{editor.blocked}</Notice>}
-        {draftTab && editor.error && !editor.confirming && <BuddyNamesProvider buddies={editor.view.buddies}><Notice tone="fail" role="alert">{editor.error}</Notice></BuddyNamesProvider>}
+        {draftTab && editor.error && !editor.confirming && <Notice tone="fail" role="alert">{editor.error}</Notice>}
         {draftTab && editor.notice && <Notice tone="plain" role="status" fading={editor.notice.fading}>{editor.notice.text}</Notice>}
       </div>
       {saveRefusal && <p id="editor-save-reason" className="sr-only">{saveRefusal}</p>}
@@ -211,7 +211,7 @@ function Connected({ api, snapshot, refresh, connectionError, verifiedAt, runtim
         className="min-h-0 min-w-0 flex-1 overflow-hidden" aria-label={t(`nav.${key}`)}>
         {key === "tasks" ? <MacroTasks snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
           authority={authority} writesAvailable={writesAvailable} onAddress={setTasksAddress} connectionError={connectionError} verifiedAtMs={verifiedAt} /> :
-          key === "buddies" ? <BuddyNamesProvider buddies={editor.view.buddies}><BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /></BuddyNamesProvider> :
+          key === "buddies" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
             <Settings api={api} csrfToken={snapshot.csrfToken} connectionError={connectionError}
               access={snapshot.consoleAccess} reminders={snapshot.reminderSettings} refresh={refresh} writesAvailable={writesAvailable}
               active={tab === "settings"}

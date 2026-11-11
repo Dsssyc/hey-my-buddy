@@ -111,6 +111,8 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       await expect(error).not.toContainText("]");
       await expect(field).toHaveAttribute("aria-invalid", "true");
       await expect(field).toHaveValue("duplicate");
+      await expect(tag).toHaveText("Review desk");
+      await expect(page.locator('[data-slot=model-row] [data-slot=alias-tag]')).toHaveText("Review desk");
       if (width === 1440) {
         const captures = fileURLToPath(new URL("../../../tmp/alias-console/captures", import.meta.url));
         await mkdir(captures, { recursive: true });

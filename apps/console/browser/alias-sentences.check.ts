@@ -26,6 +26,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
     await page.route(`**/api/macro-tasks/${macro}/timeline*`, async route => {
       const response = await route.fetch();
       const timeline: MacroTaskTimeline = await response.json();
+      for (const span of timeline.spans) if (span.buddy?.model === identity.model) span.buddy.effort = identity.effort;
       for (const span of timeline.spans) if (span.kind === "routing" && span.routing) {
         span.routing.reason = { code: "alias.conflict", params: { conflictingBuddy: identity } };
         span.routing.note = null;
@@ -62,12 +63,22 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["dark", "light"]) 
     await row.hover();
     const readout = page.locator('[data-slot=timeline-readout]');
     await expect(readout).toContainText("gpt-5-codex · high");
+    const execution = page.locator(`[data-slot=timeline-row][data-run-id=preview-run-a1] [data-key^="span:"][aria-label*="${name}"]`).first();
+    await execution.hover();
+    await expect(readout).toContainText(name);
+    expect((await readout.innerText()).split(identity.model)).toHaveLength(2);
+    await expect(readout.locator('[data-slot=alias-tag]')).toHaveCount(1);
     await expect(readout.locator('[data-slot=alias-tag]')).toHaveText("Review desk");
     await expect(readout).not.toContainText("[");
+    await expect(readout).not.toContainText("]");
+    const accessible = (await execution.getAttribute("aria-label"))!;
+    expect(accessible.split(identity.model)).toHaveLength(2);
+    expect(accessible.split("[Review desk]")).toHaveLength(2);
     alias = null;
     await page.reload();
-    await row.hover();
-    await expect(readout).toContainText("gpt-5-codex · high");
+    await execution.hover();
+    await expect(readout).toContainText(name);
+    expect((await readout.innerText()).split(identity.model)).toHaveLength(2);
     await expect(readout.locator('[data-slot=alias-tag]')).toHaveCount(0);
   });
 });
