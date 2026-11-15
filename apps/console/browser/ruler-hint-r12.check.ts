@@ -10,7 +10,7 @@ async function box(node: Locator) { return (await node.boundingBox())!; }
 
 for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (const detail of [false, true]) test.describe(`ruler hint ${theme} ${width} ${detail ? "detail" : "timeline"}`, () => {
   test.use({ locale: "zh-CN", viewport: { width, height: 1000 }, reducedMotion: "reduce" });
-  test("strengthens the ruler, anchors the hint when it opens and stays inside the viewport", async ({ page }) => {
+  test("strengthens the ruler, opens the hint at rest, dismisses it when sliding, and stays inside the viewport", async ({ page }) => {
     await page.addInitScript(theme => localStorage.setItem("hey-my-buddy.console.theme", theme), theme);
     await page.clock.install({ time: new Date("2026-10-19T12:00:00Z") });
     await open(page, `#tasks/${macro}${detail ? "/preview-run-a1/3" : ""}`);
@@ -67,15 +67,19 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
       await page.mouse.move(x === right ? x - 24 : x + 24, y);
       await page.clock.runFor(500); await expect(tooltip).toHaveCount(0);
       await page.mouse.move(x, y);
+      await page.clock.runFor(500); await expect(tooltip).toHaveCount(0);
       await page.clock.runFor(100); await closeTo(x);
       await expect(ruler).toHaveCSS("background-color", background);
     }
-    const retained = (await tooltip.elementHandle())!;
-    const previous = await box(tooltip);
-    await page.mouse.move(left, y);
+    await page.mouse.move(middle, y);
+    await expect(tooltip).toHaveCount(0);
     await page.clock.runFor(300);
-    await expect.poll(() => box(tooltip)).toEqual(previous);
-    expect(await retained.evaluate(node => node.isConnected)).toBe(true);
+    await expect(tooltip).toHaveCount(0);
+    await page.mouse.move(left, y);
+    await page.clock.runFor(599);
+    await expect(tooltip).toHaveCount(0);
+    await page.clock.runFor(1);
+    await closeTo(left);
     await mkdir(captures, { recursive: true });
     await page.screenshot({ path: `${captures}/${detail ? "detail" : "timeline"}-${theme}-${width}.png` });
     await page.mouse.move(left, y + 40); await expect(tooltip).toHaveCount(0);
