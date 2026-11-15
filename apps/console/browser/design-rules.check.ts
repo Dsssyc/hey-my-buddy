@@ -25,7 +25,9 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
       if (view.name === "dialog") {
         const list = page.getByRole("region", { name: "宏任务列表" });
         if (!await list.isVisible()) await page.locator('[data-slot="macro-overview-header"]').getByRole("button", { name: "‹ 宏任务" }).click();
-        const more = list.locator(`[data-macro-task-id="${macro}"] [data-slot="macro-menu-button"]`);
+        const row = list.locator(`[data-macro-task-id="${macro}"]`);
+        const more = row.locator('[data-slot="macro-menu-button"]');
+        await row.hover();
         await more.hover();
         await page.waitForTimeout(700);
         await expect(page.getByRole("tooltip")).toHaveCount(0);

@@ -17,7 +17,7 @@ import type { ConsoleApi } from "./api";
 type Count = { key: "host" | "review" | "active" | "paused" | "accepted" | "failed" | "ended"; mark: "hand" | "review" | "live" | "paused" | "done" | "fail" | "idle"; value: number };
 
 /** One macro task's title, context, state counts and expandable recorded facts. */
-export function MacroTaskOverview({ summary, timeline, loading, stale, active = true, nowMs, readGoals, onBackToList, listToggle, headerActions }: {
+export function MacroTaskOverview({ summary, timeline, loading, stale, active = true, nowMs, readGoals, onBackToList, listToggle }: {
   readGoals: ConsoleApi["macroTaskGoals"];
   summary: MacroTaskSummary | null;
   timeline: MacroTaskTimeline | null;
@@ -27,7 +27,6 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
   nowMs?: number;
   onBackToList: () => void;
   listToggle?: ReactNode;
-  headerActions?: ReactNode;
 }) {
   const { t, i18n: { language } } = useTranslation("macroHeader");
   const [statsOpen, setStatsOpen] = useState(false);
@@ -111,7 +110,6 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
           <dt className="flex items-center gap-1.5 text-xs text-ink2"><StateMark kind={count.mark} breathing={count.mark === "live" || count.mark === "paused" && !shown.paused?.shutdownConfirmed} />{count.key === "paused" ? t(shown.paused!.shutdownConfirmed ? "macroWork.paused" : "macroWork.pausing", { ns: "shell" }) : t(count.key === "host" ? "hostWait" : count.key)}</dt>
         </div>)}
       </dl>
-      {headerActions}
     </div>
   </header>;
 }

@@ -328,8 +328,8 @@ describe("the detail of a micro task in its macro task", () => {
 
 describe("macro task pause, resume and end", () => {
   const menu = async (f: ReturnType<typeof harness>) => {
-    const header = document.querySelector('[data-slot="macro-overview-header"]')!;
-    const button = within(header as HTMLElement).getByRole("button", { name: "更多" });
+    const row = document.querySelector('[data-macro-task-id="macro-1"]')!;
+    const button = within(row as HTMLElement).getByRole("button", { name: "更多" });
     button.focus(); await f.user.keyboard("{Enter}");
   };
   const reply = { macroTaskId: "macro-1", duplicate: false };
@@ -459,7 +459,7 @@ describe("macro task pause, resume and end", () => {
     expect(f.listed[0]!.paused).toBeNull();
   });
 
-  it("keeps the header and menu with the retained timeline after failure, then retries only that read", async () => {
+  it("keeps the header with the retained timeline after failure while the entry menu reflects the list, then retries only the timeline read", async () => {
     const f = harness(); await openMacroTask(f);
     const original = structuredClone(f.timeline);
     const paused = { pausedAt: "2026-11-11T09:00:00Z", shutdownConfirmed: true };
@@ -472,12 +472,13 @@ describe("macro task pause, resume and end", () => {
     const alert = await screen.findByRole("alert");
     await waitFor(() => expect(document.querySelector('[data-slot="macro-entry"] [data-kind="paused"]')).toBeTruthy());
     const header = document.querySelector('[data-slot="macro-overview-header"]') as HTMLElement;
+    expect(header.querySelector('[data-slot="macro-menu-button"]')).toBeNull();
     expect(within(header).getByRole("heading", { name: original.macroTask.title! })).toBeTruthy();
     expect(header.querySelector('[data-kind="paused"]')).toBeNull();
     await menu(f);
-    expect(screen.getByRole("menuitem", { name: "暂停" })).toBeTruthy();
-    expect(screen.queryByRole("menuitem", { name: "继续" })).toBeNull();
-    expect(screen.getByRole("menuitem", { name: "结束" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "继续" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "暂停" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "结束" })).toBeNull();
     await f.user.keyboard("{Escape}");
     const listReads = vi.mocked(f.api.macroTasks).mock.calls.length;
     const timelineReads = vi.mocked(f.api.macroTaskTimeline).mock.calls.length;
@@ -486,7 +487,5 @@ describe("macro task pause, resume and end", () => {
     await waitFor(() => expect(header.querySelector('[data-kind="paused"]')).toBeTruthy());
     expect(f.api.macroTaskTimeline).toHaveBeenCalledTimes(timelineReads + 1);
     expect(f.api.macroTasks).toHaveBeenCalledTimes(listReads);
-    await menu(f);
-    expect(screen.getByRole("menuitem", { name: "继续" })).toBeTruthy();
   });
 });

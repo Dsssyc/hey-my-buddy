@@ -45,8 +45,10 @@ for (const [language, w] of Object.entries(words)) for (const theme of ["dark", 
       await expect(page.locator('[data-slot="macro-list-total"]')).toHaveText("1");
       await expect(page.locator('[data-slot="macro-group-count"]')).toHaveText("1");
       if (width === 1360) await capture(page, `macros-search-${suffix}`);
-      const trigger = header.getByRole("button", { name: /^(更多|More)$/ });
-      await trigger.click();
+      await expect(header.locator('[data-slot="macro-menu-button"]')).toHaveCount(0);
+      const row = page.locator(`[data-slot="macro-list"] [data-macro-task-id="${empty}"]`);
+      await row.hover();
+      await row.locator('[data-slot="macro-menu-button"]').click();
       await page.getByRole("menuitem", { name: w.remove }).click();
       const dialog = page.getByRole("dialog");
       await expect(dialog).toBeVisible();

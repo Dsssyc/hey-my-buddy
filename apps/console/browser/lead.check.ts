@@ -113,7 +113,9 @@ for (const { locale, language, tasks } of [
       });
       const { timeline } = await openLeadMacro(page, language, tasks);
       const zh = language === "zh-CN";
-      const more = page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-menu-button]`);
+      const entry = page.locator(`[data-macro-task-id="${MACRO}"]`);
+      const more = entry.locator("[data-slot=macro-menu-button]");
+      await entry.hover();
       await more.click();
       await page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task", exact: true });
@@ -135,6 +137,7 @@ for (const { locale, language, tasks } of [
       await expect(dialog).toBeHidden();
       expect(commands).toEqual([]);
 
+      await entry.hover();
       await more.click();
       await page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
       const responsePromise = page.waitForResponse(response => response.request().method() === "POST"
@@ -178,7 +181,9 @@ for (const locale of ["zh-CN", "en-US"]) test.describe(`a long end title in ${lo
     await open(page, "#tasks");
     await page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-entry]`).click();
     await page.locator("[data-slot=macro-overview-header]").getByRole("button", { name: locale === "zh-CN" ? "‹ 宏任务" : "‹ Macro tasks", exact: true }).click();
-    await page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-menu-button]`).click();
+    const entry = page.locator(`[data-macro-task-id="${MACRO}"]`);
+    await entry.hover();
+    await entry.locator("[data-slot=macro-menu-button]").click();
     await page.getByRole("menuitem", { name: locale === "zh-CN" ? "结束" : "End", exact: true }).click();
     const dialog = page.getByRole("dialog");
     const titleLine = dialog.locator("#end-macro-task-name");

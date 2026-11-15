@@ -229,6 +229,7 @@ test("removed macro controls and time-label hints stay absent", async ({ page })
   await group.locator('[data-slot="macro-group-heading"]').hover();
   await noHint(page, group.locator('[data-slot="macro-sort-button"]'));
   const selected = list.locator(`[data-macro-task-id="${macro}"]`);
+  await selected.hover();
   await noHint(page, selected.locator('[data-slot="macro-menu-button"]'));
   await noHint(page, selected.locator('[data-slot="state-mark"]'));
   const header = page.locator('[data-slot="macro-overview-header"]');

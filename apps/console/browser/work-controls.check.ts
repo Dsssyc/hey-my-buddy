@@ -21,6 +21,7 @@ const caseHeaders = (page: Page) => ({ "X-HMB-Preview-Case": caseIds.get(page)! 
 
 type Command = { operation: string; params: { macroTaskId: string; commandId: string } };
 const more = (page: Page, id = A) => page.locator(`[data-macro-task-id="${id}"] [data-slot=macro-menu-button]`);
+const openMenu = async (page: Page, id = A) => { await entry(page, id).hover(); await more(page, id).click(); };
 const count = (page: Page) => page.locator("[data-slot=macro-overview-count-paused]");
 const entry = (page: Page, id = A) => page.locator(`[data-macro-task-id="${id}"]`);
 const commandLog = (page: Page, operation: string) => {
@@ -69,14 +70,14 @@ for (const locale of ["zh-CN", "en-US"] as const) {
       const pauses = commandLog(page, "macro_task_pause");
       const resumes = commandLog(page, "macro_task_resume");
       await open(page, `#tasks/${A}`);
-      await more(page).click();
+      await openMenu(page);
       const pauseResponse = page.waitForResponse(response => response.request().postDataJSON()?.operation === "macro_task_pause");
       await page.getByRole("menuitem", { name: zh ? "暂停" : "Pause", exact: true }).click();
       expect((await (await pauseResponse).json()).result).toEqual({ macroTaskId: A, duplicate: false });
       await expect(page.getByRole("dialog")).toHaveCount(0);
       expect(pauses).toEqual([{ operation: "macro_task_pause", params: { macroTaskId: A, commandId: expect.any(String) } }]);
       await expect(count(page)).toContainText(zh ? "暂停中" : "Pausing");
-      await more(page).click();
+      await openMenu(page);
       const resumeResponse = page.waitForResponse(response => response.request().postDataJSON()?.operation === "macro_task_resume");
       await page.getByRole("menuitem", { name: zh ? "继续" : "Resume", exact: true }).click();
       expect((await (await resumeResponse).json()).result).toEqual({ macroTaskId: A, duplicate: false });
@@ -144,8 +145,7 @@ for (const locale of ["zh-CN", "en-US"] as const) {
       });
       await open(page, "#tasks");
       await page.locator('[data-slot=macro-group][data-group-id="standalone"] [data-slot=macro-group-heading]').click();
-      await entry(page, STANDALONE).hover();
-      await more(page, STANDALONE).click();
+      await openMenu(page, STANDALONE);
       await expect(page.getByRole("menuitem", { name: zh ? "暂停" : "Pause", exact: true })).toBeVisible();
       await expect(page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true })).toBeVisible();
       const command = commandLog(page, "macro_task_pause");
@@ -154,8 +154,7 @@ for (const locale of ["zh-CN", "en-US"] as const) {
       expect((await (await response).json()).result).toEqual({ macroTaskId: STANDALONE, duplicate: false });
       expect(command[0]!.params.macroTaskId).toBe(STANDALONE);
       await expect(entry(page, STANDALONE).locator('[data-slot=state-mark]')).toHaveAttribute("data-kind", "paused");
-      await entry(page, STANDALONE).hover();
-      await more(page, STANDALONE).click();
+      await openMenu(page, STANDALONE);
       await expect(page.getByRole("menuitem", { name: zh ? "继续" : "Resume", exact: true })).toBeVisible();
     });
 
@@ -175,7 +174,7 @@ for (const locale of ["zh-CN", "en-US"] as const) {
       await open(page, `#tasks/${B}`);
       const beforeResponse = await page.request.get(`/api/macro-tasks/${B}/timeline`, { headers: caseHeaders(page) });
       const before = await beforeResponse.json();
-      await more(page, B).click();
+      await openMenu(page, B);
       await page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task" });
       await expect(dialog.locator("#end-macro-task-counts")).toContainText(zh ? `结束 ${before.macroTask.counts.unfinished} 个微任务` : `End ${before.macroTask.counts.unfinished} micro tasks`);
@@ -202,7 +201,7 @@ for (const locale of ["zh-CN", "en-US"] as const) {
       const ended = concluded.find((row: { runId: string }) => !before.rows.some((old: { runId: string; state: string }) => old.runId === row.runId && old.state === "concluded"));
       await expect(page.locator(`[data-slot=timeline-row-name][data-run-id="${ended.runId}"]`)).toHaveAccessibleName(new RegExp(zh ? "已结束" : "Ended"));
       await page.screenshot({ path: join(shots, `round4-end-view-${locale}.png`) });
-      await more(page, B).click();
+      await openMenu(page, B);
       await page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
       const again = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task" });
       const secondResponse = page.waitForResponse(reply => reply.request().postDataJSON()?.operation === "macro_task_end");
@@ -225,7 +224,7 @@ for (const locale of ["zh-CN", "en-US"] as const) {
         } else await route.fallback();
       });
       await open(page, `#tasks/${A}`);
-      await more(page).click();
+      await openMenu(page);
       await page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task" });
       await dialog.getByRole("button", { name: zh ? "确认结束" : "End", exact: true }).click();
@@ -251,7 +250,7 @@ for (const locale of ["zh-CN", "en-US"] as const) {
         } else await route.fallback();
       });
       await open(page, `#tasks/${A}`);
-      await more(page).click();
+      await openMenu(page);
       const name = action === "pause" ? zh ? "暂停" : "Pause" : action === "resume" ? zh ? "继续" : "Resume" : zh ? "结束" : "End";
       await page.getByRole("menuitem", { name, exact: true }).click();
       if (action === "end") {
@@ -347,9 +346,10 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(entry(page).locator('[data-slot=state-mark]')).toHaveAttribute("data-kind", "paused");
       await status.hover();
       await expect(page.getByRole("tooltip")).toHaveCount(0);
+      await expect(header.locator("[data-slot=macro-menu-button]")).toHaveCount(0);
       const boxes = await header.evaluate(element => {
         const frame = element.getBoundingClientRect();
-        return ["macro-overview-counts", "macro-menu-button"].map(slot => {
+        return ["macro-overview-counts"].map(slot => {
           const node = element.querySelector(`[data-slot="${slot}"]`)!;
           const box = node.getBoundingClientRect();
           return { left: box.left, top: box.top, right: box.right, bottom: box.bottom,

@@ -13,7 +13,7 @@ describe("the macro task header", () => {
     const timeline = macroTaskTimelineFixture();
     const onBack = vi.fn();
     render(<section className="timeline-view"><MacroTaskOverview readGoals={vi.fn()} summary={null} timeline={timeline} loading={false}
-      stale={false} onBackToList={onBack} listToggle={<button>列表开关</button>} headerActions={<button>停止</button>} /></section>);
+      stale={false} onBackToList={onBack} listToggle={<button>列表开关</button>} /></section>);
     const head = screen.getByRole("heading", { name: timeline.macroTask.title! }).closest("header")!;
     expect(head.querySelector("h2")?.hasAttribute("title")).toBe(false);
     expect(within(head).getByText("hey-my-buddy")).toBeTruthy();
@@ -22,7 +22,7 @@ describe("the macro task header", () => {
     expect(head.querySelector('[data-slot="macro-overview-counts"]')?.textContent).toContain("1进行中");
     expect(head.querySelector('[data-slot="macro-overview-counts"]')?.textContent).toContain("2已验收");
     expect(within(head).getByRole("button", { name: "列表开关" })).toBeTruthy();
-    expect(within(head).getByRole("button", { name: "停止" })).toBeTruthy();
+    expect(head.querySelector('[data-slot="macro-menu-button"]')).toBeNull();
     expect(head.querySelector('[data-slot="macro-goal-trigger"]')?.getAttribute("aria-label")).toBe("查看目标说明");
     expect(screen.queryByRole("dialog", { name: "目标说明" })).toBeNull();
     const user = userEvent.setup();

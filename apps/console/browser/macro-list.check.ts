@@ -348,6 +348,7 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
 
       if (width === 390 && !await list.isVisible()) await header.getByRole("button", { name: new RegExp(w.macro) }).click();
       const selected = list.locator(`[data-macro-task-id="${A}"][data-selected="true"]`);
+      await selected.hover();
       await selected.locator('[data-slot="macro-menu-button"]').click();
       await expect(page.getByRole("menuitem", { name: w.end })).toBeVisible();
       await photograph(page, "menu", w.locale, width, theme);

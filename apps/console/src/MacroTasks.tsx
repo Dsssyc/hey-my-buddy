@@ -192,8 +192,8 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     else if (!selected && rows.length) go({ macroTaskId: rows[0].macroTaskId, runId: null, step: null }, "replace");
   }, [active, selected, list.rows, deletedIds]);
   const detailClient = useMemo(() => createTaskDetailClient(api, snapshot.csrfToken), [api, snapshot.csrfToken]);
-  // The header and its menu share the selected timeline's summary. Before
-  // that first read completes, the list supplies the selected row.
+  // The header uses the selected timeline's summary; before that first read
+  // completes, the list supplies the selected row.
   const listSummary = rows.find(row => row.macroTaskId === selected);
   const timelineSummary = timeline.timeline?.macroTask.macroTaskId === selected ? timeline.timeline.macroTask : null;
   const selectedSummary = timelineSummary ?? listSummary ?? null;
@@ -263,7 +263,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         go({ ...(item === undefined ? location : overview), macroTaskId: selected, runId, step }, "replace", item ?? origin);
       }}
       onBack={backToTimeline} onOpenRun={next => openRun(next)} />}
-    headerActions={currentSummary && entryActions(currentSummary)} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
+    listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
     onOpen={(runId, key) => openRun(runId, key)} onClose={backToTimeline}
     onRetry={() => void timeline.retry()}
     onBackToList={() => { setShowNarrowList(true); if (listCollapsed) onExpandList(); }} /> : null;

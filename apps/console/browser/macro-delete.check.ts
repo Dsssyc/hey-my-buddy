@@ -18,7 +18,9 @@ const words = {
 async function openDeletionMenu(page: Page, locale: keyof typeof words): Promise<Locator> {
   const list = page.getByRole("region", { name: locale === "zh-CN" ? "宏任务列表" : "Macro task list" });
   if (!await list.isVisible()) await page.locator('[data-slot="macro-overview-header"]').getByRole("button", { name: locale === "zh-CN" ? "‹ 宏任务" : "‹ Macro tasks" }).click();
-  const more = list.locator('[data-macro-task-id="macro-1"] [data-slot="macro-menu-button"]');
+  const row = list.locator('[data-macro-task-id="macro-1"]');
+  const more = row.locator('[data-slot="macro-menu-button"]');
+  await row.hover();
   await more.click();
   await page.getByRole("menuitem", { name: words[locale].action, exact: true }).click();
   return more;

@@ -32,7 +32,11 @@ for (const [locale, theme] of [["zh-CN", "dark"], ["zh-CN", "light"], ["en-US", 
       const selected = entry(page, A), selectedButton = selected.locator("[data-slot=macro-menu-button]");
       await expect(selected).toHaveAttribute("data-selected", "true");
       await page.mouse.move(1400, 900);
+      await expect.poll(() => opacity(selectedButton)).toBe("0");
+      await selected.hover();
       await expect.poll(() => opacity(selectedButton)).toBe("1");
+      await page.mouse.move(1400, 900);
+      await expect.poll(() => opacity(selectedButton)).toBe("0");
       const other = page.locator('[data-slot=macro-list] [data-macro-task-id][data-selected=false]').first();
       const otherButton = other.locator("[data-slot=macro-menu-button]"), title = other.locator("[data-slot=macro-entry-title]");
       await expect.poll(() => opacity(otherButton)).toBe("0");
@@ -77,8 +81,7 @@ for (const [locale, theme] of [["zh-CN", "dark"], ["zh-CN", "light"], ["en-US", 
       await expect(menu.getByRole("menuitem")).toHaveCount(3);
       await page.screenshot({ path: `${shots}/entry-menu-${suffix}` });
       const header = page.locator("[data-slot=macro-detail]");
-      await expect(header.locator("[data-slot=macro-menu-button]")).toHaveCount(1);
-      await expect(header.locator("[data-slot=macro-pause-action], [data-slot=macro-end-action], [data-slot=macro-delete-action]")).toHaveCount(0);
+      await expect(header.locator("[data-slot=macro-menu-button], [data-slot=macro-pause-action], [data-slot=macro-end-action], [data-slot=macro-delete-action]")).toHaveCount(0);
       await menu.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task", exact: true });
       await expect(dialog).toBeVisible();

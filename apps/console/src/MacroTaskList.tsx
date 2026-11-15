@@ -69,7 +69,7 @@ const Entry = memo(function Entry({ row, selected, onSelect, actions }: { row: M
       <span className="flex items-center justify-center">{mark && <span className="flex"><StateMark kind={mark} breathing={mark === "live" || mark === "paused" && !row.paused!.shutdownConfirmed} className="size-2.5"/></span>}</span>
       <span data-slot="macro-entry-title" className="min-w-0"><ScrollingTitle text={text}/></span>{statusText && <span className="sr-only">{statusText}</span>}
     </button>
-  <div className="absolute top-0.5 right-4 opacity-0 pointer-events-none group-hover/entry:opacity-100 group-hover/entry:pointer-events-auto group-focus-within/entry:opacity-100 group-focus-within/entry:pointer-events-auto group-data-[selected=true]/entry:opacity-100 group-data-[selected=true]/entry:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto">{actions?.(row)}</div></li>;
+  <div className="absolute top-0.5 right-4 opacity-0 pointer-events-none group-hover/entry:opacity-100 group-hover/entry:pointer-events-auto group-focus-within/entry:opacity-100 group-focus-within/entry:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto">{actions?.(row)}</div></li>;
 });
 /** Radix measures each appended page, so showing more uses the same reveal as a group. */
 function MoreEntries({ children }: { children: React.ReactNode }) {
