@@ -36,7 +36,7 @@ import { useNumberViewPreference, useViewPreference } from "./view-preferences";
 
 function ConnectionStrip({ error, verifiedAtMs, retry, busy }: { error: string; verifiedAtMs: number | null; retry: () => void; busy: boolean }) {
   const { t } = useTranslation("tasks");
-  return <div data-slot="macro-offline" className="flex min-h-9 shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1 border-b bg-fail-wash px-4 py-1 text-sm sm:px-6" role="alert"><StateMark kind="fail"/><Hint text={error}><span tabIndex={0}>{t("offline")}</span></Hint>
+  return <div data-slot="macro-offline" className="banner-enter flex min-h-9 shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1 border-b bg-fail-wash px-4 py-1 text-sm sm:px-6" role="alert"><StateMark kind="fail"/><Hint text={error}><span tabIndex={0}>{t("offline")}</span></Hint>
     {verifiedAtMs !== null && <span className="text-xs text-ink2 tabular-nums">{t("lastRead", { time: formatClockMinutes(verifiedAtMs) })}</span>}
     <Button variant="outline" size="sm" className="ml-auto" aria-busy={busy} disabled={busy} onClick={retry}>{t(busy ? "loading" : "retry")}</Button>
   </div>;
@@ -233,7 +233,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     const entry = selectedEntries?.[action];
     const notice = entry && workFeedback(entry);
     if (!entry || !notice) return null;
-    return <div key={action} data-slot="macro-work-state" data-action={action} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-sm sm:px-6">
+    return <div key={action} data-slot="macro-work-state" data-action={action} className="banner-enter flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-sm sm:px-6">
       <p role={entry.phase === "refused" ? "alert" : "status"} className={cn("min-w-0 flex-1 wrap-anywhere", entry.phase === "refused" ? "text-fail" : "text-ink2")}>{notice}</p>
       {entry.phase === "unknown" && <Button variant="outline" size="sm" disabled={!control.writable || list.loading || control.busy(currentSummary.macroTaskId)} onClick={() => control.run(currentSummary, action)}>{t(`shell:macroWork.${action}`)}</Button>}
     </div>;
@@ -283,7 +283,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   </aside>;
   return <>
     <div className="flex h-full min-h-0 flex-col">
-      {deletionNotice && <div ref={noticeRef} tabIndex={-1} data-slot="macro-delete-result" className="flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-4 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-6">
+      {deletionNotice && <div ref={noticeRef} tabIndex={-1} data-slot="macro-delete-result" className="banner-enter flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-4 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-6">
         <p role="status" className="min-w-0 flex-1 wrap-anywhere">{t("macroHeader:deletion.deleted", { title: deletionNotice.title ?? t("macroHeader:unnamed") })}</p>
         {(deletionNotice.refreshFailed || list.error) && <p role="alert" className="text-fail">{t("macroHeader:deletion.refreshFailed")}</p>}
         <Button variant="ghost" size="sm" onClick={() => setDeletionNotice(null)}>{t("macroHeader:deletion.dismiss")}</Button>
@@ -300,7 +300,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
           rows={1} resizeTargetMinimumSize={{ fine: 12, coarse: 24 }}
           onLayoutChanged={(_, meta) => { if (meta.isUserInteraction) setSidebarWidth(workspaceGrid.current!.getTrackById("column", "sidebar").getSize().inPixels); }}>
           <Cell row={0} column={0} className="min-h-0 min-w-0 overflow-hidden">
-            <CollapsibleContent data-slot="macro-sidebar" className="h-full min-h-0 min-w-0 w-full">{listPane}</CollapsibleContent>
+            <CollapsibleContent data-slot="macro-sidebar" className={cn("h-full min-h-0 min-w-0 w-full", folding && "transition-opacity duration-150 motion-reduce:transition-none", folding && listCollapsed && "opacity-0")}>{listPane}</CollapsibleContent>
           </Cell>
           <Gridline type="column" column={1} disabled={listCollapsed} elementRef={resizeHandleRef} className={cn("sidebar-resize", listCollapsed ? "invisible w-0" : "w-px")}/>
           <Cell row={0} column={1} className="min-h-0 min-w-0 overflow-hidden">{detailPane}</Cell>

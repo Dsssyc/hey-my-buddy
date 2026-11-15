@@ -31,7 +31,7 @@ export function Output({ text, id, expansion, language = "text", preview = true 
   const open = expansion.expanded.has(id);
   return <div className="group/output relative min-w-0" data-slot="session-output">
     <HighlightedCode code={!preview || open ? text : lines.slice(0, 14).join("\n")} language={language}/>
-    <CodeBlockActions className="absolute top-1 right-1 opacity-0 group-hover/output:opacity-100 group-focus-within/output:opacity-100">
+    <CodeBlockActions className="absolute top-1 right-1 opacity-0 transition-opacity duration-150 motion-reduce:transition-none group-hover/output:opacity-100 group-focus-within/output:opacity-100">
       <CodeBlockCopyButton value={text}/>
     </CodeBlockActions>
     {preview && remaining > 0 && <button type="button" className="disclosure-trigger py-1 text-xs text-ink2" aria-expanded={open} onClick={() => expansion.toggle(id, !open)}>{t(open ? "sessionView.collapseOutput" : "sessionView.moreLines", { count: remaining })}</button>}

@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { cn } from "cn";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -92,6 +93,20 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
 
   const chosen = steps === null ? null : step !== null && step <= steps.steps.length ? step - 1
     : (origin !== null ? stepForItem(steps, origin, timeline) : null) ?? defaultStep(steps);
+  // Compare with the committed selection so StrictMode's repeated render sees
+  // the same direction; the first loaded step belongs to the stage's entrance.
+  const committed = useRef<{ runId: string; index: number | null }>({ runId, index: null });
+  const [transition, setTransition] = useState<{ runId: string; index: number | null; direction: "next" | "prev" | "jump" | undefined }>({ runId, index: null, direction: undefined });
+  const previous = committed.current;
+  const direction = previous.runId === runId && previous.index !== null && chosen !== null && chosen !== previous.index
+    ? Math.abs(chosen - previous.index) === 1 ? chosen > previous.index ? "next" : "prev" : "jump"
+    : undefined;
+  // Focus and data reads can render the same pane again during its entrance.
+  // Keep that selection's direction until another selection replaces it.
+  const selectionChanged = transition.runId !== runId || transition.index !== chosen;
+  if (selectionChanged) setTransition({ runId, index: chosen, direction });
+  const stepDirection = selectionChanged ? direction : transition.direction;
+  useEffect(() => { committed.current = { runId, index: chosen }; }, [runId, chosen]);
   const current = steps !== null && chosen !== null ? steps.steps[chosen] ?? null : null;
   const execution = current?.kind === "turn" || current?.kind === "routing" ? current.span : null;
   // The address names the step it settled on, in place of the one it was opened with.
@@ -143,7 +158,7 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
   const bare = (body: ReactNode) => <DetailLinks value={{ origin, items, onItem, elements: itemElements.current,
     // An execution step is a whole turn: linking marks its parts, never the pane around them.
     stepKey: current?.span ? "" : current?.key ?? "", waits: current && steps && ctx && row ? <StepWaits step={current} steps={steps} ctx={ctx}/> : null }}>
-    <section data-slot="task-detail" tabIndex={-1} aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-background outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [container-type:inline-size]">{body}</section>
+    <section data-slot="task-detail" tabIndex={-1} aria-label={t("label")} className="detail-stage-enter flex min-h-0 min-w-0 flex-1 flex-col bg-background motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [container-type:inline-size]">{body}</section>
   </DetailLinks>;
   if (!view) {
     return bare(<><header data-slot="detail-header" className="flex h-9 shrink-0 items-center border-b border-line bg-ruler pl-1.5 pr-4 sm:pr-6"><DetailBack onBack={onBack}/></header><div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
@@ -164,7 +179,7 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
       <StepStrip row={row} timeline={timeline!} steps={steps} selected={chosen!} onStep={onStep} nowMs={now} revealRef={revealStrip}/>
     </div>}
     {steps && current && ctx
-      ? <div key={current.key} className="flex min-h-0 min-w-0 flex-1 flex-col">{pane(current, ctx, execution ? children =>
+      ? <div key={current.key} data-step-direction={stepDirection} className={cn("flex min-h-0 min-w-0 flex-1 flex-col motion-reduce:transition-none", stepDirection && "step-pane-enter")}>{pane(current, ctx, execution ? children =>
         <ExecutionTabs routingMode={execution.kind === "routing" ? execution.routing?.routingMode ?? null : undefined} taskText={view.task.task} checkoutRoot={workflow?.cwd ?? view.task.cwd} client={sessionClient} taskId={execution.kind === "routing" ? execution.decisionTaskId! : runId} attemptId={execution.attemptId!}
           harness={(execution.kind === "routing" ? execution.routing?.routerBuddy?.harness : execution.buddy?.harness) ?? t("unrecorded")} active={active} tab={tab} onTab={onTab}>{children}</ExecutionTabs> : undefined)}</div>
       : <p role="status" className="p-6 text-ink2">{t("loading")}</p>}

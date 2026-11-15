@@ -23,8 +23,8 @@ export function ExecutionTabs({ routingMode, taskText, checkoutRoot, children, c
       <TabsTrigger value="session" className="flex-none text-xs text-ink">{t("sessionView.title")}</TabsTrigger>
       <span ref={setTabsSide} data-slot="detail-tabs-side" className="ml-auto inline-flex items-center"/>
     </TabsList>
-    <TabsPrimitive.Content value="overview" forceMount className="flex min-h-0 min-w-0 flex-1 flex-col outline-none data-[state=inactive]:hidden">{children}</TabsPrimitive.Content>
-    <TabsPrimitive.Content value="session" className="flex min-h-0 min-w-0 flex-1 flex-col pt-4 outline-none">
+    <TabsPrimitive.Content value="overview" forceMount className="view-presence flex min-h-0 min-w-0 flex-1 flex-col outline-none data-[state=inactive]:hidden">{children}</TabsPrimitive.Content>
+    <TabsPrimitive.Content value="session" className="view-presence flex min-h-0 min-w-0 flex-1 flex-col pt-4 outline-none">
       <Suspense fallback={<p className="p-6 text-sm text-ink2" role="status">{t("sessionView.loading")}</p>}><SessionPanel
         routingMode={routingMode} taskText={taskText} checkoutRoot={checkoutRoot} client={client} taskId={taskId} attemptId={attemptId} harness={harness} active={active} tabsSide={tabsSide}/></Suspense>
     </TabsPrimitive.Content>

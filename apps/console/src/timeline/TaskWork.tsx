@@ -311,7 +311,7 @@ export function TaskWork(props: TaskWorkProps) {
       },
       onPointerLeave: () => { setPointerScreenX(null); setHoveredSpan(null); setHoveredRow(null); setHoveredMarker(null); } }}>
     {/* Paint into the reserved padding without adding it to the scrollable width twice. */}
-    {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="relative min-h-full pb-8" style={{ width: `calc(${narrow ? `${trackWidth}px` : `max(100%, ${nameWidth + trackWidth}px)`} + var(--scrollbar-size))`, minWidth: "calc(100% + var(--scrollbar-size))", marginRight: "calc(-1 * var(--scrollbar-size))" }}>
+    {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="canvas-enter relative min-h-full pb-8" style={{ width: `calc(${narrow ? `${trackWidth}px` : `max(100%, ${nameWidth + trackWidth}px)`} + var(--scrollbar-size))`, minWidth: "calc(100% + var(--scrollbar-size))", marginRight: "calc(-1 * var(--scrollbar-size))" }}>
       <div data-slot="timeline-ruler" className="sticky top-0 z-30">
         {narrow && <div className="sticky left-0 z-40 bg-ruler pr-(--scrollbar-size)" style={{ width: narrowPaintWidth }}>{rowFilter}</div>}
         <ZoomRuler ref={setRuler} viewportWidth={width} atMinimum={atMinimum} onChange={zoom} style={narrow ? undefined : { display: "grid", gridTemplateColumns: `${nameWidth}px ${trackWidth}px minmax(0,1fr)` }}>

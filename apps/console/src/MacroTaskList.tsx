@@ -49,9 +49,9 @@ function GroupHeading({ label, count, open, standalone, sort, onSortChange }: { 
     <CollapsibleTrigger asChild><button type="button" data-slot="macro-group-heading" className="disclosure-trigger grid h-8 w-full grid-cols-[16px_minmax(0,1fr)_24px] items-center gap-x-2 pr-4 pl-3 text-left text-sm motion-reduce:transition-none">
       <Icon aria-hidden="true" className="size-4 text-ink2" strokeWidth={1.75} strokeDasharray={standalone ? "3 2.4" : undefined}/>
       <ScrollingTitle text={label} className="font-semibold"/>
-      <span data-slot="macro-group-count" className="text-right text-xs text-ink3 tabular-nums group-hover/project:opacity-0 group-focus-within/project:opacity-0 group-has-[[data-slot=macro-sort-button][data-state=open]]/project:opacity-0">{formatNumber(count)}</span>
+      <span data-slot="macro-group-count" className="text-right text-xs text-ink3 tabular-nums transition-opacity duration-150 motion-reduce:transition-none group-hover/project:opacity-0 group-focus-within/project:opacity-0 group-has-[[data-slot=macro-sort-button][data-state=open]]/project:opacity-0">{formatNumber(count)}</span>
     </button></CollapsibleTrigger>
-    <div className="absolute top-1 right-4 opacity-0 pointer-events-none group-hover/project:opacity-100 group-hover/project:pointer-events-auto group-focus-within/project:opacity-100 group-focus-within/project:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto">
+    <div className="absolute top-1 right-4 opacity-0 pointer-events-none transition-opacity duration-150 motion-reduce:transition-none group-hover/project:opacity-100 group-hover/project:pointer-events-auto group-focus-within/project:opacity-100 group-focus-within/project:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto">
       <MacroSort sort={sort} onChange={onSortChange}/>
     </div>
   </div>;
@@ -69,7 +69,7 @@ const Entry = memo(function Entry({ row, selected, onSelect, actions }: { row: M
       <span className="flex items-center justify-center">{mark && <span className="flex"><StateMark kind={mark} breathing={mark === "live" || mark === "paused" && !row.paused!.shutdownConfirmed} className="size-2.5"/></span>}</span>
       <span data-slot="macro-entry-title" className="min-w-0"><ScrollingTitle text={text}/></span>{statusText && <span className="sr-only">{statusText}</span>}
     </button>
-  <div className="absolute top-0.5 right-4 opacity-0 pointer-events-none group-hover/entry:opacity-100 group-hover/entry:pointer-events-auto group-focus-within/entry:opacity-100 group-focus-within/entry:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto">{actions?.(row)}</div></li>;
+  <div className="absolute top-0.5 right-4 opacity-0 pointer-events-none transition-opacity duration-150 motion-reduce:transition-none group-hover/entry:opacity-100 group-hover/entry:pointer-events-auto group-focus-within/entry:opacity-100 group-focus-within/entry:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto">{actions?.(row)}</div></li>;
 });
 /** Radix measures each appended page, so showing more uses the same reveal as a group. */
 function MoreEntries({ children }: { children: React.ReactNode }) {
