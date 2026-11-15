@@ -6,7 +6,11 @@
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-:root { --radius-card: 6px; }
+:root {
+  --radius-card: 6px;
+  --ease-out-quart: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
 
 /* One palette: the utilities read the tokens of tokens.css. The first group is
    what the generated components expect; the second is the design's own names. */
@@ -85,6 +89,120 @@
 
 @keyframes state-breathe {
   50% { opacity: .45; }
+}
+
+@keyframes ink-glide {
+  from { transform: translateX(var(--ink-dx, 0px)) scaleX(var(--ink-sx, 1)); }
+  to { transform: translateX(0) scaleX(1); }
+}
+
+@keyframes detail-stage-in {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes stage-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes panel-fade-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes step-next-in {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes step-prev-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes icon-swap-in {
+  from { opacity: 0; transform: scale(0.82); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes row-fresh-in {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
+
+.notice-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.notice-collapse > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-ink-glide="run"]::after {
+    transform-origin: left center;
+    animation: ink-glide 170ms var(--ease-out-quart);
+  }
+  .view-presence {
+    transition: opacity 140ms var(--ease-out-quart);
+  }
+  @starting-style {
+    .view-presence {
+      opacity: 0;
+    }
+  }
+  .detail-stage-enter {
+    animation: detail-stage-in 170ms var(--ease-out-expo);
+  }
+  .panel-enter {
+    animation: panel-fade-up 150ms var(--ease-out-quart);
+  }
+  .canvas-enter {
+    animation: stage-fade-in 140ms var(--ease-out-quart);
+  }
+  .step-pane-enter[data-step-direction="next"] {
+    animation: step-next-in 140ms var(--ease-out-quart);
+  }
+  .step-pane-enter[data-step-direction="prev"] {
+    animation: step-prev-in 140ms var(--ease-out-quart);
+  }
+  .step-pane-enter[data-step-direction="jump"] {
+    animation: stage-fade-in 130ms var(--ease-out-quart);
+  }
+  [data-slot="detail-strip"] [data-slot="selected-item"] {
+    animation: stage-fade-in 120ms var(--ease-out-quart);
+  }
+  .icon-swap {
+    display: inline-flex;
+    animation: icon-swap-in 120ms var(--ease-out-quart);
+  }
+  .row-fresh {
+    animation: row-fresh-in 500ms var(--ease-out-quart);
+  }
+  .notice-collapse {
+    transition: grid-template-rows 200ms var(--ease-out-quart), opacity 200ms var(--ease-out-quart);
+  }
+  @starting-style {
+    .notice-collapse {
+      grid-template-rows: 0fr;
+      opacity: 0;
+    }
+  }
+  .notice-collapse[data-fading="true"] {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  .banner-enter {
+    transition: opacity 160ms var(--ease-out-quart);
+  }
+  @starting-style {
+    .banner-enter {
+      opacity: 0;
+    }
+  }
 }
 
 @layer components {
