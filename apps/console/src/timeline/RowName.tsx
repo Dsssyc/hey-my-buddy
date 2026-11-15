@@ -4,10 +4,17 @@ import { forwardRef, memo, useImperativeHandle, useMemo, useRef, type ComponentP
 import { useTranslation } from "react-i18next";
 import { StateMark } from "../components/ui/state-mark";
 import { ScrollingTitle } from "../components/ScrollingTitle";
+import { useFadingText } from "../components/use-fading-text";
 import { HarnessLogo } from "../buddies/HarnessLogo";
 import { buddyLabel, displayTitle, rowStateInfo } from "../macro-task-display";
 import type { TimelineRow } from "../macro-task-types";
 import { isFailedRow } from "./failure";
+
+/** A compact repair reference that fades smoothly instead of ellipsis-truncating. */
+function FixLink({ title, label }: { title: string; label: string }) {
+  const fade = useFadingText(`↪ ${title}`);
+  return <span ref={fade.ref} data-slot="fix-link" className={cn("min-w-0 max-w-1/2 shrink-0 text-xs text-ink3", fade.className)} aria-label={label}>↪ {title}</span>;
+}
 
 /** A micro task's full scrolling title, repair links, new mark, state and buddy. */
 const RowNameView = memo(forwardRef<HTMLButtonElement, {
@@ -30,7 +37,8 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
   const repairTitle = row.fixes ? displayTitle(row.fixesTitleSource!, row.fixesTitle!).fullText : null;
   const repair = row.fixes ? t("fixes", { title: repairTitle }) : null;
   const paused = row.status === "queued" && row.queueReason === "paused";
-  const tone = row.status === "queued" ? null : state.tone === "green" ? "live"
+  const tone = paused || (row.status === "queued" && row.state !== "awaiting-host") ? null
+    : state.tone === "green" ? "live"
     : state.tone === "amber" || row.category === "host" || row.state === "delivered" ? "hand"
     : row.category === "active" ? "live" : isFailedRow(row) ? "fail" : "past";
   const mark = paused ? "paused" : tone === "live" ? "live" : row.state === "delivered" ? "review"
@@ -50,13 +58,13 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
       {row.kind === "helper" && <span aria-hidden="true" className="text-ink3">└</span>}
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <ScrollingTitle text={title.fullText} className="font-medium"/>
-        {row.fixes && <span data-slot="fix-link" className="min-w-0 max-w-1/2 shrink-0 truncate text-xs text-ink3" aria-label={repair!}>↪ {repairTitle}</span>}
+        {row.fixes && <FixLink title={repairTitle!} label={repair!}/>}
       </span>
       {!!row.fixedBy?.length && <span data-slot="fixed-by" className="shrink-0 text-xs text-ink3" aria-label={t("fixedBy", { n: row.fixedBy.length })}>↩ {row.fixedBy.length}</span>}
       {fresh && <span aria-label={t("newMicroTask")} className="size-1.5 shrink-0 rounded-full bg-hand-mark"/>}
       {!list && mark && <span data-slot="row-state" data-kind={mark} className="ml-auto flex size-5 shrink-0 items-center justify-center" aria-hidden="true"><StateMark kind={mark} breathing={mark === "live" || mark === "paused" && !row.shutdownConfirmed} className="size-2.5"/></span>}
     </span>
-    <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{showState && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" || paused ? "text-ink" : !current && "text-ink3", (mark === "live" || paused && !row.shutdownConfirmed) && "state-breathe")}>{state.label}</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{ariaPrefix && <span>{ariaPrefix} · </span>}<BuddyName buddy={row.buddy}>{buddyLabel(row.buddy)}</BuddyName></span>
+    <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{showState && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" || paused ? "text-ink" : !current && "text-ink3", (mark === "live" || paused && !row.shutdownConfirmed) && "state-breathe")}>{state.label}</span>}{showState && !row.buddy?.harness && !ariaPrefix && <span aria-hidden="true" className="mr-1.5 text-ink4">·</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{ariaPrefix && <span>{ariaPrefix} · </span>}<BuddyName buddy={row.buddy}>{buddyLabel(row.buddy)}</BuddyName></span>
   </button>;
 }));
 

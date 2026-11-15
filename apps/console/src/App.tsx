@@ -161,7 +161,7 @@ function Connected({ api, snapshot, refresh, connectionError, verifiedAt, runtim
           const link = <a key={key} href={key === "tasks" ? tasksAddress : "#" + key} onClick={() => select(key)} aria-current={tab === key ? "page" : undefined}
             className="relative flex items-center gap-[7px] px-3.5 whitespace-nowrap text-bar-ink2 outline-none transition-colors duration-150 hover:text-bar-ink focus-visible:bg-bar-ink/10 motion-reduce:transition-none aria-[current=page]:font-medium aria-[current=page]:text-bar-ink aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3.5 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-bar-ink">
             {t(`nav.${key}`)}
-            {key === "tasks" && pending > 0 && <span className="min-w-[18px] rounded-sm bg-bar-hand px-[5px] text-center text-xs leading-[18px] font-semibold text-bar tabular-nums">{pending}</span>}
+            {key === "tasks" && pending > 0 && <span className="min-w-[18px] rounded-sm border border-bar-hand/60 px-[5px] text-center text-xs leading-4 font-medium text-bar-hand tabular-nums">{pending}</span>}
             {key === "buddies" && hint && <span className="size-1.5 rounded-full bg-bar-hand" aria-hidden="true" />}
             {hint && <span className="sr-only">{hint}</span>}
           </a>;

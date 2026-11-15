@@ -21,7 +21,7 @@ export function Settings({ api, csrfToken, connectionError = "", writesAvailable
 }) {
   const { t } = useTranslation("settings");
   return <ScrollArea className="h-full min-h-0 bg-card" viewportProps={{ "aria-label": t("title"), tabIndex: 0 }}>
-    <div data-slot="settings-page" className="min-w-0 text-sm">
+    <div data-slot="settings-page" className="min-w-0 max-w-[960px] text-sm">
       <Section title={t("theme")}>
         <Segmented value={theme} onValueChange={value => onTheme(value as ThemeChoice)} aria-label={t("theme")}>
           {(["system", "light", "dark"] as const).map(choice => <SegmentedItem key={choice} value={choice}>{t(choice)}</SegmentedItem>)}

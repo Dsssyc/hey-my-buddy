@@ -124,7 +124,7 @@ function EffortRow({ chip, selected, onSelect, editor }: {
   return <div data-slot="buddy-choice" data-selected={selected}
     className={cn("relative transition-colors duration-150 motion-reduce:transition-none", selected ? "bg-past-wash" : "hover:bg-foreground/5")}>
     <Hint text={enableLock}><Switch checked={buddy.enabled} aria-label={t("pane.enable", { effort })}
-      className="absolute top-1 left-1 z-10 h-8 w-[34px] bg-transparent px-0.5 before:inset-x-0 before:inset-y-0 after:absolute after:inset-x-0.5 after:inset-y-2 after:rounded-full after:bg-line2 after:transition-colors after:duration-150 after:motion-reduce:transition-none aria-checked:bg-transparent aria-checked:after:bg-foreground [&_[data-slot=switch-thumb]]:relative [&_[data-slot=switch-thumb]]:z-10"
+      className="absolute top-1.5 left-2 z-10"
       aria-disabled={!canToggle || undefined} onCheckedChange={enabled => {
         if (canToggle) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId ? { ...entry, enabled } : entry) }));
       }} /></Hint>

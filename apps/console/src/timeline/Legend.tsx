@@ -25,7 +25,7 @@ export function Legend() {
     { key: "idle", label: t("drawing.idleLegend"), meaning: t("legendMeaning.idle"), mark: <svg aria-hidden="true" width="24" height="14" viewBox="0 0 24 14"><IdlePattern id={pattern}/><rect width={24} height={14} fill={`url(#${pattern})`}/></svg> },
   ];
   return <Popover>
-    <PopoverTrigger asChild><button type="button" data-slot="legend-trigger" className="shrink-0 border-b border-dotted border-ink3 text-ink2 hover:border-ink hover:text-ink focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{t("legendLabel")}</button></PopoverTrigger>
+    <PopoverTrigger asChild><button type="button" data-slot="legend-trigger" className="shrink-0 text-ink2 underline decoration-ink3 decoration-dotted underline-offset-[3px] transition-colors duration-150 hover:text-ink hover:decoration-ink focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none">{t("legendLabel")}</button></PopoverTrigger>
     <PopoverContent data-slot="timeline-legend" role="dialog" aria-label={t("legendLabel")} align="end" sideOffset={8} className="w-[22rem] max-w-[calc(100vw-2rem)] max-h-(--radix-popover-content-available-height) overflow-y-auto p-4">
       <div className="grid gap-3">{items.map(({ key, label, meaning, mark }) =>
         <div key={key} data-slot="legend-item" data-kind={key} className="grid grid-cols-[1.5rem_minmax(0,1fr)] items-start gap-2.5">

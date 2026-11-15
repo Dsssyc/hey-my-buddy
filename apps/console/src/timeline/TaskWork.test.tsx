@@ -132,6 +132,17 @@ describe("the lanes and the detail workspace", () => {
     setup({ timeline });
     expect(within(row("r4")).getByText("排队中", { exact: true })).toBeTruthy();
     expect(row("r4").getAttribute("data-state-tone")).toBe("queued");
+    expect(row("r4").querySelector('[data-slot=row-state-edge]')).toBeNull();
+    // A queued row already waiting for Host carries the hand stripe and accent tone.
+    const hostWait = macroTaskTimelineFixture();
+    const target = hostWait.rows.findIndex(item => item.runId === "r4");
+    hostWait.rows[target] = { ...hostWait.rows[target]!, state: "awaiting-host", status: "queued", category: "host", buddy: null };
+    cleanup();
+    setup({ timeline: hostWait });
+    expect(row("r4").getAttribute("data-state-tone")).toBe("hand");
+    expect(row("r4").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBe("hand");
+    expect(row("r4").querySelector('[data-slot=row-state-edge]')).toBeTruthy();
+    expect(within(row("r4")).getByText("等待 Host", { exact: true })).toBeTruthy();
   });
   it("fades the model-and-effort line one step below the state word, and restores it on the current row", () => {
     const { props, rerender } = setup();
