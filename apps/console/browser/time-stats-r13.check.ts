@@ -17,13 +17,27 @@ test("starts time statistics with both dated local record instants, including la
       localStorage.setItem("hey-my-buddy.language", language);
     }, { theme, language });
     await page.setViewportSize({ width, height: 1000 });
-    const navigation = page.waitForRequest(request => request.isNavigationRequest() && request.frame() === page.mainFrame());
-    const reload = page.reload();
-    const startedAt = (await navigation).timing().startTime;
-    const read = page.waitForResponse(response => new URL(response.url()).pathname === `/api/macro-tasks/${macro}/timeline`
-      && response.ok() && response.request().timing().startTime >= startedAt);
-    await reload;
-    const timeline = await (await read).json() as MacroTaskTimeline;
+    let navigated = false;
+    const afterCommit = new WeakSet<object>();
+    const onNavigated = (frame: ReturnType<typeof page.mainFrame>) => {
+      if (frame === page.mainFrame()) navigated = true;
+    };
+    const onRequest = (request: { frame(): ReturnType<typeof page.mainFrame> }) => {
+      if (navigated && request.frame() === page.mainFrame()) afterCommit.add(request);
+    };
+    page.on("framenavigated", onNavigated);
+    page.on("request", onRequest);
+    const read = page.waitForResponse(response => afterCommit.has(response.request())
+      && new URL(response.url()).pathname === `/api/macro-tasks/${macro}/timeline` && response.ok())
+      .then(response => response.json() as Promise<MacroTaskTimeline>);
+    let timeline: MacroTaskTimeline;
+    try {
+      await page.reload();
+      timeline = await read;
+    } finally {
+      page.off("framenavigated", onNavigated);
+      page.off("request", onRequest);
+    }
     expect(timeline.macroTask.counts.active).toBeGreaterThan(0);
     const recorded = [timeline.macroTask.createdAt!, timeline.macroTask.lastActivityAt!];
     const expected = await page.evaluate(({ language, recorded }) => {

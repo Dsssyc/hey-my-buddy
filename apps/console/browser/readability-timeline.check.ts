@@ -69,6 +69,7 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) test.describe(
     const spanId = (await group.getAttribute("data-key"))!.slice(5);
     const tail = page.locator(`[data-slot=execution-breath][data-span-id="${spanId}"]`);
     await expect(tail).toBeVisible();
+    await settle(page);
     const geometry = await bar.locator("xpath=ancestor::*[@data-slot='timeline-track']").evaluate(node => {
       const base = node.querySelector<SVGRectElement>('[data-slot=execution-bar][data-outcome=running]')!;
       const end = node.querySelector<SVGRectElement>('[data-slot=execution-breath]')!;

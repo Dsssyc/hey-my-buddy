@@ -50,6 +50,39 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
       await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
     });
 
+    test("switches header navigation ink and returns to its exact resting geometry", async ({ page }) => {
+      await open(page, `#tasks/${macro}`);
+      const nav = page.locator("header nav");
+      const target = nav.locator('a[href="#buddies"]');
+      await expect(target).toBeVisible();
+      await settle(page);
+      expect(await nav.locator("[data-ink-glide]").count()).toBe(0);
+      const motion = await target.evaluate(async node => {
+        (node as HTMLElement).click();
+        await new Promise(requestAnimationFrame);
+        const style = getComputedStyle(node), ink = getComputedStyle(node, "::after");
+        return {
+          current: node.getAttribute("aria-current"), glide: node.getAttribute("data-ink-glide"),
+          animations: node.getAnimations().length, transition: style.transitionProperty,
+          name: ink.animationName, duration: ink.animationDuration, transform: ink.transform,
+        };
+      });
+      expect(motion.current).toBe("page");
+      if (reduce) {
+        expect(motion).toMatchObject({ glide: null, animations: 0, transition: "none", name: "none", transform: "none" });
+      } else {
+        expect(motion).toMatchObject({ glide: "run", name: "ink-glide", duration: "0.17s" });
+        expect(motion.animations).toBeGreaterThan(0);
+        expect(motion.transform).not.toBe("none");
+      }
+      await settle(page);
+      await expect(target).not.toHaveAttribute("data-ink-glide");
+      expect(await target.evaluate(node => {
+        const after = getComputedStyle(node, "::after");
+        return { height: after.height, bottom: after.bottom, transform: after.transform, dx: (node as HTMLElement).style.getPropertyValue("--ink-dx") };
+      })).toEqual({ height: "2px", bottom: "0px", transform: "none", dx: "" });
+    });
+
     test("switches line-tab ink and returns to its exact resting geometry", async ({ page }) => {
       await open(page, `#tasks/${macro}`);
       const tabs = page.locator('[data-slot="macro-filter-tabs"]');

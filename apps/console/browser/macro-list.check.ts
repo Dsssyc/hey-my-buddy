@@ -70,6 +70,8 @@ async function photographMidMotion(page: Page, name: string, trigger: Locator, s
           const style = getComputedStyle(target, effect.pseudoElement);
           return [{ slot: target.dataset.slot ?? "", height: target.getBoundingClientRect().height,
             naturalHeight: parseFloat(style.getPropertyValue("--radix-collapsible-content-height")), opacity: Number(style.opacity),
+            transform: style.transform,
+            animation: animation instanceof CSSAnimation ? animation.animationName : null,
             transition: animation instanceof CSSTransition ? animation.transitionProperty : null,
             progress: effect.getComputedTiming().progress, frames: effect.getKeyframes() }];
         }),
@@ -86,10 +88,11 @@ async function photographMidMotion(page: Page, name: string, trigger: Locator, s
       expect(new Set(sample!.frames.map(frame => frame.backgroundColor)).size).toBeGreaterThan(1);
     }
     if (name === "mid-tab-select") {
-      const sample = motion.samples.find(item => item.slot === "tabs-trigger" && item.transition === "opacity");
-      expect(sample, "the selected tab fades in its underline").toBeDefined();
-      expect(sample!.opacity).toBeGreaterThan(0);
-      expect(sample!.opacity).toBeLessThan(1);
+      const sample = motion.samples.find(item => item.slot === "tabs-trigger" && item.animation === "ink-glide");
+      expect(sample, "the selected tab glides its underline").toBeDefined();
+      expect(sample!.opacity).toBe(1);
+      expect(sample!.transform).not.toBe("none");
+      expect(new Set(sample!.frames.map(frame => frame.transform)).size).toBeGreaterThan(1);
     }
     const contentSlot = name.startsWith("mid-group-") || name.startsWith("mid-more-") ? "collapsible-content" : name.startsWith("mid-list-") ? "macro-sidebar" : null;
     if (contentSlot) {

@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import { open, test } from "./preview";
+import { open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const detail = (page: Page) => page.locator('[data-slot=task-detail]');
@@ -36,8 +36,14 @@ async function toolCopyControl(page: Page, reduced = false) {
   // A new document keeps open()'s synthetic-response assertion meaningful.
   await open(page, `/?motion-stages=session#tasks/${macro}/preview-run-a1/7?tab=session`);
   const call = page.locator('[data-session-tool="tool:tool-long"]');
-  await call.locator('[data-slot=trace-collapsible-trigger]').click();
+  const trigger = call.locator('[data-slot=trace-collapsible-trigger]');
+  await trigger.click();
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
   const output = call.locator('[data-slot=session-output]').first();
+  await expect(output).toBeVisible();
+  await expect(page.locator('[data-slot=session-loading-earlier]')).toHaveCount(0);
+  await settle(page);
+  await output.scrollIntoViewIfNeeded();
   const actions = output.locator('[data-slot=code-block-actions]');
   await expectOpacityTransition(actions, reduced);
   await page.mouse.move(5, 5);
@@ -53,6 +59,7 @@ async function toolCopyControl(page: Page, reduced = false) {
 export async function runCheck(page: Page) {
   await open(page, `#tasks/${macro}`);
   await expect(page.locator('[data-slot=timeline-canvas]')).toHaveCSS("animation-name", "stage-fade-in");
+  await settle(page);
   await listControls(page);
   await row(page, "preview-run-a1").click();
   await expect(detail(page)).toHaveCSS("animation-name", "detail-stage-in");

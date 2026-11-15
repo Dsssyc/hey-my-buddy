@@ -125,13 +125,11 @@ function CodeBlockCopyButton({
         }}
         {...props}
       >
-        <span key={copied ? "copied" : "copy"} className={copied ? "icon-swap" : "inline-flex"}>
         {copied ? (
-          <CheckIcon />
+          <CheckIcon key="copied" className="icon-swap" />
         ) : (
-          <CopyIcon />
+          <CopyIcon key="copy" />
         )}
-        </span>
       </Button>
       {failed && <span role="alert">{t("sessionView.copyFailed")}</span>}
       <span aria-live="polite" className="sr-only">
