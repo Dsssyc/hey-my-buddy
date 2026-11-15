@@ -32,7 +32,9 @@ function Identifier({ value }: { value: string }) {
         className="-my-0.5 h-6 min-h-6 min-w-6 max-w-full shrink-0 justify-start gap-1 px-0 has-[>svg]:px-0 align-baseline font-mono text-xs leading-5 font-normal text-ink"
         aria-label={t("identifier.copy", { value })} onClick={() => void copy()}>
         <span className="truncate">{shortened}</span>
-        {feedback?.kind === "copied" ? <Check aria-hidden="true" className="size-3.5" /> : feedback?.kind === "failed" ? <CircleX aria-hidden="true" className="size-3.5 text-fail"/> : <Copy aria-hidden="true" className="size-3.5 text-ink3"/>}
+        <span key={feedback?.kind ?? "idle"} className={feedback ? "icon-swap" : "inline-flex"}>
+          {feedback?.kind === "copied" ? <Check aria-hidden="true" className="size-3.5" /> : feedback?.kind === "failed" ? <CircleX aria-hidden="true" className="size-3.5 text-fail"/> : <Copy aria-hidden="true" className="size-3.5 text-ink3"/>}
+        </span>
       </Button>
     <span className="sr-only" aria-live="polite" role={message ? "status" : undefined}>{message}</span>
   </>;
