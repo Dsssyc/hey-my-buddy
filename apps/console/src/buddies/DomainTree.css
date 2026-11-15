@@ -1,6 +1,6 @@
 .domain-tree { min-width: 0; contain: inline-size; }
 .domain-tree-overview { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; color: var(--ink3); font-size: 12px; font-variant-numeric: tabular-nums; }
-.domain-tree-overview button { flex: none; color: var(--ink2); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.domain-tree-overview button { flex: none; color: var(--ink2); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; transition: color 150ms var(--ease-out-quart); }
 .domain-tree-overview button:hover { color: var(--ink); }
 .domain-tree-overview button:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }
 .domain-tree-stage { margin-top: 12px; }
@@ -15,8 +15,8 @@
 .domain-tree-chevron { width: 12px; color: var(--ink3); font-size: 12px; line-height: 1; }
 .domain-tree-count { color: var(--ink2); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
 .domain-tree-bar { display: block; width: 100%; height: 9px; background: color-mix(in srgb, var(--ink) 7%, transparent); }
-.domain-tree-bar-fill { display: flex; gap: 3px; height: 100%; min-width: 2px; }
-.domain-tree-segment { flex-basis: 0; min-width: 1px; height: 100%; transition: filter 120ms ease, box-shadow 120ms ease; }
+.domain-tree-bar-fill { display: flex; gap: 3px; height: 100%; min-width: 2px; transition: width 180ms var(--ease-out-quart); }
+.domain-tree-segment { flex-basis: 0; min-width: 1px; height: 100%; transition: filter 120ms ease, box-shadow 120ms ease, flex-grow 180ms var(--ease-out-quart); }
 .domain-tree-segment[data-highlight="true"] { filter: brightness(1.32); box-shadow: 0 0 0 1px var(--ink); }
 .domain-tree-popover-title { color: var(--ink); font-size: 16px; font-weight: 500; }
 .domain-tree-popover-title span { color: var(--ink3); font-size: 12px; font-weight: 400; }
@@ -29,4 +29,4 @@
 .domain-tree-row:hover .domain-tree-info, .domain-tree-row:focus-visible .domain-tree-info, .domain-tree-info:focus-visible, .domain-tree-row[data-details-open="true"] .domain-tree-info { opacity: 1; pointer-events: auto; }
 .domain-tree-info:hover, .domain-tree-info[data-state="open"] { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .domain-tree-info:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 0; }
-@media (prefers-reduced-motion: reduce) { .domain-tree-row, .domain-tree-segment, .domain-tree-info { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .domain-tree-overview button, .domain-tree-bar-fill, .domain-tree-row, .domain-tree-segment, .domain-tree-info { transition: none; } }

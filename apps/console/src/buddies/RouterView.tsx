@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "cn";
 import { Hint } from "@/components/hint";
 import type { BuddyAttention } from "./attention";
@@ -24,9 +24,14 @@ export function RouterView({ snapshot, editor, location, onNavigate, attention, 
 }) {
   const { t } = useTranslation("buddies");
   const work = (location.view === "router" ? location.target ?? "routing" : "routing") as Work;
+  const visible = useRef(!hidden);
+  useEffect(() => { visible.current = !hidden; }, [hidden]);
+  const [panel, setPanel] = useState({ work, animated: false });
+  // Only a switch within the visible view moves the detail; entering it fades in place.
+  if (panel.work !== work) setPanel({ work, animated: visible.current && !hidden });
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => setScrolled(false), [work]);
-  return <section hidden={hidden} aria-label={t("sections.router")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+  return <section hidden={hidden} aria-label={t("sections.router")} className="view-presence flex min-h-0 min-w-0 flex-1 flex-col bg-background">
     <nav data-slot="router-works" data-scrolled={scrolled} aria-label={t("routerWork.jobs")} className={cn("flex shrink-0 items-center gap-6 border-b px-8 pt-6 pb-4 text-ink3 transition-colors duration-150 motion-reduce:transition-none", scrolled ? "border-border" : "border-transparent")}>
       {ROUTER_WORK.map(job => {
         const reason = job === "routing" && attention.roles ? t(`attention.${attention.roles}`) : undefined;
@@ -41,7 +46,7 @@ export function RouterView({ snapshot, editor, location, onNavigate, attention, 
     </nav>
     {/* The vertical viewport keeps its width; each record region owns horizontal scrolling. */}
     <ScrollArea className="min-h-0 min-w-0 flex-1" key={work} viewportProps={{ className: "[&>div]:block!", onScroll: event => setScrolled(event.currentTarget.scrollTop > 0) }}>
-      <div className="min-w-0 px-8 pb-10" data-slot="router-detail">
+      <div key={work} className={cn("min-w-0 px-8 pb-10", panel.animated && "panel-enter")} data-slot="router-detail">
         {work === "routing" ? <RoutingView snapshot={snapshot} editor={editor} onNavigate={onNavigate} />
           : work === "maintenance" ? <MaintenanceView snapshot={snapshot} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && !hidden} />
             : <ProfileSettingsView snapshot={snapshot} editor={editor} profileRunId={location.profileRunId} />}

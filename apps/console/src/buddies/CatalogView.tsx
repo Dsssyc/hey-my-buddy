@@ -163,7 +163,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const readFailure = showUnavailable ? history.error : "";
   const guard = refused ? refusal : "";
   return <section hidden={hidden} aria-label={t("sections.catalog")}
-    className="flex min-h-0 flex-1 flex-col bg-background">
+    className="view-presence flex min-h-0 flex-1 flex-col bg-background">
       <div data-slot="catalogue-toolbar" className="min-h-12 shrink-0 border-b bg-card px-6 py-2 text-ink2">
         <div data-slot="catalogue-controls" className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2">
           <Input type="search" className="h-8 w-full max-w-full bg-card text-sm text-foreground shadow-none sm:w-[200px]" aria-label={t("models.search")} placeholder={t("models.search")}

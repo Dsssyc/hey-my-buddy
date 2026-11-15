@@ -24,3 +24,7 @@
 .quant-bar-trigger > svg[data-slot="quant-bar"] { max-width: 100%; }
 .quant-bar-trigger [data-kind="fail"] path { stroke: var(--buddy-pink); }
 .quant-bar-trigger:has([data-tone="sample-pink"]) [data-kind="fail"] path { stroke: var(--buddy-sample-pink); }
+@media (prefers-reduced-motion: no-preference) {
+  .quant-bar-part { transition: x 180ms var(--ease-out-quart), width 180ms var(--ease-out-quart); }
+  .quant-bar-trigger { transition: border-color 150ms var(--ease-out-quart); }
+}

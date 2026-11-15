@@ -3,7 +3,7 @@ import { reasonText } from "../i18n/reason";
 import { ReasonMessage, ReasonMessages } from "../i18n/ReasonMessage";
 import { Joined } from "../i18n/Message";
 import { cn } from "cn";
-import { useId, useLayoutEffect, useRef } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { Input } from "@/components/ui/input";
@@ -147,6 +147,8 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
   const editing = editor.editing;
   const id = useId();
   const listViewport = useRef<HTMLDivElement>(null);
+  const [panel, setPanel] = useState({ buddyId: selectedBuddyId, switched: false });
+  if (panel.buddyId !== selectedBuddyId) setPanel({ buddyId: selectedBuddyId, switched: true });
   useLayoutEffect(() => {
     const viewport = listViewport.current!;
     if (getComputedStyle(viewport).overflowY === "visible") return;
@@ -227,7 +229,9 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
           </div>
         </ScrollArea>
       </div>
-      <BuddySettings chip={selected} data={data} recorded={recorded} editor={editor} modelAvailable={row.available} onNavigate={onNavigate} />
+      <div key={selectedBuddyId} className={panel.switched ? "panel-enter min-w-0" : "min-w-0"}>
+        <BuddySettings chip={selected} data={data} recorded={recorded} editor={editor} modelAvailable={row.available} onNavigate={onNavigate} />
+      </div>
     </div>
   </section>;
 }

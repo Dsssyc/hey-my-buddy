@@ -1,6 +1,7 @@
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { UnderlineNav } from "../components/UnderlineNav";
 import type { BuddyAttention } from "./attention";
 import { buddyHash } from "./navigation";
 import type { BuddyLocation, BuddyView } from "./navigation";
@@ -34,10 +35,10 @@ export function BuddyHeader({ location, attention, onNavigate, harnessCount, ena
   const { t } = useTranslation("buddies");
   const hints = attentionHints(attention, t);
   const inCatalog = location.view === "models";
-  return <div data-slot="buddy-header" className="flex h-9 shrink-0 items-center justify-between gap-6 border-b bg-card px-6"><nav aria-label={t("sections.label")} className="flex h-full shrink-0 items-center gap-[22px] bg-card">
+  return <div data-slot="buddy-header" className="flex h-9 shrink-0 items-center justify-between gap-6 border-b bg-card px-6"><UnderlineNav aria-label={t("sections.label")} className="flex h-full shrink-0 items-center gap-[22px] bg-card">
     <ViewLink view="models" label={t("sections.catalog")} current={inCatalog} className={sectionClass}
       onNavigate={onNavigate} />
     <ViewLink view="router" label={t("sections.router")} current={location.view === "router"} className={sectionClass} hint={hints.roles} onNavigate={onNavigate} />
     <ViewLink view="evaluation" label={t("sections.evaluation")} current={location.view === "evaluation"} className={sectionClass} onNavigate={onNavigate} />
-  </nav><span className="whitespace-nowrap text-xs text-ink2 tabular-nums" role="status">{t("sections.summary", { n: harnessCount, enabled, total })}</span></div>;
+  </UnderlineNav><span className="whitespace-nowrap text-xs text-ink2 tabular-nums" role="status">{t("sections.summary", { n: harnessCount, enabled, total })}</span></div>;
 }

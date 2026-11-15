@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { formatList, formatNumber } from "../i18n/format";
 import { ReasonMessage } from "../i18n/ReasonMessage";
 import { Message } from "../i18n/Message";
 import { BuddyIdentityName } from "../components/AliasTag";
+import { UnderlineNav } from "../components/UnderlineNav";
 import type { EvaluationStatistics, KindEvaluation, Model, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { HarnessLogo } from "./HarnessLogo";
@@ -74,6 +75,11 @@ export function EvaluationView({ snapshot, editor, api, refresh, mutationsAvaila
   const missing = models.filter(model => !model.profile && model.latestProfileRun?.state !== "running");
   const profileBuddy = snapshot.buddies.find(row => row.buddyId === snapshot.configuration?.profileBuddyId);
   const inProfile = location.view === "evaluation" && location.profile;
+  const detailKey = JSON.stringify([selected ? key(selected) : null, !!inProfile]);
+  const visible = useRef(!hidden);
+  useEffect(() => { visible.current = !hidden; }, [hidden]);
+  const [panel, setPanel] = useState({ key: detailKey, animated: false });
+  if (panel.key !== detailKey) setPanel({ key: detailKey, animated: visible.current && !hidden });
   const providers = selected ? [...new Set((using.get(key(selected)) ?? []).map(buddy => buddy.provider))] : [];
   useEffect(() => { if (explicit) { setLastSelection(key(explicit)); if (!using.get(key(explicit))?.some(buddy => buddy.enabled)) setAll(true); setQuery(""); } }, [explicit?.harness, explicit?.modelId, explicit?.effort]);
   const select = (row: KindEvaluation, profile = false) => {
@@ -81,7 +87,7 @@ export function EvaluationView({ snapshot, editor, api, refresh, mutationsAvaila
     onNavigate({ view: "evaluation", evaluation: { harness: row.harness, modelId: row.modelId, effort: row.effort }, ...(profile ? { profile: true } : {}) });
   };
   const maintenanceLock = actions.maintenanceLock ?? (snapshot.maintenance?.runs.some(run => run.state === "running") ? t("modelProfile.state.running") : undefined);
-  return <><section hidden={hidden} aria-label={t("sections.evaluation")} className="flex min-h-0 min-w-0 flex-1 bg-card">
+  return <><section hidden={hidden} aria-label={t("sections.evaluation")} className="view-presence flex min-h-0 min-w-0 flex-1 bg-card">
     <aside className="flex w-[310px] shrink-0 flex-col border-r" data-slot="evaluation-list">
       <div className="space-y-4 border-b px-5 py-4 text-xs">
         <div className="flex items-center justify-between gap-2"><span className="text-ink2">{t("evaluation.profileCount", { built: models.filter(model => model.profile).length, total: models.length })}</span><ActionButton lock={actions.profileLock} description={actions.profileLockDescription} disabled={!missing.length} onClick={() => setConfirmation(missing)}>{t("evaluation.batchBuild")}</ActionButton></div>
@@ -105,11 +111,13 @@ export function EvaluationView({ snapshot, editor, api, refresh, mutationsAvaila
     <ScrollArea className="min-h-0 min-w-0 flex-1"><div data-slot="evaluation-detail" className="min-w-0 px-8 pt-6 pb-10">
       {selected && selectedModel ? <>
         <header className="flex flex-wrap items-baseline gap-x-5 gap-y-2"><h2 className="text-lg font-semibold">{selected.harness} / {selected.modelDisplayName} / {selected.effort}</h2>{providers.length > 0 && <span className="text-xs text-ink3">{t("evaluation.providers", { names: formatList(providers) })}</span>}</header>
-        <nav aria-label={t("evaluation.detailTabs")} className="mb-6 mt-5 flex gap-6 border-b text-sm">{[false, true].map(profile => <a key={String(profile)} href={buddyHash({ view: "evaluation", evaluation: selected, ...(profile ? { profile: true } : {}) })} aria-current={!!inProfile === profile ? "page" : undefined} className="relative pb-2 text-ink2 outline-none aria-[current=page]:text-foreground aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-0 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-foreground focus-visible:ring-2 focus-visible:ring-ring" onClick={event => { event.preventDefault(); select(selected, profile); }}>{t(profile ? "modelProfile.title" : "evaluation.domains")}</a>)}</nav>
+        <UnderlineNav aria-label={t("evaluation.detailTabs")} className="mb-6 mt-5 flex gap-6 border-b text-sm">{[false, true].map(profile => <a key={String(profile)} href={buddyHash({ view: "evaluation", evaluation: selected, ...(profile ? { profile: true } : {}) })} aria-current={!!inProfile === profile ? "page" : undefined} className="relative pb-2 text-ink2 outline-none aria-[current=page]:text-foreground aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-0 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-foreground focus-visible:ring-2 focus-visible:ring-ring" onClick={event => { event.preventDefault(); select(selected, profile); }}>{t(profile ? "modelProfile.title" : "evaluation.domains")}</a>)}</UnderlineNav>
+        <div key={detailKey} className={panel.animated ? "panel-enter" : undefined}>
         {inProfile ? <ModelPortrait model={selectedModel}>
           <ActionButton lock={actions.profileLock} description={actions.profileLockDescription} disabled={selectedModel.latestProfileRun?.state === "running"} onClick={() => setConfirmation([selectedModel])}>{t(selectedModel.latestProfileRun?.state === "running" ? "modelProfile.state.running" : selectedModel.profile ? "modelProfile.rebuild" : "modelProfile.build")}</ActionButton>
           {selectedModel.latestProfileRun?.state === "failed" && <span className="ml-3 text-xs text-fail">{t("evaluation.buildFailedShort")}</span>}
         </ModelPortrait> : <DomainEvaluation key={key(selected)} evaluation={selected} evaluations={[...evaluations.values()]} domains={data.domainNodes ?? []}><EvaluationNames evaluation={selected} data={data} editor={editor} /></DomainEvaluation>}
+        </div>
       </> : <p className="text-sm text-ink3">{t("evaluation.noEvidence")}</p>}
     </div></ScrollArea>
     <Dialog open={confirmation !== null} onOpenChange={open => { if (!open) setConfirmation(null); }}><DialogContent>
@@ -118,7 +126,7 @@ export function EvaluationView({ snapshot, editor, api, refresh, mutationsAvaila
       <DialogFooter><Button variant="outline" onClick={() => setConfirmation(null)}>{t("evaluation.cancel")}</Button><Hint text={actions.profileLock} description={actions.profileLockDescription}><Button disabled={!!actions.profileLock} onClick={() => { const batch = confirmation!; setConfirmation(null); void actions.build(batch); }}>{t("evaluation.confirm")}</Button></Hint></DialogFooter>
     </DialogContent></Dialog>
   </section>
-    <div className="fixed right-6 bottom-16 z-40 flex max-w-lg flex-col gap-2" data-slot="profile-notices">{actions.notices.map(notice => <div key={notice.id} role="status" data-slot="profile-notice" className="overlay-surface border bg-popover p-4 text-xs shadow-md">
+    <div className="fixed right-6 bottom-16 z-40 flex max-w-lg flex-col gap-2" data-slot="profile-notices">{actions.notices.map(notice => <div key={notice.id} role="status" data-slot="profile-notice" className="banner-enter overlay-surface border bg-popover p-4 text-xs shadow-md">
       <p className="flex items-center gap-2">{notice.run && <StateMark kind={notice.run.state === "failed" ? "fail" : "done"} />}<strong>{notice.model}</strong>{notice.run ? t(`modelProfile.state.${notice.run.state}`) : t("evaluation.buildFailedShort")}</p>
       {notice.run?.reason && <p className="mt-2 text-fail"><ReasonMessage reason={notice.run.reason} /></p>}{notice.message && <p className="mt-2">{notice.message()}</p>}
       {notice.run && <div className="mt-2 flex flex-wrap items-center gap-3"><RouterUsage usage={sumRouterUsage(notice.run.usage?.attempts ?? [])}
