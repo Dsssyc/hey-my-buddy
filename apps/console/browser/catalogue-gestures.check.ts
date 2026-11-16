@@ -10,8 +10,8 @@ import { expectNoSidewaysScroll, open, settle, test } from "./preview";
  */
 
 const languages = [
-  { locale: "zh-CN", settings: "设置", catalog: "目录", fold: /^(展开|收起) / },
-  { locale: "en-US", settings: "settings", catalog: "Catalog", fold: /^(Fold|Unfold) / },
+  { locale: "zh-CN", settings: "设置", catalog: "模型", fold: /^(展开|收起) / },
+  { locale: "en-US", settings: "settings", catalog: "Models", fold: /^(Fold|Unfold) / },
 ];
 const CODEX = "codex / openai / gpt-5-codex";
 
@@ -59,12 +59,12 @@ async function expectColourTransition(target: Locator, label: string) {
   }
 }
 
-for (const { locale, settings, fold } of languages) {
+for (const { locale, fold } of languages) {
   test.describe(`the catalogue's gestures in ${locale} at 1280px`, () => {
     test.use({ locale, viewport: { width: 1280, height: 900 } });
 
     test("covers the whole head with one trigger beneath the arrow and provider retries", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       for (const section of await page.locator("[data-slot=harness-section]").all()) {
         const name = (await section.getAttribute("aria-label"))!;
         const header = head(page, name);
@@ -87,18 +87,13 @@ for (const { locale, settings, fold } of languages) {
     });
 
     test("folds from the name, provider and whitespace, and from Enter and Space", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       const header = head(page, "Codex");
       const trigger = header.getByRole("button", { name: new RegExp(`${fold.source}Codex$`) });
       const models = page.locator("[data-slot=harness-section][aria-label=Codex] [data-slot=model-row]");
-      const details = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
+      const details = page.locator("[data-slot=harness-details]:visible");
       await expect(trigger).toHaveAttribute("aria-expanded", "true");
-      await expect(details).toBeVisible();
-      await expect(details.locator("xpath=ancestor::*[@data-slot='harness-sidebar'][1]")).toBeVisible();
-      const blocks = await details.locator(":scope > [role=group]").all();
-      expect(blocks).toHaveLength(2);
-      const columns = await Promise.all(blocks.map(box));
-      expect(columns[0].y).toBeLessThan(columns[1].y);
+      await expect(details).toHaveCount(0);
       await expect(models.first()).toBeVisible();
       const mark = header.locator("[data-slot=disclosure]");
       await expect(mark).toHaveAttribute("data-state", "open");
@@ -111,7 +106,7 @@ for (const { locale, settings, fold } of languages) {
         await expect(mark).toHaveAttribute("data-state", "closed");
         await expect(mark).toHaveCSS("rotate", "none");
         await expect(models).toHaveCount(0);
-        await expect(details).toBeVisible();
+        await expect(details).toHaveCount(0);
         const reopening = await box(words);
         await page.mouse.click(reopening.x + reopening.width / 2, reopening.y + reopening.height / 2);
         await expect(trigger).toHaveAttribute("aria-expanded", "true");
@@ -126,12 +121,23 @@ for (const { locale, settings, fold } of languages) {
       await expect(trigger).toHaveAttribute("aria-expanded", "true");
       await page.keyboard.press("Space");
       await expect(trigger).toHaveAttribute("aria-expanded", "false");
-      await expect(details).toBeVisible();
+      await expect(details).toHaveCount(0);
+      await page.locator('[data-slot="buddy-header"] a[href="#buddies/harness"]').click();
+      const cards = page.locator("[data-slot=harness-card]");
+      expect(await cards.count()).toBeGreaterThan(0);
+      for (const card of await cards.all()) {
+        await expect(card).toBeVisible();
+        const groups = card.locator("[data-slot=harness-details] > [role=group]");
+        await expect(groups).toHaveCount(2);
+        const [left, right] = [await box(groups.nth(0)), await box(groups.nth(1))];
+        expect(Math.abs(left.y - right.y)).toBeLessThanOrEqual(1);
+        expect(right.x).toBeGreaterThanOrEqual(left.x + left.width);
+      }
       await expectNoSidewaysScroll(page);
     });
 
     test("moves every opening and closing on the Collapsible for 200ms on the height Radix measures", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       const section = page.locator("[data-slot=harness-section][aria-label=Codex]");
       const trigger = head(page, "Codex").getByRole("button", { name: new RegExp(`${fold.source}Codex$`) });
       const id = (await trigger.getAttribute("aria-controls"))!;
@@ -155,10 +161,7 @@ for (const { locale, settings, fold } of languages) {
       await expect(section.locator("[data-slot=model-row]")).toHaveCount(0);
       const opened = await trigger.evaluate(motion, id) as { state: string; name: string; duration: string; running: string[] };
       expect(opened).toMatchObject({ state: "open", name: "disclosure-down", duration: "0.2s", running: ["disclosure-down"] });
-      // Sidebar details stay visible while a model drawer uses the Collapsible.
-      const block = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
-      await expect(block).toBeVisible();
-      await expect(block.locator("xpath=ancestor::*[@data-slot='collapsible-content']")).toHaveCount(0);
+      await expect(page.locator("[data-slot=harness-details]:visible")).toHaveCount(0);
       await page.getByRole("button", { name: CODEX, exact: true }).click();
       const drawer = page.getByRole("region", { name: CODEX, exact: true });
       await expect(drawer).toBeVisible();
@@ -174,10 +177,18 @@ for (const { locale, settings, fold } of languages) {
       });
       expect(turn.property).toContain("transform");
       expect(seconds(turn.duration)[0]).toBe(0.2);
+      const model = page.getByRole("button", { name: CODEX, exact: true });
+      const chevron = model.locator("[data-slot=model-chevron]");
+      await settle(page);
+      await expect(chevron).toHaveCSS("rotate", "180deg");
+      await model.click();
+      await settle(page);
+      await expect(chevron).toHaveCSS("rotate", "none");
+      await expect(page.locator("[data-slot=harness-details]:visible")).toHaveCount(0);
     });
 
     test("keeps the service drawer scoped to service and buddy settings with usable controls", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       await page.getByRole("button", { name: CODEX, exact: true }).click();
       const drawer = page.getByRole("region", { name: CODEX, exact: true });
       await expect(drawer).toBeVisible();
@@ -194,7 +205,7 @@ for (const { locale, settings, fold } of languages) {
     });
 
     test("changes every colour on a transition of 100 to 150ms", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       await expectColourTransition(page.locator("[data-slot=model-row] > button").first(), "a model row's button");
       await expectColourTransition(page.locator("[data-slot=fold-handle]").first(), "a harness header");
       await expectColourTransition(page.locator("[data-slot=catalogue-actions] > button").first(), "a toolbar button");
@@ -222,7 +233,7 @@ for (const { locale, settings, fold } of languages) {
     test.use({ locale, viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" });
 
     test("makes no transition and opens and closes at once", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       for (const [label, target] of [
         ["a model row's button", page.locator("[data-slot=model-row] > button").first()],
         ["a harness header", page.locator("[data-slot=fold-handle]").first()],
@@ -242,9 +253,7 @@ for (const { locale, settings, fold } of languages) {
       }, id);
       // Not even a frame of closing: nothing runs, and the content is already gone.
       expect(closing).toEqual({ animations: 0, hidden: true, display: "none", children: 0 });
-      const block = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
-      await expect(block).toBeVisible();
-      await expect(block.locator("xpath=ancestor::*[@data-slot='collapsible-content']")).toHaveCount(0);
+      await expect(page.locator("[data-slot=harness-details]:visible")).toHaveCount(0);
     });
   });
 
@@ -257,7 +266,7 @@ for (const { locale, settings, fold } of languages) {
 
       test("gives the entire header model-row hover and keyboard focus", async ({ page }) => {
         await page.emulateMedia({ reducedMotion: "reduce" });
-        await open(page, "#buddies/catalog");
+        await open(page, "#buddies/models");
         const header = head(page, "Codex");
         const trigger = header.locator("[data-slot=fold-handle]");
         const model = page.getByRole("button", { name: CODEX, exact: true });
@@ -280,7 +289,7 @@ for (const { locale, settings, fold } of languages) {
       });
 
       test("keeps an open model row and selected buddy visible under the pointer", async ({ page }) => {
-        await open(page, "#buddies/catalog");
+        await open(page, "#buddies/models");
         await page.getByRole("button", { name: CODEX, exact: true }).click();
         const row = page.locator("[data-slot=model-row]").filter({ has: page.getByRole("button", { name: CODEX, exact: true }) });
         const button = row.getByRole("button");
@@ -340,13 +349,13 @@ for (const { locale, catalog } of languages) for (const width of [700, 800, 900,
   test.describe(`the controls band in ${locale} at ${width}px`, () => {
     test.use({ locale, viewport: { width, height: 900 } });
 
-    test("keeps the two toolbar actions together when controls wrap", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+    test("keeps model discovery with the filters when controls wrap", async ({ page }) => {
+      await open(page, "#buddies/models");
       const toolbar = page.locator("[data-slot=catalogue-toolbar]");
       const controls = toolbar.locator("[data-slot=catalogue-controls]");
       const items = [
         { name: "search", target: controls.getByRole("searchbox"), button: false },
-        { name: "only enabled", target: controls.locator("[data-slot=catalogue-filters] label").first(), button: false },
+        ...(await controls.locator("[data-slot=catalogue-filters] label").all()).map((target, index) => ({ name: `filter ${index}`, target, button: false })),
         ...(await controls.locator("[data-slot=catalogue-actions] > button").all()).map((target, index) => ({ name: `button ${index}`, target, button: true })),
       ];
       const placed = await Promise.all(items.map(async item => ({ ...item, at: await box(item.target) })));
@@ -357,19 +366,19 @@ for (const { locale, catalog } of languages) for (const width of [700, 800, 900,
         if (row) row.push(item); else rows.push([item]);
       }
       for (const row of rows) expect(row.length === 1 && row[0].button, `${row[0].name} is alone on its row`).toBe(false);
-      // The two buttons are neighbours on one row.
       const buttons = placed.filter(item => item.button);
-      expect(Math.abs(buttons[0].at.y - buttons[1].at.y)).toBeLessThan(2);
+      expect(buttons).toHaveLength(1);
+      await expect(buttons[0].target).toHaveAccessibleName(locale === "zh-CN" ? "发现模型" : "Discover models");
       for (const item of placed) {
         expect(item.at.x, item.name).toBeGreaterThanOrEqual(0);
         expect(item.at.x + item.at.width, item.name).toBeLessThanOrEqual(width + 0.5);
       }
-      await expect(page.locator("[data-slot=buddy-header]").getByRole("link").first()).toContainText(catalog);
+      await expect(page.locator("[data-slot=buddy-header]").getByRole("link").nth(1)).toContainText(catalog);
       await expectNoSidewaysScroll(page);
     });
 
     test("keeps the current section's name with its underline, wherever the band wraps", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       const current = page.locator("[data-slot=buddy-header] a[aria-current=page]");
       await expect(current).toHaveAttribute("aria-current", "page");
       const geometry = await current.evaluate(node => {
@@ -395,7 +404,8 @@ for (const { locale, catalog } of languages) for (const width of [700, 800, 900,
 const underlinedViews = [
   { name: "top navigation", hash: "#tasks", selector: 'header nav a[aria-current="page"]', height: "header" },
   { name: "task filters", hash: "#tasks", selector: '[data-slot="macro-filter-tabs"] [data-slot="tabs-trigger"][data-state="active"]', textSelector: '[data-slot="macro-filter-name"]' },
-  { name: "Buddy sections", hash: "#buddies/catalog", selector: '[data-slot="buddy-header"] a[aria-current="page"]', height: '[data-slot="buddy-header"]' },
+  { name: "Harness section", hash: "#buddies/harness", selector: '[data-slot="buddy-header"] a[aria-current="page"]', height: '[data-slot="buddy-header"]' },
+  { name: "Buddy sections", hash: "#buddies/models", selector: '[data-slot="buddy-header"] a[aria-current="page"]', height: '[data-slot="buddy-header"]' },
   { name: "evaluation detail", hash: "#buddies/evaluation/codex/00000000-0000-4000-8000-000000000003/high", selector: '[data-slot="evaluation-detail"] nav a[aria-current="page"]' },
 ];
 for (const { locale } of languages) for (const theme of ["dark", "light"] as const) for (const width of [1440, 390]) {
@@ -441,7 +451,7 @@ test.describe("the Buddy page in English", () => {
   }
 
   test("says nothing in Chinese in the catalogue, its sections, drawers, dialogs and hints, nor in the bar", async ({ page }) => {
-    await open(page, "#buddies/catalog");
+    await open(page, "#buddies/models");
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
     expect(await chinese(page)).toEqual([]);
     const folded = page.locator("[data-slot=fold-handle][aria-expanded=false]");
@@ -457,6 +467,9 @@ test.describe("the Buddy page in English", () => {
       await settle(page);
       expect(await chinese(page), name).toEqual([]);
     }
+    await page.locator('[data-slot="buddy-header"]').getByRole("link", { name: "Harnesses", exact: true }).click();
+    await expect(page.locator("[data-slot=harness-card]").first()).toBeVisible();
+    expect(await chinese(page)).toEqual([]);
     for (const name of ["Set path"]) {
       await page.getByRole("button", { name, exact: true }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();

@@ -57,7 +57,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"] a
     });
 
     test("keeps the catalog drawer scoped to service and buddy facts and links sample counts", async ({ page }) => {
-      await open(page, "#buddies/catalog/buddy/codex%3Aopenai%3Agpt-5-codex%3Ahigh");
+      await open(page, "#buddies/models/buddy/codex%3Aopenai%3Agpt-5-codex%3Ahigh");
       const drawer = page.locator('[data-slot="model-drawer"]');
       await expect(drawer.locator('[data-slot="model-profile"], [data-slot="kind-evaluation"], [data-slot="model-correspondence"]')).toHaveCount(0);
       await drawer.locator('[data-slot="buddy-samples"] a').click();

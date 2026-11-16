@@ -5,8 +5,8 @@ const FLASH = "dsh / deepseek-official / deepseek-flash";
 const CODEX = "codex / openai / gpt-5-codex";
 
 const languages = [
-  { locale: "zh-CN", catalog: "目录", unsaved: "未保存的修改", settings: "设置", check: "检测", checked: "已检测 Codex：已找到", cooling: "冷却中", clear: "开放重试", unavailable: /^显示不可用/ },
-  { locale: "en-US", catalog: "Catalog", unsaved: "Unsaved changes", settings: "settings", check: "Check", checked: "Checked Codex: Found", cooling: "Cooling down", clear: "Open retry", unavailable: /^Show unavailable/ },
+  { locale: "zh-CN", catalog: "模型", unsaved: "未保存的修改", settings: "设置", check: "检测", checked: "已检测 Codex：已找到", cooling: "冷却中", clear: "开放重试", unavailable: /^显示不可用/ },
+  { locale: "en-US", catalog: "Models", unsaved: "Unsaved changes", settings: "settings", check: "Check", checked: "Checked Codex: Found", cooling: "Cooling down", clear: "Open retry", unavailable: /^Show unavailable/ },
 ];
 
 for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear, unavailable } of languages)
@@ -19,7 +19,7 @@ for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear,
       });
 
       test("uses the whole model row as its disclosure handle", async ({ page }) => {
-        await open(page, "#buddies/catalog");
+        await open(page, "#buddies/models");
         const row = page.getByRole("button", { name: CODEX, exact: true });
         const resting = await row.evaluate(node => getComputedStyle(node).backgroundColor);
         await expect(row).toHaveAttribute("aria-expanded", "false");
@@ -53,7 +53,7 @@ for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear,
       });
 
       test("keeps harness summaries on one line and model rows inside the page", async ({ page }) => {
-        await open(page, "#buddies/catalog");
+        await open(page, "#buddies/models");
         const directory = page.getByRole("region", { name: catalog, exact: true });
         await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
         await expect(page.locator("[data-slot=model-drawer]")).toHaveCount(0);
@@ -63,7 +63,7 @@ for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear,
         const search = toolbar.getByRole("searchbox");
         expect(await search.evaluate(node => getComputedStyle(node).fontSize)).toBe("14px");
         const header = page.locator("[data-slot=buddy-header]");
-        await expect(header.getByRole("link").first()).toHaveAccessibleName(catalog);
+        await expect(header.getByRole("link").nth(1)).toHaveAccessibleName(catalog);
         await expect(toolbar.getByRole("status")).toHaveCount(0);
         await expect(page.locator("[data-slot=unsaved-mark]")).toHaveCount(0);
         const metered = page.locator("[data-slot=harness-section][aria-label=DSH] [data-slot=harness-header]");
@@ -108,7 +108,7 @@ for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear,
       });
 
       test("keeps ordinary model rows compact and cooling inline", async ({ page }, testInfo) => {
-        await open(page, "#buddies/catalog");
+        await open(page, "#buddies/models");
         const cooled = page.getByRole("button", { name: FLASH, exact: true }).locator("..");
         const ordinary = page.getByRole("button", { name: "dsh / deepseek-partner / deepseek-flash", exact: true }).locator("..");
         await expect(cooled.locator("[data-slot=cooling-status]")).toHaveCount(0);
@@ -124,24 +124,25 @@ for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear,
           path: testInfo.outputPath(`buddy-inline-${locale}-${width}-${theme}.png`) });
       });
 
-      test("shows cooling retry in the head and two sidebar detail blocks", async ({ page }, testInfo) => {
-        await open(page, "#buddies/catalog");
-        const dsh = page.getByRole("group", { name: `DSH ${settings}`, exact: true });
-        const codex = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
-        await expect(dsh.locator(":scope > [role=group]")).toHaveCount(2);
-        await expect(codex.locator(":scope > [role=group]")).toHaveCount(2);
+      test("shows cooling retry in the head and two harness detail groups", async ({ page }, testInfo) => {
+        await open(page, "#buddies/models");
         const dshHeader = page.locator("[data-slot=harness-section][aria-label=DSH] [data-slot=harness-header]");
         await expect(dshHeader).toContainText("deepseek-official");
         await expect(dshHeader.getByRole("button", { name: clear })).toHaveCount(1);
         await expect(page.locator("[data-slot=harness-section][aria-label=Codex] [data-slot=harness-header]").getByRole("button", { name: clear })).toHaveCount(0);
         await expectNoSidewaysScroll(page);
         await page.screenshot({ path: testInfo.outputPath(`catalogue-cooling-and-clear-${locale}-${width}-${theme}.png`), fullPage: true });
+        await page.locator('[data-slot="buddy-header"] a[href="#buddies/harness"]').click();
+        const dsh = page.getByRole("group", { name: `DSH ${settings}`, exact: true });
+        const codex = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
+        await expect(dsh.locator(":scope > [role=group]")).toHaveCount(2);
+        await expect(codex.locator(":scope > [role=group]")).toHaveCount(2);
         await dsh.screenshot({ path: testInfo.outputPath(`buddy-cooling-${locale}-${width}-${theme}.png`) });
         await codex.screenshot({ path: testInfo.outputPath(`buddy-clear-${locale}-${width}-${theme}.png`) });
       });
 
       test("places model service above a buddy list and selected panel", async ({ page }) => {
-        await open(page, "#buddies/catalog");
+        await open(page, "#buddies/models");
         await page.getByRole("button", { name: CODEX, exact: true }).click();
         const drawer = page.getByRole("region", { name: CODEX, exact: true });
         const service = drawer.locator("[data-slot=model-service]");
@@ -181,7 +182,7 @@ for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear,
       });
 
       test("shows unsaved marks on a setting, an effort and the closed row, and keeps the save bar at the bottom", async ({ page }) => {
-        await open(page, "#buddies/catalog");
+        await open(page, "#buddies/models");
         await page.getByRole("button", { name: FLASH, exact: true }).click();
         const drawer = page.getByRole("region", { name: FLASH, exact: true });
         await drawer.locator("[data-slot=buddy-choice] [role=switch]").first().click();
@@ -200,27 +201,27 @@ for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear,
         await expectNoSidewaysScroll(page);
       });
 
-      test("keeps sidebar checks and hints inside the window", async ({ page }) => {
+      test("keeps harness checks and hints inside the window", async ({ page }) => {
         // The hint opens with its motion, as a user without the setting sees it.
         await page.emulateMedia({ reducedMotion: "no-preference" });
-        await open(page, "#buddies/catalog");
+        await open(page, "#buddies/harness");
         const codex = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
         await expect(page.getByRole("group", { name: `DSH ${settings}`, exact: true })).toBeVisible();
         await expectWholeAndApart(codex, codex.locator(":scope > [role=group]"));
         for (const heading of await codex.locator("h4").all())
           expect(await heading.evaluate(node => getComputedStyle(node).fontSize)).toBe("12px");
         await codex.getByRole("button", { name: check, exact: true }).click();
-        await expect(page.locator("[data-slot=harness-feedback]")).toHaveText(checked);
-        await expectWholeAndApart(page.getByRole("main"), page.locator("[data-slot=harness-feedback]"));
+        await expect(page.locator("[data-slot=harness-feedback]:visible")).toHaveText(checked);
+        await expectWholeAndApart(page.getByRole("main"), page.locator("[data-slot=harness-feedback]:visible"));
         // Account guidance may be absent; the recorded review word always has a hint.
         const review = codex.locator("[aria-description]").filter({ hasText: /^(强制限制|Enforced)$/ }).first();
         await expect(review).toHaveAttribute("aria-description", /按 harness 的只读档位声明|Based on the harness/);
         // Scrolling closes hints: bring the word into view and let scrolling settle before keyboard focus.
         await review.scrollIntoViewIfNeeded();
         await settle(page);
-        await codex.getByRole("button", { name: check, exact: true }).focus();
+        await codex.getByRole("button", { name: locale === "zh-CN" ? "指定路径" : "Set path", exact: true }).focus();
         await settle(page);
-        await page.keyboard.press("Shift+Tab");
+        await page.keyboard.press("Tab");
         await expect(review).toBeFocused();
         const hint = page.locator("[data-slot=tooltip-content][data-state$=open]");
         await expect(hint).toBeVisible();

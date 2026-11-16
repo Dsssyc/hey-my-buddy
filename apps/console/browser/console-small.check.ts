@@ -113,7 +113,7 @@ async function saveOnce(page: Page) {
     if (request?.operation === "user_policy_publish") await route.fulfill({ json: { ok: true, result: { published: true } } });
     else await route.continue();
   });
-  await open(page, "#buddies/catalog");
+  await open(page, "#buddies/models");
   await page.getByRole("button", { name: MODEL, exact: true }).click();
   const drawer = page.getByRole("region", { name: MODEL, exact: true });
   await drawer.getByRole("spinbutton", { name: "并发上限", exact: true }).fill("3");

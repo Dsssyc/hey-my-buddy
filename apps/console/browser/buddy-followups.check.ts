@@ -69,7 +69,7 @@ for (const theme of ["dark", "light"] as const) for (const locale of ["zh-CN", "
         snapshot.modelServiceConcurrency = reported;
         await route.fulfill({ response, json: snapshot });
       });
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       for (const header of await page.locator('[data-slot="harness-header"]').all()) {
         if (await header.getByRole("button").first().getAttribute("aria-expanded") === "true")
           await expect(header).not.toContainText(/并发|Concurrency/);
@@ -104,17 +104,30 @@ for (const theme of ["dark", "light"] as const) for (const locale of ["zh-CN", "
         await expect(unknown).toHaveText("—");
         await expect(unknown.locator('[data-slot="model-occupancy-meter"]')).toHaveCount(0);
         await expectNoSidewaysScroll(page);
-        for (const card of await page.locator('[data-slot="harness-sidebar"] [data-slot="harness-card"]').all()) {
+      }
+      await page.locator('[data-slot="buddy-header"] a[href="#buddies/harness"]').click();
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        const cards = page.locator('[data-slot="harness-list"] [data-slot="harness-card"]');
+        expect(await cards.count()).toBeGreaterThan(0);
+        for (const card of await cards.all()) {
           const title = (await card.locator("h3").boundingBox())!;
-          const location = card.locator('[data-slot="harness-details"] > [role="group"]').first();
-          const box = (await location.boundingBox())!;
-          await expect(location).toHaveCSS("padding-top", "0px");
-          expect(Math.abs(box.y - title.y - title.height)).toBeLessThanOrEqual(1);
-          const headingLine = (await location.locator(":scope > div").first().boundingBox())!;
-          expect(Math.abs(headingLine.y - box.y)).toBeLessThanOrEqual(1);
-          await expect(card.locator('[data-slot="harness-details"] > [role="group"]').nth(1)).toHaveCSS("padding-top", "16px");
-          await expect(location).toHaveCSS("padding-bottom", "16px");
+          const groups = card.locator('[data-slot="harness-details"] > [role="group"]');
+          await expect(groups).toHaveCount(2);
+          await expect(groups.nth(0)).toHaveAccessibleName(locale === "zh-CN" ? "位置" : "Location");
+          await expect(groups.nth(1)).toHaveAccessibleName(locale === "zh-CN" ? "账户" : "Account");
+          const location = (await groups.nth(0).boundingBox())!, account = (await groups.nth(1).boundingBox())!;
+          expect(location.y).toBeGreaterThanOrEqual(title.y + title.height);
+          if (width >= 768) {
+            expect(Math.abs(location.y - account.y)).toBeLessThanOrEqual(1);
+            expect(account.x).toBeGreaterThanOrEqual(location.x + location.width);
+          } else {
+            expect(account.y).toBeGreaterThanOrEqual(location.y + location.height);
+            expect(Math.abs(location.x - account.x)).toBeLessThanOrEqual(1);
+          }
+          expect(await card.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
         }
+        await expectNoSidewaysScroll(page);
       }
     });
   });

@@ -2,69 +2,60 @@ import { expect } from "@playwright/test";
 import { TOOLBAR_ITEMS, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
 
 const languages = [
-  { locale: "zh-CN", sections: ["目录", "Router", "评价"], enabled: "启用" },
-  { locale: "en-US", sections: ["Catalog", "Router", "Evaluation"], enabled: "Enabled" },
+  { locale: "zh-CN", sections: ["Harness", "模型", "Router", "评价"], enabled: "启用" },
+  { locale: "en-US", sections: ["Harnesses", "Models", "Router", "Evaluation"], enabled: "Enabled" },
 ];
 
 for (const { locale, sections, enabled } of languages) {
   test.describe(`the Buddy page header in ${locale} at 1440px`, () => {
-    test.use({ locale, viewport: { width: 1440, height: 900 } });
+    test.use({ locale, viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
 
-    test("keeps one full-width header at the same height across the directory and Router", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+    test("keeps one full-width header and a flush underline across all four sections", async ({ page }) => {
+      await open(page, "#buddies/harness");
       const main = page.getByRole("main");
       const header = main.locator('[data-slot="buddy-header"]');
       const navigation = header.getByRole("navigation");
       const links = navigation.getByRole("link");
-      const summary = header.getByRole("status");
       await expect(navigation).toHaveCount(1);
-      await expect(links).toHaveCount(3);
-      for (const [index, name] of sections.entries()) await expect(links.nth(index)).toContainText(name);
-      await expect(summary).toContainText(enabled);
-      await expectWholeAndApart(header, header.locator('nav > a, :scope > [role="status"]'));
-      await expectTextUncut(header.locator('nav > a, :scope > [role="status"]'));
-      await expectNoSidewaysScroll(page);
-
+      await expect(links).toHaveCount(4);
+      expect(await links.evaluateAll(nodes => nodes.map(node => node.firstChild?.textContent))).toEqual(sections);
+      await expect(header.getByRole("status")).toContainText(enabled);
+      const baseline = (await header.boundingBox())!;
       const banner = (await page.getByRole("banner").first().boundingBox())!;
-      const catalogHeader = (await header.boundingBox())!;
-      const toolbar = (await main.locator('[data-slot="catalogue-toolbar"]').boundingBox())!;
-      expect(catalogHeader.y).toBe(banner.y + banner.height);
-      expect(catalogHeader.height).toBe(36);
-      const selected = links.first();
-      const geometry = await selected.evaluate(link => {
-        const bounds = link.getBoundingClientRect();
-        const text = document.createRange(); text.selectNodeContents(link);
-        const words = text.getBoundingClientRect();
-        const underline = getComputedStyle(link, "::after");
-        return { textMiddle: (words.top + words.bottom) / 2, linkMiddle: (bounds.top + bounds.bottom) / 2,
-          underlineBottom: bounds.bottom - parseFloat(underline.bottom), height: parseFloat(underline.height) };
-      });
-      expect(Math.abs(geometry.textMiddle - geometry.linkMiddle)).toBeLessThanOrEqual(1);
-      expect(geometry.underlineBottom).toBeCloseTo(catalogHeader.y + catalogHeader.height, 0);
-      expect(geometry.height).toBe(2);
-
-      expect(catalogHeader.width).toBe(1440);
-      expect(toolbar.y).toBe(catalogHeader.y + catalogHeader.height);
-      await expectWholeAndApart(main, main.locator('[data-slot="catalogue-toolbar"]').locator(TOOLBAR_ITEMS));
-
-      await links.nth(1).click();
-      await expect(page).toHaveURL(/#buddies\/router$/);
-      await expect(main.getByRole("region", { name: "Router", exact: true })).toBeVisible();
-      await expect(navigation).toHaveCount(1);
-      const routerHeader = (await header.boundingBox())!;
-      expect(routerHeader.y).toBe(catalogHeader.y);
-      expect(routerHeader.height).toBe(catalogHeader.height);
-      expect(routerHeader.width).toBe(catalogHeader.width);
-
-      await links.nth(2).click();
-      await expect(page).toHaveURL(/#buddies\/evaluation$/);
-      await expect(main.locator('[data-slot="evaluation-list"]')).toBeVisible();
-      expect((await header.boundingBox())!.height).toBe(catalogHeader.height);
-
+      expect(baseline.y).toBe(banner.y + banner.height);
+      expect(baseline.height).toBe(36);
+      expect(baseline.width).toBe(1440);
+      const views = ["harness", "models", "router", "evaluation"];
+      for (const [index, view] of views.entries()) {
+        await links.nth(index).click();
+        await expect(page).toHaveURL(new RegExp(`#buddies/${view}$`));
+        await expect(main.getByRole("region", { name: sections[index], exact: true })).toBeVisible();
+        expect(await header.boundingBox()).toEqual(baseline);
+        await expectWholeAndApart(header, header.locator('nav > a, :scope > [role="status"]'));
+        await expectTextUncut(header.locator('nav > a, :scope > [role="status"]'));
+        const selected = links.nth(index);
+        await expect(selected).toHaveAttribute("aria-current", "page");
+        const geometry = await selected.evaluate(link => {
+          const bounds = link.getBoundingClientRect();
+          const text = document.createRange(); text.selectNode(link.firstChild!);
+          const words = text.getBoundingClientRect();
+          const underline = getComputedStyle(link, "::after");
+          return { textMiddle: (words.top + words.bottom) / 2, linkMiddle: (bounds.top + bounds.bottom) / 2,
+            underlineBottom: bounds.bottom - parseFloat(underline.bottom), height: parseFloat(underline.height) };
+        });
+        expect(Math.abs(geometry.textMiddle - geometry.linkMiddle)).toBeLessThanOrEqual(1);
+        expect(geometry.underlineBottom).toBeCloseTo(baseline.y + baseline.height, 0);
+        expect(geometry.height).toBe(2);
+        if (view === "models") {
+          const toolbar = main.locator('[data-slot="catalogue-toolbar"]');
+          expect((await toolbar.boundingBox())!.y).toBe(baseline.y + baseline.height);
+          await expectWholeAndApart(main, toolbar.locator(TOOLBAR_ITEMS));
+        }
+        await expectNoSidewaysScroll(page);
+      }
       await links.nth(0).click();
-      await expect(page).toHaveURL(/#buddies\/catalog$/);
-      await expect(navigation).toHaveCount(1);
-      expect((await header.boundingBox())!.height).toBe(catalogHeader.height);
+      await expect(page).toHaveURL(/#buddies\/harness$/);
+      expect(await header.boundingBox()).toEqual(baseline);
       await expect(main.getByRole("table")).toHaveCount(0);
     });
   });

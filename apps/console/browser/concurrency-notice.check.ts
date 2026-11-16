@@ -17,7 +17,7 @@ for (const { locale, copy, limit } of languages) for (const width of [1440]) for
     });
 
     test("keeps the full notice readable below its input", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       await page.getByRole("button", { name: MODEL, exact: true }).click();
       const drawer = page.getByRole("region", { name: MODEL, exact: true });
       const notice = drawer.getByRole("note", { name: copy.title });

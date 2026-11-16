@@ -9,7 +9,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
     test.use({ locale: "zh-CN", viewport: { width, height: 900 }, reducedMotion: "reduce" });
     test("keeps each provider cooldown and retry in the header", async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       const section = page.locator("[data-slot=harness-section][aria-label=DSH]");
       const header = section.locator("[data-slot=harness-header]");
       const provider = header.locator("[data-slot=header-provider]").filter({ hasText: "deepseek-official" });
@@ -17,9 +17,6 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
       await expect(provider.getByRole("button", { name: "开放重试" })).toHaveCount(1);
       await expect(header.locator("button button")).toHaveCount(0);
       await expect(section.locator("[data-slot=model-row] [data-slot=cooling-status]")).toHaveCount(0);
-      const details = page.locator("[data-slot=harness-sidebar] [data-slot=harness-card]").filter({ has: page.locator("#harness-title-dsh") }).locator("[data-slot=harness-details]");
-      await expect(details.locator(":scope > [role=group]")).toHaveCount(2);
-      await expect(details.getByRole("button", { name: "开放重试" })).toHaveCount(0);
       const retries: unknown[] = [];
       await page.route("**/api/command", async route => {
         const command = route.request().postDataJSON();
@@ -37,6 +34,10 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
       }
       expect(retries).toEqual([true, false].map(() => expect.objectContaining({ operation: "quota_redetect",
         params: expect.objectContaining({ harness: "dsh", provider: "deepseek-official", requestId: expect.any(String) }) })));
+      await page.locator('[data-slot="buddy-header"] a[href="#buddies/harness"]').click();
+      const details = page.locator("[data-slot=harness-card]").filter({ has: page.locator("#harness-title-dsh") }).locator("[data-slot=harness-details]");
+      await expect(details.locator(":scope > [role=group]")).toHaveCount(2);
+      await expect(details.getByRole("button", { name: "开放重试" })).toHaveCount(0);
       await expectNoSidewaysScroll(page);
     });
     test("shows a cooling boundary, a rerouted success, and a mid-turn quota failure", async ({ page }, testInfo) => {

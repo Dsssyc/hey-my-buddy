@@ -12,7 +12,7 @@ for (const theme of ["light", "dark"]) for (const locale of ["zh-CN", "en-US"]) 
 
     test("shows provider identity, missing reads and profiles, service measurements and verified versions", async ({ page }) => {
       const zh = locale === "zh-CN";
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       const capture = async (name: string) => {
         await settle(page);
         await expectNoSidewaysScroll(page);
@@ -48,12 +48,12 @@ for (const theme of ["light", "dark"]) for (const locale of ["zh-CN", "en-US"]) 
       await expect(drawer.getByRole("note")).toHaveCount(0);
       await page.getByRole("button", { name: CODEX, exact: true }).click();
 
+      await page.locator('[data-slot="buddy-header"] a[href="#buddies/harness"]').click();
       const details = page.getByRole("group", { name: zh ? "DSH 设置" : "DSH settings", exact: true });
-      await expect(details).toContainText("0.2.2-rc.1");
+      await expect(details).toContainText("synthetic-preview-1.0");
       await expect(details.locator(":scope > [role=group]")).toHaveCount(2);
       const zcode = page.getByRole("group", { name: zh ? "ZCode 设置" : "ZCode settings", exact: true });
-      await expect(zcode).toContainText(zh ? "未核对" : "Not verified");
-      await expect(zcode).toContainText(zh ? "不能构建模型画像" : "cannot build model profiles");
+      await expect(zcode).toContainText(zh ? "不可建画像" : "no profiles");
       await capture("harness");
     });
   });

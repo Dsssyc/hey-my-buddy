@@ -41,7 +41,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
           await route.fulfill({ json: { ok: true, result: { published: true } } });
         }
       });
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       await page.getByRole("button", { name: model, exact: true }).click();
       const drawer = page.locator('[data-slot=model-drawer]');
       const field = drawer.getByRole("textbox", { name: aliasName, exact: true });
@@ -88,7 +88,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       await page.getByRole("searchbox").fill("");
       await page.getByRole("link", { name: "Router", exact: true }).click();
       await expect(page.locator('[data-slot=routing-routers-region] [data-slot=alias-tag]')).toHaveText("Review desk");
-      await page.getByRole("link", { name: zh ? "目录" : "Catalog", exact: true }).click();
+      await page.getByRole("link", { name: zh ? "模型" : "Models", exact: true }).click();
       const modelButton = page.getByRole("button", { name: model, exact: true });
       if (await modelButton.getAttribute("aria-expanded") === "false") await modelButton.click();
       await field.fill("duplicate");

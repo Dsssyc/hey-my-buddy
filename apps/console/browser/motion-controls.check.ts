@@ -108,7 +108,7 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
     });
 
     test("hands segmented selection to the thumb only while it is sliding", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       await page.getByRole("button", { name: codex, exact: true }).click();
       const drawer = page.getByRole("region", { name: codex, exact: true });
       const group = drawer.locator('[data-slot="segmented"]');
@@ -179,7 +179,7 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
 test.describe("interrupted segmented motion", () => {
   test.use({ locale: "en-US", viewport: { width: 1440, height: 960 }, reducedMotion: "no-preference" });
   test("restarts at the current visible position when another choice interrupts the slide", async ({ page }) => {
-    await open(page, "#buddies/catalog");
+    await open(page, "#buddies/models");
     await page.getByRole("button", { name: codex, exact: true }).click();
     const group = page.getByRole("region", { name: codex, exact: true }).locator('[data-slot="segmented"]');
     await expect(group).toHaveAttribute("data-thumb-ready", "true");

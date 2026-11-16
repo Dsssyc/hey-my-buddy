@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import type { Buddy, Snapshot } from "../src/types";
-import { expectNoSidewaysScroll, open, screenshots, settle, test } from "./preview";
+import { expectNoSidewaysScroll, expectWholeAndApart, open, screenshots, settle, test } from "./preview";
 
 const CODEX = "codex / openai / gpt-5-codex";
 const OPUS = "claude / anthropic / claude-opus-5-5";
@@ -40,7 +40,7 @@ for (const theme of ["dark", "light"] as const) {
     });
 
     test("places the service above the buddy list and settings, and keeps the left column fixed", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       await page.getByRole("button", { name: CODEX, exact: true }).click();
       const drawer = page.getByRole("region", { name: CODEX, exact: true });
       await settle(page);
@@ -84,62 +84,97 @@ for (const theme of ["dark", "light"] as const) {
       if (width === 1440) await page.screenshot({ path: `${screenshots}/catalog-drawer-1440-${theme}.png` });
     });
 
-    test("keeps harness facts beside the list or below it while the whole header folds models", async ({ page }) => {
-      await open(page, "#buddies/catalog");
+    test("centers models and harness cards within 1040px and folds only models", async ({ page }) => {
+      await open(page, "#buddies/models");
       const models = page.locator("[data-slot=catalog-models]");
-      const sidebar = page.locator("[data-slot=harness-sidebar]");
-      const [list, side] = [await frame(models), await frame(sidebar)];
-      if (width >= 1100) {
-        expect(side.x).toBeGreaterThanOrEqual(list.x + list.width - 0.5);
-        expect(Math.abs(side.y - list.y)).toBeLessThanOrEqual(0.5);
-        expect(side.width).toBe(384);
-        const firstCard = sidebar.locator("[data-slot=harness-card]").first();
-        const firstSection = models.locator("[data-slot=harness-section]").first();
-        expect(Math.abs((await frame(firstCard)).y - (await frame(firstSection)).y)).toBeLessThanOrEqual(1);
-        const title = await frame(firstCard.locator("h3"));
-        const header = await frame(firstSection.locator("[data-slot=harness-header]"));
-        expect(title.height).toBe(48);
-        expect(Math.abs(title.height - header.height)).toBeLessThanOrEqual(1);
-        if (width === 1440) await page.screenshot({ path: `${screenshots}/catalog-rest-1440-${theme}.png` });
-        const before = await models.locator(":scope > [data-slot=scroll-area-viewport]").evaluate(node => node.scrollTop);
-        await sidebar.locator(":scope > [data-slot=scroll-area-viewport]").evaluate(node => { node.scrollTop = node.scrollHeight; });
-        expect(await models.locator(":scope > [data-slot=scroll-area-viewport]").evaluate(node => node.scrollTop)).toBe(before);
-      } else expect(side.y).toBeGreaterThanOrEqual(list.y + list.height - 0.5);
-      await expect(sidebar.getByRole("heading", { name: "Harness", exact: true })).toHaveCount(1);
-      expect(await sidebar.getByRole("heading", { name: "Harness", exact: true }).evaluate(node => node.getBoundingClientRect().width)).toBe(1);
-      for (const card of await page.locator("[data-slot=harness-card], [data-slot=harness-section]").all()) {
+      await expect(page.locator("[data-slot=harness-sidebar]")).toHaveCount(0);
+      const centered = async (target: Locator) => {
+        const bounds = await frame(target);
+        expect(bounds.width).toBeLessThanOrEqual(1040);
+        expect(Math.abs(bounds.x + bounds.width / 2 - width / 2)).toBeLessThanOrEqual(1);
+      };
+      await centered(models.locator("[data-slot=harness-section]").first().locator(".."));
+      await centered(page.locator("[data-slot=catalogue-controls]"));
+      for (const section of await models.locator("[data-slot=harness-section]").all()) {
+        await expect(section).toHaveCSS("overflow", "clip");
+        expect((await frame(section)).width).toBeLessThanOrEqual(1040);
+      }
+      const header = models.locator('[data-slot=harness-section][aria-label="Codex"] [data-slot=harness-header]');
+      const trigger = header.locator("[data-slot=fold-handle]");
+      const rows = models.locator('[data-slot=harness-section][aria-label="Codex"] [data-slot=model-row]');
+      await expect(rows.first()).toBeVisible();
+      for (const expanded of [false, true]) {
+        await header.click({ position: { x: 1, y: 1 } });
+        await expect(trigger).toHaveAttribute("aria-expanded", String(expanded));
+        if (expanded) await expect(rows.first()).toBeVisible();
+        else await expect(rows).toHaveCount(0);
+        await expect(page.locator("[data-slot=harness-details]:visible")).toHaveCount(0);
+        await expect(page).toHaveURL(/#buddies\/models$/);
+      }
+      const offline = models.locator('[data-slot=harness-section][aria-label="Claude Code"]');
+      await offline.getByRole("link", { name: "查看环境", exact: true }).click();
+      await expect(page).toHaveURL(/#buddies\/harness\/claude$/);
+      await expect(page.locator("#harness-title-claude")).toBeFocused();
+      await expect(page.locator("#harness-title-claude")).toBeInViewport();
+      const list = page.locator("[data-slot=harness-list]");
+      await centered(list.locator("[data-slot=harness-card]").first().locator(".."));
+      await centered(page.locator("[data-slot=harness-controls]"));
+      const cards = list.locator("[data-slot=harness-card]");
+      expect(await cards.count()).toBeGreaterThan(0);
+      let previousBottom = -Infinity;
+      for (const card of await cards.all()) {
+        const bounds = await frame(card);
+        expect(bounds.y).toBeGreaterThanOrEqual(previousBottom);
+        previousBottom = bounds.y + bounds.height;
+        expect(bounds.width).toBeLessThanOrEqual(1040);
+        expect(Math.abs(bounds.x + bounds.width / 2 - width / 2)).toBeLessThanOrEqual(1);
         const radius = await card.evaluate(node => ({ actual: getComputedStyle(node).borderRadius, token: getComputedStyle(node).getPropertyValue("--radius-card").trim() }));
         expect(radius.actual).toBe(radius.token);
-      }
-      for (const section of await models.locator("[data-slot=harness-section]").all()) await expect(section).toHaveCSS("overflow", "clip");
-      expect(await sidebar.locator("[data-slot=harness-card] h3").allTextContents()).toEqual(await page.locator("[data-slot=harness-section]").evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-label"))));
-      const header = page.locator('[data-slot=harness-section][aria-label="Codex"] [data-slot=harness-header]');
-      const folded = await header.getByRole("button").getAttribute("aria-expanded");
-      await header.click({ position: { x: 1, y: 1 } });
-      await expect(header.getByRole("button")).toHaveAttribute("aria-expanded", folded === "true" ? "false" : "true");
-      await expect(page.locator("[data-slot=account-summary], [data-slot=cooling-details]")).toHaveCount(0);
-      await expect(page.locator("[data-slot=harness-section] [data-slot=harness-details]")).toHaveCount(0);
-      for (const card of await sidebar.locator("[data-slot=harness-card]").all()) {
-        await expect(card.locator("[data-slot=harness-details] > [role=group]")).toHaveCount(2);
-        await expect(card.getByRole("button", { name: "检测", exact: true })).toHaveCount(1);
-        await expect(card.getByRole("button", { name: "指定路径", exact: true })).toHaveCount(1);
+        const header = card.locator("[data-slot=harness-details] > div").first();
+        await expectWholeAndApart(header, header.locator(":scope > div"));
+        const title = await frame(card.locator("h3"));
+        const check = await frame(card.getByRole("button", { name: "检测", exact: true }));
+        const path = await frame(card.getByRole("button", { name: "指定路径", exact: true }));
+        if (width >= 768) expect(check.x).toBeGreaterThan(title.x + title.width);
+        else expect(check.x >= title.x + title.width || check.y >= title.y + title.height,
+          "the title and actions do not overlap when the header wraps").toBe(true);
+        expect(path.x).toBeGreaterThanOrEqual(check.x + check.width);
+        const groups = card.locator("[data-slot=harness-details] > [role=group]");
+        await expect(groups).toHaveCount(2);
+        await expect(groups.nth(0)).toHaveAccessibleName("位置");
+        await expect(groups.nth(1)).toHaveAccessibleName("账户");
+        const [location, account] = [await frame(groups.nth(0)), await frame(groups.nth(1))];
+        expect(location.y).toBeGreaterThanOrEqual(Math.max(title.y + title.height, check.y + check.height, path.y + path.height));
+        if (width >= 768) {
+          expect(Math.abs(location.y - account.y)).toBeLessThanOrEqual(1);
+          expect(account.x).toBeGreaterThanOrEqual(location.x + location.width);
+        } else {
+          expect(account.y).toBeGreaterThanOrEqual(location.y + location.height);
+          expect(Math.abs(location.x - account.x)).toBeLessThanOrEqual(1);
+        }
+        expect(await card.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
       }
       await expectNoSidewaysScroll(page);
-      if (width === 390 && theme === "dark") {
-        await models.scrollIntoViewIfNeeded();
-        await page.screenshot({ path: `${screenshots}/catalog-390-dark.png` });
-      }
+      if (width === 1440 || width === 390) await page.screenshot({ path: `${screenshots}/harness-${width}-${theme}.png` });
     });
 
-    test("deep-links to a harness title in the sidebar without opening header details", async ({ page }) => {
-      await open(page, "#buddies/catalog/harness/zcode");
+    test("deep-links to a model service and focuses its selected buddy", async ({ page }) => {
+      const key = encodeURIComponent(JSON.stringify(["codex", "openai", "gpt-5-codex"]));
+      await open(page, `#buddies/models/model/${key}`);
+      const drawer = page.getByRole("region", { name: CODEX, exact: true });
+      await expect(drawer).toBeVisible();
+      await expect(drawer.locator("[data-slot=buddy-panel]")).toBeFocused();
+      await expect(drawer.locator("[data-slot=buddy-stop][aria-pressed=true]")).toHaveCount(1);
+      await expect(page.locator("[data-slot=harness-details]:visible")).toHaveCount(0);
+      await expectNoSidewaysScroll(page);
+    });
+
+    test("deep-links to a harness title and scrolls it into view", async ({ page }) => {
+      await open(page, "#buddies/harness/zcode");
       const title = page.locator("#harness-title-zcode");
       await expect(title).toBeFocused();
       await expect(title).toBeInViewport();
-      if (width >= 1100) expect(await page.locator("[data-slot=harness-sidebar] > [data-slot=scroll-area-viewport]").evaluate(node => node.scrollTop)).toBeGreaterThan(0);
-      else {
-        expect(await page.locator("[data-slot=harness-sidebar]").evaluate(node => (node as HTMLElement).offsetTop)).toBeGreaterThan(0);
-      }
+      await expect(page.locator("[data-slot=catalog-models]")).toBeHidden();
       await expect(page.locator("[data-slot=account-summary]")).toHaveCount(0);
     });
   });
@@ -148,8 +183,8 @@ for (const theme of ["dark", "light"] as const) {
     test.use({ viewport: { width: 1440, height: 1000 }, locale: "zh-CN", reducedMotion: "reduce" });
     test("wraps POSIX and Windows paths between complete segments, and splits only oversized segments", async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
-      const posix = "~/.nvm/versions/node/v24.21.0/bin/console-harness-with-hyphens";
-      const windows = "C:\\Program Files\\Harness Tools\\verified-version\\console-harness.exe";
+      const posix = "~/development/toolchains/verified-runtimes/node/versions/v24.21.0/distributions/standard-command-line/bin/console-harness-with-hyphens";
+      const windows = "C:\\Program Files\\Development Tools\\Harness Distributions\\verified-version\\standard-command-line\\installed-runtimes\\bin\\console-harness.exe";
       const oversized = `~/harnesses/${"long-name".repeat(18)}/bin/runner`;
       await page.route("**/api/console", async route => {
         const response = await route.fetch();
@@ -159,7 +194,7 @@ for (const theme of ["dark", "light"] as const) {
             candidates: [{ path: windows, status: "missing" }, { path: oversized, status: "missing" }] } : row);
         await route.fulfill({ response, json: snapshot });
       });
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/harness");
       const paths = page.locator("[data-slot=harness-path]");
       for (const path of [posix, windows]) {
         const matches = paths.filter({ hasText: path });
@@ -197,7 +232,7 @@ for (const theme of ["dark", "light"] as const) {
           ? { ...buddy, available: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } } : buddy);
         await route.fulfill({ response, json: snapshot });
       });
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       await page.getByRole("button", { name: CODEX, exact: true }).click();
       const drawer = page.getByRole("region", { name: CODEX, exact: true });
       await drawer.getByRole("button", { name: "medium", exact: true }).click();
@@ -211,7 +246,7 @@ for (const theme of ["dark", "light"] as const) {
     test("scrolls just the left list to the selected buddy on opening and on selection", async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await fiveEfforts(page);
-      await open(page, "#buddies/catalog/buddy/claude%3Aanthropic%3Aclaude-opus-5-5%3Amax");
+      await open(page, "#buddies/models/buddy/claude%3Aanthropic%3Aclaude-opus-5-5%3Amax");
       const drawer = page.getByRole("region", { name: OPUS, exact: true });
       await expect(drawer.locator("[data-slot=buddy-panel]")).toBeFocused();
       await expect(drawer.locator("[data-slot=buddy-stop]")).toHaveCount(5);
@@ -235,7 +270,7 @@ for (const theme of ["dark", "light"] as const) {
 
     test("keeps the pending timestamp with service controls and puts range errors and notices underneath", async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       await page.getByRole("button", { name: "zcode / zai / glm-5", exact: true }).click();
       const drawer = page.getByRole("region", { name: "zcode / zai / glm-5", exact: true });
       const line = drawer.locator("[data-slot=model-service-line]");
@@ -258,7 +293,7 @@ for (const theme of ["dark", "light"] as const) {
       await page.setViewportSize({ width: 390, height: 1000 });
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await fiveEfforts(page);
-      await open(page, "#buddies/catalog/buddy/claude%3Aanthropic%3Aclaude-opus-5-5%3Amax");
+      await open(page, "#buddies/models/buddy/claude%3Aanthropic%3Aclaude-opus-5-5%3Amax");
       const drawer = page.getByRole("region", { name: OPUS, exact: true });
       const viewport = drawer.locator("[data-slot=buddy-list-viewport]");
       await expect(drawer.locator("[data-slot=buddy-stop]")).toHaveCount(5);
@@ -271,7 +306,7 @@ for (const theme of ["dark", "light"] as const) {
 
     test("toggles in the left list independently of selection and paints selection to the divider", async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
-      await open(page, "#buddies/catalog");
+      await open(page, "#buddies/models");
       await page.getByRole("button", { name: CODEX, exact: true }).click();
       const drawer = page.getByRole("region", { name: CODEX, exact: true });
       const selected = drawer.locator("[data-slot=buddy-stop][aria-pressed=true]");

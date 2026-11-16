@@ -161,7 +161,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
         <div data-slot="catalogue-controls" className="mx-auto flex max-w-[1040px] min-w-0 flex-wrap items-center gap-x-6 gap-y-2">
           <Input type="search" className="h-8 w-full max-w-full bg-card text-sm text-foreground shadow-none sm:w-[200px]" aria-label={t("models.search")} placeholder={t("models.search")}
             value={query} onChange={event => setQuery(event.target.value)} />
-          <div data-slot="catalogue-group" className="flex min-w-0 flex-1 flex-wrap items-center gap-x-6 gap-y-2">
+          <div data-slot="catalogue-group" className="flex min-w-0 flex-1 flex-wrap items-center gap-x-6 gap-y-2 sm:min-w-fit">
             <div data-slot="catalogue-filters" className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 text-xs sm:gap-x-5 sm:text-sm">
               <label className="flex items-center gap-2 whitespace-nowrap">
                 <Checkbox checked={enabledOnly} onCheckedChange={checked => setEnabledOnly(checked === true)} />{t("models.enabledOnly")}

@@ -11,7 +11,7 @@ test.describe("shared readability", () => {
   });
 
   test("dark tooltip and popover are legible floating surfaces", async ({ page }) => {
-    await open(page, "#buddies");
+    await open(page, "#buddies/harness");
     const permission = page.getByRole("group", { name: "Codex 设置", exact: true })
       .locator("[aria-description]").filter({ hasText: /^强制限制$/ });
     await permission.hover();
@@ -33,7 +33,7 @@ test.describe("shared readability", () => {
   });
 
   test("disclosures have neutral selection, pointer and keyboard focus", async ({ page }) => {
-    await open(page, "#buddies");
+    await open(page, "#buddies/models");
     const fold = page.locator("[data-slot=fold-handle]").first();
     expect(await fold.evaluate(node => getComputedStyle(node).cursor)).toBe("pointer");
     const chevron = fold.locator("..").locator("[data-slot=disclosure]");
