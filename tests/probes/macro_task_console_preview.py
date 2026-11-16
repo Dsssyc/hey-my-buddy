@@ -3315,6 +3315,10 @@ class PreviewHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 30
 
+    def parse_request(self) -> bool:
+        self._body_handled = False
+        return super().parse_request()
+
     @property
     def state(self) -> PreviewState:
         return self.server.state_for_case(self.headers.get("X-HMB-Preview-Case"))
@@ -3338,6 +3342,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache)
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.send_header(PREVIEW_HEADER, PREVIEW_VALUE)
         self.send_header("X-Hey-My-Buddy-Preview-Scenario", self.server.scenario)
         self.send_header("Referrer-Policy", "no-referrer")
@@ -3357,6 +3363,25 @@ class PreviewHandler(BaseHTTPRequestHandler):
     def _error(self, status: int, code: str, message: str, **details: Any) -> None:
         self.close_connection = True
         self._json(status, error_envelope(code, message, **details))
+        self.wfile.flush()
+        if not self._body_handled:
+            self._discard_body()
+
+    def _discard_body(self) -> None:
+        """Keep a refused bounded body from resetting its response on close."""
+        self._body_handled = True
+        lengths = self.headers.get_all("Content-Length", [])
+        if "Transfer-Encoding" in self.headers or len(lengths) != 1:
+            return
+        raw = lengths[0].strip(" \t")
+        if not raw.isascii() or not raw.isdecimal():
+            return
+        try:
+            length = int(raw)
+        except ValueError:
+            return
+        if 0 < length <= MAX_BODY_BYTES:
+            self.rfile.read(length)
 
     def _preview_error(self, error: PreviewError) -> None:
         self._error(STATUS_BY_CODE.get(error.code, 400), error.code, error.message, **error.details)
@@ -3484,6 +3509,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
     do_OPTIONS = do_PUT
 
     def _read_body(self) -> bytes | None:
+        self._body_handled = True
         if (self.headers.get("Transfer-Encoding") or "").strip():
             self._error(411, "INVALID_ARGUMENT", "A bounded Content-Length body is required")
             return None

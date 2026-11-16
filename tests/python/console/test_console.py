@@ -268,6 +268,36 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertEqual(status, 403)
         self.assertEqual(browser.bootstrap()["configuration"], snapshot["configuration"])
 
+    def test_refused_write_preserves_the_auth_reply_while_the_body_is_arriving(self):
+        from hey_my_buddy.console.server import MAX_BODY_BYTES
+
+        board = self.board()
+        _stated, browser = self.open_console(board)
+        csrf = browser.bootstrap()["csrfToken"]
+        path = browser.prefix + "/api/command"
+        accepted = json.dumps({"operation": "reminder_settings_set", "params": {"silenceSeconds": 900}}).encode()
+        for method, status, code in (("POST", 401, "CONSOLE_SESSION_EXPIRED"),
+                                     ("PUT", 405, "METHOD_NOT_FOUND"), ("DELETE", 405, "METHOD_NOT_FOUND")):
+            with self.subTest(method=method), socket.create_connection((browser.host, browser.port), timeout=10) as raw:
+                # Consume a valid body first, then refuse the next request on
+                # this connection before its body has been sent.
+                raw.sendall((f"POST {path} HTTP/1.1\r\nHost: {browser.host}:{browser.port}\r\n"
+                             f"Origin: {browser.origin}\r\nCookie: {browser.cookie}\r\n"
+                             f"X-Hey-My-Buddy-CSRF: {csrf}\r\nContent-Length: {len(accepted)}\r\n\r\n").encode() + accepted)
+                response = http.client.HTTPResponse(raw)
+                response.begin()
+                self.assertEqual(response.status, 200, response.read())
+                raw.sendall((f"{method} {path} HTTP/1.1\r\nHost: {browser.host}:{browser.port}\r\n"
+                             f"Content-Length: {MAX_BODY_BYTES}\r\n\r\n").encode())
+                response = http.client.HTTPResponse(raw)
+                response.begin()
+                self.assertEqual(response.status, status)
+                self.assertEqual(response.getheader("Connection"), "close")
+                self.assertEqual(json.loads(response.read())["error"]["code"], code)
+                raw.sendall(b"x" * MAX_BODY_BYTES)
+                self.assertEqual(raw.recv(1), b"")
+        self.assertEqual(board.store.count_tasks(), 0)
+
     def test_foreign_origin_host_and_cross_site_requests_are_refused(self):
         board = self.board()
         _stated, browser = self.open_console(board)
@@ -344,7 +374,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
                 body=b"x" * (1024 * 1024 + 1),
                 headers={"X-Hey-My-Buddy-CSRF": csrf, "Content-Type": "application/json"},
             )
-        except (ConnectionResetError, BrokenPipeError):
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             status = 413
         self.assertEqual(status, 413)
 

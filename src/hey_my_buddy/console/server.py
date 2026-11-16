@@ -526,6 +526,10 @@ class Console:
             def log_message(self, *_args):  # noqa: D102 - silence access logging
                 return
 
+            def parse_request(self) -> bool:
+                self._body_handled = False
+                return super().parse_request()
+
             # -- response helpers ------------------------------------------
             def _security_headers(self) -> None:
                 self.send_header("Referrer-Policy", "no-referrer")
@@ -611,6 +615,25 @@ class Console:
                 if details:
                     error["details"] = details
                 self._json(status, {"ok": False, "error": error})
+                self.wfile.flush()
+                if not self._body_handled:
+                    self._discard_body()
+
+            def _discard_body(self) -> None:
+                """Keep a refused bounded body from resetting its response on close."""
+                self._body_handled = True
+                lengths = self.headers.get_all("Content-Length", [])
+                if "Transfer-Encoding" in self.headers or len(lengths) != 1:
+                    return
+                raw = lengths[0].strip(" \t")
+                if not raw.isascii() or not raw.isdecimal():
+                    return
+                try:
+                    length = int(raw)
+                except ValueError:
+                    return
+                if 0 < length <= MAX_BODY_BYTES:
+                    self.rfile.read(length)
 
             def _cookie(self) -> str:
                 raw = self.headers.get("Cookie") or ""
@@ -894,6 +917,7 @@ class Console:
                 self._json(200, {"ok": True, "result": result})
 
             def _read_body(self) -> bytes | None:
+                self._body_handled = True
                 if (self.headers.get("Transfer-Encoding") or "").strip():
                     self._error(411, "INVALID_ARGUMENT", "A bounded Content-Length body is required")
                     return None

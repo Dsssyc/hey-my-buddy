@@ -25,6 +25,7 @@ import http.client
 import importlib.util
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -614,6 +615,32 @@ class PreviewDeletionTest(unittest.TestCase):
             return response.status, json.loads(response.read())
         finally:
             connection.close()
+
+    def test_refused_body_follows_the_reply_on_a_reused_connection(self) -> None:
+        preview = self.preview
+        accepted = json.dumps({"operation": "macro_task_deletion_preview",
+                               "params": {"macroTaskId": preview.MACRO_C}}).encode()
+        with self.server() as server:
+            host, port = server.server_address
+            for method, status, code in (("POST", 403, "FORBIDDEN"),
+                                         ("PUT", 405, "METHOD_NOT_FOUND"), ("DELETE", 405, "METHOD_NOT_FOUND")):
+                with self.subTest(method=method), socket.create_connection((host, port), timeout=10) as raw:
+                    raw.sendall((f"POST /api/command HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                                 f"X-Hey-My-Buddy-CSRF: {preview.SYNTHETIC_CSRF}\r\n"
+                                 f"Content-Length: {len(accepted)}\r\n\r\n").encode() + accepted)
+                    response = http.client.HTTPResponse(raw)
+                    response.begin()
+                    self.assertEqual(response.status, 200, response.read())
+                    raw.sendall((f"{method} /api/command HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                                 f"Content-Length: {preview.MAX_BODY_BYTES}\r\n\r\n").encode())
+                    response = http.client.HTTPResponse(raw)
+                    response.begin()
+                    self.assertEqual(response.status, status)
+                    self.assertEqual(response.getheader("Connection"), "close")
+                    self.assertEqual(preview.PREVIEW_VALUE, response.getheader(preview.PREVIEW_HEADER))
+                    self.assertEqual(json.loads(response.read())["error"]["code"], code)
+                    raw.sendall(b"x" * preview.MAX_BODY_BYTES)
+                    self.assertEqual(raw.recv(1), b"")
 
     def test_case_header_isolates_controls_and_default_state(self) -> None:
         preview = self.preview

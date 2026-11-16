@@ -76,13 +76,12 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIsNotNone(handle.wait(180), "Codex fixture controller did not exit")
         return self.adapter.collect(handle, context)
 
-    def wait_native_turn_start(self, timeout=180):
-        """Bounded wait for the fixture's explicit native turn-start fact.
+    def wait_native_turn_start(self, handle, timeout=180):
+        """Wait for the native start and the controller's matching turn receipt.
 
-        The marker is written only after the fixture actually emitted the
-        turn/start response and the turn/started notification, so waiting on it
-        proves the native turn had started before the cancel — never a blind
-        sleep, and never a thread merely existing.
+        The fixture can publish its marker before the controller consumes the
+        response. Its waiting-model activity proves the turn identity is bound
+        before a test asks for native interruption or continuation.
         """
         path = Path(self.environment["HMB_CODEX_FIXTURE_STATE"])
         deadline = time.monotonic() + timeout
@@ -94,9 +93,13 @@ class CodexAdapterTests(unittest.TestCase):
             for thread in (state.get("threads") or {}).values():
                 started = thread.get("turnStart")
                 if isinstance(started, dict) and started.get("threadId") and started.get("turnId"):
-                    return started
+                    live = handle.live_endpoint
+                    activity = live.current_activity() if live is not None else None
+                    if (activity is not None and activity.get("phase") == "waiting-model"
+                            and activity.get("nativeSessionId") == started["threadId"]):
+                        return started
             time.sleep(0.05)
-        self.fail("the fixture never recorded a started native turn before the cancel")
+        self.fail("the fixture and controller never confirmed the same started native turn")
 
     def review(self, case, *, index, capture=True):
         from hey_my_buddy.buddy.roles.structured_call import collect
@@ -430,7 +433,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
-        started = self.wait_native_turn_start()
+        started = self.wait_native_turn_start(handle)
         self.assertEqual(set(started), {"threadId", "turnId"})
         time.sleep(1.2)
         self.assertIsNone(handle.wait(0), "the micro task must outlive its one-second estimate")
@@ -449,7 +452,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
-        self.wait_native_turn_start()
+        self.wait_native_turn_start(handle)
         self.adapter.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(180), "Codex cancellation did not finish its run collection")
         outcome = self.adapter.collect(handle, context)
@@ -464,7 +467,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
-        started = self.wait_native_turn_start()
+        started = self.wait_native_turn_start(handle)
         session_path = Path(context.session_record_path)
         record_deadline = time.monotonic() + 180
         while not session_path.exists() and time.monotonic() < record_deadline:
@@ -511,7 +514,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
-        started = self.wait_native_turn_start()
+        started = self.wait_native_turn_start(handle)
         controller.worker_stop(self.adapter, handle, stop_initiator="pause",
                                grace_deadline=time.monotonic() + 10)
         self.assertIsNotNone(handle.wait(180), "Codex fixture pause did not settle")
