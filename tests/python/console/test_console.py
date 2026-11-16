@@ -268,6 +268,21 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertEqual(status, 403)
         self.assertEqual(browser.bootstrap()["configuration"], snapshot["configuration"])
 
+    def test_refused_write_preserves_the_auth_reply_while_the_body_is_arriving(self):
+        from hey_my_buddy.console.server import MAX_BODY_BYTES
+
+        board = self.board()
+        _stated, browser = self.open_console(board)
+        csrf = browser.bootstrap()["csrfToken"]
+        status, _headers, data = http_call(
+            browser.host, browser.port, "POST", browser.prefix + "/api/command",
+            body=b"x" * MAX_BODY_BYTES,
+            headers={"Origin": browser.origin, "X-Hey-My-Buddy-CSRF": csrf},
+        )
+        self.assertEqual(status, 401, data)
+        self.assertEqual(json.loads(data)["error"]["code"], "CONSOLE_SESSION_EXPIRED")
+        self.assertEqual(board.store.count_tasks(), 0)
+
     def test_foreign_origin_host_and_cross_site_requests_are_refused(self):
         board = self.board()
         _stated, browser = self.open_console(board)
@@ -344,7 +359,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
                 body=b"x" * (1024 * 1024 + 1),
                 headers={"X-Hey-My-Buddy-CSRF": csrf, "Content-Type": "application/json"},
             )
-        except (ConnectionResetError, BrokenPipeError):
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             status = 413
         self.assertEqual(status, 413)
 

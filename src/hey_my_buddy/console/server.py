@@ -611,6 +611,21 @@ class Console:
                 if details:
                     error["details"] = details
                 self._json(status, {"ok": False, "error": error})
+                if self.command == "POST" and not self._body_handled:
+                    self._discard_body()
+
+            def _discard_body(self) -> None:
+                """Keep a refused bounded body from resetting its response on close."""
+                self._body_handled = True
+                lengths = self.headers.get_all("Content-Length", [])
+                if self.headers.get("Transfer-Encoding") or len(lengths) != 1:
+                    return
+                try:
+                    length = int(lengths[0])
+                except ValueError:
+                    return
+                if 0 < length <= MAX_BODY_BYTES:
+                    self.rfile.read(length)
 
             def _cookie(self) -> str:
                 raw = self.headers.get("Cookie") or ""
@@ -858,6 +873,7 @@ class Console:
                 self._handle_request(self._post)
 
             def _post(self):
+                self._body_handled = False
                 if not self._trusted_request():
                     return
                 path = self._path()
@@ -894,6 +910,7 @@ class Console:
                 self._json(200, {"ok": True, "result": result})
 
             def _read_body(self) -> bytes | None:
+                self._body_handled = True
                 if (self.headers.get("Transfer-Encoding") or "").strip():
                     self._error(411, "INVALID_ARGUMENT", "A bounded Content-Length body is required")
                     return None
