@@ -42,8 +42,6 @@
 
 **执行上的问题要让控制台也知道。**（2026-10-25 开发者讨论 E 的“停止证明不了”时定：不为那一种情形单设状态，改成一条一般的做法） Host 一侧与 Lead 的唤醒随 0.63.0 于 2026-11-06 安装：新出现的执行或服务问题让 `await` 以 `issue` 返回一次，Lead 的唤醒与 `await` 用同一个“新消息”的定义（[ADR-022](../decisions/022-expected-duration-and-graceful-stop.md) 与 [ADR-026](../decisions/026-delegation-authority.md) 2026-10-25 的补充，[ADR-032](../decisions/032-host-interface-delegation-loop.md) 第 8 条）。还要做的有两件。一是微任务详情显示这次执行当前的问题，用已有的原因文字：`get` 的 `selectedAttempt.issues` 已经返回它们，控制台不显示；native 停止永远证明不了的 attempt 停在 `finalizing`，控制台只显示进行中。二是叫醒回合已经结束的 Host（2026-10-14 的 Host 门铃）：Codex 从 0.149.0 起有 `codex queue`（我们 10-14 在 CLI 与 app 上实测过），0.164.0 又让排进的消息能打断回合里的睡眠工具；缺的是我们的接法（谁排消息、Host 怎样知道自己会话的标识、等待进程能否活过回合），见[调研记录](../research/2026-10-26-codex-sleep-and-queue-wake.md)。
 
-**Windows 上控制台拒绝 POST 时，客户端偶尔收到连接中止而不是拒绝。**（2026-10-23 Windows 复跑 `298f62b6` 撞到一次） `console/server.py` 的 `_error` 在 401 与 403 时不读请求体就关闭连接，Windows 上的客户端这时可能收到连接中止（WSAECONNABORTED），`test_writes_require_session_csrf_and_exact_origin` 因此偶发失败一次。原因是 Host 读代码所得，没有在 Windows 上单独复现。2026-11-01 的 Windows 全套复跑里，`console/test_console_access.py` 的 `test_host_origin_fetch_metadata_and_csrf_refusals_without_cookie` 以同样的连接中止（WinError 10053）失败一次，单独复跑通过。建议：拒绝之前按请求体上限读完或丢弃请求体，再关连接。
-
 **服务冷启动、升级与运行时安装的固定等待，在忙机器上可能太短。** 2026-10-14“控制面的时限”那一步曾把这三处改成没有尽头的等待，又改成带“待定”状态与锁交接的有界等待，在 Windows 上交接不安全；Host 把它们恢复成基点的样子（冷启动 20 秒或首次安装 300 秒、升级 45 秒、安装 900 秒），不在那一步做。它们失败时什么都没装上、什么都没停，用户重试即可；在忙机器上是否需要更长，另量再定。
 
 **机器很忙时，Codex 读账户超时会让微任务在开工前失败。** 2026-10-14 一次付费探针在前端测试同时跑的时候，Codex CLI 0.162.1 的 `account/read` 超时，harness 被判失效，重试一次后仍以 `native-rpc-error` 失败，微任务在模型回合开始之前就失败了，没有付费调用；机器空闲后重跑正常。超时是一次性的短时限，负载高时会误判一个好好的 harness。要量一下这个时限该多长，或者读不到账户时不判失效。
@@ -88,8 +86,6 @@
 ## 运行环境
 
 **会话为空的证明还缺两条测试。**（2026-11-06，0.63.1 的独立审查提出，Host 核对过） 0.63.1 新加的两条调度器测试替换掉了句柄的观察，在旧代码上也会通过，守住修复的是观察层的测试；第二次扫描时根已经失去进程号、又看到无法归属的成员，结论应当是未知，代码是对的，但没有测试。
-
-**Windows 上 Python 全套还有 2 个文件必现失败；自 2026-10-27 那次推送之后，CI 没在 Windows 上跑过。**（2026-11-02，Windows 11 测试机，另一个 Worker 在 0.59.0 的版本提交 `2c9ec15e` 上独立复跑，Host 读过原始输出） 368 个文件中 366 个通过，前端 103 个文件全过；2026-11-01 记下的 `test_storage` 与 `test_checks_cleanup` 已随 schema 33 那一批修好。剩下两个：`blackboard/tasks/test_workspace_submission_cleanup.py` 的 `test_storage_busy_before_revoke_preserves_complete_allocation_for_maintenance`（schema 33 第三个微任务加的）在 `task_submit` 的替身里给分配目录拍快照，连 `.lock` 一起读，而这时产品正经 `LockFileEx` 持着这把锁，Windows 的字节区锁拒绝另一个句柄读，得到 PermissionError；复跑的 Worker 用产品的 `locking.lock` 做了探针，Host 读码核实产品代码不读锁文件，是测试的写法，快照跳过 `.lock` 即可。`buddy/harnesses/zcode/test_zcode_realtime_flow.py` 的“撤回失败之后删掉原有的续接绑定”一项（0.58.3 那批加的）在 Windows 上 `bindingPresent` 仍为真，原因没查，可能是产品的问题。两个文件的夹具清理因 WinError 32 推迟，根最后删掉了；`console/test_console_access.py` 这次通过。建议：下一批改 Windows 时先在测试机上查明 ZCode 那一项，连同快照的写法一起修，推送之后让 CI 在 Windows 上跑一次。证据在整合检出被忽略的 `tmp/storage/win-059/`。
 
 **Windows 上工作目录过长时 harness 起不来，却报成不可用。**（2026-10-26 “Windows 残余（四）”在测试机上实测，排在首次发版之后） 进程的工作目录超过约 260 个字符时，Windows 直接拒绝创建进程（WinError 267；测试机上 282 与 286 个字符的工作目录都起不来，没有创建子进程），DSH 把启动处的 `OSError` 投影成 `harness-unavailable`，看起来像 harness 没装好。安全的一边已经守住：没有起进程，就没有要停的。要改的是如实报出系统拒绝启动的原因与工作目录，让 Host 知道换一个浅一些的检出位置；其余 harness 的启动处是否同样投影，一起核对。
 
