@@ -346,7 +346,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
             identity = rc.RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="call")
             handle = run_execution.InlineRunHandle({"timeoutSeconds": None}, identity)
-            budget_path = execution.directory / module.BUDGET
+            budget_path = native_path(execution.directory / module.BUDGET)
             original_unlink = type(budget_path).unlink
             removals = []
             def unlink(path, *args, **kwargs):
