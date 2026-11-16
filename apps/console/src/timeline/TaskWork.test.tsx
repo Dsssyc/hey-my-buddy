@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
@@ -748,4 +748,15 @@ it("keeps the name column, filter and empty timeline for an empty macro task", a
   expect(document.querySelector('[data-slot="timeline-canvas"]')).toBeNull();
   await userEvent.click(within(stage as HTMLElement).getByRole("button", { name: "仅显示未结束" }));
   expect(stage.textContent).toContain("没有已提交的微任务");
+});
+
+it("clears the timeline pointer line on native pointerleave even without pointerout", () => {
+  setup();
+  const tracks = document.querySelector<HTMLElement>('[data-slot="timeline-tracks"]')!;
+  tracks.getBoundingClientRect = () => new DOMRect(0, 100, 1088, 400);
+  expect(document.querySelector('[data-slot="timeline-axis"]')?.getAttribute("class")).toContain("pointer-events-none");
+  fireEvent.pointerMove(tracks, { clientX: 500, clientY: 120 });
+  expect(document.querySelector('[data-slot="timeline-pointer"]')).toBeTruthy();
+  act(() => { tracks.dispatchEvent(new Event("pointerleave")); });
+  expect(document.querySelector('[data-slot="timeline-pointer"]')).toBeNull();
 });

@@ -56,6 +56,18 @@ export const ZoomRuler = forwardRef<HTMLDivElement, {
     openOrigin.current = null;
     setHintOpen(false);
   }, [clearDwell]);
+  useEffect(() => {
+    if (!element) return;
+    // Detached children (e.g. zoom-fit or axis readouts) suppress DOM pointerout, which React's
+    // synthetic onPointerLeave relies on; native pointerleave still fires on connected ancestors.
+    const leave = () => { lastPointer.current = null; dismiss(); };
+    element.addEventListener("pointerleave", leave);
+    element.addEventListener("pointercancel", leave);
+    return () => {
+      element.removeEventListener("pointerleave", leave);
+      element.removeEventListener("pointercancel", leave);
+    };
+  }, [element, dismiss]);
   const attach = useCallback((node: HTMLDivElement | null) => {
     rulerNode.current = node;
     setElement(node);
@@ -99,8 +111,6 @@ export const ZoomRuler = forwardRef<HTMLDivElement, {
         setHintOpen(true);
       }, TOOLTIP_DELAY_MS);
     },
-    onPointerLeave: () => { lastPointer.current = null; dismiss(); },
-    onPointerCancel: () => { lastPointer.current = null; dismiss(); },
     onPointerDown: () => { dismiss(); },
     onWheel: () => { dismiss(); },
     onFocus: event => {

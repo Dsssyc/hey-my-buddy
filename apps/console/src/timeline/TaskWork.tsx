@@ -122,6 +122,17 @@ export function TaskWork(props: TaskWorkProps) {
   const pointerX = pointerScreenX === null || !scale || !narrow && pointerScreenX < nameWidth ? null
     : Math.max(0, Math.min(scale.widthPx, pointerScreenX + scrollLeft - originX));
   useLayoutEffect(() => { if (viewport) setScrollLeft(viewport.scrollLeft); }, [scale, viewport]);
+  useEffect(() => {
+    if (!viewport) return;
+    // Use native pointerleave so a child unmounting under the cursor cannot drop the leave event.
+    const leave = () => { setPointerScreenX(null); setHoveredSpan(null); setHoveredRow(null); setHoveredMarker(null); };
+    viewport.addEventListener("pointerleave", leave);
+    viewport.addEventListener("pointercancel", leave);
+    return () => {
+      viewport.removeEventListener("pointerleave", leave);
+      viewport.removeEventListener("pointercancel", leave);
+    };
+  }, [viewport]);
   useTimelineGestures(viewport, ruler, zoomAt, () => zoom(0));
   useEffect(() => { setSelectedRunId(openedRunId); setSelectedKey(null); setPointerScreenX(null); }, [macroId]);
   useEffect(() => {
@@ -308,8 +319,7 @@ export function TaskWork(props: TaskWorkProps) {
         setPointerScreenX(localX);
         const runId = target.closest("[data-run-id]")?.getAttribute("data-run-id");
         setHoveredRow(rows.find(row => row.runId === runId) ?? null);
-      },
-      onPointerLeave: () => { setPointerScreenX(null); setHoveredSpan(null); setHoveredRow(null); setHoveredMarker(null); } }}>
+      } }}>
     {/* Paint into the reserved padding without adding it to the scrollable width twice. */}
     {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="canvas-enter relative min-h-full pb-8" style={{ width: `calc(${narrow ? `${trackWidth}px` : `max(100%, ${nameWidth + trackWidth}px)`} + var(--scrollbar-size))`, minWidth: "calc(100% + var(--scrollbar-size))", marginRight: "calc(-1 * var(--scrollbar-size))" }}>
       <div data-slot="timeline-ruler" className="sticky top-0 z-30">

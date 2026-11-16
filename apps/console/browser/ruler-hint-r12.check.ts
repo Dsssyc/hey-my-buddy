@@ -82,7 +82,14 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
     await closeTo(left);
     await mkdir(captures, { recursive: true });
     await page.screenshot({ path: `${captures}/${detail ? "detail" : "timeline"}-${theme}-${width}.png` });
-    await page.mouse.move(left, y + 40); await expect(tooltip).toHaveCount(0);
+    await page.mouse.move(middle, y + 36); await expect(tooltip).toHaveCount(0);
+    if (!detail) await expect(page.locator('[data-slot=timeline-pointer]')).toHaveCount(1);
+    const heading = await box(page.locator('[data-slot=macro-overview-header] h2'));
+    await page.mouse.move(heading.x + heading.width / 2, heading.y + heading.height / 2, { steps: 15 });
+    await expect(page.locator('[data-slot=timeline-pointer]')).toHaveCount(0);
+    await expect(page.locator('[data-slot=pointer-clock]')).toHaveCount(0);
+    await page.clock.runFor(600);
+    await expect(tooltip).toHaveCount(0);
     await page.keyboard.press("Tab");
     await ruler.focus();
     await closeTo(frame.x + frame.width / 2);

@@ -150,7 +150,7 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds, co
     // A clock stays with its tick, even if no room is left for its text.
     if (label && Math.abs((label.left + label.right) / 2 - x) <= measure(text) / 2 + 4) { labels.push({ ...label, y: 16, className: "fill-ink2" }); occupied.push(label); }
   }
-  return <svg ref={axisRef} data-slot="timeline-axis" viewBox={`${-INSET_PX} 0 ${width + INSET_PX * 2} ${TIMELINE_AXIS_PX}`} width={width + INSET_PX * 2} height={TIMELINE_AXIS_PX} className="block max-w-none select-none overflow-hidden text-xs" aria-hidden="true">
+  return <svg ref={axisRef} data-slot="timeline-axis" viewBox={`${-INSET_PX} 0 ${width + INSET_PX * 2} ${TIMELINE_AXIS_PX}`} width={width + INSET_PX * 2} height={TIMELINE_AXIS_PX} className="pointer-events-none block max-w-none select-none overflow-hidden text-xs" aria-hidden="true">
     {ruler}<line data-slot="axis-baseline" x1={0} x2={width} y1={30} y2={30} className="stroke-ink3"/>
     {scale.breaks.map((gap, index) => { const center = (gap.startX + gap.endX) / 2; return <g key={gap.startMs}>
       <path data-slot="axis-break-mark" d={`M${center - 7} 34l6-8m0 8l6-8`} className="stroke-line"/>

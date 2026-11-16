@@ -98,6 +98,12 @@ describe("ZoomRuler", () => {
     expect(screen.getByRole("tooltip")).toBeTruthy();
     fireEvent.pointerLeave(ruler);
     expect(screen.queryByRole("tooltip")).toBeNull();
+
+    // Native pointerleave without pointerout (when a hovered descendant detaches) cancels pending dwell and closes.
+    fireEvent.pointerMove(ruler, { clientX: 440, clientY: 16 });
+    act(() => { ruler.dispatchEvent(new Event("pointerleave")); });
+    act(() => { vi.advanceTimersByTime(TOOLTIP_DELAY_MS); });
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("opens immediately centered in the viewport on focus-visible and closes on blur", () => {
