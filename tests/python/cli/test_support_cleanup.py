@@ -123,7 +123,7 @@ class FixtureCleanupTests(unittest.TestCase):
                       patch.object(checks, "observed_processes", return_value=(
                           [{"pid": 123}] if residue == "process" else [],
                           ["observation incomplete"] if residue == "unknown" else [], [])) as observe,
-                      patch.object(support, "cleanup_fixture_tree") as remove):
+                      patch.object(support, "remove_private_test_root") as remove):
                     native.name = "posix"
                     with self.assertRaisesRegex(AssertionError, "preserved"):
                         support.cleanup_private_tree(base, (state,))
@@ -142,7 +142,7 @@ class FixtureCleanupTests(unittest.TestCase):
                   patch.object(support, "shutdown_private_rpc") as shutdown,
                   patch.object(checks, "held_locks", return_value={"daemon": []}) as locks,
                   patch.object(checks, "observed_processes", side_effect=AssertionError("unregistered Job")),
-                  patch.object(support, "cleanup_fixture_tree") as remove):
+                  patch.object(support, "remove_private_test_root") as remove):
                 native.name = "nt"
                 support.cleanup_private_tree(base, (state,))
             stop.assert_called_once_with(state)
@@ -161,6 +161,48 @@ class FixtureCleanupTests(unittest.TestCase):
                 with patch.object(support, "_lock_held", side_effect=lambda path: path.name == "board-owner.lock"):
                     with self.assertRaisesRegex(AssertionError, "shutdown unconfirmed"):
                         support.assert_private_processes_gone(root)
+
+    def test_owned_fixtures_finish_transient_windows_deletion_before_retiring(self):
+        from hey_my_buddy.cli import checks
+
+        for kind in ('board', 'state', 'tree'):
+            with self.subTest(kind=kind):
+                if kind == 'board':
+                    fixture = BoardTestCase('runTest')
+                    fixture.setUp()
+                    directory, cleanup = fixture.directory, fixture._cleanup
+                elif kind == 'state':
+                    context = private_state_dir()
+                    directory = context.__enter__()
+                    cleanup = lambda: context.__exit__(None, None, None)
+                else:
+                    directory = Path(tempfile.mkdtemp()).resolve()
+                    cleanup = lambda: support.cleanup_private_tree(directory, (directory,))
+                (directory / 'control-daemon.lock').touch()
+                rmtree = checks.shutil.rmtree
+                attempts = []
+
+                def transient_delete(path, **kwargs):
+                    if Path(path) != checks.native_path(directory):
+                        return rmtree(path, **kwargs)
+                    attempts.append(path)
+                    if len(attempts) == 1:
+                        error = PermissionError('the stopped process is releasing its handles')
+                        error.winerror = 32
+                        raise error
+                    return rmtree(path, **kwargs)
+
+                try:
+                    with (patch.object(support, 'os', wraps=os) as fixture_windows,
+                          patch.object(checks, 'os', wraps=os) as runner_windows,
+                          patch.object(checks.shutil, 'rmtree', side_effect=transient_delete)):
+                        fixture_windows.name = runner_windows.name = 'nt'
+                        cleanup()
+                    self.assertFalse(directory.exists(),
+                                     'A drained service fixture must remove its lock marker before its proof is lost')
+                finally:
+                    if directory.exists():
+                        remove_private_test_root(directory)
 
     def test_windows_released_locks_do_not_replace_an_unconfirmed_drain(self):
         from hey_my_buddy.protocol.transport import ServiceError
@@ -497,7 +539,7 @@ class FixtureCleanupTests(unittest.TestCase):
 
             # Leave the directory available for a protocol cleanup if the assertion
             # fails; the lock FDs also let us inspect ownership after deletion.
-            with patch("support.cleanup_fixture_tree") as remove:
+            with patch("support.remove_private_test_root") as remove:
                 fixture._cleanup()
                 assert_released(self, handles)
                 for fd in handles:
@@ -516,7 +558,7 @@ class FixtureCleanupTests(unittest.TestCase):
         handles = []
         directory = None
         try:
-            with patch("support.cleanup_fixture_tree") as remove:
+            with patch("support.remove_private_test_root") as remove:
                 with private_state_dir() as directory:
                     catalog = write_catalog_fixture(directory)
                     environment = _child_environment(directory, {
