@@ -1,6 +1,6 @@
 # `hey-my-buddy` CLI reference
 
-The CLI presents the Host delegation loop, user operations and credential-scoped role calls separately. Contract 0.61.0 implements [ADR-032](../decisions/032-host-interface-delegation-loop.md). Request fields and legal combinations come from the same models as local `help`; this page explains how to use the entry points rather than copying their complete schemas.
+The CLI presents the Host delegation loop ([ADR-032](../decisions/032-host-interface-delegation-loop.md)), user operations and credential-scoped role calls separately. Request fields and legal combinations come from the same models as local `help`; this page explains how to use the entry points rather than copying their complete schemas.
 
 ## Invocation
 

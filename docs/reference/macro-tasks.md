@@ -1,6 +1,6 @@
 # Macro tasks and micro task timelines
 
-Macro tasks group an agenda's micro tasks in one project and retain a revisable goal. Contract 0.61.0 ([ADR-032](../decisions/032-host-interface-delegation-loop.md)) permits empty macro tasks. Grouping grants no scheduler, dependency graph, execution permission or routing authority. The current schema is 35; installation upgrades from the schema-30 floor through five steps, and startup never migrates.
+Macro tasks group an agenda's micro tasks in one project and retain a revisable goal. The Host delegation loop ([ADR-032](../decisions/032-host-interface-delegation-loop.md)) permits empty macro tasks. Grouping grants no scheduler, dependency graph, execution permission or routing authority. Startup accepts only the current schema and never migrates; installation runs the remaining upgrade steps from the board's own schema, supported from the schema-30 floor ([operations](operations.md#backup-upgrade-and-storage-contract)).
 
 ## Creation and membership
 
@@ -67,7 +67,7 @@ The preview helper `tests/probes/macro_task_console_preview.py` serves synthetic
 
 ## Schema and verification
 
-Startup accepts schema 35 only and no conversion runs at startup ([operations](operations.md#backup-upgrade-and-storage-contract)); installation runs the remaining steps of 30 → 31 → 32 → 33 → 34 → 35 from the board's own schema. A board below the upgrade floor is refused with instructions to install release 0.54.1 first; a newer schema is refused.
+Startup accepts only the current schema and never migrates; installation runs the remaining upgrade steps from the board's own schema, supported from the schema-30 floor ([operations](operations.md#backup-upgrade-and-storage-contract)). A board below the upgrade floor is refused with instructions to install release 0.54.1 first; a newer schema is refused.
 
 The check suite restores the fixture board written by the upgrade floor, runs the complete chain, and compares the result with a new board that carries the same settings. Forms introduced after the floor are added by fixed SQL at the step that first supports them, with their writer provenance beside the fixture.
 

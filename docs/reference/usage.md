@@ -1,6 +1,6 @@
 # Using hey-my-buddy
 
-This page follows one agenda from installation to a reviewed result under contract 0.61.0 ([ADR-032](../decisions/032-host-interface-delegation-loop.md)). [The CLI reference](cli.md) explains the Host, operations and role entry points; local `help` supplies their current fields and legal combinations. [Workflow](workflow.md) owns the lifecycle, [operations](operations.md) owns installation and recovery, and [architecture](architecture.md) describes the service.
+This page follows one agenda from installation to a reviewed result under the Host delegation loop ([ADR-032](../decisions/032-host-interface-delegation-loop.md)). [The CLI reference](cli.md) explains the Host, operations and role entry points; local `help` supplies their current fields and legal combinations. [Workflow](workflow.md) owns the lifecycle, [operations](operations.md) owns installation and recovery, and [architecture](architecture.md) describes the service.
 
 ## The common path
 
@@ -11,7 +11,7 @@ Create a macro task, submit a bounded micro task, await it, answer any boundary 
 You need [uv](https://docs.astral.sh/uv/) and a working local DSH, ZCode, Codex or Claude Code CLI with its own provider credentials. The runtime uses Python 3.12; uv can install it. The blackboard uses the user's harness configuration and login.
 
 ```sh
-/abs/path/to/hey-my-buddy/skills/hey-my-buddy/scripts/hey-my-buddy install
+uvx hey-my-buddy@0.69.6 install
 HMB="$HOME/.agents/skills/hey-my-buddy/scripts/hey-my-buddy"
 ```
 

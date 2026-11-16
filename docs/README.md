@@ -42,13 +42,13 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 | [reference/claude-code.md](reference/claude-code.md) | Claude Code Worker execution through the Claude Code CLI: native configuration and login, structured results, native-probe boundaries and provider rejection classification |
 | [reference/cli.md](reference/cli.md) | Host, user operations and role entry points with combinations and examples, model-generated help, action ids and wait envelopes |
 | [reference/operations.md](reference/operations.md) | Installation and upgrade, runtime lifecycle, private state and environment, session privacy, recovery and removal |
-| [reference/evaluation.md](reference/evaluation.md) | Shared buddies, preferences, model service notes, the private console HTTP surface and the Buddy and 设置 pages |
+| [reference/evaluation.md](reference/evaluation.md) | Shared buddies, preferences, model profiles and correspondences, buddy aliases, the private console HTTP surface, the four Buddy sections and the 设置 page |
 | [reference/console.md](reference/console.md) | Console access and CLI lifecycle, persistent sessions, buddy sections, deep links and verification |
 | [reference/macro-tasks.md](reference/macro-tasks.md) | independent macro task creation and goals, Git and folder project identity, empty groups, Host collections and console timeline/deletion reads |
-| [reference/decision.md](reference/decision.md) | The harness-neutral Router protocol in both modes: the tool-free fast request and the read-only review request, frozen candidates, answer bounds, budgets, input verification and the native capability boundary |
+| [reference/decision.md](reference/decision.md) | The harness-neutral Router protocol in both modes: the tool-free fast request and the read-only review request, frozen candidates, answer bounds, the model response wait, input verification and the native capability boundary |
 | [reference/workers.md](reference/workers.md) | The four harness adapters and the model-free `command` adapter, each harness's launch and turn, receipts, bounded activity and stop evidence |
 | [reference/harness-integration.md](reference/harness-integration.md) | Adding a harness: each part to implement, its file and the test that guards it, the conformance check over every harness name and what it cannot verify |
-| [reference/architecture.md](reference/architecture.md) | Implemented topology, contract 0.61.0, schema 35 and its five-step upgrade chain, the shared attempt ceiling and model service concurrency, identity, recovery, catalog observation and packaging |
+| [reference/architecture.md](reference/architecture.md) | Implemented topology, persistence, the shared attempt ceiling and model service concurrency, identity, recovery, catalog observation and packaging |
 | [reference/harnesses.md](reference/harnesses.md) | Local harness discovery: health cache, executable selection, environment, capabilities, provider rejections and cooling, and how far each harness is verified |
 
 Detailed commands belong in their owning reference, routed from this page and from [skills/hey-my-buddy/SKILL.md](../skills/hey-my-buddy/SKILL.md).
@@ -92,6 +92,7 @@ Each ADR records the decision at its own point in time, with its dated amendment
 | [030](decisions/030-harness-layer-scope.md) | What the harness layer owns: the user's harness is used as it is |
 | [031](decisions/031-one-process-per-execution.md) | One process per execution |
 | [032](decisions/032-host-interface-delegation-loop.md) | The Host delegation loop, explicit execution choices, response identities and work without a checkout |
+| [033](decisions/033-macro-task-pause-resume-end.md) | Pausing, resuming and ending macro tasks from the console |
 
 ## Acceptance records
 
