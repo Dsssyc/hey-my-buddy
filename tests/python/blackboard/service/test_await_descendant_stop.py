@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 import json
 import sqlite3
 import sys
@@ -34,7 +35,7 @@ class DescendantStopWaitTests(real_workspace.RealWorkspaceTestCase):
                 # The test-only command admission cannot create Host helpers.
                 # Seed just its ownership edge to exercise the real observation
                 # path; the child process, receipt and shutdown proof are real.
-                with sqlite3.connect(self.directory / 'board.sqlite3') as connection:
+                with closing(sqlite3.connect(self.directory / 'board.sqlite3')) as connection, connection:
                     connection.execute('INSERT INTO workflow_children VALUES(?,?,?,?,?,?)',
                                        (child, parent['runId'], 'model-free-stop-fixture', 'cancelled',
                                         '2026-11-06T00:00:00.000Z', '2026-11-06T00:00:00.000Z'))
