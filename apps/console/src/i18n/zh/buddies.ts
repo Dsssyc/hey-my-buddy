@@ -21,9 +21,10 @@ export default {
     dataFlow: "构建画像时，模型名称与对应关系候选会发给画像 buddy 的模型提供方；画像 buddy 可以联网查找公开资料。",
   },
   sections: {
+    harness: "Harness",
+    models: "模型",
     evaluation: "评价",
     label: "Buddy 的分区",
-    catalog: "目录",
     router: "Router",
     summary: "{{n}} 个 harness · 启用 {{enabled}} / {{total}}",
   },
@@ -43,6 +44,7 @@ export default {
   unsaved: "未保存",
   loginExpired: "浏览器授权已失效，操作未提交；请重新授权。",
   models: {
+    viewHarness: "查看环境",
     search: "搜索 buddy",
     enabledOnly: "仅显示已启用",
     showUnavailable: "显示不可用",

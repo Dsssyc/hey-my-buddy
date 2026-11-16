@@ -1,6 +1,5 @@
 import { cn } from "cn";
 import { useState } from "react";
-import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
@@ -8,38 +7,24 @@ import { StateMark } from "@/components/ui/state-mark";
 import type { HarnessHealth } from "../types";
 import { harnessDetailsView, statusText } from "./harness";
 import type { HarnessDetailsView } from "./harness";
+import { HarnessLogo } from "./HarnessLogo";
 import { HarnessPathDialog } from "./HarnessPathDialog";
 
 const hintTarget = "rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
 const label = "text-xs text-ink3";
-const fields = "grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-3 gap-y-2";
-const buttons = "mt-4 flex flex-wrap gap-2";
+const fields = "grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] content-start items-baseline gap-x-3 gap-y-2";
 
-type Gate = { canWrite: boolean; refusal: string; busy: boolean };
-
-function Block({ title, head, children }: { title: string; head?: ReactNode; children: ReactNode }) {
-  return <div role="group" aria-label={title} className="min-w-0 px-5 py-4 first:pt-0">
-    <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-      <h4 className="text-xs font-medium text-ink2">{title}</h4>
-      <span className="flex flex-wrap items-center gap-x-1.5 text-xs text-ink3">{head}</span>
-    </div>
-    {children}
-  </div>;
-}
-
-/** Keep each path segment together; an oversized segment can wrap within itself. */
 function PathText({ path }: { path: string }) {
   return <>{path.split(/(?<=[\\/])/).map((part, index) => <span key={index} className="inline-block max-w-full align-bottom wrap-anywhere">{part}<wbr /></span>)}</>;
 }
 
 function Exception({ exception }: { exception: NonNullable<HarnessDetailsView["location"]["exception"]> }) {
   const { t } = useTranslation("buddies");
-  return <div className={cn(fields, "mt-3")}>
-    {exception.reason && <><span className={label}>{t("harness.pane.reason")}</span>
-      <span className="wrap-anywhere">{exception.reason}</span></>}
+  return <div className={cn(fields, "col-span-2 mt-1")}>
+    {exception.reason && <><span className={label}>{t("harness.pane.reason")}</span><span className="wrap-anywhere">{exception.reason}</span></>}
     {exception.tried.length > 0 && <>
       <span className={cn(label, "col-span-2")}>{t("harness.pane.tried")}</span>
-      {exception.tried.map((tried, index) => <div key={`${tried.path ?? ""}:${index}`} className="col-span-2 flex flex-col gap-0.5">
+      {exception.tried.map((tried, index) => <div key={`${tried.path ?? ""}:${index}`} className="col-span-2 flex min-w-0 flex-col gap-0.5">
         <code data-slot="harness-path" className="font-mono text-xs wrap-anywhere">{tried.path === null ? t("harness.pane.noPath") : <PathText path={tried.path} />}</code>
         <span className="text-xs text-ink3">{[tried.source, tried.result].filter(Boolean).join(" · ")}</span>
       </div>)}
@@ -47,74 +32,53 @@ function Exception({ exception }: { exception: NonNullable<HarnessDetailsView["l
   </div>;
 }
 
-function LocationBlock({ row, name, view, gate, onCheck, onSavePath }: {
-  row: HarnessHealth; name: string; view: HarnessDetailsView; gate: Gate;
+/** One wide harness card with location and account facts in adjacent columns. */
+export function HarnessDetails({ row, name, canWrite, refusal, busy, onCheck, onSavePath }: {
+  row: HarnessHealth; name: string; canWrite: boolean; refusal: string; busy: boolean;
   onCheck: () => void; onSavePath: (path: string | null) => void;
 }) {
   const { t } = useTranslation("buddies");
-  const [pathOpen, setPathOpen] = useState(false);
-  const { location } = view;
-  const inert = gate.busy || !gate.canWrite;
-  const refusal = gate.refusal || (gate.busy ? t("harness.running") : undefined);
-  return <Block title={t("harness.pane.location")} head={<>
-    <StateMark kind={row.status === "ready" ? "live" : "idle"} />
-    <Hint text={location.exception?.reason ?? undefined}><span tabIndex={0} className={hintTarget}>{statusText(row.status, t)}</span></Hint>
-  </>}>
-    <div className={fields}>
-      <span className={label}>{t("harness.pane.installedVersion")}</span>
-      <span className="tabular-nums">{row.version ?? t("harness.unrecorded")}</span>
-      <span className={label}>{t("harness.pane.verifiedVersion")}</span>
-      <span className="tabular-nums">{row.permissionsVerifiedVersion ?? t("harness.notVerified")}</span>
-      <span className={label}>{t("harness.pane.path")}</span>
-      <span data-slot="harness-path" className="font-mono text-xs wrap-anywhere">{location.path === null ? t("harness.unrecorded") : <PathText path={location.path} />}</span>
-      <span className={label}>{t("harness.pane.source")}</span><span>{location.source}</span>
-      <span className={label}>{t("harness.pane.checked")}</span>
-      <span className="tabular-nums">{location.checked ?? t("harness.unrecorded")}</span>
-      <span className={label}>{t("harness.pane.review")}</span>
-      <Hint text={[location.review.note, location.review.reason].filter(Boolean).join(" ")}>
-        <span tabIndex={0} className={hintTarget}>{location.review.text}</span>
-      </Hint>
-      <span className={label}>{t("harness.pane.web")}</span>
-      <span>{t(row.permissions?.web === "enforced" ? "harness.web.eligible" : "harness.web.ineligible")}</span>
-    </div>
-    <p className="mt-3 text-xs text-ink3">{t(row.permissions?.web === "enforced" ? "harness.web.enforcedDescription" : "harness.web.unenforcedDescription")}</p>
-    {location.exception && <Exception exception={location.exception} />}
-    <div className={buttons}>
-      <Hint text={refusal}><Button variant="outline" aria-disabled={inert || undefined}
-        onClick={onCheck}>{t("harness.check")}</Button></Hint>
-      <Button variant="outline" onClick={() => setPathOpen(true)}>{t("harness.pane.pickPath")}</Button>
-    </div>
-    {pathOpen && <HarnessPathDialog harness={row.harness} name={name} manualPath={row.manualPath} disabled={inert}
-      reason={refusal} onSave={path => { setPathOpen(false); onSavePath(path); }} onClose={() => setPathOpen(false)} />}
-  </Block>;
-}
-
-function AccountBlock({ view }: { view: HarnessDetailsView }) {
-  const { t } = useTranslation("buddies");
-  const { account } = view;
-  return <Block title={t("harness.account.name")}>
-    <div className={fields}>
-      <span className={label}>{t("harness.account.state")}</span>
-      <Hint text={account.reason ?? undefined}><span tabIndex={0} className={hintTarget}>{account.state}</span></Hint>
-      <span className={label}>{t("harness.account.billing")}</span>
-      <span className="flex flex-col">{account.billing.length
-        ? account.billing.map(entry => <span key={entry.provider}>{entry.provider} <span className="text-ink3">{entry.plan}</span></span>)
-        : t("harness.account.plan.unknown")}</span>
-    </div>
-  </Block>;
-}
-
-/** Location and account facts stay visible in the harness sidebar. */
-export function HarnessDetails({ row, name, canWrite, refusal, busy, onCheck, onSavePath }: {
-  row: HarnessHealth; name: string;
-  onCheck: () => void; onSavePath: (path: string | null) => void;
-} & Gate) {
-  const { t } = useTranslation("buddies");
   const view = harnessDetailsView(row, t);
-  const gate = { canWrite, refusal, busy };
-  return <div role="group" aria-label={t("harness.detailsLabel", { name })} data-slot="harness-details"
-    className="text-sm">
-    <LocationBlock row={row} name={name} view={view} gate={gate} onCheck={onCheck} onSavePath={onSavePath} />
-    <AccountBlock view={view} />
+  const { location, account } = view;
+  const [pathOpen, setPathOpen] = useState(false);
+  const inert = busy || !canWrite;
+  const reason = refusal || (busy ? t("harness.running") : undefined);
+  return <div role="group" aria-label={t("harness.detailsLabel", { name })} data-slot="harness-details" className="grid grid-cols-1 gap-x-8 gap-y-3 px-4 pb-4 text-sm sm:px-5 md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+    <div className="col-span-full flex min-h-12 flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2.5">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <h3 id={`harness-title-${row.harness}`} tabIndex={-1} className="flex items-center gap-2 text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+          <HarnessLogo harness={row.harness} />{name}
+        </h3>
+        {row.version && <span data-slot="harness-version" className="text-xs text-ink3 tabular-nums">{row.version}</span>}
+        <span className="text-xs text-ink3" aria-hidden="true">·</span>
+        <span className="inline-flex items-center gap-1.5 text-xs text-ink2"><StateMark kind={row.status === "ready" ? "live" : "idle"} />
+          <Hint text={location.exception?.reason ?? undefined}><span tabIndex={0} className={hintTarget}>{statusText(row.status, t)}</span></Hint>
+        </span>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <Hint text={reason}><Button variant="outline" className="h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={inert || undefined} onClick={onCheck}>{t("harness.check")}</Button></Hint>
+        <Button variant="outline" className="h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" onClick={() => setPathOpen(true)}>{t("harness.pane.pickPath")}</Button>
+      </div>
+    </div>
+      <div role="group" aria-label={t("harness.pane.location")} className={cn(fields, "text-xs")}>
+        <span className={label}>{t("harness.pane.path")}</span>
+        <span className="min-w-0"><span data-slot="harness-path" className="font-mono text-xs text-foreground wrap-anywhere">{location.path === null ? t("harness.unrecorded") : <PathText path={location.path} />}</span>
+          {(location.path !== null || row.manualPath !== null) && <span data-slot="harness-source" className="whitespace-nowrap text-ink3"> · {location.source}</span>}</span>
+        <span className={label}>{t("harness.pane.permissions")}</span>
+        <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span>{t("harness.pane.review")} <Hint text={[location.review.note, location.review.reason].filter(Boolean).join(" ")}><span tabIndex={0} className={cn(hintTarget, "text-foreground")}>{location.review.text}</span></Hint></span>
+          <span className="text-ink3" aria-hidden="true">/</span>
+          <Hint text={t(row.permissions?.web === "enforced" ? "harness.web.enforcedDescription" : "harness.web.unenforcedDescription")}><span tabIndex={0} className={hintTarget}>{t(row.permissions?.web === "enforced" ? "harness.web.summaryEnforced" : "harness.web.summaryUnenforced")}</span></Hint>
+        </span>
+        {location.exception && <Exception exception={location.exception} />}
+      </div>
+      <div role="group" aria-label={t("harness.account.name")} className={cn(fields, "text-xs")}>
+        <span className={label}>{t("harness.account.state")}</span>
+        <Hint text={account.reason ?? undefined}><span tabIndex={0} className={cn(hintTarget, "text-foreground")}>{account.state}</span></Hint>
+        <span className={label}>{t("harness.account.billing")}</span>
+        <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-foreground">{account.billing.length ? account.billing.map(entry => <span key={entry.provider} className="whitespace-nowrap">{entry.provider} <span className="text-ink3">{entry.plan}</span></span>) : <span className="text-ink3">{t("harness.account.plan.unknown")}</span>}</span>
+      </div>
+    {pathOpen && <HarnessPathDialog harness={row.harness} name={name} manualPath={row.manualPath} disabled={inert}
+      reason={reason} onSave={path => { setPathOpen(false); onSavePath(path); }} onClose={() => setPathOpen(false)} />}
   </div>;
 }

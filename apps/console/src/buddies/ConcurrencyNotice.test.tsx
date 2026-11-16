@@ -21,7 +21,7 @@ const languages = [
 
 async function openDrawer(sessionPresent = true) {
   const user = userEvent.setup();
-  window.location.hash = "#buddies/catalog";
+  window.location.hash = "#buddies/models";
   render(<App suppliedApi={fixture(snapshot({ sessionPresent })).api} />);
   await user.click(await screen.findByRole("button", { name: MODEL }));
   return screen.getByRole("region", { name: MODEL });

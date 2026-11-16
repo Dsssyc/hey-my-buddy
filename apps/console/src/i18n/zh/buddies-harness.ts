@@ -1,7 +1,9 @@
 /** Recorded harness settings within the directory. */
 export default {
-  sideTitle: "Harness",
   detailsLabel: "{{name}} 设置",
+  found: "已找到 {{found}} / {{total}}",
+  checkedAt: "检测于 {{time}}",
+  empty: "尚无检测记录。检测 Harness 后会在这里显示状态与设置。",
 
   check: "检测",
   checkAll: "全部检测",
@@ -10,7 +12,6 @@ export default {
   retry: "重试",
   refused: "连接中断或缺少写入资格",
   unrecorded: "未记录",
-  notVerified: "未核对",
   status: {
     ready: "已找到",
     missing: "未找到",
@@ -25,15 +26,11 @@ export default {
     restored: "已恢复自动检测；{{name}} {{status}}",
   },
   pane: {
-    installedVersion: "已安装版本",
-    verifiedVersion: "核实时的版本",
     location: "位置",
+    permissions: "权限",
     path: "路径",
-    source: "来源",
     manual: "手动",
-    checked: "检测",
     review: "只读",
-    web: "只联网",
     pickPath: "指定路径",
     reason: "原因",
     tried: "已尝试的位置",
@@ -48,8 +45,8 @@ export default {
     note: "按 harness 的只读档位声明显示；此处不运行原生调用。",
   },
   web: {
-    eligible: "强制限制",
-    ineligible: "未声明强制限制",
+    summaryEnforced: "只联网·强制限制（可建画像）",
+    summaryUnenforced: "只联网·未强制（不可建画像）",
     enforcedDescription: "只联网档位已声明强制执行，可构建模型画像。",
     unenforcedDescription: "只联网档位未声明强制执行，不能构建模型画像。",
   },

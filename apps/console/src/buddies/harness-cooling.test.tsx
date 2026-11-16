@@ -21,7 +21,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); sessionSt
 
 describe("provider cooldown", () => {
   it("shows only active providers with a neutral status and one clear action each", async () => {
-    await openHarness(fixture({ harnesses: rows() }));
+    await openHarness(fixture({ harnesses: rows() }), "#buddies/models");
     const provider = within(header()).getByText("zai").closest("[data-slot=header-provider]")!;
     expect(within(provider as HTMLElement).getByText(`冷却中 · 约 ${formatCoolingTime(Date.parse(deadline))} 结束`).className).toContain("text-ink3");
     expect(within(header()).getAllByRole("button")).toHaveLength(2);
@@ -33,7 +33,7 @@ describe("provider cooldown", () => {
   it.each([true, false])("reports cleared=%s from the flat reply and refreshes", async cleared => {
     const user = userEvent.setup();
     const f = fixture({ harnesses: rows(), replies: { quota_redetect: () => reply(cleared) } });
-    await openHarness(f);
+    await openHarness(f, "#buddies/models");
     await user.click(clear());
     expect(await screen.findByText(cleared ? "已解除冷却" : "当前未在冷却")).toBeTruthy();
     expect(f.command).toHaveBeenCalledWith("quota_redetect", expect.objectContaining({ harness: "dsh", provider: "zai", requestId: expect.any(String) }), "csrf");
@@ -44,12 +44,12 @@ describe("provider cooldown", () => {
   it.each([true, false])("retries from the header without changing expanded=%s", async expanded => {
     const user = userEvent.setup();
     const f = fixture({ harnesses: rows(), replies: { quota_redetect: () => reply(true) } });
-    await openHarness(f, "#buddies");
+    await openHarness(f, "#buddies/models");
     const fold = foldHandle("DSH");
     if ((fold.getAttribute("aria-expanded") === "true") !== expanded) await user.click(fold);
     await user.click(clear());
     expect(fold.getAttribute("aria-expanded")).toBe(String(expanded));
-    expect(document.querySelector("[data-slot=harness-sidebar] #harness-title-dsh")?.closest("[data-slot=harness-card]")?.querySelector("[data-slot=harness-details]")).toBeTruthy();
+    expect(document.querySelector("[data-slot=harness-card] #harness-title-dsh")?.closest("[data-slot=harness-card]")?.querySelector("[data-slot=harness-details]")).toBeTruthy();
     expect(f.calls).toEqual([{ operation: "quota_redetect", params: expect.objectContaining({ harness: "dsh", provider: "zai" }) }]);
   });
 
@@ -57,7 +57,7 @@ describe("provider cooldown", () => {
     const user = userEvent.setup();
     const replies = [() => { throw new ApiError("NETWORK_ERROR", "回复未知"); }, () => ({}), () => reply(true, true)];
     const f = fixture({ harnesses: rows(), replies: { quota_redetect: () => replies.shift()!() } });
-    await openHarness(f);
+    await openHarness(f, "#buddies/models");
     await user.click(clear());
     await screen.findByRole("alert");
     await user.click(screen.getByRole("button", { name: "重试" }));
@@ -73,18 +73,18 @@ describe("provider cooldown", () => {
   it("retains request identity across an unmount until a known reply", async () => {
     const user = userEvent.setup();
     const f = fixture({ harnesses: rows(), replies: { quota_redetect: () => { throw new ApiError("NETWORK_ERROR", "回复未知"); } } });
-    await openHarness(f); await user.click(clear()); await screen.findByRole("alert");
+    await openHarness(f, "#buddies/models"); await user.click(clear()); await screen.findByRole("alert");
     const id = f.calls[0].params.requestId;
     cleanup();
     const next = fixture({ harnesses: rows(), replies: { quota_redetect: () => reply(false, true) } });
-    await openHarness(next); await user.click(clear()); await screen.findByText("当前未在冷却");
+    await openHarness(next, "#buddies/models"); await user.click(clear()); await screen.findByText("当前未在冷却");
     expect(next.calls[0].params.requestId).toBe(id);
   });
 
   it("honors write permission and does not send from a read-only session", async () => {
     const user = userEvent.setup();
     const f = fixture({ harnesses: rows(), missingSession: true });
-    await openHarness(f);
+    await openHarness(f, "#buddies/models");
     expect(clear().getAttribute("aria-disabled")).toBe("true");
     await user.click(clear());
     expect(f.command).not.toHaveBeenCalled();
@@ -94,7 +94,7 @@ describe("provider cooldown", () => {
     const user = userEvent.setup();
     let finish!: (value: unknown) => void;
     const f = fixture({ harnesses: rows(), replies: { quota_redetect: () => new Promise(resolve => { finish = resolve; }) } });
-    await openHarness(f); await user.click(clear()); await user.click(clear());
+    await openHarness(f, "#buddies/models"); await user.click(clear()); await user.click(clear());
     expect(f.calls).toHaveLength(1);
     await act(async () => finish(reply(true)));
     await screen.findByText("已解除冷却");

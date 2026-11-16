@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ConsoleApi } from "../api";
 import { errorText } from "../api";
 import { harnessName } from "../buddy-display";
@@ -17,8 +17,6 @@ import type { Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { MAX_HISTORY_BUDDIES, BUDDY_PAGE_SIZE, historySourceKey, useBuddyHistory } from "../use-buddy-history";
 import { useViewPreference } from "../view-preferences";
-import { HarnessDetails } from "./HarnessDetails";
-import { HarnessLogo } from "./HarnessLogo";
 import { HarnessHeader } from "./HarnessHeader";
 import { ModelDrawer, buddyRowId } from "./ModelDrawer";
 import { ModelLine } from "./ModelLine";
@@ -26,24 +24,23 @@ import { harnessBlocks, harnessStateText, listedModels } from "./models";
 import type { ModelRow } from "./models";
 import { buddyHash } from "./navigation";
 import type { BuddyLocation } from "./navigation";
-import { useHarnessActions } from "./use-harness-actions";
+import type { useHarnessActions } from "./use-harness-actions";
 
 const liveT = i18n.getFixedT(null, "buddies");
 
 /**
  * One directory, grouped by harness, with a harness sidebar and one model drawer.
  */
-export function CatalogView({ snapshot, editor, api, refresh, active, mutationsAvailable, location, onNavigate, hidden }: {
+export function CatalogView({ snapshot, editor, api, refresh, active, mutationsAvailable, location, onNavigate, hidden, actions }: {
   snapshot: Snapshot; editor: Editor; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
   /** The page is in front and this is the view it shows. */
   active: boolean; mutationsAvailable: boolean;
-  location: BuddyLocation; onNavigate: (next: BuddyLocation) => void; hidden: boolean;
+  location: BuddyLocation; onNavigate: (next: BuddyLocation) => void; hidden: boolean; actions: ReturnType<typeof useHarnessActions>;
 }) {
   const { t } = useTranslation("buddies");
   const [selected, setSelected] = useState<string | null>(null);
   /** The buddy chosen on each model's list; a model keeps its choice while its drawer closes. */
   const [chosen, setChosen] = useState<Record<string, string>>({});
-  const actions = useHarnessActions({ snapshot, api, refresh, mutationsAvailable, sessionWritable: editor.sessionWritable });
   const [query, setQuery] = useState("");
   const [enabledOnly, setEnabledOnly, setEnabledOnlyForView] = useViewPreference("models.enabledOnly");
   const [showUnavailable, setShowUnavailable, setShowUnavailableForView] = useViewPreference("models.showUnavailable");
@@ -95,11 +92,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   // Deep selections cut through local filters without changing the saved preferences.
   useEffect(() => {
     if (!active || !location.target || handledLocation.current === buddyHash(location)) return;
-    if (location.targetKind === "harness") {
-      if (!actions.rows.some(row => row.harness === location.target)) return;
-      setFocusRequest(previous => ({ id: `harness-title-${location.target}`, n: (previous?.n ?? 0) + 1 }));
-      setQuery(""); setEnabledOnlyForView(false);
-    } else {
+    {
       const target = data.buddies.find(buddy => location.targetKind === "model" ? modelServiceKey(buddy) === location.target : buddy.buddyId === location.target);
       if (!target) return;
       const modelService = modelServices(data.buddies).find(row => row.key === modelServiceKey(target))!;
@@ -162,10 +155,10 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const reading = showUnavailable && history.loading;
   const readFailure = showUnavailable ? history.error : "";
   const guard = refused ? refusal : "";
-  return <section hidden={hidden} aria-label={t("sections.catalog")}
+  return <section hidden={hidden} aria-label={t("sections.models")}
     className="view-presence flex min-h-0 flex-1 flex-col bg-background">
       <div data-slot="catalogue-toolbar" className="min-h-12 shrink-0 border-b bg-card px-6 py-2 text-ink2">
-        <div data-slot="catalogue-controls" className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2">
+        <div data-slot="catalogue-controls" className="mx-auto flex max-w-[1040px] min-w-0 flex-wrap items-center gap-x-6 gap-y-2">
           <Input type="search" className="h-8 w-full max-w-full bg-card text-sm text-foreground shadow-none sm:w-[200px]" aria-label={t("models.search")} placeholder={t("models.search")}
             value={query} onChange={event => setQuery(event.target.value)} />
           <div data-slot="catalogue-group" className="flex min-w-0 flex-1 flex-wrap items-center gap-x-6 gap-y-2">
@@ -180,9 +173,6 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
               </label>}
             </div>
             <div data-slot="catalogue-actions" className="ml-auto flex items-center gap-2">
-              <Hint text={actions.refusal || (actions.busy ? t("harness.checkAllBusy") : undefined)}>
-                <Button variant="outline" className="h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={actions.busy || !!actions.refusal || undefined} onClick={() => void actions.run({ kind: "check" })}>{t("harness.checkAll")}</Button>
-              </Hint>
               <Hint text={refusal || (busy ? t("models.discoverBusy") : undefined)}>
                 <Button variant="outline" className="h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={busy || !!refusal || undefined} onClick={() => void discover()}>{t("models.discover")}</Button>
               </Hint>
@@ -190,7 +180,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
           </div>
         </div>
       </div>
-      {(reading || readFailure || (showUnavailable && history.limitReached) || guard || error || note) && <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 border-b px-3 py-2 text-xs sm:px-6">
+      {(reading || readFailure || (showUnavailable && history.limitReached) || guard || error || note) && <div className="shrink-0 border-b px-3 py-2 text-xs sm:px-6"><div className="mx-auto flex max-w-[1040px] flex-wrap items-center gap-x-5 gap-y-1">
         {reading && <p className="text-ink3" role="status">{t("models.reading")}</p>}
         {readFailure && <p className="flex items-center gap-2.5 text-fail" role="alert">{readFailure}
           <Button variant="outline" size="sm" onClick={history.reload}>{t("models.retry")}</Button></p>}
@@ -198,17 +188,14 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
         {guard && <p className="text-ink2" role="status">{guard}</p>}
         {error && <p className="text-fail" role="alert">{error}</p>}
         {note && <p className="text-ink2" role="status">{note}</p>}
-      </div>}
-      {(actions.guard || actions.error || actions.note) && <div data-slot="harness-feedback" className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b bg-card px-3 py-2 text-xs sm:px-6">
+      </div></div>}
+      {active && actions.scope === "models" && (actions.guard || actions.error || actions.note) && <div className="shrink-0 border-b bg-card px-3 py-2 text-xs sm:px-6"><div data-slot="harness-feedback" className="mx-auto flex max-w-[1040px] flex-wrap items-center gap-x-5 gap-y-1">
         {actions.guard && <p role="status">{actions.guard}</p>}
-        {actions.error && <p className="flex flex-wrap items-center gap-2 text-fail" role="alert">{actions.error}
-          {actions.retry && <Button variant="outline" size="sm" onClick={() => void actions.run(actions.retry!)}>{t("harness.retry")}</Button>}</p>}
+        {actions.error && <p className="flex flex-wrap items-center gap-2 text-fail" role="alert">{actions.error}{actions.retry && <Button variant="outline" size="sm" onClick={() => void actions.run(actions.retry!)}>{t("harness.retry")}</Button>}</p>}
         {actions.note && <p role="status">{actions.note}</p>}
-      </div>}
-      <ScrollArea className="min-h-0 flex-1" viewportProps={{ className: "[&>div]:block! min-[1100px]:[&>div]:h-full" }}>
-      <div className="min-[1100px]:flex min-[1100px]:h-full min-[1100px]:min-h-0">
-      <ScrollArea data-slot="catalog-models" className="min-h-0 min-w-0 flex-1 max-[1100px]:overflow-visible!" viewportProps={{ className: "[&>div]:block! max-[1100px]:h-auto max-[1100px]:overflow-visible!" }}>
-        <div className="space-y-3 p-3 sm:p-6">
+      </div></div>}
+      <ScrollArea data-slot="catalog-models" className="min-h-0 min-w-0 flex-1" viewportProps={{ className: "[&>div]:block!" }}>
+        <div className="mx-auto max-w-[1040px] space-y-3 p-3 sm:p-6">
           {sections.map(block => {
             const health = actions.rows.find(row => row.harness === block.harness);
             return <Collapsible asChild key={block.harness} open={!block.folded}
@@ -216,7 +203,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
               <section aria-label={block.name} data-slot="harness-section" className="overflow-clip rounded-(--radius-card) border bg-card">
                 <HarnessHeader block={block} health={health} state={block.state}
                   gate={{ canWrite: !actions.refusal, refusal: actions.refusal, busy: actions.busy }}
-                  onRetry={provider => void actions.run({ kind: "retry", harness: block.harness, provider })} />
+                  onRetry={provider => void actions.run({ kind: "retry", harness: block.harness, provider })} onNavigate={onNavigate} />
                 <CollapsibleContent>
                   {block.models.map(row => <Collapsible key={row.key} open={selected === row.key}>
                     <ModelLine showProvider={block.providers.length > 1} row={row} harnessState={block.state} recorded={recorded} data={data} expanded={selected === row.key} onSelect={() => selectModel(row)} />
@@ -235,28 +222,6 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
             <p className="mt-1.5 text-xs text-ink2">{t(data.buddies.length ? "models.empty.filteredHint" : "models.empty.noneHint")}</p>
           </div>}
         </div>
-        <ScrollBar orientation="horizontal" />
-      </ScrollArea>
-      <ScrollArea data-slot="harness-sidebar" className="min-h-0 border-t bg-sunk min-[1100px]:w-[384px] min-[1100px]:shrink-0 min-[1100px]:border-t-0 min-[1100px]:border-l max-[1100px]:overflow-visible!"
-        viewportProps={{ className: "[&>div]:block! max-[1100px]:h-auto max-[1100px]:overflow-visible!" }}>
-        <h2 className="sr-only">{t("harness.sideTitle")}</h2>
-        <div className="space-y-3 px-3 pt-6 pb-3">
-          {sections.map(block => {
-            const health = actions.rows.find(row => row.harness === block.harness);
-            return health && active ? <div key={block.harness} data-slot="harness-card" aria-labelledby={`harness-title-${block.harness}`} className="rounded-(--radius-card) border bg-card">
-              <h3 id={`harness-title-${block.harness}`} tabIndex={-1}
-                className="flex h-12 items-center gap-2 px-5 text-sm font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset">
-                <HarnessLogo harness={block.harness} />{block.name}
-              </h3>
-              <HarnessDetails row={health} name={block.name}
-                canWrite={!actions.refusal} refusal={actions.refusal} busy={actions.busy}
-                onCheck={() => void actions.run({ kind: "check", harness: block.harness })}
-                onSavePath={path => void actions.run({ kind: "set", harness: block.harness, path })} />
-            </div> : null;
-          })}
-        </div>
-      </ScrollArea>
-      </div>
       </ScrollArea>
   </section>;
 }

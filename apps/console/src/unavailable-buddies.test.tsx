@@ -441,7 +441,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
   const unavailableKey = "hey-my-buddy.console.view.models.showUnavailable";
   function jump(buddyId: string) {
     act(() => {
-      window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(buddyId)}`;
+      window.location.hash = `#buddies/models/buddy/${encodeURIComponent(buddyId)}`;
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
   }
@@ -450,7 +450,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
     const f = fixture();
     for (const buddy of f.snapshot().buddies) buddy.enabled = false;
     const user = userEvent.setup();
-    window.location.hash = "#buddies/catalog";
+    window.location.hash = "#buddies/models";
     let view = render(<App suppliedApi={f.api} />);
     await listed(0, 2);
     await user.click(enabledOnly());
@@ -468,7 +468,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
     expect(localStorage.getItem(enabledKey)).toBe("true");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     view.unmount();
-    window.location.hash = "#buddies/catalog";
+    window.location.hash = "#buddies/models";
     view = render(<App suppliedApi={f.api} />);
     await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "仅显示已启用" }))).toBe("true"));
     expect(checked(showUnavailable())).toBe("false");
@@ -479,7 +479,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
   it("reveals an unavailable Router target without overwriting the manually unchecked filter", async () => {
     const f = fixture({ staleDecision: true });
     const user = userEvent.setup();
-    window.location.hash = "#buddies/catalog";
+    window.location.hash = "#buddies/models";
     let view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);
     await user.click(enabledOnly());
@@ -496,7 +496,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
     expect(localStorage.getItem(enabledKey)).toBe("false");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     view.unmount();
-    window.location.hash = "#buddies/catalog";
+    window.location.hash = "#buddies/models";
     view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);
     expect(checked(enabledOnly())).toBe("false");

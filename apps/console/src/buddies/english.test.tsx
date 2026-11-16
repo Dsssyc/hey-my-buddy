@@ -82,10 +82,10 @@ function world(sessionPresent = true) {
   }));
 }
 
-async function openCatalog(f: ReturnType<typeof world>, hash = "#buddies") {
+async function openCatalog(f: ReturnType<typeof world>, hash = "#buddies/models") {
   window.location.hash = hash;
   render(createElement(App, { suppliedApi: f.api }));
-  return await screen.findByRole("region", { name: "Catalog" });
+  return await screen.findByRole("region", { name: "Models" });
 }
 
 beforeEach(async () => { setLanguageChoice("en"); });
@@ -101,9 +101,11 @@ describe("the catalogue in English", () => {
     const user = userEvent.setup();
     const catalog = await openCatalog(world());
     expect(chinese()).toEqual([]);
-    // Every section's models are unfolded; location and account details stay in the sidebar.
+    const sectionNav = screen.getByRole("navigation", { name: "Sections of the Buddies page" });
+    expect(within(sectionNav).getByRole("link", { name: "Harnesses" })).toBeTruthy();
+    expect(within(sectionNav).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["Harnesses", "Models", "Router", "Evaluation"]);
+    // Every section's models are unfolded.
     for (const fold of [...catalog.querySelectorAll<HTMLElement>("[data-slot=fold-handle]")]) if (fold.getAttribute("aria-expanded") === "false") await user.click(fold);
-    expect(catalog.querySelectorAll("[data-slot=harness-details]").length).toBeGreaterThan(0);
     expect(chinese()).toEqual([]);
     // Every model row open in turn, with every effort of its strip selected.
     for (const row of [...catalog.querySelectorAll<HTMLElement>("[data-slot=model-row] > button")]) {
@@ -119,14 +121,11 @@ describe("the catalogue in English", () => {
     await user.click(document.querySelector<HTMLElement>("[data-slot=model-drawer] [data-slot=buddy-choice] [role=switch][aria-checked=true]")!);
     expect(screen.getByRole("region", { name: "Unsaved changes" })).toBeTruthy();
     expect(chinese()).toEqual([]);
-    // The dialogs the sections open.
-    for (const name of [/^Set path$/]) {
-      await user.click(within(catalog).getAllByRole("button", { name })[0]);
-      await screen.findByRole("dialog");
-      expect(chinese(), String(name)).toEqual([]);
-      await user.keyboard("{Escape}");
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    }
+    await user.click(within(sectionNav).getByRole("link", { name: "Harnesses" }));
+    const harnessView = await screen.findByRole("region", { name: "Harnesses" });
+    await user.click(within(harnessView).getAllByRole("button", { name: "Set path" })[0]);
+    await screen.findByRole("dialog");
+    expect(chinese()).toEqual([]);
   });
 
   it("says nothing in Chinese for a session that cannot write: every refusal and lock", async () => {
@@ -134,7 +133,6 @@ describe("the catalogue in English", () => {
     const catalog = await openCatalog(world(false));
     await user.click(within(catalog).getByRole("button", { name: "Discover models" }));
     expect(await within(catalog).findByText(/authorization has expired/i)).toBeTruthy();
-    await user.click(within(catalog).getByRole("button", { name: "Check all" }));
     await user.click(catalog.querySelector<HTMLElement>("[data-slot=model-row] > button")!);
     expect(chinese()).toEqual([]);
     expect(within(catalog).queryByRole("button", { name: "Manage account" })).toBeNull();

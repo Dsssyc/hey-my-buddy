@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CatalogView } from "./CatalogView";
+import { useHarnessActions } from "./use-harness-actions";
 import { useEditor } from "../use-editor";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "../console-session";
 import { CHECKED_AT, fixture, harness, harnesses, openHarness, snapshot } from "./harness.fixtures";
@@ -34,47 +35,56 @@ afterEach(() => {
 });
 
 describe("the harness sections", () => {
-  it("shows recorded harness states and their details in the sidebar", async () => {
+  it("shows one wide card per recorded harness with status and account groups", async () => {
     const f = fixture();
-    await openHarness(f, "#buddies");
-    expect(document.querySelectorAll("[data-slot=harness-sidebar] [data-slot=harness-card]")).toHaveLength(4);
+    await openHarness(f, "#buddies/harness");
+    expect(document.querySelectorAll("[data-slot=harness-list] [data-slot=harness-card]")).toHaveLength(4);
     expect(document.querySelectorAll("[data-slot=harness-details]")).toHaveLength(4);
-    expect(document.querySelectorAll("[data-slot=harness-section]")[0].getAttribute("aria-label")).toBe("DSH");
+    expect(document.querySelectorAll("[data-slot=harness-card] [data-slot=harness-version]")[0].textContent).toBe("0.4.2");
     for (const [name, state] of [["ZCode", "未找到"], ["Codex", "未登录"], ["Claude Code", "未通过"]]) {
       expect(within(harnessSection(name)).getByText(state)).toBeTruthy();
     }
-    expect(fieldValue(paneBlock("位置", "Codex"), "已安装版本").textContent).toBe("0.157.0");
+    expect(harnessSection("Codex").querySelector("[data-slot=harness-version]")?.textContent).toBe("0.157.0");
     expect(f.command).not.toHaveBeenCalled();
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
   });
 
-  it("keeps harness details visible while model sections fold", async () => {
+  it("retains harness details when switching to and from Models", async () => {
     const user = userEvent.setup();
-    await openHarness(fixture(), "#buddies");
+    await openHarness(fixture(), "#buddies/harness");
     expect(harnessPane("DSH")).toBeTruthy();
     expect(harnessPane("Codex")).toBeTruthy();
-    await user.click(within(harnessSection("DSH")).getByRole("button", { name: /^(展开|收起) DSH$/ }));
+    await user.click(screen.getByRole("link", { name: "模型" }));
+    await screen.findByRole("region", { name: "模型" });
+    await user.click(screen.getByRole("link", { name: "Harness" }));
+    expect(await screen.findByRole("region", { name: "Harness" })).toBeTruthy();
     expect(harnessPane("DSH")).toBeTruthy();
-    expect(harnessPane("Codex")).toBeTruthy();
   });
 
-  it("keeps check feedback below the catalogue toolbar", async () => {
+  it("keeps check feedback below the Harness toolbar", async () => {
     const user = userEvent.setup();
     await openHarness(fixture());
-    await user.click(within(paneBlock("位置", "DSH")).getByRole("button", { name: "检测" }));
-    const line = (await screen.findByText("已检测 DSH：已找到")).closest("[data-slot=harness-feedback]")!;
+    await user.click(within(harnessSection("DSH")).getByRole("button", { name: "检测" }));
+    const feedback = await screen.findByText("已检测 DSH：已找到");
+    const line = feedback.closest("[data-slot=harness-feedback]")!;
     expect(line.className).not.toContain("hidden");
-    expect(document.querySelector("[data-slot=catalogue-toolbar]")).toBeTruthy();
+    expect(document.querySelector("[data-slot=harness-toolbar]")).toBeTruthy();
+    await user.click(screen.getByRole("link", { name: "模型" }));
+    await screen.findByRole("region", { name: "模型" });
+    expect(document.querySelector("[data-slot=harness-feedback]")).toBeNull();
+    await user.click(screen.getByRole("link", { name: "Harness" }));
+    await screen.findByRole("region", { name: "Harness" });
+    expect(await screen.findByText("已检测 DSH：已找到")).toBeTruthy();
   });
 });
 
 describe("models without harness observations", () => {
   it("retains the model catalogue and invents no harness account or health", async () => {
     const f = fixture({ harnesses: [] });
-    await openHarness(f);
-    expect(screen.getByRole("region", { name: "目录" })).toBeTruthy();
+    await openHarness(f, "#buddies/models");
+    expect(screen.getByRole("region", { name: "模型" })).toBeTruthy();
     expect(document.querySelectorAll("[data-slot=harness-details]")).toHaveLength(0);
-    expect(screen.getByRole("button", { name: "全部检测" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "全部检测" })).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
 });
@@ -85,17 +95,17 @@ describe("the location block", () => {
     const f = fixture();
     await openHarness(f);
     const location = paneBlock("位置");
-    expect(fieldValue(location, "已安装版本").textContent).toBe("0.4.2");
+    expect(harnessSection("DSH").querySelector("[data-slot=harness-version]")?.textContent).toBe("0.4.2");
     expect(fieldValue(location, "路径").textContent).toBe("/usr/local/bin/dsh");
-    expect(fieldValue(location, "来源").textContent).toBe("版本管理器（nvm 默认版本）");
-    expect(fieldValue(location, "检测").textContent).toBe(clock(CHECKED_AT));
-    expect(within(location).getByText("已找到")).toBeTruthy();
+    expect(location.querySelector("[data-slot=harness-source]")?.textContent).toContain("版本管理器（nvm 默认版本）");
+    expect(screen.getByText(`检测于 ${clock(CHECKED_AT)}`)).toBeTruthy();
+    expect(within(harnessSection("DSH")).getByText("已找到")).toBeTruthy();
     // Nothing exceptional is said of a harness that is found.
     for (const word of ["原因", "已尝试的位置"]) expect(within(location).queryByText(word)).toBeNull();
     expect(within(harnessPane()).queryByText(/请先|(?<!已)安装/)).toBeNull();
     // The path can always be set, found or not.
-    expect(within(location).getByRole("button", { name: "检测" })).toBeTruthy();
-    await user.click(within(location).getByRole("button", { name: "指定路径" }));
+    expect(within(harnessSection("DSH")).getByRole("button", { name: "检测" })).toBeTruthy();
+    await user.click(within(harnessSection("DSH")).getByRole("button", { name: "指定路径" }));
     expect(await screen.findByRole("dialog", { name: "DSH 路径" })).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
   });
@@ -104,9 +114,9 @@ describe("the location block", () => {
     const f = fixture();
     await openHarness(f);
     const location = paneBlock("位置", "ZCode");
-    expect(within(location).getByText("未找到")).toBeTruthy();
+    expect(within(harnessSection("ZCode")).getByText("未找到")).toBeTruthy();
     expect(fieldValue(location, "原因").textContent).toBe(reasonText({ code: "harness.not-found", params: { operation: "probe" } }));
-    expect(within(location).getByText("未找到").getAttribute("aria-description")).toBe(reasonText({ code: "harness.not-found", params: { operation: "probe" } }));
+    expect(within(harnessSection("ZCode")).getByText("未找到").getAttribute("aria-description")).toBe(reasonText({ code: "harness.not-found", params: { operation: "probe" } }));
     expect(fieldValue(location, "路径").textContent).toBe("未记录");
     const tried = within(location).getByText("已尝试的位置").parentElement!;
     expect([...tried.querySelectorAll("[data-slot=harness-path]")].map(path => path.textContent)).toEqual(["/Applications/ZCode.app/Contents/MacOS/zcode", "/opt/homebrew/bin/zcode"]);
@@ -120,8 +130,8 @@ describe("the location block", () => {
     await openHarness(fixture());
     const location = paneBlock("位置", "Claude Code");
     expect(fieldValue(location, "路径").textContent).toBe("/Users/fixture/.claude/local/claude");
-    expect(fieldValue(location, "来源").textContent).toBe("手动");
-    await user.click(within(location).getByRole("button", { name: "指定路径" }));
+    expect(fieldValue(location, "来源").textContent).toContain("手动");
+    await user.click(within(harnessSection("Claude Code")).getByRole("button", { name: "指定路径" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("textbox", { name: "可执行文件路径" })).toHaveProperty("value", "/Users/fixture/.claude/local/claude");
     expect(within(dialog).getByRole("button", { name: "恢复自动检测" })).toBeTruthy();
@@ -130,7 +140,7 @@ describe("the location block", () => {
   it("offers no restore where no path is stored", async () => {
     const user = userEvent.setup();
     await openHarness(fixture());
-    await user.click(within(paneBlock("位置")).getByRole("button", { name: "指定路径" }));
+    await user.click(within(harnessSection("DSH")).getByRole("button", { name: "指定路径" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).queryByRole("button", { name: "恢复自动检测" })).toBeNull();
     expect(within(dialog).getByRole("textbox", { name: "可执行文件路径" })).toHaveProperty("value", "");
@@ -139,22 +149,21 @@ describe("the location block", () => {
 
 describe("opening a harness by its address", () => {
   it("focuses the addressed harness title in the sidebar", async () => {
-    await openHarness(fixture(), "#buddies/catalog/harness/codex");
+    await openHarness(fixture(), "#buddies/harness/codex");
     expect(harnessPane("Codex")).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(harnessTitle("codex")));
-    expect(harnessTitle("codex").closest("[data-slot=harness-sidebar]")).toBeTruthy();
-    expect(screen.queryByRole("navigation", { name: "目录的内容" })).toBeNull();
+    expect(harnessTitle("codex").closest("[data-slot=harness-card]")).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "模型的内容" })).toBeNull();
   });
 
-  it("opens the addressed harness with the cooling provider", async () => {
-    const rows = [harness({ harness: "dsh", status: "ready", providers: [{ provider: "zai", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 1 }] })];
-    await openHarness(fixture({ harnesses: rows }), "#buddies/catalog/harness/dsh");
-    expect(within(harnessSection("DSH")).getByText("zai")).toBeTruthy();
-    expect(within(harnessSection("DSH")).getByRole("button", { name: "开放重试" })).toBeTruthy();
+  it("opens and focuses the addressed harness card", async () => {
+    await openHarness(fixture(), "#buddies/harness/dsh");
+    await waitFor(() => expect(document.activeElement).toBe(harnessTitle("dsh")));
+    expect(harnessSection("DSH").getAttribute("data-slot")).toBe("harness-card");
   });
 
   it("keeps every harness card visible when the address names no harness", async () => {
-    await openHarness(fixture(), "#buddies/catalog/harness/unknown");
+    await openHarness(fixture(), "#buddies/harness/unknown");
     expect(document.querySelectorAll("[data-slot=harness-details]")).toHaveLength(4);
   });
 });
@@ -165,13 +174,13 @@ describe("checking", () => {
     const f = fixture();
     await openHarness(f);
     const reads = f.snapshotMock.mock.calls.length;
-    await user.click(within(paneBlock("位置", "Codex")).getByRole("button", { name: "检测" }));
+    await user.click(within(harnessSection("Codex")).getByRole("button", { name: "检测" }));
     await screen.findByText("已检测 Codex：已找到");
     // No model call and no new path: one named harness through /api/command.
     expect(f.calls).toEqual([{ operation: "capabilities", params: { refresh: true, harness: "codex" } }]);
     await waitFor(() => expect(f.snapshotMock.mock.calls.length).toBeGreaterThan(reads));
     await waitFor(() => expect(fieldValue(paneBlock("位置", "Codex"), "路径").textContent).toBe("/opt/bin/codex"));
-    expect(within(paneBlock("位置", "Codex")).getByText("9.9.9")).toBeTruthy();
+    expect(harnessSection("Codex").querySelector("[data-slot=harness-version]")?.textContent).toBe("9.9.9");
     // The others were not checked.
     expect(within(harnessSection("ZCode")).getByText("未找到")).toBeTruthy();
   });
@@ -206,7 +215,7 @@ describe("checking", () => {
     const user = userEvent.setup();
     const f = fixture({ failFirstCheck: true });
     await openHarness(f);
-    await user.click(within(paneBlock("位置", "ZCode")).getByRole("button", { name: "检测" }));
+    await user.click(within(harnessSection("ZCode")).getByRole("button", { name: "检测" }));
     await toolbarAlert();
     await user.click(screen.getByRole("button", { name: "重试" }));
     await screen.findByText("已检测 ZCode：已找到");
@@ -221,7 +230,7 @@ describe("checking", () => {
     const checkAll = screen.getByRole("button", { name: "全部检测" });
     await user.click(checkAll);
     await waitFor(() => expect(f.command).toHaveBeenCalledTimes(1));
-    for (const button of [screen.getByRole("button", { name: "全部检测" }), within(paneBlock("位置")).getByRole("button", { name: "检测" })]) {
+    for (const button of [screen.getByRole("button", { name: "全部检测" }), within(harnessSection("DSH")).getByRole("button", { name: "检测" })]) {
       expect(button.getAttribute("aria-disabled")).toBe("true");
       await user.click(button);
     }
@@ -237,7 +246,7 @@ describe("checking", () => {
 
 describe("the path dialog", () => {
   async function openPath(user: ReturnType<typeof userEvent.setup>, name: string) {
-    await user.click(within(paneBlock("位置", name)).getByRole("button", { name: "指定路径" }));
+    await user.click(within(harnessSection(name)).getByRole("button", { name: "指定路径" }));
     return await screen.findByRole("dialog");
   }
 
@@ -278,8 +287,8 @@ describe("the path dialog", () => {
     }]);
     expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() => expect(fieldValue(paneBlock("位置", "ZCode"), "路径").textContent).toBe("/opt/tools/zcode"));
-    expect(fieldValue(paneBlock("位置", "ZCode"), "来源").textContent).toBe("手动");
-    expect(within(paneBlock("位置", "ZCode")).getByText("已找到")).toBeTruthy();
+    expect(fieldValue(paneBlock("位置", "ZCode"), "来源").textContent).toContain("手动");
+    expect(within(harnessSection("ZCode")).getByText("已找到")).toBeTruthy();
   });
 
   it("clears the stored path back to automatic detection with null", async () => {
@@ -294,7 +303,7 @@ describe("the path dialog", () => {
       params: { harness: "claude", path: null },
     }]);
     // Automatic detection still fails here; the row says so, not a stale path.
-    await waitFor(() => expect(within(paneBlock("位置", "Claude Code")).getByText("未找到")).toBeTruthy());
+    await waitFor(() => expect(within(harnessSection("Claude Code")).getByText("未找到")).toBeTruthy());
     expect(fieldValue(paneBlock("位置", "Claude Code"), "路径").textContent).toBe("未记录");
   });
 
@@ -331,7 +340,7 @@ describe("a session that cannot write", () => {
     const user = userEvent.setup();
     const f = fixture({ missingSession: true });
     await openHarness(f);
-    const buttons = [screen.getByRole("button", { name: "全部检测" }), within(paneBlock("位置")).getByRole("button", { name: "检测" })];
+    const buttons = [screen.getByRole("button", { name: "全部检测" }), within(harnessSection("DSH")).getByRole("button", { name: "检测" })];
     for (const button of buttons) {
       expect(button.getAttribute("aria-disabled")).toBe("true");
       expect(button.hasAttribute("disabled")).toBe(false);
@@ -342,7 +351,7 @@ describe("a session that cannot write", () => {
     await user.click(buttons[1]);
     expect(f.command).not.toHaveBeenCalled();
     // The dialogs open to be read, and their actions are inert too.
-    await user.click(within(paneBlock("位置")).getByRole("button", { name: "指定路径" }));
+    await user.click(within(harnessSection("DSH")).getByRole("button", { name: "指定路径" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("button", { name: "保存并检测" }).getAttribute("aria-disabled")).toBe("true");
     await user.type(within(dialog).getByRole("textbox", { name: "可执行文件路径" }), "/opt/tools/zcode");
@@ -361,15 +370,16 @@ describe("a disconnected session", () => {
     const state = snapshot();
     function View() {
       const editor = useEditor(f.api, state, async () => null, false, "连接中断或缺少写入资格");
+      const actions = useHarnessActions({ snapshot: state, api: f.api, refresh: async () => null, mutationsAvailable: false, sessionWritable: editor.sessionWritable });
       return <TooltipProvider><CatalogView snapshot={state} editor={editor} api={f.api} refresh={async () => null} active
-        mutationsAvailable={false} location={{ view: "models" }} onNavigate={() => {}} hidden={false} /></TooltipProvider>;
+        mutationsAvailable={false} location={{ view: "models" }} onNavigate={() => {}} hidden={false} actions={actions} /></TooltipProvider>;
     }
     render(<View />);
-    const button = screen.getByRole("button", { name: "全部检测" });
+    const button = screen.getByRole("button", { name: "发现模型" });
     expect(button.getAttribute("aria-disabled")).toBe("true");
-    expect(button.getAttribute("aria-description")).toBe("连接中断或缺少写入资格");
+    expect(button.getAttribute("aria-description")).toBe("连接中断或没有写入资格，暂时不能发现模型；草稿仍保留。");
     await user.click(button);
-    expect(await screen.findByText("连接中断或缺少写入资格")).toBeTruthy();
+    expect(await screen.findByText("连接中断或没有写入资格，暂时不能发现模型；草稿仍保留。")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
   });
 });
@@ -388,24 +398,25 @@ describe("entering the view", () => {
     const state = snapshot([harness({ harness: "claude", status: "ready" })]);
     function View({ active }: { active: boolean }) {
       const editor = useEditor(f.api, state, async () => null, true, "");
+      const actions = useHarnessActions({ snapshot: state, api: f.api, refresh: async () => null, mutationsAvailable: true, sessionWritable: editor.sessionWritable });
       return <TooltipProvider><CatalogView snapshot={state} editor={editor} api={f.api} refresh={async () => null} active={active}
-        mutationsAvailable location={{ view: "models" }} onNavigate={() => {}} hidden={!active} /></TooltipProvider>;
+        mutationsAvailable location={{ view: "models" }} onNavigate={() => {}} hidden={!active} actions={actions} /></TooltipProvider>;
     }
     const { rerender } = render(<View active />);
     await user.click(screen.getByRole("button", { name: "claude / anthropic / claude-sonnet-5" }));
-    expect(document.querySelector("[data-slot=harness-details]")).toBeTruthy();
+    expect(document.querySelector("[data-slot=harness-details]")).toBeNull();
     expect(document.querySelector("[data-slot=model-drawer]")).toBeTruthy();
     rerender(<View active={false} />);
     expect(document.querySelector("[data-slot=harness-details]")).toBeNull();
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     rerender(<View active />);
-    expect(document.querySelector("[data-slot=harness-details]")).toBeTruthy();
+    expect(document.querySelector("[data-slot=harness-details]")).toBeNull();
     expect(document.querySelector("[data-slot=model-drawer]")).toBeTruthy();
   });
 
-  it("writes that a harness was never checked as not recorded, in its location block", async () => {
+  it("keeps harness settings in the dedicated section", async () => {
     await openHarness(fixture({ harnesses: [harness({ harness: "claude", status: "unknown" })] }));
-    expect(fieldValue(paneBlock("位置"), "检测").textContent).toBe("未记录");
+    expect(document.querySelector("[data-slot=harness-details]")).toBeTruthy();
   });
 });
 
@@ -423,7 +434,7 @@ describe("the account block", () => {
     await openHarness(fixture({ harnesses: withAccount({ status: "logged-out", accountType: null, checkedAt: null,
       reason: { code: "account.login-required", params: {} } }) }));
     const block = paneBlock("账户");
-    expect(block.firstElementChild!.textContent).toBe("账户");
+    expect(block.textContent).toContain("状态");
     expect(fieldValue(block, "状态").textContent).toBe("未登录");
     expect(fieldValue(block, "计费").textContent).toBe("openai 订阅");
     expect(within(block).getByText("未登录").getAttribute("aria-description")).toBe(reasonText({ code: "account.login-required", params: {} }));
@@ -432,12 +443,12 @@ describe("the account block", () => {
 
   it("adds the account's type and when it was checked to its status", async () => {
     await openHarness(fixture({ harnesses: withAccount() }));
-    expect(fieldValue(paneBlock("账户"), "状态").textContent).toBe(`已配置 · ChatGPT · ${clock("2026-09-29T09:00:00.000Z")}`);
+    expect(fieldValue(paneBlock("账户"), "状态").textContent).toBe("已配置 · ChatGPT");
   });
 
   it("writes only that nothing is recorded where there is no account record, and offers nothing to manage", async () => {
     await openHarness(fixture({ harnesses: withAccount() }));
-    expect(paneBlock("账户", "ZCode").textContent).toBe("账户状态未记录计费未知");
+    expect(paneBlock("账户", "ZCode").textContent).toBe("状态未记录计费未知");
     expect(within(paneBlock("账户", "ZCode")).queryByRole("button")).toBeNull();
     expect(harnessSection("ZCode").querySelector("[data-slot=cooling-status]")).toBeNull();
   });

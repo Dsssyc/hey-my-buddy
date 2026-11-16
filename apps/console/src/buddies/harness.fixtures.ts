@@ -47,9 +47,9 @@ export function harnesses(): HarnessHealth[] {
 
 type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
 
-export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
+export function snapshot(rows: HarnessHealth[] = harnesses(), enabled = true): HarnessSnapshot {
   const buddy: Buddy = { effortRank: null, buddyId: mediumId, alias: null, ...sonnet, effort: "medium", available: true,
-    enabled: true, capabilities: ["execution:claude", "decision"], contextWindow: 200_000, description: "", source: "catalog:fixture" };
+    enabled, capabilities: ["execution:claude", "decision"], contextWindow: 200_000, description: "", source: "catalog:fixture" };
   return {
     csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
@@ -68,6 +68,7 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
 type Reply = (params: Record<string, any>) => unknown;
 type FixtureOptions = {
   harnesses?: HarnessHealth[];
+  enabled?: boolean;
   /** No browser session was supplied to the view. */
   missingSession?: boolean;
   failFirstCheck?: boolean;
@@ -77,7 +78,7 @@ type FixtureOptions = {
 };
 
 export function fixture(options: FixtureOptions = {}) {
-  let state = snapshot(options.harnesses);
+  let state = snapshot(options.harnesses, options.enabled);
   if (options.missingSession) state = { ...state, consoleSession: undefined as unknown as Snapshot["consoleSession"] };
   const calls: { operation: string; params: Record<string, any> }[] = [];
   let checksToFail = options.failFirstCheck ? 1 : 0;
@@ -141,8 +142,8 @@ export function fixture(options: FixtureOptions = {}) {
 }
 
 /** Opens the page at an address and waits for the harness view. */
-export async function openHarness(f: ReturnType<typeof fixture>, hash = "#buddies") {
+export async function openHarness(f: ReturnType<typeof fixture>, hash = "#buddies/harness") {
   window.location.hash = hash;
   render(createElement(App, { suppliedApi: f.api }));
-  await screen.findByRole("region", { name: "目录" });
+  await screen.findByRole("region", { name: hash.includes("/models") ? "模型" : "Harness" });
 }

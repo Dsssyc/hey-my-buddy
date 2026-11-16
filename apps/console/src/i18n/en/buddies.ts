@@ -21,9 +21,10 @@ export default {
     dataFlow: "Building a profile sends model names and correspondence candidates to the profile buddy's model provider; the buddy can search public web sources.",
   },
   sections: {
+    harness: "Harnesses",
+    models: "Models",
     evaluation: "Evaluation",
     label: "Sections of the Buddies page",
-    catalog: "Catalog",
     router: "Router",
     summary: "{{n}} harnesses · Enabled {{enabled}} / {{total}}",
   },
@@ -42,6 +43,7 @@ export default {
   unsaved: "Unsaved",
   loginExpired: "Browser authorization has expired and nothing was submitted; authorize this browser again.",
   models: {
+    viewHarness: "View harness",
     search: "Search buddies",
     enabledOnly: "Enabled only",
     showUnavailable: "Show unavailable",

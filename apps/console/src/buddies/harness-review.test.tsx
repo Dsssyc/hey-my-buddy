@@ -7,16 +7,16 @@ import { fieldValue, paneBlock } from "./harness.testing";
 afterEach(() => { cleanup(); sessionStorage.clear(); window.location.hash = ""; document.documentElement.dataset.theme = ""; });
 
 const note = "按 harness 的只读档位声明显示；此处不运行原生调用。";
-const review = () => fieldValue(paneBlock("位置"), "只读");
+const review = () => paneBlock("位置");
 const word = () => within(review()).getByText(/^(强制限制|依照约定|未声明|未知)$/);
 
 describe("declared review level", () => {
-  it("shows installed and verification versions independently, including an unchecked declaration", async () => {
+  it("shows both semantic groups and omits the retired verified-version field", async () => {
     await openHarness(fixture({ harnesses: [harness({ harness: "dsh", status: "ready", version: "0.4.2", permissionsVerifiedVersion: null })] }));
-    const location = paneBlock("位置");
-    expect(fieldValue(location, "已安装版本").textContent).toBe("0.4.2");
-    expect(fieldValue(location, "核实时的版本").textContent).toBe("未核对");
-    expect(screen.getByRole("group", { name: "DSH 设置" }).querySelectorAll(":scope > [role=group]")).toHaveLength(2);
+    const details = screen.getByRole("group", { name: "DSH 设置" });
+    expect(details.textContent).toContain("0.4.2");
+    expect(details.textContent).not.toMatch(/核实时的版本|未核对/);
+    expect(details.querySelectorAll(":scope > [role=group]")).toHaveLength(2);
     expect(within(paneBlock("账户")).queryByRole("button")).toBeNull();
   });
 
@@ -43,9 +43,8 @@ describe("declared review level", () => {
 describe("declared web level", () => {
   it.each([["enforced", "强制限制"], ["convention", "未声明强制限制"]] as const)("shows %s with a visible description", async (web, expected) => {
     await openHarness(fixture({ harnesses: [harness({ harness: "codex", status: "ready", permissions: { web } })] }));
-    expect(fieldValue(paneBlock("位置"), "只联网").textContent).toBe(expected);
-    expect(paneBlock("位置").textContent).toContain(web === "enforced"
-      ? "只联网档位已声明强制执行，可构建模型画像。"
-      : "只联网档位未声明强制执行，不能构建模型画像。");
+    const location = paneBlock("位置");
+    expect(location.textContent).toContain(web === "enforced" ? "只联网·强制限制（可建画像）" : "只联网·未强制（不可建画像）");
+    expect(location.textContent).not.toContain("核实时的版本");
   });
 });

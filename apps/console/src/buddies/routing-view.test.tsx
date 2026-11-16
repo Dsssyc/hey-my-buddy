@@ -106,9 +106,9 @@ describe("the Router list", () => {
     const user = userEvent.setup();
     await openRoles(f);
     const link = within(line(MEDIUM)).getByRole("link", { name: MEDIUM });
-    expect(link.getAttribute("href")).toBe(`#buddies/catalog/buddy/${encodeURIComponent(MEDIUM_ID)}`);
+    expect(link.getAttribute("href")).toBe(`#buddies/models/buddy/${encodeURIComponent(MEDIUM_ID)}`);
     await user.click(link);
-    expect(window.location.hash).toBe(`#buddies/catalog/buddy/${encodeURIComponent(MEDIUM_ID)}`);
+    expect(window.location.hash).toBe(`#buddies/models/buddy/${encodeURIComponent(MEDIUM_ID)}`);
     await waitFor(() => expect(modelButton("claude / anthropic / claude-sonnet-5").getAttribute("aria-expanded")).toBe("true"));
   });
 
@@ -464,9 +464,9 @@ describe("what leaves the roles view out of use", () => {
   it("publishes a catalogue preference without changing Router settings", async () => {
     const f = fixture(snapshot());
     const user = userEvent.setup();
-    window.location.hash = "#buddies/catalog";
+    window.location.hash = "#buddies/models";
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("region", { name: "目录" });
+    await screen.findByRole("region", { name: "模型" });
     await selectModel(user, "claude / anthropic / claude-sonnet-5", "Claude Code");
     await user.click(within(levelPreference("medium")).getByRole("radio", { name: "优先" }));
     await user.click(saveButton());
@@ -519,7 +519,7 @@ describe("what leaves the roles view out of use", () => {
     await user.click(modeOption("快速"));
     expect(listed()).toEqual([MEDIUM]);
     expect(modeOption("审阅").getAttribute("aria-checked")).toBe("true");
-    expect(screen.queryByText("正在保存或读取目录；请稍后修改。")).toBeNull();
+    expect(screen.queryByText("正在保存或读取模型；请稍后修改。")).toBeNull();
     saving.resolve({ published: true,});
     await screen.findByText("设置已保存");
     expect(addButton().getAttribute("aria-disabled")).toBeNull();

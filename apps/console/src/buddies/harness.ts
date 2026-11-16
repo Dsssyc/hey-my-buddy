@@ -84,8 +84,7 @@ export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView
     },
     account: {
       state: parsed ? [accountStatusText(parsed.status, t),
-        parsed.accountType ? t(`harness.account.type.${ACCOUNT_TYPES.find(name => name === parsed.accountType) ?? "unknown"}`) : "",
-        harnessTime(parsed.checkedAt) ?? ""].filter(Boolean).join(" · ") : t("harness.unrecorded"),
+        parsed.accountType ? t(`harness.account.type.${ACCOUNT_TYPES.find(name => name === parsed.accountType) ?? "unknown"}`) : ""].filter(Boolean).join(" · ") : t("harness.unrecorded"),
       billing: Object.entries(row.billingByProvider ?? {}).map(([provider, fact]) =>
         ({ provider, plan: t(`harness.account.plan.${PLANS.find(name => name === fact?.kind) ?? "unknown"}`) })),
       reason: parsed?.reason ? reasonText(parsed.reason) : null,

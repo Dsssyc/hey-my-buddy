@@ -362,7 +362,7 @@ describe("a level's own preference", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
     window.location.hash = "#settings";
     await waitFor(() => expect(screen.queryByRole("radiogroup", { name: "medium 的偏好" })).toBeNull());
-    window.location.hash = "#buddies/catalog";
+    window.location.hash = "#buddies/models";
     await waitFor(() => expect(screen.queryByRole("region", { name: SOL })).toBeNull());
     expect(screen.queryByRole("listbox")).toBeNull();
   });

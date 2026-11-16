@@ -2,6 +2,7 @@ import { ReasonMessages } from "../i18n/ReasonMessage";
 import { BuddyName } from "../components/AliasTag";
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
+import { ChevronDownIcon } from "lucide-react";
 import { Hint } from "@/components/hint";
 import { CollapsibleTrigger } from "@/components/ui/collapsible";
 import { UnsavedMark } from "@/components/ui/state-mark";
@@ -51,6 +52,7 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
             </span>
             <span>{row.occupancy} / {Number.isNaN(row.limit) ? "—" : row.limit}</span>
           </>}
+          <ChevronDownIcon data-slot="model-chevron" size={14} aria-hidden="true" className={cn("shrink-0 text-ink3 transition-transform duration-200 motion-reduce:transition-none", expanded && "rotate-180 text-foreground")} />
         </span>
       </button>
     </CollapsibleTrigger>

@@ -1,8 +1,10 @@
 import type zh from "../zh/buddies-harness";
 
 export default {
-  sideTitle: "Harnesses",
   detailsLabel: "{{name}} settings",
+  found: "Found {{found}} / {{total}}",
+  checkedAt: "Checked {{time}}",
+  empty: "No check is recorded yet. Check a harness to see its status and settings here.",
 
   check: "Check",
   checkAll: "Check all",
@@ -11,7 +13,6 @@ export default {
   retry: "Retry",
   refused: "The connection is lost or this session cannot write",
   unrecorded: "Not recorded",
-  notVerified: "Not verified",
   status: {
     ready: "Found",
     missing: "Not found",
@@ -26,15 +27,11 @@ export default {
     restored: "Automatic detection restored; {{name}}: {{status}}",
   },
   pane: {
-    installedVersion: "Installed version",
-    verifiedVersion: "Verified version",
     location: "Location",
+    permissions: "Permissions",
     path: "Path",
-    source: "Source",
     manual: "Manual",
-    checked: "Checked",
     review: "Read only",
-    web: "Web only",
     pickPath: "Set path",
     reason: "Reason",
     tried: "Locations tried",
@@ -48,8 +45,8 @@ export default {
     note: "Based on the harness's read only declaration; this view makes no native call.",
   },
   web: {
-    eligible: "Enforced",
-    ineligible: "No enforced declaration",
+    summaryEnforced: "Web only: Enforced (profiles)",
+    summaryUnenforced: "Web only: Not enforced (no profiles)",
     enforcedDescription: "The web only level is declared enforced, so this harness can build model profiles.",
     unenforcedDescription: "The web only level is not declared enforced, so this harness cannot build model profiles.",
   },

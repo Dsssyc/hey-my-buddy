@@ -24,7 +24,7 @@ it("publishes setting and clearing an alias through the drawer without republish
     for (const patch of params.buddySettings ?? []) Object.assign(state.buddies.find(buddy => buddy.buddyId === patch.buddyId)!, patch);
     return { published: true };
   });
-  window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(MEDIUM_ID)}`;
+  window.location.hash = `#buddies/models/buddy/${encodeURIComponent(MEDIUM_ID)}`;
   const user = userEvent.setup();
   render(<App suppliedApi={f.api} />);
   const input = await screen.findByRole("textbox", { name: "别名" });
@@ -53,7 +53,7 @@ const reasons: Reason[] = [
 for (const language of ["zh", "en"]) for (const reason of reasons) it(`keeps ${reason.code} under the rejected alias in ${language}`, async () => {
   await i18n.changeLanguage(language);
   const f = fixture(snapshot(), { user_policy_publish: () => { throw new ApiError("INVALID_ARGUMENT", "refused", { buddyId: MEDIUM_ID, reason }); } });
-  window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(MEDIUM_ID)}`;
+  window.location.hash = `#buddies/models/buddy/${encodeURIComponent(MEDIUM_ID)}`;
   render(<App suppliedApi={f.api} />);
   const user = userEvent.setup();
   let input = await screen.findByRole("textbox", { name: language === "zh" ? "别名" : "Alias" });
@@ -125,7 +125,7 @@ it("uses the saved alias in the page-wide blocked-save explanation", async () =>
   state.buddies[0].enabled = false;
   state.buddies[0].alias = "Saved desk";
   const f = fixture(state);
-  window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(MEDIUM_ID)}`;
+  window.location.hash = `#buddies/models/buddy/${encodeURIComponent(MEDIUM_ID)}`;
   render(<App suppliedApi={f.api} />);
   const user = userEvent.setup();
   const input = await screen.findByRole("textbox", { name: "别名" });

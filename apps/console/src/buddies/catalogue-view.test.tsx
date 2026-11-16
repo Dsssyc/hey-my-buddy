@@ -66,7 +66,7 @@ function fixture(state: Snapshot = snapshot(), replies: Record<string, Reply> = 
 }
 
 function open(f: ReturnType<typeof fixture>) {
-  window.location.hash = "#buddies";
+  window.location.hash = "#buddies/models";
   render(<App suppliedApi={f.api} />);
 }
 
@@ -126,11 +126,11 @@ describe("the harness sections", () => {
     expect(section.textContent).toContain("1 个模型");
     expect(section.textContent).toContain("启用 1 / 2");
     expect(section.querySelector("[data-slot=model-row]")).toBeNull();
-    expect(within(catalogue()).getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
+    expect(document.querySelector('[data-slot="harness-details"][aria-label="Claude Code 设置"]')).toBeTruthy();
     await user.type(search(), "no-such-model");
     await listed(0, 0);
     expect(within(catalogue()).getByRole("region", { name: "Claude Code" })).toBe(section);
-    expect(within(catalogue()).getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
+    expect(document.querySelector('[data-slot="harness-details"][aria-label="Claude Code 设置"]')).toBeTruthy();
     await user.clear(search());
     await user.click(screen.getByRole("checkbox", { name: "仅显示已启用" }));
     await listed(0, 0);
@@ -444,7 +444,7 @@ describe("model-keyed evaluation links", () => {
     for (const text of ["Old evaluation", "Wrong harness", "Wrong effort", "Partner evaluation"]) {
       expect(within(detail).queryByText(text)).toBeNull();
     }
-    await user.click(screen.getByRole("link", { name: "目录" }));
+    await user.click(screen.getByRole("link", { name: "模型" }));
     await selectModel(user, "codex / partner / gpt-6-sol", "Codex");
     expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("4 次");
     expect(pane().querySelector("[data-slot=buddy-infrastructure-failures]")).toBeNull();

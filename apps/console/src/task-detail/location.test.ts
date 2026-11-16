@@ -31,7 +31,7 @@ describe("the address of the tasks page", () => {
   });
 
   it("names nothing for another page, and ignores a step that is not a positive number", () => {
-    expect(tasksLocation("#buddies/catalog")).toBeNull();
+    expect(tasksLocation("#buddies/models")).toBeNull();
     expect(tasksLocation("")).toBeNull();
     expect(tasksLocation("#tasks")).toEqual(TASKS_ROOT);
     for (const step of ["0", "-1", "x", "1.5", "01", "10000"]) expect(tasksLocation(`#tasks/macro-1/run-9/${step}`)).toEqual({ macroTaskId: "macro-1", runId: "run-9", step: null });

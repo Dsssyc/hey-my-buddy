@@ -5,15 +5,17 @@ import { HarnessLogo } from "./HarnessLogo";
 import { CoolingHeaderProviders } from "./cooling";
 import { harnessStateText } from "./models";
 import type { HarnessBlock } from "./models";
+import { buddyHash } from "./navigation";
+import type { BuddyLocation } from "./navigation";
 
 const row = "flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-left sm:px-4";
 
 /**
  * The whole head folds models; provider retries sit above its trigger.
  */
-export function HarnessHeader({ block, health, state, gate, onRetry }: {
+export function HarnessHeader({ block, health, state, gate, onRetry, onNavigate }: {
   block: HarnessBlock & { modelCount: number }; health: HarnessHealth | undefined; state: string | null;
-  gate: { canWrite: boolean; refusal: string; busy: boolean }; onRetry: (provider: string) => void;
+  gate: { canWrite: boolean; refusal: string; busy: boolean }; onRetry: (provider: string) => void; onNavigate?: (next: BuddyLocation) => void;
 }) {
   const { t } = useTranslation("buddies");
   const content = <>
@@ -21,6 +23,9 @@ export function HarnessHeader({ block, health, state, gate, onRetry }: {
     <b className="text-base font-semibold">{block.name}</b>
     <CoolingHeaderProviders names={block.providers} providers={health?.providers ?? []} gate={gate} onRetry={onRetry} />
     {state && <span className="text-xs text-ink3">{harnessStateText(state, t)}</span>}
+    {state && onNavigate && <a href={buddyHash({ view: "harness", target: block.harness })}
+      onClick={event => { event.preventDefault(); event.stopPropagation(); onNavigate({ view: "harness", target: block.harness }); }}
+      className="pointer-events-auto rounded-sm px-2 py-0.5 text-xs text-ink2 underline decoration-line2 underline-offset-4 outline-none transition-colors duration-150 hover:text-foreground hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none">{t("models.viewHarness")}</a>}
     {block.folded && <span className="ml-auto text-xs text-ink3 tabular-nums">{t("models.modelCount", { n: block.modelCount })} · {t("models.enabled")} {block.enabled} / {block.total}</span>}
   </>;
   return <div data-slot="harness-header" className="group/header relative flex min-h-12 items-stretch">

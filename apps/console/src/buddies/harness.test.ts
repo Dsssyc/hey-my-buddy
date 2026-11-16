@@ -110,12 +110,12 @@ describe("harness details", () => {
     expect(harnessDetailsView(row({ status: "unhealthy" }), t).location.exception!.reason).toBeNull();
   });
 
-  it("writes the account's status, type and check, the billing of each provider and the guidance", () => {
+  it("writes the account's status and type without repeating its check time, plus billing", () => {
     expect(harnessDetailsView(row(), t).account.state).toBe("未记录");
     const view = harnessDetailsView(row({ account: { ...account, status: "ready", accountType: "chatgpt", checkedAt: "2026-09-29T09:00:00.000Z" },
       billingByProvider: { openai: { kind: "subscription", source: "native", observedAt: "x" }, deepseek: { kind: "metered", source: "native", observedAt: "x" },
         other: { kind: "unknown", source: "native", observedAt: "x" } } }), t).account!;
-    expect(view).toMatchObject({ state: `已配置 · ChatGPT · ${clock("2026-09-29T09:00:00.000Z")}`,
+    expect(view).toMatchObject({ state: "已配置 · ChatGPT",
       billing: [{ provider: "openai", plan: "订阅" }, { provider: "deepseek", plan: "按量" }, { provider: "other", plan: "未知" }] });
     expect(harnessDetailsView(row({ account: { ...account, accountType: "mystery" } }), t).account?.state).toBe("已配置 · 未知");
     expect(harnessDetailsView(row({ account }), t).account?.billing).toEqual([]);

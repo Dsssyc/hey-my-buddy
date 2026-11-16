@@ -5,7 +5,7 @@ import type userEvent from "@testing-library/user-event";
 type User = ReturnType<typeof userEvent.setup>;
 
 /** The inline catalogue: identities belong to rows, efforts to the scale. */
-export const catalogue = () => screen.getByRole("region", { name: "目录" });
+export const catalogue = () => screen.getByRole("region", { name: "模型" });
 export const modelButton = (identity: string) => within(catalogue()).getByRole("button", { name: identity });
 export const queryModel = (identity: string) => within(catalogue()).queryByRole("button", { name: identity });
 export const modelRow = (identity: string) => modelButton(identity).closest<HTMLElement>("[data-slot=model-row]")!;
