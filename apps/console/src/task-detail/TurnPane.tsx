@@ -1,3 +1,4 @@
+import { confirmingStop, ExecutionIssues } from "./ExecutionIssues";
 import { Joined } from "../i18n/Message";
 import { BuddyName } from "../components/AliasTag";
 import { useTranslation } from "react-i18next";
@@ -74,8 +75,8 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
     : notes.length ? <Joined items={notes} /> : undefined;
   return <Pane tabs={tabs} footer={running ? <LiveActivity className="border-t px-6 py-2.5" activity={attempt?.activity ?? null} stuck={reminders.possiblyStuck} nowMs={ctx.nowMs} /> : undefined} title={
     <PaneTitle title={t("step.turn", { n: index })}
-      state={rejected ? t("turn.rejected") : running ? t("state.running") : failed ? t("state.failed") : unknown ? t("state.unknown") : t("state.ended")}
-      tone={running ? "live" : rejected ? "past" : failed ? "fail" : unknown ? "hand" : "past"}
+      state={confirmingStop(attempt) ? t("state.confirmingStop") : rejected ? t("turn.rejected") : running ? t("state.running") : failed ? t("state.failed") : unknown ? t("state.unknown") : t("state.ended")}
+      tone={confirmingStop(attempt) ? "hand" : running ? "live" : rejected ? "past" : failed ? "fail" : unknown ? "hand" : "past"}
       warnings={[...(reminders.overdue ? [shell("reminders.overdue")] : []), ...(reminders.possiblyStuck ? [shell("reminders.possiblyStuck")] : [])]}
       note={note || undefined}>
       <MomentRange start={step.at} end={span.endAt} itemKey={step.key} label={t("step.turn", { n: index })}/>
@@ -92,6 +93,7 @@ export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?:
         {turn?.sessionId ? <CopyableIdentifier value={turn.sessionId} /> : <span>{t("session.unrecorded")}</span>}
         {turn && <span>· {turn.resumeMode === "native-session" ? t("session.resumed") : t("session.fresh")}</span>}
       </span>} />
+    <ExecutionIssues attempt={attempt} />
     {none && <>
       <Section name={t("delivery.access")}>{turn.access}</Section>
       <Section name={t("delivery.cwd")}><code>{ctx.workflow.cwd ?? ctx.view.task.cwd}</code></Section>

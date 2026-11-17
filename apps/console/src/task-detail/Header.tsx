@@ -1,3 +1,4 @@
+import { confirmingStop } from "./ExecutionIssues";
 import { cn } from "cn";
 import { useEffect, useState } from "react";
 import { ArrowLeft, RefreshCw } from "lucide-react";
@@ -18,7 +19,7 @@ export function DetailBack({ onBack }: { onBack: () => void }) {
   return <Button variant="ghost" size="icon-sm" data-slot="detail-back" aria-label={t("back")} onClick={onBack}><ArrowLeft aria-hidden="true"/></Button>;
 }
 
-export type StateWord = { key: "running" | "stopping" | "unknown" | "queued" | "paused" | "host" | "lead" | "failedHost" | "cancelledHost" | "failedLead" | "cancelledLead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "paused" | "hand" | "review" | "done" | "fail" | "idle" };
+export type StateWord = { key: "confirmingStop" | "running" | "stopping" | "unknown" | "queued" | "paused" | "host" | "lead" | "failedHost" | "cancelledHost" | "failedLead" | "cancelledLead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "paused" | "hand" | "review" | "done" | "fail" | "idle" };
 
 const queueReasons = [
   "awaiting-execution", "capacity", "model-capacity", "cwd-overlap", "capability-mismatch",
@@ -85,7 +86,8 @@ export function Header({ view, workflow, turns, endMs, error, busy, onRefresh, o
   const refresh = () => { setTurning(true); onRefresh(); };
   const title = taskTitle(view.task);
   const text = title.source === "none" ? t("untitled") : title.fullText;
-  const word = stateWord(view.task, view.lead, workflow?.state, workflow?.hostConclusion?.executionStatus ?? null);
+  const word: StateWord = confirmingStop(view.attempt) ? { key: "confirmingStop", mark: "live" }
+    : stateWord(view.task, view.lead, workflow?.state, workflow?.hostConclusion?.executionStatus ?? null);
   const queueReason = word.key === "queued" ? queueReasonKey(view.task.queueReason) : null;
   const modelService = view.task.lineage?.buddy ?? workflow?.buddy;
   const reminders = view.attempt ?? { overdue: false, possiblyStuck: false };
@@ -108,7 +110,7 @@ export function Header({ view, workflow, turns, endMs, error, busy, onRefresh, o
         </dl>
         <div className="flex shrink-0 items-center gap-2 @max-[650px]:ml-auto">
           <Hint text={word.key === "stopping" && workflow?.shutdown ? t("acceptance.unconfirmed", { n: workflow.shutdown.unconfirmedCount }) : undefined}>
-            <span data-slot="detail-status" tabIndex={word.key === "stopping" ? 0 : undefined} className={cn("inline-flex items-center gap-1.5 text-xs whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring", word.mark === "hand" || word.mark === "review" ? "text-hand" : word.mark === "live" ? "text-ink state-breathe" : word.mark === "fail" ? "text-fail" : "text-ink2")}><StateMark kind={word.mark} breathing={word.mark === "live" || word.mark === "paused" && !view.task.shutdownConfirmed}/>{t(`state.${word.key}`)}</span>
+            <span data-slot="detail-status" tabIndex={word.key === "stopping" ? 0 : undefined} className={cn("inline-flex items-center gap-1.5 text-xs whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring", word.key === "confirmingStop" || word.mark === "hand" || word.mark === "review" ? "text-hand" : word.mark === "live" ? "text-ink state-breathe" : word.mark === "fail" ? "text-fail" : "text-ink2")}><StateMark kind={word.mark} breathing={word.mark === "live" || word.mark === "paused" && !view.task.shutdownConfirmed}/>{t(`state.${word.key}`)}</span>
           </Hint>
           {queueReason && <span data-slot="detail-queue-reason" className="max-w-64 text-xs leading-snug text-ink3">{t(`queueReason.${queueReason}`)}{queueReason === "model-capacity" && modelService && <> · {modelService.harness} / {modelService.provider} / {modelService.model}</>}</span>}
           {reminders.overdue && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.overdue")}</span>}

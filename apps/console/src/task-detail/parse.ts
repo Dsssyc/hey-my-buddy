@@ -526,6 +526,17 @@ function parseAttempt(task: Rec): Attempt | null {
   };
   return {
     attemptId, active,
+    executionState: str(attempt.executionState, "task.selectedAttempt.executionState"),
+    issues: list(attempt.issues, "task.selectedAttempt.issues").map(value => {
+      const issue = rec(value, "task.selectedAttempt.issues");
+      const observedAt = str(issue.observedAt, "task.selectedAttempt.issues.observedAt");
+      if (!Number.isFinite(Date.parse(observedAt))) refuse("task.selectedAttempt.issues.observedAt");
+      return {
+        stage: str(issue.stage, "task.selectedAttempt.issues.stage"),
+        code: str(issue.code, "task.selectedAttempt.issues.code"),
+        message: str(issue.message, "task.selectedAttempt.issues.message"), observedAt,
+      };
+    }),
     startedAt: strOrNull(attempt.startedAt, "task.selectedAttempt"), finishedAt: strOrNull(attempt.finishedAt, "task.selectedAttempt"),
     error: strOrNull(attempt.error, "task.selectedAttempt"),
     releaseReason: reasonOrNull(attempt.releaseReason, "task.selectedAttempt.releaseReason"),

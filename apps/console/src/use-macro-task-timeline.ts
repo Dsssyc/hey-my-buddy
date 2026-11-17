@@ -59,7 +59,10 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
       // carries the older source fact. Without a response date the local
       // clock at read completion stands in (justified: the console is local).
       const verifiedAt = verifiedAtMs ?? Date.now();
-      setDisplayObservedAt(new Date(verifiedAt).toISOString());
+      // HTTP Date truncates milliseconds; verification cannot precede the body's
+      // own observation, including spans or events created within that second.
+      const observedAtMs = Date.parse(next.observedAt);
+      setDisplayObservedAt(new Date(Number.isFinite(observedAtMs) ? Math.max(verifiedAt, observedAtMs) : verifiedAt).toISOString());
       // Merge from the last accepted data before setData: the state updater may
       // be deferred by React, so new-row labels cannot depend on its output.
       const previous = dataRef.current;

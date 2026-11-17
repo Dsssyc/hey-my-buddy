@@ -1,3 +1,4 @@
+import { confirmingStop, ExecutionIssues } from "./ExecutionIssues";
 import { BuddyName, BuddyIdentityName, accessibleBuddyName, useBuddies } from "../components/AliasTag";
 import { useTranslation } from "react-i18next";
 import { ReasonMessage } from "../i18n/ReasonMessage";
@@ -33,12 +34,13 @@ export function RoutingPane({ step, ctx, tabs }: { step: Step; ctx: Context; tab
   const notCalled = entry?.source === "single-candidate" || entry?.source === "no-candidate";
   const mode = span.routing?.routingMode ?? null;
   const usage = span.routing?.usage ?? null;
+  const attempt = ctx.view.attempt?.attemptId === span.attemptId ? ctx.view.attempt : null;
   const running = step.outcome === "running";
   const failed = step.outcome === "failed";
-  const state = running ? t("state.running") : failed ? t("state.failed") : step.outcome === "unknown" ? t("state.unknown")
+  const state = confirmingStop(attempt) ? t("state.confirmingStop") : running ? t("state.running") : failed ? t("state.failed") : step.outcome === "unknown" ? t("state.unknown")
     : step.outcome === "abstention" ? t("routing.abstained") : t("state.ended");
   return <Pane tabs={tabs} title={
-    <PaneTitle title={t("step.routing")} state={state} tone={running ? "live" : failed ? "fail" : step.outcome === "unknown" ? "hand" : "past"} note={failed && span.error ? span.error : undefined}>
+    <PaneTitle title={t("step.routing")} state={state} tone={confirmingStop(attempt) ? "hand" : running ? "live" : failed ? "fail" : step.outcome === "unknown" ? "hand" : "past"} note={failed && span.error ? span.error : undefined}>
       <MomentRange start={step.at} end={span.endAt} itemKey={step.key} label={t("step.routing")}/>
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>}>
@@ -49,6 +51,7 @@ export function RoutingPane({ step, ctx, tabs }: { step: Step; ctx: Context; tab
         <span>{t("routing.elapsed", { time: usage?.elapsedMs != null ? formatDuration(usage.elapsedMs, "fine") : t("unknown") })}</span>
         <span>{t("routing.toolCalls", { n: usage?.toolCalls ?? t("unknown") })}</span>
       </span>} />
+    <ExecutionIssues attempt={attempt} />
     <Section name={t("routing.chosen")}><div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <span className="font-mono text-xs"><BuddyName buddy={span.routing?.selectedBuddy}>{quad(span.routing?.selectedBuddy) ?? unrecorded}</BuddyName></span>
       {entry?.exploration.quota && entry.exploration.reselected && <Hint text={<Message ns="taskDetail" id="routing.preferredBuddy" values={{ buddy: <BuddyIdentityName buddy={preferred} empty={unrecorded} /> }} />} description={t("routing.preferredBuddy", { buddy: accessibleBuddyName(quad(preferred), preferred) ?? unrecorded })}>
