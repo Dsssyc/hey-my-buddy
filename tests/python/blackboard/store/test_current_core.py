@@ -26,6 +26,25 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 
 
 class CurrentCoreTests(BoardTestCase):
+    def test_current_modules_do_not_import_frozen_schema_steps(self):
+        source = Path(__file__).resolve().parents[4] / "src" / "hey_my_buddy"
+        frozen_module = re.compile(r"^schema_\d+_\d+$")
+        imports = []
+        for path in source.rglob("*.py"):
+            if path.name == "upgrade.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    modules = [node.module] if node.module else []
+                else:
+                    continue
+                imports.extend((path, node.lineno, module) for module in modules
+                               if module and any(frozen_module.fullmatch(part) for part in module.split(".")))
+        self.assertEqual(imports, [])
+
     def test_frozen_schema_steps_import_only_the_standard_library(self):
         source = Path(__file__).resolve().parents[4] / "src" / "hey_my_buddy" / "blackboard" / "store"
         for name in ("schema_30_31.py", "schema_31_32.py", "schema_32_33.py", "schema_33_34.py", "schema_34_35.py", "schema_35_36.py", "schema_36_37.py", "schema_37_38.py", "schema_38_39.py", "schema_39_40.py", "schema_40_41.py"):

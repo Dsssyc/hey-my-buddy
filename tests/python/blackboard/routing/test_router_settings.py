@@ -4,8 +4,11 @@ import unittest
 import threading
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.routing.router_settings import DEFAULT_ROUTER_SETTINGS, validate_router_settings_patch
-from hey_my_buddy.blackboard.store.schema_37_38 import MAX_MODEL_RESPONSE_WAIT_SECONDS
+from hey_my_buddy.blackboard.routing.router_settings import (
+    DEFAULT_ROUTER_SETTINGS,
+    MAX_MODEL_RESPONSE_WAIT_SECONDS,
+    validate_router_settings_patch,
+)
 
 BUDDY = "codex:openai:example:high"
 RETRY_MAX_SECONDS = 2147483647

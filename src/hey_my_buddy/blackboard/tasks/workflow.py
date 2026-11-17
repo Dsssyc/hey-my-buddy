@@ -3206,27 +3206,51 @@ class WorkflowCoordinator:
             self.board.events_wait({"after": head, "timeoutMs": max(1, int(min(1, deadline-time.monotonic())*1000)), "limit": 1})
         for original in reversed(scope):
             run_id = original["run_id"]
-            try:
-                with self.db.read() as connection:
-                    run = self._run_row(connection, run_id)
-                    if run["state"] in ("accepted", "concluded", "delivered"):
-                        continue
+            with self.db.read() as connection:
+                run = self._run_row(connection, run_id)
+                if run["state"] in ("accepted", "concluded", "delivered"):
+                    continue
+                try:
                     self._expect_current(run, original)
+                except BoardError as error:
+                    if error.code == "CONFLICT" and error.message == "The micro task changed while preparing the action; get it again":
+                        continue
+                    raise
+                try:
                     task = self._conclude_precheck(connection, run, None)
-                    work = self._conclude_seal_work(connection, run, task)
-                sealed = self._seal_conclusion(run_id, work)
-                with self.db.write() as connection:
-                    current = self._run_row(connection, run_id)
+                except BoardError as error:
+                    if error.code in ("SHUTDOWN_UNCONFIRMED", "CONFLICT"):
+                        continue
+                    raise
+                work = self._conclude_seal_work(connection, run, task)
+            sealed = self._seal_conclusion(run_id, work)
+            with self.db.write() as connection:
+                current = self._run_row(connection, run_id)
+                if current["state"] in ("accepted", "concluded", "delivered"):
+                    continue
+                try:
                     self._expect_current(current, run)
-                    self._conclude_record(connection, run_row=current, task=None, actor=actor, now=self.now(),
-                        note=request["note"], reason=make_reason("macro-task-ended"), sealed_record=sealed)
-                    head = self.board._head_of(connection)
-                self.board._notify(head)
+                except BoardError as error:
+                    if error.code == "CONFLICT" and error.message == "The micro task changed while preparing the action; get it again":
+                        continue
+                    raise
+                try:
+                    task = self._conclude_precheck(connection, current, None)
+                except BoardError as error:
+                    if error.code in ("SHUTDOWN_UNCONFIRMED", "CONFLICT"):
+                        continue
+                    raise
+                self._conclude_record(connection, run_row=current, task=task, actor=actor, now=self.now(),
+                    note=request["note"], reason=make_reason("macro-task-ended"), sealed_record=sealed)
+                head = self.board._head_of(connection)
+            self.board._notify(head)
+            try:
                 self._reclaim_checkout(run_id=run_id)
-            except BoardError:
-                # Missing stop proof or a Host race leaves this item unconcluded.
-                # Reclamation failures retain the conclusion for scheduled cleanup.
-                continue
+            except BoardError as error:
+                if error.code not in ("NOT_READY", "CONFLICT", "WORKSPACE_BUSY", "WORKSPACE_LOCKED",
+                                      "STORAGE_BUSY", "TASK_DELETING", "WORKSPACE_REPOSITORY_NOT_FOUND"):
+                    raise
+                # The conclusion is committed; scheduled reclamation can retry these blockers.
         with self.db.write() as connection:
             receipt = self.board._receipt_response(connection, self.board._receipt_entry(connection, command_id, "macro_task.end", request))
             if receipt is not None:
@@ -6254,9 +6278,19 @@ class WorkflowCoordinator:
             "workspace_facts_role,state,created_at) VALUES(?,?,?,'manual',?,?,?,'recorded',?)",
             (identifier, run["run_id"], run["run_id"], turn["turn_id"], text,
              "none" if run["checkout"] == "none" else "pending", now))
-        # This automatic continuation represents the console pause action;
-        # the original browser identity stays on macro_task.paused's audit event.
-        actor = {"role": "console", "id": "pause"}
+        group = connection.execute(
+            f"SELECT group_id FROM ({macro_tasks.RUN_GROUPS_SQL}) WHERE run_id=?",
+            (run["run_id"],),
+        ).fetchone()
+        paused = connection.execute(
+            "SELECT actor_role,actor_id FROM events WHERE kind='macro_task.paused'"
+            " AND json_extract(payload_json,'$.macroTaskId')=? ORDER BY seq DESC LIMIT 1",
+            (group["group_id"],),
+        ).fetchone()
+        actor = ({"role": paused["actor_role"], "id": paused["actor_id"]}
+                 if paused is not None and paused["actor_role"] is not None else None)
+        if actor is None:
+            actor = {"role": "workflow", "id": "auto"}
         self._requeue(connection, self.board._task_row(connection, {"runId": run["run_id"]}), run,
                       actor=actor, now=now, continuation_id=identifier)
         connection.execute("UPDATE workflow_runs SET current_attempt_id=NULL WHERE run_id=?", (run["run_id"],))
