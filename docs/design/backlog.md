@@ -4,13 +4,11 @@
 
 ## 控制台
 
-**时间轴轮询的同一整秒内有新事件或新片段时，“现在”竖线与空闲折叠会短暂消失一轮。**（2026-11-16 开发者核对 0.69.7 控制台“现在”刻度线时 Host 实测接口查出） `console/server.py` 发出的标准 HTTP `Date` 响应头按 RFC 9110 只有整秒精度（`.000Z`），而时间轴响应体里的 `observedAt` 及片段、事件时间戳是毫秒精度；`apps/console/src/use-macro-task-timeline.ts` 直接用 `verifiedAtMs` 生成 `displayObservedAt`，没有对 `Date.parse(next.observedAt)` 取 `Math.max`，`TaskWork.tsx` 又拿它覆盖传给 `timelineScaleInput` 的 `observedAt`。一旦新片段或新事件落在轮询响应所在的同一整秒内（例如 `.250Z`，响应体 `observedAt` 为 `.499Z`），该轮的 `displayObservedAt`（`.000Z`）就比 `domain.endMs` 早，导致这一个 3 秒周期里 `nowAtEnd` 变成 `false`、若有同秒新开的未结束片段还会让 `ordered` 与 `canFold` 一并变成 `false`，下一轮轮询再恢复。改法：`use-macro-task-timeline.ts` 计算显示时刻时对响应体自身的 `observedAt` 取 `Math.max`，并补一条单测钉住整秒截断下的未结束时间轴。
-
 **排队的微任务说不出是被哪个微任务挡住。**（2026-11-09 开发者看到另一个会话的微任务“画 Fig. 12 与 F1 表”排在空闲的 gpt-6.1-sol 上，问为什么；Host 只读核对过日常黑板） 排队的原因随 0.67.1 写成了一句短话（例如“该工作目录正被其他微任务使用”），但读取只给 `queueReason`，不给占着资源的是哪个微任务：服务在 `store._admission_blocker` 里知道占着目录的认领属于哪个任务，任务读取（`workflow.py` 的任务视图，Host 的 `get` 也用它）没有带出来。建议在任务读取里加上挡住它的微任务（标识与标题），控制台写出名字并能点过去；这是 Host 一侧读取的变化，属于契约，随下一次动契约的批次做。
 
 **按项目分组的宏任务列表还需在大规模数据下重测。** 当前 `macro_tasks.py` 用限定本页的 `PAGE_HISTORY_SQL` 派生摘要，`use-macro-task-list.ts` 让前台动作中断后台轮询、304 不重提交可见列表，`macro-task-display.ts` 复用日期格式器；列表按项目分组、首屏每组 5 条。旧的 105 个宏任务测量已不能代表当前行为；[0.56.4 的验收](../acceptance/installs/0.56.4.md)也只复测了服务端。剩余工作是在当前分组与分页方式下，以 1000 个宏任务等规模重测首屏、连续翻页与持续变化时的浏览器渲染，再据结果决定是否需要虚拟化或按资源版本增量拉取。
 
-**执行上的问题要让控制台也知道。**（2026-10-25 开发者讨论 E 的“停止证明不了”时定：不为那一种情形单设状态，改成一条一般的做法） Host 一侧与 Lead 的唤醒随 0.63.0 于 2026-11-06 安装：新出现的执行或服务问题让 `await` 以 `issue` 返回一次，Lead 的唤醒与 `await` 用同一个“新消息”的定义（[ADR-022](../decisions/022-expected-duration-and-graceful-stop.md) 与 [ADR-026](../decisions/026-delegation-authority.md) 2026-10-25 的补充，[ADR-032](../decisions/032-host-interface-delegation-loop.md) 第 8 条）。还要做的有两件。一是微任务详情显示这次执行当前的问题，用已有的原因文字：`get` 的 `selectedAttempt.issues` 已经返回它们，控制台不显示；native 停止永远证明不了的 attempt 停在 `finalizing`，控制台只显示进行中。二是叫醒回合已经结束的 Host（2026-10-14 的 Host 门铃）：Codex 从 0.149.0 起有 `codex queue`（我们 10-14 在 CLI 与 app 上实测过），0.164.0 又让排进的消息能打断回合里的睡眠工具；缺的是我们的接法（谁排消息、Host 怎样知道自己会话的标识、等待进程能否活过回合），见[调研记录](../research/2026-10-26-codex-sleep-and-queue-wake.md)。
+**叫醒回合已经结束的 Host。** Host 一侧与 Lead 在 `await` 期间的新问题唤醒随 0.63.0 安装（[ADR-022](../decisions/022-expected-duration-and-graceful-stop.md)、[ADR-026](../decisions/026-delegation-authority.md) 2026-10-25 补充、[ADR-032](../decisions/032-host-interface-delegation-loop.md) 第 8 条），控制台微任务详情展示 `selectedAttempt.issues` 与未确认停止的 `finalizing` 状态随 [0.69.9](../acceptance/installs/0.69.9.md) 安装。剩余的是叫醒回合已经结束的 Host（2026-10-14 的 Host 门铃）：Codex 从 0.149.0 起有 `codex queue`（我们 10-14 在 CLI 与 app 上实测过），0.164.0 又让排进的消息能打断回合里的睡眠工具；缺的是我们的接法（谁排消息、Host 怎样知道自己会话的标识、等待进程能否活过回合），见[调研记录](../research/2026-10-26-codex-sleep-and-queue-wake.md)。
 
 **服务冷启动与升级启动的固定等待，在忙机器上可能太短。** `protocol/transport.py` 仍为冷启动设置 20 秒、首次安装时设置 300 秒的等待，`install/upgrade.py` 启动新服务的等待为 45 秒。尚未量清忙机器上的等待分布；先量出在哪一步到时，再决定是否调整时限及失败后的重试提示。
 
@@ -18,15 +16,9 @@
 
 ## 安装与存储
 
-**现在的形式从冻结的升级步骤里取定义。**（2026-11-11 Host 整理 architecture.md 的表清单时读代码记下） `blackboard/store/db.py` 建新板用的 `ROUTER_SETTINGS_DDL` 从 `schema_37_38.py` 导入，`routing/router_settings.py` 的 `DEFAULT_MODEL_RESPONSE_WAIT_SECONDS` 与 `MAX_MODEL_RESPONSE_WAIT_SECONDS` 也从那里导入。`AGENTS.md` 要求每一步带着自己的定义、不导入现在的代码；反过来的依赖没有写明，却一样会卡住以后的改动：哪天改 `router_settings` 的形式或这两个默认值，要么去改一个已经在真实黑板上跑过的步骤，要么先把定义搬回来。现在的代码只在这两处导入冻结的步骤。建议：下一个动到路由设置的批次把这三个定义搬回现在的代码，步骤保留它自己的一份。
-
 **从 schema 37 以前的黑板导出样本时，统计按升级下限的规则重算。**（2026-11-06，0.64.0 存储设计的盲审提出，Host 读代码核对过） `tools/export_board_sample.py` 对 37 以前的源改用 30→31 那一步冻结的 `backfill` 重算样本的统计，它不认后来的整合记录格式，判一次通过的依据与源黑板当时的不同。日常黑板已是 37，只影响从更旧的黑板导出。
 
 **删除路径按回合找仓库时，按 `attempt_id` 查事件没有索引。**（2026-11-05 ADR-032 的 P5 验收时 Host 读代码记下，未量） `blackboard/tasks/projects.py` 的 `known_repository_paths` 为每个候选回合执行 `SELECT seq FROM events WHERE attempt_id=? AND kind IN (...) ORDER BY seq DESC LIMIT 1`；`events` 上只有 `(task_id, seq)` 与 `(kind, seq DESC)` 两个索引，这一句大概走 kind 的索引往回扫。删除宏任务与回收时它按项目只算一次，日常还没有觉得慢。建议：先在导出的样本上量一次删除一个大宏任务的耗时，量出问题再改成按 `task_id` 加回合条件查，或者加索引；加索引是存储形式的变化，要随存储批次。
-
-**Windows 上看不到别的进程是否以检出为工作目录。**（2026-10-31 Windows 测试欠账第二批验收时 Opus 独立审查提出，Host 核对过） `require_idle_checkout` 在 Windows 上直接返回，回收先删文件、删到目录时才失败；用户在检出里开着终端时，里面的文件可能已被删掉。办法：先把整个检出目录改名，改名成功才算没人占用，再删改名后的目录。下一批 Windows 的改动里做。
-
-**存储计划“正在变”的树，还缺三处测试。**（2026-10-31 微任务“存储计划不因检出在变而崩”验收时，Opus 独立审查提出，Host 读代码核对过） 代码三处都安全，但没有测试钉住：计划时稳定、`apply` 重新盘点时正在变；`apply` 删除前最后一次核对时正在变；`_finish_pending` 恢复回执时原树正在变。另外 `scandir` 那一支的 `changing` 没有被单独钉住：删掉它，现有测试仍然全绿（可在桩里删掉目录后再建回来）。
 
 **升级样板还有两张表缺少存量。** 当前 `tests/fixtures/upgrade-floor/board.sql` 中 `artifacts` 与 `attempt_received_receipts` 仍为空。下一次改动这两张表的存储形式时，须在同一次改动里扩充生成器，用升级下限的写者生成存量，使升级测试覆盖真实转换。
 
@@ -44,8 +36,6 @@
 **私有发布被中途打断后留下的临时件。** 2026-10-21 阶段 C（统一事实发布）的 Opus 独立审查指出，Host 读代码核对过，都不是那一批引入的：写者在临时文件阶段被杀时，`.agent-credential.json.<hex>.tmp` 一类含凭据的临时件不在 `private_dirs.py` 的 `_CREDENTIAL_FILES` 里，凭据清理不会删它；备份校验在 backups 根下建的 `.verify-*` 目录里有一份解压后的完整黑板，进程被杀后会一直留着。另外，`upgrade.restore` 读备份时不持备份锁，靠 `control-daemon.lock`、`board-owner.lock` 与唯一的 `create` 调用点互斥；这一点写进 operations。
 
 **契约变化的安装回退时，IPC 根删不掉就停在 recovery-required。**（2026-10-30，采用 C-Two 0.10.0 那一批的 Opus 审查，Host 核对过代码） 契约变化的安装在起服务之前重建 `state/ipc`。如果 `rmtree` 每次都失败，例如根里有一个属主没有写权限的子目录，向前起新服务之前就失败，回退时的第二次重建也会失败，安装停在 recovery-required，旧服务没有起来；改动之前，新服务起不来时回退照常能起旧服务。这种根只会是人为改坏的，C-Two 自己也拒绝不私有的根，所以记作顺带项：下次动安装的回退时，看能不能在删除之前就判断根能否删除，删不了就在切换之前停下。
-
-**维护调用的原生目录永远回收不掉。**（2026-10-31，主动回收那一批验收时 Host 只读盘点日常黑板，Opus 审查同样指出） 服务按“验收或结束满三天、停止已证实”回收微任务的原生目录，归属经 `workflow_runs` 或 Router 的 `router_dispatches` 证明；维护面的 Router 调用不挂在任何微任务上，它们的原生目录被列成 owner-unproven，永远留下，每轮回收还要枚举一遍。日常黑板上自 10-28 维护开始以来已有 18 个（共约 0.1 MB），另有 2 个 2026-10-16/17 的 command 根。改法：一条规则管所有黑板任务的原生目录——它所属的工作结束（微任务按验收或结束，Router 调用按它所属的微任务，维护等一次性的任务按自身终态）满三天、停止已证实就回收；归属仍证明不了的才列出。做完之后，每轮枚举的开销也就不再随维护次数增长。
 
 **孤立分配核对引用时仍逐个扫描保留事实。** `reclamation.py` 的 `allocation_plan` 每次把一个候选传给 `_allocation_reference_sets`，同一轮有 k 个候选时仍可能做 k 次全部事实的 JSON 解析；受阻项会缓存到目录或相关任务变化，已经不会每轮无条件重扫。建议先对本轮候选共同扫一次，再在各自锁下确认没有引用的候选，保留现有缓存与引用证明边界。
 
@@ -106,8 +96,6 @@
 **黑板把不知道的输入模态记成只收文本。** DSH CLI 的模型选项没有输入模态，`catalog.py` 却把空列表补成 `["text"]`；Claude Code CLI 直接声明文本，Codex CLI 缺少模态字段时也默认文本。Router 因此拿到未经原生声明支持的 `input:text` 能力。建议原生没有说明时记为未知，不发布相应的 `input:` 能力，再核对真实模态信息的来源。
 
 ## 委派与 Worker
-
-**暂停与结束的两个顺带项。**（[ADR-033](../decisions/033-macro-task-pause-resume-end.md) 已在 0.69.0 装上，[安装记录](../acceptance/installs/0.69.0.md)）一是被暂停的那次续接，发起方写成 `{"role":"console","id":"pause"}`，而这个位置平常写的是控制台会话的 id，改成不用特殊值的写法。二是结束逐项写结论时用 `except BoardError: continue` 接住了所有错误（`blackboard/tasks/workflow.py` 的 `_end_macro_task`）：停止未确认、Host 抢先与回收被挡住是预期的，可封存失败这类意料之外的错误也被吞掉，原因哪里都不留；应当只接住预期的错误码，其余让这次请求失败（Host 2026-11-12 验收时读码看到）。
 
 **执行层的内部规格还留着两个默认值。** `protocol/schemas.py` 的 `normalize_spec` 把未写的 `adapter` 当作 `dsh`、`expectedSeconds` 当作 1800 秒；`routing/decision.py` 也两次补上默认时长。当前 `request_select` 的请求不含必填时长，部分测试确实依赖这些默认值，不能直接删掉。需先明确内部提交与路由请求的必填字段、补齐调用者，再删除无用途的默认值。
 
