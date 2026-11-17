@@ -13,7 +13,7 @@ from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import canonical_json
-from hey_my_buddy.blackboard.store.schema_37_38 import MAX_MODEL_RESPONSE_WAIT_SECONDS
+from hey_my_buddy.blackboard.routing.router_settings import MAX_MODEL_RESPONSE_WAIT_SECONDS
 from hey_my_buddy.errors import BoardError
 
 A = "dsh:fixture:alpha:max"

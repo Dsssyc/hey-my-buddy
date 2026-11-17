@@ -5,7 +5,9 @@ from collections.abc import Mapping, Sequence
 
 from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
-from ..store.schema_37_38 import DEFAULT_MODEL_RESPONSE_WAIT_SECONDS, MAX_MODEL_RESPONSE_WAIT_SECONDS
+
+DEFAULT_MODEL_RESPONSE_WAIT_SECONDS = 60
+MAX_MODEL_RESPONSE_WAIT_SECONDS = 86400
 
 FIELDS = frozenset({"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "modelResponseWaitSeconds",
                     "maintenanceBuddyId", "maintenanceIntervalSeconds", "profileBuddyId", "explorationEvery"})
