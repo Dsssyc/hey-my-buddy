@@ -130,6 +130,10 @@ npm --prefix apps/console test
 
 [AGENTS.md](AGENTS.md) covers the repository's invariants, layout and checks. Report problems in [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues).
 
+## Acknowledgements
+
+Thanks to the [LINUX DO](https://linux.do/) community for providing an open space for technical discussion and open-source sharing.
+
 ## License
 
 [MIT](LICENSE)

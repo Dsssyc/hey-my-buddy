@@ -34,6 +34,8 @@
 
 ## 控制台
 
+**时间轴轮询的同一整秒内有新事件或新片段时，“现在”竖线与空闲折叠会短暂消失一轮。**（2026-11-16 开发者核对 0.69.7 控制台“现在”刻度线时 Host 实测接口查出） `console/server.py` 发出的标准 HTTP `Date` 响应头按 RFC 9110 只有整秒精度（`.000Z`），而时间轴响应体里的 `observedAt` 及片段、事件时间戳是毫秒精度；`apps/console/src/use-macro-task-timeline.ts` 直接用 `verifiedAtMs` 生成 `displayObservedAt`，没有对 `Date.parse(next.observedAt)` 取 `Math.max`，`TaskWork.tsx` 又拿它覆盖传给 `timelineScaleInput` 的 `observedAt`。一旦新片段或新事件落在轮询响应所在的同一整秒内（例如 `.250Z`，响应体 `observedAt` 为 `.499Z`），该轮的 `displayObservedAt`（`.000Z`）就比 `domain.endMs` 早，导致这一个 3 秒周期里 `nowAtEnd` 变成 `false`、若有同秒新开的未结束片段还会让 `ordered` 与 `canFold` 一并变成 `false`，下一轮轮询再恢复。改法：`use-macro-task-timeline.ts` 计算显示时刻时对响应体自身的 `observedAt` 取 `Math.max`，并补一条单测钉住整秒截断下的未结束时间轴。
+
 **排队的微任务说不出是被哪个微任务挡住。**（2026-11-09 开发者看到另一个会话的微任务“画 Fig. 12 与 F1 表”排在空闲的 gpt-6.1-sol 上，问为什么；Host 只读核对过日常黑板） 排队的原因随 0.67.1 写成了一句短话（例如“该工作目录正被其他微任务使用”），但读取只给 `queueReason`，不给占着资源的是哪个微任务：服务在 `store._admission_blocker` 里知道占着目录的认领属于哪个任务，任务读取（`workflow.py` 的任务视图，Host 的 `get` 也用它）没有带出来。建议在任务读取里加上挡住它的微任务（标识与标题），控制台写出名字并能点过去；这是 Host 一侧读取的变化，属于契约，随下一次动契约的批次做。
 
 **会话内容的覆盖要逐类有证据，并由检查守住。**（2026-10-27 开发者同意；起因是 ZCode 的正文与思考从会话视图装上起就没记下来，修复在宏任务“harness 会话内容的覆盖”里） 每个 harness 的投影按种类（消息、推理、工具输入、工具输出、计划）声明证据（harness 的版本与来源：探针录下的原生事件、它自己存下的会话，或安装包里带的协议），没有证据的种类列进 `session_omitted.py`；加一个检查，有一类既没证据也没列出就失败。Host 当日只读比对的结果：Codex 的原生记录里推理都不带可读文字，清单已写明，如实；Claude Code 不保存原生会话，记录里没有思考，模块注释说思考的覆盖没核实，清单却是空的；DSH 的原生会话都没留下，记录里有思考、过程中几乎没有正文，同样未核实。做法：ZCode 修完之后交给一个微任务，用探针连本机的假模型给 Claude Code 与 DSH 补证据，不调用真实模型；查不到的如实列为未核实。ZCode 已于 2026-10-27 修好（[补记](../acceptance/adr024/session-view.md)），它的计划仍未核实而清单为空，要在这一批里列出（需要新的原因代码与控制台文案）；顺带修 ZCode 探针里两项 0.16.9 到 0.17.0 的既有漂移（目录为空的警告断言、失败回合用 `*.json` 找会话绑定）。见 [接入要点](../reference/harness-integration.md) 的 Session content 一节。
