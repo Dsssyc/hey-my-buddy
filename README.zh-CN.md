@@ -130,6 +130,10 @@ npm --prefix apps/console test
 
 [AGENTS.md](AGENTS.md) 写明仓库的不变量、目录结构与检查。问题请提到 [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues)。
 
+## 致谢
+
+感谢 [LINUX DO](https://linux.do/) 社区提供的技术交流与开源分享平台。
+
 ## 许可
 
 [MIT](LICENSE)
