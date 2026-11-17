@@ -1,6 +1,8 @@
 """Canonical cwd paths, observation failures and privacy before deletion."""
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -10,6 +12,49 @@ import psutil
 
 from hey_my_buddy.blackboard.tasks import checkout_processes as guard
 from hey_my_buddy.errors import BoardError
+
+
+@unittest.skipUnless(os.name == "nt", "native Windows rename occupancy proof")
+class WindowsCheckoutIdleTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-win-idle-")
+        self.addCleanup(self.temp.cleanup)
+        self.checkout = Path(self.temp.name).resolve() / "workspaces" / ("ws-" + "1" * 32) / "checkout"
+        (self.checkout / "nested").mkdir(parents=True)
+        (self.checkout / "tracked.txt").write_bytes(b"checkout content")
+        (self.checkout / "nested" / "evidence.txt").write_bytes(b"nested content")
+
+    def occupant(self, cwd):
+        child = subprocess.Popen(
+            [sys.executable, "-c", "print('ready', flush=True); import time; time.sleep(180)"],
+            cwd=str(cwd), stdout=subprocess.PIPE, text=True)
+        # The directory is a live working directory only once the child runs.
+        self.assertEqual(child.stdout.readline(), "ready\n")
+        return child
+
+    def contents(self):
+        return {(str(path.relative_to(self.checkout)), path.read_bytes())
+                for path in self.checkout.rglob("*") if path.is_file()}
+
+    def test_an_occupied_checkout_is_refused_with_every_file_untouched(self):
+        intact = self.contents()
+        for cwd in (self.checkout, self.checkout / "nested"):
+            with self.subTest(cwd=cwd):
+                child = self.occupant(cwd)
+                try:
+                    with self.assertRaises(BoardError) as caught:
+                        guard.require_idle_checkout(self.checkout, allocated_at=time.time())
+                finally:
+                    child.terminate()
+                    child.wait(timeout=30)
+                    child.stdout.close()
+                self.assertEqual(caught.exception.code, "NOT_READY")
+                self.assertEqual(caught.exception.details["reasons"], ["checkout-in-use"])
+                self.assertEqual(self.contents(), intact)
+                self.assertFalse((self.checkout.parent / "checkout.removing").exists())
+        guard.require_idle_checkout(self.checkout, allocated_at=time.time())
+        self.assertEqual(self.contents(), intact)
+        self.assertFalse((self.checkout.parent / "checkout.removing").exists())
 
 
 @unittest.skipIf(os.name == "nt", "POSIX working-directory observation")

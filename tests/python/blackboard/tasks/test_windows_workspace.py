@@ -73,6 +73,18 @@ class WindowsWorkspacePrivateRecordsTests(unittest.TestCase):
         with workspace._lock(linked):
             self.assertTrue((directory / ".lock").is_file())
 
+    def test_windows_removal_rename_is_reserved_for_managed_allocation_checkouts_only(self):
+        allocation = self.root / "workspaces" / ("ws-" + "a" * 32) / "checkout"
+        with patch.object(workspace, "_WINDOWS", True):
+            self.assertEqual(workspace._windows_removal_sibling(allocation).name, "checkout.removing")
+            self.assertEqual(workspace._windows_removal_sibling(allocation).parent, allocation.parent)
+            self.assertIsNone(workspace._windows_removal_sibling(allocation.parent / "borrowed"))
+            self.assertIsNone(workspace._windows_removal_sibling(self.root / "elsewhere" / "checkout"))
+            self.assertIsNone(workspace._windows_removal_sibling(
+                self.root / "workspaces" / "ws-not-an-identifier" / "checkout"))
+        with patch.object(workspace, "_WINDOWS", False):
+            self.assertIsNone(workspace._windows_removal_sibling(allocation))
+
 
 @unittest.skipUnless(os.name == "nt", "native Windows Git symbolic links")
 class NativeWindowsGitTests(unittest.TestCase):

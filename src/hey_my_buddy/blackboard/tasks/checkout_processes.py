@@ -12,6 +12,8 @@ from ...process_observation import _processes
 from ...protocol.process_start import process_start
 from ...protocol.reasons import reason
 
+_WINDOWS = os.name == "nt"
+
 
 def allocation_created_at(directory: Path) -> float:
     """request.json is written once, before this allocation creates a checkout."""
@@ -21,10 +23,39 @@ def allocation_created_at(directory: Path) -> float:
         raise BoardError('WORKSPACE_IO_ERROR', str(error)) from error
 
 
+def removal_sibling(checkout: Path) -> Path:
+    """The reserved same-parent name a Windows removal renames the checkout to.
+
+    The name is deterministic so an interrupted removal is recognized and
+    finished by the next attempt instead of being left as unknown evidence.
+    """
+    return checkout.parent / (checkout.name + '.removing')
+
+
+def _rename_whole_checkout(source: Path, target: Path) -> None:
+    """Rename one whole checkout directory through the native filesystem call."""
+    native_path(source).rename(native_path(target))
+
+
 def require_idle_checkout(checkout: Path, *, allocated_at: float) -> None:
-    if os.name == "nt":
-        # Windows provides no supported query for another process's cwd, and
-        # the OS already refuses deletion of a directory used as a cwd.
+    if _WINDOWS:
+        # Windows provides no supported query for another process's cwd. One
+        # same-parent rename of the whole checkout and back is the proof: NTFS
+        # refuses the rename outright while any process keeps the checkout or
+        # any descendant as its cwd or holds any handle inside it, and a refused
+        # rename has touched nothing. The caller holds the allocation lock.
+        root = Path(os.path.realpath(checkout))
+        sibling = removal_sibling(root)
+        try:
+            _rename_whole_checkout(root, sibling)
+        except PermissionError as error:
+            raise BoardError("NOT_READY", "The checkout is in use and cannot be proven idle",
+                             reasons=["checkout-in-use"], path=str(checkout)) from error
+        try:
+            _rename_whole_checkout(sibling, root)
+        except OSError as error:
+            raise BoardError("WORKSPACE_IO_ERROR", "The checkout idle rename could not be undone",
+                             path=str(checkout), removalName=str(sibling)) from error
         return
     try:
         # Only this owned checkout is resolved. psutil's cwd is already a

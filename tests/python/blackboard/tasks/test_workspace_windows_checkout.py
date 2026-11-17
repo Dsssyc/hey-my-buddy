@@ -165,6 +165,54 @@ class NativeWindowsWorkspaceCheckoutTests(unittest.TestCase):
         self.assertTrue(error["details"]["reason"])
         self.assertEqual(result["cause"], {"code": "WORKSPACE_GIT_ERROR", "operation": "reset"})
 
+    def _locked_checkout(self, identifier: str) -> tuple[Path, Path, dict]:
+        commit = self.commit_index("100644", "tracked.txt", b"windows checkout content\n")
+        directory = self.state / "workspaces" / identifier
+        checkout = directory / "checkout"
+        directory.mkdir(parents=True)
+        _git(self.repository, "worktree", "add", "--detach", str(checkout), commit)
+        _git(self.repository, "worktree", "lock", "--reason", "hey-my-buddy:" + identifier, str(checkout))
+        return checkout, directory, {"version": 4, "projectId": "fixture-project"}
+
+    def test_removal_refuses_an_occupied_checkout_and_finishes_once_it_exits(self):
+        checkout, directory, manifest = self._locked_checkout("ws-" + "2" * 32)
+        removal = {"removed": True, "path": str(checkout)}
+        nested = checkout / "nested"
+        nested.mkdir()
+        intact = (checkout / "tracked.txt").read_bytes()
+        child = subprocess.Popen([sys.executable, "-c", "print('ready', flush=True); import time; time.sleep(180)"],
+                                 cwd=str(nested), stdout=subprocess.PIPE, text=True)
+        self.assertEqual(child.stdout.readline(), "ready\n")
+        try:
+            with self.assertRaises(BoardError) as caught:
+                workspace._remove_worktree(self.repository, checkout, manifest, removal)
+            self.assertEqual(caught.exception.code, "NOT_READY")
+            self.assertEqual(caught.exception.details["reasons"], ["checkout-in-use"])
+            self.assertEqual((checkout / "tracked.txt").read_bytes(), intact)
+            self.assertFalse((directory / "checkout.removing").exists())
+            self.assertIsNotNone(workspace._worktree_record(self.repository, checkout))
+        finally:
+            child.terminate()
+            child.wait(timeout=30)
+            child.stdout.close()
+        workspace._remove_worktree(self.repository, checkout, manifest, removal)
+        self.assertFalse(checkout.exists())
+        self.assertFalse((directory / "checkout.removing").exists())
+        self.assertIsNone(workspace._worktree_record(self.repository, checkout))
+
+    def test_removal_finishes_from_its_reserved_rename_after_an_interruption(self):
+        checkout, directory, manifest = self._locked_checkout("ws-" + "3" * 32)
+        # The removal renamed the whole checkout and was interrupted before any
+        # deletion: the retry recognizes the reserved sibling, deletes it and
+        # clears the Git registration without missing the original name.
+        workspace.native_path(checkout).rename(workspace.native_path(directory / "checkout.removing"))
+        removal = {"removed": True, "path": str(checkout)}
+        workspace._remove_worktree(self.repository, checkout, manifest, removal)
+        self.assertTrue(removal["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+        self.assertFalse((directory / "checkout.removing").exists())
+        self.assertIsNone(workspace._worktree_record(self.repository, checkout))
+
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--restricted-child"]:
