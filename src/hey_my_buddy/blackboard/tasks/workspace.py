@@ -1198,6 +1198,11 @@ def submission_revoke_plan(state_dir, manifest):
         checkout_present = manifest["kind"] == "worktree" and _path_present(directory / "checkout")
         if checkout_present:
             expected.add("checkout")
+        removing = _windows_removal_sibling(directory / "checkout")
+        if removing is not None and _path_present(removing):
+            # An interrupted Windows removal renamed this checkout already; the
+            # reserved sibling is that removal's own target, not new evidence.
+            expected.add(removing.name)
         if {path.name for path in directory.iterdir()} != expected:
             plan["reasons"].append("additional-evidence")
             return plan
@@ -3036,6 +3041,20 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False, pr
         return _remove_worktree(repository, checkout_root, manifest, removal)
 
 
+def _windows_removal_sibling(checkout_root: Path) -> Path | None:
+    """The reserved rename target of a managed checkout's Windows removal.
+
+    NTFS refuses the whole-tree rename while any process still holds the
+    checkout or a descendant, so renaming first makes an occupied checkout
+    fail before a single file is deleted. Only a managed allocation checkout
+    carries the reserved sibling; any other path keeps the direct removal.
+    """
+    if not _WINDOWS or checkout_root.name != "checkout" or not _workspace_identifier(checkout_root.parent.name):
+        return None
+    from .checkout_processes import removal_sibling
+    return removal_sibling(checkout_root)
+
+
 def _remove_worktree(repository, checkout_root, manifest, removal):
     """Keep the original locked registration until physical deletion completes.
 
@@ -3044,9 +3063,27 @@ def _remove_worktree(repository, checkout_root, manifest, removal):
     deletion, so the existing applying journal can prove and resume it.
     """
     present = _path_present(checkout_root)
-    if present:
-        private_dirs.remove_tree(checkout_root)
-    if _path_present(checkout_root):
+    target = checkout_root
+    sibling = _windows_removal_sibling(checkout_root)
+    if sibling is not None:
+        if present:
+            if _path_present(sibling):
+                raise BoardError("WORKSPACE_UNSAFE", "The reserved checkout removal name is occupied",
+                                 path=str(sibling))
+            try:
+                native_path(checkout_root).rename(native_path(sibling))
+            except PermissionError as error:
+                # Windows refused the whole-tree rename: a process still holds
+                # the checkout, and nothing in it has been deleted.
+                raise BoardError("NOT_READY", "The checkout is in use by another process",
+                                 reasons=["checkout-in-use"], path=str(checkout_root)) from error
+            private_files.sync_directory(checkout_root.parent)
+        # Either this rename or an interrupted earlier one left the checkout
+        # under its reserved removal name; deletion always finishes there.
+        target = sibling
+    if _path_present(target):
+        private_dirs.remove_tree(target)
+    if _path_present(checkout_root) or (sibling is not None and _path_present(sibling)):
         raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout still exists after removal", path=str(checkout_root))
     removal["alreadyRemoved"] = not present
     try:
@@ -3059,11 +3096,11 @@ def _remove_worktree(repository, checkout_root, manifest, removal):
         except BoardError as registration_error:
             error.details["registrationError"] = registration_error.payload()
             raise error from registration_error
-        if _path_present(checkout_root) or record is not None:
+        if _path_present(checkout_root) or (sibling is not None and _path_present(sibling)) or record is not None:
             raise
         return removal
     record, _git_dir = _cleanup_registration(repository, checkout_root, manifest, check_project=False)
-    if _path_present(checkout_root) or record is not None:
+    if _path_present(checkout_root) or (sibling is not None and _path_present(sibling)) or record is not None:
         raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout or its Git registration still exists after removal",
                          path=str(checkout_root))
     return removal

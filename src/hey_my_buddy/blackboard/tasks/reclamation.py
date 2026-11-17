@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ... import private_dirs
 from ...errors import BoardError
+from ..store.db import TERMINAL_TASK_STATES
 from . import allocation_revocations, host_conclusions, workspace
 from .workspace_bindings import MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE
 
@@ -78,23 +79,71 @@ def native_task_ids(store) -> dict[str, str]:
 
 
 def native_owner(connection, task_id):
+    """The object that owns a native root: its run, its routed run, or its own task.
+
+    A micro task's root belongs to its workflow run; a Router dispatch's root
+    belongs to the micro task that routed it; every other recorded task — a
+    maintenance or profile call, a historical command — owns its root itself.
+    Only a directory whose owner cannot be named at all is unproven.
+    """
     run = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (task_id,)).fetchone()
     if run is not None:
         return run
-    return connection.execute(
+    run = connection.execute(
         "SELECT r.* FROM router_dispatches d JOIN workflow_routes w ON w.decision_id=d.decision_id"
         " JOIN workflow_runs r ON r.run_id=w.run_id WHERE d.task_id=?", (task_id,),
     ).fetchone()
+    if run is not None:
+        return run
+    return connection.execute('SELECT * FROM tasks WHERE task_id=?', (task_id,)).fetchone()
 
 
-def native_reasons(store, connection, run, now) -> list[str]:
-    if run is None:
+def native_owner_id(owner):
+    """The board identity of an owner row: its run id, or its standalone task id."""
+    return owner['run_id'] if 'run_id' in owner.keys() else owner['task_id']
+
+
+def native_owner_run_id(owner):
+    """The run an owner row proves, or None when a standalone task owns the root."""
+    return owner['run_id'] if owner is not None and 'run_id' in owner.keys() else None
+
+
+def _owner_finished_at(connection, owner):
+    """The terminal time of whichever object owns a native root, if it has ended.
+
+    A run ends with its acceptance, conclusion or terminal parent. A standalone
+    task records no terminal moment of its own: its last row update and its
+    attempts' recorded ends together bound the time its work stopped.
+    """
+    if 'run_id' in owner.keys():
+        return _finished_at(connection, owner)
+    if owner['state'] not in TERMINAL_TASK_STATES:
+        return None
+    times = [owner['updated_at']]
+    times.extend(row['finished_at'] for row in connection.execute(
+        'SELECT finished_at FROM attempts WHERE task_id=?', (owner['task_id'],))
+        if row['finished_at'] is not None)
+    return max(times)
+
+
+def _owner_shutdown_confirmed(store, connection, owner) -> bool:
+    """A run proves its own and its descendants' stop; a task only its attempts'."""
+    if 'run_id' in owner.keys():
+        shutdown = store.workflow.shutdown_summary(connection, owner['run_id'])
+        return shutdown['selfConfirmed'] and shutdown['descendantsConfirmed']
+    rows = connection.execute('SELECT execution_state, shutdown_confirmed FROM attempts WHERE task_id=?',
+                              (owner['task_id'],)).fetchall()
+    return all(row['execution_state'] == 'finished' and row['shutdown_confirmed'] for row in rows)
+
+
+def native_reasons(store, connection, owner, now) -> list[str]:
+    """One retention rule for every native root whose owner the board can name."""
+    if owner is None:
         return ['owner-unproven']
-    finished = _finished_at(connection, run)
+    finished = _owner_finished_at(connection, owner)
     reasons = (['continuation-supported'] if finished is None else
                ['grace-period'] if now - datetime.fromisoformat(finished) < NATIVE_RETENTION else [])
-    shutdown = store.workflow.shutdown_summary(connection, run['run_id'])
-    if not (shutdown['selfConfirmed'] and shutdown['descendantsConfirmed']):
+    if not _owner_shutdown_confirmed(store, connection, owner):
         reasons.append('shutdown-unconfirmed')
     return reasons
 
@@ -109,11 +158,11 @@ def reclaim_native(store, *, task_ids=None, stopping=lambda: False) -> None:
     with store.db.read() as connection:
         for path in roots:
             task_id = task_ids.get(path.name)
-            run = native_owner(connection, task_id) if task_id is not None else None
-            if run is not None:
-                owned.setdefault(run['run_id'], []).append(path)
+            owner = native_owner(connection, task_id) if task_id is not None else None
+            if owner is not None:
+                owned.setdefault(native_owner_id(owner), []).append(path)
     failure = None
-    for run_id, paths in owned.items():
+    for owner_id, paths in owned.items():
         if stopping():
             break
         try:
@@ -121,12 +170,8 @@ def reclaim_native(store, *, task_ids=None, stopping=lambda: False) -> None:
             # Re-read terminal/stop facts inside it, once for this native object.
             with locked(store):
                 with store.db.read() as connection:
-                    run = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()
-                    finished = _finished_at(connection, run) if run is not None else None
-                    if finished is None or datetime.fromisoformat(store.now()) - datetime.fromisoformat(finished) < NATIVE_RETENTION:
-                        continue
-                    shutdown = store.workflow.shutdown_summary(connection, run_id)
-                    if not (shutdown['selfConfirmed'] and shutdown['descendantsConfirmed']):
+                    owner = native_owner(connection, owner_id)
+                    if native_reasons(store, connection, owner, datetime.fromisoformat(store.now())):
                         continue
                 for path in paths:
                     private_dirs.remove_tree(path)
@@ -285,8 +330,13 @@ def allocation_plan(store, item):
             require_idle_checkout(checkout, allocated_at=allocation_created_at(directory))
         except BoardError as error:
             cause = error.details.get('reason', {})
-            if (error.code != 'NOT_READY' or cause.get('code') != 'checkout.process-blockers'
-                    or cause.get('params', {}).get('unreadableProcesses')):
+            if error.code != 'NOT_READY':
+                raise
+            if cause:
+                if (cause.get('code') != 'checkout.process-blockers'
+                        or cause.get('params', {}).get('unreadableProcesses')):
+                    raise
+            elif error.details.get('reasons') != ['checkout-in-use']:
                 raise
             item['reasons'].extend(error.details['reasons'])
 
