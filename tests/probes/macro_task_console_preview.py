@@ -362,7 +362,7 @@ def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, start
             stop_initiator: str | None = None, cancel_requested_at: str | None = None,
             grace_deadline: str | None = None, result_status: str | None = None,
             termination_reason: str | None = None, release_reason: dict | None = None,
-            turn_state: str | None = None) -> dict:
+            turn_state: str | None = None, issues: list[dict] | None = None) -> dict:
     # `result` is the stored worker receipt: {"status", "result", "shutdownConfirmed"},
     # exactly what store.task_result unpacks; the adapter payload nests under `result`.
     # `usage` is the ADR-018 per-attempt token usage: null when the record is
@@ -374,6 +374,7 @@ def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, start
             "generation": turn_index, "state": state, "shutdownConfirmed": confirmed,
             "startedAt": started, "finishedAt": finished, "buddy": buddy,
             "error": error, "result": receipt, "disposition": disposition, "usage": usage,
+            "issues": issues if issues is not None else [],
             "expectedSeconds": expected_seconds,
             "stopInitiator": stop_initiator, "cancelRequestedAt": cancel_requested_at,
             "graceDeadline": grace_deadline,
@@ -2015,7 +2016,7 @@ def attempt_view(entry: dict, item: dict) -> dict:
         "attemptId": item["attemptId"], "taskId": entry["runId"], "generation": item["generation"],
         "workerId": "synthetic-worker-1", "workerIdentity": "synthetic preview worker (fixture)",
         "workerInstance": "synthetic-instance-1", "adapter": entry["adapter"] or buddy["harness"],
-        "executionState": item["state"], "ownership": "owned",
+        "executionState": item["state"], "ownership": "owned", "issues": item["issues"],
         "runtimeIdentity": None, "leaseExpiresAt": None, "leaseSeconds": 900, "logPaths": {},
         "resultAvailable": item["result"] is not None, "shutdownConfirmed": item["shutdownConfirmed"],
         "cancelRequested": item["cancelRequestedAt"] is not None, "cancelRequestedAt": item["cancelRequestedAt"],

@@ -243,6 +243,8 @@ export type Ending = {
 /** The execution the task view's per-attempt facts are about: the one running, else the last one chosen. */
 export type Attempt = {
   attemptId: string;
+  executionState: string;
+  issues: { stage: string; code: string; message: string; observedAt: string }[];
   active: boolean;
   startedAt: string | null;
   finishedAt: string | null;
