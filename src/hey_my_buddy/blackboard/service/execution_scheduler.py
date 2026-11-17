@@ -18,8 +18,9 @@ from ...json_codec import canonical_json
 from .live_registry import LiveRegistry
 from ...protocol.execution import (BUDGET, execution_directory,
                                   launch_execution, read_execution_endpoint)
-from ...protocol.process_identity import (inspect_process_identity, boot_id, kill_verified_process_group,
+from ...protocol.process_identity import (inspect_process_identity, boot_id, kill_verified_process_session,
                                           verify_job_member)
+from ...protocol import process_identity as process_identities
 from ...protocol.run_identity import RunIdentity
 
 
@@ -173,9 +174,8 @@ class ExecutionScheduler:
             # The child's own report can close a failed parent-side capture.
             # Compare it with the creation facts retained in our owned handle.
             expected = {"bootId": boot_id(), "pid": handle.pid,
-                        "startedAt": handle.process_started_at,
-                        "processGroupId": handle.pgid, "jobName": None}
-            if identity != expected:
+                        "startedAt": handle.process_started_at, "jobName": None}
+            if handle.session_id != handle.pid or identity != expected:
                 return None
             return self._adopt_verified(attempt_id, held, identity)
         if root is not None:
@@ -339,8 +339,8 @@ class ExecutionScheduler:
                 self._observe(claim, handle, identity)
                 return
             try:
-                exit_code = handle.process.poll()
-                if exit_code is not None and not handle.group_alive():
+                exit_code = handle.poll()
+                if exit_code is not None and handle.shutdown_confirmed(settle_seconds=0):
                     self.store.recover_executions(attempt_id, stopped_evidence={
                         "kind": "creator-reaped", "exitCode": exit_code})
                     if self.store.execution_finished(attempt_id):
@@ -436,15 +436,21 @@ class ExecutionScheduler:
         retry_at = None
         delay = 0.1
         settled = False
+        members = (handle._members if handle.process is not None else
+                   process_identities._posix_members(identity, process_identities._SystemSource())) if identity["jobName"] is None else None
         try:
             while not self._stopping.is_set():
                 # A notification during any read/call below must prevent sleep.
                 with self._condition:
                     revision = observer.revision
                 next_deadline = None
+                observation = "unknown"
                 try:
                     if handle.process is not None:
-                        handle.process.poll()  # Reap the creator's child only.
+                        _, state = handle.observe()
+                        observation = "identity-absent" if state == "gone" else state
+                    else:
+                        observation = inspect_process_identity(identity, members=members)
                     if observer.watch is not None and observer.watch.error is not None:
                         self._unknown(attempt_id, observer.watch.error)
                         self.live_registry.unbind(attempt_id, client)
@@ -458,7 +464,6 @@ class ExecutionScheduler:
                     pending_stop = (view.get("cancelRequested") or
                                     (view.get("selectedAttempt") or {}).get("forceRequestedAt") is not None)
                     if client is None and (pending_stop or retry_at is None or time.monotonic() >= retry_at):
-                        observation = inspect_process_identity(identity)
                         if observation in ("identity-absent", "boot-changed"):
                             if self._recover_if_gone(attempt_id, identity, observation):
                                 settled = True
@@ -505,14 +510,14 @@ class ExecutionScheduler:
                 if forced_at is not None and (
                         time.monotonic() >= (force_retry_at or forced_at + self.STOP_GRACE_SECONDS)):
                     try:
-                        self._force_if_required(identity)
+                        self._force_if_required(identity, members=members)
                     except Exception as error:
                         self._issue(attempt_id, "force-stop", error)
                     force_retry_at = time.monotonic() + force_delay
                     force_delay = min(force_delay * 2, self.TICK_SECONDS)
                 if client is None:
                     try:
-                        if self._recover_if_gone(attempt_id, identity):
+                        if self._recover_if_gone(attempt_id, identity, observation):
                             settled = True
                             return
                     except Exception as error:
@@ -591,11 +596,16 @@ class ExecutionScheduler:
 
     def _stop_intent(self, view: dict, handle) -> tuple[tuple | None, float | None]:
         attempt = view.get("selectedAttempt") or {}
+        initiator = view.get("stopInitiator") if view.get("cancelRequested") else None
+        if initiator == "console":
+            with self.store.db.read() as connection:
+                row = self.store._attempt_row(connection, attempt["attemptId"])
+                if row["stop_purpose"] == "pause":
+                    initiator = "pause"
         if attempt.get("forceRequestedAt") is not None:
             reason = attempt["forceReason"]
-            initiator = "deadline" if reason == "deadline" else view.get("stopInitiator") or "service"
+            initiator = reason if reason in ("deadline", "pause") else initiator or "service"
             return (initiator, None, True, reason), None
-        initiator = view.get("stopInitiator") if view.get("cancelRequested") else None
         deadline = self._deadline(view.get("graceDeadline")) if initiator else None
         try:
             budget_deadline = self._budget_deadline(handle)
@@ -636,6 +646,8 @@ class ExecutionScheduler:
 
     @staticmethod
     def _forced_reason(initiator: str | None, grace_deadline: str | None) -> str:
+        if initiator == "pause":
+            return "pause"
         if initiator == "deadline":
             return "deadline"
         if grace_deadline is not None:
@@ -645,7 +657,7 @@ class ExecutionScheduler:
         return "forced-stop"
 
     @staticmethod
-    def _force_if_required(identity: dict) -> None:
-        kill_verified_process_group(identity)
+    def _force_if_required(identity: dict, *, members=None) -> None:
+        kill_verified_process_session(identity, members=members)
         # Only the ordinary stop observation can finish recovery; keep retrying
         # while the root or any owned member may still be present.

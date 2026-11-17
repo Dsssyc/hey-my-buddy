@@ -1,0 +1,702 @@
+"""Frozen upgrade output and the floor-to-current migration chain."""
+from contextlib import closing
+import ast
+import hashlib
+import inspect
+import json
+from pathlib import Path
+import sqlite3
+import re
+import tempfile
+import unittest
+from unittest import mock
+
+from blackboard.store.upgrade_fixture import FIXTURE, FIXTURE_ROOT_TOKEN, load_fixture, load_schema36_model_stock, complete_fixture_cleanup
+from hey_my_buddy.blackboard.store import schema_30_31, schema_32_33, schema_34_35, schema_35_36, upgrade
+from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
+from hey_my_buddy.install.upgrade import preflight
+from hey_my_buddy.errors import BoardError
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                    separators=(',', ':')).encode()).hexdigest()
+
+
+class FrozenUpgradeTests(unittest.TestCase):
+    def test_new_step_has_no_current_package_imports(self):
+        for step in upgrade.STEPS.values():
+            source = ast.parse(Path(inspect.getmodule(step).__file__).read_text(encoding='utf-8'))
+            self.assertFalse([node for node in ast.walk(source) if isinstance(node, (ast.Import, ast.ImportFrom))
+                              and (any(alias.name.startswith('hey_my_buddy') for alias in node.names)
+                                   if isinstance(node, ast.Import) else node.module is not None
+                                   and node.module.startswith('hey_my_buddy'))])
+            self.assertFalse([node for node in ast.walk(source) if isinstance(node, ast.ImportFrom) and node.level])
+
+    def test_30_to_31_matches_the_complete_pre_freeze_output(self):
+        oracle = json.loads((FIXTURE / 'schema-31-oracle.json').read_text(encoding='utf-8'))
+        sql = (FIXTURE / 'board.sql').read_bytes()
+        self.assertEqual(hashlib.sha256(sql).hexdigest(), oracle['fixtureSqlSha256'])
+        with closing(sqlite3.connect(':memory:')) as db:
+            db.executescript(sql.decode())
+            db.row_factory = sqlite3.Row
+            with db:
+                schema_30_31.upgrade(db)
+            schema = [tuple(r) for r in db.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
+            self.assertEqual(digest(schema), oracle['schemaSha256'])
+            tables = {}
+            for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):
+                rows = [tuple(r) for r in db.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid')]
+                tables[name] = {'rows': len(rows), 'sha256': digest(rows)}
+            self.assertEqual(tables, oracle['tables'])
+            self.assertEqual(db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '31')
+            self.assertEqual([r[0] for r in db.execute('PRAGMA integrity_check')], ['ok'])
+            self.assertEqual(list(db.execute('PRAGMA foreign_key_check')), [])
+
+
+def add_schema31_stock(db):
+    for sql in (FIXTURE / 'schema-31-stock.sql').read_text(encoding='utf-8').split(';'):
+        if sql.strip():
+            db.execute(sql)
+
+
+class UpgradeChainTests(unittest.TestCase):
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix='upgrade-chain-')
+        self.addCleanup(self.scratch.cleanup)
+        self.root = Path(self.scratch.name)
+        self.state = self.root / 'state'
+        self.fixture = load_fixture(self.state)
+        self.db = sqlite3.connect(self.state / 'board.sqlite3')
+        self.addCleanup(self.db.close)
+        self.db.row_factory = sqlite3.Row
+
+    def add_bound_stock(self, filename, *, schema31=False):
+        """Bind SQL-only supplemental history to this fixture's private roots.
+
+        These old supplements add no file dependency of their own. The applying
+        journal names a base allocation whose actual files load_fixture restored.
+        Only their new/changed rows are applied; current writers never run here.
+        """
+        with closing(sqlite3.connect(':memory:')) as template:
+            template.row_factory = sqlite3.Row
+            template.executescript((FIXTURE / 'board.sql').read_text(encoding='utf-8'))
+            if schema31:
+                schema_30_31.upgrade(template)
+            tables = [row[0] for row in template.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            before = {table: {row['rowid']: dict(row) for row in template.execute(
+                f'SELECT rowid AS rowid,* FROM "{table}"')} for table in tables}
+            template.executescript((FIXTURE / filename).read_text(encoding='utf-8'))
+            after = {table: {row['rowid']: dict(row) for row in template.execute(
+                f'SELECT rowid AS rowid,* FROM "{table}"')} for table in tables}
+        bindings = dict(self.fixture['bindings'])
+        def bind(value):
+            if isinstance(value, dict):
+                return {bind(key): bind(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [bind(item) for item in value]
+            if not isinstance(value, str):
+                return value
+            def token(match):
+                text = match[0]
+                if not text.startswith(FIXTURE_ROOT_TOKEN):
+                    return bindings.get(text, text)
+                relative = text.removeprefix(FIXTURE_ROOT_TOKEN)
+                root = self.fixture['fixtureRoot']
+                if relative == '/state' or relative.startswith('/state/'):
+                    root, relative = self.state, relative.removeprefix('/state')
+                relative = re.sub(r'ws-[0-9a-f]{32}|[0-9a-f]{64}',
+                                  lambda item: bindings.get(item[0], item[0]), relative)
+                return str(root.joinpath(*relative.lstrip('/').split('/')))
+            return re.sub(re.escape(FIXTURE_ROOT_TOKEN) + r'(?:/[\w.-]+)*|ws-[0-9a-f]{32}|[0-9a-f]{64}', token, value)
+        # The reservation supplement's own old inline manifest has a path-bound
+        # self digest; derive it before binding other rows that refer to it.
+        for table in ('workflow_artifacts', 'workflow_runs'):
+            column = 'manifest_json' if table == 'workflow_artifacts' else 'workspace_manifest_json'
+            for key, row in after[table].items():
+                if row == before[table].get(key):
+                    continue
+                value = json.loads(row[column])
+                if value.get('workspaceId') and value.get('kind') in ('existing', 'worktree'):
+                    payload = bind({key: item for key, item in value.items() if key != 'manifestSha256'})
+                    bindings[value['manifestSha256']] = hashlib.sha256(json.dumps(
+                        payload, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        with self.db:
+            for table in tables:
+                for rowid in before[table].keys() - after[table].keys():
+                    self.db.execute(f'DELETE FROM "{table}" WHERE rowid=?', (rowid,))
+                for rowid, row in after[table].items():
+                    old = before[table].get(rowid)
+                    if row == old:
+                        continue
+                    values = {}
+                    for key, value in row.items():
+                        if isinstance(value, str) and value.startswith(('{', '[')):
+                            parsed = json.loads(value)
+                            bound = bind(parsed)
+                            value = json.dumps(bound, ensure_ascii=False, sort_keys=True, separators=(',', ':')) if bound != parsed else value
+                        else:
+                            value = bind(value)
+                        values[key] = value
+                    if old is None:
+                        self.db.execute(f'INSERT INTO "{table}"({",".join(values)}) VALUES({",".join("?" for _ in values)})', list(values.values()))
+                    else:
+                        changed = {key: values[key] for key in values if row[key] != old[key]}
+                        self.db.execute(f'UPDATE "{table}" SET {",".join(key + "=?" for key in changed)} WHERE rowid=?', [*changed.values(), rowid])
+
+    def schema31(self):
+        with self.db:
+            schema_30_31.upgrade(self.db)
+            add_schema31_stock(self.db)
+
+    def assert_current_structure(self):
+        fresh = Database(self.root / 'fresh')
+        self.addCleanup(fresh.close)
+        fresh.initialize()
+        query = 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
+        with fresh.read() as connection:
+            self.assertEqual([tuple(r) for r in self.db.execute(query)],
+                             [tuple(r) for r in connection.execute(query)])
+        self.assertEqual([r[0] for r in self.db.execute('PRAGMA integrity_check')], ['ok'])
+        self.assertEqual(list(self.db.execute('PRAGMA foreign_key_check')), [])
+
+    def test_schema_40_to_41_adds_exclusive_pause_units(self):
+        with self.db:
+            for version in range(30, 40):
+                upgrade.STEPS[version](self.db)
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '40')
+        # Schema 40 console cancellations have no pause/end purpose to infer.
+        with self.db:
+            self.db.execute("UPDATE attempts SET stop_initiator='console',cancel_requested_at='2026-11-11T11:00:00.000Z'"
+                            " WHERE rowid=(SELECT MIN(rowid) FROM attempts)")
+        previous = [dict(row) for row in self.db.execute('SELECT rowid,* FROM attempts ORDER BY rowid')]
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 40, 'targetSchema': 41})
+        self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM attempts ORDER BY rowid')],
+                         [{**row, 'stop_purpose':None} for row in previous])
+        for purpose in ('pause','end',None):
+            with self.db:
+                self.db.execute('UPDATE attempts SET stop_purpose=? WHERE rowid=(SELECT MIN(rowid) FROM attempts)', (purpose,))
+        with self.assertRaises(sqlite3.IntegrityError), self.db:
+            self.db.execute("UPDATE attempts SET stop_purpose='cancel' WHERE rowid=(SELECT MIN(rowid) FROM attempts)")
+        self.assert_current_structure()
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM work_pauses').fetchone()[0], 0)
+        self.db.execute('PRAGMA foreign_keys=ON')
+        macro_id = self.db.execute('SELECT macro_task_id FROM macro_tasks LIMIT 1').fetchone()[0]
+        standalone = self.db.execute('SELECT run_id FROM workflow_runs WHERE macro_task_id IS NULL LIMIT 1').fetchone()
+        self.assertIsNotNone(standalone)
+        with self.db:
+            self.db.execute('INSERT INTO work_pauses(macro_task_id,paused_at) VALUES(?,?)',
+                            (macro_id, '2026-11-11T12:00:00.000Z'))
+            self.db.execute('INSERT INTO work_pauses(run_id,paused_at) VALUES(?,?)',
+                            (standalone[0], '2026-11-11T12:01:00.000Z'))
+        for macro, run in ((None, None), (macro_id, standalone[0]), (macro_id, None), (None, standalone[0]),
+                           ('missing-macro', None), (None, 'missing-run')):
+            with self.subTest(macro=macro, run=run), self.assertRaises(sqlite3.IntegrityError):
+                with self.db:
+                    self.db.execute('INSERT INTO work_pauses(macro_task_id,run_id,paused_at) VALUES(?,?,?)',
+                                    (macro, run, '2026-11-11T12:02:00.000Z'))
+
+    def test_all_dropped_facts_have_floor_stock_and_equal_the_frozen_spec(self):
+        rows = list(self.db.execute('SELECT * FROM tasks'))
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
+        self.assertEqual(len(rows), metadata['tableRowCounts']['tasks'])
+        self.assertEqual(sum(row['adapter'] == 'decision' for row in rows), 7)
+        for row in rows:
+            spec = json.loads(row['spec_json'])
+            self.assertEqual(json.loads(row['required_capabilities']), spec.get('requiredCapabilities', []))
+            self.assertEqual(json.loads(row['exclusive_resources']), spec.get('exclusiveResources', []))
+            self.assertEqual(row['expected_seconds'], spec.get('expectedSeconds'))
+            self.assertEqual(row['router_budget_seconds'], spec.get('routerBudgetSeconds'))
+
+    def test_process_identity_stock_preserves_root_identity_and_rowids(self):
+        rows = list(self.db.execute('SELECT * FROM attempt_process_identities'))
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row['process_group_id'] == row['root_pid'] for row in rows))
+        self.schema31()
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM attempt_process_identities WHERE boot_id IS NULL AND job_name IS NOT NULL').fetchone()[0], 1)
+        query = 'SELECT rowid,attempt_id,boot_id,root_pid,root_started_at,job_name FROM attempt_process_identities ORDER BY rowid'
+        before = [tuple(row) for row in self.db.execute(query)]
+        upgrade.upgrade_state(self.state)
+        self.assertEqual([tuple(row) for row in self.db.execute(query)], before)
+        self.assertNotIn('process_group_id', {row[1] for row in self.db.execute('PRAGMA table_info(attempt_process_identities)')})
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute('UPDATE attempt_process_identities SET boot_id=NULL')
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE attempt_process_identities SET job_name='unexpected-job' WHERE boot_id IS NOT NULL")
+        self.assert_current_structure()
+
+    def test_result_stock_drops_read_counters_and_budget_copies_and_keeps_frozen_content(self):
+        self.schema31()
+        frozen_columns = {table: ','.join(['rowid', *(row[1] for row in self.db.execute(f'PRAGMA table_info({table})') if row[1] not in ('manifest_sha256', 'workspace_manifest_json'))]) for table in ('workflow_turns', 'workflow_artifacts', 'workflow_host_conclusions', 'workflow_continuations', 'router_requests', 'attempt_received_receipts')}
+        frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT {frozen_columns[table]} FROM {table} ORDER BY rowid')]
+                  for table in ('router_requests', 'workflow_turns', 'attempt_received_receipts')}
+        specs = list(self.db.execute('SELECT task_id,spec_json,input_fingerprint FROM tasks'
+                                     ' WHERE task_id NOT IN (SELECT run_id FROM workflow_runs) ORDER BY rowid'))
+        task_text = dict(self.db.execute("SELECT task_id,json_extract(spec_json,'$.task') FROM tasks"))
+        sources = (('attempts', 'attempt_id', 'result_json', ('result', 'usage')),
+                   ('decision_requests', 'decision_id', 'output_json', ('usage',)))
+        expected = {}
+        unchanged = {}
+        for table, key, column, path in sources:
+            rows = list(self.db.execute(f'SELECT {key},{column} FROM {table} WHERE {column} IS NOT NULL'))
+            self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table},json_tree({column}) WHERE json_tree.key='bytesRead'").fetchone()[0], 2)
+            expected[table], unchanged[table] = {}, {}
+            for row in rows:
+                value = json.loads(row[column])
+                usage = value
+                for field in path:
+                    usage = usage.get(field, {})
+                result = value['result'] if table == 'attempts' else value
+                budget = result.pop('budget', None)
+                if 'bytesRead' in usage:
+                    self.assertIsNone(usage.pop('bytesRead'))
+                    self.assertEqual(budget['bytesRead'], 2097152)
+                elif budget is None:
+                    unchanged[table][row[key]] = row[column]
+                expected[table][row[key]] = value
+        upgrade.upgrade_state(self.state)
+        for table, key, column, _path in sources:
+            actual = dict(self.db.execute(f'SELECT {key},{column} FROM {table} WHERE {column} IS NOT NULL'))
+            self.assertEqual({key: json.loads(value) for key, value in actual.items()}, expected[table])
+            self.assertEqual({key: actual[key] for key in unchanged[table]}, unchanged[table])
+            self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table},json_tree({column}) WHERE json_tree.key='bytesRead'").fetchone()[0], 0)
+            budget_path = '$.result.budget' if table == 'attempts' else '$.budget'
+            self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table} WHERE json_type({column},?) IS NOT NULL",
+                                             (budget_path,)).fetchone()[0], 0)
+        for table, rows in frozen.items():
+            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT {frozen_columns[table]} FROM {table} ORDER BY rowid')], rows)
+        self.assertEqual(list(self.db.execute('SELECT task_id,spec_json,input_fingerprint FROM tasks'
+                                              ' WHERE task_id NOT IN (SELECT run_id FROM workflow_runs) ORDER BY rowid')), specs)
+        self.assertEqual(dict(self.db.execute("SELECT task_id,json_extract(spec_json,'$.task') FROM tasks")), task_text)
+        self.assertGreater(self.db.execute("SELECT COUNT(*) FROM router_requests,json_tree(snapshot_json) WHERE json_tree.key='bytesRead'").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT json_extract(spec_json,'$.decision.document.budget.bytesRead') FROM tasks WHERE task_id='schema31-maintenance-task'").fetchone()[0], 524288)
+
+    def test_budget_copies_are_removed_even_without_retired_read_counters(self):
+        self.schema31()
+        for table, column, usage_path, budget_path in (
+                ('attempts', 'result_json', '$.result.usage.bytesRead', '$.result.budget'),
+                ('decision_requests', 'output_json', '$.usage.bytesRead', '$.budget')):
+            self.db.execute(f'UPDATE {table} SET {column}=json_remove({column},?,?)',
+                            (usage_path, budget_path + '.bytesRead'))
+            self.assertGreater(self.db.execute(f'SELECT COUNT(*) FROM {table} WHERE json_type({column},?) IS NOT NULL',
+                                               (budget_path,)).fetchone()[0], 0)
+        self.db.commit()
+        upgrade.upgrade_state(self.state)
+        for table, column, path in (('attempts', 'result_json', '$.result.budget'),
+                                    ('decision_requests', 'output_json', '$.budget')):
+            self.assertEqual(self.db.execute(f'SELECT COUNT(*) FROM {table} WHERE json_type({column},?) IS NOT NULL',
+                                             (path,)).fetchone()[0], 0)
+
+    def test_catalog_observation_stock_becomes_current_sequence(self):
+        self.schema31()
+        query = 'SELECT rowid,observation_id,request_id,response_json,harnesses_json FROM catalog_observations ORDER BY rowid'
+        before = [tuple(row) for row in self.db.execute(query)]
+        self.assertEqual(len(before), 4)
+        completed = 0
+        for row in before:
+            if row[3] is None:
+                continue
+            completed += 1
+        self.assertEqual(completed, 3)
+        current = [dict(row) for row in self.db.execute('SELECT * FROM catalog_current')]
+        pending = [dict(row) for row in self.db.execute('SELECT * FROM catalog_pending')]
+        upgrade.upgrade_state(self.state)
+        for table in ('catalog_observations', 'evaluation_catalog', 'catalog_pending',
+                      'model_service_concurrency'):
+            self.assertIsNone(self.db.execute('SELECT 1 FROM sqlite_master WHERE name=?', (table,)).fetchone())
+        self.assertEqual([row['sequence'] for row in self.db.execute('SELECT * FROM catalog_current')],
+                         [row['observation_id'] for row in current])
+        self.assertEqual({(row['harness'], row['provider'], row['model']): row['pending_since']
+                          for row in self.db.execute('SELECT * FROM model_services') if row['pending_since']},
+                         {(row['harness'], row['provider'], row['model']): row['since'] for row in pending})
+
+    def test_floor_runs_every_step_with_schema31_stock_and_matches_a_new_board(self):
+        def step_with_new_form(db):
+            schema_30_31.upgrade(db)
+            add_schema31_stock(db)
+        with mock.patch.dict(upgrade.STEPS, {30: step_with_new_form}):
+            self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 30, 'targetSchema': SCHEMA_VERSION})
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM maintenance_runs').fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM workspace_reservations w JOIN workflow_runs r"
+                                        " ON r.run_id=w.holder_task_id WHERE w.state='held'"
+                                        " AND r.state IN ('accepted','concluded')").fetchone()[0], 0)
+        self.assert_current_structure()
+
+    def test_alias_step_uses_catalog_proof_and_rolls_back_on_failure(self):
+        self.schema31()
+        with self.db:
+            for version in range(31, 39):
+                upgrade.STEPS[version](self.db)
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '39')
+        # This supplement derives native, historical-payload and orphan cases
+        # from the floor writer's labeled buddy and catalog rows.
+        self.db.executescript((FIXTURE / 'schema-39-alias-stock.sql').read_text(encoding='utf-8'))
+        original = {row['model']: row['description'] for row in self.db.execute(
+            'SELECT model,description FROM buddies')}
+        self.assertEqual(original, {'fixture-alpha': 'fixture-alpha via openai',
+                                    'fixture-beta': 'Native beta description',
+                                    'fixture-gamma': 'fixture-gamma via openai',
+                                    'fixture-orphan': 'fixture-orphan via openai',
+                                    'fixture-native': 'Native model detail',
+                                    'fixture-absent': 'Remembered absent model'})
+        frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+                  for table in ('router_requests', 'decision_requests')}
+
+        actual_step = upgrade.STEPS[39]
+        def fail_after_step(connection):
+            actual_step(connection)
+            raise RuntimeError('injected failure before commit')
+        with mock.patch.dict(upgrade.STEPS, {39: fail_after_step}):
+            with self.assertRaisesRegex(RuntimeError, 'injected failure'):
+                upgrade.upgrade_state(self.state)
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '39')
+        self.assertIn('label', [row['name'] for row in self.db.execute('PRAGMA table_info(buddies)')])
+
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 39, 'targetSchema': SCHEMA_VERSION})
+        self.assertEqual({row['model']: row['description'] for row in self.db.execute(
+            'SELECT model,description FROM model_services')},
+            {'fixture-alpha': '', 'fixture-beta': 'Native beta description',
+             'fixture-gamma': '', 'fixture-orphan': 'fixture-orphan via openai',
+             'fixture-native': 'Native model detail',
+             'fixture-absent': 'Remembered absent model'})
+        columns = [row['name'] for row in self.db.execute('PRAGMA table_info(buddies)')]
+        self.assertIn('alias', columns)
+        self.assertNotIn('label', columns)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM buddies WHERE alias IS NOT NULL').fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT concurrency_limit FROM model_services WHERE model='fixture-alpha'").fetchone()[0], 3)
+        self.assertEqual(self.db.execute("SELECT source_sequence FROM model_services WHERE model='fixture-alpha'").fetchone()[0], 3)
+        self.assertIsNone(self.db.execute("SELECT context_window FROM model_services WHERE model='fixture-alpha'").fetchone()[0])
+        self.assertEqual(json.loads(self.db.execute("SELECT input_modalities_json FROM model_services WHERE model='fixture-alpha'").fetchone()[0]), ['text'])
+        self.assertEqual(self.db.execute("SELECT concurrency_limit FROM model_services WHERE model='fixture-native'").fetchone()[0], 5)
+        self.assertEqual(self.db.execute("SELECT unavailable_code FROM model_services WHERE model='fixture-native'").fetchone()[0], 'catalog.native-unavailable')
+        self.assertIsNone(self.db.execute("SELECT unavailable_code FROM model_services WHERE model='fixture-absent'").fetchone()[0])
+        self.assertEqual(self.db.execute("SELECT confirmed_absent_at FROM model_services WHERE model='fixture-absent'").fetchone()[0],
+                         '2026-01-01T00:02:00.000Z')
+        self.assertEqual(self.db.execute("SELECT retired FROM buddies WHERE effort='medium'").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT retired FROM buddies WHERE effort='low'").fetchone()[0], 1)
+        self.assertEqual([row[0] for row in self.db.execute("SELECT effort FROM buddies WHERE model='fixture-alpha' AND retired=0 ORDER BY effort_rank")], ['high'])
+        self.assertEqual([tuple(row) for row in self.db.execute("SELECT effort,effort_rank FROM buddies WHERE model='fixture-alpha' ORDER BY effort_rank")], [('high', 0), ('medium', 1), ('low', 2)])
+        self.assertEqual(self.db.execute("SELECT source_sequence FROM model_services WHERE model='fixture-gamma'").fetchone()[0], None)
+        self.assertEqual(self.db.execute("SELECT source_sequence FROM model_services WHERE model='fixture-orphan'").fetchone()[0], None)
+        for table, before in frozen.items():
+            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT * FROM {table} ORDER BY rowid')], before)
+        self.assert_current_structure()
+
+    def test_model_facts_choose_current_buddy_group_or_last_unlisted_row(self):
+        self.schema31()
+        with self.db:
+            for version in range(31, 39):
+                upgrade.STEPS[version](self.db)
+        self.db.executescript((FIXTURE / 'schema-39-alias-stock.sql').read_text(encoding='utf-8'))
+        with self.db:
+            # The old writer's selected current row is the model fact source;
+            # the payload supplies effort order, not a second metadata copy.
+            self.db.execute("UPDATE buddies SET capabilities_json='[\"execution:codex\",\"effort:high\",\"input:image\"]' WHERE buddy_id='codex:openai:fixture-alpha:high'")
+            # An unlisted service has multiple old rows: the later physical row
+            # carries the last written model facts, without source proof.
+            self.db.execute("""INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,
+                available,enabled,capabilities_json,context_window,description,source)
+                SELECT 'codex:openai:fixture-orphan:low','orphan low',harness,provider,model,
+                       'low',1,enabled,'["execution:codex","effort:low","input:image"]',
+                       8192,'Last orphan detail','catalog:missing-later'
+                FROM buddies WHERE buddy_id='codex:openai:fixture-orphan:high'""")
+        upgrade.upgrade_state(self.state)
+        alpha = self.db.execute("SELECT input_modalities_json FROM model_services WHERE model='fixture-alpha'").fetchone()
+        orphan = self.db.execute("SELECT description,context_window,input_modalities_json,source_sequence FROM model_services WHERE model='fixture-orphan'").fetchone()
+        self.assertEqual(json.loads(alpha[0]), ['image'])
+        self.assertEqual(tuple(orphan), ('Last orphan detail', 8192, '["image"]', None))
+        self.assert_current_structure()
+
+    def test_confirmed_absence_wins_over_an_older_native_unavailability_payload(self):
+        self.schema31()
+        with self.db:
+            for version in range(31, 39):
+                upgrade.STEPS[version](self.db)
+        self.db.executescript((FIXTURE / 'schema-39-alias-stock.sql').read_text(encoding='utf-8'))
+        expected_time = self.db.execute("SELECT read_at FROM catalog_current WHERE harness='codex'").fetchone()[0]
+        payload = json.loads(self.db.execute("SELECT payload_json FROM evaluation_catalog WHERE discovery_id='cat-89b5b236ee44be1428bb5c86'").fetchone()[0])
+        provider = next(item for item in payload['providers'] if item['harness'] == 'codex' and item['provider'] == 'openai')
+        previous_model = dict(provider['models'][0])
+        previous_model.update(id='fixture-absent', available=False,
+                              unavailableReason={'code': 'catalog.native-unavailable', 'params': {}},
+                              unavailableContent='Earlier native limitation')
+        provider['models'] = [previous_model]
+        with self.db:
+            self.db.execute('INSERT INTO evaluation_catalog(discovery_id,payload_json) VALUES(?,?)',
+                            ('prior-native-unavailability', json.dumps(payload)))
+            self.db.execute("UPDATE buddies SET source='catalog:prior-native-unavailability' WHERE model='fixture-absent'")
+        upgrade.upgrade_state(self.state)
+        service = self.db.execute("SELECT confirmed_absent_at,unavailable_code FROM model_services WHERE model='fixture-absent'").fetchone()
+        self.assertEqual(tuple(service), (expected_time, None))
+        from hey_my_buddy.blackboard.catalog import buddy_state
+        self.assertEqual(buddy_state.get(self.db, 'codex:openai:fixture-absent:high')['unavailable_code'], 'catalog.model-absent')
+        self.assert_current_structure()
+
+    def test_multi_effort_stock_preserves_model_absence_and_uses_active_facts(self):
+        from datetime import datetime, timezone
+        from hey_my_buddy.blackboard.store import schema_39_40
+        from hey_my_buddy.blackboard.catalog import buddy_state
+        from hey_my_buddy.blackboard.routing.candidate import candidate_bound
+        self.schema31()
+        with self.db:
+            for version in range(31, 39):
+                upgrade.STEPS[version](self.db)
+        self.db.executescript((FIXTURE / 'schema-39-alias-stock.sql').read_text(encoding='utf-8'))
+        self.db.executescript((FIXTURE / 'schema-39-catalog-stock.sql').read_text(encoding='utf-8'))
+        # These are facts of the old writers, before the conversion runs:
+        # confirmation touched available high, leaving retired/health xhigh;
+        # the pending legal list contains high while xhigh retains stale data.
+        causes = {row['effort']: row['unavailable_code'] for row in self.db.execute(
+            "SELECT effort,unavailable_code FROM buddies WHERE model='stock-absent-retired'")}
+        self.assertEqual(causes, {'high': 'catalog.model-absent', 'xhigh': 'catalog.effort-retired'})
+        self.assertEqual(self.db.execute("SELECT json_extract(payload_json,'$.providers[0].models[0].available') FROM evaluation_catalog WHERE discovery_id='catalog-stock-stale'").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT unavailable_code FROM buddies WHERE model='stock-confirmed-health' AND effort='xhigh'").fetchone()[0], 'harness.probe-failed')
+        now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+        with mock.patch.object(schema_39_40, 'datetime') as clock:
+            clock.now.return_value = now
+            upgrade.upgrade_state(self.state)
+        services = {row['model']: dict(row) for row in self.db.execute('SELECT * FROM model_services')}
+        self.assertEqual(services['stock-absent-retired']['confirmed_absent_at'], '2026-01-01T00:01:30.000Z')
+        for model in ('stock-confirmed-health', 'stock-health-only', 'stock-all-retired'):
+            self.assertEqual(services[model]['confirmed_absent_at'], '2026-01-01T00:02:00.000Z')
+        self.assertEqual(services['stock-no-time']['confirmed_absent_at'], '2026-11-11T12:00:00.000Z')
+        pending = services['stock-pending-retired']
+        self.assertEqual((pending['description'], pending['context_window'], pending['input_modalities_json']),
+                         ('Current pending detail', 32768, '["text","image"]'))
+        self.assertEqual((pending['pending_since'], pending['confirmed_absent_at'], pending['unavailable_code']),
+                         ('2026-01-01T00:02:00.000Z', None, None))
+        retired = services['stock-all-retired']
+        self.assertEqual((retired['description'], retired['context_window'], retired['input_modalities_json']),
+                         ('Last retired detail', 1024, '["audio"]'))
+        for model, harness in (('stock-absent-retired', 'codex'), ('stock-confirmed-health', 'codex'),
+                               ('stock-health-only', 'codex'), ('stock-no-time', 'claude')):
+            buddy = buddy_state.get(self.db, f'{harness}:openai:{model}:high')
+            self.assertFalse(buddy['available'])
+            self.assertEqual(buddy['unavailable_code'], 'catalog.model-absent')
+            self.assertEqual(candidate_bound(self.db, {**buddy, 'enabled': 1}, {'codingOnly': False},
+                                            '2026-11-11T12:00:00Z', require_health=False,
+                                            apply_preferences=False, check_cooling=False), 'unavailable')
+        self.assertEqual(buddy_state.get(self.db, 'codex:openai:stock-absent-retired:xhigh')['unavailable_code'],
+                         'catalog.effort-retired')
+        self.assert_current_structure()
+
+    def test_schema36_model_stock_preserves_every_rekeyed_form(self):
+        self.schema31()
+        with self.db:
+            for version in range(31, 36):
+                upgrade.STEPS[version](self.db)
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '36')
+        load_schema36_model_stock(self.db)
+        tables = ('kind_statistics', 'kind_cell_statistics', 'kind_statistics_buckets',
+                  'kind_cell_statistics_buckets', 'kind_summaries', 'kind_summary_evidence')
+        before = {table: [dict(row) for row in self.db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+                  for table in tables}
+        self.assertTrue(all(before.values()))
+        notes = [dict(row) for row in self.db.execute('SELECT * FROM model_service_notes ORDER BY model,harness,provider')]
+        self.assertEqual([(row['model'], row['provider']) for row in notes],
+                         [('fixture-alpha', 'mirror'), ('fixture-alpha', 'openai'),
+                          ('fixture-beta', 'alternate'), ('fixture-beta', 'openai')])
+        attempts = [dict(row) for row in self.db.execute(
+            'SELECT attempt_id,model_harness,model_provider,model_model FROM attempts ORDER BY rowid')]
+        buddies = [dict(row) for row in self.db.execute(
+            'SELECT buddy_id,harness,provider,model FROM buddies ORDER BY rowid')]
+        self.assertTrue(any(row['model_model'] == 'fixture-alpha' for row in attempts))
+        self.assertEqual(sum(row['model'] == 'fixture-alpha' for row in buddies), 2)
+        self.assertEqual(sum(row['model'] == 'fixture-beta' for row in buddies), 2)
+        upgrade.upgrade_state(self.state)
+        display = {row['model_id']: row['display_name'] for row in self.db.execute(
+            'SELECT model_id,display_name FROM models')}
+        for table in tables:
+            after = [dict(row) for row in self.db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+            normalized = [{**{key: value for key, value in row.items() if key != 'model_id'},
+                           'model': display[row['model_id']]} for row in after]
+            self.assertEqual(normalized, before[table], table)
+        for old in attempts:
+            row = self.db.execute('SELECT model_id FROM attempts WHERE attempt_id=?', (old['attempt_id'],)).fetchone()
+            self.assertEqual(display[row['model_id']] if row['model_id'] else None, old['model_model'])
+        mappings = {(row['harness'], row['provider'], row['model']): display[row['model_id']]
+                    for row in self.db.execute('SELECT harness,provider,model,model_id FROM model_correspondences')}
+        for old in buddies:
+            self.assertEqual(mappings[old['harness'], old['provider'], old['model']], old['model'])
+        self.assertIsNone(self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='model_notes'").fetchone())
+        self.assert_current_structure()
+
+    def test_terminal_reservation_stock_releases_at_the_original_host_decision_time(self):
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text(encoding='utf-8'))
+        reader_id = self.db.execute("SELECT r.run_id FROM workspace_reservations w"
+                                    " JOIN workflow_runs r ON r.run_id=w.holder_task_id"
+                                    " JOIN workflow_host_conclusions h ON h.run_id=r.run_id"
+                                    " WHERE w.access='read' AND r.state='concluded' LIMIT 1").fetchone()[0]
+        reader = self.db.execute("SELECT w.*,r.execution_workspace_json,h.created_at AS concluded_at"
+                                 " FROM workspace_reservations w JOIN workflow_runs r ON r.run_id=w.holder_task_id"
+                                 " JOIN workflow_host_conclusions h ON h.run_id=r.run_id WHERE r.run_id=?",
+                                 (reader_id,)).fetchone()
+        self.assertEqual((reader['access'], reader['state']), ('read', 'released'))
+        self.assertEqual(json.loads(reader['execution_workspace_json'])['kind'], 'existing')
+        # Model an inherited reservation that the old Host conclusion did not
+        # release, using a complete output and conclusion from the floor writer.
+        self.db.execute("UPDATE workspace_reservations SET state='held',released_at=NULL WHERE holder_task_id=?",
+                        (reader_id,))
+        self.db.commit()
+        self.assertEqual(tuple(self.db.execute(
+            'SELECT state,released_at FROM workspace_reservations WHERE holder_task_id=?',
+            (reader_id,)).fetchone()), ('held', None))
+        # The floor's accept writer already releases its own reservations. Also
+        # exercise an inherited held acceptance without changing that evidence.
+        self.db.execute("UPDATE workspace_reservations SET state='held',released_at=NULL WHERE holder_task_id=?",
+                        (metadata['stableIds']['accepted'],))
+        self.db.commit()
+        self.schema31()
+        before = [dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_reservations ORDER BY rowid')]
+        decisions = dict(self.db.execute("SELECT r.run_id,CASE r.state WHEN 'accepted' THEN t.accepted_at ELSE h.created_at END"
+                                         " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
+                                         " LEFT JOIN workflow_host_conclusions h ON h.run_id=r.run_id"
+                                         " WHERE r.state IN ('accepted','concluded')"))
+        self.assertEqual({row[0] for row in self.db.execute("SELECT DISTINCT r.state FROM workflow_runs r"
+                         " JOIN workspace_reservations w ON w.holder_task_id=r.run_id WHERE w.state='held'")},
+                         {'accepted', 'concluded', 'failed'})
+        # updated_at may move for a later lifecycle operation; it is no decision time.
+        self.db.execute("UPDATE workflow_runs SET updated_at='2026-02-01T00:00:00.000Z'")
+        self.db.commit()
+        retired = {'manifest_sha256', 'workspace_manifest_json', 'run_revision', 'owner_generation', 'command_id'}
+        frozen_columns = {table: ','.join(['rowid', *(row[1] for row in self.db.execute(f'PRAGMA table_info({table})') if row[1] not in retired)]) for table in ('workflow_turns', 'workflow_artifacts', 'workflow_host_conclusions', 'workflow_continuations', 'router_requests', 'attempt_received_receipts')}
+        frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT {frozen_columns[table]} FROM {table} ORDER BY rowid')]
+                  for table in ('workflow_host_conclusions', 'workflow_artifacts', 'workflow_turns')}
+        roots = {}
+        for (raw,) in self.db.execute('SELECT workspace_manifest_json FROM workflow_runs'):
+            manifest = json.loads(raw)
+            roots[manifest['workspaceId'], manifest['manifestSha256']] = manifest['checkoutRoot']
+        for (raw,) in self.db.execute("SELECT manifest_json FROM workflow_artifacts WHERE kind IN ('input','turn-input')"):
+            manifest = json.loads(raw)
+            roots[manifest['workspaceId'], manifest['manifestSha256']] = manifest['checkoutRoot']
+        upgrade.upgrade_state(self.state)
+        expected = []
+        for row in before:
+            value = {key: item for key, item in row.items() if key not in ('checkout_id', 'repository_id', 'path')}
+            value['checkout_root'] = roots[row['workspace_id'], row['manifest_sha256']]
+            if row['state'] == 'held' and row['holder_task_id'] in decisions:
+                value.update(state='released', released_at=decisions[row['holder_task_id']])
+            expected.append(value)
+        self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_reservations ORDER BY rowid')], expected)
+        self.assertEqual(self.db.execute('SELECT checkout_root FROM workspace_reservations WHERE holder_task_id=?',
+                                         (reader_id,)).fetchone()[0],
+                         roots[reader['workspace_id'], reader['manifest_sha256']])
+        for table, rows in frozen.items():
+            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT {frozen_columns[table]} FROM {table} ORDER BY rowid')], rows)
+        self.assert_current_structure()
+
+    def test_a_terminal_reservation_without_its_decision_time_aborts_the_upgrade(self):
+        self.schema31()
+        self.db.execute("DELETE FROM workflow_host_conclusions WHERE run_id IN"
+                        " (SELECT holder_task_id FROM workspace_reservations WHERE state='held')")
+        self.db.commit()
+        before = list(self.db.iterdump())
+        with self.assertRaisesRegex(ValueError, 'no acceptance or conclusion timestamp'):
+            upgrade.upgrade_state(self.state)
+        self.assertEqual(list(self.db.iterdump()), before)
+
+    def test_schema31_preserves_every_surviving_value_and_old_maintenance_deadlines(self):
+        self.schema31()
+        stored = self.db.execute("SELECT spec_json,input_fingerprint FROM tasks WHERE task_id='schema31-maintenance-task'").fetchone()
+        self.assertEqual(stored[1], hashlib.sha256(('2:' + stored[0]).encode()).hexdigest())
+        removed = {'required_capabilities','exclusive_resources','expected_seconds','router_budget_seconds', 'owner'}
+        columns = ['rowid', *[r[1] for r in self.db.execute('PRAGMA table_info(tasks)')
+                             if r[1] not in removed | {'spec_json', 'input_fingerprint'}]]
+        query = 'SELECT ' + ','.join(columns) + ' FROM tasks ORDER BY rowid'
+        before = [tuple(r) for r in self.db.execute(query)]
+        complete_fixture_cleanup(self.db)
+        self.assertEqual(preflight(self.state, contract_changed=True)['schema'], 31)
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 31, 'targetSchema': SCHEMA_VERSION})
+        self.assertEqual([tuple(r) for r in self.db.execute(query)], before)
+        self.assertEqual(tuple(self.db.execute("SELECT spec_json,input_fingerprint FROM tasks"
+                                               " WHERE task_id='schema31-maintenance-task'").fetchone()), tuple(stored))
+        self.assertTrue(removed.isdisjoint({r[1] for r in self.db.execute('PRAGMA table_info(tasks)')}))
+        self.assertEqual(self.db.execute("SELECT json_extract(spec_json,'$.routerBudgetSeconds'),"
+                          "json_extract(spec_json,'$.decision.routerBudgetSeconds'),"
+                          "json_extract(spec_json,'$.decision.document.budget.timeoutSeconds')"
+                          " FROM tasks WHERE task_id='schema31-maintenance-task'").fetchone()[:], (310,300,300))
+        self.assert_current_structure()
+
+    def test_second_step_failure_rolls_back_the_entire_chain_and_marker(self):
+        before = list(self.db.iterdump())
+        real = upgrade.STEPS[31]
+        def failing(db):
+            real(db)
+            raise RuntimeError('after-task-rebuild')
+        with mock.patch.dict(upgrade.STEPS, {31: failing}), self.assertRaisesRegex(RuntimeError, 'after-task-rebuild'):
+            upgrade.upgrade_state(self.state)
+        self.assertEqual(list(self.db.iterdump()), before)
+
+    def test_foreign_key_check_prevents_committing_a_broken_rebuild(self):
+        before = list(self.db.iterdump())
+        real = upgrade.STEPS[31]
+        def broken(db):
+            real(db)
+            db.execute("UPDATE attempts SET task_id='missing-parent' WHERE rowid=(SELECT MIN(rowid) FROM attempts)")
+        with mock.patch.dict(upgrade.STEPS, {31: broken}), self.assertRaises(BoardError) as caught:
+            upgrade.upgrade_state(self.state)
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(list(self.db.iterdump()), before)
+
+    def test_below_floor_install_and_upgrade_name_the_required_release_without_writing(self):
+        with self.db:
+            self.db.execute("UPDATE meta SET value='29' WHERE key='schema_version'")
+        before = list(self.db.iterdump())
+        for operation in (lambda: preflight(self.state, contract_changed=True),
+                          lambda: upgrade.upgrade_state(self.state)):
+            with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
+                operation()
+            self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
+            self.assertIn('0.54.1', str(caught.exception))
+            self.assertEqual(list(self.db.iterdump()), before)
+
+    def test_cleanup_stock_discards_old_admissions_and_preserves_interrupted_and_completed_journals(self):
+        self.schema31()
+        self.add_bound_stock('schema-31-cleanup-stock.sql', schema31=True)
+        before = [dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_cleanup_plans ORDER BY rowid')]
+        self.assertEqual({row['state'] for row in before}, {'planned', 'blocked', 'applying', 'applied'})
+        started = next(row for row in before if row['state']=='applying')
+        owner = self.db.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?',
+                                (started['run_id'],)).fetchone()
+        manifest = json.loads(owner[0])
+        self.assertEqual(started['workspace_id'], manifest['workspaceId'])
+        self.assertEqual(started['path'], manifest['checkoutRoot'])
+        self.assertEqual(started['checkout_id'], manifest['checkoutId'])
+        self.assertTrue(all(row['expires_at'] for row in before))
+        self.assertTrue(all(row['command_id'] for row in before))
+        self.assertGreater(self.db.execute("SELECT COUNT(*) FROM commands WHERE kind IN"
+                                          " ('workflow.cleanup_plan','workflow.cleanup_apply')").fetchone()[0], 0)
+        deleted = {row['plan_id'] for row in before if row['state'] in ('planned','blocked')}
+        event_plans = {json.loads(row[0]).get('planId') for row in self.db.execute('SELECT payload_json FROM events')}
+        self.assertTrue(deleted <= event_plans)
+        inbound = [(table[0], tuple(fk)) for table in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                   for fk in self.db.execute(f'PRAGMA foreign_key_list("{table[0]}")') if fk[2]=='workspace_cleanup_plans']
+        self.assertEqual(inbound, [])
+        self.db.commit()
+        upgrade.upgrade_state(self.state)
+        expected = []
+        for row in before:
+            if row['state'] not in ('applying', 'applied'):
+                continue
+            value = {key: item for key, item in row.items()
+                     if key not in ('expires_at', 'command_id', 'checkout_id', 'repository_id')}
+            evidence = json.loads(value['evidence_json'])
+            self.assertEqual(evidence.pop('ownerGeneration'), 1)
+            workspace = evidence['workspace']
+            workspace['projectId'] = workspace.pop('repositoryId')
+            workspace.pop('checkoutId', None)
+            allocation = workspace['allocation']
+            allocation['projectId'] = allocation.pop('repositoryId')
+            allocation.pop('checkoutId', None)
+            value['evidence_json'] = evidence
+            expected.append(value)
+        actual = [dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_cleanup_plans ORDER BY rowid')]
+        for row in actual:
+            row['evidence_json'] = json.loads(row['evidence_json'])
+        self.assertEqual(actual, expected)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM commands WHERE kind IN"
+                                        " ('workflow.cleanup_plan','workflow.cleanup_apply')").fetchone()[0], 0)
+        self.assertFalse(any(json.loads(row[0]).get('planId') in deleted for row in self.db.execute('SELECT payload_json FROM events')))
+        self.assert_current_structure()

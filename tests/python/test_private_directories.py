@@ -63,8 +63,8 @@ class PrivateDirectoryTests(BoardTestCase):
         junction = deep / 'redirected'
         result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(native_path(junction)), str(outside)], capture_output=True)
         self.assertEqual(result.returncode, 0, repr(result.stdout) + repr(result.stderr))
-        size, _, safe = storage.tree_info(root)
-        self.assertEqual((size, safe), (len(b'inside') + len(b'literal'), True))
+        size, _, safe, stable = storage.tree_info(root)
+        self.assertEqual((size, safe, stable), (len(b'inside') + len(b'literal'), True, True))
         removed = private_dirs.cleanup_attempt_credentials(state, 'codex', 'junction-task', 'attempt')
         self.assertEqual(removed['count'], 1)
         self.assertEqual(read_bytes(sentinel), b'outside sentinel')

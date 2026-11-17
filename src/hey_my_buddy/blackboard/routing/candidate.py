@@ -14,8 +14,10 @@ def candidate_bound(connection, candidate, request, now, *, frozen=None,
         return "identity-changed"
     if not candidate["enabled"]:
         return "disabled"
-    if not candidate["available"]:
+    if not candidate["catalog_available"]:
         return "unavailable"
+    if require_health and candidate['harness_status'] != 'ready':
+        return "harness-unavailable"
     if request.get("codingOnly", True) and candidate["harness"] not in schemas.CODING_HARNESSES:
         return "constraints"
     if any(candidate[key] != value for key, value in request.get("constraints", {}).items()):
@@ -32,10 +34,6 @@ def candidate_bound(connection, candidate, request, now, *, frozen=None,
             has_pins = connection.execute("SELECT 1 FROM evaluation_preferences WHERE mode='pin' LIMIT 1").fetchone() is not None
         if has_pins and (not preference or preference[0] != "pin"):
             return "not-pinned"
-    if require_health:
-        health = connection.execute("SELECT status FROM harness_health WHERE harness=?", (candidate["harness"],)).fetchone()
-        if health is None or health[0] != "ready":
-            return "harness-unavailable"
     if any(all(candidate[key] == excluded[key] for key in ("harness", "provider", "model"))
            for excluded in request.get("routingBasis", {}).get("overloadedModelServices", [])):
         return "overloaded"

@@ -2,8 +2,8 @@ import type { Reason } from "../reason";
 import { hasDecisionCapability, hasFastRoutingCapability, routerAttention } from "../policy";
 import type { Configuration, Draft, Buddy, RouterHealthEntry, RouterHealthIdentity, RoutingHealth, RoutingMode } from "../types";
 
-/** The four parts of a buddy's identity: `harness / provider / model / effort`. */
-export function buddyQuad(identity: RouterHealthIdentity): string {
+/** The complete name of a buddy: `harness / provider / model / effort`. */
+export function buddyQuad(identity: RouterHealthIdentity & { alias?: string | null }): string {
   return `${identity.harness} / ${identity.provider} / ${identity.model} / ${identity.effort}`;
 }
 
@@ -81,7 +81,7 @@ type RouterCandidate = { buddy: Buddy; refusal: RouterRefusal | null };
 export function routerCandidates(buddies: Buddy[], list: string[], mode: RoutingMode, query: string): RouterCandidate[] {
   const needle = query.trim().toLowerCase();
   const candidates = buddies
-    .filter(buddy => !list.includes(buddy.buddyId) && buddyQuad(buddy).toLowerCase().includes(needle))
+    .filter(buddy => !list.includes(buddy.buddyId) && [buddyQuad(buddy), buddy.alias].join(" ").toLowerCase().includes(needle))
     .map(buddy => ({ buddy, refusal: routerRefusalOf(buddy, mode) }));
   return [...candidates.filter(entry => !entry.refusal), ...candidates.filter(entry => entry.refusal)];
 }
@@ -136,7 +136,7 @@ export function routerNote(source: Pick<Draft, "configuration" | "buddies">, hea
 }
 
 /** The counts of the window that are written out as names with a number; a count of nothing is left out. */
-const RECORD_COUNTS = ["consecutiveFailures", "abstention", "cancelled", "budgetExhausted", "boundsRejected", "inputChanged"] as const;
+const RECORD_COUNTS = ["consecutiveFailures", "abstention", "cancelled", "notResponding", "boundsRejected", "inputChanged"] as const;
 type RecordCount = (typeof RECORD_COUNTS)[number];
 
 export function recordCounts(health: RoutingHealth): { name: RecordCount; n: number }[] {
@@ -144,7 +144,7 @@ export function recordCounts(health: RoutingHealth): { name: RecordCount; n: num
     consecutiveFailures: health.consecutiveFailures,
     abstention: health.abstentionCount,
     cancelled: health.cancelledCount,
-    budgetExhausted: health.budgetExhaustedCount,
+    notResponding: health.notRespondingCount,
     boundsRejected: health.boundsRejectedCount,
     inputChanged: health.inputChangedCount,
   };

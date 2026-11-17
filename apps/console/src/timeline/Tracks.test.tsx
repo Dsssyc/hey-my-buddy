@@ -2,6 +2,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { cleanup, render as testingRender, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setLanguageChoice } from "../i18n";
 import { buddyColorKey } from "../macro-task-display";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 import type { TimelineBuddy, TimelineEvent, TimelineSpan } from "../macro-task-types";
@@ -10,13 +11,13 @@ import { fitLabel } from "./labels";
 import { Axis, Track, spanReadout } from "./Tracks";
 
 const render = (node: React.ReactNode) => testingRender(<TooltipProvider>{node}</TooltipProvider>);
-afterEach(cleanup);
+afterEach(() => { cleanup(); setLanguageChoice("browser"); });
 const at = (minutes: number) => new Date(Date.UTC(2026, 9, 17, 8, minutes)).toISOString();
 const scale = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, 800);
 const base = macroTaskTimelineFixture();
 const execution = (extra: Partial<TimelineSpan> = {}): TimelineSpan => ({ ...base.spans.find(span => span.kind === "execution")!, spanId: "e", startAt: at(5), endAt: at(15), resultStatus: "ok", state: "finished", uncertain: false, shutdownConfirmed: true, expectedSeconds: 600, reminders: null, inquiries: [], ...extra });
 function track(spans: TimelineSpan[], extra: { state?: string; rowBuddy?: TimelineBuddy | null; acceptedAt?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; highlightedKey?: string; buddyColors?: ReadonlyMap<string, string>; onOpen?: (runId: string, key: string) => void; onSelect?: (runId: string, key?: string) => void } = {}) {
-  return render(<Track row={{ ...base.rows[0]!, buddy: extra.rowBuddy === undefined ? base.rows[0]!.buddy : extra.rowBuddy, state: extra.state ?? "accepted", acceptedAt: extra.acceptedAt ?? null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} buddyColors={extra.buddyColors ?? new Map([[buddyColorKey(execution().buddy), "#6d7ec0"]])} selected={false} tabKey={extra.tabKey} highlightedKey={extra.highlightedKey}/>);
+  return render(<Track row={{ ...base.rows[0]!, buddy: extra.rowBuddy === undefined ? base.rows[0]!.buddy : extra.rowBuddy, state: extra.state ?? "accepted", acceptedAt: extra.acceptedAt ?? null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} buddyColors={extra.buddyColors ?? new Map([[buddyColorKey(execution().buddy), "#6d7ec0"]])} selected={false} tabKey={extra.tabKey} highlightedKey={extra.highlightedKey}/>);
 }
 const slot = (name: string) => document.querySelector(`[data-slot=${name}]`);
 
@@ -35,6 +36,21 @@ describe("measured timeline labels", () => {
 });
 
 describe("timeline drawings follow recorded facts", () => {
+  it("marks a confirmed paused turn at its end and names the interruption in both languages", () => {
+    const paused = execution({ resultStatus: "cancelled", terminationReason: "pause" });
+    for (const [language, words] of [["zh", "用户在控制台暂停，回合已中断。"], ["en", "The user paused this work in the console; the turn was interrupted."]] as const) {
+      cleanup(); setLanguageChoice(language); track([paused]);
+      expect(slot("pause-end-mark")?.getAttribute("data-span-id")).toBe("e");
+      expect(spanReadout(paused, Date.parse(at(40)))).toContain(words);
+      expect(document.querySelector('[data-key="span:e"]')?.getAttribute("aria-label")).toContain(words);
+    }
+    cleanup(); track([execution({ resultStatus: "failed", terminationReason: "pause", error: "seal failed" })]);
+    expect(slot("pause-end-mark")).toBeTruthy();
+    cleanup(); track([execution({ resultStatus: "cancelled", terminationReason: "forced-stop" })]);
+    expect(slot("pause-end-mark")).toBeNull();
+    cleanup(); track([execution({ resultStatus: "cancelled", terminationReason: "pause", uncertain: true, shutdownConfirmed: false })]);
+    expect(slot("pause-end-mark")).toBeNull();
+  });
   it("looks up settled bar colours by all four parts of each historical buddy", () => {
     const buddy = execution().buddy!;
     const identities = [buddy, { ...buddy, harness: "other-harness" }, { ...buddy, provider: "other-provider" },
@@ -64,7 +80,7 @@ describe("timeline drawings follow recorded facts", () => {
   it("renders full, abbreviated or no bar text using the measured available room", () => {
     const live = execution({ startAt: at(0), endAt: null, state: "executing", shutdownConfirmed: false, expectedSeconds: null, resultStatus: undefined });
     track([live], { width: 200, rowBuddy: null });
-    expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("Claude Opus 5.5 · 40 分");
+    expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("claude-opus-5-5 · 40 分");
     cleanup(); track([live], { width: 70, rowBuddy: null });
     expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("40 分");
     cleanup(); track([live], { width: 25, rowBuddy: null });
@@ -179,7 +195,7 @@ describe("timeline drawings follow recorded facts", () => {
     for (const field of ["harness", "provider", "model"] as const) {
       cleanup(); track([live], { rowBuddy: { ...live.buddy!, [field]: "different" }, width: 800 });
       expect(slot("execution-buddy")).toBeTruthy();
-      expect(slot("track-label")?.textContent).toContain("Claude Opus 5.5");
+      expect(slot("track-label")?.textContent).toContain("claude-opus-5-5");
       const readout = spanReadout(live, Date.parse(at(40)));
       for (const value of Object.values(live.buddy!).filter(value => value !== null)) expect(readout).toContain(value);
     }
@@ -195,15 +211,18 @@ describe("timeline drawings follow recorded facts", () => {
     }
     cleanup(); track([live], { rowBuddy: { ...live.buddy!, provider: "another-provider", effort: "max" }, width: 800 });
     expect(slot("execution-buddy")).toBeTruthy();
-    expect(slot("track-label")?.textContent).toContain("Claude Opus 5.5");
+    expect(slot("track-label")?.textContent).toContain("claude-opus-5-5");
   });
   it("retains orange diamonds after human waits and acceptance waits settle", () => {
     track([execution({ spanId: "h", kind: "host", state: "approved", expectedSeconds: null, inquiries: null })]);
     expect(slot("host-wait")?.hasAttribute("stroke-dasharray")).toBe(false);
     expect(slot("waiting-diamond")?.getAttribute("class")).toBe("fill-hand-mark");
+    expect(slot("waiting-diamond")?.getAttribute("data-kind")).toBe("hand");
     cleanup(); track([execution()], { acceptedAt: at(25) });
     expect(slot("acceptance-wait")?.hasAttribute("stroke-dasharray")).toBe(false);
-    expect(slot("waiting-diamond")?.getAttribute("class")).toBe("fill-hand-mark");
+    expect(slot("waiting-diamond")?.getAttribute("class")).toBe("stroke-hand-mark");
+    expect(slot("waiting-diamond")?.getAttribute("fill")).toBe("none");
+    expect(slot("waiting-diamond")?.getAttribute("data-kind")).toBe("review");
   });
   it("moves through mixed event and inquiry entries, then restores cluster focus on Escape", async () => {
     const user = userEvent.setup();
@@ -314,4 +333,19 @@ it("merges mixed shape and label clearances before finding free space", () => {
   expect(fitLabel(["too wide"], { left: 0, right: 200 }, occupied, () => 95)).toBeNull();
   const label = fitLabel(["fits"], { left: 0, right: 200 }, occupied, () => 90)!;
   expect(occupied[1]!.left - label.right).toBeGreaterThanOrEqual(12);
+});
+
+it("keeps an alias beside the measured model name and drops both when only duration fits", () => {
+  const span = execution({ buddy: { ...execution().buddy!, model: "other-model", alias: "Reviewer" }, startAt: at(0), endAt: at(40) });
+  const colors = new Map([[buddyColorKey(span.buddy), "#6d7ec0"]]);
+  track([span], { width: 800, buddyColors: colors });
+  expect(slot("alias-tag")?.textContent).toBe("Reviewer");
+  expect(slot("track-label")?.textContent).toBe("other-model");
+  expect(slot("track-label-duration")?.textContent).toContain("分");
+  const alias = slot("alias-tag")!.parentElement!.parentElement!;
+  expect(Number(alias.getAttribute("x"))).toBeGreaterThan(Number(slot("track-label")!.getAttribute("x")));
+  cleanup();
+  track([span], { width: 90, buddyColors: colors });
+  expect(slot("alias-tag")).toBeNull();
+  expect(slot("track-label")?.textContent).not.toContain("other-model");
 });

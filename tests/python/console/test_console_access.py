@@ -94,7 +94,7 @@ class ConsoleAccessTests(ConsoleTestCase):
         self.assertEqual(board.console.status()["sessionCount"], 0)
         self.assertEqual(browser.call("GET", urlsplit(pending["url"]).path)[0], 410)
         board.console.close()
-        board.console = Console(board.store, board.service, port=browser.port)
+        board.console = Console(board.store, board.service, runtime_identity=board.control["runtime"], port=browser.port)
         board.console.start(issue_ticket=False)
         self.assertFalse(browser.bootstrap()["consoleAccess"]["requireLogin"])
         self.change(browser, True)
@@ -115,7 +115,7 @@ class ConsoleAccessTests(ConsoleTestCase):
         cookie = second.cookie
         now[0] += 800 * 86400
         board.console.close()
-        board.console = Console(board.store, board.service, port=first.port, clock=lambda: now[0])
+        board.console = Console(board.store, board.service, runtime_identity=board.control["runtime"], port=first.port, clock=lambda: now[0])
         board.console.start(issue_ticket=False)
         self.assertEqual(second.bootstrap()["consoleSession"]["id"], identity)
         csrf = first.bootstrap()["csrfToken"]
@@ -128,7 +128,7 @@ class ConsoleAccessTests(ConsoleTestCase):
 
     def test_two_cookie_free_writers_apply_last_write(self):
         board = self.board()
-        board.call("model_catalog_refresh", {"requestId": "two-windows-catalog"})
+        board.call("model_catalog_refresh", {})
         _, first = self.open_console(board)
         second = Browser(first.origin + "/")
         before = [first.bootstrap(), second.bootstrap()]

@@ -49,7 +49,7 @@ export type HarnessDetailsView = {
     /** Only for a harness that is not found. */
     exception: null | { reason: string | null; tried: { path: string | null; source: string | null; result: string }[] };
   };
-  account: null | {
+  account: {
     state: string;
     billing: { provider: string; plan: string }[];
     reason: string | null;
@@ -70,7 +70,8 @@ export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView
       source: row.manualPath ? t("harness.pane.manual") : row.source?.trim() || t("harness.unrecorded"),
       checked: harnessTime(row.checkedAt),
       review: {
-        text: t(!permissions ? "harness.review.unknown" : permissions.read ? "harness.review.eligible" : "harness.review.ineligible"),
+        text: t(!permissions ? "harness.review.unknown" : permissions.read === "enforced" ? "harness.review.eligible"
+          : permissions.read === "convention" ? "harness.review.conventional" : "harness.review.ineligible"),
         reason: null,
         note: reviewNote,
       },
@@ -81,13 +82,12 @@ export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView
         })),
       },
     },
-    account: parsed && {
-      state: [accountStatusText(parsed.status, t),
-        parsed.accountType ? t(`harness.account.type.${ACCOUNT_TYPES.find(name => name === parsed.accountType) ?? "unknown"}`) : "",
-        harnessTime(parsed.checkedAt) ?? ""].filter(Boolean).join(" · "),
+    account: {
+      state: parsed ? [accountStatusText(parsed.status, t),
+        parsed.accountType ? t(`harness.account.type.${ACCOUNT_TYPES.find(name => name === parsed.accountType) ?? "unknown"}`) : ""].filter(Boolean).join(" · ") : t("harness.unrecorded"),
       billing: Object.entries(row.billingByProvider ?? {}).map(([provider, fact]) =>
         ({ provider, plan: t(`harness.account.plan.${PLANS.find(name => name === fact?.kind) ?? "unknown"}`) })),
-      reason: parsed.reason ? reasonText(parsed.reason) : null,
+      reason: parsed?.reason ? reasonText(parsed.reason) : null,
     },
   };
 }

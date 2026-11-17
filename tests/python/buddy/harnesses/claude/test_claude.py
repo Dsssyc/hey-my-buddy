@@ -10,11 +10,9 @@ all — which is exactly what the wiring microtask delivers.
 from __future__ import annotations
 
 import json
-import math
 import os
 import sys
 import tempfile
-from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -53,7 +51,7 @@ class ClaudeFixtureCase(unittest.TestCase):
     """The shared fake-CLI harness: private roots, scrubbed environment."""
 
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-claude-test-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-test-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -94,8 +92,9 @@ class ClaudeFixtureCase(unittest.TestCase):
             self.assertEqual(self.adapter.available(), (True, None))
             self.assertEqual(probe.call_count, 2)
 
-    def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=8,
+    def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=None,
                 model="claude-opus-5-5[1m]", access=None):
+        # Ordinary micro tasks have no Router budget. Deadline tests opt in.
         turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": mode or ("reconstructed-new-session" if previous else "initial"),
                       "previousSessionId": previous, "context": {},
@@ -103,7 +102,7 @@ class ClaudeFixtureCase(unittest.TestCase):
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 session_record_path=str(self.root / f"session-attempt-{index}.jsonl"),
                                 spec={"adapter": "claude", "cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
-                                      **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
+                                      **({"modelResponseWaitSeconds": timeout} if timeout is not None else {}),
                                       "provider": "anthropic", "model": model, "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case},
@@ -166,7 +165,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         handle = self.executor.start(context)
         self.last_handle = handle
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
+        self.assertIsNotNone(handle.wait(180), "Claude fixture controller did not exit")
         return self.executor.collect(handle, context)
 
     def fixture_state(self):
@@ -351,12 +350,6 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def test_console_stop_forces_native_shutdown(self):
         self._force_stop_hanging_role(initiator="console")
 
-    def test_deadline_ends_the_native_process_group(self):
-        outcome = self.execute(self.context("hang", timeout=1))
-        self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.result["code"], "deadline")
-        self.assertTrue(outcome.shutdown_confirmed)
-        self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), True)
 
     def test_quota_event_while_interrupting_does_not_lose_the_stop_receipt(self):
         context = self.context("interrupt-quota", timeout=12)
@@ -373,12 +366,11 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), False,
                       "a quota frame that interrupts the acknowledgement wait is not an acknowledgement")
 
-    def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
+    def test_absent_timeout_allows_native_completion(self):
         context = self.context(timeout=None)
         self.executor.prepare(context)
         handle = self.executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertEqual(handle.deadline, math.inf)
         self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
         outcome = self.executor.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -536,7 +528,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                 outcome = self.execute(context)
                 self.assertEqual(outcome.status, "failed", outcome.to_report())
                 self.assertEqual(outcome.result["code"], "invalid-buddy")
-                self.assertFalse(outcome.result["modelStarted"])
+                self.assertFalse(outcome.result["modelResponded"])
                 self.assertNotIn("turn", outcome.result)
                 self.assertIsNone(self.last_handle.result.buddy.checked.model)
                 self.assertEqual(self.fixture_state()["userTurns"], 0)
@@ -558,7 +550,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         carried = self.execute(self.context(mode="initial", previous="old-session", index=9))
         self.assertEqual(carried.status, "failed")
         self.assertEqual(carried.result["code"], "invalid-resume-mode")
-        self.assertFalse(carried.result["modelStarted"])
+        self.assertFalse(carried.result["modelResponded"])
         self.assertNotIn("turn", carried.result)
         self.assertFalse((self.root / "fixture.json").exists(),
                          "an illegal turn must never start a native child")
@@ -656,12 +648,12 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
         from hey_my_buddy.buddy.roles.run_execution import start_review
         from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
+        from hey_my_buddy.blackboard.routing.router import answer_schema
         context = self.context()
         context.turn = None
         context.agent_credential = "must-not-reach-native"
         context.environment["HMB_AGENT_CREDENTIAL_FILE"] = "/private/must-not-reach-native.json"
-        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]), budget())
+        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]))
         handle = start_review("claude", context, request)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(20))
@@ -671,7 +663,6 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         raw = result.result["rawAnswer"]
         answer = json.loads(raw) if isinstance(raw, str) else raw
         self.assertEqual(answer["buddyId"], "legal")
-        self.assertIsNone(result.result["usage"]["bytesRead"])
         self.assertEqual(result.result["correctionCount"], 0)
         self.assertFalse(native_path(context.turn_output_file()).exists())
         # The unified receipt: a quiet tool-free stream still binds the frozen

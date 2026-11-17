@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import tempfile
-import time
 import unittest
 from unittest import mock
 
@@ -217,12 +216,11 @@ class WorkerSeamTests(unittest.TestCase):
 
 
 class RouterCallPointTests(unittest.TestCase):
-    def test_adapter_prepares_before_start_and_preserves_full_native_budget(self):
+    def test_adapter_prepares_before_start_without_a_native_budget(self):
         from types import SimpleNamespace
         from hey_my_buddy.buddy.roles import router as calls
 
-        document = {"buddy": {"harness": "dsh"}, "routingMode": "review",
-                    "budget": {"timeoutSeconds": 60, "toolCalls": 2},
+        document = {"domainNodes": [], "buddy": {"harness": "dsh"}, "routingMode": "review",
                     "outputSchema": {"type": "object"}, "task": "choose", "buddies": []}
         context = self.context(decision_input=document)
         frozen = self.root / "frozen"
@@ -236,7 +234,7 @@ class RouterCallPointTests(unittest.TestCase):
             start.assert_not_called()
             self.assertIs(adapter.start(context), handle)
         preparation = start.call_args.args[0]
-        self.assertEqual(preparation.request.budget, document["budget"])
+        self.assertFalse(hasattr(preparation.request, 'budget'))
         self.assertEqual(handle.router_input, (None, frozen, "digest"))
 
     def test_router_usage_keeps_the_native_reported_elapsed_time(self):
@@ -244,8 +242,8 @@ class RouterCallPointTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
         from hey_my_buddy.buddy.roles import router as calls
 
-        context = self.context(decision_input={"buddy": {}, "routingMode": "review",
-                                               "budget": {"timeoutSeconds": 60}, "buddies": []})
+        context = self.context(decision_input={"domainNodes": [], "buddy": {}, "routingMode": "review",
+                                               "buddies": []})
         native = AdapterOutcome(status="failed", result={"code": "deadline", "usage": {"elapsedMs": 200}},
                                 shutdown_confirmed=False)
         with mock.patch.object(calls.read_only, "collect", return_value=native):
@@ -257,8 +255,7 @@ class RouterCallPointTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
         from hey_my_buddy.buddy.roles import router as calls
 
-        context = self.context(decision_input={"buddy": {}, "routingMode": "review",
-                                               "budget": {"timeoutSeconds": 60},
+        context = self.context(decision_input={"domainNodes": [], "buddy": {}, "routingMode": "review",
                                                "buddies": [{"buddyId": "chosen"}]})
         handle = SimpleNamespace(router_input=(None, self.root, "digest"))
         native = AdapterOutcome(status="ok", result={"rawAnswer": "native answer", "usage": {"elapsedMs": 200}},
@@ -288,7 +285,7 @@ class RouterCallPointTests(unittest.TestCase):
         from hey_my_buddy.buddy.roles import router as calls
 
         document = {"buddy": {"harness": "dsh"}, "routingMode": "review",
-                    "budget": {"timeoutSeconds": 60}, "outputSchema": {"type": "object"}}
+                    "outputSchema": {"type": "object"}}
         frozen = self.root / "failed-preparation"
         frozen.mkdir()
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=self.Native()), \
@@ -318,7 +315,7 @@ class RouterCallPointTests(unittest.TestCase):
 
     def context(self, **kwargs):
         values = dict(task_id="task-router", attempt_id="attempt-router", generation=1,
-                      spec={"cwd": str(self.root), "task": "choose", "routerBudgetSeconds": 60},
+                      spec={"cwd": str(self.root), "task": "choose", "modelResponseWaitSeconds": 60},
                       directory=self.root / "attempt",
                       environment={"HMB_STATE_DIR": str(self.root / "state")}, runtime={},
                       session_record_path=str(self.root / "session.jsonl"))
@@ -326,8 +323,8 @@ class RouterCallPointTests(unittest.TestCase):
         return ExecutionContext(**values)
 
     def preparation(self, kind, native=None):
-        document = {"routingMode": "fast" if kind == "fast" else "review", "task": "choose", "buddies": [],
-                    "outputSchema": {"type": "object"}, "budget": {"timeoutSeconds": 60}}
+        document = {"domainNodes": [], "routingMode": "fast" if kind == "fast" else "review", "task": "choose", "buddies": [],
+                    "outputSchema": {"type": "object"}}
         native = native if native is not None else self.Native()
         context = self.context()
         if kind == "fast":
@@ -350,7 +347,7 @@ class RouterCallPointTests(unittest.TestCase):
         self.assertIsNone(preparation.context.turn)
         self.assertIsNone(preparation.context.agent_credential)
         self.assertEqual(preparation.request.cwd, str(preparation.no_tool_cwd))
-        self.assertEqual(preparation.request.timeout_seconds, 60)
+        self.assertFalse(hasattr(preparation.request, 'timeout_seconds'))
         self.assertEqual(self.start(preparation), "started-handle")
         module, harness, context, request = self.start_call
         self.assertIs(module, self.module)
@@ -368,7 +365,7 @@ class RouterCallPointTests(unittest.TestCase):
         self.assertIsNone(manifest)
         self.assertTrue(root.is_dir())
         self.assertEqual(len(digest), 64)
-        self.assertTrue(router_input.verify(manifest, root, digest, deadline=time.monotonic() + 120, state_dir=self.root / "state")["unchanged"])
+        self.assertTrue(router_input.verify(manifest, root, digest, state_dir=self.root / "state")["unchanged"])
         self.assertEqual(self.start(preparation), "started-handle")
         harness, _context, request = self.start_call
         self.assertEqual(harness, "dsh")

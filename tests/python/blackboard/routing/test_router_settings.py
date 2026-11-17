@@ -1,9 +1,11 @@
 """Router list setting choices are independent of native availability and state."""
 from copy import deepcopy
 import unittest
+import threading
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router_settings import DEFAULT_ROUTER_SETTINGS, validate_router_settings_patch
+from hey_my_buddy.blackboard.store.schema_37_38 import MAX_MODEL_RESPONSE_WAIT_SECONDS
 
 BUDDY = "codex:openai:example:high"
 RETRY_MAX_SECONDS = 2147483647
@@ -12,10 +14,16 @@ RETRY_MAX_SECONDS = 2147483647
 class RouterSettingsTests(unittest.TestCase):
     def test_settings_defaults(self):
         self.assertEqual(DEFAULT_ROUTER_SETTINGS, {"routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
-                                                   "defaultRoutingMode": "fast", "routingBudget": "standard"})
+                                                  "defaultRoutingMode": "fast", "modelResponseWaitSeconds": 60,
+                                                  "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600,
+                                                  "profileBuddyId": None, "explorationEvery": 5})
+
+    def test_maximum_wait_leaves_room_for_condition_timeout_on_this_platform(self):
+        self.assertLess(MAX_MODEL_RESPONSE_WAIT_SECONDS + 10, threading.TIMEOUT_MAX)
 
     def test_patch_preserves_omissions_and_explicit_clear(self):
-        self.assertEqual(validate_router_settings_patch({"routingBudget": "brief"}), {"routingBudget": "brief"})
+        self.assertEqual(validate_router_settings_patch({"modelResponseWaitSeconds": 45}),
+                         {"modelResponseWaitSeconds": 45})
         # The explicit clear is now an empty array; null is refused instead of clearing.
         self.assertEqual(validate_router_settings_patch({"routerBuddyIds": []}), {"routerBuddyIds": []})
         self.assertEqual(validate_router_settings_patch({"routerBuddyIds": [BUDDY]}),
@@ -26,7 +34,12 @@ class RouterSettingsTests(unittest.TestCase):
     def test_patch_rejects_invalid_lists_and_values(self):
         for value in (None, [], {}, {"routerBuddyId": BUDDY}, {"fastRouterBuddyId": "old"},
                       {"reviewRouterBuddyId": None}, {"decisionBuddyId": "old"}, {"revision": 1},
-                      {"routingBudgetLimits": {}}, {"routingBudget": "quick"}, {"routingBudget": None},
+                      {"routingBudgetLimits": {}}, {"routingBudget": "brief"}, {"profileBudget": "deep"},
+                      {"modelResponseWaitSeconds": None}, {"modelResponseWaitSeconds": True},
+                      {"modelResponseWaitSeconds": 0}, {"modelResponseWaitSeconds": -1},
+                      {"modelResponseWaitSeconds": MAX_MODEL_RESPONSE_WAIT_SECONDS + 1},
+                      {"modelResponseWaitSeconds": 2**100},
+                      {"modelResponseWaitSeconds": 1.5}, {"modelResponseWaitSeconds": "60"},
                       {"defaultRoutingMode": "auto"}, {"defaultRoutingMode": None},
                       {"routerBuddyIds": None}, {"routerBuddyIds": "solo"}, {"routerBuddyIds": (BUDDY,)},
                       {"routerBuddyIds": [BUDDY, None]}, {"routerBuddyIds": [1]},
@@ -43,6 +56,22 @@ class RouterSettingsTests(unittest.TestCase):
             with self.subTest(seconds=seconds):
                 self.assertEqual(validate_router_settings_patch({"routerRetryIntervalSeconds": seconds}),
                                  {"routerRetryIntervalSeconds": seconds})
+        for seconds in (1, MAX_MODEL_RESPONSE_WAIT_SECONDS):
+            self.assertEqual(validate_router_settings_patch({"modelResponseWaitSeconds": seconds}),
+                             {"modelResponseWaitSeconds": seconds})
+
+    def test_patch_validates_the_exploration_interval(self):
+        # Null is the recorded form of exploration off; the minimum interval is 2.
+        self.assertEqual(validate_router_settings_patch({"explorationEvery": None}),
+                         {"explorationEvery": None})
+        self.assertEqual(validate_router_settings_patch({"explorationEvery": 2}),
+                         {"explorationEvery": 2})
+        self.assertEqual(validate_router_settings_patch({"explorationEvery": 1000}),
+                         {"explorationEvery": 1000})
+        for value in (1, 0, -2, True, 5.0, "5"):
+            with self.subTest(value=value), self.assertRaises(BoardError) as failure:
+                validate_router_settings_patch({"explorationEvery": value})
+            self.assertEqual(failure.exception.code, "INVALID_ARGUMENT")
 
     def test_patch_accepts_large_lists_without_item_limits(self):
         many = [f"provider:model-{index}:off" for index in range(200)]
@@ -50,7 +79,7 @@ class RouterSettingsTests(unittest.TestCase):
 
     def test_patch_validation_keeps_input_and_result_independent(self):
         ids = [BUDDY]
-        entry = {"routerBuddyIds": ids, "routerRetryIntervalSeconds": 30, "routingBudget": "deep"}
+        entry = {"routerBuddyIds": ids, "routerRetryIntervalSeconds": 30, "modelResponseWaitSeconds": 75}
         before = deepcopy(entry)
         result = validate_router_settings_patch(entry)
         self.assertEqual(entry, before)

@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import {
-  catalogue, chip, choosePreference, effortCell, foldHandle, level, levelPreference, listed, modelButton, modelRow, pane,
+  catalogue, chip, choosePreference, effortCell, foldHandle, levelSwitch, levelPreference, listed, modelButton, modelRow, pane,
   queryFoldHandle, queryModel, search, selectModel,
 } from "./buddies/page.testing";
 import type { ConsoleApi, HarnessHealth } from "./api";
@@ -36,7 +36,7 @@ const SONNET = "claude / anthropic / claude-sonnet-5";
 const SOL = "codex / openai / gpt-6-sol";
 const GLM = "zcode / zhipu / glm-5";
 
-function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harness" | "provider" | "model" | "effort">): Buddy {
+function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "alias" | "harness" | "provider" | "model" | "effort">): Buddy {
   return {
     effortRank: null, available: true, enabled: false, capabilities: [], contextWindow: null,
     description: "", source: "catalog:fixture", ...entry,
@@ -46,15 +46,15 @@ function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harnes
 /** Three harnesses: one available model service, one all-disabled model service, one offline model service. */
 function buddies(): Buddy[] {
   return [
-    buddy({ effortRank: null, buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
+    buddy({ effortRank: null, buddyId: mediumId, alias: null, ...sonnet, effort: "medium",
       enabled: true, capabilities: ["execution:claude", "routing:fast", "decision"], contextWindow: 200_000 }),
-    buddy({ effortRank: null, buddyId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
+    buddy({ effortRank: null, buddyId: highId, alias: null, ...sonnet, effort: "high",
       capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
-    buddy({ effortRank: null, buddyId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
+    buddy({ effortRank: null, buddyId: solMediumId, alias: null, ...sol, effort: "medium",
       capabilities: ["execution:codex"] }),
-    buddy({ effortRank: null, buddyId: solLowId, label: "GPT-6 Sol · low", ...sol, effort: "low",
+    buddy({ effortRank: null, buddyId: solLowId, alias: null, ...sol, effort: "low",
       capabilities: ["execution:codex"] }),
-    buddy({ buddyId: glmId, label: "GLM-5 · default", ...glm, effort: "default", available: false,
+    buddy({ buddyId: glmId, alias: null, ...glm, effort: "default", available: false,
       unavailableReason: { code: "harness.not-found", params: {} } }),
   ];
 }
@@ -68,10 +68,10 @@ type Options = { routerBuddyId?: string | null; preferences?: Preference[] };
  */
 function harnesses(): HarnessHealth[] {
   return [
-    { harness: "claude", status: "ready", revision: 2, manualPath: null,
+    { harness: "claude", status: "ready", revision: 2, manualPath: null, permissionsVerifiedVersion: null,
       executable: "/Users/fixture/.local/bin/claude", version: "2.0.1",
       source: "版本管理器（nvm 默认版本）", checkedAt: "2026-09-28T09:30:00.000Z", candidates: [] },
-    { harness: "zcode", status: "missing", revision: 1, manualPath: null,
+    { harness: "zcode", status: "missing", revision: 1, manualPath: null, permissionsVerifiedVersion: null,
       reason: { code: "harness.not-found", params: {} },
       checkedAt: "2026-09-28T09:30:00.000Z",
       candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing" }] },
@@ -82,15 +82,15 @@ type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
 
 function snapshot(options: Options = {}): HarnessSnapshot {
   const base: Snapshot = {
-    csrfToken: "csrf", eventCursor: 0,
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: options.routerBuddyId === undefined ? [mediumId] : options.routerBuddyId === null ? [] : [options.routerBuddyId],
-      routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" },
+    configuration: { explorationEvery: 5, routerBuddyIds: options.routerBuddyId === undefined ? [mediumId] : options.routerBuddyId === null ? [] : [options.routerBuddyId],
+      routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: buddies(),
     preferences: options.preferences ?? [],
 
-    modelServiceNotes: [],
+    models: [], modelCorrespondences: [],
 
     decisions: [],
 
@@ -110,22 +110,16 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
     ...state,
 
     preferences: [...state.preferences],
-    modelServiceNotes: [...state.modelServiceNotes],
     configuration: state.configuration ? { ...state.configuration, ...(params.configuration ?? {}) } : null,
   };
   for (const setting of params.buddySettings ?? []) {
     next.buddies = next.buddies.map(entry => entry.buddyId === setting.buddyId ? { ...entry, enabled: setting.enabled } : entry);
   }
-  const key = (entry: { harness: string; provider: string; model: string }) => JSON.stringify([entry.harness, entry.provider, entry.model]);
   for (const change of params.preferenceChanges ?? []) {
     next.preferences = next.preferences.filter(entry => entry.buddyId !== change.buddyId);
     if (change.mode !== null) {
       next.preferences.push({ buddyId: change.buddyId, mode: change.mode, note: change.note });
     }
-  }
-  for (const change of params.modelServiceNoteChanges ?? []) {
-    next.modelServiceNotes = next.modelServiceNotes.filter(entry => key(entry) !== key(change));
-    next.modelServiceNotes.push({ ...change, updatedAt: null });
   }
   return next;
 }
@@ -140,7 +134,8 @@ function fixture(options: Options = {}) {
     if (operation === "buddy_list") {
       // Only a checked 显示不可用 asks for this page; it mirrors the board's
       // bounded contract and just returns the current rows.
-      return { buddies: state.buddies, modelServiceNotes: state.modelServiceNotes,
+      return { buddies: state.buddies, models: state.models,
+        modelCorrespondences: state.modelCorrespondences,
         preferences: state.preferences,
         modelServiceConcurrency: state.modelServiceConcurrency, nextCursor: null };
     }
@@ -163,7 +158,7 @@ function fixture(options: Options = {}) {
     command,
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
     storagePlan: vi.fn(async (csrfToken: string) => command("storage_plan", {}, csrfToken)),
     storageApply: vi.fn(),
     runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: "0.29.0", contractVersion: "fixture", schemaVersion: 15, sourceCommit: null, installedAt: null }, installed: null })),
@@ -179,7 +174,7 @@ async function openBuddy(api: ConsoleApi) {
 }
 
 const saveButton = () => within(screen.getByRole("region", { name: "未保存的修改" })).getByRole("button", { name: /^(保存|重试同一保存)$/ });
-const enabledOnly = () => screen.getByRole("checkbox", { name: "只看已启用" });
+const enabledOnly = () => screen.getByRole("checkbox", { name: "仅显示已启用" });
 const showUnavailable = () => screen.getByRole("checkbox", { name: "显示不可用 1" });
 
 afterEach(() => {
@@ -217,7 +212,7 @@ describe("the harness directory", () => {
     await listed(1, 4);
     expect(foldHandle("Codex")).toBeTruthy();
     // The two filters combine: with 显示不可用 on, the offline model is listed,
-    // and 只看已启用 still hides it because none of its buddies is enabled.
+    // and 仅显示已启用 still hides it because none of its buddies is enabled.
     await user.click(showUnavailable());
     await listed(1, 5);
     expect(foldHandle("ZCode").getAttribute("aria-expanded")).toBe("false");
@@ -247,15 +242,14 @@ describe("the harness directory", () => {
     await user.click(foldHandle("Claude Code"));
     expect(foldHandle("Claude Code").closest("[data-slot=harness-section]")!.textContent).toContain("启用 1 / 2");
     expect(queryModel(SONNET)).toBeNull();
-    // The harness that cannot work is written with its recorded state; the
-    // recorded reason is its explanation, on hover and for a screen reader.
+    // The summary names the recorded state without repeating it in a popup.
     const zcode = foldHandle("ZCode");
     expect(zcode.getAttribute("aria-expanded")).toBe("false");
-    const state = within(zcode.closest("[data-slot=harness-section]")!).getByRole("button", { name: "ZCode 账户" });
+    const state = zcode.closest("[data-slot=harness-section]")!.querySelector<HTMLElement>("[data-slot=harness-header]")!;
     expect(within(state).getByText("未找到")).toBeTruthy();
-    expect(state.getAttribute("aria-description")).toContain(reasonText({ code: "harness.not-found", params: {} }));
+    expect(state.getAttribute("aria-description")).toBeNull();
     await user.hover(state);
-    expect((await screen.findByRole("tooltip", undefined, { timeout: 2000 })).textContent).toContain(reasonText({ code: "harness.not-found", params: {} }));
+    expect(screen.queryByRole("tooltip")).toBeNull();
     // A folded harness hides its models; unfolded, the model says nothing the harness already said.
     expect(queryModel(GLM)).toBeNull();
     await user.click(zcode);
@@ -305,9 +299,9 @@ describe("the harness directory", () => {
     expect(foldHandle("ZCode")).toBeTruthy();
     expect(queryFoldHandle("Claude Code")).toBeTruthy();
     expect(queryModel(SONNET)).toBeNull();
-    // The model's display label, lowercase, still finds the row that shows its id.
+    // The model id is searchable after the directory label was removed.
     await user.clear(search());
-    await user.type(search(), "gpt-6 sol");
+    await user.type(search(), "gpt-6-sol");
     await listed(0, 2);
     await user.click(foldHandle("Codex"));
     expect(modelButton(SOL)).toBeTruthy();
@@ -346,12 +340,12 @@ describe("a level's own preference", () => {
     await openBuddy(f.api);
     await selectModel(user, SONNET, "Claude Code");
     await user.click(effortCell("high"));
-    await user.click(within(level("high")).getByRole("switch"));
+    await user.click(levelSwitch("high"));
     await selectModel(user, SOL, "Codex");
     await user.click(effortCell("medium"));
-    await user.click(within(level("medium")).getByRole("switch"));
+    await user.click(levelSwitch("medium"));
     await user.click(effortCell("low"));
-    await user.click(within(level("low")).getByRole("switch"));
+    await user.click(levelSwitch("low"));
     const chips = [chip(SONNET, "high"), chip(SOL, "medium"), chip(SOL, "low")];
     expect(chips.map(item => item.textContent)).toEqual(["high优先", "medium固定", "low排除"]);
     expect(new Set(chips.map(item => item.className)).size).toBe(1);
@@ -368,7 +362,7 @@ describe("a level's own preference", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
     window.location.hash = "#settings";
     await waitFor(() => expect(screen.queryByRole("radiogroup", { name: "medium 的偏好" })).toBeNull());
-    window.location.hash = "#buddies/catalog";
+    window.location.hash = "#buddies/models";
     await waitFor(() => expect(screen.queryByRole("region", { name: SOL })).toBeNull());
     expect(screen.queryByRole("listbox")).toBeNull();
   });
@@ -400,7 +394,7 @@ describe("the settings page", () => {
     expect(overview.textContent).toContain("占用977 KB");
     expect(overview.textContent).toContain("可回收977 KB");
     // No buddy settings leak into the system settings page.
-    expect(screen.queryByRole("checkbox", { name: "只看已启用" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "仅显示已启用" })).toBeNull();
     expect(screen.queryByRole("table", { name: "模型" })).toBeNull();
   });
 });

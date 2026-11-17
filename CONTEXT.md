@@ -1,6 +1,6 @@
 # hey-my-buddy
 
-Agent buddies share delegated work through one blackboard: a Host buddy delegates a micro task and owns it, a Router buddy may choose the Worker buddy for it, Worker buddies execute its turns, and every fact they exchange is recorded on the blackboard. [ADR-013](docs/decisions/013-buddy-roles-and-blackboard-terminology.md) records why these terms were chosen. [ADR-021](docs/decisions/021-router-buddy-planes-and-routing-evidence.md) adds a buddy's identity, the Router's three planes, the routing knowledge terms and the macro task and micro task terms; its status says how much of that is implemented. [ADR-026](docs/decisions/026-delegation-authority.md) adds the Lead buddy and delegation authority. [ADR-027](docs/decisions/027-model-catalog-trust.md) adds the model catalog and its pending state.
+Agent buddies share delegated work through one blackboard: a Host buddy delegates a micro task and accepts its result, a Router buddy may choose the Worker buddy for it, Worker buddies execute its turns, and every fact they exchange is recorded on the blackboard. [ADR-013](docs/decisions/013-buddy-roles-and-blackboard-terminology.md) records why these terms were chosen. [ADR-021](docs/decisions/021-router-buddy-planes-and-routing-evidence.md) adds a buddy's identity, the Router's three planes, the routing knowledge terms and the macro task and micro task terms; its status says how much of that is implemented. [ADR-026](docs/decisions/026-delegation-authority.md) adds the Lead buddy and delegation authority. [ADR-027](docs/decisions/027-model-catalog-trust.md) adds the model catalog and its pending state.
 
 ## Language
 
@@ -11,12 +11,23 @@ The product that provides the blackboard, execution processes, adapters, CLI, co
 _Avoid_: Buddy
 
 **黑板 / blackboard**:
-The single shared record of micro tasks, turns, requests, results and decisions, together with the mechanical rules that admit, queue and fence work on it. It makes no judgment about the work and never directs a buddy.
-_Avoid_: Buddy, Buddy service
+The single shared record of micro tasks, turns, requests, results and decisions, together with the mechanical rules that admit, queue and fence work on it. It makes no judgment about the work and never directs a buddy. English code and records call one blackboard's stored record a board (`board.sqlite3`); Chinese text calls it 黑板 as well.
+_Avoid_: Buddy, Buddy service; `看板` (for a blackboard or what it stores)
 
 **状态目录 / state directory**:
 The private directory where one blackboard keeps its data on disk. It lies under the user's home by default; `HMB_STATE_DIR` selects another one.
 _Avoid_: 状态根 / state root
+
+**升级下限 / upgrade floor**:
+The oldest stored form of a blackboard that the current version can still upgrade; every newer form is reached from it one step at a time. It moves only by an explicit decision, and a blackboard older than it is refused with the release that can upgrade it.
+_Avoid_: 升级基点 / upgrade base (it named a start that moved at every release)
+
+**控制台 / console**:
+The blackboard's private local entry for the user: a web application that shows what the blackboard records and lets the user act on it only through the blackboard's own operations. Larger to smaller: 黑板 / blackboard, then 控制台 / console, then 界面 / page.
+
+**界面 / page**:
+One part of the console that the user looks at and acts on, such as the macro task page or the Buddy page; the console's own labels name its pages.
+_Avoid_: `看板` (not the same word as page; it named both a page and a stored blackboard)
 
 ### Buddies and roles
 
@@ -24,20 +35,32 @@ _Avoid_: 状态根 / state root
 A participant, normally an agent, that acts on the blackboard in the Host, Worker or Router role. A buddy is identified by its harness, provider, model and reasoning effort, for example `dsh / deepseek-official / deepseek-flash / off`; anything of that shape is a buddy, and one run of it is an execution of that buddy. Buddies are peers in standing and interact only through the blackboard.
 _Avoid_: Buddy (for the product or the blackboard), peer Buddy; configuration, profile, model or template (for a buddy); 伙伴 (Chinese text keeps the word buddy, as it keeps Host, Worker, Router and harness)
 
+**四元组 / complete name**:
+A buddy's four parts written together as `harness / provider / model / effort`, for example `claude / anthropic / fable-5.2 / max`; it names exactly one buddy wherever a buddy is named.
+_Avoid_: 四段名字, 完整名字, four-part name, full name
+
+**别名 / alias**:
+A short name the user gives one buddy, for example Claudea. Wherever the user names a buddy the alias stands for that buddy's complete name, and text for a Host writes it in square brackets after the complete name, `claude / anthropic / fable-5.2 / max [Claudea]`. Records keep the buddy, never the alias, so renaming an alias changes no history. Decided by the developer on 2026-11-10.
+_Avoid_: label, nickname
+
+**同型 buddy / buddy kind**:
+The harness, model and reasoning effort of a buddy, without its provider. Buddies of one kind share one evaluation, so a change of provider keeps it and a change of harness does not. The console does not show the word: it names a buddy kind by its harness, model and reasoning effort.
+_Avoid_: buddy model, 型号 (for the kind; 型号 reads as a model)
+
 **推理强度 / reasoning effort**:
 The fourth part of a buddy's identity: how much reasoning the harness asks of the model. A harness offers it in values such as `off`, `high` and `max`, and each value of a model is a different buddy. Each harness names and grades its efforts in its own way, so two harnesses' values are not comparable even when they share a name.
 _Avoid_: 思考强度, 档位, 思考档位 (档位 names a permission level), effort level, thinking level
 
 **角色 / role**:
-The authority a buddy acts with on the blackboard, Host, Worker or Router, established by its authorized operation rather than by its harness or model. Host and Worker operations use scoped credentials; a Router has no direct blackboard credential and returns only a structured answer collected by its Worker runtime.
+The authority a buddy acts with on the blackboard, Host, Worker or Router, established by its authorized operation rather than by its harness or model. A Worker or a Lead acts with the credential of its own execution, and a call that carries none acts as Host; a Router has no direct blackboard credential and returns only a structured answer collected by its execution process.
 
 **Host buddy**:
-A buddy acting with Host authority: it owns the micro tasks it delegates or takes over, defining their authorization, deciding their boundaries and accepting their results. Short form: Host.
-_Avoid_: coordinator, orchestrator, manager
+A buddy acting with Host authority: it delegates micro tasks, defining their authorization, deciding their boundaries and accepting their results. The blackboard does not record which session acted as Host, so any of the user's Host sessions may act on a micro task that no Lead owns. Short form: Host.
+_Avoid_: Host agent, main agent, coordinator, orchestrator, manager
 
 **Worker buddy**:
 A buddy that executes turns of a micro task with attempt-scoped authority; it may finish, ask for assistance or raise attention, but cannot create micro tasks, authorize helpers or accept results. Its results reach the Host for acceptance. The one exception is a Lead. Short form: Worker.
-_Avoid_: a Buddy, coding Buddy
+_Avoid_: Worker agent, subagent, a Buddy, coding Buddy
 
 **Lead buddy**:
 The buddy executing a micro task that carries delegation authority. Toward the Host that delegated that micro task it is a Worker: it reports only to that Host, which accepts its result, and it never talks to the user. Toward the micro tasks created under that micro task it acts with Host authority: it delegates them, decides their boundaries, sends them back and accepts them. It is the buddy the user names for that work, and exists only when the user asks for it. Short form: Lead.
@@ -52,17 +75,17 @@ _Avoid_: child task, sub-task; a helper is a different thing
 
 **Router buddy**:
 A buddy acting with Router authority in one of the three planes (三个面 / three planes): the routing plane, the maintenance plane and the profile plane. The user lists one or more buddies in order for the routing plane, and the first available one holds it; the maintenance and profile planes each have the one buddy the user names. Unlike a Worker's result, its output takes effect without Host acceptance; the blackboard checks it for bounds and structure only. Short form: Router.
-_Avoid_: decision Buddy, selector (for the buddy)
+_Avoid_: Router agent, decision Buddy, selector (for the buddy)
 
 **路由面 / routing plane**:
-The Router's plane that chooses the Worker buddy for one micro task within its routing bounds, in fast or review mode; each choice is one routing calculation.
+The Router's plane that chooses the Worker buddy for one micro task within its routing bounds, in fast or review mode; each choice is one routing calculation. The console names it by its work alone, 路由 / Routing, without the word plane.
 _Avoid_: 工作面 / work plane (it reads as a name for all three planes), 执行面
 
 **维护面 / maintenance plane**:
-The Router's plane that classifies finished micro tasks into the domain list and the task types and writes each buddy's evaluation from the recorded outcomes.
+The Router's plane that classifies finished micro tasks into the domain tree and the task types and writes each buddy kind's evaluation from the recorded outcomes. The console names it by its work alone, 维护 / Maintenance, without the word plane.
 
 **画像面 / profile plane**:
-The Router's plane that builds model profiles from public sources.
+The Router's plane that builds model profiles from public sources. The console names it by its work alone, 画像 / Profiles, without the word plane.
 
 **路由边界 / routing bounds**:
 The legal candidates a Router may choose from: the published, enabled and available buddies that satisfy the micro task's required capabilities and the user's pins and exclusions. The blackboard checks a Router's choice against these bounds only, never its judgment.
@@ -82,21 +105,25 @@ _Avoid_: 用户, user (for the developer)
 ### Routing knowledge
 
 **模型画像 / model profile**:
-The public picture of a model: its positioning and its commonly reported strengths and weaknesses, each with a source, together with published facts such as price and context length. It belongs to the model, is shared by every buddy that uses the model and does not depend on the user's work.
+The public picture of a model: its positioning and its commonly reported strengths and weaknesses, each with a source. It belongs to the model, is shared by every buddy that uses the model and does not depend on the user's work.
 _Avoid_: model card, evaluation (for public information)
 
 **评价 / evaluation**:
-What the blackboard's recorded outcomes show about one buddy in this user's work, organised by domain and task type: counted results and observations that cite micro tasks. It belongs to the buddy.
+What the blackboard's recorded outcomes show about one buddy kind in this user's work, organised by the domain tree and the task types: counted results, accumulated as each micro task closes, and a summary. It belongs to the buddy kind.
 _Avoid_: card, assessment, profile (for local evidence)
 
-**领域清单 / domain list**:
-The user's own vertical domains, each the kind of expertise their micro tasks call for, grown from those micro tasks and maintained by the Router. A domain is neither a project nor a task type.
+**归纳 / summary**:
+The maintenance plane's written observations about one buddy kind, citing the micro tasks they rest on. It holds no numbers; the counted results stand beside it.
+
+**领域树 / domain tree**:
+The user's own vertical domains as a tree, each node the kind of expertise their micro tasks call for, grown from those micro tasks and maintained by the Router, with no limit on nodes or depth. A domain is neither a project nor a task type.
+_Avoid_: 领域清单 / domain list
 
 **任务类型 / task type**:
 One of seven fixed kinds of work: create (新建), change (改造), debug (排错), verify (验证), review (审查), research (调研) and write (撰写).
 
 **探索 / exploration**:
-An occasional routing choice of a rarely used buddy for a short micro task, made to gather evidence about it.
+An occasional routing choice of the buddy kind with the fewest samples for the micro task's domain and task type, made to gather evidence about it; the user sets how often.
 
 ### Where buddies run
 
@@ -112,6 +139,9 @@ The connector through which an execution reaches the blackboard: a harness in on
 
 **模型 / model**:
 One concrete language model, whoever provides it. Providers, communities and users may call the same model by different names.
+
+**模型的对应关系 / model correspondence**:
+The blackboard's record of which model each model service's name stands for. Equal names under different providers are one model; a different name is a model of its own until a correspondence joins it to another, suggested by the profile plane or set by the user. A change, including marking that a name now stands for a newer model, holds from the moment it is made.
 
 **模型服务 / model service**:
 One provider's service of one model. The blackboard knows a provider only by the name a harness gives it, so it identifies a model service by harness, provider and model, for example `dsh / deepseek-official / deepseek-flash`; a buddy is a model service used through that harness at one reasoning effort.
@@ -132,6 +162,14 @@ _Avoid_: BYOK, API 密钥 / API key (as a way of paying: a key can belong to a s
 **提供方拒绝 / provider rejection**:
 A provider declining to serve a turn, as the harness reports it in a structured code. It is one of three kinds: 额度耗尽 / quota used up, which puts the provider into cooling; 限流 / rate limited; and 满载 / overloaded, when the provider has no room for that model service at the moment. An authentication failure is not a provider rejection, and neither is an error the harness reports only as text.
 _Avoid_: quota failure (for the whole: quota is one kind), refusal (for a provider's; the blackboard and the Router refuse requests)
+
+**输入上限 / input limit**:
+How large an initial input one harness accepts in one native request, counted the harness's own way, as its adapter declares it: 已知 / known, with a value, a unit and the harness form and versions it was verified on, or 未知 / unknown, when no value was found, which does not mean unlimited.
+_Avoid_: context window, token budget (those belong to a model, not to a harness)
+
+**输入拒收 / input rejection**:
+A turn that does not start, or that its harness refuses, because its initial input is too large. 本地核对拒收 / rejected by local preflight: the blackboard measured the assembled prompt against a known input limit and did not start the native turn. 原生拒收 / rejected by native admission: the harness refused the input with a structured code saying it was too large. Either way the micro task stops at the Host boundary with the sizes of the prompt's parts. An input rejection is not a provider rejection.
+_Avoid_: input too long, overflow
 
 **冷却 / cooling**:
 The time a provider of one harness sits out automatic routing after a provider rejection for quota. It grows with consecutive rejections, ends by itself or when the user clears it, and a later success ends the sequence. It belongs to the provider in that harness, not to a model or a buddy, and never changes the user's enablement or preferences.
@@ -156,15 +194,19 @@ _Avoid_: run controller, Worker runtime, Worker (for this process)
 ### Work
 
 **项目 / project**:
-The code repository that a macro task belongs to. Every worktree and checkout of one repository belongs to the same project; a worktree or a checkout is not a project.
-_Avoid_: 工作区, workspace (an execution workspace is a checkout, not a project)
+Where a macro task's work belongs: a Git repository, or an ordinary folder known by its path. A repository stays the same project when it is renamed, moved or copied; a fresh clone is a different project. Every worktree and checkout of one repository belongs to the same project; a worktree or a checkout is not a project. A folder that is moved or renamed becomes a new project, and a folder that later becomes a Git repository stays the same project.
+_Avoid_: 工作区, workspace (an execution workspace is a checkout, not a project); 仓库, repository (for every project: a project may be a folder)
 
 **宏任务 / macro task**:
-A user's overall piece of work, holding one or more micro tasks and used to group them for browsing. It is the unit by which the user deletes records; a micro task that belongs to no macro task is deleted on its own. It does not schedule work or grant control authority.
+A user's overall piece of work: it carries a goal statement and groups the micro tasks submitted for it for browsing; it holds none until the first is submitted. It is the unit by which the user deletes records, pauses, resumes and ends work; a micro task that belongs to no macro task is deleted on its own. It grants no control authority and schedules nothing, except that a paused macro task holds its work until it is resumed.
 _Avoid_: 工作目标, objective
 
+**目标说明 / goal**:
+What a macro task is meant to achieve, how far counts as done and what is left out. The Host writes it when it creates the macro task and revises it whenever the direction changes; every revision is kept with its time. It is not part of a Worker's input and does not track progress.
+_Avoid_: 描述, description (the fixed display text it replaces)
+
 **微任务 / micro task**:
-One bounded piece of work that a Host buddy delegates, owns and accepts; it may span several Worker turns. Every micro task belongs to at most one macro task.
+One bounded piece of work that a Host buddy delegates and accepts; it may span several Worker turns. Every micro task belongs to at most one macro task.
 _Avoid_: 委派 (as a noun), delegation, governed goal
 
 **委派 / delegate**:
@@ -184,20 +226,43 @@ One Worker buddy execution ending in a result, assistance request or attention b
 A question the micro task's Host or Lead puts to its running turn through the blackboard, together with the answer correlated with it. It changes neither the turn's task nor its authority, and it is not a continuation.
 _Avoid_: 询问, 消息 (the stored record is a message; the act is an inquiry)
 
+**检出 / checkout**:
+The working copy of a project's Git repository in which a Worker executes a micro task: a worktree the blackboard creates for that micro task, or the Host's existing checkout. It isolates nothing at the operating system level.
+_Avoid_: 工作区, workspace (for the checkout itself)
+
+**不带检出的微任务 / micro task without a checkout**:
+A micro task whose Worker works directly in the folder the Host names, a Git repository or an ordinary folder, with nothing copied and nothing sealed. Each of its turns ends in a fixed result; with write access the Worker changes the folder itself, and the blackboard keeps no copy of those changes.
+_Avoid_: 无仓库的微任务 (it may run in a repository)
+
+**固定结果 / fixed result**:
+The result the Worker delivered at the end of a turn of a micro task without a checkout, kept by the blackboard with its digest. Acceptance binds it; the files it names are not part of it.
+
 **封存 / seal**:
-The fixed artifact the blackboard makes of a checkout's content when a turn ends; acceptance judges it, never the Worker's own report.
+The fixed artifact the blackboard makes of a checkout's content when a turn ends; acceptance judges it, never the Worker's own report. A micro task without a checkout has no seal; its turns end in fixed results.
 _Avoid_: 第 N 封 (say 第 N 回合的封存), 快照
 
 **预期时长 / expected duration**:
-When the Host expects a micro task or a command execution to be done: half an hour unless it says otherwise. Reaching it stops nothing; it is the moment the Host is reminded to look, and the reminder repeats each time the same span passes again.
+When the Host expects a micro task to be done, given with every micro task as the Host's judgment of its size; the Router reads it too. Reaching it stops nothing; it is the moment the Host is reminded to look, and the reminder repeats each time the same span passes again.
 _Avoid_: timeout, deadline, time limit (for delegated work)
 
 **有序收尾 / wrap-up**:
-Stopping a running micro task through the blackboard so that its Worker says what is done and what is not and delivers before it stops; a forced stop follows when the grace period ends, and the partial output is sealed either way.
+Stopping a running micro task through the blackboard so that its Worker says what is done and what is not and delivers before it stops; a forced stop follows when the grace period ends. Either way a checkout's partial output is sealed, while a micro task without a checkout keeps only the result its Worker delivered.
 _Avoid_: graceful shutdown; cancel (for the summary itself); `收尾` on its own
 
+**暂停 / pause**:
+The user's stop of a whole macro task from the console: its running turns are interrupted through the harness and recorded so they can be continued, and its queued work does not start until it is resumed; nothing is concluded or reclaimed.
+_Avoid_: 停止 or 急停 (for this), suspend
+
+**继续 / resume**:
+The user's undoing of a pause from the console: the blackboard continues each micro task the pause interrupted, with the same buddy, access and scope, and releases the work it held.
+_Avoid_: 续接 / continue (the Host's verb for one micro task), restart
+
+**结束 / end**:
+The user's closing of a macro task from the console: each unfinished micro task is stopped and concluded as ended by the user, so its checkout is reclaimed; delivered micro tasks are left to the Host.
+_Avoid_: 删除 (which removes records), 取消 / cancel
+
 **权限档位 / permission level**:
-How far a buddy may go in one run, in five levels from narrow to wide: 不用工具 / no tools (it only answers), 只联网 / web only (it may search the web and fetch pages and cannot touch local files), 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout) and 放开 / full access (no limit on where files are modified). The first two say which tools exist; the last three say where files may be modified and nothing about the network. A Worker buddy's level is one of the last three, chosen by the Host when it delegates and changeable between turns; a Router buddy's level follows from what it is doing. A harness carries a level out either 强制 / enforced, when its sandbox or tool limits stop what the level excludes, or 约定 / by convention, when it is only asked to stay inside and the blackboard checks afterwards what it can.
+How far a buddy may go in one run, in five levels from narrow to wide: 不用工具 / no tools (it only answers), 只联网 / web only (it may search the web and fetch pages; it cannot touch local files or the user's other connected data, and runs no commands), 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout, or the folder it works in when it has none) and 放开 / full access (no limit on where files are modified). The first two say which tools exist; the last three say where files may be modified and nothing about the network. A Worker buddy's level is one of the last three, chosen by the Host when it delegates and changeable between turns; a Router buddy's level follows from what it is doing. A harness carries a level out either 强制 / enforced, when its sandbox or tool limits stop what the level excludes, or 约定 / by convention, when it is only asked to stay inside and the blackboard checks afterwards what it can.
 _Avoid_: 权限清单, sandbox mode (a level is not a list of grants, and a sandbox mode is only how one harness carries a level out)
 
 **换档 / level change**:
@@ -217,14 +282,17 @@ A run whose native side ended in a way the run module could not read as success 
 _Avoid_: 结束未确认 (that says a process's stop was not confirmed, a different fact)
 
 **换手 / handoff**:
-A micro task passing to a different buddy between turns: the buddy that executed its earlier turns stops, and another executes the next. The micro task, its Host and the micro tasks under it stay the same.
-_Avoid_: 接管, takeover (those name a Host taking over the ownership of a micro task)
+A micro task passing to a different buddy between turns: the buddy that executed its earlier turns stops, and another executes the next. The micro task and the micro tasks under it stay the same.
+_Avoid_: 接管, takeover
 
 **验收 / acceptance**:
-The Host's evidence-backed judgment on a fixed artifact, separate from Worker completion.
+The Host's evidence-backed judgment on a seal or a fixed result, separate from Worker completion.
+
+**三方交叉验证 / three-way cross-check**:
+At acceptance the Host checks the brief with its later inputs, the buddy's report and the seal or fixed result against one another, and trusts none of them alone: the brief may miss what the Host left out, the report may flatter, and the artifact may drift from the brief. When a Worker only answers, its report and its fixed result may be the same text, and only two of them remain to compare.
 
 **打回 / send back**:
-The Host's handling of a delivered micro task it does not accept: it continues the same micro task with what must change, so a Worker runs another turn in the same checkout; nothing counts as accepted until a later seal is accepted.
+The Host's handling of a delivered micro task it does not accept: it continues the same micro task with what must change, so another turn runs in the same checkout, by the same buddy unless the Host names another; nothing counts as accepted until a later seal or fixed result is accepted.
 
 ### Checks
 

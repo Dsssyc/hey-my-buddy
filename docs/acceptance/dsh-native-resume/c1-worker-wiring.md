@@ -8,7 +8,7 @@
 
 ## 覆盖与夹具
 
-- V-C1 首次就绪登记：`WorkerLiveWiringTests.test_the_first_ready_tick_registers_the_live_binding_once`。实际续租 tick（`_forward_activity`）首次经 `handle_live_binding` 发现控制器就绪后，`_attempt_activity_binding` 调用 `worker.live.bind`，看板客户端恰好记录一次 `live_attach`；第二个 tick 不再重复登记。
+- V-C1 首次就绪登记：`WorkerLiveWiringTests.test_the_first_ready_tick_registers_the_live_binding_once`。实际续租 tick（`_forward_activity`）首次经 `handle_live_binding` 发现控制器就绪后，`_attempt_activity_binding` 调用 `worker.live.bind`，黑板客户端恰好记录一次 `live_attach`；第二个 tick 不再重复登记。
 - V-C2 续租后重新登记：`test_a_successful_renew_registers_the_same_binding_again`。合法 nonce 下 `_renew` 成功（无取消、未完成、无待对账）后 `_refresh_live_binding` 再次登记，且是同一个 attachment 对象（`assertIs`）。
 - V-C2 对账后重新登记：`test_a_successful_reconcile_registers_the_same_binding_again`。续租响应要求对账、子进程句柄仍存活时，`_recover` 对账成功后再次登记同一 attachment。两种重新登记共用 `_refresh_live_binding`，两条路径各有独立用例与独立断言消息。
 - V-C3 退出关闭 Worker 端点：`WorkerEndpointClosureTests.test_worker_exit_closes_its_own_c_two_socket`。真实 `Worker.run(max_iterations=1)` 主循环前后，Worker 自身 C-Two socket 文件从 `is_socket()` 到不存在；同时核对循环确实执行了一次注册与一轮认领。

@@ -1,12 +1,14 @@
 import i18n from "i18next";
+import { z } from "zod";
 import { ApiError } from "../api";
 import { parseActor } from "../actor";
 import { isReason } from "../reason";
 import type { Reason } from "../reason";
+import { parseInputFailure } from "./input-failure";
 import type { ActivityPhase, Actor, RoutingMode, Task, TokenUsage } from "../types";
 import type {
   Activity, Artifact, Attempt, Audit, AuditRequest, Basis, Buddy, CompactRequest, Continuation, CumulativePatch, Ending,
-  HostConclusion, Inquiries, Inquiry, InquiryState, Integration, OpenRequest, ResultTurn, Routing, RoutingEntry, Session,
+  HostConclusion, Inquiries, Inquiry, InquiryState, Integration, OpenRequest, ResultTurn, Routing, RoutingEntry,
   TaskView, Turn, Workflow,
 } from "./types";
 
@@ -73,6 +75,16 @@ function actor(value: unknown, what: string): Actor {
   return actorOrNull(value, what) ?? refuse(what);
 }
 
+const selectedBuddySchema = z.object({
+  harness: z.string(), provider: z.string(), model: z.string(), effort: z.string(), alias: z.string().nullable(),
+}).strict();
+
+function parseSelectedBuddy(value: unknown, what: string): RoutingEntry["selectedBuddy"] {
+  if (value === null || value === undefined) return null;
+  const parsed = selectedBuddySchema.safeParse(value);
+  return parsed.success ? parsed.data : refuse(what);
+}
+
 function parseBuddy(value: unknown, what: string): Buddy | null {
   const buddy = recOrNull(value, what);
   return buddy && {
@@ -123,8 +135,12 @@ function parseTurn(value: unknown): Turn {
     state: str(turn.state, "turn.state"), disposition: strOrNull(turn.disposition, "turn.disposition"),
     createdAt: str(turn.createdAt, "turn.createdAt"), updatedAt: str(turn.updatedAt, "turn.updatedAt"),
     buddy: parseBuddy(turn.buddy, "turn.buddy"),
+    checkout: oneOf(turn.checkout, ["none", "worktree", "existing"] as const, "turn.checkout"),
+    projectKind: oneOf(turn.projectKind, ["git", "folder"] as const, "turn.projectKind"),
+    access: oneOf(turn.access, ["read", "write", "full"] as const, "turn.access"),
     routing: routing && { decisionId: strOrNull(routing.decisionId, "turn.routing"), buddyRevision: int(routing.buddyRevision, "turn.routing") },
     tokenUsage: parseTokenUsage(turn.tokenUsage),
+    inputFailure: parseInputFailure(turn.inputFailure, "turn.inputFailure"),
     ...(failure ? { providerRejection: { code: oneOf(failure.code, ["quota-exceeded", "rate-limited", "overloaded"] as const, "turn.providerRejection") } } : {}),
   };
 }
@@ -138,6 +154,8 @@ function parseResultTurn(value: unknown): ResultTurn {
 function parseCompactRequest(value: unknown): CompactRequest {
   const request = rec(value, "request");
   return {
+    reason: reasonOrNull(request.reason, "request.reason"),
+    inputFailure: parseInputFailure(request.inputFailure, "request.inputFailure"),
     requestId: str(request.requestId, "request.requestId"), kind: str(request.kind, "request.kind"),
     state: str(request.state, "request.state"), createdAt: str(request.createdAt, "request.createdAt"),
     decidedAt: strOrNull(request.decidedAt, "request.decidedAt"),
@@ -163,13 +181,19 @@ function parseOpenRequest(value: unknown): OpenRequest {
 function parsePatch(value: unknown): CumulativePatch | null {
   const patch = recOrNull(value, "cumulativePatch");
   return patch && {
-    baseCommit: strOrNull(patch.baseCommit, "cumulativePatch"), outputCommit: strOrNull(patch.outputCommit, "cumulativePatch"),
+    baseCommit: strOrNull(patch.baseCommit, "cumulativePatch"),
     path: strOrNull(patch.path, "cumulativePatch"), sha256: strOrNull(patch.sha256, "cumulativePatch"),
     changedPaths: strings(patch.changedPaths, "cumulativePatch"),
   };
 }
 
-const OUTPUT_KINDS = ["output", "resolved-output", "partial-output"] as const;
+const OUTPUT_KINDS = ["output", "resolved-output", "partial-output", "result"] as const;
+const fileRefSchema = z.object({ path: z.string(), sha256: z.string() });
+const sealedEvidenceSchema = z.object({ snapshotSha256: z.string(), tree: z.string() });
+const integrationSourceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("commits"), baseCommit: z.string(), headCommit: z.string() }),
+  z.object({ kind: z.literal("patch"), baseCommit: z.string(), path: z.string(), sha256: z.string() }),
+]);
 
 /**
  * The sealed outputs of the micro task. Its other seals (the input it was
@@ -181,11 +205,26 @@ function parseArtifacts(value: unknown): Artifact[] {
     const artifact = rec(item, "artifact");
     if (!OUTPUT_KINDS.includes(artifact.kind as never)) return [];
     const kind = artifact.kind as Artifact["kind"];
+    const contentForm = oneOf(artifact.contentForm, ["sealed-inline-v1", "record-reference", "result-reference"] as const, "artifact.contentForm");
+    if ((kind === "result") !== (contentForm === "result-reference")) refuse("artifact.contentForm");
+    const sealedEvidence = kind === "result" ? null : sealedEvidenceSchema.safeParse(artifact.sealedEvidence);
+    if (sealedEvidence && !sealedEvidence.success && contentForm !== "sealed-inline-v1") refuse("artifact.sealedEvidence");
+    if (contentForm === "record-reference" && !fileRefSchema.safeParse(artifact.recordFile).success) refuse("artifact.recordFile");
+    const integrationSource = kind === "result" || artifact.integrationSource == null ? null : integrationSourceSchema.safeParse(artifact.integrationSource);
+    if (integrationSource && !integrationSource.success) refuse("artifact.integrationSource");
+    const resultFile = kind === "result" ? fileRefSchema.safeParse(artifact.resultFile) : null;
+    if (resultFile && !resultFile.success) refuse("artifact.resultFile");
     return [{
       artifactId: str(artifact.artifactId, "artifact.artifactId"), kind,
       attemptId: str(artifact.attemptId, "artifact.attemptId"),
-      manifestSha256: str(artifact.manifestSha256, "artifact.manifestSha256"),
-      outputCommit: strOrNull(artifact.outputCommit, "artifact.outputCommit"),
+      contentForm,
+      sealedEvidence: sealedEvidence?.success ? sealedEvidence.data : null,
+      legacyEvidence: contentForm === "sealed-inline-v1" ? { manifestSha256: str(artifact.manifestSha256, "artifact.manifestSha256") } : null,
+      integrationSource: integrationSource?.success ? integrationSource.data : null,
+      runId: kind === "result" ? str(artifact.runId, "artifact.runId") : null,
+      generation: kind === "result" ? int(artifact.generation, "artifact.generation") : null,
+      resultFile: resultFile?.success ? resultFile.data : null,
+      unsealedChanges: kind === "result" && artifact.unsealedChanges === true,
       diffPath: strOrNull(artifact.diffPath, "artifact.diffPath"),
       changedPaths: strings(artifact.changedPaths, "artifact.changedPaths"),
       partial: kind === "partial-output",
@@ -199,13 +238,31 @@ function parseIntegration(value: unknown): Integration {
   const integration = rec(value, "integration");
   const target = recOrNull(integration.target, "integration.target");
   const verification = recOrNull(integration.verification, "integration.verification") ?? {};
+  const version = intOrNull(verification.version, "integration.verification.version");
+  const differingPaths = list(verification.differingPaths ?? [], "integration.verification.differingPaths").map(item => {
+    const path = rec(item, "integration.verification.differingPaths");
+    return { path: str(path.path, "integration.verification.differingPaths.path"),
+      expectedMode: strOrNull(path.expectedMode, "integration.verification.differingPaths.expectedMode"),
+      expectedOid: strOrNull(path.expectedOid, "integration.verification.differingPaths.expectedOid"),
+      artifactMode: strOrNull(path.artifactMode, "integration.verification.differingPaths.artifactMode"),
+      artifactOid: strOrNull(path.artifactOid, "integration.verification.differingPaths.artifactOid") };
+  });
   return {
     integrationId: str(integration.integrationId, "integration.integrationId"),
     artifactId: str(integration.artifactId, "integration.artifactId"),
-    state: str(integration.state, "integration.state"), strategy: str(integration.strategy, "integration.strategy"),
+    state: str(integration.state, "integration.state"), strategy: oneOf(integration.strategy,
+      ["three-way", "three-way-adjusted", "merge", "patch", "not-required"] as const, "integration.strategy"),
     target: target && { path: strOrNull(target.path, "integration.target"), ref: strOrNull(target.ref, "integration.target") },
     beforeCommit: strOrNull(integration.beforeCommit, "integration.beforeCommit"),
     afterCommit: strOrNull(integration.afterCommit, "integration.afterCommit"),
+    verification: { version, mergeBaseCommit: strOrNull(verification.mergeBaseCommit, "integration.verification.mergeBaseCommit"),
+      expectedTree: strOrNull(verification.expectedTree, "integration.verification.expectedTree"), differingPaths,
+      conflictingPaths: strings(verification.conflictingPaths, "integration.verification.conflictingPaths"),
+      adjustments: strings(verification.adjustments, "integration.verification.adjustments"),
+      hostPaths: strings(verification.hostPaths, "integration.verification.hostPaths"),
+      artifactMode: strOrNull(verification.artifactMode, "integration.verification.artifactMode"),
+      artifactOid: strOrNull(verification.artifactOid, "integration.verification.artifactOid"),
+      note: strOrNull(verification.note, "integration.verification.note") },
     hostPaths: strings(verification.hostPaths, "integration.verification"),
     note: strOrNull(integration.note, "integration.note"),
     actor: actorOrNull(integration.actor, "integration.actor"), createdAt: str(integration.createdAt, "integration.createdAt"),
@@ -221,7 +278,6 @@ function parseConclusion(value: unknown): HostConclusion {
     artifactId: strOrNull(conclusion.artifactId, "hostConclusion.artifactId"),
     attemptId: strOrNull(conclusion.attemptId, "hostConclusion.attemptId"),
     actor: actor(conclusion.actor, "hostConclusion.actor"), createdAt: str(conclusion.createdAt, "hostConclusion.createdAt"),
-    runRevision: intOrNull(conclusion.runRevision, "hostConclusion.runRevision"),
   };
 }
 
@@ -263,10 +319,15 @@ export function parseWorkflow(value: unknown, runId: string): Workflow {
   const counts = rec(workflow.counts, "workflow.counts");
   const shutdown = recOrNull(workflow.shutdown, "workflow.shutdown");
   const workspace = recOrNull(workflow.workspace, "workflow.workspace");
+  const project = rec(workflow.project, "workflow.project");
+  const taskSummary = rec(workflow.task, "workflow.task");
   return {
-    runId, revision: int(workflow.revision, "workflow.revision"), state: str(workflow.state, "workflow.state"),
-    hostId: strOrNull(workflow.hostId, "workflow.hostId"), buddy: parseBuddy(workflow.buddy, "workflow.buddy"),
-    buddyLocked: bool(workflow.buddyLocked, "workflow.buddyLocked"), delegationAuthority: bool(workflow.delegationAuthority, "workflow.delegationAuthority"),
+    runId, taskRevision: int(taskSummary.revision, "workflow.task.revision"), state: str(workflow.state, "workflow.state"),
+    buddy: parseBuddy(workflow.buddy, "workflow.buddy"),
+    checkout: oneOf(workflow.checkout, ["none", "worktree", "existing"] as const, "workflow.checkout"),
+    projectKind: oneOf(project.kind, ["git", "folder"] as const, "workflow.project.kind"),
+    unsealedChanges: workflow.unsealedChanges === true,
+    delegationAuthority: bool(workflow.delegationAuthority, "workflow.delegationAuthority"),
     routing: parseRouting(workflow.routing),
     turns: list(workflow.turns, "workflow.turns").map(parseTurn),
     currentTurn: workflow.currentTurn === null || workflow.currentTurn === undefined ? null : parseResultTurn(workflow.currentTurn),
@@ -319,14 +380,32 @@ function parseContinuation(value: unknown): Continuation {
 function parseRoutingEntry(value: unknown): RoutingEntry {
   const entry = rec(value, "routingHistory");
   const mode = entry.routingMode;
+  const exploration = rec(entry.exploration, "routingHistory.exploration");
+  const routerIndex = intOrNull(entry.routerIndex, "routingHistory.routerIndex");
+  if (routerIndex !== null && routerIndex < 0) refuse("routingHistory.routerIndex");
+  const hasDomain = Object.prototype.hasOwnProperty.call(entry, "domainNodeId");
+  const hasDomainName = Object.prototype.hasOwnProperty.call(entry, "domainNodeName");
+  const hasTaskType = Object.prototype.hasOwnProperty.call(entry, "taskType");
+  if (hasDomain !== hasTaskType || hasDomain !== hasDomainName) refuse("routingHistory.judgment");
   return {
     decisionId: str(entry.decisionId, "routingHistory.decisionId"), status: str(entry.status, "routingHistory.status"),
+    routerIndex,
+    exploration: {
+      quota: bool(exploration.quota, "routingHistory.exploration.quota"),
+      reselected: bool(exploration.reselected, "routingHistory.exploration.reselected"),
+      preferredBuddyId: strOrNull(exploration.preferredBuddyId, "routingHistory.exploration.preferredBuddyId"),
+    },
     source: strOrNull(entry.source, "routingHistory.source"),
-    selectedBuddy: parseBuddy(entry.selectedBuddy, "routingHistory.selectedBuddy"),
+    selectedBuddy: parseSelectedBuddy(entry.selectedBuddy, "routingHistory.selectedBuddy"),
     routerBuddy: parseBuddy(entry.routerBuddy, "routingHistory.routerBuddy"),
     routingMode: (mode === null || mode === undefined ? null : oneOf(mode, ["fast", "review"] as const, "routingHistory.routingMode")) as RoutingMode | null,
     reason: reasonOrNull(entry.reason, "routingHistory.reason"),
     note: strOrNull(entry.note, "routingHistory.note"),
+    ...(hasDomain ? {
+      domainNodeId: strOrNull(entry.domainNodeId, "routingHistory.domainNodeId"),
+      domainNodeName: strOrNull(entry.domainNodeName, "routingHistory.domainNodeName"),
+      taskType: oneOf(entry.taskType, ["create", "change", "debug", "verify", "review", "research", "write"] as const, "routingHistory.taskType"),
+    } : {}),
   };
 }
 
@@ -347,7 +426,6 @@ export function parseAudit(value: unknown, runId: string): { audit: Audit; routi
   const audit = rec(reply.audit, "audit");
   return {
     audit: {
-      revision: int(reply.revision, "audit.revision"),
       turns: list(audit.turns, "audit.turns").map(parseResultTurn),
       continuations: list(audit.continuations, "audit.continuations").map(parseContinuation),
       requests: list(audit.requests, "audit.requests").map(parseAuditRequest),
@@ -403,7 +481,7 @@ export function parseInquiries(value: unknown, limit: number): Inquiries {
 const PHASES: readonly ActivityPhase[] = ["starting", "waiting-model", "streaming-model", "tool-running", "waiting-external", "waiting-host", "finishing", "unknown"];
 const STOPPERS = ["host", "lead", "console", "service", "unknown"] as const;
 
-function parseActivity(value: unknown): Activity | null {
+export function parseActivity(value: unknown): Activity | null {
   const activity = recOrNull(value, "task.activity");
   if (!activity) return null;
   const counts = recOrNull(activity.counts, "task.activity.counts");
@@ -415,25 +493,10 @@ function parseActivity(value: unknown): Activity | null {
   const eventSeq = intOrNull(activity.eventSeq, "task.activity");
   return {
     phase: PHASES.includes(activity.phase as ActivityPhase) ? (activity.phase as ActivityPhase) : "unknown",
-    observedAt, toolName, lastToolAt, lastNativeAt, eventSeq,
+    observedAt, toolName,
     modelTurns: counts ? intOrNull(counts.modelTurns, "task.activity.counts") : null,
     toolCalls: counts ? intOrNull(counts.toolCalls, "task.activity.counts") : null,
     basis: toolName || lastToolAt ? "tool" : lastNativeAt || nativeSession ? "native" : observedAt || eventSeq !== null ? "phase" : "unknown",
-  };
-}
-
-function parseSession(receipt: Rec | null): Session | null {
-  const result = receipt && recOrNull(receipt.result, "attempt.result");
-  const native = result && recOrNull(result.nativeSession, "attempt.nativeSession");
-  const identity = result && recOrNull(result.nativeIdentity, "attempt.nativeIdentity");
-  const id = strOrNull(native?.sessionId, "attempt.nativeSession") ?? strOrNull(identity?.sessionId, "attempt.nativeIdentity");
-  if (!native && id === null) return null;
-  return {
-    id,
-    scope: strOrNull(native?.storageScope, "attempt.nativeSession"), owner: strOrNull(native?.storageOwner, "attempt.nativeSession"),
-    visibility: strOrNull(native?.nativeAppVisibility, "attempt.nativeSession"),
-    resumable: boolOrNull(native?.resumable, "attempt.nativeSession"), binding: boolOrNull(native?.bindingPresent, "attempt.nativeSession"),
-    note: strOrNull(native?.note, "attempt.nativeSession")?.trim() || null,
   };
 }
 
@@ -469,7 +532,7 @@ function parseAttempt(task: Rec): Attempt | null {
     overdue: active && bool(reminders.overdue, "task.selectedAttempt.reminders"),
     possiblyStuck: active && bool(reminders.possiblyStuck, "task.selectedAttempt.reminders"),
     activity: active ? parseActivity(task.activity) : null,
-    ending, session: parseSession(receipt),
+    ending,
     tokenUsage: parseTokenUsage(attempt.tokenUsage),
     shutdownConfirmed: bool(attempt.shutdownConfirmed, "task.selectedAttempt"),
   };
@@ -480,7 +543,7 @@ const LINEAGE_KINDS = ["micro-task", "helper"] as const;
 function parseLineage(value: unknown): Rec {
   const lineage = rec(value, "task.lineage");
   oneOf(lineage.kind, LINEAGE_KINDS, "task.lineage.kind");
-  for (const key of ["sourceHostId", "currentHostId", "parentRunId", "rootRunId", "rootLeadRunId"]) {
+  for (const key of ["parentRunId", "rootRunId", "rootLeadRunId"]) {
     if (lineage[key] === undefined) refuse(`task.lineage.${key}`);
     strOrNull(lineage[key], `task.lineage.${key}`);
   }
@@ -488,6 +551,7 @@ function parseLineage(value: unknown): Rec {
   const project = recOrNull(lineage.project, "task.lineage.project");
   if (project) {
     str(project.id, "task.lineage.project.id");
+    oneOf(project.kind, ["git", "folder"] as const, "task.lineage.project.kind");
     str(project.label, "task.lineage.project.label");
     strOrNull(project.path, "task.lineage.project.path");
   }
@@ -510,9 +574,13 @@ export function parseTask(value: unknown, runId: string): TaskView {
   const lineage = parseLineage(task.lineage);
   const workflow = rec(task.workflow, "task.workflow");
   str(workflow.state, "task.workflow.state");
-  for (const key of ["hostId", "title", "macroTaskId"]) strOrNull(workflow[key], `task.workflow.${key}`);
+  for (const key of ["title", "macroTaskId"]) strOrNull(workflow[key], `task.workflow.${key}`);
+  oneOf(workflow.checkout, ["none", "worktree", "existing"] as const, "task.workflow.checkout");
+  oneOf(workflow.projectKind, ["git", "folder"] as const, "task.workflow.projectKind");
   return {
-    task: task as unknown as Task, updatedAt: task.updatedAt as string, attempt: parseAttempt(task),
+    task: task as unknown as Task, updatedAt: task.updatedAt as string, acceptanceNote: strOrNull(task.acceptanceNote, "task.acceptanceNote"), attempt: parseAttempt(task),
+    inputFailure: parseInputFailure(task.inputFailure, "task.inputFailure"),
+    requestReason: reasonOrNull(workflow.requestReason, "task.workflow.requestReason"),
     lead: (lineage.rootLeadRunId ?? null) !== null,
   };
 }

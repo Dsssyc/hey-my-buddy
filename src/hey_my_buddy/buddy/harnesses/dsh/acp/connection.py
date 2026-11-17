@@ -274,7 +274,7 @@ class AcpConnection:
 
     # -- requests and notifications ---------------------------------------------
 
-    def request(self, method: str, params: dict, timeout: float) -> dict:
+    def request(self, method: str, params: dict, timeout: float, *, on_sent=None) -> dict:
         """Send one request and wait for its response within one budget that
         covers queuing, writing and waiting; errors raise, late answers arrive
         as facts, and every failure path releases the pending entry."""
@@ -291,6 +291,8 @@ class AcpConnection:
             deadline=deadline)
         try:
             self._await_write(job, method, timeout)
+            if on_sent is not None:
+                on_sent()
         except BaseException:
             with self._pending_lock:
                 resolved = waiter["resolved"]
@@ -620,31 +622,9 @@ class AcpConnection:
                     pass
 
 
-def group_observation(handle) -> str:
-    """One direct observation of the owned process group: gone/alive/unknown.
-
-    Unknown is conservative: an unavailable observation is never termination
-    evidence. A positive "gone" is only trustworthy beside the leader's exit;
-    stop facts combine both.
-    """
-    if handle.job is not None:
-        try:
-            return "gone" if handle.job.active() == 0 else "alive"
-        except OSError:
-            return "unknown"
-    if os.name == "nt":
-        return "alive" if handle.group_alive() else "gone"
-    if handle.pgid is None:
-        return "unknown"
-    try:
-        os.killpg(handle.pgid, 0)
-    except ProcessLookupError:
-        return "gone"
-    except PermissionError:
-        return "alive"
-    except OSError:
-        return "unknown"
-    return "alive"
+def session_observation(handle) -> str:
+    """Use the same session/tree or Job observation as every owned stop."""
+    return handle.session_observation()
 
 
 def stop_evidence(handle) -> dict:
@@ -654,11 +634,11 @@ def stop_evidence(handle) -> dict:
     owned group is observed gone. EOF, a session close, a cancel acknowledgement
     or an unreachable channel never appears here as a stop proof.
     """
-    code = handle.process.poll()
-    observation = group_observation(handle)
+    code = handle.poll()
+    observation = session_observation(handle)
     return {
         "leaderExited": code is not None,
         "leaderExitCode": code,
         "groupObserved": observation,
-        "shutdownConfirmed": bool(code is not None and observation == "gone"),
+        "shutdownConfirmed": handle.shutdown_confirmed(settle_seconds=0),
     }

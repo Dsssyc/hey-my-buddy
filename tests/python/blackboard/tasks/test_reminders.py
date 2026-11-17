@@ -1,7 +1,7 @@
 """Expected-duration facts for every execution and native-silence facts for harnesses."""
 from admission import admit_execution
 from contextlib import contextmanager
-from support import BoardTestCase, FakeClock
+from support import BoardTestCase, FakeClock, enable_fixture_buddy
 import uuid
 from unittest.mock import patch
 from hey_my_buddy.blackboard.tasks import reminders
@@ -27,12 +27,15 @@ class ReminderFacts(BoardTestCase):
         from mock_workspace import MockWorkspace
 
         self.catalog_fixture()
-        self.enterContext(patch.object(workflow, '_workspace_module', MockWorkspace(self.directory)))
+        enable_fixture_buddy(self.store, {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
+        workspace = MockWorkspace(self.directory)
+        self.enterContext(patch.object(workflow, '_workspace_module', workspace))
+        cwd = str(self.workdir())
         submitted = self.client.workflow_submit(
-            requestId='reminder', hostId='reminder-host', task='observe', cwd=str(self.workdir()),
-            harness='dsh', provider='deepseek-official', model='deepseek-flash', effort='off',
-            executionWorkspace={'kind': 'existing', 'access': 'read'}, expectedSeconds=expected)
-        self.task = submitted['task']
+            title='reminder', task='observe', cwd=cwd, macroTaskId='standalone',
+            buddy='dsh / deepseek-official / deepseek-flash / off', checkout='existing', access='read',
+            inputs=[], expectedSeconds=expected)
+        self.task = self.client.get(runId=submitted['runId'])
         self.nonce = 'n' * 32
         self.attempt = admit_execution(self.client, self.nonce)['claim']['attempt']
 
@@ -45,8 +48,8 @@ class ReminderFacts(BoardTestCase):
                 if event['kind'] == 'attempt.reminder']
 
     def consume(self):
-        return self.fixture.call('task_wait', {'runId': self.task['runId'], 'timeoutMs': 0,
-                                              'consumeReminders': True, 'reminderWaitId': str(uuid.uuid4())})
+        return self.store.task_wait({'runId': self.task['runId'], 'timeoutMs': 0,
+                                     'consumeReminders': True, 'reminderWaitId': str(uuid.uuid4())})
 
     def test_idle_has_no_deadline_and_deadlines_follow_expected_duration(self):
         self.assertIsNone(reminders.collect(self.store))
@@ -99,7 +102,7 @@ class ReminderFacts(BoardTestCase):
         @contextmanager
         def complete_before_collect_write():
             with original_write() as connection:
-                connection.execute("UPDATE attempts SET execution_state='finished',result_json='{}'"
+                connection.execute("UPDATE attempts SET execution_state='finished',result_json='{}',result_form='current-report-v2'"
                                    ' WHERE attempt_id=?', (self.attempt['attemptId'],))
             with original_write() as connection:
                 yield connection
@@ -151,8 +154,8 @@ class ReminderFacts(BoardTestCase):
         self.clock.advance(20)
         reminders.collect(self.store)
         params = {'runId': self.task['runId'], 'timeoutMs': 0, 'consumeReminders': True, 'reminderWaitId': 'lost-reply'}
-        first = self.fixture.call('task_wait', params)['reminder']
-        self.assertEqual(self.fixture.call('task_wait', params)['reminder'], first)
+        first = self.store.task_wait(params)['reminder']
+        self.assertEqual(self.store.task_wait(params)['reminder'], first)
         self.assertEqual(self.consume()['reminder']['expectedMultiple'], 2)
 
     def test_prompt_observation_does_not_reset_silence_or_invent_a_native_event(self):

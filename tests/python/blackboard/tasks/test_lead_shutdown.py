@@ -16,8 +16,7 @@ class LeadShutdownTests(WorkflowTestCase):
     def allow_parallel_claims(self, board):
         with board.store.db.write() as db:
             db.execute(
-                "INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
-                " VALUES(?,?,?,8)",
+                "INSERT INTO model_services(harness,provider,model,concurrency_limit) VALUES(?,?,?,8) ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=8",
                 (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]),
             )
 
@@ -28,7 +27,7 @@ class LeadShutdownTests(WorkflowTestCase):
         return board.call("task_get", {"runId": run["runId"]})["task"]["selectedAttempt"]
 
     def conclude(self, board, run, note="Host closes Lead work"):
-        return board.call("workflow_conclude", {"runId": run["runId"], "note": note, **self.control(run)})
+        return board.call("workflow_conclude", {"runId": run["runId"], "note": note})
 
     def test_host_stop_fences_running_lead_owned_run_and_nested_helper(self):
         board = self.board(max_concurrent=8)
@@ -40,16 +39,16 @@ class LeadShutdownTests(WorkflowTestCase):
         waiting = self.owned(board, lead_claim, "owned-with-helper")
         waiting_view, _ = self.finish_owned(board, waiting, "w3", disposition="assistance")
         decided = self.decide(board, waiting_view, waiting_view["activeRequest"]["requestId"],
-                              helpers=[{"requestId": "nested-helper", "task": "Help owned work",
+                              helpers=[{"title": "nested-helper", "task": "Help owned work",
                                         "cwd": str(self.workdir("nested-helper")),
-                                        "executionWorkspace": {"kind": "existing", "access": "write"}}],
+                                        "workspace": {"kind": "existing", "access": "write"}}],
                               autoContinue=False, credential=lead_claim["agentCredential"])
         helper = self.get(board, {"runId": decided["children"][0]["taskId"]})
         self.register(board, "w4")
         helper_claim = self.claim(board, "w4", claim_request_id="helper-running", run_id=helper["runId"])
 
         stopped = board.call("workflow_cancel", {"runId": lead["runId"],
-                                                 'note': "Host stops Lead", **self.control(lead)})
+                                                 'note': "Host stops Lead"})
         self.assertEqual(stopped["state"], "cancelled")
         for run in (lead, owned, waiting, helper):
             self.assertEqual(self.get(board, run)["state"], "cancelled")
@@ -84,7 +83,7 @@ class LeadShutdownTests(WorkflowTestCase):
                    "decisions": [], "artifacts": [], "request": None}
         self.finish_turn(board, {"claim": claim}, outcome=waiting)
         self.assertEqual(self.get(board, lead)["state"], "waiting-owned")
-        board.call("workflow_cancel", {"runId": lead["runId"], **self.control(lead)})
+        board.call("workflow_cancel", {"runId": lead["runId"]})
         self.assertEqual(self.get(board, child)["state"], "cancelled")
         self.assertEqual(self.attempt(board, child)["stopInitiator"], "host")
         self.assertFalse(self.get(board, lead)["shutdown"]["descendantsConfirmed"])
@@ -105,7 +104,7 @@ class LeadShutdownTests(WorkflowTestCase):
 
         def stop_during_preparation(spec):
             result = validate(spec)
-            board.call("workflow_cancel", {"runId": lead["runId"], **self.control(lead)})
+            board.call("workflow_cancel", {"runId": lead["runId"]})
             return result
 
         with patch.object(board.store.workflow, "_validated_buddy", side_effect=stop_during_preparation):
@@ -135,7 +134,7 @@ class LeadShutdownTests(WorkflowTestCase):
     def test_wrap_up_cannot_submit_with_the_original_turn_credential_after_stop_started(self):
         board = self.board()
         lead, claim = self.lead(board)
-        board.call("workflow_cancel", {"runId": lead["runId"], **self.control(lead)})
+        board.call("workflow_cancel", {"runId": lead["runId"]})
         self.assertIsNotNone(self.attempt(board, lead)["graceDeadline"])
         with self.assertRaises(BoardError) as caught:
             self.owned(board, claim, "wrap-up-submission")
@@ -187,7 +186,7 @@ class LeadShutdownTests(WorkflowTestCase):
         lead, claim = self.lead(board)
         child = self.owned(board, claim)
         self.finish_owned(board, child)
-        self.finish_turn(board, {"claim": claim}, disposition="attention")
+        self.finish_turn(board, {"claim": claim}, runner_status="failed", exit_code=1, seal=False)
         original = self.workspace.host_seal
         def seal(state_dir, manifest, task_id, attempt_id, **kwargs):
             if task_id == lead["runId"]:
@@ -269,15 +268,15 @@ class LeadShutdownTests(WorkflowTestCase):
             self.conclude(board, lead, "Lead has no further work")
         self.assertEqual(caught.exception.code, "SHUTDOWN_UNCONFIRMED")
         self.finish_turn(board, {"claim": claim}, runner_status="cancelled", seal=False)
-        self.conclude(board, lead, "Lead has no further work")
+        concluded = self.conclude(board, lead, "Lead has no further work")
+        self.assertEqual(concluded['state'], 'concluded')
         for name, child in cases.items():
             with self.subTest(outcome=name):
                 view = self.get(board, child)
                 self.assertEqual(view["state"], "concluded")
                 self.assertIsNone(view["hostConclusion"]["note"])
                 self.assertEqual(view["hostConclusion"]["reason"], {"code": "lead.owned-concluded", "params": {"leadRunId": lead["runId"]}})
-                self.assertNotIn("not-accepted", view["cleanup"]["reasons"])
-                self.assertEqual(view["cleanup"]["evidence"]["acceptance"]["state"], "concluded")
+                self.assertEqual(view["cleanup"]["reasons"], ["not-a-managed-worktree"])
         accepted = self.get(board, accepted_child)
         self.assertEqual(accepted["state"], "accepted")
         self.assertIsNone(accepted["hostConclusion"])
@@ -294,7 +293,7 @@ class LeadShutdownTests(WorkflowTestCase):
                     board.call("workflow_get", {field: value, "credential": claim["agentCredential"]})
                 self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as caught:
-            board.call("workflow_cancel", {"runId": foreign["runId"], **self.control(foreign),
+            board.call("workflow_cancel", {"runId": foreign["runId"],
                                            "credential": claim["agentCredential"]})
         self.assertEqual(caught.exception.code, "FORBIDDEN")
         self.assertEqual(self.get(board, foreign)["state"], "executing")

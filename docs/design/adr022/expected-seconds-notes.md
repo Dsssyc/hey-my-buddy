@@ -14,7 +14,7 @@
 
 真实子进程的预算测试发现既有 Worker 路径在到点取消 Router 后可能收到适配器的 `cancelled`，从而未换下一个 Router。修正在预算触发的根因处：Worker 记录 `failed`、`router-budget-exhausted` 与 `deadline`，仍使用适配器实际给出的停止证据；没有把 unknown 改成 stopped，也没有补造 native 停止证据。只有确认停止后，现有黑板路由路径才派发下一个 Router。`worker_result` 的边界拒绝普通执行提交 `deadline`，它从此仅表示 Router 预算用完；其他终止原因、Host 取消、急停和有序收尾方式未改。
 
-新增 `blackboard/store/upgrade.py`，由显式、空闲升级路径在已验证的 schema 19 备份之后调用，单事务重建 `tasks` 与 `workflow_turns` 并写入 schema 20；启动普通 Database 仍只接受当前 schema，不会自动迁移旧板。DDL 从当前 schema 取出再重建，外键和完整性在事务提交前检查，升级样板测试逐项比对升级后的 SQLite 定义与新建看板。`install/upgrade.py` 只接收基点 19 或当前 20，记下 migrating/migrated 阶段，并以转换后的快照核验目标；转换或启动失败恢复原 schema 19 备份。`blackboard/store/backup.py` 在该待做升级期间允许验证带显式 schema 19 标记的备份，以便转换前备份和失败回滚。
+新增 `blackboard/store/upgrade.py`，由显式、空闲升级路径在已验证的 schema 19 备份之后调用，单事务重建 `tasks` 与 `workflow_turns` 并写入 schema 20；启动普通 Database 仍只接受当前 schema，不会自动迁移旧板。DDL 从当前 schema 取出再重建，外键和完整性在事务提交前检查，升级样板测试逐项比对升级后的 SQLite 定义与新建黑板。`install/upgrade.py` 只接收基点 19 或当前 20，记下 migrating/migrated 阶段，并以转换后的快照核验目标；转换或启动失败恢复原 schema 19 备份。`blackboard/store/backup.py` 在该待做升级期间允许验证带显式 schema 19 标记的备份，以便转换前备份和失败回滚。
 
 普通存量 `timeoutSeconds` 的正数按同值改为 `expectedSeconds`，旧 0 改为 1800；Router 外层旧值包含宽限，按原值改为 `routerBudgetSeconds`，嵌套与请求中的实际预算也按原值改名，Router 设置与 `budget.timeoutSeconds` 不变。微任务原始规范、task canonical 规范和相应 input fingerprint 转成新形态，回合预期从转换后的 task 回填；服务命令回执里的 task/attempt 视图也转换，`task.submit` 回执 request hash 随新 fingerprint 更新。原始回合 input JSON、其 input hash、native outcome、provenance、prompt hash 和工作区成果文件都保留；命令回执里的模型 result 与原始 input 不作为服务视图递归改写。
 

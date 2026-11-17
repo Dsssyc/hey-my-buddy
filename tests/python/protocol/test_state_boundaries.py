@@ -112,10 +112,12 @@ class StateBoundaryTests(unittest.TestCase):
         from hey_my_buddy.cli import blocking, console_cli
         lifecycle = {"running": True, "consoleId": "0123456789abcdef01234567",
                      "url": "http://127.0.0.1:8123/"}
-        run = {"runId": "fixture", "status": "failed", "revision": 1}
+        run = {"runId": "fixture", "state": "failed", "revision": 1,"actions":["get"]}
 
         def request(endpoint, operation, params, resource="control", *, state_dir):
             self.assertIs(state_dir, self.state)
+            if operation == 'task_wait':
+                return run
             return (lifecycle if params.get("action") == "open" else {"running": False}) if operation == "console" else {"task": run}
 
         with patch.object(transport, "get_state_dir", side_effect=AssertionError("internal CLI reselected state")), \

@@ -18,6 +18,7 @@ from hey_my_buddy.buddy.harnesses.dsh.acp.connection import AcpConnectionClosed,
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.private_dirs import remove_tree
 
+from .fake_agent import RECORD_WORK_DIR
 from .support import AcpTestCase, MCP_STUB
 
 
@@ -64,7 +65,8 @@ class NewSessionTest(AcpTestCase):
         self.assertEqual("end_turn", client.prompt(session_id, "private fixture", timeout=30.0)["stopReason"])
         marker = sessions / f"{session_id}.fake-session.json"
         self.assertEqual("low", json.loads(native_path(marker).read_text(encoding="utf-8"))["effort"])
-        self.assertTrue(native_path(sessions / f"{session_id}.v3.jsonl").is_file())
+        self.assertTrue(native_path(sessions / RECORD_WORK_DIR / session_id
+                                    / "session.v4.jsonl").is_file())
         index = storage / "session_projcache" / "sessions" / f"{session_id}.json"
         self.assertEqual(str(self.root), json.loads(native_path(index).read_text(encoding="utf-8"))["cwd"])
         client.close_session(session_id, timeout=15.0)
@@ -192,7 +194,7 @@ class CancelTest(AcpTestCase):
             lambda: any(entry.get("event") == "cancel-received" for entry in self.agent_log())),
             "the agent must record the cancel notification")
         # The cancel notification is transport only: the agent still runs.
-        self.assertTrue(client.handle.group_alive())
+        self.assertTrue(client.handle.session_alive())
         self.assertFalse(client.handle.shutdown_confirmed())
         client.close_session(session["sessionId"], timeout=15.0)
 
@@ -249,7 +251,7 @@ class StopStateTest(AcpTestCase):
         """The shutdown guard presents an unconfirmed stop as a test failure.
 
         The synthetic observation is fully in-memory: a Job-like handle whose
-        group is still active drives the production ``group_observation`` job
+        group is still active drives the production ``session_observation`` job
         branch to ``alive`` with ``shutdownConfirmed`` false on every platform,
         and no process group of this run is touched. The guard must raise with
         that evidence in the message - the failure is the record, and no
@@ -257,6 +259,15 @@ class StopStateTest(AcpTestCase):
         """
 
         class UnstoppableHandle:
+            def poll(self):
+                return None
+
+            def session_observation(self):
+                return "alive"
+
+            def shutdown_confirmed(self, settle_seconds=0):
+                return False
+
             process = type("FakeProcess", (), {"poll": lambda self: None})()
             job = type("ActiveJob", (), {"active": lambda self: 1})()
 
@@ -266,7 +277,7 @@ class StopStateTest(AcpTestCase):
             def wait(self, timeout):
                 return None
 
-            def group_alive(self):
+            def session_alive(self):
                 return True
 
         class UnconfirmedClient:

@@ -10,10 +10,10 @@ import type { RuntimeVersionInfo, Snapshot } from "./types";
 
 function snapshot(): Snapshot {
   return {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    buddies: [], preferences: [], modelServiceNotes: [], decisions: [],
+    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
+    buddies: [], preferences: [], models: [], modelCorrespondences: [], decisions: [],
  modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: {},
   };
@@ -30,7 +30,7 @@ function api(): ConsoleApi {
     command: vi.fn(),
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
 }
 

@@ -22,7 +22,6 @@ from ...private_dirs import directory_mode
 from ...process_observation import observe_open_paths, observe_process_argv
 from ...protocol import schemas
 from ..store.db import utc_now
-from . import host_conclusions
 from ...errors import BoardError
 from ...install.runtime import DEFAULT_RUNTIME_ROOT, INSTALL_LOCK, is_ready, installation_lock, runtime_root
 
@@ -31,32 +30,50 @@ _RUNTIME_ID = r'[0-9a-f]{32}'
 _BUILD_DIRECTORY = re.compile(r'\.(' + _RUNTIME_ID + r')\.build-.+')
 
 
-def tree_info(path: Path) -> tuple[int, str, bool]:
-    """Size and mutation fingerprint without descending into linked entries."""
+def tree_info(path: Path) -> tuple[int, str, bool, bool]:
+    """Size, mutation fingerprint, link safety and scan stability.
+
+    The measured tree belongs to other processes too: an entry that vanishes
+    between its listing and its lstat proves the tree changing under the scan.
+    Such a scan reports an approximate size and no fingerprint, because the
+    digest of a partial listing is not a mutation fingerprint of anything.
+    """
     path = private_dirs._absolute(path)
     size = 0
     digest = hashlib.sha256()
     safe = not private_dirs.linked(path)
     if not safe:
-        return 0, '', False
+        return 0, '', False, True
     if not native_path(path).exists():
-        return 0, '', safe
+        return 0, '', safe, True
     paths = []
+    changing = False
     def collect(item: Path):
+        nonlocal changing
         paths.append(item)
         if private_dirs.linked(item) or not native_path(item).is_dir():
             return
-        with os.scandir(native_path(item)) as entries:
-            children = [item / entry.name for entry in entries]
+        try:
+            with os.scandir(native_path(item)) as entries:
+                children = [item / entry.name for entry in entries]
+        except FileNotFoundError:
+            changing = True
+            return
         for child in children:
             collect(child)
     collect(path)
     for item in sorted(paths):
-        stat = native_path(item).lstat()
+        try:
+            stat = native_path(item).lstat()
+        except FileNotFoundError:
+            changing = True
+            continue
         if not private_dirs.linked(item) and native_path(item).is_file():
             size += stat.st_size
         digest.update(f'{item.relative_to(path)}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_mode}\n'.encode())
-    return size, digest.hexdigest(), safe
+    if changing:
+        return size, '', safe, False
+    return size, digest.hexdigest(), safe, True
 
 
 def _service_process_modules() -> dict[str, str]:
@@ -172,31 +189,6 @@ def _runtime_leftover_recent(path: Path, now: float) -> bool:
     return False
 
 
-def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
-    if run is None or task is None:
-        return ['owner-unproven']
-    # Cancelled runs can currently continue. Preserve them rather than changing
-    # existing Host recovery semantics merely to make reclaimable bytes bigger.
-    shutdown = store.workflow.shutdown_summary(connection, run['run_id'])
-    reasons = []
-    if not all(shutdown.get(k) is True for k in ('selfConfirmed', 'descendantsConfirmed')):
-        reasons.append('shutdown-unconfirmed')
-    if run['state'] == 'accepted' and task['accepted_at']:
-        finished_at = task['accepted_at']
-    elif run['state'] == 'concluded':
-        finished_at = host_conclusions.current(connection, run)['created_at']
-    else:
-        return ['continuation-supported', *reasons]
-    finished = datetime.fromisoformat(finished_at).timestamp()
-    if now - finished < GRACE_SECONDS:
-        reasons.append('grace-period')
-    if connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued')", (run['run_id'],)).fetchone():
-        reasons.append('pending-continuations')
-    if connection.execute("SELECT 1 FROM workflow_requests WHERE run_id=? AND state='open'", (run['run_id'],)).fetchone():
-        reasons.append('open-requests')
-    return reasons
-
-
 def _workspace_reference_rows(connection):
     """Physical references in retained facts, without filtering their state.
 
@@ -217,11 +209,6 @@ def _workspace_reference_rows(connection):
             yield table, row
 
 
-def allocation_references(connection, manifest: dict, request_id: str | None = None) -> list[str]:
-    """An unregistered allocation has no retained board reference of any state."""
-    return _allocation_reference_reasons(_workspace_reference_rows(connection), manifest, request_id)
-
-
 def submission_references(connection, manifest: dict, request_id: str, directory: Path) -> list[str]:
     """Prove the new logical allocation is unregistered, including retained uses.
 
@@ -233,11 +220,7 @@ def submission_references(connection, manifest: dict, request_id: str, directory
                                       directories=[str(directory)])[0]
 
 
-def _allocation_reference_reasons(rows, manifest, request_id):
-    return _allocation_reference_sets(rows, [(manifest, request_id)])[0]
-
-
-def _allocation_reference_sets(rows, allocations, *, directories=None):
+def _allocation_reference_sets(rows, allocations, *, directories=None, on_reference=None):
     """One streaming pass, one parse per structured field, bounded by a row.
 
     Exact tokens and normalized ancestor paths match every candidate together.
@@ -250,8 +233,6 @@ def _allocation_reference_sets(rows, allocations, *, directories=None):
     tokens, paths = {}, {}
     for index, (manifest, request_id) in enumerate(allocations):
         identities = [manifest['workspaceId'], request_id, manifest.get('manifestSha256')]
-        if manifest['kind'] == 'worktree':
-            identities.append(manifest['checkoutId'])
         for token in identities:
             if isinstance(token, str):
                 tokens.setdefault(token, set()).add(index)
@@ -281,7 +262,7 @@ def _allocation_reference_sets(rows, allocations, *, directories=None):
         unproven = False
         for field in row.keys():
             value = row[field]
-            if isinstance(value, str) and (field.endswith('_json') or field in ('exclusive_resources', 'required_capabilities')):
+            if isinstance(value, str) and field.endswith('_json'):
                 try:
                     value = json.loads(value)
                 except ValueError:
@@ -289,125 +270,31 @@ def _allocation_reference_sets(rows, allocations, *, directories=None):
             referenced.update(matches(value))
         for index in referenced:
             reasons[index].add(table + '-reference')
+            if on_reference is not None:
+                on_reference(index, table, row)
         if unproven:
-            for item in reasons:
+            for index, item in enumerate(reasons):
                 item.add(table + '-reference-unproven')
+                if on_reference is not None and index not in referenced:
+                    on_reference(index, table, row)
     return [sorted(item) for item in reasons]
 
 
-def _orphan_workspace(store, directory: Path, *, git_proof: bool = True) -> dict:
-    """Only the original allocation record can prove an orphan's exact checkout."""
+def inspect(store) -> dict:
     from . import workspace
-    state = store.directory.resolve()
-    path = directory / 'checkout'
-    result = {'path': str(path), 'orphan': True, 'runId': None, 'reasons': [],
-              'manifest': None, 'allocationFacts': None}
-    try:
-        manifest = _read_storage_json(directory / 'manifest.json')
-        request = _read_storage_json(directory / 'request.json')
-        pinned = _read_storage_json(directory / 'input.json')
-        workspace._validate_manifest(manifest)
-        if (not isinstance(request.get('requestId'), str) or not request['requestId']
-                or not isinstance(request.get('intent'), dict) or not isinstance(pinned.get('snapshot'), dict)):
-            raise BoardError('STORAGE_UNSAFE', 'Original allocation records have invalid fields')
-        expected_id = 'ws-' + workspace._sha(workspace._json([str(state), request['requestId']]))[:32]
-        if (directory.parent != state / 'workspaces' or directory.name != expected_id
-                or manifest['workspaceId'] != directory.name or manifest['kind'] != 'worktree'
-                or manifest['checkoutRoot'] != str(path) or str(path.resolve()) != str(path)
-                or type(request.get('version')) is not int or request['version'] not in (1, 2, 3)
-                or request['version'] != manifest['version']
-                or request.get('intent', {}).get('kind') != 'worktree'
-                or pinned.get('inputCommit') != manifest['inputCommit']
-                or pinned.get('inputTree') != manifest['inputTree']
-                or pinned.get('snapshot', {}).get('stagedCommit') != manifest['snapshot']['stagedCommit']):
-            raise BoardError('STORAGE_UNSAFE', 'Original allocation records do not prove this checkout')
-        result['manifest'] = manifest
-        result['allocationRequestId'] = request['requestId']
-        refs = {}
-        if git_proof:
-            proof = workspace.cleanup_inspect(state, manifest)
-            result['reasons'].extend(proof['reasons'])
-            result['proof'] = proof
-            repository = Path(manifest['snapshot']['repositoryPath'])
-            for suffix, commit in (('input', manifest['inputCommit']),
-                                   ('staged', manifest['snapshot']['stagedCommit']),
-                                   ('retained/input', manifest['inputCommit']),
-                                   ('retained/staged', manifest['snapshot']['stagedCommit'])):
-                ref = 'refs/hey-my-buddy/workspaces/' + directory.name + '/' + suffix
-                refs[ref] = workspace._line(repository, 'show-ref', '--verify', '--hash', ref)
-                if (suffix in ('input', 'staged') and manifest['snapshot'][suffix + 'Ref'] != ref
-                        or workspace._git(repository, 'symbolic-ref', '-q', ref, allowed=(0, 1)).strip()
-                        or refs[ref] != commit):
-                    result['reasons'].append('fixed-reference-changed')
-            if workspace._git(path, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z'):
-                result['reasons'].append('unsealed-changes')
-        identities = {}
-        for name, item in (('allocation', directory), ('checkout', path), ('lock', directory / '.lock')):
-            identity = item.lstat()
-            if not (stat.S_ISREG(identity.st_mode) if name == 'lock' else stat.S_ISDIR(identity.st_mode)):
-                raise BoardError('STORAGE_UNSAFE', 'Original allocation physical identity is unproven')
-            identities[name] = {'device': identity.st_dev, 'inode': identity.st_ino, 'mode': identity.st_mode}
-        result['allocationFacts'] = {'identities': identities, 'refs': refs,
-                                    'manifestSha256': manifest['manifestSha256'],
-                                    'requestSha256': workspace._sha(workspace._json(request)),
-                                    'inputSha256': workspace._sha(workspace._json(pinned))}
-    except (BoardError, OSError, ValueError, TypeError, KeyError) as error:
-        result['reasons'].append('allocation-unproven')
-        if isinstance(error, BoardError):
-            result['reasons'].append(error.code)
-            result['proofError'] = error.payload()
-    result['reasons'] = sorted(set(result['reasons']))
-    return result
-
-
-def _remove_orphan_workspace(store, candidate: dict) -> None:
-    from . import workspace
-    directory = Path(candidate['path']).parent
-    # This is the same lock and order as submission: allocation, then board.
-    # Keep the DB writer fence through removal so admission cannot win between
-    # checking retained facts and deleting a checkout.
-    with workspace._lock(directory):
-        # Git and allocation-record proof precede the writer transaction. The
-        # allocation lock still fences same-request preparation/admission.
-        fresh = _orphan_workspace(store, directory)
-        with store.db.write() as connection:
-            if not fresh['reasons']:
-                fresh['reasons'].extend(allocation_references(
-                    connection, fresh['manifest'], fresh['allocationRequestId']))
-            if (fresh['reasons'] or fresh['allocationFacts'] != candidate.get('allocationFacts')
-                    or fresh['manifest'] != candidate.get('manifest')
-                    or tree_info(Path(candidate['path']))[1:] != (candidate['fingerprint'], True)):
-                raise BoardError('STORAGE_CHANGED', 'Orphan allocation changed or acquired a board reference',
-                                 reasons=fresh['reasons'])
-            # Revalidate small physical records after the historical scan too;
-            # moving Git inspection out of the transaction must not widen the
-            # deletion authority to changed request/input records or inodes.
-            for name, item in (('allocation', directory), ('checkout', Path(candidate['path'])),
-                               ('lock', directory / '.lock')):
-                identity = item.lstat()
-                facts = {'device': identity.st_dev, 'inode': identity.st_ino, 'mode': identity.st_mode}
-                if facts != fresh['allocationFacts']['identities'][name]:
-                    raise BoardError('STORAGE_CHANGED', 'Orphan physical identity changed')
-            for name, key in (('request.json', 'requestSha256'), ('input.json', 'inputSha256')):
-                record = _read_storage_json(directory / name)
-                if workspace._sha(workspace._json(record)) != fresh['allocationFacts'][key]:
-                    raise BoardError('STORAGE_CHANGED', 'Orphan allocation record changed')
-            if _read_storage_json(directory / 'manifest.json') != fresh['manifest']:
-                raise BoardError('STORAGE_CHANGED', 'Orphan allocation manifest changed')
-            workspace.cleanup_remove(store.directory, fresh['manifest'])
-
-
-def inspect(store, *, git_proof: bool = True) -> dict:
-    from . import workspace
+    from .workspace_bindings import MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE, effective_manifest
+    from .workflow import repository_candidates
     state = store.directory.resolve()
     rows = []
     orphaned, commands, known = process_inventory(state)
     reported: set[psutil.Process] = set()
     now = time.time()
     def add(category, path, reasons, **metadata):
-        size, fingerprint, safe = tree_info(path)
+        size, fingerprint, safe, stable = tree_info(path)
         if not safe:
             reasons = [*reasons, 'linked-path']
+        if not stable:
+            reasons = [*reasons, 'changing']
         if not native_path(path).exists() and not private_dirs.linked(path):
             return
         row = {'id': hashlib.sha256(str(path).encode()).hexdigest()[:24], 'category': category,
@@ -417,34 +304,69 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         return row
     # Snapshot board facts first. Filesystem walks and Git inspection must never
     # hold an authoritative database transaction open.
-    native_owners = {}
+    repository_check = object()
     workspace_inputs = []
+    unproven_workspaces = []
     with store.db.read() as connection:
         for run in connection.execute('SELECT * FROM workflow_runs'):
-            task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
-            reasons = _zcode_reasons(store, connection, run, task, now)
-            micro_task_ids = [run['run_id'], *(routed['task_id'] for routed in
-                                             store.workflow._routing_tasks(connection, run['run_id']))]
-            for micro_task_id in micro_task_ids:
-                digest = hashlib.sha256(micro_task_id.encode()).hexdigest()
-                native_owners[digest] = (run['run_id'], reasons)
-            manifest = json.loads(run['workspace_manifest_json'])
-            retained = store.workflow._allocation_provenance(connection, run)
-            reasons, _, _ = store.workflow._cleanup_reasons(connection, run, task, manifest)
-            sealed = store.workflow._latest_handoff(connection, run, manifest) if not reasons else None
-            workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons, sealed))
-    harnesses = state / 'harnesses'
-    if harnesses.exists():
-        for adapter in sorted(private_dirs.ADAPTERS):
-            adapter_root = harnesses / adapter
-            if not adapter_root.exists():
+            try:
+                manifest = effective_manifest(state, connection, run)
+            except BoardError as error:
+                if error.code not in ('WORKSPACE_MANIFEST_CHANGED', 'INVALID_WORKSPACE'):
+                    raise
+                owner = connection.execute(
+                    f'WITH manifest_owners AS ({MANIFEST_OWNERS_CTE}),'
+                    f' run_bindings AS ({RUN_BINDINGS_CTE})'
+                    ' SELECT o.workspace_kind,o.checkout_root,b.workspace_id'
+                    ' FROM run_bindings b JOIN manifest_owners o'
+                    ' ON o.workspace_id=b.workspace_id AND o.manifest_sha256=b.manifest_sha256'
+                    ' WHERE b.run_id=?', (run['run_id'],)).fetchone()
+                if owner is None:
+                    raise
+                unproven_workspaces.append((run['run_id'], dict(owner), error.code))
                 continue
-            micro_tasks = adapter_root / 'micro-tasks'
-            if micro_tasks.exists():
-                for name in sorted(os.listdir(native_path(micro_tasks))):
-                    path = micro_tasks / name
-                    run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
-                    add('harnesses', path, reasons, runId=run_id, adapter=adapter)
+            retained = store.workflow._allocation_provenance(connection, run)
+            reasons = None
+            # An existing checkout is borrowed unless retained provenance ties
+            # this run to a managed worktree at the same checkout root.
+            managed_workspace = (manifest['kind'] == 'worktree' or any(
+                item['kind'] == 'worktree' and item['checkoutRoot'] == manifest['checkoutRoot']
+                for item in retained))
+            if managed_workspace and run['state'] in ('accepted', 'concluded'):
+                plan = connection.execute(
+                    "SELECT state FROM workspace_cleanup_plans WHERE run_id=? AND path=?"
+                    " ORDER BY rowid DESC LIMIT 1", (run['run_id'], manifest['checkoutRoot'])).fetchone()
+                if plan is None or plan['state'] != 'applied':
+                    reasons = repository_check
+            elif managed_workspace:
+                task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
+                reasons, _, _ = store.workflow._cleanup_reasons(connection, run, task, manifest)
+            workspace_inputs.append((run['run_id'], manifest, retained, reasons))
+    checked_inputs = []
+    for run_id, manifest, retained, reasons in workspace_inputs:
+        if reasons is repository_check:
+            physical = next((item for item in (manifest, *retained)
+                             if item['kind'] == 'worktree' and item['checkoutRoot'] == manifest['checkoutRoot']), manifest)
+            try:
+                repository = workspace.locate_repository(
+                    physical, candidates=lambda: repository_candidates(store.db, physical), repair=False)
+                reasons = ['repository-not-found'] if repository is None else None
+            except BoardError as error:
+                reasons = [error.code]
+        checked_inputs.append((run_id, manifest, retained, reasons))
+    workspace_inputs = checked_inputs
+    from . import reclamation
+    native = reclamation.native_roots(store)
+    native_tasks = reclamation.native_task_ids(store) if native else {}
+    with store.db.read() as connection:
+        for path in native:
+            task_id = native_tasks.get(path.name)
+            run = reclamation.native_owner(connection, task_id) if task_id is not None else None
+            reasons = reclamation.native_reasons(store, connection, run, datetime.fromisoformat(store.now()))
+            if reasons or private_dirs.linked(path):
+                add('harnesses', path, reasons, runId=run['run_id'] if run is not None else None,
+                    adapter=path.parent.parent.name)
+    harnesses = state / 'harnesses'
     sessions = state / 'sessions'
     if sessions.exists():
         for category in ('macro-tasks', 'micro-tasks'):
@@ -457,7 +379,14 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     # Board knowledge is independent of whether physical ownership is proved.
     # Rejected/borrowed allocations must not fall through to the orphan path.
     recognized = set()
-    for _, _, manifest, retained, _, _ in workspace_inputs:
+    for run_id, owner, code in unproven_workspaces:
+        path = Path(os.path.normpath(owner['checkout_root']))
+        recognized.add(path)
+        if owner['workspace_kind'] == 'worktree' and workspace._workspace_identifier(owner['workspace_id']):
+            recognized.add(state / 'workspaces' / owner['workspace_id'] / 'checkout')
+            if workspace._path_present(path):
+                add('workspaces', path, [code], runId=run_id)
+    for _, manifest, retained, _ in workspace_inputs:
         for recorded in (manifest, *retained):
             root = recorded.get('checkoutRoot')
             if isinstance(root, str):
@@ -465,53 +394,29 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             identifier = recorded.get('workspaceId')
             if recorded.get('kind') == 'worktree' and workspace._workspace_identifier(identifier):
                 recognized.add(state / 'workspaces' / identifier / 'checkout')
-    for run_id, revision, manifest, retained, reasons, sealed in workspace_inputs:
+    for run_id, manifest, retained, reasons in workspace_inputs:
+        if reasons is None:
+            continue  # Terminal allocations belong to the service's reclamation loop.
         try:
             allocation = workspace.resolve_allocation(state, manifest, retained)
             if allocation is None:
-                continue  # Host-owned/unrelated checkout: never measure or delete.
+                continue
             path = Path(allocation['path'])
             if path in seen:
                 continue
             seen.add(path)
             if not workspace._path_present(path):
-                # The checkout may have been reclaimed while its allocation
-                # record and sealed outputs remain. Keep those bytes visible.
-                add('workspaces', path.parent, [*reasons, 'checkout-missing'],
-                    runId=run_id, revision=revision)
-                continue
-            if not reasons and git_proof:
-                inspected = workspace.cleanup_inspect(state, manifest, sealed=sealed, retained=retained)
-                reasons.extend(inspected['reasons'])
-            add('workspaces', path, reasons, runId=run_id, revision=revision)
+                add('workspaces', path.parent, [*reasons, 'checkout-missing'], runId=run_id)
+            else:
+                add('workspaces', path, reasons, runId=run_id)
         except BoardError:
-            # Invalid ownership never licenses a filesystem guess.
             continue
     workspace_root = state / 'workspaces'
-    orphan_inputs = []
     if workspace_root.is_dir():
-        for directory in sorted(workspace_root.iterdir()):
-            path = directory / 'checkout'
-            if path in seen or path in recognized:
-                continue
-            if not path.exists():
-                add('workspaces', directory, ['owner-unproven', 'checkout-missing'],
-                    orphan=True, runId=None)
-                continue
-            orphan_inputs.append(_orphan_workspace(store, directory, git_proof=git_proof))
-    pending = [item for item in orphan_inputs if not item['reasons']]
-    if pending:
-        with store.db.read() as connection:
-            references = _allocation_reference_sets(
-                _workspace_reference_rows(connection),
-                [(item['manifest'], item['allocationRequestId']) for item in pending])
-        for item, reasons in zip(pending, references):
-            item['reasons'].extend(reasons)
-    for orphan in orphan_inputs:
-        reasons = orphan.pop('reasons')
-        path = Path(orphan.pop('path'))
-        orphan.pop('allocationRequestId', None)
-        add('workspaces', path, reasons, **orphan)
+        directories = [directory for directory in sorted(workspace_root.iterdir())
+                       if directory / 'checkout' not in seen and directory / 'checkout' not in recognized]
+        for item in reclamation.allocation_inventory(store, directories):
+            add('workspaces', item['path'], item['reasons'], orphan=True, runId=None)
     runtimes = runtime_root().absolute()
     from ...home import default_state_dir
     foreign_default_root = (runtimes.resolve() == Path(DEFAULT_RUNTIME_ROOT).resolve()
@@ -645,7 +550,7 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
         raise BoardError('STORAGE_UNSAFE', 'Pending removal is absent from its original plan')
     candidate = matches[0]
     category = candidate.get('category')
-    if (candidate.get('eligible') is not True or category not in ('harnesses', 'runtimes') or
+    if (candidate.get('eligible') is not True or category != 'runtimes' or
             any(pending.get(key) != candidate.get(key) for key in ('id', 'path', 'fingerprint', 'bytes')) or
             not isinstance(pending.get('path'), str) or not is_absolute_path(pending['path']) or
             pending['id'] != hashlib.sha256(pending['path'].encode()).hexdigest()[:24]):
@@ -653,13 +558,7 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
     original = Path(pending['path'])
     if '..' in original.parts:
         raise BoardError('STORAGE_UNSAFE', 'Pending removal path is not a live candidate')
-    root = Path(state).absolute()
-    if category == 'runtimes':
-        allowed_parent = runtime_root().absolute()
-        allowed = original.parent == allowed_parent
-    else:
-        allowed = any(original.parent == root / 'harnesses' / adapter / 'micro-tasks'
-                      for adapter in private_dirs.ADAPTERS)
+    allowed = original.parent == runtime_root().absolute()
     tomb = original.with_name('.reclaim-' + planned['planId'] + '-' + original.name)
     if (not allowed or pending.get('tomb') != str(tomb) or
             type(pending.get('device')) is not int or type(pending.get('inode')) is not int):
@@ -687,7 +586,6 @@ def locked(store):
 
 
 def plan(store, params: dict) -> dict:
-    schemas.reject_unknown(params, set(), 'storage.plan')
     with locked(store) as directory:
         result = inspect(store)
         result.update(planId='stg-' + uuid.uuid4().hex, expiresAt=(datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat())
@@ -695,25 +593,9 @@ def plan(store, params: dict) -> dict:
         return result
 
 
-def _changed_workspace_reasons(store, candidate: dict) -> list[str]:
-    """Diagnose a retained checkout without authorizing its changed storage plan."""
-    from . import workspace
-    with store.db.read() as connection:
-        run = store.workflow._run_row(connection, candidate['runId'])
-        manifest = json.loads(run['workspace_manifest_json'])
-        retained = store.workflow._allocation_provenance(connection, run)
-        sealed = store.workflow._latest_handoff(connection, run, manifest)
-    proof = workspace.cleanup_inspect(store.directory, manifest, sealed=sealed, retained=retained,
-                                      allowed=store.workflow._board_adopted_paths(run['run_id'], manifest))
-    return proof['reasons'] or ['candidate-changed']
-
-
 def apply(store, params: dict) -> dict:
-    schemas.reject_unknown(params, {'planId', 'commandId', 'confirm'}, 'storage.apply')
-    plan_id = schemas.required_string(params, 'planId', max_length=64, pattern=re.compile(r'^stg-[0-9a-f]{32}$'))
-    command = schemas.required_string(params, 'commandId', max_length=128)
-    if params.get('confirm') is not True:
-        raise BoardError('CONFIRMATION_REQUIRED', 'Confirm the exact storage plan before applying it')
+    plan_id = params['planId']
+    command = params['commandId']
     with locked(store) as directory:
         receipt = directory / ('receipt-' + hashlib.sha256(command.encode()).hexdigest() + '.json')
         saved = _read_storage_json(receipt, missing_ok=True)
@@ -738,21 +620,18 @@ def apply(store, params: dict) -> dict:
             result = saved
         if result.get('pending'):
             pending = result['pending']
-            runtime_pending = next(row for row in planned['candidates']
-                                   if row['id'] == pending['id'])['category'] == 'runtimes'
             with ExitStack() as removal:
-                if runtime_pending:
-                    original, tomb = Path(pending['path']), Path(pending['tomb'])
-                    removal.enter_context(_runtime_removal_locks(original, create=True))
-                    remaining = original if original.exists() else tomb
-                    if remaining.is_dir():
-                        _, commands, known = process_inventory(store.directory.resolve())
-                        if runtime_usage(remaining, commands, known):
-                            raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
+                original, tomb = Path(pending['path']), Path(pending['tomb'])
+                removal.enter_context(_runtime_removal_locks(original, create=True))
+                remaining = original if original.exists() else tomb
+                if remaining.is_dir():
+                    _, commands, known = process_inventory(store.directory.resolve())
+                    if runtime_usage(remaining, commands, known):
+                        raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
                 _finish_pending(result, receipt)
         # The plan proved Git state before confirmation. The removal paths prove
         # it again under their own deletion fences, after this board inventory.
-        current = {row['id']: row for row in inspect(store, git_proof=False)['candidates']}
+        current = {row['id']: row for row in inspect(store)['candidates']}
         done = {row['id'] for row in result['removed'] + result['skipped']}
         for candidate in planned['candidates']:
             if candidate['id'] in done:
@@ -768,35 +647,18 @@ def apply(store, params: dict) -> dict:
                 if (fresh is None or not fresh['eligible'] or
                         any(fresh.get(key) != candidate.get(key) for key in ('category', 'path', 'fingerprint'))):
                     reasons = fresh['reasons'] if fresh and not fresh['eligible'] else ['candidate-changed']
-                    if (fresh is not None and fresh['eligible'] and fresh['category'] == 'workspaces'
-                            and not fresh.get('orphan')
-                            and all(fresh.get(key) == candidate.get(key) for key in ('category', 'path'))):
-                        reasons = _changed_workspace_reasons(store, fresh)
                     result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': reasons})
                     continue
-                if candidate['category'] == 'workspaces':
-                    if fresh.get('orphan') is True:
-                        _remove_orphan_workspace(store, candidate)
-                        result['removed'].append({'id': fresh['id'], 'path': fresh['path'], 'bytes': fresh['bytes']})
-                        result['removedBytes'] += fresh['bytes']
-                        _save_receipt(receipt, result)
-                        continue
-                    authority = {'sessionId': 'storage-maintenance'}
-                    request = {'runId': fresh['runId'], 'commandId': command + ':' + fresh['id'], 'expectedRevision': fresh['revision']}
-                    planned_workspace = store.workflow.cleanup_plan(request, console_authority=authority)
-                    wp = planned_workspace['plan']
-                    store.workflow.cleanup_apply({**request, 'commandId': request['commandId'] + ':apply', 'expectedRevision': planned_workspace['targetRevision'], 'planId': wp['planId'], 'confirmPath': fresh['path']}, console_authority=authority)
-                elif candidate['category'] in ('harnesses', 'runtimes'):
+                if candidate['category'] == 'runtimes':
                     # Recheck immediately before atomic removal from the live name.
                     original = Path(fresh['path'])
                     with ExitStack() as removal:
-                        if candidate['category'] == 'runtimes':
-                            removal.enter_context(_runtime_removal_locks(original, create=True))
-                            if original.is_dir():
-                                _, commands, known = process_inventory(store.directory.resolve())
-                                if runtime_usage(original, commands, known):
-                                    raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
-                        if tree_info(original)[1:] != (fresh['fingerprint'], True):
+                        removal.enter_context(_runtime_removal_locks(original, create=True))
+                        if original.is_dir():
+                            _, commands, known = process_inventory(store.directory.resolve())
+                            if runtime_usage(original, commands, known):
+                                raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
+                        if tree_info(original)[1:] != (fresh['fingerprint'], True, True):
                             raise BoardError('STORAGE_CHANGED', 'Candidate changed')
                         tomb = original.with_name('.reclaim-' + plan_id + '-' + original.name)
                         identity = native_path(original).lstat()
@@ -808,8 +670,6 @@ def apply(store, params: dict) -> dict:
                     continue
                 else:
                     raise BoardError('STORAGE_PROTECTED', 'Durable storage cannot be reclaimed')
-                result['removed'].append({'id': fresh['id'], 'path': fresh['path'], 'bytes': fresh['bytes']})
-                result['removedBytes'] += fresh['bytes']
             except (BoardError, OSError) as error:
                 if result.get('pending'):
                     raise BoardError('STORAGE_INCOMPLETE', 'Removal is incomplete; retry the same commandId and planId', planId=plan_id) from error
@@ -834,7 +694,7 @@ def _finish_pending(result: dict, receipt: Path) -> None:
         identity = native_path(original).lstat()
         if (tomb_exists or
                 (identity.st_dev != pending['device'] or identity.st_ino != pending['inode']) or
-                tree_info(original)[1:] != (pending['fingerprint'], True)):
+                tree_info(original)[1:] != (pending['fingerprint'], True, True)):
             raise BoardError('STORAGE_CHANGED', 'Pending removal no longer matches its candidate')
         os.rename(native_path(original), native_path(tomb))
         private_files.sync_directory(original.parent)
@@ -852,24 +712,6 @@ def _finish_pending(result: dict, receipt: Path) -> None:
     result['removedBytes'] += pending['bytes']
     del result['pending']
     _save_receipt(receipt, result)
-
-
-def cleanup_accepted_workspace(store, run_id: str) -> dict:
-    """Daemon-triggered cleanup after acceptance, using the normal guarded plan."""
-    with store.db.read() as connection:
-        run = store.workflow._run_row(connection, run_id)
-        if run['state'] != 'accepted':
-            return {'removed':False, 'reason':'not-accepted'}
-        revision = run['revision']
-    authority = {'sessionId':'accepted-workspace-maintenance'}
-    command = 'accepted-cleanup-' + uuid.uuid4().hex
-    params = {'runId':run_id, 'expectedRevision':revision, 'commandId':command}
-    planned = store.workflow.cleanup_plan(params, console_authority=authority)
-    if not planned['plan']['eligible']:
-        return {'removed':False, 'plan':planned['plan']}
-    return store.workflow.cleanup_apply({**params, 'commandId':command + '-apply',
-        'expectedRevision':planned['targetRevision'], 'planId':planned['plan']['planId'],
-        'confirmPath':planned['plan']['path']}, console_authority=authority)
 
 
 def prune_old_runtimes(store) -> dict:

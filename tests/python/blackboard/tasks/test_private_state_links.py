@@ -144,7 +144,8 @@ class LinkedWorkspaceRecordDeletionTests(unittest.TestCase):
         relocated = self.root / 'relocated-workspaces'
         records.rename(relocated)
         records.symlink_to(relocated, target_is_directory=True)
-        skipped = delete_workspaces(SimpleNamespace(directory=self.state), [manifest], [])
+        store, owners, artifacts = workspace_tests.deletion_sql_inputs(self, [manifest])
+        skipped = delete_workspaces(store, owners, artifacts)
         self.assertEqual(skipped, [])
         self.assertEqual(list(relocated.iterdir()), [])
         self.assertTrue(records.is_symlink())

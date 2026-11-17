@@ -39,7 +39,7 @@ class CheckpointOnlyResumableTests(ZcodeFixtureCase):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(context.timeout_seconds + 10),
+        self.assertIsNotNone(handle.wait(20),
                              "controller did not exit within its deadline and shutdown grace")
         return context, handle
 

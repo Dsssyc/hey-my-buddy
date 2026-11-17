@@ -9,6 +9,7 @@ Host through the fixed get/result/artifact surfaces. A reading that fails is an
 honest unknown; a stash change never fails or blocks anything.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from admission import admit_board, admit_store
 
 import json
@@ -17,7 +18,7 @@ from contextlib import contextmanager
 from unittest import mock
 
 from mock_workspace import MockWorkspace
-from support import BoardTestCase
+from support import BoardTestCase, enable_fixture_buddy
 
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
@@ -52,20 +53,23 @@ class WorkflowStashTestCase(BoardTestCase):
 
     def repo_key(self) -> str:
         """The mock manifest's shared repository path for this case's source cwd."""
-        return "mock+repo:" + str(self.workdir())
+        return str(self.workdir())
 
     def repository_path(self, board) -> str:
         with board.store.db.read() as connection:
-            manifest = json.loads(connection.execute(
-                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (self.run_id,)
-            ).fetchone()[0])
+            manifest = board.store.workflow._run_manifest(connection, board.store.workflow._run_row(connection, self.run_id))
         return manifest["snapshot"]["repositoryPath"]
 
     def submit_and_claim(self, board, *, request_id="req-1"):
+        enable_fixture_buddy(board.store, BUDDY)
+        cwd = str(self.workdir())
+        title = request_id
+        task = "stash facts task"
         submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": request_id, "hostId": "host-1", "task": "stash facts task",
-            "cwd": str(self.workdir()), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]},
+            "cwd": cwd, "title": title, "task": task,
+            "macroTaskId": "standalone",
+            "buddy": " / ".join(BUDDY.values()), "checkout": "existing", "access": "write",
+            "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
         })
         self.run_id = submitted["runId"]
         pass  # Admission is owned by the service.
@@ -80,9 +84,9 @@ class WorkflowStashTestCase(BoardTestCase):
         record = native_turn.claim_record(claim, outcome=outcome, session_id="sess-1")
         result = {"status": "ok", "processState": {"shutdownConfirmed": True}, "turn": record,
                   "turnResultPath": "/tmp/turn.json"}
-        manifest = claim["turn"]["input"]["executionWorkspace"]
-        result["workspaceSeal"] = self.workspace.seal(
-            self.directory, manifest, attempt["taskId"], attempt["attemptId"])
+        manifest = turn_manifest(self.directory, claim["turn"]["input"])
+        result["workspaceSeal"] = record_reference(self.directory, self.workspace.seal(
+            self.directory, manifest, attempt["taskId"], attempt["attemptId"]))
         if result_extra:
             result.update(result_extra)
         return board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
@@ -142,10 +146,14 @@ class StartFactFreezingTests(WorkflowStashTestCase):
         board = self.board()
         repository = self.repo_key()
         self.workspace.stash_inventories[repository] = observed([entry("a" * 40, "queued-time entry")])
+        enable_fixture_buddy(board.store, BUDDY)
+        cwd = str(self.workdir())
+        title = "req-1"
+        task = "queued change task"
         submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": "req-1", "hostId": "host-1", "task": "queued change task",
-            "cwd": str(self.workdir()), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]},
+            "cwd": cwd, "title": title, "task": task, "macroTaskId": "standalone",
+            "buddy": " / ".join(BUDDY.values()), "checkout": "existing", "access": "write",
+            "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
         })
         self.run_id = submitted["runId"]
         # The stash disappears while the task merely sits queued: the turn that
@@ -247,7 +255,7 @@ class SealFactPinningTests(WorkflowStashTestCase):
         self.finish(board, claimed)
         with board.store.db.read() as connection:
             rows = connection.execute(
-                "SELECT manifest_json, manifest_sha256 FROM workflow_artifacts"
+                "SELECT manifest_json, shared_refs_sha256 FROM workflow_artifacts"
                 " WHERE run_id=? AND kind='shared-refs'", (self.run_id,)).fetchall()
         self.assertEqual(len(rows), 1)
         pinned = json.loads(rows[0][0])
@@ -319,7 +327,7 @@ class SealFactPinningTests(WorkflowStashTestCase):
             historical["manifestSha256"] = board.store.workflow.shared_refs_record_digest(historical)
             sealed_json = canonical_json(historical)
             connection.execute(
-                "UPDATE workflow_artifacts SET manifest_json=?, manifest_sha256=? WHERE artifact_id=?",
+                "UPDATE workflow_artifacts SET manifest_json=?, shared_refs_sha256=? WHERE artifact_id=?",
                 (sealed_json, historical["manifestSha256"], row["artifact_id"]),
             )
         self.workspace.stash_inventories[repository] = observed([entry("b" * 40, "later entry")])
@@ -365,11 +373,11 @@ class SealFactPinningTests(WorkflowStashTestCase):
             "disposition": "completed", "summary": "broken", "remaining": [], "decisions": [], "artifacts": [],
             "request": None}, session_id="sess-1")
         record["inputSha256"] = "0" * 64
-        manifest = claim["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claim["turn"]["input"])
         result = {"status": "ok", "processState": {"shutdownConfirmed": True}, "turn": record,
                   "turnResultPath": "/tmp/turn.json",
-                  "workspaceSeal": self.workspace.seal(self.directory, manifest, self.run_id,
-                                                      claim["attempt"]["attemptId"])}
+                  "workspaceSeal": record_reference(self.directory, self.workspace.seal(self.directory, manifest, self.run_id,
+                                                      claim["attempt"]["attemptId"]))}
         finished = board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
         self.assertEqual(finished["taskState"], "failed")
         self.assertIsNotNone(finished["workflow"]["sharedStash"])

@@ -6,20 +6,204 @@ from pathlib import Path
 import subprocess
 import shutil
 import unittest
-from temporary import TemporaryDirectory
+import tempfile
+import uuid
 from unittest.mock import patch
-from types import SimpleNamespace
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion_workspace
+from hey_my_buddy.blackboard.store.store import BoardStore
+from hey_my_buddy.blackboard.tasks.workspace_bindings import MANIFEST_OWNERS_CTE
 from hey_my_buddy.paths import native_path
 
 
+def deletion_sql_inputs(case, manifests, artifacts=()):
+    """Publish prepared test workspaces as current SQL owner facts for physical deletion."""
+    if not hasattr(case, '_deletion_store'):
+        case._deletion_store = BoardStore(case.state)
+        case._deletion_store.initialize()
+        case.addCleanup(case._deletion_store.db.close)
+    store = case._deletion_store
+    manifests = list(manifests)
+    artifacts = list(artifacts)
+    now = store.now()
+    with store.db.write() as connection:
+        for manifest in manifests:
+            identifier = manifest['workspaceId']
+            request_id = case._workspace_request_ids[identifier]
+            attached = next((row for row in artifacts if row.get('workspaceId') == identifier), None)
+            run_id = attached['taskId'] if attached is not None else 'fixture-' + identifier
+            project_id = workspace.manifest_project_id(manifest)
+            connection.execute(
+                "INSERT OR IGNORE INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,"
+                "adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (run_id, request_id, '{"expectedSeconds":1}', 'fixture', 1,
+                 'codex', manifest['checkoutRoot'], 'cancelled', 1, now, now))
+            connection.execute(
+                "INSERT OR IGNORE INTO projects(project_id,kind,path) VALUES(?,'git',?)",
+                (project_id, manifest['checkoutRoot']))
+            connection.execute(
+                "INSERT OR IGNORE INTO workflow_runs(run_id,standalone_project_id,creation_key,title,"
+                "project_kind,checkout,execution_workspace_json,workspace_id,workspace_manifest_sha256,state,created_at,updated_at)"
+                " VALUES(?,?,?,?,'git',?,?,?,?,?,?,?)",
+                (run_id, project_id, 'fixture-' + identifier, 'Fixture workspace', manifest['kind'],
+                 '{}', identifier, manifest['manifestSha256'], 'cancelled', now, now))
+            connection.execute(
+                "INSERT OR IGNORE INTO workflow_artifacts(artifact_id,run_id,kind,content_form,workspace_id,"
+                "input_manifest_sha256,workspace_facts_role,workspace_kind,checkout_root,repository_path,"
+                "input_commit,staged_commit,created_at) VALUES(?,?,'input','input-reference',?,?,?,?,?,?,?,?,?)",
+                ('fixture-input-' + identifier + '-' + manifest['manifestSha256'], run_id, identifier,
+                 manifest['manifestSha256'], 'owner', manifest['kind'], manifest['checkoutRoot'],
+                 manifest['snapshot']['repositoryPath'], manifest['inputCommit'],
+                 manifest['snapshot']['stagedCommit'], now))
+        for artifact in artifacts:
+            kind = {'host-output': 'partial-output', 'resolution': 'resolved-output',
+                    'abandoned-site': 'abandoned-site', None: 'output'}[artifact.get('kind')]
+            origin = ('host' if artifact.get('kind') == 'host-output' else 'worker') if kind in ('output','partial-output') else None
+            artifact_id = 'fixture-output-' + uuid.uuid5(uuid.NAMESPACE_URL,
+                artifact['ref'] + artifact['snapshotSha256']).hex
+            connection.execute(
+                "INSERT OR IGNORE INTO workflow_artifacts(artifact_id,run_id,attempt_id,kind,content_form,"
+                "manifest_json,output_snapshot_sha256,output_origin,output_workspace_id,output_manifest_sha256,"
+                "output_commit,output_action,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (artifact_id, artifact['taskId'], artifact['attemptId'], kind, 'sealed-inline-v1',
+                 json.dumps(artifact), artifact['snapshotSha256'], origin, artifact['workspaceId'],
+                 artifact['manifestSha256'], artifact['commit'],
+                 artifact.get('action') if kind == 'resolved-output' else None, now))
+    pairs = {(row['workspaceId'], row['manifestSha256']) for row in manifests}
+    with store.db.read() as connection:
+        owners = [dict(row) for row in connection.execute(
+            f'WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})'
+            ' SELECT o.*,r.standalone_project_id AS project_id FROM manifest_owners o'
+            ' JOIN workflow_runs r ON r.run_id=o.owner_run_id')
+            if (row['workspace_id'], row['manifest_sha256']) in pairs]
+        records = [dict(row) for row in connection.execute(
+            "SELECT * FROM workflow_artifacts WHERE kind IN ('output','resolved-output','partial-output','abandoned-site')")
+            if (row['output_workspace_id'], row['output_manifest_sha256']) in pairs]
+    return store, owners, records
+
+
 class WorkspaceTests(unittest.TestCase):
+    def test_relative_gitfile_targets_are_resolved_before_native_io(self):
+        checkout = self.root / "relative-gitfile"
+        checkout.mkdir()
+        pointer = checkout / ".git"
+        real_native = workspace.native_path
+        def canonical_native(path):
+            self.assertTrue(Path(path).is_absolute())
+            self.assertNotIn("..", Path(path).parts)
+            return real_native(path)
+        failure = BoardError("WORKSPACE_GIT_ERROR", "Git failed", returncode=128, stderr="opaque failure")
+        for target, present in (("../repo/.git", True), ("../missing-repository", False)):
+            with self.subTest(target=target):
+                pointer.write_text("gitdir: " + target + "\n", encoding="utf-8")
+                command, env = workspace._git_command(checkout, "rev-parse", "--absolute-git-dir")
+                observed = subprocess.run(command, env=env, capture_output=True)
+                self.assertEqual(observed.returncode, 0 if present else 128)
+                expected = str(self.repo / ".git") if present else None
+                with patch.object(workspace, "native_path", side_effect=canonical_native):
+                    self.assertEqual(workspace.repository_at(checkout), expected)
+                    with patch.object(workspace, "_line", side_effect=failure):
+                        if present:
+                            with self.assertRaises(BoardError) as caught:
+                                workspace.repository_at(checkout)
+                            self.assertIs(caught.exception, failure)
+                        else:
+                            self.assertIsNone(workspace.repository_at(checkout))
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink traversal; relative target test runs on every OS")
+    def test_gitfile_resolution_follows_links_before_parent_components(self):
+        checkout = self.root / "linked-gitfile"
+        checkout.mkdir()
+        outside = self.root / "outside"
+        (outside / "nested").mkdir(parents=True)
+        (checkout / "link").symlink_to(outside / "nested", target_is_directory=True)
+        self.git("init", "--bare", "-q", str(outside / "metadata"))
+        self.git("init", "--bare", "-q", str(checkout / "missing"))
+        (checkout / "metadata").mkdir()
+        failure = BoardError("WORKSPACE_GIT_ERROR", "Git failed", returncode=128, stderr="opaque failure")
+        for target, present in (("metadata", True), ("missing", False)):
+            with self.subTest(target=target):
+                (checkout / ".git").write_text(f"gitdir: link/../{target}\n", encoding="utf-8")
+                expected = str(outside / target) if present else None
+                self.assertEqual(workspace.repository_at(checkout), expected)
+                with patch.object(workspace, "_line", side_effect=failure):
+                    if present:
+                        with self.assertRaises(BoardError) as caught:
+                            workspace.repository_at(checkout)
+                        self.assertIs(caught.exception, failure)
+                    else:
+                        self.assertIsNone(workspace.repository_at(checkout))
+
+    def test_parent_repository_proof_skips_empty_git_directories(self):
+        child = self.repo / "parent-search" / "child"
+        child.mkdir(parents=True)
+        failure = BoardError("WORKSPACE_GIT_ERROR", "Git failed", returncode=128, stderr="opaque failure")
+        for empty_git in (False, True):
+            with self.subTest(empty_git=empty_git):
+                if empty_git:
+                    (child / ".git").mkdir()
+                self.assertEqual(workspace.repository_at(child, allow_parent=True), str(self.repo / ".git"))
+                with patch.object(workspace, "_line", side_effect=failure):
+                    self.assertIsNone(workspace.repository_at(child, allow_parent=False))
+                    with self.assertRaises(BoardError) as caught:
+                        workspace.repository_at(child, allow_parent=True)
+                    self.assertIs(caught.exception, failure)
+
+    def test_repository_absence_uses_gitfile_target_not_git_diagnostic(self):
+        checkout = self.root / "gitfile-checkout"
+        checkout.mkdir()
+        pointer = checkout / ".git"
+        for target in ("../missing-repository", str(self.root / "missing-repository")):
+            pointer.write_text("gitdir: " + target + "\n", encoding="utf-8")
+            for diagnostic in ("opaque fixture failure", "fatal: gitfile does not point to a valid repository"):
+                with self.subTest(target=target, diagnostic=diagnostic):
+                    failure = BoardError("WORKSPACE_GIT_ERROR", "Git failed", returncode=128, stderr=diagnostic)
+                    with patch.object(workspace, "_line", side_effect=failure):
+                        self.assertIsNone(workspace.repository_at(checkout))
+        # A readable, live target cannot turn another Git failure into absence.
+        pointer.write_text("gitdir: " + str(self.repo / ".git") + "\n", encoding="utf-8")
+        with patch.object(workspace, "_line", side_effect=failure):
+            with self.assertRaises(BoardError) as caught:
+                workspace.repository_at(checkout)
+        self.assertIs(caught.exception, failure)
+        for malformed in ("gitdir: \n", "not a gitfile\n"):
+            pointer.write_text(malformed, encoding="utf-8")
+            with self.subTest(malformed=malformed), patch.object(workspace, "_line", side_effect=failure):
+                with self.assertRaises(BoardError) as caught:
+                    workspace.repository_at(checkout)
+            self.assertIs(caught.exception, failure)
+        plain = self.root / "plain-with-head-file"
+        plain.mkdir()
+        (plain / "HEAD").write_text("an ordinary user file\n", encoding="utf-8")
+        with patch.object(workspace, "_line", side_effect=failure):
+            self.assertIsNone(workspace.repository_at(plain))
+            with self.assertRaises(BoardError) as caught:
+                workspace.repository_at(self.repo / ".git")
+        self.assertIs(caught.exception, failure)
+
+    def test_repository_absence_never_hides_an_unreadable_gitfile_target(self):
+        checkout = self.root / "unreadable-gitfile-checkout"
+        checkout.mkdir()
+        target = self.root / "unreadable-repository"
+        target.mkdir()
+        (checkout / ".git").write_text("gitdir: " + str(target) + "\n", encoding="utf-8")
+        real_listdir = os.listdir
+        def listing(path):
+            if Path(path) == native_path(target):
+                raise PermissionError("fixture cannot read Git directory")
+            return real_listdir(path)
+        failure = BoardError("WORKSPACE_GIT_ERROR", "Git failed", returncode=128, stderr="opaque fixture failure")
+        with patch.object(workspace, "_line", side_effect=failure), patch.object(os, "listdir", side_effect=listing):
+            with self.assertRaises(BoardError) as caught:
+                workspace.repository_at(checkout)
+        self.assertEqual(caught.exception.code, "WORKSPACE_IO_ERROR")
+        self.assertIsInstance(caught.exception.__cause__, PermissionError)
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        temporary = TemporaryDirectory(prefix="hey-my-buddy-workspace-repository-")
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-repository-")
         cls.addClassCleanup(temporary.cleanup)
         fixture = cls(methodName="runTest")
         fixture.repo = Path(temporary.name) / "repo"
@@ -28,7 +212,7 @@ class WorkspaceTests(unittest.TestCase):
         cls._repository_template = fixture.repo
 
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-workspace-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.repo = self.root / "repo"
@@ -72,13 +256,27 @@ class WorkspaceTests(unittest.TestCase):
 
     def intent(self, **updates):
         return {"kind": "worktree", "cwd": str(self.repo), "access": "write", "base": {"kind": "working-tree"},
-                "writeScope": ["src"], "integrator": {"role": "host", "id": "host-1"}, **updates}
+                "writeScope": ["src"], "integrator": {"role": "host"}, **updates}
 
     def prepare(self, request="request", **updates):
-        return workspace.prepare(self.state, request, self.intent(**updates))
+        manifest = workspace.prepare(self.state, request, self.intent(**updates))
+        self.__dict__.setdefault('_workspace_request_ids', {})[manifest['workspaceId']] = request
+        return manifest
+
+    @staticmethod
+    def legacy_snapshot(manifest):
+        snapshot = {key: value for key, value in manifest["snapshot"].items() if key != "executionSelection"}
+        snapshot.update(executionSelectors=workspace.execution_selection(manifest).get("selectors", [])
+                        if workspace.execution_selection(manifest) else [],
+                        includeSelectors=[], includedUntracked=workspace.input_untracked_paths(manifest),
+                        excludedUntracked=sorted(snapshot["excludedEntries"]))
+        return snapshot
 
     def legacy_full_manifest(self, manifest):
-        legacy = dict(manifest, version=2, accessReason="Original Host explanation", access="full")
+        legacy = dict(manifest, version=2, integrator={"role": "host", "id": "historical-host"},
+                      accessReason="Original Host explanation", access="full", snapshot=self.legacy_snapshot(manifest))
+        legacy["repositoryId"] = legacy.pop("projectId")
+        legacy["checkoutId"] = "0" * 64
         legacy["manifestSha256"] = workspace._sha(workspace._json({
             key: value for key, value in legacy.items() if key != "manifestSha256"}))
         directory = self.state / "workspaces" / legacy["workspaceId"]
@@ -86,6 +284,7 @@ class WorkspaceTests(unittest.TestCase):
         request_path = directory / "request.json"
         request = json.loads(request_path.read_bytes())
         request["version"] = 2
+        request["intent"]["integrator"] = {"role": "host", "id": "historical-host"}
         request["intent"]["access"] = "full"
         request["intent"].pop("accessNote", None)
         request["intent"]["accessReason"] = legacy["accessReason"]
@@ -93,18 +292,20 @@ class WorkspaceTests(unittest.TestCase):
         return legacy
 
     def test_integrator_is_a_structured_identity_for_new_workspaces(self):
-        for invalid in ("host:host-1", {}, {"role": "host"}, {"role": "worker", "id": "worker-1"},
+        for invalid in ("host:host-1", {}, {"role": "host", "id": "host-1"}, {"role": "worker", "id": "worker-1"},
                         {"role": "lead", "id": " "}, {"role": "host", "id": "host-1", "extra": True}):
             with self.subTest(integrator=invalid):
                 self.assert_error("INVALID_WORKSPACE", workspace._intent, self.intent(integrator=invalid))
         manifest = self.prepare(integrator={"role": "lead", "id": "lead-1"})
-        self.assertEqual(manifest["version"], 3)
+        self.assertEqual(manifest["version"], 6)
         self.assertEqual(manifest["integrator"], {"role": "lead", "id": "lead-1"})
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
 
     def test_historical_hashed_manifest_remains_readable(self):
         manifest = self.prepare()
-        historical = dict(manifest, version=1, integrator="host:host-1")
+        historical = dict(manifest, version=1, integrator="host:host-1", snapshot=self.legacy_snapshot(manifest))
+        historical["repositoryId"] = historical.pop("projectId")
+        historical["checkoutId"] = "0" * 64
         historical["manifestSha256"] = hashlib.sha256(workspace._json({
             key: value for key, value in historical.items() if key != "manifestSha256"
         })).hexdigest()
@@ -117,9 +318,39 @@ class WorkspaceTests(unittest.TestCase):
         })).hexdigest()
         self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest, invalid_current)
 
+    def test_manifest_versions_one_through_four_keep_their_frozen_selector_form(self):
+        current = self.prepare(kind="existing")
+        for version in (1, 2, 3, 4):
+            with self.subTest(version=version):
+                legacy = dict(current, version=version, snapshot=self.legacy_snapshot(current))
+                if version < 4:
+                    legacy["repositoryId"] = legacy.pop("projectId")
+                    legacy["checkoutId"] = "0" * 64
+                if version == 1:
+                    legacy["integrator"] = "host:host-1"
+                else:
+                    legacy["integrator"] = {"role": "host", "id": "historical-host"}
+                legacy["manifestSha256"] = workspace._sha(workspace._json({
+                    key: value for key, value in legacy.items() if key != "manifestSha256"}))
+                frozen = workspace._json(legacy)
+                workspace._validate_manifest(legacy)
+                self.assertTrue(workspace.verify(legacy, state_dir=self.state)["unchanged"])
+                self.assertEqual(workspace.execution_selection(legacy), {"kind": "selectors", "selectors": []})
+                self.assertEqual(workspace._json(legacy), frozen)
+
+    def test_new_worktree_materializes_inputs_without_an_execution_selection(self):
+        (self.repo / "source-input.txt").write_text("frozen source\n", encoding="utf-8")
+        manifest = self.prepare(includeUntracked=["source-input.txt"])
+        self.assertEqual(manifest["version"], 6)
+        self.assertNotIn("executionSelection", manifest["snapshot"])
+        self.assertNotIn("executionSelectors", manifest["snapshot"])
+        checkout = Path(manifest["checkoutRoot"])
+        self.assertEqual((checkout / "source-input.txt").read_text(), "frozen source\n")
+        self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
+
     def test_full_manifest_version_keeps_legacy_reason_only_in_historical_artifacts(self):
         current = self.prepare(access="full", accessNote="Host approved this access")
-        self.assertEqual(current["version"], 3)
+        self.assertEqual(current["version"], 6)
         self.assertEqual(current["access"], "full")
         self.assertNotIn("accessNote", current)
         self.assertNotIn("accessReason", current)
@@ -133,40 +364,47 @@ class WorkspaceTests(unittest.TestCase):
         self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest,
                           dict(legacy, accessNote="renamed"))
         self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest,
-                          dict(current, accessReason="not in v3"))
+                          dict(current, accessReason="not in v5"))
 
     def test_old_full_manifest_allocation_can_be_deleted(self):
         current = self.prepare(access="full", accessNote="Host approved this access")
         legacy = self.legacy_full_manifest(current)
         checkout = Path(legacy["checkoutRoot"])
         self.assertTrue(checkout.is_dir())
-        self.assertEqual(macro_task_deletion_workspace.delete_workspaces(
-            SimpleNamespace(directory=self.state), [legacy], []), [])
+        store, owners, artifacts = deletion_sql_inputs(self, [legacy])
+        self.assertEqual(macro_task_deletion_workspace.delete_workspaces(store, owners, artifacts), [])
         self.assertFalse(checkout.exists())
 
     def test_v2_request_replays_without_changing_its_disk_records(self):
         current = self.prepare()
         directory = self.state / "workspaces" / current["workspaceId"]
-        old = dict(current, version=2)
+        old = dict(current, version=2, integrator={"role": "host", "id": "historical-host"},
+                   snapshot=self.legacy_snapshot(current))
+        old["repositoryId"] = old.pop("projectId")
+        old["checkoutId"] = "0" * 64
         old["manifestSha256"] = workspace._sha(workspace._json({
             key: value for key, value in old.items() if key != "manifestSha256"}))
         (directory / "manifest.json").write_bytes(workspace._json(old))
         request_path = directory / "request.json"
         request = json.loads(request_path.read_bytes())
         request["version"] = 2
+        request["intent"]["integrator"] = {"role": "host", "id": "historical-host"}
         request_path.write_bytes(workspace._json(request))
         before = {name: (directory / name).read_bytes() for name in ("request.json", "manifest.json")}
         self.assertEqual(self.prepare(), old)
         self.assertEqual({name: (directory / name).read_bytes() for name in before}, before)
 
-    def test_incomplete_v2_request_cannot_create_a_v3_manifest(self):
+    def test_incomplete_v4_request_cannot_create_a_v5_manifest(self):
         current = self.prepare()
         directory = self.state / "workspaces" / current["workspaceId"]
         (directory / "manifest.json").unlink()
         request_path = directory / "request.json"
         request = json.loads(request_path.read_bytes())
-        request["version"] = 2
+        request["version"] = 4
         request_path.write_bytes(workspace._json(request))
+        input_path = directory / "input.json"
+        pinned = json.loads(input_path.read_bytes())
+        input_path.write_bytes(workspace._json(pinned))
         before = request_path.read_bytes()
         self.assert_error("WORKSPACE_CONFLICT", self.prepare)
         self.assertEqual(request_path.read_bytes(), before)
@@ -188,14 +426,16 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
 
     def test_identity_unifies_siblings_and_distinguishes_linked_checkout(self):
+        manifest = self.prepare()
         left = workspace.inspect(str(self.repo / "src"))
         right = workspace.inspect(str(self.repo / "docs"))
         linked = self.root / "linked"
         self.git("worktree", "add", "--detach", str(linked), self.base)
         other = workspace.inspect(str(linked / "src"))
-        self.assertEqual(left["checkoutId"], right["checkoutId"])
-        self.assertNotEqual(left["checkoutId"], other["checkoutId"])
-        self.assertEqual(left["repositoryId"], other["repositoryId"])
+        self.assertEqual(left["checkoutRoot"], right["checkoutRoot"])
+        self.assertNotEqual(left["checkoutRoot"], other["checkoutRoot"])
+        self.assertEqual(left["projectId"], other["projectId"])
+        self.assertEqual(left["projectId"], manifest["projectId"])
         self.assertEqual(left["checkoutRoot"], str(self.repo))
         self.assertEqual(left["path"], str(self.repo / "src"))
 
@@ -236,12 +476,13 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(workspace._observe(target, [], state_dir=self.state)["tracked"]["src/link"],
                          workspace._entries(self.repo, manifest["inputCommit"])["src/link"])
         self.assertFalse((target / "src/excluded.txt").exists())
+        self.assertEqual(workspace.input_untracked_paths(manifest), ["src/link", "src/selected.bin"])
         self.assertEqual(self.git("show", manifest["snapshot"]["stagedCommit"] + ":src/file.txt"), b"staged\n")
         self.assertEqual(original_index, (self.repo / ".git/index").read_bytes())
         self.assertEqual(original_status, self.git("status", "--porcelain=v1", "-z"))
         self.assertEqual(self.base, self.git("rev-parse", "HEAD").decode().strip())
         self.assertEqual(outside.read_text(encoding="utf-8"), "do not follow")
-        self.assertEqual(manifest["snapshot"]["excludedUntracked"], ["src/excluded.txt"])
+        self.assertEqual(sorted(manifest["snapshot"]["excludedEntries"]), ["src/excluded.txt"])
         self.assertNotIn("stagedSha256", manifest["snapshot"])
         self.assertNotIn("unstagedSha256", manifest["snapshot"])
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
@@ -456,7 +697,7 @@ class WorkspaceTests(unittest.TestCase):
         integrated = self.root / "integrated"
         self.git("worktree", "add", "--detach", str(integrated), output["commit"])
         result = workspace.integration_verify(output, original_input=manifest, final_input=manifest,
-                                              path=str(integrated), ref="HEAD")
+                                              path=str(integrated), ref="HEAD", before_commit=manifest["inputCommit"])
         self.assertTrue(result["verified"])
         cleanup = workspace.cleanup_inspect(self.state, manifest, output)
         self.assertFalse(cleanup["eligible"])
@@ -503,8 +744,20 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotEqual(first["snapshotSha256"], second["snapshotSha256"])
         self.assertEqual(original_index, (self.repo / ".git/index").read_bytes())
         self.assertEqual(self.base, self.git("rev-parse", "HEAD").decode().strip())
-        self.assert_error("WORKSPACE_BASE_MISMATCH", self.prepare, "stale-handoff", kind="existing",
-                          base={"kind": "working-tree", "ref": first["commit"]}, includeUntracked=first["includedUntracked"])
+        for index in range(40):
+            (self.repo / "src" / f"host-{index:02}.txt").write_text("Host commit\n", encoding="utf-8", newline="\n")
+        long_path = "src/" + "/".join(["a" * 100] * 5) + "/long.txt"
+        native_path(self.repo / long_path).parent.mkdir(parents=True)
+        native_path(self.repo / long_path).write_text("Long Host path\n", encoding="utf-8", newline="\n")
+        self.git("add", long_path, *(f"src/host-{index:02}.txt" for index in range(40)))
+        self.git("commit", "-qm", "Host changes after the seal")
+        error = self.assert_error("WORKSPACE_BASE_MISMATCH", self.prepare, "stale-handoff", kind="existing",
+                                  base={"kind": "working-tree", "ref": first["commit"]}, includeUntracked=first["includedUntracked"])
+        self.assertEqual(error.details["baseCommit"], first["commit"])
+        self.assertEqual(error.details["paths"], [long_path[:500], *[f"src/host-{index:02}.txt" for index in range(31)]])
+        self.assertEqual(error.details["pathsCount"], 42)
+        self.assertTrue(error.details["pathsTruncated"])
+        self.assertTrue(error.details["pathsSamplesShortened"])
 
     def test_sibling_cwd_maps_to_equivalent_subdirectory_in_isolated_tree(self):
         manifest = self.prepare(cwd=str(self.repo / "src"))
@@ -555,7 +808,7 @@ class WorkspaceTests(unittest.TestCase):
         existing_file = self.repo / "docs/source.ignored"
         existing_file.write_text("preexisting ignored cache", encoding="utf-8", newline="\n")
         existing = self.prepare("existing", kind="existing", access="read", writeScope=[])
-        self.assertNotIn("docs/source.ignored", existing["snapshot"]["excludedUntracked"])
+        self.assertNotIn("docs/source.ignored", sorted(existing["snapshot"]["excludedEntries"]))
         existing_file.write_text("updated ignored cache", encoding="utf-8", newline="\n")
         self.assertTrue(workspace.verify(existing, state_dir=self.state)["unchanged"])
         self.assertEqual(workspace.seal(self.state, existing, "existing", "attempt")["changedPaths"], [])
@@ -581,7 +834,7 @@ class WorkspaceTests(unittest.TestCase):
         manifest = self.prepare(kind="existing", access="read", writeScope=[], base={"kind": "commit", "ref": "HEAD"})
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
         self.assertEqual(workspace.seal(self.state, manifest, "task", "attempt")["changedPaths"], [])
-        self.assertEqual(manifest["snapshot"]["excludedUntracked"], [])
+        self.assertEqual(sorted(manifest["snapshot"]["excludedEntries"]), [])
         self.assertEqual(manifest["exclusionPolicy"], {"version": 1, "kind": "git-standard",
                          "managedPaths": "tracked-and-nonignored-untracked", "selectedIgnored": "includeUntracked"})
 
@@ -600,7 +853,7 @@ class WorkspaceTests(unittest.TestCase):
         self.addCleanup(ignored.chmod, 0o700)
         manifest = self.prepare(kind="existing", access="read", writeScope=[], includeUntracked=["fixtures/private"])
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
-        self.assertEqual(manifest["snapshot"]["includedUntracked"], ["fixtures/private/binary.dat", "fixtures/private/config.json"])
+        self.assertEqual(workspace.input_untracked_paths(manifest), ["fixtures/private/binary.dat", "fixtures/private/config.json"])
         (fixtures / "config.json").write_text('{"fixture": "changed"}', encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, state_dir=self.state)
         self.assert_error("WORKSPACE_CHANGED", workspace.seal, self.state, manifest, "task", "attempt")
@@ -626,7 +879,7 @@ class WorkspaceTests(unittest.TestCase):
         path = Path(output["diffPath"]).parent / "output.json"
         changed = {**output, "changedPaths": []}
         native_path(path).write_text(json.dumps(changed), encoding="utf-8", newline="\n")
-        self.assert_error("WORKSPACE_CONFLICT", workspace.seal, self.state, manifest, "task", "attempt")
+        self.assert_error("WORKSPACE_MANIFEST_CHANGED", workspace.seal, self.state, manifest, "task", "attempt")
 
     def test_malformed_manifest_and_input_fail_with_structured_errors(self):
         manifest = self.prepare()

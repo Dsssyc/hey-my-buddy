@@ -15,8 +15,8 @@ afterEach(() => { cleanup(); setLanguageChoice("browser"); });
 
 describe("changing the language in an already loaded console", () => {
   it("updates the mounted macro task list and previously imported helper vocabulary without reloading", () => {
-    render(<TooltipProvider><MacroTaskList sort="activity-desc" onSortChange={() => {}} rows={[]} totals={{ all: 0, active: 0, host: 0, review: 0 }}
-      loading={false} error="" nextCursor={null} reorder={null} filter="all" query="" selected={null}
+    render(<TooltipProvider><MacroTaskList sortFor={() => "activity-desc"} onSortChange={() => {}} groups={[]} totals={{ all: 0, active: 0, host: 0, review: 0 }}
+      loading={false} error="" reorder={null} filter="all" query="" selected={null}
       onCollapse={() => {}} onFilterChange={() => {}} onQueryChange={() => {}}
       onSelect={() => {}} onMore={() => {}} onApplyReorder={() => {}} /></TooltipProvider>);
     expect(screen.getByText("没有宏任务")).toBeTruthy();
@@ -35,14 +35,14 @@ describe("changing the language in an already loaded console", () => {
   });
 
   it("translates a notice already shown by the editor while retaining its draft state", async () => {
-    const snapshot = { eventCursor: 8, csrfToken: "csrf", consoleSession: { id: "session" },
-      buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], configuration: null,
+    const snapshot = { eventCursor: 8, csrfToken: "csrf", runtimeIdentity: "fixture-runtime", consoleSession: { id: "session" },
+      buddies: [], preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [], configuration: null,
       decisions: [], tasks: { pendingCount: 0 }, capabilities: {} } as Snapshot;
     const { result } = renderHook(() => useEditor({} as ConsoleApi, snapshot, async () => snapshot, true, ""));
     await act(async () => result.current.discard());
-    expect(result.current.notice).toBe("草稿已放弃");
+    expect(result.current.notice!.text).toBe("草稿已放弃");
     act(() => setLanguageChoice("en"));
-    expect(result.current.notice).toBe("Draft discarded");
+    expect(result.current.notice!.text).toBe("Draft discarded");
     expect(result.current.draft).toBeNull();
   });
 

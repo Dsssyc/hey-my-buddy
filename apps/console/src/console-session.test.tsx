@@ -8,13 +8,14 @@ import { createAuthorityLatch, sessionCanWrite } from "./console-session";
 import { FILTER_DEBOUNCE_MS } from "./use-buddy-history";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import type { ConsoleSession, Buddy, Snapshot, Task } from "./types";
-import { listed, note, selectModel } from "./buddies/page.testing";
+import { effortCell, level, listed, selectModel } from "./buddies/page.testing";
 import { timelineOfRecords } from "./task-detail/task-detail.fixtures";
-import { macroTaskSummary } from "./macro-task-fixtures";
+import { macroTaskGroups, macroTaskSummary } from "./macro-task-fixtures";
 
 const bannerNotice = /新窗口已取得写权限，此页面现在是只读/;
 const actionRefusal = /浏览器授权已失效/;
 const saveRefusal = /浏览器授权已失效/;
+const preferenceNote = () => within(level("off")).getByRole("textbox", { name: "off 的偏好理由" }) as HTMLInputElement;
 
 /** Two model services and three execution buddies, all available. */
 function catalog(): Buddy[] {
@@ -24,18 +25,23 @@ function catalog(): Buddy[] {
     { harness: "zcode", provider: "bigmodel-api", model: "GLM-5.3", effort: "high", enabled: false },
   ];
   return entries.map(p => ({ ...p, effortRank: null, buddyId: [p.harness, p.provider, p.model, p.effort].join(":"),
-    label: `${p.model} · ${p.effort}`, available: true, capabilities: [], contextWindow: null,
+    alias: null, available: true, capabilities: [], contextWindow: null,
     source: "catalog:fixture", description: "" }));
 }
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 
+async function selectFlashOff(user: ReturnType<typeof userEvent.setup>) {
+  await selectModel(user, FLASH, "DSH");
+  if (effortCell("off").getAttribute("aria-pressed") !== "true") await user.click(effortCell("off"));
+}
+
 function microTask(runId: string, task: string, extra: Partial<Task> = {}): Task {
   return { runId, task, state: "queued", owner: "worker:fixture", cwd: `/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-24T10:00:00Z", updatedAt: "2026-09-24T10:00:00Z", acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
-    workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
-    lineage: { kind: "micro-task", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
-      project: { id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },
+    workflow: { checkout: "worktree", projectKind: "git", state: "executing", awaitingHost: false, revision: 1 },
+    lineage: { kind: "micro-task", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
+      project: { kind: "git" as const, id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } },
     ...extra };
 }
@@ -43,7 +49,7 @@ function microTask(runId: string, task: string, extra: Partial<Task> = {}): Task
 /** The compact collaboration record of a micro task, as `workflow_get` sends it. */
 type Workflow = Record<string, unknown>;
 function workflow(task: Task, overrides: Workflow = {}): Workflow {
-  return { runId: task.runId, hostId: "current-host", revision: 1, state: "awaiting-host", buddy: null, buddyLocked: false, delegationAuthority: false,
+  return { checkout: "worktree", project: { kind: "git" }, runId: task.runId, revision: 1, state: "awaiting-host", buddy: null, delegationAuthority: false,
     routing: null, turns: [], currentTurn: null, requests: [], counts: { turns: 0, openRequests: 1 }, children: [], artifacts: [], integrations: [],
     finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
     activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open", createdAt: "2026-09-25T10:00:00Z", decidedAt: null, childTaskId: null, routing: false,
@@ -64,14 +70,15 @@ function fixture(options: {
 } = {}) {
   const buddies = catalog();
   let state: Snapshot = {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: session(),
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: session(),
 
-    configuration: { routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
     unavailableBuddyCount: 1,
 
-    modelServiceNotes: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", updatedAt: null }],
-    preferences: [], decisions: [],
+    models: [{ modelId: "deepseek-flash", displayName: "deepseek-flash", names: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash" }], profile: null, latestProfileRun: null }],
+    modelCorrespondences: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", correspondenceId: "flash-map", modelId: "deepseek-flash", createdAt: "2026-11-01T00:00:00Z", source: "same-name", evidenceUrl: null, evidenceDate: null, canUndo: false }],
+    preferences: [{ buddyId: flashOff, mode: "prefer", note: "原人工意见" }], decisions: [],
     modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
@@ -104,7 +111,7 @@ function fixture(options: {
     }
     if (operation === "message_list") return { messages: [], cursor: 0 };
     if (operation === "buddy_list") {
-      return { buddies: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], nextCursor: null };
+      return { buddies: [], models: [], modelCorrespondences: [], preferences: [], modelServiceConcurrency: [], nextCursor: null };
     }
     if (operation === "selection_get") {
       return { decision: { decisionId: String(params.decisionId), status: "completed",
@@ -126,8 +133,8 @@ function fixture(options: {
   });
   const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
     snapshot, command, task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
-    macroTasks: vi.fn(async () => ({ macroTasks: roots.map(row => macroTaskSummary({ macroTaskId: `run:${row.runId}`, title: row.task, titleSource: "task", project: row.lineage?.project ?? null })),
-      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(roots.map(row => macroTaskSummary({ macroTaskId: `run:${row.runId}`, kind: "standalone", title: row.task, titleSource: "task", project: row.lineage?.project ?? null }))),
+      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
     macroTaskTimeline: vi.fn(async (macroTaskId: string) => ({ timeline: timelineOfRecords(macroTaskId, records), verifiedAtMs: null })) } as unknown as ConsoleApi;
   return { api, command, operations, published, snapshot,
     state: () => state,
@@ -171,11 +178,11 @@ afterEach(() => {
 /** Builds one authenticated-snapshot envelope; `null` leaves the field out. */
 function envelope(consoleSession: unknown, include = true) {
   return {
-    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "fast", routingBudget: "standard" },
+    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600,
+      defaultRoutingMode: "fast", modelResponseWaitSeconds: 60, profileBuddyId: null },
 
-    buddies: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 },
-    csrfToken: "csrf", eventCursor: 0,
+    buddies: [], models: [], modelCorrespondences: [], preferences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 },
+    csrfToken: "csrf", runtimeIdentity: "runtime-one", eventCursor: 0,
     ...(include ? { consoleSession } : {}),
   };
 }
@@ -267,8 +274,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(screen.queryByText("只读会话")).toBeNull();
     expect(screen.queryByText(bannerNotice)).toBeNull();
     expect(document.querySelector(".readonly-banner")).toBeNull();
-    await selectModel(user, FLASH, "DSH");
-    const opinion = note();
+    await selectFlashOff(user);
+    const opinion = preferenceNote();
     await user.clear(opinion);
     await user.type(opinion, "未保存的本地草稿");
     expect(screen.getByText(/1 项未保存/)).toBeTruthy();
@@ -282,7 +289,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(screen.queryByText(bannerNotice)).toBeNull();
     expect(document.querySelector(".readonly-banner")).toBeNull();
     // Draft value survives and stays copyable.
-    const retained = note() as HTMLTextAreaElement;
+    const retained = preferenceNote();
     expect(retained.value).toBe("未保存的本地草稿");
     expect(retained.disabled).toBe(false);
     // Save is refused locally without a publish, a begin or a renew.
@@ -297,7 +304,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.published).toHaveLength(0);
     // Navigation keeps working and no control reacquires authority.
     await user.click(screen.getByRole("link", { name: "任务" }));
-    expect(await screen.findByRole("heading", { name: "还没有宏任务" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "暂无宏任务" })).toBeTruthy();
     expect(f.operations).toEqual([]);
     // Refreshing again never regains rights without a new login.
     // The edit cluster only exists on the settings tabs (P1.2), so return there.
@@ -317,8 +324,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await listed(2, 3);
     expect(screen.queryByText(bannerNotice)).toBeNull();
     // A local draft may open before the session lapses.
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "登录失效前的草稿");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "登录失效前的草稿");
     // The next poll is a 401: the page stays browsable with the login-expired
     // banner and no single-writer copy anywhere.
     f.expireSession();
@@ -334,10 +341,11 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect((await screen.findAllByText(/暂时不能发现模型/)).length).toBeGreaterThan(0);
     // Browsing and the read-only detail keep working.
     await user.click(screen.getByRole("link", { name: "任务" }));
+    await user.click(await screen.findByRole("button", { name: /独立微任务/ }));
     await user.click(await screen.findByRole("button", { name: /只读微任务/ }));
     await waitFor(() => expect(document.querySelector('[data-key="row:readonly-task"]')).toBeTruthy());
     await user.dblClick(document.querySelector('[data-key="row:readonly-task"]') as HTMLElement);
-    await screen.findByRole("heading", { name: /只读微任务/ });
+    await within(await screen.findByRole("region", { name: "微任务详情" })).findByRole("heading", { name: /只读微任务/ });
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
     // Discovery and task control never reached the board; detail reads remain available.
@@ -350,8 +358,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "结果不明");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "结果不明");
     await user.click(screen.getByRole("button", { name: "保存" }));
     // The lost publish reply is staged for a deliberate retry with the same id.
     expect(await screen.findByText(/保存结果未知/)).toBeTruthy();
@@ -365,7 +373,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await readSnapshotOnForeground(f.api.snapshot);
     expect(screen.queryByText(bannerNotice)).toBeNull();
     expect(await screen.findByText(/保存结果未知/)).toBeTruthy();
-    const retained = note() as HTMLTextAreaElement;
+    const retained = preferenceNote();
     expect(retained.value).toBe("原人工意见结果不明");
     expect(retained.disabled).toBe(false);
     expect(retained.readOnly).toBe(true);
@@ -385,8 +393,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "提交结果不明");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "提交结果不明");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByText(/保存结果未知/)).toBeTruthy();
     const commandId = f.published[0].commandId;
@@ -407,7 +415,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await new Promise(resolve => setTimeout(resolve, 900));
     expect(f.operations).toEqual(operations);
     expect(f.published).toHaveLength(2);
-    expect(note()).toHaveProperty("value", "原人工意见提交结果不明");
+    expect(preferenceNote()).toHaveProperty("value", "原人工意见提交结果不明");
   });
 
   it("treats a first publish that is definitely refused as a resolved rejection", async () => {
@@ -416,8 +424,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "首次被拒");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "首次被拒");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect((await screen.findAllByText(actionRefusal)).length).toBeGreaterThan(0);
     // No earlier attempt exists, so this is not an unknown result and the
@@ -435,11 +443,11 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "被拒绝的保存");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "被拒绝的保存");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect((await screen.findAllByText(actionRefusal)).length).toBeGreaterThan(0);
-    expect(note()).toHaveProperty("value", "原人工意见被拒绝的保存");
+    expect(preferenceNote()).toHaveProperty("value", "原人工意见被拒绝的保存");
     // A definite refusal is not retried: no begin replay, no renew, no abort.
     await new Promise(resolve => setTimeout(resolve, 900));
     expect(f.operations).toEqual(["user_policy_publish"]);
@@ -447,7 +455,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   });
 
   it("keeps micro task details read-only across sessions and leaves routing readable", async () => {
-    const awaiting = microTask("browse-task", "可浏览任务", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
+    const awaiting = microTask("browse-task", "可浏览任务", { workflow: { checkout: "worktree", projectKind: "git", state: "awaiting-host", awaitingHost: true, revision: 1 } });
     const workflows = new Map<string, Workflow>([["browse-task", workflow(awaiting, {
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" },
       routing: { status: "completed", decisionId: "decision-1", source: "model-selection" },
@@ -459,7 +467,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
       window.location.hash = "#tasks/run%3Abrowse-task/browse-task";
       render(<App suppliedApi={f.api} />);
       const detail = await screen.findByRole("region", { name: "微任务详情" });
-      await screen.findByRole("group", { name: "这个微任务的各步" });
+      await screen.findByRole("group", { name: "微任务步骤" });
       expect(await within(detail).findByText("协助 browse-task")).toBeTruthy();
       expect(within(detail).queryByRole("group", { name: "用户决定" })).toBeNull();
       expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
@@ -479,14 +487,14 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   ];
 
   it.each(failedPolls)("keeps micro task details readable with no writes after a failed poll (%s)", async (_label, failure) => {
-    const awaiting = microTask("gated-micro-task", "断线待协助目标", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
+    const awaiting = microTask("gated-micro-task", "断线待协助目标", { workflow: { checkout: "worktree", projectKind: "git", state: "awaiting-host", awaitingHost: true, revision: 1 } });
     const workflows = new Map<string, Workflow>([["gated-micro-task", workflow(awaiting)]]);
     const f = fixture({ records: [awaiting], workflows, failAfter: 1, failWith: failure });
     const user = userEvent.setup();
     window.location.hash = "#tasks/run%3Agated-micro-task/gated-micro-task";
     render(<App suppliedApi={f.api} />);
     const detail = await screen.findByRole("region", { name: "微任务详情" });
-    await screen.findByRole("group", { name: "这个微任务的各步" });
+    await screen.findByRole("group", { name: "微任务步骤" });
 
     await readSnapshotOnForeground(f.api.snapshot);
     expect(await screen.findByText("连接中断")).toBeTruthy();
@@ -496,9 +504,9 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.operations.every(operation => ["selection_get", "selection_list", "buddy_list", "workflow_get", "message_list"].includes(operation))).toBe(true);
     await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /Buddy/ }));
     await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "断线草稿");
-    expect(note()).toHaveProperty("value", "原人工意见断线草稿");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "断线草稿");
+    expect(preferenceNote()).toHaveProperty("value", "原人工意见断线草稿");
     expect(screen.getByRole("button", { name: "保存" }).getAttribute("aria-disabled")).toBe("true");
   });
 
@@ -510,14 +518,14 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await listed(2, 3);
     // Let restored-history reads become reachable before checking the default fixture's gate.
     await act(async () => { await new Promise(resolve => setTimeout(resolve, FILTER_DEBOUNCE_MS + 50)); });
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "断线草稿");
+    await selectFlashOff(user);
+    await user.type(preferenceNote(), "断线草稿");
     await readSnapshotOnForeground(f.api.snapshot);
     expect(await screen.findByText(/无法连接本地黑板/)).toBeTruthy();
     const save = screen.getByRole("button", { name: "保存" });
     expect(save.getAttribute("aria-disabled")).toBe("true");
     await user.click(save);
-    expect(note()).toHaveProperty("value", "原人工意见断线草稿");
+    expect(preferenceNote()).toHaveProperty("value", "原人工意见断线草稿");
     expect(f.operations).toEqual([]);
   });
 });

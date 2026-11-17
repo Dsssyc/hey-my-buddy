@@ -57,7 +57,7 @@ SESSION_STAMP_SECONDS = 60
 _QUERY_INTEGER = re.compile(r"^[0-9]{1,7}$")
 #: Exact parameter whitelists of the read-only macro task routes; they reach the
 #: same named ``macro_task_list``/``macro_task_timeline`` operations as the CLI.
-MACRO_TASK_LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter", "sort"})
+MACRO_TASK_LIST_PARAMETERS = frozenset({"limit", "before", "group", "query", "filter", "sort"})
 MACRO_TASK_TIMELINE_PARAMETERS = frozenset({"limit", "query", "filter"})
 _MACRO_TASK_ID = re.compile(r"^(macro-[A-Za-z0-9-]{1,120}|run:[A-Za-z0-9._:-]{1,128})$")
 
@@ -88,7 +88,7 @@ def parse_macro_task_query(query: str, allowed: frozenset[str]) -> dict:
 #: or an unwrapped store call — is not reachable through this surface.
 #:
 #: The browser can publish authenticated user settings and inspect selection
-#: decisions, but cannot invoke Router model calls.
+#: decisions and invoke maintenance, but cannot initiate routing selections.
 CONSOLE_OPERATIONS = (
     "accounts",
     "capabilities",
@@ -96,13 +96,21 @@ CONSOLE_OPERATIONS = (
     "quota_redetect",
     "user_policy_publish",
     "reminder_settings_set",
+    "maintenance_start",
+    "profile_start",
+    "maintenance_pending",
+    "task_cancel",
+    "domain_rename",
+    "domain_merge",
     "selection_get",
     "selection_list",
     "model_catalog_refresh",
     "buddy_list",
     "workflow_get",
     "message_list",
-    "macro_task_stop",
+    "macro_task_pause",
+    "macro_task_resume",
+    "macro_task_end",
     "macro_task_deletion_preview",
     "macro_task_delete",
     "storage_plan",
@@ -233,9 +241,10 @@ class _ConsoleHTTPServer(ThreadingHTTPServer):
 class Console:
     """One loopback console instance owned by the service."""
 
-    def __init__(self, store, service, *, assets_dir: Path | str | None = None, port: int | None = None, clock=time.time):
+    def __init__(self, store, service, *, runtime_identity: str, assets_dir: Path | str | None = None, port: int | None = None, clock=time.time):
         self.store = store
         self.service = service
+        self.runtime_identity = runtime_identity
         self.assets_dir = Path(assets_dir) if assets_dir is not None else default_assets_dir()
         self.host = "127.0.0.1"
         self._persist_port = port is None
@@ -431,6 +440,7 @@ class Console:
     def _compose_snapshot(self, session: BrowserSession, projection: dict) -> dict:
         """The projection plus this session's private overlay fields."""
         snapshot = {**projection}
+        snapshot["runtimeIdentity"] = self.runtime_identity
         snapshot["csrfToken"] = session.csrf
         snapshot["consoleSession"] = session.view()
         with self._lock:
@@ -515,6 +525,10 @@ class Console:
 
             def log_message(self, *_args):  # noqa: D102 - silence access logging
                 return
+
+            def parse_request(self) -> bool:
+                self._body_handled = False
+                return super().parse_request()
 
             # -- response helpers ------------------------------------------
             def _security_headers(self) -> None:
@@ -601,6 +615,25 @@ class Console:
                 if details:
                     error["details"] = details
                 self._json(status, {"ok": False, "error": error})
+                self.wfile.flush()
+                if not self._body_handled:
+                    self._discard_body()
+
+            def _discard_body(self) -> None:
+                """Keep a refused bounded body from resetting its response on close."""
+                self._body_handled = True
+                lengths = self.headers.get_all("Content-Length", [])
+                if "Transfer-Encoding" in self.headers or len(lengths) != 1:
+                    return
+                raw = lengths[0].strip(" \t")
+                if not raw.isascii() or not raw.isdecimal():
+                    return
+                try:
+                    length = int(raw)
+                except ValueError:
+                    return
+                if 0 < length <= MAX_BODY_BYTES:
+                    self.rfile.read(length)
 
             def _cookie(self) -> str:
                 raw = self.headers.get("Cookie") or ""
@@ -730,6 +763,9 @@ class Console:
                     return self._macro_task_read(
                         "macro_task_timeline", {"macroTaskId": identifier}, MACRO_TASK_TIMELINE_PARAMETERS
                     )
+                if relative.startswith("/api/macro-tasks/") and relative.endswith("/goals"):
+                    identifier = relative[len("/api/macro-tasks/"):-len("/goals")]
+                    return self._macro_task_read("macro_task_goal_history", {"macroTaskId": identifier}, frozenset())
                 if relative.startswith("/api/tasks/"):
                     session = re.fullmatch(r"/api/tasks/([A-Za-z0-9._:-]{1,128})/attempts/([A-Za-z0-9._:-]{1,128})/session", relative)
                     if session is not None:
@@ -881,6 +917,7 @@ class Console:
                 self._json(200, {"ok": True, "result": result})
 
             def _read_body(self) -> bytes | None:
+                self._body_handled = True
                 if (self.headers.get("Transfer-Encoding") or "").strip():
                     self._error(411, "INVALID_ARGUMENT", "A bounded Content-Length body is required")
                     return None

@@ -18,13 +18,13 @@
 
 `precheck_result` 删除 Worker 刚封存后对 effective manifest 的 Git 复问，改为只核清单记录。失败回合的 partial-output 同样只核原有记录摘要、字段和输入绑定，不再调用完整 Git 绑定证明；停止、attempt/turn 身份、结构化结果的验证保留。记录校验从原 `_artifact_binding` 抽出，固定对象与补丁的读取仍由后续使用产物的边界承担。
 
-`prepare_continuation_workspace` 删除对上一份清单的独立 `verify`，新准备结果与原物理检出的字段比较继续守住分配。删除对刚生成新清单的末端 `verify`，磁盘重放或直接沿用旧清单时保留。是否重放由分配锁内原有的清单读取传出，不增加存储字段，也不在锁外猜测；看板 snapshot 前后比较、所有权与预留栅栏保留。
+`prepare_continuation_workspace` 删除对上一份清单的独立 `verify`，新准备结果与原物理检出的字段比较继续守住分配。删除对刚生成新清单的末端 `verify`，磁盘重放或直接沿用旧清单时保留。是否重放由分配锁内原有的清单读取传出，不增加存储字段，也不在锁外猜测；黑板 snapshot 前后比较、所有权与预留栅栏保留。
 
 `_artifact_binding` 删除非回收路径的 input/staged/output 引用核对、重算补丁再比摘要，以及从同一成果重新推导自身路径清单的检查。同次操作对相同固定 commit 只读一次树，仍逐项核对所有期望树，包括同 OID 却不同期望的记录；输出对象、树、父提交、本地补丁哈希与整个微任务的真实路径差保留。由固定树导出的真实路径继续用于验收，固定引用在回收专用路径核对。
 
 `integration_verify` 删除 `_is_ancestor` 前重复的 source commit 解析；Git 的祖先查询本来就把缺失对象或非祖先判成假。目标身份、ref、前后树、路径内容及 `beforeCommit` 的祖先关系继续现读。adjusted 验收删除背靠背第二轮 Git 比对，在同一次比较结果上确认精确的 differing/missing 路径；显式理由和提交区间成立仍是验收条件，没有将未成立的区间宣布通过。
 
-`cleanup_plan` 删除整轮 `cleanup_inspect` 和其 Git 证明，仅依据看板资格、清单、`resolve_allocation` 与路径记录 `planned` 或 `blocked`；计划的分配路径和身份来自这些事实。原有计划期限、控制授权、revision 复核、幂等回执与事件名保留。`planned` 表示看板一侧允许尝试回收。
+`cleanup_plan` 删除整轮 `cleanup_inspect` 和其 Git 证明，仅依据黑板资格、清单、`resolve_allocation` 与路径记录 `planned` 或 `blocked`；计划的分配路径和身份来自这些事实。原有计划期限、控制授权、revision 复核、幂等回执与事件名保留。`planned` 表示黑板一侧允许尝试回收。
 
 `cleanup_apply` 在原来的位置证明一次，仍在写入 `applying` 之前；该证明把现场证据与固定引用保留清单写进计划。只有当前仍为 `planned` 的计划，拒绝时才在同一复核事务写 `blocked`、原因和证据；当前已为 `applying` 的计划在任何记录写入前报 `NOT_READY`，它的所有列原样保留，围栏继续生效。挂载分支时仍带 `attachedBranch`。检出已经消失时仍收敛为已回收；真实移除前的身份、登记、分配锁标识和 detached 核对，以及失败后的重新加锁证据均保留。
 
@@ -32,7 +32,7 @@
 
 `_allocation_refs` 删除首回合同一 workspace id 的第二次清点，只对身份列表去重，保留原排序、64 条截断与命令形状。`_reclaim_checkout` 删除计划阶段不再产生的 `blocked` 加 `checkout-missing` 收敛分支，以及计划阶段的 attached-branch 提取；分支诊断从执行的 `NOT_READY` 原样传出，消失收敛留给执行。`get` 中回收段的形态未改。
 
-存储执行的库存删除孤立检出与已验收检出的 Git 证明，只保留分配记录、路径、物理身份、树指纹与看板引用检查。孤立检出在原分配锁内证明一次，再由原看板写者栅栏复核历史引用、小记录与物理身份；已验收检出的两处 plan/apply 调用随计划零 Git，只由执行证明一次。存储计划的证明保留，计划与执行之间的用户确认边界没有合并。
+存储执行的库存删除孤立检出与已验收检出的 Git 证明，只保留分配记录、路径、物理身份、树指纹与黑板引用检查。孤立检出在原分配锁内证明一次，再由原黑板写者栅栏复核历史引用、小记录与物理身份；已验收检出的两处 plan/apply 调用随计划零 Git，只由执行证明一次。存储计划的证明保留，计划与执行之间的用户确认边界没有合并。
 
 `shared_stash_inventory` 删除对已知 common Git dir 再解析一次；两个产品调用点本来就传 `snapshot.repositoryPath`。没有 stash 的 ref 读取及有 stash 的完整 reflog 读取继续保留，读取失败仍是 unknown；直接测试随这个内部输入约定传公共目录，没有在产品里留下旧参数形态的分支。
 
@@ -85,7 +85,7 @@ Host 复核修正后的最终源码检查：`tests/python/blackboard/tasks/` 全
 
 `cleanup_apply` 原先用同一条 UPDATE 把 `planned` 和 `applying` 的拒绝都写成 `blocked`，这会放开一次已经开始、可能只删了一部分的回收围栏。现在在原复核事务中根据当前计划状态判断：拒绝的 `applying` 在写入之前直接返回原 `NOT_READY`，任何一列都不更新；只有 `planned` 的拒绝才保存 `blocked` 和证据。成功路径及原来的证明位置不变，没有增加 Git 调用。
 
-存储执行原先只记录 `NOT_READY` 错误码，现在把它携带的具体 reasons 写进跳过项；没有具体理由的拒绝仍保留错误码。普通文件改动还有更早的路径：无 Git 库存的文件系统指纹已经变化，会直接跳过为 `candidate-changed`。本轮在路径和类别未变、看板仍允许、已有分配的受管检出上增加一次只读诊断，保留其 `unsealed-changes` 等具体理由；这个分支已经决定不删除，诊断通过也仍以 `candidate-changed` 跳过，原计划变更保护没有放开。孤立检出及其他类别不走这条诊断，正常删除仍只由 `cleanup_apply` 证明一次。新诊断改变了拒绝路径调用数，因此重新量了七文件；本轮新测试中诊断分支实发 21 次 Git。
+存储执行原先只记录 `NOT_READY` 错误码，现在把它携带的具体 reasons 写进跳过项；没有具体理由的拒绝仍保留错误码。普通文件改动还有更早的路径：无 Git 库存的文件系统指纹已经变化，会直接跳过为 `candidate-changed`。本轮在路径和类别未变、黑板仍允许、已有分配的受管检出上增加一次只读诊断，保留其 `unsealed-changes` 等具体理由；这个分支已经决定不删除，诊断通过也仍以 `candidate-changed` 跳过，原计划变更保护没有放开。孤立检出及其他类别不走这条诊断，正常删除仍只由 `cleanup_apply` 证明一次。新诊断改变了拒绝路径调用数，因此重新量了七文件；本轮新测试中诊断分支实发 21 次 Git。
 
 新增 `test_refused_started_reclaim_preserves_every_plan_column_and_the_capture_fence`：在 `applying` 落盘后、真实移除之前中断，删除一个已跟踪文件，再回收，验证 `NOT_READY` 原因、计划所有列逐项相等、`_cleanup_fence` 仍拒绝，以及其余文件和固定引用不变。新增 `test_storage_apply_keeps_unsealed_change_reasons_after_planning`：分别用普通改动和保持原 stat 信息的同长度内容改动覆盖提前跳过与 `cleanup_apply` 拒绝，均验证具体原因 `unsealed-changes`、未删除及文件、引用原样。两个子场景使用独立目标目录。
 

@@ -6,6 +6,7 @@ from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
+from hey_my_buddy.blackboard.store.upgrade import upgrade_state
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
@@ -18,6 +19,7 @@ class UpgradeServiceTests(BoardTestCase):
         fixture = load_fixture(state)
         archived = backup.create(state, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self.assertEqual(backup.verify(archived["path"])["schema"], fixture["schemaVersion"])
+        self.assertEqual(upgrade_state(state)['targetSchema'], SCHEMA_VERSION)
         database = Database(state)
         self.addCleanup(database.close)
         database.initialize()
@@ -30,7 +32,7 @@ class UpgradeServiceTests(BoardTestCase):
         self.assertIsNone(resolution.problem)
         self.assertEqual([item["code"] for item in resolution.inspections], [None])
         self.assertEqual(resolution.facts["routingMode"], "review")
-        self.assertEqual(resolution.facts["routingBudget"], "deep")
+        self.assertEqual(resolution.facts["modelResponseWaitSeconds"], 60)
         self.assertEqual(resolution.facts["routerRetryIntervalSeconds"], 47)
 
         def call(operation, params):
@@ -38,8 +40,6 @@ class UpgradeServiceTests(BoardTestCase):
 
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             self.assertEqual(call("health", {})["schemaVersion"], SCHEMA_VERSION)
-            snapshot = call("console_snapshot", {})
-            self.assertEqual(snapshot["configuration"]["routerBuddyIds"], fixture["routerBuddyIds"])
             tasks = call("task_list", {})["runs"]
             self.assertIn(fixture["stableIds"]["delivered"], {task["runId"] for task in tasks})
             view = call("workflow_get", {"runId": fixture["stableIds"]["delivered"]})

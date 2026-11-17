@@ -173,7 +173,7 @@ F 当前 `_tree_changes` 先用 diff-tree 得到最多 512 个路径，再每个
 
 每步的受影响文件用同一 checks 入口和默认进程数验证；最后在最终源码上运行本轮同一 9 文件命令，并补上上表列出的 batch/Git-errors/Windows 文件（Windows 文件应在实际 Windows 跑，不能把平台 skip 当作验收）。不要求改检查器、不增加并行度、不降低等待预算、不改测试 fixtures。前后转发计数应对上 A/B/C/D/E/F 实际减少量；计时用同负载窗口交替基线／候选，记录失败、退出码、跳过与私有根清理，候选仍失败则先查原因，不能以较少调用数接收。
 
-删除安全另做共同验收：在 cleanup 计划后、apply 证明后与真正 remove 前分别引入 unsealed tracked/untracked 内容、换 checkout/git-dir 的 inode、移动或复制 `.git` 指针、撤掉登记、改 buddy 锁或附着 branch；在 storage 的历史引用扫描或 writer fence 边界添加任意状态的看板引用、改变 request/input/manifest；在 review 与 reclaim 之间 takeover，或令另一个原 owner 已完成同一路径删除。必须保持现有拒绝／保留／精确路径幂等收敛及 dangling symlink 判断，未知停止状态不授权封存或删除，remove 失败且路径仍在时保留原错误与 relock 证据。现有对应回归主要在 test_workspace_lifecycle.py、test_storage_orphans.py 和 test_workspace_submission_cleanup.py；本微任务只提出这些注入，没有声称执行过。
+删除安全另做共同验收：在 cleanup 计划后、apply 证明后与真正 remove 前分别引入 unsealed tracked/untracked 内容、换 checkout/git-dir 的 inode、移动或复制 `.git` 指针、撤掉登记、改 buddy 锁或附着 branch；在 storage 的历史引用扫描或 writer fence 边界添加任意状态的黑板引用、改变 request/input/manifest；在 review 与 reclaim 之间 takeover，或令另一个原 owner 已完成同一路径删除。必须保持现有拒绝／保留／精确路径幂等收敛及 dangling symlink 判断，未知停止状态不授权封存或删除，remove 失败且路径仍在时保留原错误与 relock 证据。现有对应回归主要在 test_workspace_lifecycle.py、test_storage_orphans.py 和 test_workspace_submission_cleanup.py；本微任务只提出这些注入，没有声称执行过。
 
 ## 6. 未采纳的做法与保留的查询
 
@@ -191,6 +191,6 @@ F 当前 `_tree_changes` 先用 diff-tree 得到最多 512 个路径，再每个
 
 库路线需逐项重新证明用户的 system/global/local/worktree 配置及 include、core.worktree、index 格式扩展和 sparse/split index、worktree 的 git-dir/common-dir、锁与 refs/reflog、SHA-1/SHA-256、路径编码与 Windows 行为、mode/symlink、attributes/filters、原始字节和对象替换禁用的语义；已有 CLI 对环境污染、失败 argv/输出尾部、timeout 与实际子进程收束的证据也要改成库边界。纯读取切到库但写入保留 Git，会形成两套配置和现场读取的一致性问题；全部切换则扩大到固定 ref CAS、materialization 与回收。它有调查价值，当前缺乏等价性证据，也超出一次只削减调用的微任务范围，不能作为捷径。以上风险是本仓库契约带来的验证要求，未声称官方库必然不支持这些功能。
 
-跨操作缓存不做：用户 checkout 的 HEAD/index/ignored 规则、Worker 写入、ref/stash 的共用修改、GC、目录与 inode 替换、服务重启及看板 revision/ownership 都能在下一次调用前改变；路径相同不等于同一 repository/checkout。缓存的失效事件会把本来由 Git 与现有 fence 负责的事实重新变成一套状态协议。本文只沿用当前函数中已经由真实 Git 回答过的固定 OID 或相同 entry map，不新增持久缓存、全局 LRU、mtime 快捷判断、WATCH 失效机制或跨宏任务／微任务共享状态。
+跨操作缓存不做：用户 checkout 的 HEAD/index/ignored 规则、Worker 写入、ref/stash 的共用修改、GC、目录与 inode 替换、服务重启及黑板 revision/ownership 都能在下一次调用前改变；路径相同不等于同一 repository/checkout。缓存的失效事件会把本来由 Git 与现有 fence 负责的事实重新变成一套状态协议。本文只沿用当前函数中已经由真实 Git 回答过的固定 OID 或相同 entry map，不新增持久缓存、全局 LRU、mtime 快捷判断、WATCH 失效机制或跨宏任务／微任务共享状态。
 
 临时计数脚本、探针与日志在交付前删除；交付树仅新增本文件。两轮原检查已通过并清理私有根；额外通过 checks 运行 test_repository_hygiene.py 的 5 条测试（0 跳过、退出 0、私有根已移除），并直接核对本文件的 UTF-8、个人路径、段落物理行、行尾空白与 Markdown code 标记，私有 Git 探针只验证了本机局部语义；未改实现、未测候选速度、未做 Host 故障注入、未运行完整检查或安装，也未作 Host 验收。

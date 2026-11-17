@@ -1,5 +1,7 @@
 import { expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
 
 // The detail of a micro task on the synthetic preview. Macro task A holds a1 (accepted, two turns, a change
@@ -11,14 +13,14 @@ const B = "macro-22222222-2222-4222-8222-222222222222";
 const languages = [
   {
     locale: "zh-CN", refresh: "重新读取", turn: (n: number) => `回合 ${n}`, delegate: "委派", acceptance: "验收",
-    running: "进行中", stuck: "可能卡住", overdue: "已超过预期", waitingHost: "等待 Host", failed: "失败", mode: "快速",
+    running: "进行中", stuck: "疑似停滞", overdue: "已超过预期", waitingHost: "等待 Host", failed: "失败", mode: "快速",
     answered: "已答复", unavailable: "问询已结束", delivered: "已送达，等待答复", conclusion: "Host 的结论", notCounted: "不计入验收",
     integration: "整合", reported: /上报 \d+ 分钟前/, handoff: "换手", unsure: "结束未确认", helperDone: "已完成", ask: "上一轮停下了吗？",
   },
   {
     locale: "en-US", refresh: "Read again", turn: (n: number) => `Turn ${n}`, delegate: "Delegate", acceptance: "Acceptance",
-    running: "Running", stuck: "Possibly stuck", overdue: "Overdue", waitingHost: "Waiting for Host", failed: "Failed", mode: "Fast",
-    answered: "Answered", unavailable: "Unavailable", delivered: "Delivered, awaiting answer", conclusion: "Host's conclusion", notCounted: "not counted as accepted",
+    running: "Running", stuck: "Possibly stalled", overdue: "Overdue", waitingHost: "Waiting for Host", failed: "Failed", mode: "Fast",
+    answered: "Answered", unavailable: "Inquiry ended", delivered: "Delivered, awaiting answer", conclusion: "Host's conclusion", notCounted: "not counted as accepted",
     integration: "Integration", reported: /Reported \d+ min ago/, handoff: "Handoff", unsure: "Stop not confirmed", helperDone: "Done", ask: "上一轮停下了吗？",
   },
 ];
@@ -62,15 +64,15 @@ async function expectDetailWhole(page: Page, { skipTitle = false } = {}) {
   // Events and inquiries share the time scale with bars; the axis and row occupy separate bands.
   await expectWholeAndApart(canvas, strip(page).locator('[data-slot=timeline-axis], [data-slot=timeline-track]'));
   await expectTextUncut(strip(page).locator("text:visible"));
-  await expectWholeAndApart(content(page), content(page).locator(":scope > *"));
+  await expectWholeAndApart(content(page), content(page).locator(":scope > :not(:last-child):visible, :scope > :last-child > :visible"));
   await expectTextUncut(pane(page).locator("[data-slot=detail-band] span, [data-slot=detail-live] span"));
   await expectNoSidewaysScroll(page);
   const sideways = await pane(page).locator("[data-slot=scroll-area-viewport]").evaluate(node => node.scrollWidth - node.clientWidth);
   expect(sideways, "the pane scrolls sideways").toBeLessThanOrEqual(0);
 }
 
-/** The title takes its own line on narrow screens; status stays beside refresh. */
-async function expectOneLineHead(page: Page, refresh: string, narrow: boolean) {
+/** The head keeps the title readable: the facts share its line when they fit, or follow below. */
+async function expectHead(page: Page, refresh: string) {
   const header = detail(page).locator("[data-slot=detail-header]");
   const [title, figures, status, again, mark] = await Promise.all([
     header.locator("h2").boundingBox(), header.locator("dl").boundingBox(),
@@ -80,14 +82,13 @@ async function expectOneLineHead(page: Page, refresh: string, narrow: boolean) {
   const centre = (box: { y: number; height: number }) => box.y + box.height / 2;
   expect(Math.abs(centre(status!) - centre(again!)), "the state stays beside refresh").toBeLessThan(10);
   expect(Math.abs(centre(mark!) - centre(title!)), "the back button stays beside the title").toBeLessThan(10);
-  if (narrow) {
-    expect(figures!.y, "facts follow the title").toBeGreaterThan(title!.y);
-    expect(status!.y, "state and refresh follow the facts").toBeGreaterThanOrEqual(figures!.y + figures!.height);
-  } else {
-    expect(Math.abs(centre(again!) - centre(figures!)), "wide, refresh shares the facts line").toBeLessThan(10);
-    expect(again!.x, "wide, refresh is at the right end").toBeGreaterThan(figures!.x);
-    expect(Math.abs(centre(title!) - centre(figures!)), "wide, the head is one line").toBeLessThan(10);
+  expect(figures!.y, "facts share the title's line or follow it").toBeGreaterThanOrEqual(title!.y);
+  expect(again!.y, "refresh never rises above the facts").toBeGreaterThanOrEqual(figures!.y - 10);
+  expect(again!.x, "refresh is at the right end").toBeGreaterThan(figures!.x);
+  if (figures!.y <= title!.y + 5) {
+    expect(Math.abs(centre(again!) - centre(figures!)), "refresh shares the facts line").toBeLessThan(10);
   }
+  expect(title!.width, "the title keeps a readable width").toBeGreaterThan(100);
 }
 
 /** A change of address inside the page, as a reader makes it: the page does not reload. */
@@ -98,6 +99,28 @@ async function go(page: Page, hash: string): Promise<void> {
 /** A slice of the strip by the words its readout carries. */
 const step = (page: Page, text: string | RegExp) => strip(page).getByRole("button", { name: typeof text === "string"
   ? new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?: ·|$)`) : text });
+
+for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
+  test.describe(`recorded Router judgment ${theme} ${width}px`, () => {
+    test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
+    test("shows the domain node and task type without clipping", async ({ page }) => {
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      await open(page, `#tasks/${A}/preview-run-a1/2`);
+      await expect(pane(page)).toContainText("领域节点");
+      await expect(pane(page)).toContainText("界面工程");
+      await expect(pane(page)).toContainText("任务类型");
+      await expect(pane(page)).toContainText("改造");
+      await expectTextUncut(pane(page).getByText("界面工程"));
+      await expectNoSidewaysScroll(page);
+      const screenshotDirectory = process.env.HMB_ROUTE_SCREENSHOTS;
+      if (screenshotDirectory) {
+        await pane(page).getByText("界面工程").scrollIntoViewIfNeeded();
+        await mkdir(screenshotDirectory, { recursive: true });
+        await page.screenshot({ path: join(screenshotDirectory, `route-${theme}-${width}.png`), fullPage: true });
+      }
+    });
+  });
+}
 
 for (const { locale } of languages) for (const theme of ["dark", "light"]) for (const reducedMotion of ["reduce", "no-preference"] as const) {
   test.describe(`strip selection ${locale} ${theme} ${reducedMotion}`, () => {
@@ -232,7 +255,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
           await expect(page.locator('[data-slot=task-names]')).toBeHidden();
         }
         await expectDetailWhole(page, { skipTitle: true });
-        await expectOneLineHead(page, refresh, width <= 760);
+        await expectHead(page, refresh);
         // A step reached by the keyboard is the one shown.
         await step(page, delegate).focus();
         await page.keyboard.press("Enter");
@@ -243,7 +266,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
       test("the delegation step: the task, its source, its helpers and its fixes", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/1`);
         await expect(pane(page).getByRole("heading", { name: delegate })).toBeVisible();
-        await expect(pane(page).getByRole("button", { name: /preview-run-a1/ })).toBeVisible();
+        await expect(pane(page).getByRole("button", { name: /preview-run-a1/ })).toHaveCount(0);
         await expect(pane(page).getByRole("button", { name: /schema/ })).toBeVisible();
         await expect(pane(page).getByText("↩")).toBeVisible();
         // A helper is written in the fixed words with a mark, not as the board names its state.
@@ -263,13 +286,13 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(band).toContainText("Router");
         await expect(band).toContainText("dsh / deepseek-official / deepseek-flash / max");
         await expect(band).toContainText(mode);
-        await expect(pane(page).locator("[data-slot=detail-thread]")).toContainText("deepseek-flash");
+        await expect(pane(page)).toContainText("deepseek-flash");
         await expectDetailWhole(page, { skipTitle: true });
       });
 
-      test("a finished turn: the input, its inquiries and their answers, the result and the seal", async ({ page }) => {
+      test("a finished turn: its inquiries and answers, result and seal without repeated input", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/3`);
-        const thread = pane(page).locator("[data-slot=detail-thread]");
+        const thread = pane(page);
         await expect(thread).toContainText("目前读到哪个文件了？");
         await expect(thread).toContainText(answered);
         await expect(thread).toContainText("正在核对");
@@ -277,12 +300,15 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(pane(page).locator("[data-slot=detail-band]")).toContainText("Worker");
         // The seal opens to its evidence.
         await expectDetailWhole(page, { skipTitle: true });
-        // The second turn begins with the Host's continuation input, and ends in a seal that opens to its evidence.
+        // Continuation input belongs to its own step; a later turn retains its result and seal.
         await step(page, turn(2)).click();
-        await expect(pane(page).locator("[data-slot=detail-thread]")).toContainText("路径边界也核对一遍");
-        const seal = pane(page).getByRole("button", { name: new RegExp(locale === "zh-CN" ? "封存" : "Seal") });
-        await seal.click();
-        await expect(pane(page).getByText("SHA-256").first()).toBeVisible();
+        await expect(pane(page)).not.toContainText("路径边界也核对一遍");
+        const seal = pane(page).getByRole("group", { name: locale === "zh-CN" ? "封存证据" : "Sealed evidence", exact: true });
+        const toggle = seal.locator('[data-slot="collapsible-trigger"]');
+        await toggle.click();
+        await expect(seal.getByText(locale === "zh-CN" ? "快照摘要" : "Snapshot digest")).toHaveCount(0);
+        await toggle.click();
+        await expect(seal.getByText(locale === "zh-CN" ? "快照摘要" : "Snapshot digest")).toBeVisible();
         await expectDetailWhole(page, { skipTitle: true });
         await step(page, handoff).click();
         await expect(pane(page)).toContainText("deepseek-flash");
@@ -291,10 +317,10 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
 
       test("an inquiry that names no attempt is shown in the turn that came after it", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/7`);
-        await expect(pane(page).locator("[data-slot=detail-thread]")).toContainText(ask);
+        await expect(pane(page)).toContainText(ask);
         await expectDetailWhole(page, { skipTitle: true });
         await step(page, turn(1)).click();
-        await expect(pane(page).locator("[data-slot=detail-thread]")).not.toContainText(ask);
+        await expect(pane(page)).not.toContainText(ask);
       });
 
       test("a stop that is not confirmed is written as not confirmed, in the turn and on the strip", async ({ page }) => {
@@ -326,7 +352,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
           return color;
         }));
         expect(await contrastOf(warning)).toBeGreaterThanOrEqual(4.5);
-        await expect(pane(page).locator("[data-slot=detail-thread]")).toContainText(delivered);
+        await expect(pane(page)).toContainText(delivered);
         const live = pane(page).locator("[data-slot=detail-live]");
         await expect(live).toContainText(reported);
         await expect(live).toBeVisible();
@@ -340,7 +366,8 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await open(page, `#tasks/${A}/preview-run-a2`);
         const selected = chosen(page);
         await expect(selected).toHaveAccessibleName(new RegExp(waitingHost));
-        await expect(pane(page).locator("h3").first()).toContainText(locale === "zh-CN" ? "协助请求" : "Assistance request");
+        await expect(pane(page).locator("h3").first()).toContainText(locale === "zh-CN" ? "决定" : "Decision");
+        await expect(pane(page).locator("[data-slot=request-kind]")).toContainText(locale === "zh-CN" ? "协助请求" : "Assistance request");
         await expect(pane(page).getByText(waitingHost).first()).toBeVisible();
         const dashed = await strip(page).locator("[data-slot=host-wait]").last().evaluate(node => node.getAttribute("stroke-dasharray"));
         expect(dashed).toBe("5 4");
@@ -359,6 +386,11 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await open(page, `#tasks/${A}/preview-run-a1/8`);
         await expect(pane(page).locator("h3").first()).toContainText(acceptance);
         await expect(pane(page)).toContainText(integration);
+        const integrationRow = pane(page).getByRole("group", { name: integration, exact: true });
+        const toggle = integrationRow.locator('[data-slot="collapsible-trigger"]');
+        await toggle.click();
+        await expect(integrationRow.locator("dl")).toBeHidden();
+        await toggle.click();
         await expect(pane(page)).toContainText("docs/reference/console.md");
         await expect(pane(page)).toContainText("refs/heads/synthetic-preview");
         await expectDetailWhole(page, { skipTitle: true });
@@ -392,7 +424,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
 
       test("a route with every candidate cooling shows the next retry and the frozen buddies", async ({ page }, testInfo) => {
         await open(page, `#tasks/${A}/preview-run-a4`);
-        await expect(pane(page)).toContainText(locale === "zh-CN" ? "所有候选都在冷却" : "All candidates are cooling down");
+        await expect(pane(page)).toContainText(locale === "zh-CN" ? "所有候选均在冷却中" : "All candidates are cooling down");
         await pane(page).getByRole("button", { name: locale === "zh-CN" ? "提交时的约束" : "Bounds at submission" }).click();
         await expect(pane(page)).toContainText(locale === "zh-CN" ? "冷却中的候选 2 个" : "Cooling down: 2");
         await expect(pane(page)).toContainText("dsh");
@@ -409,9 +441,10 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(detail(page)).toBeVisible();
         await expect(detail(page).locator("input, textarea, select, form")).toHaveCount(0);
         await expect(pane(page).locator("[data-slot=detail-live]")).toBeVisible();
-        // The refresh reads again, with its time in the hint.
+        // The refresh reads again without a checking-time tooltip.
         await detail(page).getByRole("button", { name: refresh }).hover();
-        await expect(page.locator("[data-slot=tooltip-content][data-state$=open]")).toContainText(/\d{2}:\d{2}:\d{2}/);
+        await page.waitForTimeout(700);
+        await expect(page.getByRole("tooltip")).toHaveCount(0);
         await detail(page).getByRole("button", { name: refresh }).click();
         await expect.poll(() => operations.length).toBeGreaterThan(0);
         expect(new Set(operations.filter(Boolean))).toEqual(new Set(["workflow_get", "message_list"]));
@@ -479,3 +512,27 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [390, 1280]) {
     });
   });
 }
+
+for (const locale of ["zh-CN", "en-US"]) test.describe(`queued micro task detail ${locale}`, () => {
+  test.use({ locale, viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+  test("explains directory and model service blockers without clipping", async ({ page }) => {
+    let queueReason = "cwd-overlap";
+    await page.route("**/api/tasks/preview-run-b5", async route => {
+      const response = await route.fetch();
+      const task = await response.json();
+      task.state = "queued";
+      task.queueReason = queueReason;
+      task.lineage = { ...task.lineage, buddy: { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" } };
+      await route.fulfill({ response, json: task });
+    });
+    await open(page, `#tasks/${B}/preview-run-b5`);
+    const reason = detail(page).locator('[data-slot="detail-queue-reason"]');
+    await expect(reason).toHaveText(locale === "zh-CN" ? "该工作目录正被其他微任务使用" : "Another micro task is using this working directory");
+    await expectNoSidewaysScroll(page);
+    queueReason = "model-capacity";
+    await page.reload();
+    await expect(reason).toContainText(locale === "zh-CN" ? "所选模型服务的并发名额已满" : "The selected model service is at capacity");
+    await expect(reason).toContainText("codex / openai / gpt-6.1-sol");
+    await expectNoSidewaysScroll(page);
+  });
+});

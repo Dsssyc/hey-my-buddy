@@ -53,7 +53,7 @@ from typing import Any, Callable, Mapping
 from ....protocol.reasons import reason as make_reason
 
 from ....errors import BoardError
-from ....json_codec import canonical_json
+from ....json_codec import canonical_json, decode_strict_json
 from ....private_dirs import ensure_private_dir
 from ....paths import native_path
 from ....private_files import read_bytes
@@ -61,6 +61,8 @@ from ....protocol.activity import ActivityPublisher, native_tool_name
 from ..c_two_live import CTwoLiveEndpoint
 from ..in_turn_inquiry import INQUIRY_TOOLS, InquiryServices, prepare_inquiry_services
 from ..inquiry_bridge import InquiryBridge
+from ..input_admission import admission_error
+from ....protocol.input_failure import is_input_too_large
 from ..session_receipts import ReceiptError, refusal_shaped
 from ...roles.turn_io import private_json
 from ..version import VersionShutdownError, probe_version
@@ -69,7 +71,7 @@ from ..native_support import (
     CancelFlag,
     ObserverInterrupt,
     execution_deadline,
-    halt_owned_group as _halt_owned_group,
+    halt_owned_session as _halt_owned_session,
     identity_or_none,
     utc_now,
     truncate_utf8,
@@ -79,6 +81,7 @@ from ..native_support import (
     INQUIRY_TOOL_NAME_CHARS,
     INQUIRY_FAILURE_BYTES,
 )
+from ..native_observations import native_counter
 from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
 from ..run_contract import (
     CheckedBuddy,
@@ -187,8 +190,7 @@ def _catalog(initialize: dict | None, version: str) -> dict:
     catalog = {"source": "claude-code-initialize", "harness": "claude", "harnessVersion": version,
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
                "providers": [{"harness": "claude", "provider": provider,
-                              "displayName": provider, "packageName": "claude-code",
-                              "packageVersion": version, "models": models}],
+                              "displayName": provider, "models": models}],
                "discoveries": [{"harness": "claude", "status": status,
                                 "accountStatus": account_status}],
                "warnings": list({canonical_json(item): item for item in warnings}.values())}
@@ -250,6 +252,7 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
+    native_admission_error: dict | None = None
     provider_rejection: dict | None = None
     catalog_checked: bool = False
     catalog: dict | None = None
@@ -295,7 +298,7 @@ def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Pr
     private_json(native_root / _SETTINGS_FILE, settings)
     mcp_config_path = None
     inquiry_tools = ()
-    if inquiry is not None:
+    if inquiry is not None and request.permission != "web":
         mcp_config_path = str(native_root / "inquiry-mcp.json")
         private_json(Path(mcp_config_path), {"mcpServers": {inquiry.server_name: inquiry.mcp_server}})
         inquiry_tools = tuple(f"mcp__{inquiry.server_name}__{name}" for name in INQUIRY_TOOLS)
@@ -303,6 +306,7 @@ def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Pr
                           effort=request.buddy.effort,
                           settings_path=str(native_root / _SETTINGS_FILE),
                           read_only=read_only, output_schema=request.output_schema.value,
+                          web_only=request.permission == "web",
                           full_access=request.permission == "full",
                           mcp_config_path=mcp_config_path, inquiry_tools=inquiry_tools)
     return _Preparation(session_id=session_id, deadline=deadline, invocation_root=invocation_root,
@@ -337,7 +341,7 @@ def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment:
                     raise ClaudeProtocolError("harness-unavailable",
                                               "The selected Claude executable could not start") from None
                 raise
-            handle = ProcessHandle(process, stop_channel="stdin", own_group=True, log_paths={})
+            handle = ProcessHandle(process, stop_channel="stdin", log_paths={})
             if owned is not None:
                 owned[:] = [handle]
         finally:
@@ -348,7 +352,7 @@ def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment:
         # only its actual stop can replace the earlier diagnostic receipt.
         if process is not None:
             try:
-                shutdown, _signalled = _halt_owned_group(handle, time.monotonic() + 5.0)
+                shutdown, _signalled = _halt_owned_session(handle, time.monotonic() + 5.0)
                 if owned is not None:
                     owned[:] = [{"created": True, "shutdown": shutdown, "exit_code": process.returncode}]
             finally:
@@ -399,6 +403,59 @@ def _check_catalog(request: RunRequest, catalog: dict) -> bool:
 # -- the live collectors of one execution run ------------------------------------
 
 
+def _root_model_output(frame: dict, session_id: str) -> bool:
+    """Whether this native frame contains output from the allocated root model."""
+    if frame.get("parent_tool_use_id"):
+        return False
+    frame_session = frame.get("session_id")
+    if isinstance(frame_session, str) and frame_session and frame_session != session_id:
+        return False
+
+    def output_tokens(usage: object) -> bool:
+        if not isinstance(usage, dict):
+            return False
+        details = usage.get("output_tokens_details")
+        reasoning = details.get("thinking_tokens") if isinstance(details, dict) else None
+        return (native_counter(usage.get("output_tokens")) or 0) > 0 or (native_counter(reasoning) or 0) > 0
+
+    kind = frame.get("type")
+    if kind == "assistant":
+        if frame.get("error"):
+            return False
+        message = frame.get("message")
+        if not isinstance(message, dict):
+            return False
+        content = message.get("content")
+        if isinstance(content, list) and any(
+                isinstance(block, dict) and (
+                    block.get("type") == "tool_use" or
+                    (block.get("type") in ("text", "thinking", "reasoning") and
+                     isinstance(block.get(block["type"]), str) and bool(block[block["type"]]))
+                ) for block in content):
+            return True
+        return output_tokens(message.get("usage"))
+    if kind == "stream_event":
+        event = frame.get("event")
+        if not isinstance(event, dict):
+            return False
+        block = event.get("content_block")
+        delta = event.get("delta")
+        if event.get("type") == "content_block_start" and isinstance(block, dict):
+            return block.get("type") == "tool_use" or any(
+                isinstance(block.get(key), str) and bool(block[key])
+                for key in ("text", "thinking", "reasoning"))
+        if event.get("type") == "content_block_delta" and isinstance(delta, dict):
+            field = {"text_delta": "text", "thinking_delta": "thinking",
+                     "input_json_delta": "partial_json"}.get(delta.get("type"))
+            return field is not None and isinstance(delta.get(field), str) and bool(delta[field])
+        return event.get("type") == "message_delta" and output_tokens(event.get("usage"))
+    if kind == "result":
+        text = frame.get("result")
+        return (frame.get("subtype") == "success" and frame.get("is_error") is not True
+                and isinstance(text, str) and bool(text)) or output_tokens(frame.get("usage"))
+    return False
+
+
 class _TurnCollector:
     """The live observers of one run: tool facts, turn evidence, activity, the role observer.
 
@@ -428,10 +485,13 @@ class _TurnCollector:
         self.unsupported_requests = 0
         self.early_messages: list[tuple[bool, dict]] = []
         self.user_sent = False
+        self.user_send_attempted = False
         self.provider = "unknown"
         self.last_activity: dict | None = None
         self._connection: Connection | None = None
         self._last_tool_calls = 0
+        self.model_responded = False
+        self._last_model_responded = False
         self._quiet = False
         self.inquiry = inquiry
         self.bridge = bridge
@@ -502,11 +562,12 @@ class _TurnCollector:
 
     def send_input(self, connection: Connection, session_id: str, cwd: str, input_text: str) -> None:
         # The user-message boundary: anything the CLI already emitted is
-        # pre-user output; the model is counted as started from this send on.
+        # pre-user output; a completed write is only a send fact.
         connection.pump_available()
-        self.user_sent = True
+        self.user_send_attempted = True
         connection.send({"type": "user", "message": {"role": "user",
                        "content": [{"type": "text", "text": input_text}]}})
+        self.user_sent = True
         if self.session is not None:
             self.session.record.project(self.session.start_prompt, session_id, input_text)
         self.evidence = TurnEvidence(session_id, cwd, provider=self.provider)
@@ -546,6 +607,8 @@ class _TurnCollector:
         if self.evidence is not None:
             initialized = self.evidence.init_observed
             activity = self.evidence.observe(frame)
+            if not self.model_responded and _root_model_output(frame, self.evidence.session_id):
+                self.model_responded = True
             if self.bridge is not None:
                 if not initialized and self.evidence.init_observed:
                     self.bridge.activate(self.evidence.session_id)
@@ -558,7 +621,7 @@ class _TurnCollector:
                         self.root_stop_requested = True
                         self.root_unanswered_input = self.bridge.report()["unansweredDelivered"] > 0
                         self._request_interrupt()
-                        _halt_owned_group(self._native_handle, self._connection.deadline)
+                        _halt_owned_session(self._native_handle, self._connection.deadline)
                 self._observe_inquiry_tool(frame)
                 self.bridge.note_event({"kind": frame.get("type") or "event"},
                                        "finishing" if self.evidence.result is not None else "running")
@@ -572,8 +635,9 @@ class _TurnCollector:
                     + self.expected_permission_mode + ", native session reported " + self.evidence.permission_mode)
             if activity:
                 self.publish_activity(*activity)
-        if self.tools.tool_calls != self._last_tool_calls:
+        if self.tools.tool_calls != self._last_tool_calls or self.model_responded != self._last_model_responded:
             self._last_tool_calls = self.tools.tool_calls
+            self._last_model_responded = self.model_responded
             self._notify(settled=False, raw=None)
 
     def _observe_inquiry_tool(self, frame: dict) -> None:
@@ -666,6 +730,7 @@ class _TurnCollector:
 
     def facts(self, *, settled: bool, raw: str | None) -> dict:
         return {"settled": settled, "rawAnswer": raw,
+                "modelResponded": self.model_responded,
                 "toolCalls": self.tools.tool_calls,
                 "deniedInteractions": len(self.denied),
                 "unknownEvents": _unknown_events(self._connection)}
@@ -697,6 +762,7 @@ def _send_and_settle(collector: _TurnCollector, spawn: _Spawn, preparation: _Pre
     """
     connection = spawn.connection
     collector.send_input(connection, preparation.session_id, request.cwd, request.input_text)
+    collector._notify(settled=False, raw=None)
     collector.replay_early()
     collector.publish_activity("waiting-model")
     evidence = collector.evidence
@@ -760,8 +826,14 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
         raise ProviderRejected("unknown", None, source="claude/stream-json-result")
     if (native_result.get("is_error") is True or subtype == "error"
             or isinstance(subtype, str) and subtype.startswith("error_")):
+        source = {"code": native_result.get("error_code", native_result.get("code", subtype)),
+                  "message": native_result.get("error_message", native_result.get("result")),
+                  "data": native_result.get("data")}
+        if isinstance(native_result.get("error"), dict):
+            source.update(native_result["error"])
         raise ClaudeProtocolError("native-turn-failed",
-                                  "the Claude native turn reported an error result")
+                                  "the Claude native turn reported an error result",
+                                  native_error=admission_error("stream-json/result", source))
     return False
 
 
@@ -770,12 +842,12 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
 
 def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, int | None]:
     """Close, wait, then terminate; report only what the owned group confirmed."""
-    shutdown, _signalled = _halt_owned_group(spawn.handle, deadline)
+    shutdown, _signalled = _halt_owned_session(spawn.handle, deadline)
     try:
         spawn.process.stdout.close()
     except OSError:
         pass
-    return shutdown, spawn.process.returncode
+    return shutdown, spawn.handle.poll()
 
 
 # -- phase 6: the factual result -------------------------------------------------
@@ -893,6 +965,9 @@ def _effective_policy(preparation: _Preparation) -> EffectivePolicy:
                  "sandbox": preparation.settings["sandbox"]}
     if "permissions" in preparation.settings:
         requested["permissions"] = preparation.settings["permissions"]
+    if "--strict-mcp-config" in preparation.args:
+        requested["strictMcpConfig"] = True
+        requested["mcpConfig"] = decode_strict_json(_flag_value(preparation.args, "--mcp-config"))
     return EffectivePolicy(
         tools=PolicyFact(requested=requested))
 
@@ -947,7 +1022,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     if spawn is not None and collector is not None:
         # The stream's own observed end is a transport fact, reported exactly
         # as observed: it is never downgraded by the business verdict nor by
-        # the process-group stop, which travel in their own fields. The one
+        # the session stop, which travel in their own fields. The one
         # exclusion is the verified built-in delivery call — the value carrier,
         # never an ordinary task tool.
         tool_package = _usable(_validated_tool_evidence, collector.tools.finish(
@@ -959,7 +1034,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     if state.terminal_ok and native_result is not None:
         # The delivery facts report what the transport and the terminal checks
         # each observed on their own: the stream's end is the drain's fact,
-        # never back-inferred from the process-group stop. A verified built-in delivery call stays excluded from
+        # never back-inferred from the session stop. A verified built-in delivery call stays excluded from
         # tool facts; an unverified call remains counted there.
         completion = CompletionEvidence(stream_end=stream_ended)
     checked = CheckedBuddy()
@@ -1031,7 +1106,13 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
             harness_version=spawn.version if spawn is not None else None,
             native_event_count=evidence.event_seq if evidence is not None and evidence.event_seq else None,
             native_evidence=native_evidence,
-            model_started=True if user_sent else None,
+            model_responded=(True if collector is not None and collector.model_responded
+                           else False if not (collector is not None and collector.user_send_attempted)
+                           or is_input_too_large(state.native_admission_error)
+                           or state.drained is True else None),
+            native_request_sent=(True if user_sent else None if collector is not None and
+                                 collector.user_send_attempted else False),
+            native_admission_error=state.native_admission_error,
             buddy=ResultBuddy(
                 requested=RunBuddy(provider=request.buddy.provider,
                                    model=request.buddy.model,
@@ -1180,6 +1261,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.status = "cancelled" if error.code == "user-cancel" else "error"
             state.reason = error.code
             state.error_text = str(error)
+            if (isinstance(error, ClaudeProtocolError) and collector is not None
+                    and collector.user_sent and collector.evidence is not None
+                    and not collector.evidence.root_model_activity):
+                state.native_admission_error = error.native_error
             # A result can report a structured rejection before the stream fails
             # during the drain. Its activity history is then incomplete, but the
             # rejection itself remains a native fact.
@@ -1218,7 +1303,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                     state.status = "error"
                     state.reason = "native-shutdown-failed"
                     state.error_text = ("the Claude native process did not exit with confirmed "
-                                        "process-group shutdown")
+                                        "session shutdown")
             if cancel.is_set() and state.status != "ok":
                 state.status = "cancelled"
                 state.reason = "user-cancel"
@@ -1294,7 +1379,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     if not shutdown or spawn.process.returncode != 0:
         raise _with_stop_fact(ClaudeProtocolError("native-shutdown-failed",
                                                   "the Claude native process did not exit with confirmed "
-                                                  "process-group shutdown"), shutdown)
+                                                  "session shutdown"), shutdown)
     return catalog
 
 

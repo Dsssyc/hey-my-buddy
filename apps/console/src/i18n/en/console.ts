@@ -1,6 +1,7 @@
 import type zh from "../zh/console";
 
 export default {
+  correspondenceChanged: "The correspondence has changed; refresh before undoing.",
   "waitingForLead": "Waiting for Lead",
   "waitingForHost": "Waiting for Host",
   "stopUnconfirmed": "Stop unconfirmed",
@@ -12,10 +13,9 @@ export default {
   "theSaveResultIsUnknownAndMay": "The save result is unknown and may have taken effect; check it before retrying.",
   "enabledState": "Enabled state",
   "reasoningEffortPreference": "Reasoning effort preference",
-  "modelServiceNote": "Model service note",
+  "modelCorrespondence": "Model correspondence",
   "routerList": "Router list",
   "defaultRoutingMode": "Default routing mode",
-  "routingBudget": "Routing budget",
   "retryInterval": "Retry interval",
   "concurrencyLimit": "Concurrency limit",
   "routerListForBuddy": "Router list ({{v0}})",
@@ -25,7 +25,6 @@ export default {
   "someoneElseChangedYourDraftIsRetained": "Someone else changed {{v0}}{{v1}}. Your draft is retained; reload and check it.",
   "settingsNeedUpgrading": " (settings need upgrading)",
   "correctTheInvalidDraftValuesFirst": " (correct the invalid draft values first)",
-  "aReadIsStillInProgressTry": "A read is still in progress. Try again shortly.",
   "notRecorded": "Not recorded",
   "executionCompleted": "Execution completed",
   "started": "Started",
@@ -34,7 +33,7 @@ export default {
   "stillWaiting": "Still waiting",
   "decided": "Decided",
   "executionFailed": "Execution failed",
-  "reroutedAfterRejection": "Refused for quota; rerouted",
+  "reroutedAfterRejection": "Provider rejection; rerouted",
   "timeMissing": "Time missing",
   "abstained": "Abstained",
   "approved": "Approved",

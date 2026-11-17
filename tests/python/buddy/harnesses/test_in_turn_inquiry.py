@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from temporary import TemporaryDirectory
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -29,7 +29,7 @@ class InTurnInquiryTests(unittest.TestCase):
         self.assertEqual(json.loads(records.splitlines()[-1])['inquiryId'], 'long-question')
 
     def setUp(self):
-        self.directory = TemporaryDirectory()
+        self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         root = Path(self.directory.name)
         self.identity = dict(taskId="task", attemptId="attempt", generation=1, turnId="turn")

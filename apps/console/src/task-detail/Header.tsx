@@ -3,32 +3,56 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
-import { useTextClipped } from "@/components/use-text-clipped";
+import { ScrollingTitle } from "@/components/ScrollingTitle";
 import { Button } from "@/components/ui/button";
 import { StateMark } from "@/components/ui/state-mark";
 import { CopyableIdentifier } from "@/components/CopyableIdentifier";
-import { formatClock, formatDuration, formatMomentMinutes } from "../i18n/format";
+import { formatDuration } from "../i18n/format";
 import { taskStatus, taskTitle } from "../task-state";
+import { workflowOwnerText } from "../actor";
 import type { Task } from "../types";
 import type { TaskView, Workflow } from "./types";
 
 export function DetailBack({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation("taskDetail");
-  return <Hint text={t("back")}><Button variant="ghost" size="icon-sm" data-slot="detail-back" aria-label={t("back")} onClick={onBack}><ArrowLeft aria-hidden="true"/></Button></Hint>;
+  return <Button variant="ghost" size="icon-sm" data-slot="detail-back" aria-label={t("back")} onClick={onBack}><ArrowLeft aria-hidden="true"/></Button>;
 }
 
-export type StateWord = { key: "running" | "stopping" | "queued" | "host" | "lead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
+export type StateWord = { key: "running" | "stopping" | "unknown" | "queued" | "paused" | "host" | "lead" | "failedHost" | "cancelledHost" | "failedLead" | "cancelledLead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "paused" | "hand" | "review" | "done" | "fail" | "idle" };
+
+const queueReasons = [
+  "awaiting-execution", "capacity", "model-capacity", "cwd-overlap", "capability-mismatch",
+  "awaiting-model-selection", "awaiting-buddy-validation", "awaiting-routing-shutdown",
+  "awaiting-workspace-preparation", "awaiting-helpers", "awaiting-host", "awaiting-owned",
+  "awaiting-acknowledgement", "helper-attention", "attempt-uncertain-after-restart",
+  "harness-probe-unknown", "workflow-routing-fenced", "workflow-accepted",
+  "workflow-concluded", "workflow-cancelled", "workflow-failed", "router-retry-in-progress",
+  "router-dispatch-unfinished", "decision-dispatch-superseded", "decision-dispatch-advanced",
+] as const;
+type QueueReasonKey = (typeof queueReasons)[number] | "workflow-ancestor" | "unknown";
+
+function queueReasonKey(reason: string | null | undefined): QueueReasonKey {
+  if (reason?.startsWith("workflow-ancestor-")) return "workflow-ancestor";
+  return reason && queueReasons.includes(reason as (typeof queueReasons)[number]) ? reason as (typeof queueReasons)[number] : "unknown";
+}
 
 /** The one word a micro task's state has, and the mark that goes with it. */
-export function stateWord(task: Task, lead: boolean, workflowState: string | null = task.workflow?.state ?? null): StateWord {
+export function stateWord(task: Task, lead: boolean, workflowState: string | null = task.workflow?.state ?? null, conclusionStatus: string | null = null): StateWord {
   if (taskStatus(task) === "cancelling") return { key: "stopping", mark: "live" };
-  if (task.state === "queued") return { key: "queued", mark: "idle" };
+  if (task.state === "queued") return task.queueReason === "paused" ? { key: "paused", mark: "paused" } : { key: "queued", mark: "idle" };
+  if (workflowState === "failed" || workflowState === "cancelled") {
+    if (task.state === "running") return { key: "running", mark: "live" };
+    if (task.state === "reconciliation-needed") return { key: "unknown", mark: "live" };
+  }
   switch (workflowState) {
     case "awaiting-host": return { key: lead ? "lead" : "host", mark: "hand" };
-    case "delivered": return { key: "review", mark: "hand" };
+    case "delivered": return { key: "review", mark: "review" };
     case "accepted": return { key: "accepted", mark: "done" };
-    case "failed": return { key: "failed", mark: "fail" };
-    case "concluded": case "cancelled": return { key: "ended", mark: "idle" };
+    case "failed": return task.lineage?.kind === "helper" ? { key: "failed", mark: "fail" }
+      : { key: lead ? "failedLead" : "failedHost", mark: "hand" };
+    case "cancelled": return task.lineage?.kind === "helper" ? { key: "ended", mark: "idle" }
+      : { key: lead ? "cancelledLead" : "cancelledHost", mark: "hand" };
+    case "concluded": return conclusionStatus === "failed" ? { key: "failed", mark: "fail" } : { key: "ended", mark: "idle" };
     case "executing": case "waiting-helpers": case "waiting-owned": return { key: "running", mark: "live" };
     default: break;
   }
@@ -38,13 +62,13 @@ export function stateWord(task: Task, lead: boolean, workflowState: string | nul
 }
 
 /**
- * The head of the detail: what the micro task is, when it began
- * and how long it has gone on, and the one control
+ * The head of the detail: what the micro task is,
+ * how long it has gone on, and the one control
  * that reads it again. Reading is all it does; nothing here changes the board.
  */
-export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, error, busy, onRefresh, onBack }: {
-  view: TaskView; workflow: Workflow | null; turns: number | null; endMs: number; nowMs: number;
-  verifiedAtMs: number | null; error: string; busy: boolean; onRefresh: () => void; onBack: () => void;
+export function Header({ view, workflow, turns, endMs, error, busy, onRefresh, onBack }: {
+  view: TaskView; workflow: Workflow | null; turns: number | null; endMs: number;
+  error: string; busy: boolean; onRefresh: () => void; onBack: () => void;
 }) {
   const { t } = useTranslation("taskDetail");
   const shell = useTranslation("shell").t;
@@ -60,40 +84,40 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
   const refreshing = busy || turning;
   const refresh = () => { setTurning(true); onRefresh(); };
   const title = taskTitle(view.task);
-  const text = title.source === "none" ? t("untitled") : title.text;
-  const word = stateWord(view.task, view.lead, workflow?.state ?? null);
+  const text = title.source === "none" ? t("untitled") : title.fullText;
+  const word = stateWord(view.task, view.lead, workflow?.state, workflow?.hostConclusion?.executionStatus ?? null);
+  const queueReason = word.key === "queued" ? queueReasonKey(view.task.queueReason) : null;
+  const modelService = view.task.lineage?.buddy ?? workflow?.buddy;
   const reminders = view.attempt ?? { overdue: false, possiblyStuck: false };
   const start = Date.parse(view.task.createdAt);
-  const [titleRef, clipped] = useTextClipped<HTMLHeadingElement>(text);
-  const titleHint = title.source === "task" ? t("title.fromTask", { title: title.fullText }) : clipped && title.source !== "none" ? title.fullText : undefined;
-  return <header data-slot="detail-header" className="shrink-0 bg-card">
-    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 py-2 pl-1.5 pr-4 sm:pr-6">
-      <div className="flex min-w-0 flex-1 items-center gap-2.5 @max-[650px]:order-1 @max-[650px]:basis-full">
+  // The bar shares the left column header's ground, height and bottom line. One
+  // line whenever the facts fit beside a readable title; facts that do not fit
+  // wrap to a second line by the existing narrow rules.
+  return <header data-slot="detail-header" className="flex shrink-0 flex-col border-b border-line bg-ruler">
+    <div className="flex min-h-9 flex-wrap items-center gap-x-2.5 gap-y-1.5 pl-1.5 pr-4 sm:pr-6 @max-[650px]:py-2">
+      <div className="flex min-w-80 flex-1 items-center gap-2.5 @max-[650px]:basis-full">
         <DetailBack onBack={onBack}/>
-        <Hint text={titleHint}>
-          <h2 ref={titleRef} tabIndex={0} className="min-w-0 truncate rounded-sm text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{text}</h2>
-        </Hint>
+        <ScrollingTitle as="h2" text={text} focusable className="min-w-40 rounded-sm text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"/>
         <CopyableIdentifier value={view.task.runId}/>
       </div>
-      <div className="ml-auto flex shrink-0 items-center gap-x-4 @max-[650px]:order-2 @max-[650px]:w-full @max-[650px]:flex-wrap @max-[650px]:gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-x-4 @max-[650px]:w-full @max-[650px]:flex-wrap @max-[650px]:gap-2">
         <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums @max-[650px]:basis-full">
-          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.started")}</dt><dd>{Number.isFinite(start) ? formatMomentMinutes(start, nowMs) : t("unrecorded")}</dd></div>
+          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("delegation.owner")}</dt><dd className="min-w-0 wrap-anywhere">{workflowOwnerText(view.task)}</dd></div>
           <div className="flex gap-1.5"><dt className="text-ink3">{t("header.elapsed")}</dt><dd>{Number.isFinite(start) ? formatDuration(Math.max(0, endMs - start)) : t("unrecorded")}</dd></div>
           {turns !== null && <div className="flex gap-1.5"><dt className="text-ink3">{t("header.turns")}</dt><dd>{turns}</dd></div>}
         </dl>
         <div className="flex shrink-0 items-center gap-2 @max-[650px]:ml-auto">
           <Hint text={word.key === "stopping" && workflow?.shutdown ? t("acceptance.unconfirmed", { n: workflow.shutdown.unconfirmedCount }) : undefined}>
-            <span data-slot="detail-status" tabIndex={word.key === "stopping" ? 0 : undefined} className={cn("text-xs whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring", word.mark === "hand" ? "text-hand" : word.mark === "live" ? "text-ink state-breathe" : word.mark === "fail" ? "text-fail" : "text-ink2")}>{t(`state.${word.key}`)}</span>
+            <span data-slot="detail-status" tabIndex={word.key === "stopping" ? 0 : undefined} className={cn("inline-flex items-center gap-1.5 text-xs whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring", word.mark === "hand" || word.mark === "review" ? "text-hand" : word.mark === "live" ? "text-ink state-breathe" : word.mark === "fail" ? "text-fail" : "text-ink2")}><StateMark kind={word.mark} breathing={word.mark === "live" || word.mark === "paused" && !view.task.shutdownConfirmed}/>{t(`state.${word.key}`)}</span>
           </Hint>
+          {queueReason && <span data-slot="detail-queue-reason" className="max-w-64 text-xs leading-snug text-ink3">{t(`queueReason.${queueReason}`)}{queueReason === "model-capacity" && modelService && <> · {modelService.harness} / {modelService.provider} / {modelService.model}</>}</span>}
           {reminders.overdue && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.overdue")}</span>}
           {reminders.possiblyStuck && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.possiblyStuck")}</span>}
-          <Hint text={verifiedAtMs !== null ? t("refresh.verified", { time: formatClock(verifiedAtMs) }) : t("refresh.unverified")}>
-            <Button variant="ghost" size="icon-sm" aria-label={t("refresh.label")} data-slot="detail-refresh" aria-busy={busy} disabled={refreshing} onClick={refresh}>
-              <RefreshCw data-slot="detail-refresh-icon" aria-hidden="true"
-                className={cn(turning && "detail-refresh-turn", busy && "motion-reduce:opacity-50")}
-                onAnimationIteration={() => { if (!busy) setTurning(false); }} />
-            </Button>
-          </Hint>
+          <Button variant="ghost" size="icon-sm" aria-label={t("refresh.label")} data-slot="detail-refresh" aria-busy={busy} disabled={refreshing} onClick={refresh}>
+            <RefreshCw data-slot="detail-refresh-icon" aria-hidden="true"
+              className={cn(turning && "detail-refresh-turn", busy && "motion-reduce:opacity-50")}
+              onAnimationIteration={() => { if (!busy) setTurning(false); }} />
+          </Button>
         </div>
       </div>
     </div>

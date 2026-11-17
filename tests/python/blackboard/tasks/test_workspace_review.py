@@ -8,7 +8,6 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from temporary import TemporaryDirectory
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.tasks import workspace
@@ -18,13 +17,16 @@ from hey_my_buddy.paths import native_path
 
 class WorkspaceReviewTests(unittest.TestCase):
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="hey-my-buddy-workspace-review-")
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-review-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.repo = self.root / "repo"
         self.repo.mkdir()
         self.state = self.root / "state"
         self.git("init", "-q")
+        # Local fetch drops the caller's -c options before starting upload-pack.
+        # Its source repository must also allow long sealed-ref paths on Windows.
+        self.git("config", "core.longpaths", "true")
         self.git("config", "user.name", "Workspace Review")
         self.git("config", "user.email", "review@example.invalid")
         (self.repo / "src").mkdir()
@@ -44,7 +46,7 @@ class WorkspaceReviewTests(unittest.TestCase):
     def intent(self, **updates):
         return {"kind": "worktree", "cwd": str(self.repo), "access": "write",
                 "base": {"kind": "working-tree"}, "writeScope": ["src"],
-                "integrator": {"role": "host", "id": "host-1"}, **updates}
+                "integrator": {"role": "host"}, **updates}
 
     def prepare(self, request, **updates):
         return workspace.prepare(self.state, request, self.intent(**updates))

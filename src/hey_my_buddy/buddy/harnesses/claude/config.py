@@ -25,6 +25,8 @@ WRITABLE_TOOLS = ("Agent", "Bash", "Edit", "Glob", "Grep", "LS", "MultiEdit",
 #: inside the cwd, so a read-only turn exposes no Bash and no write tools at all.
 READONLY_TOOLS = ("Glob", "Grep", "LS", "Read", "Skill")
 
+WEB_TOOLS = ("WebSearch", "WebFetch")
+
 #: Session-wide hard denials for read-only turns. The disallow list binds native
 #: child agents too, so read-only is enforced by the permission layer rather
 #: than by model promises.
@@ -84,7 +86,7 @@ def discovery_args() -> list[str]:
 
 def execution_args(*, session_id: str, model: str, effort: str, settings_path: str, read_only: bool,
                    output_schema: dict, full_access: bool = False,
-                   mcp_config_path: str | None = None, inquiry_tools=()) -> list[str]:
+                   mcp_config_path: str | None = None, inquiry_tools=(), web_only: bool = False) -> list[str]:
     """The native permission invocation; user configuration sources stay enabled.
 
     ``output_schema`` is the run's own ending contract and is always explicit:
@@ -93,13 +95,17 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
     """
     args = [*base_args(),
             "--no-session-persistence",
-            "--tools", ",".join([*(READONLY_TOOLS if read_only else WRITABLE_TOOLS),
+            "--tools", ",".join(WEB_TOOLS if web_only else [*(READONLY_TOOLS if read_only else WRITABLE_TOOLS),
                                  *(("ToolSearch",) if mcp_config_path else ())]),
             "--permission-prompt-tool", "stdio",
             "--settings", settings_path,
             "--session-id", session_id,
             "--model", model]
-    if read_only:
+    if web_only:
+        args += ["--permission-mode", "default", "--allowedTools", ",".join(WEB_TOOLS),
+                 "--disallowedTools", "mcp__*", "--strict-mcp-config",
+                 "--mcp-config", canonical_json({"mcpServers": {}})]
+    elif read_only:
         # Mode stays default so any write ask is a real denial path, and the
         # session-wide disallow list hard-denies writes for child agents too.
         args += ["--permission-mode", "default", "--disallowedTools", ",".join(DENIED_WRITE_TOOLS)]
@@ -116,7 +122,7 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
         args += ["--permission-mode", "bypassPermissions" if full_access else "acceptEdits"]
     if effort != DEFAULT_EFFORT:
         args += ["--effort", effort]
-    if mcp_config_path is not None:
+    if mcp_config_path is not None and not web_only:
         args += ["--mcp-config", mcp_config_path, "--allowedTools", ",".join(inquiry_tools)]
     args += ["--json-schema", canonical_json(output_schema)]
     return args

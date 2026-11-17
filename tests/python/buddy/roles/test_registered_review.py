@@ -18,7 +18,7 @@ from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase, READ_SC
 
 
 class RegisteredReviewTests(NativeRunCase):
-    def review(self, *, tool_budget=4):
+    def review(self):
         root = self.base / uuid.uuid4().hex
         root.mkdir(mode=0o700)
         control = {
@@ -28,16 +28,16 @@ class RegisteredReviewTests(NativeRunCase):
             "stateDir": os.environ["HMB_STATE_DIR"],
             "directory": str(root),
             "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.jsonl"),
-            "cwd": str(self.cwd), "timeoutSeconds": 10,
+            "cwd": str(self.cwd),
             "executionLiveFile": str(root / "execution-live.json"),
             "live": {"instanceId": "a" * 64, "token": "b" * 64},
             "canCorrect": False,
             "readOnlyRequest": {"prompt": "Choose", "outputSchema": READ_SCHEMA,
-                                "budget": {"toolCalls": tool_budget}, "captureEvidence": False},
+                                "captureEvidence": False},
         }
         identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                invocation_id=control["invocationId"])
-        handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
+        handle = run_execution.InlineRunHandle(control, identity)
         with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
                 mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)):
             result, request, verdict, code = inline_run.execute(control, handle)
@@ -65,19 +65,18 @@ class RegisteredReviewTests(NativeRunCase):
         self.assertNotIn("account", request.to_payload())
         self.assertEqual(request.session_services, ())
 
-    def test_a_real_tool_over_budget_is_stopped_by_the_role_and_keeps_its_fact(self):
+    def test_multiple_real_tools_keep_their_facts_without_a_cap(self):
         self.use_fixture(STREAM_FIXTURE)
-        self.fixture_case("budget")
-        result, request, payload, code = self.review(tool_budget=1)
-        self.assertEqual(code, 1)
-        self.assertEqual(payload["code"], "readonly-budget-exhausted")
-        self.assertEqual(payload["usage"]["toolCalls"], 2)
+        self.fixture_case("overflow")
+        result, request, payload, code = self.review()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["usage"]["toolCalls"], 65)
         self.assertEqual(list(read_tool_calls(payload["toolEvidence"],
                                               state_dir=Path(request.private_state.state_dir)))[0]["categories"], ["read"])
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
-    def test_correction_keeps_review_budget_and_the_original_review_prompt(self):
-        observer = ReviewObserver(2, READ_SCHEMA, "Choose", can_correct=True)
+    def test_correction_keeps_the_original_review_prompt(self):
+        observer = ReviewObserver(READ_SCHEMA, "Choose", can_correct=True)
         tolerated = {"toolCalls": 2, "unknownEvents": {"total": 1}, "deniedInteractions": 1}
         self.assertEqual(observer.observer(tolerated).action, "continue")
         answer = observer.observer(tolerated | {"settled": True, "rawAnswer": "{"})
@@ -85,7 +84,6 @@ class RegisteredReviewTests(NativeRunCase):
         self.assertEqual(answer.input_text, "Choose\n\nFormat correction: answer-invalid-json. "
                          "Return exactly the supplied JSON Schema; do not repeat exploration.")
         self.assertEqual(observer.observer({"settled": True, "rawAnswer": "{"}).action, "continue")
-        self.assertEqual(observer.observer({"toolCalls": 3}).action, "stop")
-        self.assertEqual(observer.stop_reason, "readonly-budget-exhausted")
-        no_correction = ReviewObserver(2, READ_SCHEMA, "Choose", can_correct=False)
+        self.assertEqual(observer.observer({"toolCalls": 3}).action, "continue")
+        no_correction = ReviewObserver(READ_SCHEMA, "Choose", can_correct=False)
         self.assertEqual(no_correction.observer({"settled": True, "rawAnswer": "{"}).action, "continue")

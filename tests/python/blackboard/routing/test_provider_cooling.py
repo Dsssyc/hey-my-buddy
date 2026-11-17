@@ -89,7 +89,7 @@ class ProviderCoolingTests(BoardTestCase):
         params = {"requestId": "clear-absent", "harness": "dsh", "provider": "fixture"}
         self.assertFalse(self.board_.call("quota_redetect", params)["cleared"])
         for invalid, code in (({"provider": "not an identifier"}, "INVALID_ARGUMENT"),
-                              ({"harness": "unknown"}, "UNSUPPORTED_HARNESS"),
+                              ({"harness": "unknown"}, "INVALID_ARGUMENT"),
                               ({"other": "field"}, "INVALID_ARGUMENT")):
             with self.subTest(invalid=invalid), self.assertRaises(BoardError) as caught:
                 self.board_.call("quota_redetect", {**params, **invalid})
@@ -114,7 +114,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
              "models": [{"id": item["model"], "name": item["model"]}]} for item in self.identities]})
         self.board_ = self.board(clock=self.clock)
         self.board_.evaluation._clock = self.clock
-        self.board_.call("model_catalog_refresh", {"requestId": "catalog"})
+        self.board_.call("model_catalog_refresh", {})
         self.enable(0)
 
     def enable(self, index):
@@ -122,17 +122,10 @@ class CoolingWorkflowTests(WorkflowTestCase):
             "buddySettings": [{"buddyId": self.ids[index], "enabled": True}],
             "configuration": {"routerBuddyIds": [], "defaultRoutingMode": "review"}})
 
-    def routed(self, *, explicit=False, locked=False):
-        params = {"requestId": "routed", "hostId": "host-1", "task": "synthetic quota failover",
-                  "cwd": str(self.workdir()), "executionWorkspace": {"kind": "existing", "access": "write"}}
-        if explicit:
-            params.update(self.identities[0])
-        if locked:
-            params["buddyLocked"] = True
-            params.update(self.identities[0])
-        run = self.board_.call("workflow_submit", params)
-        self.controls[run["runId"]] = run["control"]
-        return run
+    def routed(self, *, explicit=False):
+        return self.submit(self.board_, request_id="routed", task="synthetic quota failover",
+                           cwd=str(self.workdir()), kind="existing", access="write",
+                           buddy=self.identities[0] if explicit else "route")
 
     def reject_turn(self, claimed, *, phase="before-model", shutdown=True, code="quota-exceeded"):
         result = {"code": "harness-error", "providerRejection": failure(phase=phase, code=code)}
@@ -157,7 +150,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
                                         (first["claim"]["attempt"]["attemptId"],)).fetchone()[0], "revoked")
         after = self.board_.call("workflow_get", {"runId": run["runId"]})
         self.assertEqual(after["state"], "executing")
-        self.assertEqual(after["buddy"], self.identities[1])
+        self.assertEqual(after["buddy"], {**self.identities[1], "alias": None})
         self.assertNotEqual(after["routing"]["decisionId"], first_decision)
         self.assertEqual(after["workspace"], run["workspace"])
         second = self.claim(self.board_, run_id=run["runId"])
@@ -200,9 +193,9 @@ class CoolingWorkflowTests(WorkflowTestCase):
             self.assertEqual([row[0] for row in db.execute("SELECT turn_index FROM workflow_turns ORDER BY rowid")], [1, 2, 3])
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_routes WHERE run_id=?", (run["runId"],)).fetchone()[0], 3)
 
-    def assert_host_failure(self, *, phase="before-model", explicit=False, locked=False,
+    def assert_host_failure(self, *, phase="before-model", explicit=False,
                             code="quota-exceeded", shutdown=True, cancel=False):
-        run = self.routed(explicit=explicit, locked=locked)
+        run = self.routed(explicit=explicit)
         turn = self.claim(self.board_, run_id=run["runId"])
         if cancel:
             with self.board_.store.db.write() as db:
@@ -225,11 +218,8 @@ class CoolingWorkflowTests(WorkflowTestCase):
     def test_explicit_buddy_stays_with_host_and_shows_cooling(self):
         run = self.assert_host_failure(explicit=True)
         view = self.board_.call("workflow_get", {"runId": run["runId"]})
-        self.assertEqual(view["buddy"], self.identities[0])
+        self.assertEqual(view["buddy"], {**self.identities[0], "alias": None})
         self.assertEqual(view["providerCooling"]["coolingUntil"], moment(1800))
-
-    def test_locked_buddy_stays_with_host(self):
-        self.assert_host_failure(locked=True)
 
     def test_rate_limit_is_not_a_quota_reroute_or_cooldown(self):
         self.assert_host_failure(code="rate-limited")
@@ -241,7 +231,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
         settled = self.reject_turn(first, code="overloaded")
         self.assertTrue(settled["workflow"]["autoContinued"])
         current = self.board_.call("workflow_get", {"runId": run["runId"]})
-        self.assertEqual(current["buddy"], self.identities[1])
+        self.assertEqual(current["buddy"], {**self.identities[1], "alias": None})
         self.assertEqual(current["workspace"], run["workspace"])
         self.assertEqual(current["turns"][0]["providerRejection"]["code"], "overloaded")
         self.assertEqual(current["routing"]["routingBasis"]["overloadedModelServices"], [{
@@ -257,7 +247,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
         self.finish_turn(self.board_, second)
         delivered = self.board_.call("workflow_get", {"runId": run["runId"]})
         self.assertNotIn("providerRejection", delivered)
-        pending = self.continue_run(self.board_, delivered, reroute=True)
+        pending = self.continue_run(self.board_, delivered, buddy="route")
         self.board_.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
         after = self.board_.call("workflow_get", {"runId": run["runId"]})
         self.assertEqual(after["routing"]["routingBasis"]["overloadedModelServices"], [])
@@ -284,15 +274,15 @@ class CoolingWorkflowTests(WorkflowTestCase):
         provider = self.identities[0]["provider"]
         self.catalog_fixture({**FIXTURE_CATALOG, "providers": [{"harness": "dsh", "provider": provider,
             "efforts": ["off", "max"], "models": [{"id": self.identities[0]["model"]}, {"id": "spare"}]}]})
-        self.board_.call("model_catalog_refresh", {"requestId": "extra-efforts"})
+        self.board_.call("model_catalog_refresh", {})
         extra = [f"dsh:{provider}:{self.identities[0]['model']}:max", f"dsh:{provider}:spare:off"]
         self.board_.console_call("user_policy_publish", {"commandId": "enable-extra",
             "buddySettings": [{"buddyId": buddy_id, "enabled": True} for buddy_id in extra],
             "preferenceChanges": [{"buddyId": self.ids[0], "mode": "exclude", "note": "also excluded by user"}]})
-        pending = self.continue_run(self.board_, failed, reroute=True)
+        pending = self.continue_run(self.board_, failed, buddy="route")
         self.board_.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
         current = self.board_.call("workflow_get", {"runId": run["runId"]})
-        self.assertEqual(current["buddy"], {**self.identities[0], "model": "spare"})
+        self.assertEqual(current["buddy"], {**self.identities[0], "model": "spare", "alias": None})
         basis = current["routing"]["routingBasis"]
         excluded = basis["overloadedModelServices"]
         self.assertEqual(len(excluded), 1)
@@ -300,21 +290,19 @@ class CoolingWorkflowTests(WorkflowTestCase):
         self.assertEqual(basis["excludedBuddies"], [{"buddyId": self.ids[0], **self.identities[0], "note": "also excluded by user"}])
         from hey_my_buddy.blackboard.routing.candidate import candidate_bound
         with self.board_.store.db.read() as db:
-            other_harness = dict(db.execute("SELECT * FROM buddies WHERE buddy_id=?", (self.ids[0],)).fetchone())
+            from hey_my_buddy.blackboard.catalog import buddy_state
+            other_harness = buddy_state.get(db, self.ids[0])
             other_harness["harness"] = "codex"
             self.assertIsNone(candidate_bound(db, other_harness, {"routingBasis": {"overloadedModelServices": excluded}}, T0,
                                              require_health=False, apply_preferences=False, check_cooling=False))
         # A fresh request has no task-local exclusion, even on the same provider.
-        fresh = self.board_.call("selection_request", {"requestId": "fresh-request", "task": "choose"})
+        fresh = self.board_.store.decisions.request_select({"requestId": "fresh-request", "task": "choose"})
         fresh_basis = self.board_.call("selection_get", {"decisionId": fresh["decisionId"]})["decision"]["routingBasis"]
         self.assertEqual((fresh_basis["candidateCount"], len(fresh_basis["excludedBuddies"])), (2, 1))
         self.assertEqual(fresh_basis["overloadedModelServices"], [])
 
     def test_overload_does_not_override_explicit_buddy(self):
         self.assert_host_failure(code="overloaded", explicit=True)
-
-    def test_overload_does_not_override_locked_buddy(self):
-        self.assert_host_failure(code="overloaded", locked=True)
 
     def test_overload_with_unknown_phase_stays_with_host(self):
         self.assert_host_failure(code="overloaded", phase="unknown")
@@ -375,7 +363,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             for index, identity in enumerate(self.identities):
                 quota_routing.record_rejection(db, "dsh", identity["provider"], failure(reset=moment(300 - index * 60)), now=T0)
-        selected = self.board_.call("selection_request", {"requestId": "all-cooling", "task": "choose"})
+        selected = self.board_.store.decisions.request_select({"requestId": "all-cooling", "task": "choose"})
         view = self.board_.call("selection_get", {"decisionId": selected["decisionId"]})["decision"]
         self.assertEqual(view["status"], "needs-host")
         self.assertEqual(view["reason"], {"code": "all-candidates-cooling", "params": {"retryAt": moment(180)}})

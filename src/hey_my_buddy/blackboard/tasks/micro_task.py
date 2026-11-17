@@ -2,21 +2,18 @@
 
 This module is a pure derivation over existing authoritative facts. It owns no
 state, writes nothing and adds no lifecycle: the C-Two ``task_list``,
-``console_snapshot`` and task views all read the same relation below, and the
+The console projection and task views all read the same relation below, and the
 ordinary micro-task workflow keeps ``workflow.task_extension``.
 
 Everything here is grounded in durable rows:
 
 * kind and lineage come from ``workflow_runs`` plus ``workflow_children`` (helpers)
   and ``router_dispatches``/``workflow_routes`` (internal routing decisions);
-* the original delegating Host comes from the source frozen on that run at
-  admission. Helpers use their own admission source, and routing decisions use
-  their owning run's source. Lead admissions carry ``null``;
-* the current Host is the root of the task's micro task tree, because a takeover
-  fences the whole owned graph rather than one row;
-* the project is the root Micro task's immutable original ``cwd`` and the
-  repository identity in its pinned input manifest; a temporary execution
-  worktree is never the project.
+* current ownership is derived from Lead lineage, with a nameless Host for
+  roots outside that lineage;
+* the project is the root Micro task's immutable original ``cwd`` and frozen
+  project kind; Git provenance comes from its pinned input manifest when one
+  exists. A temporary execution worktree is never the project.
 
 ``t.*`` is carried through the relation, so a resolved row is also a valid task row
 for :meth:`hey_my_buddy.blackboard.store.store.BoardStore._decorate`.
@@ -28,7 +25,8 @@ import binascii
 import json
 import re
 import sqlite3
-from pathlib import Path
+from .workspace_bindings import MANIFEST_OWNERS_CTE
+from . import projects
 from typing import Any, Sequence
 
 from ...errors import BoardError
@@ -45,7 +43,6 @@ HISTORY_FILTERS = ("all", "active", "host", "review")
 QUERY_MAX_LENGTH = 200
 # A task without a recorded repository identity uses its original absolute cwd.
 PROJECT_ID_MAX_LENGTH = 4096
-HOST_ID_MAX_LENGTH = 256
 CURSOR_MAX_LENGTH = 512
 CURSOR_VERSION = 1
 
@@ -55,8 +52,8 @@ _TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,%d}$" % TASK_ID_MAX_LENGTH)
 _CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,%d}$" % CURSOR_MAX_LENGTH)
 _TIMESTAMP_PATTERN = re.compile(r"^[0-9A-Za-z:.+-]{1,64}$")
 
-#: Columns matched by ``query``. The original project path and both Host
-#: attributions are part of the contract; execution uses the task's effective
+#: Columns matched by ``query``. The original project path is part of the
+#: contract; execution uses the task's effective
 #: adapter and the resolved model.
 QUERY_COLUMNS = (
     "task_id",
@@ -65,25 +62,39 @@ QUERY_COLUMNS = (
     "route_run_title",
     "route_run_task",
     "project_path",
-    "source_host_id",
-    "current_host_id",
     "effective_adapter",
     "effective_model",
 )
+
+ACTIVE_TASK_STATES = ("queued", "running", "cancelling", "reconciliation-needed")
+UNCONCLUDED_RESULT_STATES = ("failed", "cancelled")
+_ACTIVE_TASK_SQL = ",".join(map(repr, ACTIVE_TASK_STATES))
+_RESULT_SQL = ",".join(map(repr, UNCONCLUDED_RESULT_STATES))
+
+
+def host_filter_sql(*, run_state="run_state", task_state="state",
+                    parent_run_id="child_parent_run_id", root_run_id="root_run_id") -> str:
+    """Host waits for history and the slim snapshot, without reading payloads."""
+    return (
+        f"(({run_state}='awaiting-host' OR ({parent_run_id} IS NULL"
+        f" AND {run_state} IN ({_RESULT_SQL}) AND {task_state} NOT IN ({_ACTIVE_TASK_SQL})))"
+        " AND NOT EXISTS (SELECT 1 FROM workflow_lead_tasks lead_tree"
+        f" WHERE lead_tree.owned_run_id={root_run_id}))"
+    )
+
 
 #: ``filter`` semantics, applied in SQL before any LIMIT:
 FILTER_SQL = {
     "all": None,
     # Open work, including Lead-owned runs waiting for the Lead to resume them.
     "active": (
-        "(state IN ('queued','running','cancelling','reconciliation-needed')"
-        " OR run_state IN ('executing','awaiting-host','waiting-helpers','waiting-owned'))"
+        f"(state IN ({_ACTIVE_TASK_SQL})"
+        " OR run_state IN ('executing','awaiting-host','waiting-helpers','waiting-owned')"
+        f" OR (child_parent_run_id IS NULL AND run_state IN ({_RESULT_SQL})))"
     ),
     # A Lead-owned tree is active for its Lead, including helper descendants
     # parked on their own Host boundary. The tree root carries that ownership.
-    "host": ("(run_state = 'awaiting-host' AND NOT EXISTS ("
-             "SELECT 1 FROM workflow_lead_tasks lead_tree "
-             "WHERE lead_tree.owned_run_id = root_run_id))"),
+    "host": host_filter_sql(),
     # A terminal result that is still unaccepted: the same condition the console's
     # review gate uses (delivered run or plain task, durable result, confirmed stop).
     # Micro-task review_ready also proves stop for every owned child and router.
@@ -103,26 +114,51 @@ SELECT dispatch.task_id, dispatch.decision_id, route.run_id,
   LEFT JOIN workflow_routes route ON route.decision_id = dispatch.decision_id
 """
 
+# Equivalent to WorkflowCoordinator._stop_proven for existing tasks. Reuse this
+# predicate for every grouped stop proof, including the paused macro view.
+UNCONFIRMED_STOPS_SQL = """
+SELECT task.task_id FROM tasks task
+ WHERE EXISTS (SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
+                AND (attempt.execution_state <> 'finished' OR attempt.shutdown_confirmed <> 1))
+    OR (task.active_attempt_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
+          AND attempt.attempt_id = task.active_attempt_id))
+    OR (task.selected_attempt_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
+          AND attempt.attempt_id = task.selected_attempt_id))
+    OR (task.state IN ('running','cancelling','reconciliation-needed') AND NOT EXISTS (
+        SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id))
+"""
+
 #: One row per task: the full task row plus its derived micro task facts.
 #:
-#: ``roots`` walks ``workflow_children`` upward; the terminal row of a lineage is the
-#: root of that micro task tree. A routing decision points at its owning run through
+#: ``roots`` looks up a child and walks ``workflow_children`` upward; its terminal
+#: ancestor is the root of that micro task tree. A routing decision points at its owning run through
 #: ``workflow_routes``, and that run's root is used for the decision's project and
 #: Host, so a decision is never misattributed to its own private decision directory.
 RELATION_SQL = f"""
-WITH RECURSIVE routing_tasks AS ({ROUTING_TASKS_SQL}),
+WITH RECURSIVE manifest_owners AS ({MANIFEST_OWNERS_CTE}),
+routing_tasks AS ({ROUTING_TASKS_SQL}),
 lineage(task_id, root_run_id) AS (
     SELECT child_task_id, child_task_id FROM workflow_children
     UNION ALL
     SELECT lineage.task_id, parent.parent_run_id
       FROM lineage JOIN workflow_children parent ON parent.child_task_id = lineage.root_run_id
 ),
-roots AS (
-    SELECT lineage.task_id AS task_id, lineage.root_run_id AS root_run_id
-      FROM lineage
-     WHERE NOT EXISTS (
-         SELECT 1 FROM workflow_children parent WHERE parent.child_task_id = lineage.root_run_id
-     )
+roots AS NOT MATERIALIZED (
+    -- Keep the lookup key on the indexed child table. Joining a materialized
+    -- all-tree lineage here makes SQLite scan it once per history row.
+    SELECT child.child_task_id AS task_id, (
+        WITH RECURSIVE ancestors(run_id) AS (
+            SELECT child.parent_run_id
+            UNION ALL
+            SELECT parent.parent_run_id FROM ancestors
+              JOIN workflow_children parent ON parent.child_task_id = ancestors.run_id
+        )
+        SELECT run_id FROM ancestors WHERE NOT EXISTS (
+            SELECT 1 FROM workflow_children parent WHERE parent.child_task_id = ancestors.run_id
+        )
+    ) AS root_run_id FROM workflow_children child
 ),
 owned_runs(owner_run_id, run_id) AS (
     SELECT run_id, run_id FROM workflow_runs
@@ -135,22 +171,7 @@ owned_executions(owner_run_id, task_id) AS (
     SELECT owned.owner_run_id, routing.task_id FROM owned_runs owned
       JOIN routing_tasks routing ON routing.run_id = owned.run_id
 ),
-unconfirmed_stops AS (
-    -- Equivalent to WorkflowCoordinator._stop_proven: all attempts must be
-    -- finished and confirmed; dangling attempt identities and never-observed
-    -- active tasks cannot serve as termination evidence.
-    SELECT task.task_id FROM tasks task
-     WHERE EXISTS (SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
-                    AND (attempt.execution_state <> 'finished' OR attempt.shutdown_confirmed <> 1))
-        OR (task.active_attempt_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
-              AND attempt.attempt_id = task.active_attempt_id))
-        OR (task.selected_attempt_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id
-              AND attempt.attempt_id = task.selected_attempt_id))
-        OR (task.state IN ('running','cancelling','reconciliation-needed') AND NOT EXISTS (
-            SELECT 1 FROM attempts attempt WHERE attempt.task_id = task.task_id))
-)
+unconfirmed_stops AS ({UNCONFIRMED_STOPS_SQL})
 SELECT
     t.*,
     r.run_id AS micro_task_run_id,
@@ -162,9 +183,9 @@ SELECT
     lead.created_at AS lead_owned_at,
     root_lead.lead_run_id AS root_lead_run_id,
     c.parent_run_id AS child_parent_run_id,
-    COALESCE(c.parent_run_id, dr.run_id) AS delegated_parent_run_id,
+    COALESCE(c.parent_run_id, dr_route.run_id) AS delegated_parent_run_id,
     dr.decision_id AS decision_id,
-    dr.run_id AS route_run_id,
+    dr_route.run_id AS route_run_id,
     r.title AS workflow_title,
     routed_run.title AS route_run_title,
     json_extract(routed_task.spec_json, '$.task') AS route_run_task,
@@ -174,22 +195,21 @@ SELECT
     dr.provider AS router_provider,
     dr.model AS router_model,
     dr.effort AS router_effort,
-    COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr.run_id) AS root_run_id,
-    root_run.host_id AS root_host_id,
-    root_run.owner_generation AS root_owner_generation,
-    source_run.source_host_id AS source_host_id,
-    root_run.host_id AS current_host_id,
+    COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id) AS root_run_id,
     CASE WHEN root_run.run_id IS NOT NULL THEN json_extract(root_task.spec_json, '$.cwd')
          WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
          ELSE json_extract(t.spec_json, '$.cwd') END AS project_path,
     CASE WHEN root_run.run_id IS NOT NULL THEN
-        (SELECT json_extract(artifact.manifest_json, '$.repositoryId') FROM workflow_artifacts artifact
-          WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
-          ORDER BY artifact.rowid LIMIT 1)
+        COALESCE(root_run.standalone_project_id, root_macro.project_id)
          WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
-         ELSE json_extract(t.spec_json, '$.cwd') END AS project_id,
-    (SELECT json_extract(artifact.manifest_json, '$.snapshot.repositoryPath')
-       FROM workflow_artifacts artifact
+         ELSE NULL END AS project_id,
+    CASE WHEN root_run.run_id IS NOT NULL THEN root_run.project_kind
+         WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
+         ELSE 'git' END AS project_kind,
+    (SELECT owner.repository_path
+       FROM workflow_artifacts artifact JOIN manifest_owners owner
+         ON owner.workspace_id=artifact.workspace_id
+        AND owner.manifest_sha256=artifact.input_manifest_sha256
       WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
       ORDER BY artifact.rowid LIMIT 1) AS project_repository_path,
     json_extract(t.spec_json, '$.task') AS task,
@@ -213,20 +233,29 @@ LEFT JOIN workflow_runs r ON r.run_id = t.task_id
 LEFT JOIN workflow_children c ON c.child_task_id = t.task_id
 LEFT JOIN workflow_lead_tasks lead ON lead.owned_run_id = t.task_id
 LEFT JOIN roots rt ON rt.task_id = t.task_id
-LEFT JOIN routing_tasks dr ON dr.task_id = t.task_id
-LEFT JOIN workflow_runs routed_run ON routed_run.run_id = dr.run_id
+LEFT JOIN router_dispatches dr ON dr.task_id = t.task_id
+LEFT JOIN workflow_routes dr_route ON dr_route.decision_id = dr.decision_id
+LEFT JOIN workflow_runs routed_run ON routed_run.run_id = dr_route.run_id
 LEFT JOIN tasks routed_task ON routed_task.task_id = routed_run.run_id
 LEFT JOIN macro_tasks routed_macro ON routed_macro.macro_task_id = routed_run.macro_task_id
-LEFT JOIN roots wr_roots ON wr_roots.task_id = dr.run_id
-LEFT JOIN workflow_runs source_run ON source_run.run_id = COALESCE(r.run_id, dr.run_id)
-LEFT JOIN tasks root_task ON root_task.task_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr.run_id)
-LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr.run_id)
+LEFT JOIN roots wr_roots ON wr_roots.task_id = dr_route.run_id
+LEFT JOIN tasks root_task ON root_task.task_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id)
+LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id)
+LEFT JOIN macro_tasks root_macro ON root_macro.macro_task_id=root_run.macro_task_id
 LEFT JOIN workflow_lead_tasks root_lead
-  ON root_lead.owned_run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr.run_id)
+  ON root_lead.owned_run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id)
 """
 
 #: The relation wrapped as a table expression: ``SELECT * FROM (task_history) AS resolved``.
 TASK_HISTORY_SQL = f"SELECT * FROM ({RELATION_SQL}) AS resolved"
+
+
+def replace_sql_once(sql: str, fragment: str, replacement: str) -> str:
+    """Fail when a derived SQL projection no longer matches its shared source."""
+    count = sql.count(fragment)
+    if count != 1:
+        raise ValueError(f"Expected exactly one SQL fragment {fragment!r}, found {count}")
+    return sql.replace(fragment, replacement)
 
 
 def _complete_buddy(value: Any) -> dict | None:
@@ -244,18 +273,16 @@ def _complete_buddy(value: Any) -> dict | None:
     return buddy
 
 
-def project_label(path: str | None, repository_path: str | None) -> str | None:
-    """Name the repository, falling back to the submitted directory without Git."""
-    if repository_path:
-        repository = Path(repository_path)
-        path = str(repository.parent if repository.name == ".git" else repository)
-    if not path:
+def buddy_view(connection, identity: dict | None) -> dict | None:
+    """Project an identity with its current user setting, never into a record."""
+    if identity is None:
         return None
-    name = Path(path).name
-    return name or path
+    row = connection.execute("SELECT alias FROM buddies WHERE harness=? AND provider=? AND model=? AND effort=?",
+                             tuple(identity[key] for key in BUDDY_FIELDS)).fetchone()
+    return {**{key: identity[key] for key in BUDDY_FIELDS}, "alias": row["alias"] if row else None}
 
 
-def metadata_from_row(row: sqlite3.Row) -> dict:
+def metadata_from_row(connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
     """Derive one task's micro task metadata from a resolved relation row."""
     micro_task = row["micro_task_run_id"] is not None
     if micro_task:
@@ -266,8 +293,6 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
         kind = "execution"
     path = row["project_path"] if isinstance(row["project_path"], str) and row["project_path"] else None
     identifier = row["project_id"] if isinstance(row["project_id"], str) and row["project_id"] else None
-    source_host = row["source_host_id"] if isinstance(row["source_host_id"], str) and row["source_host_id"] else None
-    current_host = row["current_host_id"] if isinstance(row["current_host_id"], str) and row["current_host_id"] else None
     parent_run = row["delegated_parent_run_id"] if isinstance(row["delegated_parent_run_id"], str) else None
     root_run = row["root_run_id"] if isinstance(row["root_run_id"], str) else None
     buddy = _complete_buddy(row["run_buddy_json"] if micro_task else row["spec_json"])
@@ -283,17 +308,17 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
                      "macroTaskId": row["route_macro_task_id"],
                      "macroTaskTitle": row["route_macro_task_title"]}
                     if row["route_run_id"] is not None else None)
-    project = ({"id": identifier or path, "path": path,
-                "label": project_label(path, row["project_repository_path"])}
+    project = ({"id": identifier, "kind": row["project_kind"], "path": path,
+                "label": projects.label(path, row["project_repository_path"])}
                if identifier or path else None)
     result = {
         "kind": kind,
-        "sourceHostId": source_host if root_run else None,
-        "currentHostId": current_host if root_run else None,
+        "actor": ({"role": "lead", "id": row["root_lead_run_id"]} if row["root_lead_run_id"]
+                  else {"role": "host"}) if root_run else None,
         "parentRunId": parent_run,
         "rootRunId": root_run,
         "project": project,
-        "buddy": buddy,
+        "buddy": buddy_view(connection, buddy),
         "routingTask": routing_task,
         "delegationAuthority": bool(row["run_delegation_authority"]),
         "rootLeadRunId": row["root_lead_run_id"],
@@ -310,7 +335,7 @@ def resolve(connection: sqlite3.Connection, task: sqlite3.Row) -> dict:
     ).fetchone()
     if row is None:
         raise BoardError("NOT_FOUND", "The task row no longer resolves to a readable history record")
-    return metadata_from_row(row)
+    return metadata_from_row(connection, row)
 
 
 def resolve_many(connection: sqlite3.Connection, task_ids: Sequence[str]) -> dict[str, dict]:
@@ -322,7 +347,7 @@ def resolve_many(connection: sqlite3.Connection, task_ids: Sequence[str]) -> dic
     rows = connection.execute(
         f"{TASK_HISTORY_SQL} WHERE task_id IN ({placeholders})", identifiers
     ).fetchall()
-    return {row["task_id"]: metadata_from_row(row) for row in rows}
+    return {row["task_id"]: metadata_from_row(connection, row) for row in rows}
 
 
 def _escape_like(value: str) -> str:
@@ -333,7 +358,6 @@ def history_where(
     *,
     roots_only: bool = False,
     project_id: str | None = None,
-    host_id: str | None = None,
     query: str | None = None,
     filter_name: str = "all",
 ) -> tuple[list[str], list[Any]]:
@@ -347,9 +371,6 @@ def history_where(
     if project_id:
         clauses.append("project_id = ?")
         values.append(project_id)
-    if host_id:
-        clauses.append("(source_host_id = ? OR current_host_id = ?)")
-        values.extend([host_id, host_id])
     if query:
         pattern = f"%{_escape_like(query)}%"
         clauses.append("(" + " OR ".join(f"{column} LIKE ? ESCAPE '\\'" for column in QUERY_COLUMNS) + ")")

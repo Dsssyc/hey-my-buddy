@@ -1,4 +1,5 @@
 """Service-owned resume selection uses each turn's frozen permission level."""
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from types import SimpleNamespace
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
@@ -36,10 +37,10 @@ class PermissionResumeTests(WorkflowTestCase):
             self.finish_turn(board, first, disposition="attention", session_id=session,
                              result_mutator=lambda result: result.update(nativeSession={"storageOwner": owner}))
             view = board.call("workflow_get", {"runId": submitted["runId"]})
-            kwargs = {"access": access}
+            kwargs = {"access": access, **({"writeScope":["."]} if access != "read" else {})}
             if access == "full":
                 kwargs["accessNote"] = "Need unrestricted fixture operations"
-            self.continue_run(board, view, command_id=f"continue-{index}", **kwargs)
+            self.continue_run(board, view, **kwargs)
             # The current task already has the new level; the old turn must keep
             # the old one so this comparison cannot use the task's current access.
             with board.store.db.read() as db:
@@ -53,7 +54,7 @@ class PermissionResumeTests(WorkflowTestCase):
             self.assertEqual(turn["resumeMode"],
                              "reconstructed-new-session" if reconstructed else "native-session")
             self.assertEqual(turn["input"]["previousSessionId"], session)
-            self.assertEqual(turn["input"]["executionWorkspace"]["access"], access)
+            self.assertEqual(turn_manifest(self.directory, turn["input"])["access"], access)
             if harness == "dsh" and changed:
                 self.assertEqual(turn["input"]["context"]["resumeReason"], "permission-level-changed")
             else:

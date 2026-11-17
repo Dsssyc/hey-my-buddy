@@ -7,30 +7,44 @@ import type { RoutingMode } from "./types";
 export type MacroTaskSort = "activity-desc" | "activity-asc" | "created-desc" | "created-asc";
 export type MacroTaskFilter = "all" | "active" | "host" | "review";
 /** Disjoint member states in display priority 待决定 (host) > 进行中 (active) > 待验收 (review) > 已结束 (ended). */
-type MacroTaskCategory = MacroTaskSummary["state"];
-const macroTaskSummarySchema = z.looseObject({
+type MacroTaskCategory = Exclude<MacroTaskSummary["state"], "empty">;
+const macroTaskSummaryFields = z.looseObject({
   macroTaskId: z.string().min(1), kind: z.enum(["macro-task", "standalone"]), title: z.string().nullable(),
-  titleSource: z.enum(["macro-task", "title", "task", "none"]), description: z.string().nullable(), summary: z.string().nullable(),
-  project: z.looseObject({ id: z.string(), path: z.string().nullable(), label: z.string() }).nullable(),
-  sourceHostId: z.string().nullable(), currentHostIds: z.array(z.string()), createdAt: z.string().nullable(),
-  lastActivityAt: z.string().nullable(), lastActivitySeq: safeCount, state: z.enum(["host", "active", "review", "ended"]),
+  titleSource: z.enum(["macro-task", "title", "task", "none"]),
+  project: z.looseObject({ id: z.string(), kind: z.enum(["git", "folder"]), path: z.string().nullable(), label: z.string() }).nullable(),
+  paused: z.object({ pausedAt: dateString, shutdownConfirmed: z.boolean() }).nullable(),
+  createdAt: z.string().nullable(),
+  lastActivityAt: z.string().nullable(), lastActivitySeq: safeCount, state: z.enum(["host", "active", "review", "ended", "empty"]),
   counts: z.looseObject({ roots: safeCount, helpers: safeCount, accepted: safeCount, failed: safeCount,
-    active: safeCount, host: safeCount, review: safeCount, ended: safeCount, stoppableRoots: safeCount,
-    stoppableHelpers: safeCount, delivered: safeCount, awaitingHost: safeCount }),
+    active: safeCount, host: safeCount, review: safeCount, ended: safeCount, unfinished: safeCount, delivered: safeCount }),
   matchingRuns: safeCount, rootRunIds: z.array(z.string()),
 });
+const macroTaskSummarySchema = macroTaskSummaryFields.refine(summary => !Object.hasOwn(summary, "goal"));
+export const macroTaskGoalSchema = z.object({ body: z.string(), revision: z.number().int().positive(), createdAt: dateString });
+export type MacroTaskGoal = z.infer<typeof macroTaskGoalSchema>;
+export const macroTaskGoalsSchema = z.object({ macroTaskId: z.string().min(1), goals: z.array(macroTaskGoalSchema) });
+const macroTaskDetailSchema = macroTaskSummaryFields.extend({
+  goal: macroTaskGoalSchema.nullable(),
+});
 export type MacroTaskSummary = z.infer<typeof macroTaskSummarySchema>;
+export type MacroTaskDetail = z.infer<typeof macroTaskDetailSchema>;
 export type MacroTaskQuery = {
-  limit?: number; before?: string; projectId?: string; hostId?: string;
+  limit?: number; before?: string; group?: string;
   query?: string; filter?: MacroTaskFilter; sort?: MacroTaskSort;
 };
+export const macroTaskGroupSchema = z.object({
+  id: z.string().min(1), project: macroTaskSummaryFields.shape.project, total: safeCount,
+  macroTasks: z.array(macroTaskSummarySchema), nextCursor: z.string().nullable(),
+});
+export type MacroTaskGroup = z.infer<typeof macroTaskGroupSchema>;
 export const macroTaskPageSchema = z.object({
-  macroTasks: z.array(macroTaskSummarySchema), totals: z.looseObject({ all: safeCount, active: safeCount, host: safeCount, review: safeCount }),
-  nextCursor: z.string().nullable(), cursor: integer, changed: z.boolean(),
+  defaults: z.object({ firstLimit: z.int().positive(), groupLimit: z.int().positive() }),
+  groups: z.array(macroTaskGroupSchema), totals: z.looseObject({ all: safeCount, active: safeCount, host: safeCount, review: safeCount }),
+  cursor: integer, changed: z.boolean(),
 });
 export type MacroTaskPage = z.infer<typeof macroTaskPageSchema>;
 export type TimelineBuddy = {
-  harness: string | null; provider: string | null; model: string | null; effort: string | null;
+  harness: string | null; provider: string | null; model: string | null; effort: string | null; alias?: string | null;
 };
 const timelineRemindersSchema = z.looseObject({
   overdue: z.boolean(), possiblyStuck: z.boolean(), lastNativeEventAt: dateString.nullable(), toolInProgress: z.boolean(),
@@ -47,12 +61,14 @@ const timelineRowSchema = z.looseObject({
 export type TimelineRow = z.infer<typeof timelineRowSchema> & {
   runId: string; parentRunId: string | null; rootRunId: string;
   titleSource: "title" | "task" | "none";
-  summary: string | null;
   createdAt: string;
   /** Micro task workflow state (for example executing, awaiting-host, delivered, accepted). */
   state: string;
   /** Execution task status (queued, running, completed, failed, cancelled, ...). */
   status: string;
+  queueReason?: string | null;
+  /** Recorded Host conclusion; null until the Host closes the micro task. */
+  conclusionStatus: "failed" | "cancelled" | "delivered" | null;
   category: MacroTaskCategory;
   /** Every recorded attempt proved its stop; unknown is never reported as stopped. */
   shutdownConfirmed: boolean;
@@ -81,7 +97,7 @@ type TimelineRouting = {
   } | null;
   /** Host owns the budget schema; preserve it without offering budget controls. */
   budget?: Record<string, unknown> | null;
-  usage?: { elapsedMs?: number | null; toolCalls?: number | null; bytesRead?: number | null } | null;
+  usage?: { elapsedMs?: number | null; toolCalls?: number | null } | null;
 };
 // Non-execution kinds, including unknown or absent kinds, carry only null
 // timing facts. Routing otherwise remains unchecked except for router identity.
@@ -106,9 +122,10 @@ export type TimelineSpan = z.infer<typeof timelineSpanSchema> & {
   requestId: string | null; buddy: TimelineBuddy | null;
   shutdownConfirmed: boolean | null; uncertain: boolean; clockSkew: boolean;
   generation?: number; disposition?: string; error?: string;
+  terminationReason?: string | null;
   /** Own durable attempt receipt; a model turn disposition is not the execution result. */
   resultStatus?: "ok" | "failed" | "cancelled";
-  requestKind?: string; summary?: string | null; reason?: Reason | null; decisionTaskId?: string;
+  requestKind?: string; reason?: Reason | null; decisionTaskId?: string;
   /** Native usage of the span's own execution; a shape the console does not read is unknown. */
   tokenUsage?: unknown;
   /** Exact recorded decision; never infer it from the run's current route. */
@@ -125,7 +142,7 @@ export type TimelineEvent = {
   stopInitiator?: "host" | "lead" | "console" | "service" | "unknown" | null;
 };
 export const macroTaskTimelineSchema = z.object({
-  macroTask: macroTaskSummarySchema, observedAt: z.string(), cursor: integer,
+  macroTask: macroTaskDetailSchema, observedAt: z.string(), cursor: integer,
   rows: z.array(timelineRowSchema.transform(row => row as TimelineRow)),
   spans: z.array(timelineSpanSchema.transform(span => span as TimelineSpan)), events: z.array(z.custom<TimelineEvent>()),
   totals: z.looseObject({ rows: integer, spans: integer, events: integer, allRows: integer }),
@@ -134,10 +151,6 @@ export const macroTaskTimelineSchema = z.object({
 // Only a subset of each row/span was checked by the boundary. Their remaining
 // projection fields retain their types without imposing new acceptance rules.
 export type MacroTaskTimeline = z.infer<typeof macroTaskTimelineSchema>;
-/** Reply of `macro_task_stop`: one result for every member of the macro task. */
-export type MacroTaskStopResult = {
-  macroTaskId: string;
-  duplicate: boolean;
-  /** Acknowledgement is not shutdown evidence; the timeline proves each stop. */
-  results: ReadonlyArray<{ runId: string; state: string; stopped: boolean }>;
-};
+/** A control reply acknowledges one command; all work facts remain in views. */
+export const workActionReplySchema = z.strictObject({ macroTaskId: z.string().min(1), duplicate: z.boolean() });
+export type WorkAction = "pause" | "resume" | "end";

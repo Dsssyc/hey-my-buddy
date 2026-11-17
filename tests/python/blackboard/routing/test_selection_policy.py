@@ -48,7 +48,7 @@ class PolicyFactsTests(unittest.TestCase):
         self.assertEqual(check["userPreference"], "alternative")
         self.assertEqual(check["hardConstraints"], {})
         from hey_my_buddy.blackboard.routing import router
-        answer = {"buddyId": ZCODE_ID, "note": "file evidence supports another route", "evidence": []}
+        answer = {"domainNodeId": None, "taskType": "change", "buddyId": ZCODE_ID, "note": "file evidence supports another route", "evidence": []}
         self.assertEqual(router.validate_answer(answer, [DSH_ID, ZCODE_ID]), answer)
 
     def test_no_user_preference_is_none_and_a_preferred_choice_is_matched(self):
@@ -82,7 +82,7 @@ class PolicyFactsTests(unittest.TestCase):
 
 class RouterAnswerTests(unittest.TestCase):
     def answer(self, **changes):
-        return {"buddyId": DSH_ID, "note": "Read the frozen checkout", "evidence": [], **changes}
+        return {"domainNodeId": None, "taskType": "change", "buddyId": DSH_ID, "note": "Read the frozen checkout", "evidence": [], **changes}
 
     def validate(self, value):
         from hey_my_buddy.blackboard.routing import router
@@ -102,8 +102,8 @@ class RouterAnswerTests(unittest.TestCase):
         self.assertEqual(self.validate(json.dumps(answer)), frozen)
         self.assertEqual(answer, frozen)
 
-    def test_annotation_and_preference_references_are_advisory(self):
-        evidence = [{"kind": kind, "ref": "not-supplied"} for kind in ("annotation", "preference")]
+    def test_preference_references_are_advisory(self):
+        evidence = [{"kind": kind, "ref": "not-supplied"} for kind in ("preference", "summary")]
         self.assertEqual(self.validate(self.answer(evidence=evidence))["evidence"], evidence)
 
     def test_abstention_uses_same_shape_and_can_cite_files(self):
@@ -129,19 +129,19 @@ class RouterAnswerTests(unittest.TestCase):
 
     def test_note_and_reference_shape_are_bounded(self):
         from hey_my_buddy.blackboard.routing import router
-        for value in (None, "", "  ", 1, "x" * (router.MAX_NOTE + 1)):
+        for value in (None, "", 1, "x" * (router.MAX_NOTE + 1)):
             with self.subTest(note=value):
                 self.assert_code("answer-shape", self.answer(note=value))
-        invalid = [None, {}, "id", [{"kind": "annotation"}], [{"kind": "annotation", "ref": "a", "extra": 1}],
-                   [{"kind": "unknown", "ref": "a"}], [{"kind": "card", "ref": "a"}],
-                   [{"kind": "annotation", "ref": ""}], [{"kind": "annotation", "ref": "a\nsecret"}],
-                   [{"kind": "annotation", "ref": "a\x7f"}], [{"kind": "annotation", "ref": "x" * 1025}],
-                   [{"kind": "annotation", "ref": "a"}] * (router.MAX_REFERENCES + 1)]
+        invalid = [None, {}, "id", [{"kind": "preference"}], [{"kind": "preference", "ref": "a", "extra": 1}],
+                   [{"kind": "unknown", "ref": "a"}], [{"kind": "annotation", "ref": "a"}], [{"kind": "card", "ref": "a"}],
+                   [{"kind": "preference", "ref": ""}],
+                   [{"kind": "preference", "ref": "x" * 1025}],
+                   [{"kind": "preference", "ref": "a"}] * (router.MAX_REFERENCES + 1)]
         for value in invalid:
             with self.subTest(evidence=value):
                 self.assert_code("answer-shape", self.answer(evidence=value))
         self.validate(self.answer(note="x" * router.MAX_NOTE,
-                                  evidence=[{"kind": "annotation", "ref": "x" * 1024}] * router.MAX_REFERENCES))
+                                  evidence=[{"kind": "preference", "ref": "x" * 1024}] * router.MAX_REFERENCES))
 
     def test_file_paths_cannot_escape_checkout(self):
         for ref in ("/etc/passwd", "../file", "src/../../file", "src/../file", "C:/file", "src\\file", "."):
@@ -151,10 +151,11 @@ class RouterAnswerTests(unittest.TestCase):
 
     def test_schema_freezes_candidates_and_has_no_model_policy_fields(self):
         from hey_my_buddy.blackboard.routing import router
-        from hey_my_buddy.buddy.roles.structured_call import correction_code, schema_errors
+        from hey_my_buddy.buddy.roles.structured_call import correction_code
+        from hey_my_buddy.protocol.structured_schema import schema_errors
         schema = router.answer_schema([DSH_ID, ZCODE_ID])
         self.assertEqual(schema["properties"]["buddyId"]["enum"], [DSH_ID, ZCODE_ID, None])
-        self.assertEqual(set(schema["properties"]), {"buddyId", "note", "evidence"})
+        self.assertEqual(set(schema["properties"]), {"buddyId", "domainNodeId", "taskType", "note", "evidence"})
         self.assertEqual(schema_errors(self.answer(), schema), [])
         self.assertEqual(schema_errors(self.answer(buddyId=None), schema), [])
         self.assertIn("enum", schema_errors(self.answer(buddyId="ghost"), schema))

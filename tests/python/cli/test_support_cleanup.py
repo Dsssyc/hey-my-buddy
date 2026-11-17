@@ -6,6 +6,7 @@ import os
 import runpy
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -38,6 +39,26 @@ def write_service_endpoint(root: Path, *, pid=123, started='fixture-start', serv
 
 
 class FixtureCleanupTests(unittest.TestCase):
+    def test_failed_process_evidence_keeps_identity_and_only_private_references(self):
+        target = Mock(pid=123)
+        target.create_time.return_value = 42.0
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / 'fixture'
+            worker = str(directory / 'worker')
+            native = str(directory / 'runtime' / 'native.so')
+            outside = str(directory.parent / 'outside-private-file')
+            with patch('hey_my_buddy.cli.checks.observe_process_argv', return_value=(
+                    [(target, ['python', worker, 'private-token'])], [])), \
+                 patch('hey_my_buddy.cli.checks.observe_open_paths', return_value=(
+                    {123: {native, outside}}, None, True, [])):
+                evidence = support.private_process_failure_evidence(
+                    directory, [{'pid': 123, 'source': 'openFiles', 'executable': 'python'}])
+        self.assertEqual(evidence['identitySnapshot'], [
+            {'pid': 123, 'createTime': 42.0, 'rootArguments': [worker]}])
+        self.assertEqual(evidence['rootReferences'], {'123': [native]})
+        self.assertNotIn('private-token', json.dumps(evidence))
+        self.assertNotIn('outside-private-file', json.dumps(evidence))
+
     def test_daemon_fixture_cooperates_on_windows_and_keeps_posix_sigterm(self):
         for platform, fail_stop in (("nt", False), ("nt", True), ("posix", False)):
             with self.subTest(platform=platform, fail_stop=fail_stop):
@@ -95,13 +116,14 @@ class FixtureCleanupTests(unittest.TestCase):
                       patch.object(support, "os", wraps=os) as native,
                       patch.object(support, "stop_private_service") as stop,
                       patch.object(support, "shutdown_private_rpc"),
+                      patch.object(support, "private_process_failure_evidence", return_value={}),
                       patch.object(checks, "request_cooperative_stop", return_value=[]) as drain,
                       patch.object(checks, "held_locks", return_value={"daemon": [base / "elsewhere/board-owner.lock"]
                                                                     if residue == "lock" else []}),
                       patch.object(checks, "observed_processes", return_value=(
                           [{"pid": 123}] if residue == "process" else [],
                           ["observation incomplete"] if residue == "unknown" else [], [])) as observe,
-                      patch.object(support, "remove_private_test_root") as remove):
+                      patch.object(support, "cleanup_fixture_tree") as remove):
                     native.name = "posix"
                     with self.assertRaisesRegex(AssertionError, "preserved"):
                         support.cleanup_private_tree(base, (state,))
@@ -120,7 +142,7 @@ class FixtureCleanupTests(unittest.TestCase):
                   patch.object(support, "shutdown_private_rpc") as shutdown,
                   patch.object(checks, "held_locks", return_value={"daemon": []}) as locks,
                   patch.object(checks, "observed_processes", side_effect=AssertionError("unregistered Job")),
-                  patch.object(support, "remove_private_test_root") as remove):
+                  patch.object(support, "cleanup_fixture_tree") as remove):
                 native.name = "nt"
                 support.cleanup_private_tree(base, (state,))
             stop.assert_called_once_with(state)
@@ -435,16 +457,16 @@ class FixtureCleanupTests(unittest.TestCase):
                     self.assertFalse(native.called, "fixture capabilities attempted native discovery")
                     self.assertNotIn("error", capabilities)
                     self.assertTrue(capabilities["adapters"]["dsh"]["available"])
-                    refreshed = call_operation(service, "model_catalog_refresh", {"requestId": "r05-fixture"})
-                    self.assertEqual(refreshed["catalog"]["source"], f"file:{catalog}")
+                    refreshed = call_operation(service, "model_catalog_refresh", {})
+                    self.assertEqual(refreshed["catalog"]["source"], "current-native-observations")
                     payload = json.loads(catalog.read_text(encoding="utf-8"))
-                    self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"],
-                                     payload["providers"][0]["models"][0]["id"])
+                    self.assertEqual({model['id'] for model in refreshed['catalog']['providers'][0]['models']},
+                                     {model['id'] for model in payload['providers'][0]['models']})
                     payload["providers"][0]["models"][0]["id"] = "r05-fixture-changed-model"
                     catalog.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
-                    reread = call_operation(service, "model_catalog_refresh", {"requestId": "r05-fixture-reread"})
-                    self.assertEqual(reread["catalog"]["providers"][0]["models"][0]["id"],
-                                     payload["providers"][0]["models"][0]["id"])
+                    reread = call_operation(service, "model_catalog_refresh", {})
+                    self.assertEqual({model['id'] for model in reread['catalog']['providers'][0]['models']},
+                                     {model['id'] for model in payload['providers'][0]['models']})
                     self.assertFalse(native.called, "fixture catalog attempted native discovery")
                 finally:
                     daemon.store.db.close()
@@ -475,7 +497,7 @@ class FixtureCleanupTests(unittest.TestCase):
 
             # Leave the directory available for a protocol cleanup if the assertion
             # fails; the lock FDs also let us inspect ownership after deletion.
-            with patch("support.remove_private_test_root") as remove:
+            with patch("support.cleanup_fixture_tree") as remove:
                 fixture._cleanup()
                 assert_released(self, handles)
                 for fd in handles:
@@ -494,7 +516,7 @@ class FixtureCleanupTests(unittest.TestCase):
         handles = []
         directory = None
         try:
-            with patch("support.remove_private_test_root") as remove:
+            with patch("support.cleanup_fixture_tree") as remove:
                 with private_state_dir() as directory:
                     catalog = write_catalog_fixture(directory)
                     environment = _child_environment(directory, {

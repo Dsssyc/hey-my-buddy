@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 import sqlite3
 import stat
+import sys
 from unittest.mock import patch
 
 from support import BoardTestCase
@@ -25,6 +26,21 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 
 
 class CurrentCoreTests(BoardTestCase):
+    def test_frozen_schema_steps_import_only_the_standard_library(self):
+        source = Path(__file__).resolve().parents[4] / "src" / "hey_my_buddy" / "blackboard" / "store"
+        for name in ("schema_30_31.py", "schema_31_32.py", "schema_32_33.py", "schema_33_34.py", "schema_34_35.py", "schema_35_36.py", "schema_36_37.py", "schema_37_38.py", "schema_38_39.py", "schema_39_40.py", "schema_40_41.py"):
+            tree = ast.parse((source / name).read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    self.assertEqual(node.level, 0, (name, node.lineno))
+                    modules = [node.module]
+                else:
+                    continue
+                for module in modules:
+                    self.assertIn(module.split(".")[0], sys.stdlib_module_names, (name, node.lineno, module))
+
     def test_fresh_database_creates_private_file_without_changing_directory_mode(self):
         directory = self.directory / "database-mode"
         directory.mkdir(mode=0o750)
@@ -79,7 +95,7 @@ class CurrentCoreTests(BoardTestCase):
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
         signature = json.loads((Path(__file__).resolve().parents[2] / "protocol" / "contract_signatures.json").read_text(encoding="utf-8"))
         self.assertEqual(CONTRACT_VERSION, signature["contractVersion"])
-        self.assertEqual(SCHEMA_VERSION, 30)
+        self.assertEqual(SCHEMA_VERSION, 41)
         board = self.board()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
@@ -123,6 +139,17 @@ class CurrentCoreTests(BoardTestCase):
         self.assertEqual(sorted(writes), sorted([
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('schema_version', ?)"),
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES(?, ?)"),
+            ("blackboard/store/schema_30_31.py", "UPDATE meta SET value='31' WHERE key='schema_version'"),
+            ("blackboard/store/schema_31_32.py", "UPDATE meta SET value='32' WHERE key='schema_version'"),
+            ("blackboard/store/schema_32_33.py", "UPDATE meta SET value='33' WHERE key='schema_version'"),
+            ("blackboard/store/schema_33_34.py", "UPDATE meta SET value='34' WHERE key='schema_version'"),
+            ("blackboard/store/schema_34_35.py", "UPDATE meta SET value='35' WHERE key='schema_version'"),
+            ("blackboard/store/schema_35_36.py", "UPDATE meta SET value='36' WHERE key='schema_version'"),
+            ("blackboard/store/schema_36_37.py", "UPDATE meta SET value='37' WHERE key='schema_version'"),
+            ("blackboard/store/schema_37_38.py", "UPDATE meta SET value='38' WHERE key='schema_version'"),
+            ("blackboard/store/schema_38_39.py", "UPDATE meta SET value='39' WHERE key='schema_version'"),
+            ("blackboard/store/schema_39_40.py", "UPDATE meta SET value='40' WHERE key='schema_version'"),
+            ("blackboard/store/schema_40_41.py", "UPDATE meta SET value='41' WHERE key='schema_version'"),
         ]))
         board = self.board()
         with board.store.db.read() as connection:
@@ -133,7 +160,7 @@ class CurrentCoreTests(BoardTestCase):
 
     def test_unsupported_schema_is_rejected_without_rewriting_archive(self):
         # Schema 18 is now as unsupported as every older board form.
-        for version in ("5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "24", "25", "26", "27", "28", "999", None, "unrecognized"):
+        for version in ("5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "24", "25", "26", "27", "28", "30", "999", None, "unrecognized"):
             with self.subTest(version=version):
                 directory = self.directory / str(version)
                 path = self.old_database(directory, version)

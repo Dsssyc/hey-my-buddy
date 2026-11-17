@@ -1,6 +1,7 @@
 """Thread-owned SQLite connections retain transaction isolation and rollbacks."""
 import sqlite3
 import threading
+from unittest.mock import patch
 
 from support import BoardTestCase
 from hey_my_buddy.blackboard.store.db import Database
@@ -231,3 +232,67 @@ class ConnectionTests(BoardTestCase):
         finally:
             release.set()
             thread.join(5)
+
+    def test_close_waits_for_borrowed_connections_and_refuses_new_borrows(self):
+        for transaction in ("read", "write", "connect"):
+            with self.subTest(transaction=transaction):
+                database = Database(self.directory / transaction)
+                database.initialize()
+                self.addCleanup(database.close)
+                ready, release, observed, closed = (threading.Event() for _ in range(4))
+                errors, values, connections = [], [], []
+                # Observe the close thread either waiting or returning. This
+                # establishes ordering without a sleep or a negative timed wait.
+                condition = threading.Condition()
+                database._connection_lock = condition
+                wait = condition.wait
+
+                def waiting():
+                    observed.set()
+                    return wait()
+
+                def reader():
+                    try:
+                        with getattr(database, transaction)() as connection:
+                            connections.append(connection)
+                            connection.execute("SELECT value FROM meta").fetchall()
+                            ready.set()
+                            if not release.wait(10):
+                                raise AssertionError("reader was not released")
+                            values.append(connection.execute("SELECT 42").fetchone()[0])
+                    except BaseException as error:
+                        errors.append(error)
+
+                def close():
+                    try:
+                        database.close()
+                    except BaseException as error:
+                        errors.append(error)
+                    finally:
+                        closed.set()
+                        observed.set()
+
+                reader_thread = threading.Thread(target=reader)
+                close_thread = threading.Thread(target=close)
+                with patch.object(condition, "wait", side_effect=waiting):
+                    reader_thread.start()
+                    try:
+                        self.assertTrue(ready.wait(10))
+                        close_thread.start()
+                        self.assertTrue(observed.wait(10))
+                        self.assertFalse(closed.is_set(), "close returned while a connection was borrowed")
+                        with self.assertRaisesRegex(RuntimeError, "Database is closed"):
+                            with database.connect():
+                                pass
+                    finally:
+                        release.set()
+                        reader_thread.join(10)
+                        if close_thread.ident is not None:
+                            close_thread.join(10)
+                self.assertFalse(reader_thread.is_alive())
+                self.assertFalse(close_thread.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(values, [42])
+                self.assertTrue(closed.is_set())
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    connections[0].execute("SELECT 1")

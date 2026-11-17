@@ -15,8 +15,10 @@ import json
 import unittest
 from unittest.mock import patch
 
-from support import BoardTestCase, FakeClock
+from support import BoardTestCase, FakeClock, seed_buddy
 from hey_my_buddy.blackboard.catalog import catalog
+from hey_my_buddy.blackboard.catalog import buddy_state
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 
@@ -42,27 +44,26 @@ class RouterDispatchTestCase(BoardTestCase):
     # -- fixtures ------------------------------------------------------------
     def add_buddy(self, buddy_id, *, model=None, available=1, enabled=1):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
-                       "available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,?,?,?)",
-                       (buddy_id, buddy_id, "dsh", "fixture", model or buddy_id, "max", available, enabled,
-                        canonical_json([])))
+            model = model or buddy_id
+            seed_buddy(db, buddy_id=buddy_id, harness="dsh", provider="fixture",
+                       model=model, effort="max", available=available, enabled=enabled,
+                       now=self.board_.store.now())
 
-    def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
+    def set_settings(self, *, ids=None, mode=None, wait=None, interval=None):
         with self.board_.store.db.write() as db:
             merged = {**router.configuration(db)}
             if ids is not None:
                 merged["routerBuddyIds"] = list(ids)
             if mode is not None:
                 merged["defaultRoutingMode"] = mode
-            if budget is not None:
-                merged["routingBudget"] = budget
+            if wait is not None:
+                merged["modelResponseWaitSeconds"] = wait
             if interval is not None:
                 merged["routerRetryIntervalSeconds"] = interval
             router._write_settings(db, merged)
 
     def request(self, *, request_id="pick-1", task="fix the parser"):
-        return self.board_.call("selection_request", {"requestId": request_id, "task": task})
+        return self.board_.store.decisions.request_select({"requestId": request_id, "task": task})
 
     def decision_row(self, decision_id):
         return self.board_.call("selection_get", {"decisionId": decision_id})["decision"]
@@ -87,8 +88,8 @@ class RouterDispatchTestCase(BoardTestCase):
     def tasks(self, *, state=None):
         with self.board_.store.db.read() as db:
             if state is None:
-                return db.execute("SELECT task_id,state,adapter FROM tasks WHERE owner='decision'").fetchall()
-            return db.execute("SELECT task_id,state,adapter FROM tasks WHERE owner='decision' AND state=?",
+                return db.execute("SELECT task_id,state,adapter FROM tasks WHERE adapter='decision'").fetchall()
+            return db.execute("SELECT task_id,state,adapter FROM tasks WHERE adapter='decision' AND state=?",
                               (state,)).fetchall()
 
     def attempts(self):
@@ -250,7 +251,9 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         result = self.request()
         frozen = self.dispatch_of(result["runId"])
         with self.board_.store.db.write() as db:
+            db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','fixture','replaced')")
             db.execute("UPDATE buddies SET model='replaced' WHERE buddy_id=?", (A,))
+            ensure_model_service(db, "dsh", "fixture", "replaced", self.board_.store.now())
         claimed = self.claim("identity-edited")
         self.assertIsNotNone(claimed["claim"])
         self.assertEqual(claimed["claim"]["decisionInput"], frozen["document"])
@@ -266,10 +269,8 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         with self.board_.store.db.write() as db:
             for index in (1, 2):
                 db.execute(
-                    "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
-                    "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
-                    " VALUES(?,?,?,?,'digest',1,'dsh','/work',60,'running',1,?,?)",
-                    (f"busy-{index}", f"busy-{index}", "host", "{}", T0, T0))
+                    "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set(?,'$.expectedSeconds',60),'digest',1,'dsh','/work','running',1,?,?)",
+                    (f"busy-{index}", f"busy-{index}", "{}", T0, T0))
                 db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES(?,?,1,'nonce','executing','dsh','dsh','other',?,?,?,?)", (f'att-busy-{index}', f'busy-{index}', f'model-{index}', T0, T0, T0))
         blocked = self.claim("cap")
         self.assertIsNone(blocked["claim"])
@@ -288,9 +289,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                                           task_id=None, attempt_id=None, outcome="no_answer",
                                           code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
             db.execute(
-                "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
-                "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
-                " VALUES('retry-1','retry','host','{}','digest',1,'dsh','/work',60,'running',1,?,?)",
+                "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES('retry-1','retry',json_set('{}','$.expectedSeconds',60),'digest',1,'dsh','/work','running',1,?,?)",
                 (T0, T0))
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES('att-retry','retry-1',1,'nonce','executing','dsh','dsh','fixture','alpha',?,?,?)", (T0, T0, T0))
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at)"
@@ -389,29 +388,32 @@ class ClaimTests(RouterDispatchTestCase):
 class WorkflowWiringTests(RouterDispatchTestCase):
     def route_micro_task(self, run_id="run-1", *, required_capabilities=()):
         """One micro task admitted through the coordinator's workflow entry."""
+        from mock_workspace import MockWorkspace
+        workspace = MockWorkspace(self.board_.directory)
+        manifest = workspace.prepare(self.board_.directory, f"routing-{run_id}",
+                                     {"kind": "existing", "cwd": str(self.workdir()), "access": "write"})
         with self.board_.store.db.write() as db:
+            db.execute("INSERT OR IGNORE INTO projects(project_id,kind,path) VALUES(?,'git',?)",
+                       (manifest["projectId"], manifest["snapshot"]["repositoryPath"]))
             db.execute(
-                "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
-                "fingerprint_version,adapter,cwd,expected_seconds,state,queue_reason,revision,created_at,updated_at)"
-                " VALUES(?,?,'host',?,'digest',1,'unresolved','/work',60,'queued',"
-                "'awaiting-model-selection',1,?,?)",
+                "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,queue_reason,revision,created_at,updated_at) VALUES(?,?,json_set(?,'$.expectedSeconds',60),'digest',1,'unresolved','/work','queued','awaiting-model-selection',1,?,?)",
                 (run_id, run_id, canonical_json({"task": "do the thing"}), T0, T0))
             db.execute(
-                "INSERT INTO workflow_runs(run_id,host_id,source_host_id,control_verifier,"
-                " request_fingerprint,execution_workspace_json,workspace_manifest_json,state,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (run_id, "host-1", "host-1", "verifier", "request-digest",
-                 canonical_json({"kind": "existing"}), canonical_json({"kind": "existing"}), "executing", T0, T0))
+                "INSERT INTO workflow_runs(run_id,execution_workspace_json,workspace_id,"
+                "workspace_manifest_sha256,standalone_project_id,project_kind,checkout,state,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,'git','existing',?,?,?)",
+                (run_id, canonical_json({"kind": "existing"}), manifest["workspaceId"],
+                 manifest["manifestSha256"], manifest["projectId"], "executing", T0, T0))
             response = self.board_.store.decisions.route_workflow(
-                db, run_id=run_id, sequence=1, spec={"task": "do the thing", "requiredCapabilities": list(required_capabilities)}, manifest=None)
+                db, run_id=run_id, sequence=1, spec={"task": "do the thing", "requiredCapabilities": list(required_capabilities), "expectedSeconds": 60}, manifest=manifest)
         return response
 
     def attach_pending_link(self, decision_id, run_id="run-1"):
         """The Micro task's owning transaction inserts its pending route link."""
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
-                " VALUES(?,?,1,'pending',?)",
+                "INSERT INTO workflow_routes(decision_id,run_id,state,exploration,created_at)"
+                " VALUES(?,?,'pending','counted',?)",
                 (decision_id, run_id, T0))
             db.execute("UPDATE workflow_runs SET current_routing_id=? WHERE run_id=?", (decision_id, run_id))
 
@@ -474,10 +476,10 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
         with self.board_.store.db.read() as db:
             original = router_sequence.dispatch(db, frozen['runId'])
         with self.board_.store.db.write() as db:
-            db.execute('UPDATE buddies SET available=0,unavailable_code=?,unavailable_params_json=?,unavailable_content=? WHERE buddy_id=?',
-                       ('catalog.native-unavailable', '{}', '  native text\n', B))
+            db.execute('UPDATE model_services SET unavailable_code=?,unavailable_params_json=?,unavailable_content=? WHERE harness=? AND provider=? AND model=?',
+                       ('catalog.native-unavailable', '{}', '  native text\n', 'dsh', 'fixture', 'bravo'))
             current_input = self.board_.store.decisions._buddy_input(
-                db.execute('SELECT * FROM buddies WHERE buddy_id=?', (B,)).fetchone())
+                buddy_state.get(db, B))
         self.assertEqual(current_input['unavailableReason'],
                          {'code': 'catalog.native-unavailable', 'params': {}})
         self.assertEqual(current_input['unavailableContent'], '  native text\n')
@@ -523,7 +525,9 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
 
     def test_next_actor_keeps_the_original_task_and_input(self):
         with self.board_.store.db.write() as db:
+            db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','fixture',?)", ("b" * 40,))
             db.execute("UPDATE buddies SET model=? WHERE buddy_id=?", ("b" * 40, B))
+            ensure_model_service(db, "dsh", "fixture", "b" * 40, self.board_.store.now())
         first = self.request()
         original = self.dispatch_of(first["runId"])
         with self.board_.store.db.write() as db:
@@ -538,24 +542,25 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
     def test_unhealthy_router_records_preflight_failure_without_an_attempt(self):
         first = self.request()
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
+            db.execute("UPDATE harness_health SET status='unhealthy',record_json=json_set(record_json,'$.reason',json(?)) WHERE harness='dsh'",
+                       ('{"code":"harness.probe-failed","params":{"operation":"probe"}}',))
         response = self.claim("changed")
         self.assertIsNone(response["claim"])
         self.assertEqual(self.decision_row(first["decisionId"])["status"], "needs-host")
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual(self.attempts(), [])
 
-    def test_request_snapshot_and_dispatch_preserve_the_settings_budget(self):
+    def test_request_snapshot_and_dispatch_preserve_the_response_wait(self):
         self.set_settings(mode="review")
         with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
-            response = self.board_.call("selection_request", {"requestId": "deadline", "task": "choose"})
+            response = self.board_.store.decisions.request_select({"requestId": "deadline", "task": "choose"})
         with self.board_.store.db.read() as db:
             requested = json.loads(self.board_.store.decisions._row(db, response["decisionId"])["requested_json"])
         snapshot = self.snapshot_of(response["decisionId"])
         dispatch = self.dispatch_of(response["runId"])
-        self.assertNotIn("budget", requested)
-        self.assertEqual(dispatch["document"]["budget"], snapshot["facts"]["budget"])
-        self.assertEqual(snapshot["facts"]["budget"]["timeoutSeconds"], 300)
+        self.assertNotIn("modelResponseWaitSeconds", requested)
+        self.assertEqual(dispatch["document"]["modelResponseWaitSeconds"], snapshot["facts"]["modelResponseWaitSeconds"])
+        self.assertEqual(snapshot["facts"]["modelResponseWaitSeconds"], 60)
 
 
 if __name__ == "__main__":

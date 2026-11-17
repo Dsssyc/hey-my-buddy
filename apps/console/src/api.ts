@@ -5,7 +5,7 @@ import type { RuntimeVersionInfo, Configuration, ConsoleAccess, ConsoleSession, 
 import type {
   MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskTimeline,
 } from "./macro-task-types";
-import { macroTaskPageSchema, macroTaskTimelineSchema } from "./macro-task-types";
+import { macroTaskPageSchema, macroTaskTimelineSchema, macroTaskGoalsSchema } from "./macro-task-types";
 import {
   configurationSchema, consoleAccessSchema, consoleSessionSchema, harnessHealthSchema, permissionLevelsSchema,
   preferencesSchema, providerCoolingSchema, reminderSettingsSchema, routingHealthSchema, runtimeVersionSchema, safeCount, dateString, snapshotReadSchema,
@@ -15,6 +15,7 @@ export class ApiError extends Error {
   constructor(
     public code: string,
     message: string | (() => string),
+    public details?: Record<string, unknown>,
   ) {
     super(typeof message === "function" ? message() : message);
     if (typeof message === "function") Object.defineProperty(this, "message", { get: message, configurable: true });
@@ -236,12 +237,13 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     }
     const body = data as {
       ok?: boolean;
-      error?: { code?: string; message?: string };
+      error?: { code?: string; message?: string; details?: Record<string, unknown> };
     };
     if (!response.ok || body?.ok === false) {
       throw new ApiError(
         body?.error?.code || `HTTP_${response.status}`,
         body?.error?.message || (() => i18n.t("common:error.refused")),
+        body?.error?.details,
       );
     }
     return verifiedRead(data, responseVerifiedAtMs(response));
@@ -364,13 +366,14 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const stillCurrent = outstanding.get(url) === ticket;
       const body = data as {
         ok?: boolean;
-        error?: { code?: string; message?: string };
+        error?: { code?: string; message?: string; details?: Record<string, unknown> };
       };
       if (!response.ok || body?.ok === false) {
         if (body?.ok === false && body?.error?.code === SESSION_EXPIRED_CODE) clearConditionalCache();
         throw new ApiError(
           body?.error?.code || `HTTP_${response.status}`,
           body?.error?.message || (() => i18n.t("common:error.refused")),
+          body?.error?.details,
         );
       }
       if (stillCurrent && cacheGeneration === atGeneration && !signal?.aborted) {
@@ -469,6 +472,12 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.timeline"));
       }
       return { timeline: data, verifiedAtMs };
+    },
+    async macroTaskGoals(macroTaskId: string, signal?: AbortSignal) {
+      const data = await request(`/macro-tasks/${encodeURIComponent(macroTaskId)}/goals`, { signal });
+      const parsed = macroTaskGoalsSchema.safeParse(data);
+      if (!parsed.success) throw new ApiError("INVALID_RESPONSE", () => i18n.t("macroHeader:goalInvalid"));
+      return parsed.data;
     },
     /** Version facts are read once by visible settings, independent of snapshots. */
     async runtimeVersion(signal?: AbortSignal): Promise<RuntimeVersionInfo> {

@@ -56,8 +56,12 @@ def main():
             send({"id": ident, "result": {"account": {"type": "chatgpt", "planType": "plus"}}})
             send({"method": "account/updated", "params": {"authMode": "chatgpt", "planType": "plus"}})
         elif method == "model/list":
+            # The gated case serves a second effort so one fake CLI can stand
+            # behind two Router buddies; every other case keeps the single
+            # declared level.
+            levels = ("low", "high") if case == "gated" else ("low",)
             entry = {"model": "fixture-model", "displayName": "Fixture",
-                     "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
+                     "supportedReasoningEfforts": [{"reasoningEffort": level} for level in levels]}
             if case == "unlisted-model":
                 entry = {"model": "other-model", "displayName": "Other",
                          "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
@@ -87,12 +91,28 @@ def main():
                 del receipt["modelProvider"]
             send({"id": ident, "result": receipt})
         elif method == "turn/start":
+            if case == "input-too-large":
+                send({"id": ident, "error": {"code": -32602, "message": "fixture admission refusal",
+                      "data": {"input_error_code": "input_too_large", "max_chars": 9,
+                               "actual_chars": 10, "secret": "must never appear"}}})
+                continue
             turns += 1
             trace = Path(os.environ["HMB_CODEX_FIXTURE_STATE"])
             recorded = json.loads(trace.read_text(encoding="utf-8"))
             recorded.setdefault("turns", []).append(params)
             trace.write_text(json.dumps(recorded), encoding="utf-8", newline="\n")
             turn_id = f"turn-{turns}"
+            if case == "gated":
+                # A first step that stays silent exactly as long as the test's
+                # gate file says: nothing is emitted until the gate appears,
+                # then the ordinary flow runs with the supplied answer.
+                started = os.environ.get("HMB_CODEX_FIXTURE_STARTED")
+                if started:
+                    Path(started).touch()
+                gate = Path(os.environ["HMB_CODEX_FIXTURE_GATE"])
+                bounded = time.monotonic() + 300
+                while time.monotonic() < bounded and not gate.exists():
+                    time.sleep(0.05)
             if case == "unlisted-model":
                 # The native answer decides: the server rejects the turn under
                 # the selected model's own name.
@@ -165,6 +185,12 @@ def main():
                     event("thread/tokenUsage/updated", turn_id, tokenUsage={
                         "last": usage, "total": {key: value * turns for key, value in usage.items()}})
             answer = "not-json" if case in ("format", "usage-format", "usage-then-missing") and turns == 1 else json.dumps({"buddyId": "foreign" if case == "outside" else "legal"})
+            if case == "router-facts":
+                buddy = params["outputSchema"]["properties"]["buddyId"]["enum"][0]
+                answer = json.dumps({"domainNodeId": None, "taskType": "change", "buddyId": buddy, "note": "Offline fixture reads the frozen program facts",
+                                     "evidence": [{"kind": "statistics", "ref": buddy}]})
+            if case == "gated":
+                answer = os.environ["HMB_CODEX_FIXTURE_ANSWER"]
             final = {"type": "agentMessage", "id": f"final-{turns}", "phase": "final_answer", "text": answer}
             event("item/completed", turn_id, item=final)
             items = [final]

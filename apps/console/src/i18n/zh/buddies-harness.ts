@@ -1,7 +1,9 @@
 /** Recorded harness settings within the directory. */
 export default {
   detailsLabel: "{{name}} 设置",
-  summaryLabel: "{{name}} 账户",
+  found: "已找到 {{found}} / {{total}}",
+  checkedAt: "检测于 {{time}}",
+  empty: "尚无检测记录。检测 Harness 后会在这里显示状态与设置。",
 
   check: "检测",
   checkAll: "全部检测",
@@ -19,29 +21,34 @@ export default {
   },
   done: {
     checked: "已检测 {{name}}：{{status}}",
-    checkedAll: "已检测全部 Harness：已找到 {{ready}} / {{n}}",
+    checkedAll: "已检测全部 harness：已找到 {{ready}} / {{n}}",
     saved: "已保存路径 {{path}}；{{name}} {{status}}",
     restored: "已恢复自动检测；{{name}} {{status}}",
   },
   pane: {
-    version: "版本",
     location: "位置",
+    permissions: "权限",
     path: "路径",
-    source: "来源",
     manual: "手动",
-    checked: "检测",
-    review: "审阅",
+    review: "只读",
     pickPath: "指定路径",
     reason: "原因",
-    tried: "试过的位置",
+    tried: "已尝试的位置",
     noPath: "未记录路径",
   },
   /** Local review eligibility: a free check of the shipped mechanism, never native-run evidence. */
   review: {
-    eligible: "可用",
-    ineligible: "不可用",
+    eligible: "强制限制",
+    conventional: "依照约定",
+    ineligible: "未声明",
     unknown: "未知",
-    note: "资格来自 harness 的只读档位声明，不代表原生调用已验证。",
+    note: "按 harness 的只读档位声明显示；此处不运行原生调用。",
+  },
+  web: {
+    summaryEnforced: "只联网·强制限制（可建画像）",
+    summaryUnenforced: "只联网·未强制（不可建画像）",
+    enforcedDescription: "只联网档位已声明强制执行，可构建模型画像。",
+    unenforcedDescription: "只联网档位未声明强制执行，不能构建模型画像。",
   },
   path: {
     title: "{{name}} 路径",
@@ -75,11 +82,11 @@ export default {
     },
   },
   cooling: {
-    name: "冷却",
-    status: "冷却中 · 约 {{time}} 可再试",
-    clear: "解除冷却",
+    status: "冷却中 · 约 {{time}} 结束",
+    clear: "开放重试",
+    retryHint: "开放一次重试机会，不代表提供方已恢复。",
     done: { cleared: "已解除冷却", none: "当前未在冷却" },
-    storageUnavailable: "无法保留请求编号；请允许页面使用会话存储后重试。",
+    storageUnavailable: "无法保留请求 ID；请允许页面使用会话存储后重试。",
     unknownResult: "解除冷却的结果未知；请重放此请求。",
   },
 };

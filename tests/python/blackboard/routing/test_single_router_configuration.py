@@ -1,6 +1,7 @@
 import uuid
 """Human settings patches and upgrade-required reads on private boards."""
 from unittest.mock import patch
+from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
@@ -12,7 +13,7 @@ class SingleRouterConfigurationTests(BoardTestCase):
         super().setUp()
         self.catalog_fixture()
         self.board_ = self.board()
-        self.board_.call('model_catalog_refresh', {'requestId': 'configuration-catalog'})
+        self.board_.call('model_catalog_refresh', {})
 
     def configure(self, settings, *, enable=False):
         params = {}
@@ -22,25 +23,25 @@ class SingleRouterConfigurationTests(BoardTestCase):
         return self.board_.console_call('user_policy_publish', params)
 
     def settings(self):
-        return self.board_.call('console_snapshot', {})['configuration']
+        return console_snapshot_projection(self.board_.service)[0]['configuration']
 
     def test_fresh_defaults_have_an_empty_router_list(self):
-        snapshot = self.board_.call('console_snapshot', {})
+        snapshot = console_snapshot_projection(self.board_.service)[0]
         settings = snapshot['configuration']
         self.assertEqual(settings['routerBuddyIds'], [])
         self.assertEqual(settings['defaultRoutingMode'], 'fast')
-        self.assertEqual(settings['routingBudget'], 'standard')
+        self.assertEqual(settings['modelResponseWaitSeconds'], 60)
         self.assertNotIn('fastRouterBuddyId', settings)
         self.assertNotIn('reviewRouterBuddyId', settings)
         self.assertNotIn("configurationError", snapshot)
 
-    def test_budget_patch_and_clear_preserve_other_settings(self):
+    def test_response_wait_patch_and_clear_preserve_other_settings(self):
         self.configure({'routerBuddyIds': [BUDDY]}, enable=True)
-        self.configure({'routingBudget': 'brief'})
+        self.configure({'modelResponseWaitSeconds': 30})
         self.assertEqual(self.settings()['routerBuddyIds'], [BUDDY])
         self.configure({'routerBuddyIds': []})
         self.assertEqual(self.settings()['routerBuddyIds'], [])
-        self.assertEqual(self.settings()['routingBudget'], 'brief')
+        self.assertEqual(self.settings()['modelResponseWaitSeconds'], 30)
 
     def test_mode_patch_preserves_temporarily_ineligible_router_and_reports_qualification(self):
         self.configure({'routerBuddyIds': [BUDDY]}, enable=True)
@@ -54,11 +55,11 @@ class SingleRouterConfigurationTests(BoardTestCase):
         self.assertEqual(self.settings()['defaultRoutingMode'], 'review')
         self.assertEqual(self.settings()['routerBuddyIds'], [BUDDY])
 
-    def test_unavailable_existing_router_does_not_block_budget_or_clear(self):
+    def test_unavailable_existing_router_does_not_block_response_wait_or_clear(self):
         self.configure({'routerBuddyIds': [BUDDY]}, enable=True)
         with self.board_.store.db.write() as db:
-            db.execute('UPDATE buddies SET available=0 WHERE buddy_id=?', (BUDDY,))
-        self.configure({'routingBudget': 'deep'})
+            db.execute('UPDATE buddies SET retired=1 WHERE buddy_id=?', (BUDDY,))
+        self.configure({'modelResponseWaitSeconds': 90})
         self.assertEqual(self.settings()['routerBuddyIds'], [BUDDY])
         self.configure({'routerBuddyIds': [], 'defaultRoutingMode': 'review'})
         self.assertEqual(self.settings()['routerBuddyIds'], [])

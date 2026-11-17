@@ -1,7 +1,7 @@
 """A stopped pre-model refusal requeues the same continuation under service authority."""
 from blackboard.tasks.test_workflow import WorkflowTestCase
+import json
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.cli.cli_views import micro_task_brief, task_brief
 
 
 class RefusedResumeTests(WorkflowTestCase):
@@ -16,17 +16,18 @@ class RefusedResumeTests(WorkflowTestCase):
                                            "dsh": "hey-my-buddy-micro-task"}.get(harness)}))
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         if continuation_kind == "manual":
-            self.continue_run(board, view, command_id="continue-" + suffix, input="Keep this exact continuation input.")
+            self.continue_run(board, view,  input="Keep this exact continuation input.")
         else:
             self.decide(board, view, view["activeRequest"]["requestId"], note="Keep this approved input.")
         second = self.claim(board, claim_request_id="native-" + suffix)
         self.assertEqual(second["claim"]["turn"]["resumeMode"], "native-session")
         return board, submitted["runId"], second
 
-    def refuse(self, board, claim, *, started=False, shutdown=True, code="native-resume-unavailable"):
+    def refuse(self, board, claim, *, responded=False, shutdown=True, code="native-resume-unavailable", legacy=False):
         def result(payload):
             payload.pop("turn")
-            payload.update(code=code, modelStarted=started, error="Fixture native refusal explanation.")
+            payload.update(code=code, error="Fixture native refusal explanation.")
+            payload["modelStarted" if legacy else "modelResponded"] = responded
         return self.finish_turn(board, claim, runner_status="failed", exit_code=1, seal=False,
                                 shutdown=shutdown, result_mutator=result)
 
@@ -44,18 +45,17 @@ class RefusedResumeTests(WorkflowTestCase):
         self.assertEqual(recovery["turnId"], original["turnId"])
         self.assertEqual(view["currentTurn"]["state"], "failed")
         self.assertEqual(view["continuationCount"], 2)
-        self.assertEqual(micro_task_brief(view)["resumeRecovery"], recovery)
+        self.assertEqual(view["resumeRecovery"], recovery)
         status = board.call("task_get", {"runId": run_id})["task"]
-        self.assertEqual(task_brief(status)["resumeRecovery"], recovery)
+        self.assertEqual(status["resumeRecovery"], recovery)
         self.assertNotIn("resumeRecovery", status["workflow"])
-        self.assertNotIn("resumeRecovery", task_brief(status)["workflow"])
         listed = next(row for row in board.call("task_list", {})["runs"] if row["runId"] == run_id)
         self.assertNotIn("resumeRecovery", listed)
         self.assertNotIn("resumeRecovery", listed["workflow"])
-        snapshot = board.call("console_snapshot", {})
-        console_row = next(row for row in snapshot["tasks"]["runs"] if row["runId"] == run_id)
+        # The console fetches the standalone group's timeline for its task rows.
+        timeline = board.call("macro_task_timeline", {"macroTaskId": f"run:{run_id}"})
+        console_row = next(row for row in timeline["rows"] if row["runId"] == run_id)
         self.assertNotIn("resumeRecovery", console_row)
-        self.assertNotIn("resumeRecovery", console_row["workflow"])
         # Replayed result and reads cannot allocate an attempt or requeue again.
         with self.assertRaises(BoardError) as caught:
             self.refuse(board, second)
@@ -98,8 +98,8 @@ class RefusedResumeTests(WorkflowTestCase):
     def test_helper_authorized_continuation_keeps_its_one_use_input(self):
         self.assert_auto_rebuild("zcode", continuation_kind="helper")
 
-    def test_started_unknown_and_unconfirmed_failures_do_not_requeue(self):
-        for index, facts in enumerate(({"started": True}, {"started": None}, {"started": 0},
+    def test_responded_unknown_and_unconfirmed_failures_do_not_requeue(self):
+        for index, facts in enumerate(({"responded": True}, {"responded": None}, {"responded": 0},
                                        {"code": "other-failure"}, {"shutdown": False})):
             with self.subTest(facts=facts):
                 board, run_id, second = self.native_turn(suffix=str(index))
@@ -109,6 +109,22 @@ class RefusedResumeTests(WorkflowTestCase):
                 self.assertEqual(view["continuationCount"], 1)
                 self.assertIsNone(view["resumeRecovery"])
                 self.assertIsNone(self.claim(board, "w2", claim_request_id="blocked-" + str(index), run_id=run_id)["claim"])
+
+    def test_legacy_model_started_is_retained_without_authorizing_automatic_rebuild(self):
+        for index, old_value in enumerate((False, True, None)):
+            with self.subTest(old_value=old_value):
+                board, run_id, second = self.native_turn(suffix="legacy-" + str(index))
+                self.refuse(board, second, responded=old_value, legacy=True)
+                view = board.call("workflow_get", {"runId": run_id})
+                self.assertEqual(view["state"], "failed")
+                self.assertEqual(view["continuationCount"], 1)
+                self.assertIsNone(view["resumeRecovery"])
+                with board.store.db.read() as connection:
+                    raw = connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                        (second["claim"]["attempt"]["attemptId"],)).fetchone()[0]
+                payload = json.loads(raw)["result"]
+                self.assertIs(payload["modelStarted"], old_value)
+                self.assertNotIn("modelResponded", payload)
 
     def test_initial_failure_does_not_requeue(self):
         board = self.board()
@@ -128,15 +144,15 @@ class RefusedResumeTests(WorkflowTestCase):
         self.finish_turn(board, self.claim(board), disposition="assistance")
         parent = board.call("workflow_get", {"runId": parent["runId"]})
         approved = self.decide(board, parent, parent["activeRequest"]["requestId"], helpers=[{
-            "requestId": "helper", "task": "Do helper work", "cwd": str(self.workdir()),
-            "executionWorkspace": {"kind": "worktree", "access": "write"},
+            "title": "helper", "task": "Do helper work", "cwd": str(self.workdir()),
+            "workspace": {"kind": "worktree", "access": "write"},
         }])
         child_id = approved["children"][0]["taskId"]
         first = self.claim(board, claim_request_id="helper-first", run_id=child_id)
         self.finish_turn(board, first, disposition="attention", result_mutator=lambda result: result.update(
             nativeSession={"storageOwner": "hey-my-buddy-micro-task"}))
         parent = board.call("workflow_get", {"runId": parent["runId"]})
-        self.decide(board, parent, parent["activeRequest"]["requestId"], command_id="approve-helper")
+        self.decide(board, parent, parent["activeRequest"]["requestId"])
         second = self.claim(board, claim_request_id="helper-native", run_id=child_id)
         self.assertEqual(second["claim"]["turn"]["resumeMode"], "native-session")
         self.refuse(board, second)

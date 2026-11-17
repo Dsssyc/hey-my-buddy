@@ -139,7 +139,7 @@
 
 | 文件、函数 | 字段、当前文字（中） | 读者 |
 | --- | --- | --- |
-| `blackboard/tasks/storage.py:inspect`，常量 `LABELS` | `categories[].label`: harnesses → Harness 私有会话；zcode → ZCode 旧私有主目录；workspaces → 受管检出；runtimes → 运行时；backup → 上次升级之前的看板；durable → 看板与记录 | 控制台、Host 的 storage-plan |
+| `blackboard/tasks/storage.py:inspect`，常量 `LABELS` | `categories[].label`: harnesses → Harness 私有会话；zcode → ZCode 旧私有主目录；workspaces → 受管检出；runtimes → 运行时；backup → 上次升级之前的黑板；durable → 黑板与记录 | 控制台、Host 的 storage-plan |
 | `blackboard/tasks/macro_tasks.py:_markers`，`MARKER_LABELS` | `markers[].label`: dispatch 派发、decide 决定、continue 续接、integrate 整合、accept 验收、reject 验收问题、conclude 结论、cancel 取消、takeover 接管 | 控制台 |
 | 同文件 `_summary/_timeline_row`，`UNTITLED` | `title`、`fixesTitle`: 未命名微任务 | 控制台、Host |
 
@@ -283,11 +283,11 @@
 
 2026-10-18，Host 给第 2 项写说明之前清点了读写点，改成上表：原来的第 2 项拆成 2a 与 2b，各自可以单独审；路由请求的形式移到第 3 项，因为路由关注的原因不总是决策的原因。派发前校验 buddy 失败时（`workflow.py:prepare_dispatch`），Host 指定的 buddy 根本没有决策；路由选出的 buddy 有决策，但失败的是校验，不是决策。这些要和决策的原因一起设计。同日开发者定：Host、用户与 Router 写的文字叫备注（note），不叫 reason（术语表“备注 / note”）。0.46.0 本来就改契约，入口参数、记录里的列与键、事件字段与 Worker 回合输入一起改，不留别名；黑板不再替缺失的备注写缺省句子，谁做的由记录里的操作者与停止发起方说明。2b 因此改为上表那样。控制台的任务详情要求请求的 summary 与结论的 note 是字符串（`apps/console/src/task-detail/parse.ts`），批次二改了它们之后，0.46.0 只能和批次三的控制台一起装。
 
-同日 Host 给第 3 项写说明之前清点了读写点，并在日常看板的私有副本（先跑当时的 24 → 25）与样板库上数了存量，把第 3 项拆成上表的 3a 与 3b：决策原因一改列，路由表、路由关注与边界顶层的原因都读它，必须同一步改，所以 3a 做全部存储，要在日常副本上演练升级；3b 只改边界自己的文字与模板，没有存储，日常副本与样板库里也没有缓存了边界的命令回复。日常副本上 46 个决策都由 Router 完成，决策原因就是 Router 回答里的文字，路由关注的请求为 0；样板库只有 1 个程序直接选定的决策。Router 回答改名 note 之后，按回答的键读已存回答的有三处：`decision.py:health_summary` 与 `router_history.py:_abstained` 用键集合认弃选，`macro_tasks.py` 把已存回答再校验一遍。继续按键读，旧回答与新回答就是两种读法，所以 Router 的文字在采用时存进决策自己的 note 列，升级按写入路径把已采用回答的文字移进去，读的一方只读这一列；原始输出与回执是执行证据，不改。`router_history.py` 还在运行时把没有结果事实的决策事件按旧形状分类（`_record_rows`、`_classify_record`、`unattributed_records`）：日常副本上 46 个决策都有结果事实，样板库没有 Router 调用，这条路没有要读的存量；批次二的源码读日常副本时，它反把这 46 个决策全部列为无法归属（`unattributedCount` 为 46），因为它们的冻结请求里没有 routerBuddyId。这条路随 3a 删除，Router 历史只读 router_outcomes。
+同日 Host 给第 3 项写说明之前清点了读写点，并在日常黑板的私有副本（先跑当时的 24 → 25）与样板库上数了存量，把第 3 项拆成上表的 3a 与 3b：决策原因一改列，路由表、路由关注与边界顶层的原因都读它，必须同一步改，所以 3a 做全部存储，要在日常副本上演练升级；3b 只改边界自己的文字与模板，没有存储，日常副本与样板库里也没有缓存了边界的命令回复。日常副本上 46 个决策都由 Router 完成，决策原因就是 Router 回答里的文字，路由关注的请求为 0；样板库只有 1 个程序直接选定的决策。Router 回答改名 note 之后，按回答的键读已存回答的有三处：`decision.py:health_summary` 与 `router_history.py:_abstained` 用键集合认弃选，`macro_tasks.py` 把已存回答再校验一遍。继续按键读，旧回答与新回答就是两种读法，所以 Router 的文字在采用时存进决策自己的 note 列，升级按写入路径把已采用回答的文字移进去，读的一方只读这一列；原始输出与回执是执行证据，不改。`router_history.py` 还在运行时把没有结果事实的决策事件按旧形状分类（`_record_rows`、`_classify_record`、`unattributed_records`）：日常副本上 46 个决策都有结果事实，样板库没有 Router 调用，这条路没有要读的存量；批次二的源码读日常副本时，它反把这 46 个决策全部列为无法归属（`unattributedCount` 为 46），因为它们的冻结请求里没有 routerBuddyId。这条路随 3a 删除，Router 历史只读 router_outcomes。
 
-同日 Host 给第 4 项写说明之前清点了读写点，并在日常看板的私有副本上数了存量，更正了上表第 4 项：原来写的“预检重试与 ZCode、DSH 写的英文存进 `tasks.queue_reason`”不对。进度里的 `waitingReason` 只有执行进程等待控制观察时的代码 `router-input-unknown`，每次 worker 启动还送一次 null，副本上 239 个 `attempt.waiting` 事件全是 null；ZCode 的英文在活动里，DSH 的同名字段从不赋值。副本上 7 条消息只有一条带原因：执行结束时服务把仍在排队的问题标成 `the attempt ended before this question could be delivered`，十几秒后导入问询日志才记下回答，于是一条已回答的消息带着“没送到”的原因；另有 3 条 0.43.0 之前的问题在已结束的执行上一直是 queued（执行结束时清理排队问题的写法是 0.43.0 才有的）。
+同日 Host 给第 4 项写说明之前清点了读写点，并在日常黑板的私有副本上数了存量，更正了上表第 4 项：原来写的“预检重试与 ZCode、DSH 写的英文存进 `tasks.queue_reason`”不对。进度里的 `waitingReason` 只有执行进程等待控制观察时的代码 `router-input-unknown`，每次 worker 启动还送一次 null，副本上 239 个 `attempt.waiting` 事件全是 null；ZCode 的英文在活动里，DSH 的同名字段从不赋值。副本上 7 条消息只有一条带原因：执行结束时服务把仍在排队的问题标成 `the attempt ended before this question could be delivered`，十几秒后导入问询日志才记下回答，于是一条已回答的消息带着“没送到”的原因；另有 3 条 0.43.0 之前的问题在已结束的执行上一直是 queued（执行结束时清理排队问题的写法是 0.43.0 才有的）。
 
-2026-10-18，参考文档对照批次二源码核对时又看到两处漏项。一是 `await` 在 Host 边界给出的命令模板没跟上第 2b 项：decline 模板仍带 `reason`，指定 buddy 的 continue 模板缺 `note`，Host 照发会被拒（Host 用看板自己的校验复现）；已作为第 2b 项的返修提交。二是用户偏好里用户自己写的说明仍叫 `reason`（`evaluation_preferences.reason`、`preferenceChanges[].reason`、`preferences[].reason`，控制台的 `policy.ts` 与 `draft.ts`），照术语表应是备注 note，第 2b 项的清点没有列到它。它改存储，跟着这一次待执行的 24 → 25 升级做（空串转 null，与其他备注一致）；控制台一侧与批次三的文件重叠，等批次三合进批次二之后作为一个微任务做，在装 0.46.0 之前完成。两处都已做完：模板的返修验收 `int-5aa541eb`，偏好的备注（连同路由健康汇总的原因对象）验收 `int-769037cc`，见[验收记录](../../acceptance/structured-reasons/structured-reasons.md)。
+2026-10-18，参考文档对照批次二源码核对时又看到两处漏项。一是 `await` 在 Host 边界给出的命令模板没跟上第 2b 项：decline 模板仍带 `reason`，指定 buddy 的 continue 模板缺 `note`，Host 照发会被拒（Host 用黑板自己的校验复现）；已作为第 2b 项的返修提交。二是用户偏好里用户自己写的说明仍叫 `reason`（`evaluation_preferences.reason`、`preferenceChanges[].reason`、`preferences[].reason`，控制台的 `policy.ts` 与 `draft.ts`），照术语表应是备注 note，第 2b 项的清点没有列到它。它改存储，跟着这一次待执行的 24 → 25 升级做（空串转 null，与其他备注一致）；控制台一侧与批次三的文件重叠，等批次三合进批次二之后作为一个微任务做，在装 0.46.0 之前完成。两处都已做完：模板的返修验收 `int-5aa541eb`，偏好的备注（连同路由健康汇总的原因对象）验收 `int-769037cc`，见[验收记录](../../acceptance/structured-reasons/structured-reasons.md)。
 
 每个 Python 微任务用 `uv run --frozen python -m hey_my_buddy.cli.checks <对应 tests/python 文件或目录>`：1 覆盖 harness/catalog/health/store 升级，2 覆盖 tasks/workflow/结论/CLI/store 升级，3a 覆盖 routing/释放/路由关注/store 升级，3b 覆盖 routing/tasks/CLI，4 覆盖 inquiry/store/protocol，5 覆盖 console/tasks/CLI/protocol。源码中不存在的候选测试路径由实施者在相同 owning 测试目录新增，不直接起测试进程。共享文件串行落地，Host 最后跑完整 Python 检查；控制台跑 `npm --prefix apps/console test` 与 `npm --prefix apps/console run test:browser`。实现验证不在本计划回合运行。
 
@@ -295,10 +295,10 @@
 
 Host 在日常规模的私有 24 副本上演练升级，先用现有样板/复制流程做身份与路径重绑定，不能让副本指到日常工作区或原生会话。记录总耗时、事务开始到提交耗时、每张受影响表的前后行数、转换数/history 数、FK/完整性结果与内容/摘要保全；出现归属不明即失败，修转换器重演，不带未知分支安装。Host 在 `docs/acceptance/` 记录实测；本计划不虚构计数或时长，文档更新也由 Host 负责。
 
-本回合只运行 `uv run --frozen python -m hey_my_buddy.cli.checks tests/python/cli/test_repository_hygiene.py`，清除 AGENTS 指定的继承状态/运行时/credential/虚拟环境变量并令 uv 离线。无日常看板、原生探针、联网或模型调用，不改写入范围之外的文件。
+本回合只运行 `uv run --frozen python -m hey_my_buddy.cli.checks tests/python/cli/test_repository_hygiene.py`，清除 AGENTS 指定的继承状态/运行时/credential/虚拟环境变量并令 uv 离线。无日常黑板、原生探针、联网或模型调用，不改写入范围之外的文件。
 
 ## 7. 核对差异与待开发者定的事
 
 与审查文字不符的两点：`router_boundary_data.py:_CHANGED_CODES` 当前没有 router-unavailable，它列 router-input-changed、router-out-of-bounds、router-dispatch-unverified、workflow-routing-fenced、ACCOUNT_BINDING_CHANGED、BUDDY_CONFLICT、router-input-too-large；`router_failover.py:classify_outcome` 只检查 code 的类型，分类用 changed/cancelled/answer_valid/shutdown_confirmed 等事实，不按 router-unavailable 值分类。因此 inspection/problem 的粗 router-unavailable 可以一次改为细代码，边界 kind 不变；真正仍被逻辑消费的 router-out-of-bounds 保留为原因 code，用参数细分，不新增分类列。另一个是 `child_settled` 确有 `_requeue(reason="authorized helpers settled")`，但 `_requeue` 函数体完全没有读 reason，后面的 workflow.auto_continued 事件也没有 reason；因此删除无用参数，不新增原因或迁移。这些是源码事实，不是推断。
 
-其余补正已核对相符：释放/中断说明进入决策，路由副本常存错误代码，dispatch 过大三处写入，越界六值，BUDDY_UNAVAILABLE.details 带目录原因/处置，buddies 不可用说明进入冻结模型输入。本回合未读日常看板，归属是否全部可证、实际转换计数和演练耗时尚未知，留给上述副本演练；不据此预加历史分支。待开发者定的事：没有。
+其余补正已核对相符：释放/中断说明进入决策，路由副本常存错误代码，dispatch 过大三处写入，越界六值，BUDDY_UNAVAILABLE.details 带目录原因/处置，buddies 不可用说明进入冻结模型输入。本回合未读日常黑板，归属是否全部可证、实际转换计数和演练耗时尚未知，留给上述副本演练；不据此预加历史分支。待开发者定的事：没有。

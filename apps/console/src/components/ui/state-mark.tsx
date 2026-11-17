@@ -3,13 +3,17 @@ import { cn } from "cn"
 
 /**
  * The fixed marks a state is drawn with (ADR-029 clause 8): a filled circle is
- * what runs or is on, a diamond waits for a hand, a check is accepted, a cross
- * failed, and a hollow circle has not started or is absent. The same state is
+ * what runs or is on, a filled diamond waits for the Host or Lead, an outlined
+ * orange diamond waits for acceptance, two vertical strokes mean paused,
+ * a check is accepted, a cross failed, and a hollow circle has not started
+ * or is absent. The same state is
  * the same mark in a list, on the timeline and in a detail.
  */
 const marks = {
   live: <circle cx="6" cy="6" r="4.5" className="fill-foreground" />,
+  paused: <path d="M4 2.2v7.6M8 2.2v7.6" fill="none" strokeWidth="1.8" strokeLinecap="round" className="stroke-foreground" />,
   hand: <path d="M6 .8 11.2 6 6 11.2.8 6Z" className="fill-hand-mark" />,
+  review: <path d="M6 .8 11.2 6 6 11.2.8 6Z" fill="none" strokeWidth="1.5" className="stroke-hand-mark" />,
   done: <path d="M2 6.4 4.8 9 10 3.2" fill="none" strokeWidth="1.8" className="stroke-past" />,
   fail: <path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" fill="none" strokeWidth="1.8" className="stroke-fail" />,
   idle: <circle cx="6" cy="6" r="4" fill="none" strokeWidth="1.5" className="stroke-ink3" />,
@@ -17,16 +21,17 @@ const marks = {
 
 function StateMark({
   kind,
+  breathing = kind === "live",
   className,
   ...props
-}: Omit<React.ComponentProps<"svg">, "children"> & { kind: keyof typeof marks }) {
+}: Omit<React.ComponentProps<"svg">, "children"> & { kind: keyof typeof marks; breathing?: boolean }) {
   return (
     <svg
       data-slot="state-mark"
       data-kind={kind}
       viewBox="0 0 12 12"
       aria-hidden="true"
-      className={cn("size-3 shrink-0 overflow-visible", kind === "live" && "state-breathe", className)}
+      className={cn("size-3 shrink-0 overflow-visible", breathing && "state-breathe", className)}
       {...props}
     >
       {marks[kind]}

@@ -1,7 +1,7 @@
 [project]
 name = "hey-my-buddy"
-version = "0.54.1"
-description = "A durable agent blackboard with independent workers and C-Two RPC"
+version = "0.69.7"
+description = "A local blackboard where a Host buddy delegates micro tasks to Worker buddies in other coding harnesses and accepts every result itself."
 requires-python = ">=3.12,<3.13"
 dynamic = ["readme"]
 license = "MIT"
@@ -15,12 +15,13 @@ classifiers = [
     "Topic :: Software Development",
 ]
 dependencies = [
-    "c-two==0.9.0",
+    "c-two==0.10.1",
     "portalocker>=3,<4",
     "psutil>=7,<8",
     "pywin32; sys_platform == 'win32'",
     "pydantic>=2,<3",
     "zstandard>=0.25,<1",
+    "pyyaml>=6,<7",
 ]
 
 [project.urls]
@@ -34,7 +35,7 @@ hey-my-buddy = "hey_my_buddy.install.package_install:main"
 dev = ["distlib>=0.4,<0.5"]
 
 [build-system]
-requires = ["hatchling>=1.27", "hatch-fancy-pypi-readme==25.1.0", "portalocker>=3,<4"]
+requires = ["hatchling==1.32.4", "hatch-fancy-pypi-readme==25.1.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.metadata.hooks.fancy-pypi-readme]

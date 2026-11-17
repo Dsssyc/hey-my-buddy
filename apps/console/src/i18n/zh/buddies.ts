@@ -1,12 +1,32 @@
+import routerErrors from "./router-errors";
+import routerWork from "./router-work";
+import domainTree from "./domain-tree";
+import routerProfiles from "./router-profiles";
+import modelProfile from "./model-profile";
 import harness from "./buddies-harness";
 import roles from "./buddies-roles";
+import evaluation from "./evaluation";
+import maintenance from "./maintenance";
 
 /** The Buddy page: the catalogue of buddies and the roles they hold. */
 export default {
+  routerWork, domainTree, routerProfiles, routerErrors,
+  maintenance,
+  modelProfile,
+  profile: {
+    choose: "选择 buddy",
+    search: "搜索 buddy",
+    none: "未指定",
+    noCandidates: "没有已启用、可用且具备强制只联网档位的 buddy",
+    dataFlow: "构建画像时，模型名称与对应关系候选会发给画像 buddy 的模型提供方；画像 buddy 可以联网查找公开资料。",
+  },
   sections: {
+    harness: "Harness",
+    models: "模型",
+    evaluation: "评价",
     label: "Buddy 的分区",
-    catalog: "目录",
-    roles: "角色",
+    router: "Router",
+    summary: "{{n}} 个 harness · 启用 {{enabled}} / {{total}}",
   },
   attention: {
     upgrade: "Router 设置需要升级",
@@ -21,16 +41,12 @@ export default {
     pin: "固定",
     exclude: "排除",
   },
-  preferenceHint: {
-    prefer: "路由时先考虑",
-    pin: "路由时只在固定的 buddy 里选",
-    exclude: "不参与路由",
-  },
   unsaved: "未保存",
   loginExpired: "浏览器授权已失效，操作未提交；请重新授权。",
   models: {
+    viewHarness: "查看环境",
     search: "搜索 buddy",
-    enabledOnly: "只看已启用",
+    enabledOnly: "仅显示已启用",
     showUnavailable: "显示不可用",
     enabled: "启用",
     discover: "发现模型",
@@ -38,7 +54,6 @@ export default {
     columns: {
       buddy: "Buddy",
       effort: "推理强度",
-      concurrency: "并发",
     },
     fold: "收起 {{name}}",
     unfold: "展开 {{name}}",
@@ -52,10 +67,12 @@ export default {
     },
     unavailable: "不可用",
     pending: "待确认",
-    pendingSince: "待确认，自 {{time}}",
+    pendingHintNoTime: "最近一次读取未见此模型，复查前仍可使用；首次缺席满一小时后复查，仍缺席才记为不可用。无需操作。",
+    pendingHint: "自 {{time}} 起读取未见此模型，复查前仍可使用；首次缺席满一小时后复查，仍缺席才记为不可用。无需操作。",
+    noProfile: "已启用；尚未构建画像。",
     fresh: "新",
     occupancyUnknown: "占用未知",
-    occupancy: "占用 {{active}}，上限 {{limit}}",
+    occupancy: "占用 {{active}} / {{limit}}",
     reading: "正在读取不可用的 buddy",
     retry: "重试",
     limit: "只显示前 {{n}} 个不可用的 buddy；更早的请用搜索查找。",
@@ -63,36 +80,41 @@ export default {
     discoveredNone: "没有新的 buddy",
     refused: "连接中断或没有写入资格，暂时不能发现模型；草稿仍保留。",
     empty: {
-      none: "还没有模型",
-      noneHint: "点“发现模型”，查找本机的 Harness 能用的模型。",
+      none: "暂无模型",
+      noneHint: "使用“发现模型”查找本机 harness 可用的模型。",
       filtered: "没有匹配的模型",
-      filteredHint: "换一个搜索词，或者去掉筛选。",
+      filteredHint: "更换搜索词或清除筛选。",
     },
   },
   pane: {
+    alias: "别名",
     preference: "偏好",
-    noteNone: "选择偏好后可填写备注",
+    noteNone: "选择偏好后可填写理由",
     enable: "启用 {{effort}}",
     buddyPreference: "{{effort}} 的偏好",
-    buddyNote: "{{effort}} 的偏好备注",
-    model: "模型",
+    buddyNote: "{{effort}} 的偏好理由",
+    model: "模型服务",
+    status: "状态",
+    firstMissing: "首次缺席",
+    samples: "计入评价",
+    sampleCount: "{{n}} 次",
     available: "可用",
     unavailable: "不可用",
     pending: "待确认",
     concurrency: "并发",
     concurrencyLimit: "并发上限",
     occupancy: "占用 {{n}}",
-    occupancyUnknown: "占用未知",
     range: "需要正整数",
-    note: "备注",
+    note: "理由",
     locked: {
       session: "浏览器授权已失效，重新授权后可以修改",
       saving: "正在保存或等待核对，暂时不能修改",
       retired: "已不可用，不能启用",
-      pinBuddy: "这个 buddy 不可用或未启用，不能固定",
+      pinBuddy: "该 buddy 不可用或未启用，不能固定",
     },
   },
   /** The two other views keep their texts in files of their own. */
   harness,
   roles,
+  evaluation,
 };

@@ -8,10 +8,11 @@ import { screenshots as shots, expectNoSidewaysScroll, open, settle, test } from
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
 const captures = fileURLToPath(new URL("../../../tmp/filter-row", import.meta.url));
+const groupCaptures = fileURLToPath(new URL("../../../tmp/macro-list-groups", import.meta.url));
 
 const words = [
-  { locale: "zh-CN", list: "宏任务列表", macro: "宏任务", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目、Host 或编号", noMatch: "没有匹配的宏任务", empty: "还没有宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，更新排序" },
-  { locale: "en-US", list: "Macro task list", macro: "Macro tasks", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search title, project, Host or ID", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", stop: "Stop macro task", time: "Time statistics", update: "New activity; update order" },
+  { locale: "zh-CN", list: "宏任务列表", macro: "宏任务", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目或 ID", noMatch: "没有匹配的宏任务", empty: "暂无宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", end: "结束", time: "时间统计", update: "有新的活动，更新排序" },
+  { locale: "en-US", list: "Macro task list", macro: "Macro tasks", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search titles, projects or IDs", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", end: "End", time: "Time statistics", update: "New activity; update order" },
 ] as const;
 
 const countGroups = [
@@ -69,6 +70,8 @@ async function photographMidMotion(page: Page, name: string, trigger: Locator, s
           const style = getComputedStyle(target, effect.pseudoElement);
           return [{ slot: target.dataset.slot ?? "", height: target.getBoundingClientRect().height,
             naturalHeight: parseFloat(style.getPropertyValue("--radix-collapsible-content-height")), opacity: Number(style.opacity),
+            transform: style.transform,
+            animation: animation instanceof CSSAnimation ? animation.animationName : null,
             transition: animation instanceof CSSTransition ? animation.transitionProperty : null,
             progress: effect.getComputedTiming().progress, frames: effect.getKeyframes() }];
         }),
@@ -85,12 +88,13 @@ async function photographMidMotion(page: Page, name: string, trigger: Locator, s
       expect(new Set(sample!.frames.map(frame => frame.backgroundColor)).size).toBeGreaterThan(1);
     }
     if (name === "mid-tab-select") {
-      const sample = motion.samples.find(item => item.slot === "tabs-trigger" && item.transition === "opacity");
-      expect(sample, "the selected tab fades in its underline").toBeDefined();
-      expect(sample!.opacity).toBeGreaterThan(0);
-      expect(sample!.opacity).toBeLessThan(1);
+      const sample = motion.samples.find(item => item.slot === "tabs-trigger" && item.animation === "ink-glide");
+      expect(sample, "the selected tab glides its underline").toBeDefined();
+      expect(sample!.opacity).toBe(1);
+      expect(sample!.transform).not.toBe("none");
+      expect(new Set(sample!.frames.map(frame => frame.transform)).size).toBeGreaterThan(1);
     }
-    const contentSlot = name.startsWith("mid-group-") ? "collapsible-content" : name.startsWith("mid-list-") ? "macro-sidebar" : null;
+    const contentSlot = name.startsWith("mid-group-") || name.startsWith("mid-more-") ? "collapsible-content" : name.startsWith("mid-list-") ? "macro-sidebar" : null;
     if (contentSlot) {
       const sample = motion.samples.find(item => item.slot === contentSlot);
       expect(sample, `${name} animates ${contentSlot}`).toBeDefined();
@@ -111,6 +115,10 @@ async function photographMidMotion(page: Page, name: string, trigger: Locator, s
     await expectNoSidewaysScroll(page);
     await mkdir(shots, { recursive: true });
     await page.screenshot({ path: join(shots, `actual-${name}-en-US-1280-light.png`), animations: "allow" });
+    if (name.startsWith("mid-more-")) {
+      await mkdir(groupCaptures, { recursive: true });
+      await scope.screenshot({ path: join(groupCaptures, "en-US-1280-light-more-mid-motion.png"), animations: "allow" });
+    }
   } finally {
     await capture.evaluate(state => state.release());
     await capture.dispose();
@@ -135,7 +143,7 @@ async function assertListGeometry(page: Page, width: number) {
       if (box.left < frame.left - 1 || box.right > frame.right + 1) offenders.push(`${element.className}: outside list`);
       if (element.scrollWidth > element.clientWidth + 1 && element.dataset.slot !== "macro-entry") offenders.push(`${element.dataset.slot}: clipped ${element.scrollWidth}/${element.clientWidth}`);
     }
-    for (const element of node.querySelectorAll<HTMLElement>("[data-slot=macro-entry] time, [data-slot=macro-entry-counts], [data-slot=macro-group-heading] span, [data-slot=macro-filter-tabs] [data-slot=tabs-trigger], [data-slot=macro-filter-count], [data-slot=macro-list-total]")) {
+    for (const element of node.querySelectorAll<HTMLElement>("[data-slot=macro-group-heading] span, [data-slot=macro-filter-tabs] [data-slot=tabs-trigger], [data-slot=macro-filter-count], [data-slot=macro-list-total]")) {
       if (element.scrollWidth > element.clientWidth + 1) offenders.push(`${element.className}: text clipped`);
     }
     return offenders;
@@ -143,7 +151,7 @@ async function assertListGeometry(page: Page, width: number) {
   expect(errors).toEqual([]);
   const listBox = (await list.boundingBox())!;
   expect(listBox.width).toBeLessThanOrEqual(width);
-  expect(listBox.width).toBeGreaterThan(width === 390 ? 350 : 290);
+  expect(listBox.width).toBeGreaterThan(width === 390 ? 350 : 287);
   const viewport = list.locator("[data-slot=scroll-area-viewport]");
   const scrollWidth = await viewport.evaluate(node => ({ content: node.scrollWidth, frame: node.clientWidth }));
   expect(scrollWidth.content, "macro list rows fit the scroll viewport").toBeLessThanOrEqual(scrollWidth.frame + 1);
@@ -165,7 +173,9 @@ async function assertListGeometry(page: Page, width: number) {
   expect(metrics.search.height).toBeGreaterThanOrEqual(32);
   expect(metrics.tab.height).toBeGreaterThanOrEqual(32);
   expect(metrics.group.font).toBeGreaterThanOrEqual(12);
-  expect(metrics.entry.font).toBeGreaterThanOrEqual(14);
+  expect(metrics.group.font).toBe(14);
+  expect(metrics.entry.font).toBe(13);
+  expect(metrics.entry.height).toBe(28);
 }
 
 async function assertSelectedTabUnderline(page: Page) {
@@ -248,7 +258,8 @@ async function assertFilterRow(page: Page, w: typeof words[number], counts: type
       const name = metrics.tabs[index]!;
       if (name.name === field.full && !name.clipped) continue;
       await tab.locator("[data-slot=macro-filter-name]").hover();
-      await expect(page.getByRole("tooltip"), `${w.locale} ${field.full}: the tooltip gives the full name`).toHaveText(field.full);
+      await page.waitForTimeout(700);
+      await expect(page.getByRole("tooltip")).toHaveCount(0);
       await page.mouse.move(width - 8, 8);
       await expect(page.getByRole("tooltip")).toBeHidden();
     }
@@ -261,8 +272,9 @@ async function assertHeaderGeometry(page: Page) {
   const header = page.locator("[data-slot=macro-overview-header]");
   await expect(header).toBeVisible();
   await expectNoSidewaysScroll(page);
-  const clipped = await header.evaluate(node => [...node.querySelectorAll<HTMLElement>("dt, dd, button:not([data-slot=macro-menu-button])")]
-    .filter(element => element.getClientRects().length && (element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1))
+  // The identifier's hit area extends beyond its 20px fact row; measure its text for clipping.
+  const clipped = await header.evaluate(node => [...node.querySelectorAll<HTMLElement>("dt, dd:not(:has([data-slot=copyable-identifier])), button, [data-slot=copyable-identifier] > span")]
+    .filter(element => !element.closest('[data-slot="macro-goal-fact"]') && element.getClientRects().length && (element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1))
     .map(element => element.textContent?.trim().slice(0, 40)));
   expect(clipped, "macro header text is clipped").toEqual([]);
   const boxes = await header.locator(":scope > div").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().toJSON()));
@@ -271,11 +283,11 @@ async function assertHeaderGeometry(page: Page) {
     "header identity and controls do not overlap").toBe(true);
   const escaped = await header.evaluate(node => {
     const frame = node.getBoundingClientRect();
-    return [...node.querySelectorAll<HTMLElement>("[data-slot=macro-menu-button], dl dd")]
+    return [...node.querySelectorAll<HTMLElement>("dl dd")]
       .filter(item => { const box = item.getBoundingClientRect(); return box.left < frame.left - 1 || box.right > frame.right + 1; })
       .map(item => item.textContent?.trim());
   });
-  expect(escaped, "header counts and controls stay in the header").toEqual([]);
+  expect(escaped, "header counts stay in the header").toEqual([]);
   const titleSize = await header.locator("h2").evaluate(node => parseFloat(getComputedStyle(node).fontSize));
   expect(titleSize).toBeGreaterThanOrEqual(18);
 }
@@ -291,8 +303,8 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await expect(page).toHaveURL(new RegExp(`#tasks/${B}$`));
       const list = page.locator("[data-slot=macro-list]");
       await expect(list).toBeVisible();
-      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(3);
-      await expect(list.locator("[data-slot=macro-group-heading]")).toHaveCount(3);
+      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(8);
+      await expect(list.locator("[data-slot=macro-group-heading]")).toHaveCount(4);
       await expect(list.locator("[data-slot=macro-group-heading]").last()).toHaveAttribute("aria-expanded", "false");
       await assertListGeometry(page, width);
       await assertSelectedTabUnderline(page);
@@ -320,10 +332,10 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await expect(list.getByText(w.noMatch)).toBeVisible();
       await photograph(page, "unmatched", w.locale, width, theme);
       await list.getByRole("textbox", { name: w.search }).fill("");
-      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(3);
+      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(8);
 
       await list.locator("[data-slot=macro-group-heading]").last().click();
-      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(4);
+      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(9);
       await list.locator("[data-slot=macro-group-heading]").last().click();
       await list.locator(`[data-macro-task-id="${A}"] [data-slot=macro-entry]`).click();
       await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
@@ -337,19 +349,22 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await page.keyboard.press("Escape");
       await expect(page.getByRole("dialog", { name: w.time })).toBeHidden();
 
-      await header.getByRole("button", { name: w.more }).click();
-      await expect(page.getByRole("button", { name: w.stop })).toBeVisible();
+      if (width === 390 && !await list.isVisible()) await header.getByRole("button", { name: new RegExp(w.macro) }).click();
+      const selected = list.locator(`[data-macro-task-id="${A}"][data-selected="true"]`);
+      await selected.hover();
+      await selected.locator('[data-slot="macro-menu-button"]').click();
+      await expect(page.getByRole("menuitem", { name: w.end })).toBeVisible();
       await photograph(page, "menu", w.locale, width, theme);
-      await page.getByRole("button", { name: w.stop }).click();
+      await page.getByRole("menuitem", { name: w.end }).click();
       await expect(page.getByRole("dialog")).toBeVisible();
-      await photograph(page, "stop-confirm", w.locale, width, theme);
+      await photograph(page, "end-confirm", w.locale, width, theme);
       await page.keyboard.press("Escape");
       await expect(page.getByRole("dialog")).toBeHidden();
 
       if (width === 1280) {
         await list.getByRole("button", { name: w.collapse }).click();
       } else {
-        await header.getByRole("button", { name: /宏任务|Macro tasks/ }).click();
+        if (!await list.isVisible()) await header.getByRole("button", { name: new RegExp(w.macro) }).click();
         await list.getByRole("button", { name: w.collapse }).click();
       }
       await expect(list).toBeHidden();
@@ -361,9 +376,13 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
 
     test("shows an empty board and preserves existing rows after an interrupted read", async ({ page }) => {
       await themeBeforeLoad(page, theme);
-      await page.route(/\/api\/macro-tasks(?:\?|$)/, route => route.fulfill({ json: {
-        macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 21, changed: false,
-      } }));
+      await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
+        const response = await route.fetch();
+        const { defaults } = await response.json();
+        await route.fulfill({ json: {
+          defaults, groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, cursor: 21, changed: false,
+        } });
+      });
       await open(page, "#tasks");
       await expect(page.getByRole("heading", { name: w.empty })).toBeVisible();
       await expect(page.locator("[data-slot=macro-first-use]")).toBeVisible();
@@ -371,21 +390,61 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await photograph(page, "empty", w.locale, width, theme);
       await page.unrouteAll();
       await page.reload();
-      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(3);
+      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(8);
       await page.route(/\/api\/macro-tasks(?:\?|$)/, route => route.fulfill({ json: { malformed: true } }));
       await expect(page.getByRole("alert").filter({ hasText: w.offline })).toBeVisible({ timeout: 7000 });
       await expect(page.locator("[data-slot=macro-offline]")).toBeVisible();
-      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(3);
+      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(8);
       await expect(page.getByRole("button", { name: w.retry })).toBeVisible();
       await photograph(page, "offline", w.locale, width, theme);
     });
   });
 }
 
+for (const { locale, width, theme } of [
+  { locale: "zh-CN", width: 1280, theme: "dark" },
+  { locale: "zh-CN", width: 1280, theme: "light" },
+  { locale: "en-US", width: 390, theme: "dark" },
+] as const) test.describe(`grouped macro list ${locale} ${width}px ${theme}`, () => {
+  test.use({ locale, viewport: { width, height: width === 390 ? 844 : 800 }, reducedMotion: "reduce" });
+  test("shows every group first page and appends only the chosen group's next page", async ({ page }) => {
+    await themeBeforeLoad(page, theme);
+    await open(page, "#tasks");
+    const list = page.locator("[data-slot=macro-list]");
+    await expect(list.locator("[data-slot=macro-group]")).toHaveCount(4);
+    await expect(list.locator("[data-slot=macro-group]").last()).toContainText(locale === "zh-CN" ? "独立微任务" : "Standalone micro tasks");
+    const group = list.locator("[data-slot=macro-group]").filter({ has: page.locator(`[data-macro-task-id="${A}"]`) });
+    await expect(group.locator("[data-slot=macro-entry]")).toHaveCount(5);
+    await expect(group.locator("[data-slot=macro-group-more]")).toBeVisible();
+    await expect(list.locator("[data-slot=macro-entry-counts]")).toHaveCount(0);
+    await assertListGeometry(page, width);
+    await mkdir(groupCaptures, { recursive: true });
+    await page.screenshot({ path: join(groupCaptures, `${locale}-${width}-${theme}-initial.png`), animations: "disabled" });
+    await list.screenshot({ path: join(groupCaptures, `${locale}-${width}-${theme}-initial-list.png`), animations: "disabled" });
+    const read = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/macro-tasks" && url.searchParams.get("group") === "project:synthetic-preview-alpha" && url.searchParams.has("before");
+    });
+    await group.locator("[data-slot=macro-group-more]").click();
+    const response = await read;
+    expect(response.ok()).toBe(true);
+    const data = await response.json();
+    expect(data.groups).toHaveLength(1);
+    expect(data.groups[0].macroTasks).toHaveLength(5);
+    await expect(group.locator("[data-slot=macro-entry]")).toHaveCount(10);
+    await expect(group.locator("[data-slot=macro-group-more]")).toHaveCount(0);
+    await expect(list.locator("[data-slot=macro-group]").first().locator("[data-slot=macro-entry]")).toHaveCount(1);
+    await expectNoSidewaysScroll(page);
+    await settle(page);
+    await page.screenshot({ path: join(groupCaptures, `${locale}-${width}-${theme}-more.png`), animations: "disabled" });
+    await list.screenshot({ path: join(groupCaptures, `${locale}-${width}-${theme}-more-list.png`), animations: "disabled" });
+  });
+});
+
 for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
   test.describe(`macro text clipping, ${width}px, ${theme}`, () => {
     test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 800 }, reducedMotion: "reduce" });
-    test("fades only clipped project names and titles and reveals their full text on hover", async ({ page }) => {
+    test("fades clipped project names and titles without full-text tooltips", async ({ page }) => {
       const labels = [
         { id: A, project: "c-two", title: "检查名称", clipped: false },
         { id: B, project: "c-two-research-and-development-for-multi-agent-console-project-name-that-does-not-fit", title: "检查宏任务列表中项目名称与标题被截断时的渐隐、全文提示以及完整的悬停显示", clipped: true },
@@ -394,13 +453,15 @@ for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
       await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
         const response = await route.fetch();
         const data = await response.json();
-        const original = data.macroTasks.find((row: { kind: string }) => row.kind === "macro-task");
-        data.macroTasks = labels.map(({ id, project, title }, index) => ({ ...original,
-          macroTaskId: id, project: { ...original.project, id: `project-${index}`, label: project },
-          title, titleSource: "macro-task", lastActivitySeq: 100 - index,
-        }));
+        const original = data.groups[0].macroTasks[0];
+        data.groups = labels.map(({ id, project, title }, index) => {
+          const location = { ...original.project, id: `project-${index}`, label: project };
+          return { id: `project:${location.id}`, project: location, total: 1, nextCursor: null,
+            macroTasks: [{ ...original, macroTaskId: id, project: location,
+              title, titleSource: "macro-task", lastActivitySeq: 100 - index }] };
+        });
         data.totals = { all: 2, active: 2, host: 2, review: 2 };
-        data.nextCursor = null; data.changed = false;
+        data.changed = false;
         await route.fulfill({ response, json: data });
       });
       await open(page, "#tasks");
@@ -410,20 +471,18 @@ for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
         const group = list.locator("[data-slot=macro-group-heading]").nth(index);
         const entry = list.locator(`[data-macro-task-id="${id}"] [data-slot=macro-entry]`);
         for (const [button, text] of [[group, project], [entry, title]] as const) {
-          const label = button.getByText(text, { exact: true });
+          const label = button.locator('[data-slot="scrolling-title"]');
           const geometry = await label.evaluate(node => ({
             clipped: node.scrollWidth > node.clientWidth, width: node.clientWidth, contentWidth: node.scrollWidth,
           }));
           expect(geometry.clipped, `${text}: ${JSON.stringify(geometry)}`).toBe(clipped);
-          await expect(label).toHaveCSS("mask-image", clipped ? /linear-gradient/ : "none");
-          if (clipped) await expect(button).toHaveAttribute("aria-description", text);
-          else await expect(button).not.toHaveAttribute("aria-description");
+          await expect(label).toHaveCSS("text-overflow", "clip");
+          await expect(label).toHaveCSS("mask-image", clipped ? /linear-gradient.*28px/ : "none");
+          await expect(button).toHaveAccessibleName(new RegExp(text.slice(0, 12)));
+          await expect(button).not.toHaveAttribute("aria-description");
           await label.hover();
-          if (clipped) await expect(page.getByRole("tooltip")).toHaveText(text);
-          else {
-            await page.waitForTimeout(700);
-            await expect(page.getByRole("tooltip")).toHaveCount(0);
-          }
+          await page.waitForTimeout(700);
+          await expect(page.getByRole("tooltip")).toHaveCount(0);
           await page.mouse.move(width - 8, 8);
           await expect(page.getByRole("tooltip")).toBeHidden();
         }
@@ -485,7 +544,7 @@ for (const w of words) test.describe(`collapsed macro list heading in ${w.locale
       const response = await route.fetch();
       const data = await response.json();
       // No rows to select, so the collapsed detail side is the one that shows.
-      data.macroTasks = [];
+      data.groups = [];
       data.totals = { all: 123_456, active: 12, host: 12, review: 12 };
       await route.fulfill({ response, json: data });
     });
@@ -510,12 +569,14 @@ for (const w of words) test.describe(`stable macro task order in ${w.locale}`, (
     await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
       const response = await route.fetch();
       const data = await response.json();
-      const original = data.macroTasks.find((row: { kind: string }) => row.kind === "macro-task");
-      data.macroTasks = Array.from({ length: 24 }, (_, index) => ({ ...original, macroTaskId: id(index),
+      const original = data.groups[0].macroTasks[0];
+      const rows = Array.from({ length: 24 }, (_, index) => ({ ...original, macroTaskId: id(index),
         title: `Synthetic ${index}`, lastActivitySeq: updated && index === updated ? 1000 + index : 100 - index,
       })).sort((a, b) => b.lastActivitySeq - a.lastActivitySeq);
+      data.groups = [{ id: `project:${original.project.id}`, project: original.project, total: rows.length,
+        macroTasks: rows, nextCursor: null }];
       data.totals = { all: 24, active: 24, host: 24, review: 24 };
-      data.nextCursor = null; data.changed = false;
+      data.changed = false;
       await route.fulfill({ response, json: data });
     });
     await open(page, "#tasks");
@@ -525,7 +586,7 @@ for (const w of words) test.describe(`stable macro task order in ${w.locale}`, (
     await page.mouse.move(1200, 10);
     updated = 1;
     await expect(first).toHaveAttribute("data-macro-task-id", id(1), { timeout: 7000 });
-    await list.locator(`[data-macro-task-id="${A}"] button`).click();
+    await list.locator(`[data-macro-task-id="${A}"] [data-slot=macro-entry]`).click();
     await expect(page.locator("[data-slot=macro-overview-header]")).toBeVisible();
     await list.hover({ position: { x: 12, y: 12 } });
     updated = 2;
@@ -534,7 +595,7 @@ for (const w of words) test.describe(`stable macro task order in ${w.locale}`, (
     await expect(first).toHaveAttribute("data-macro-task-id", id(1));
     await marker.click();
     await expect(first).toHaveAttribute("data-macro-task-id", id(2));
-    await expect(list.locator(`[data-macro-task-id="${A}"] button`)).toHaveAttribute("aria-pressed", "true");
+    await expect(list.locator(`[data-macro-task-id="${A}"] [data-slot=macro-entry]`)).toHaveAttribute("aria-pressed", "true");
     const viewport = list.locator("[data-slot=scroll-area-viewport]");
     await viewport.hover(); await page.mouse.wheel(0, 400);
     await expect.poll(() => viewport.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
@@ -544,7 +605,7 @@ for (const w of words) test.describe(`stable macro task order in ${w.locale}`, (
     await page.mouse.move(1200, 10);
     await viewport.focus(); await viewport.press("Home");
     await expect(first).toHaveAttribute("data-macro-task-id", id(3), { timeout: 7000 });
-    await expect(list.locator(`[data-macro-task-id="${A}"] button`)).toHaveAttribute("aria-pressed", "true");
+    await expect(list.locator(`[data-macro-task-id="${A}"] [data-slot=macro-entry]`)).toHaveAttribute("aria-pressed", "true");
   });
 });
 
@@ -562,9 +623,13 @@ test.describe("macro list motion", () => {
     await photographMidMotion(page, "mid-group-collapse", heading, group);
     await expect(heading).toHaveAttribute("aria-expanded", "false");
 
-    const row = list.locator("[data-macro-task-id]").nth(1).getByRole("button");
+    const alpha = list.locator("[data-slot=macro-group]").filter({ has: page.locator(`[data-macro-task-id="${A}"]`) });
+    await photographMidMotion(page, "mid-more-expand", alpha.locator("[data-slot=macro-group-more]"), alpha);
+    await expect(alpha.locator("[data-slot=macro-entry]")).toHaveCount(10);
+
+    const row = list.locator("[data-macro-task-id]").nth(1).locator("[data-slot=macro-entry]");
     await photographMidMotion(page, "mid-row-select", row, row);
-    await expect(list.locator("[data-macro-task-id]").nth(1).getByRole("button")).toHaveAttribute("aria-pressed", "true");
+    await expect(list.locator("[data-macro-task-id]").nth(1).locator("[data-slot=macro-entry]")).toHaveAttribute("aria-pressed", "true");
     const tab = list.getByRole("tab", { name: /^Running/ });
     await photographMidMotion(page, "mid-tab-select", tab, tab);
     await expect(list.getByRole("tab", { name: /^Running/ })).toHaveAttribute("aria-selected", "true");
@@ -602,41 +667,47 @@ test.describe("macro list reduced motion", () => {
     expect(await stats.evaluate(node => getComputedStyle(node).animationName)).toBe("none");
     await page.keyboard.press("Escape");
 
-    await header.getByRole("button", { name: "More" }).click();
-    const stopAction = page.getByRole("button", { name: "Stop macro task" });
-    await expect(stopAction).toBeVisible();
-    expect(await page.getByRole("dialog").evaluate(node => getComputedStyle(node).animationName)).toBe("none");
-    await stopAction.click();
+    await page.getByRole("button", { name: "Expand macro task list" }).click();
+    const actionRow = list.locator(`[data-macro-task-id="${A}"]`);
+    await actionRow.hover();
+    await actionRow.locator('[data-slot="macro-menu-button"]').click();
+    const endAction = page.getByRole("menuitem", { name: "End" });
+    await expect(endAction).toBeVisible();
+    expect(await page.locator('[data-slot="macro-entry-menu"]').evaluate(node => getComputedStyle(node).animationName)).toBe("none");
+    await endAction.click();
     const confirmation = page.getByRole("dialog");
     await expect(confirmation).toBeVisible();
     expect(await confirmation.evaluate(node => getComputedStyle(node).animationName)).toBe("none");
   });
 });
 
-// State colour belongs to actionable work; selection contributes only its wash.
+// A compact mark carries state, while selection contributes only its wash.
 for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
   test.describe(`macro state edges, ${width}px, ${theme}`, () => {
     test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 800 }, reducedMotion: "reduce" });
-    test("keeps waiting and live edges, count shapes and accessible state names across selection", async ({ page }) => {
+    test("keeps compact state marks and accessible state names across selection", async ({ page }) => {
       await themeBeforeLoad(page, theme);
       await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
         const response = await route.fetch();
         const data = await response.json();
-        const original = data.macroTasks[0];
+        const original = data.groups[0].macroTasks[0];
         const variants = [
           { title: "等待接手", host: 1, review: 1, active: 1, failed: 0, accepted: 0, ended: 0 },
           { title: "进行中的任务", host: 0, review: 0, active: 1, failed: 0, accepted: 0, ended: 0 },
           { title: "Host 已给结论的失败", host: 0, review: 0, active: 0, failed: 1, accepted: 0, ended: 1 },
           { title: "全部验收", host: 0, review: 0, active: 0, failed: 0, accepted: 1, ended: 1 },
+          { title: "等待验收", host: 0, review: 1, active: 0, failed: 0, accepted: 0, ended: 0 },
         ];
-        data.macroTasks = variants.map(({ title, ...counts }, index) => ({ ...original,
+        const rows = variants.map(({ title, ...counts }, index) => ({ ...original,
           macroTaskId: index === 1 ? A : `macro-edge-${index}`, title, titleSource: "macro-task",
-          state: index === 0 ? "host" : index === 1 ? "active" : "ended",
+          state: index === 0 ? "host" : index === 1 ? "active" : index === 4 ? "review" : "ended",
           counts: { ...original.counts, roots: counts.host + counts.review + counts.active + counts.ended, ...counts },
           lastActivitySeq: 100 - index,
         }));
-        data.totals = { all: 4, host: 1, active: 2, review: 1 };
-        data.nextCursor = null; data.changed = false;
+        data.groups = [{ id: `project:${original.project.id}`, project: original.project, total: rows.length,
+          macroTasks: rows, nextCursor: null }];
+        data.totals = { all: 5, host: 1, active: 2, review: 2 };
+        data.changed = false;
         await route.fulfill({ response, json: data });
       });
       await page.route(/\/api\/macro-tasks\/macro-edge-3\/timeline(?:\?|$)/, async route => {
@@ -652,29 +723,23 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       if (width === 390) await page.locator("[data-slot=macro-overview-header]").getByRole("button", { name: /宏任务/ }).click();
       await expect(list).toBeVisible();
       const rows = list.locator("[data-slot=macro-entry]");
-      await expect(rows).toHaveCount(4);
-      for (const [index, state] of ["等待接手", "进行中", "失败", "已验收"].entries()) {
+      await expect(rows).toHaveCount(5);
+      for (const [index, state] of ["等待 Host", "进行中", "失败", "已验收", "等待验收"].entries()) {
         await expect(rows.nth(index)).toHaveAccessibleName(new RegExp(state));
       }
-      expect(await rows.locator(":scope > [data-slot=state-mark]").count()).toBe(0);
-      await expect(rows.nth(2).locator("[data-slot=macro-entry-counts] [data-kind=fail] path")).toHaveCount(1);
+      await expect(rows.locator("[data-slot=macro-entry-counts]")).toHaveCount(0);
+      for (const [index, mark] of ["hand", "live", "fail"].entries()) {
+        await expect(rows.nth(index).locator("[data-slot=state-mark]")).toHaveAttribute("data-kind", mark);
+      }
+      await expect(rows.nth(3).locator("[data-slot=state-mark]")).toHaveCount(0);
+      await expect(rows.nth(4).locator("[data-slot=state-mark]")).toHaveAttribute("data-kind", "review");
       const styles = () => rows.evaluateAll(nodes => nodes.map(node => {
-        const edge = getComputedStyle(node, "::before");
         const style = getComputedStyle(node);
-        const token = (name: string) => {
-          const probe = document.createElement("span"); probe.style.color = `var(${name})`; node.append(probe);
-          const colour = getComputedStyle(probe).color; probe.remove(); return colour;
-        };
-        return { content: edge.content, width: edge.width, colour: edge.backgroundColor,
-          background: style.backgroundColor, border: style.borderLeftWidth,
-          hand: token("--hand-mark"), live: token("--ink"), wash: token("--selection"), hover: token("--selection-hover"), transition: style.transitionProperty };
+        return { background: style.backgroundColor, border: style.borderLeftWidth,
+          height: node.getBoundingClientRect().height, font: style.fontSize };
       }));
       let measured = await styles();
-      expect(measured[0]).toMatchObject({ width: "3px", colour: measured[0].hand });
-      expect(measured[1]).toMatchObject({ width: "3px", colour: measured[1].live });
-      for (const index of [2, 3]) expect(measured[index].content).toBe("none");
-      expect(measured[3].background).toBe(measured[3].wash);
-      expect(measured.every(row => row.border === "0px" && row.transition === "none")).toBe(true);
+      expect(measured.every(row => row.border === "0px" && row.height === 28 && row.font === "13px")).toBe(true);
       await assertListGeometry(page, width);
       await photograph(page, "edges-list", "zh-CN", width, theme);
       await rows.nth(1).click();
@@ -683,7 +748,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       await expect(rows.nth(1)).toHaveAttribute("aria-pressed", "true");
       await rows.nth(1).hover(); await settle(page);
       measured = await styles();
-      expect(measured[1]).toMatchObject({ width: "3px", colour: measured[1].live, background: measured[1].hover, border: "0px" });
+      expect(measured[1].background).not.toBe(measured[0].background);
       await photograph(page, "edges-selected-live", "zh-CN", width, theme);
       await expectNoSidewaysScroll(page);
     });

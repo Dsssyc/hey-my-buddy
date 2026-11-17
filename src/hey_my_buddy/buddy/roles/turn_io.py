@@ -7,6 +7,8 @@ from pathlib import Path
 from ...private_files import publish_bytes
 from ...errors import BoardError
 from ...protocol.usage import MAX_ASSISTANT_MESSAGE_BYTES
+from ...protocol.turn_input import NONE_TURN_INPUT_VERSION
+from ...protocol.workspace_manifest import turn_manifest
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 from ...private_dirs import context_root, ensure_private_dir
 from ..harnesses.base import ExecutionContext
@@ -52,7 +54,10 @@ def inquiry_paths(context: ExecutionContext) -> dict:
 
 
 def verify_workspace(context: ExecutionContext) -> None:
-    manifest = context.turn_input["executionWorkspace"]
+    manifest = turn_manifest(Path(context.environment["HMB_STATE_DIR"]), context.turn_input)
+    if context.turn_input["version"] == NONE_TURN_INPUT_VERSION:
+        context.effective_workspace = manifest
+        return
     from ...blackboard.tasks.workflow import workspace_module
     routing = (context.turn_input.get("context") or {}).get("routing") or {}
     workspace_module().verify(manifest, state_dir=Path(context.environment["HMB_STATE_DIR"]),
@@ -106,6 +111,8 @@ def validate_outcome(outcome: object, *, delegation_authority: bool = False) -> 
 
 def seal_workspace(context: ExecutionContext) -> tuple[dict | None, str | None]:
     manifest = context.effective_workspace
+    if context.turn_input["version"] == NONE_TURN_INPUT_VERSION:
+        return None, None
     state_dir = context.environment["HMB_STATE_DIR"]
     try:
         from ...blackboard.tasks.workflow import workspace_module
@@ -153,5 +160,8 @@ def validated_checkpoint(payload: dict, turn_input: dict) -> dict | None:
 
 def checkpoint_resumable(payload: dict, checkpoint: dict) -> bool:
     process = payload.get("processState")
-    return (checkpoint.get("nativeTurnStatus") == "completed" and checkpoint.get("bindingSaved") is True
-            and isinstance(process, dict) and type(process.get("nativeExitCode")) is int and process["nativeExitCode"] == 0)
+    return (checkpoint.get("bindingSaved") is True and isinstance(process, dict)
+            and process.get("shutdownConfirmed") is True
+            and (checkpoint.get("nativeTurnStatus") == "interrupted" or
+                 checkpoint.get("nativeTurnStatus") == "completed"
+                 and type(process.get("nativeExitCode")) is int and process["nativeExitCode"] == 0))

@@ -18,7 +18,6 @@ import os
 import subprocess
 import sys
 import tempfile
-from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -38,6 +37,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     SessionService,
 )
 from hey_my_buddy.buddy.harnesses.zcode import native_run
+from hey_my_buddy.protocol import process_members
 from hey_my_buddy.buddy.harnesses.zcode.native_run import (
     SessionServices,
     prepare_session_service,
@@ -135,7 +135,7 @@ class NativeRunCase(FakeAppServerTests):
 
     def setUp(self):
         super().setUp()
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-",
                                                  dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -163,7 +163,7 @@ class MockNativeCase(ZcodeFixtureCase):
     def setUp(self):
         super().setUp()
         self.state_dir = Path(self.environment["HMB_STATE_DIR"])
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-w-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-w-",
                                                  dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -174,7 +174,7 @@ class MockNativeCase(ZcodeFixtureCase):
         mount = prepare_session_service(
             invocation_root=invocation, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=self.base / "attention.json",
-            session_tools=worker_services.session_tools(), completion_tool="hey_my_buddy_finish_turn")
+            session_tools=worker_services.session_tools(checkpoint=False), completion_tool="hey_my_buddy_finish_turn")
         prompt = worker_services.micro_task_prompt("fixture task", turn_input, mount.finish_tool,
                                                  checkpoint_tool=None, answer_tool=None)
         request = RunRequest(
@@ -199,6 +199,68 @@ class MockNativeCase(ZcodeFixtureCase):
 
 
 class FastSeamTests(NativeRunCase):
+    def test_model_start_requires_root_output_and_counts_whitespace_text(self):
+        root = {"sessionId": "session", "turnId": "turn"}
+        def frame(kind, payload, **identity):
+            return {"method": "session/event", "params": {**root, **identity,
+                    "type": kind, "payload": payload}}
+
+        for message in (
+            frame("turn.started", {"inputId": "input"}),
+            frame("model.streaming", {"kind": "text_delta", "delta": ""}),
+            frame("model.streaming", {"kind": "text_delta", "delta": "child", "source": "sub-agent"}),
+            frame("model.streaming", {"kind": "text_delta", "delta": "foreign"}, sessionId="other"),
+            frame("tool.updated", {"kind": "result", "toolCallId": "missing"}),
+            frame("turn.completed", {"response": ""}),
+        ):
+            self.assertFalse(native_run._root_model_activity(message, "session", "turn"), message)
+        for message in (
+            frame("model.streaming", {"kind": "text_delta", "delta": " "}),
+            frame("model.streaming", {"kind": "reasoning_delta", "delta": "thought"}),
+            frame("model.streaming", {"kind": "tool_call", "toolCallId": "tool"}),
+            frame("turn.completed", {"response": "answer"}),
+            {"method": "v4/telemetry/event", "params": {**root, "kind": "usage.delta", "outputTokens": 1}},
+        ):
+            self.assertTrue(native_run._root_model_activity(message, "session", "turn"), message)
+
+    def test_admitted_turn_without_output_stays_false_and_output_is_live(self):
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
+        for case, expected in (("quota-before", False), ("usage-quota", True)):
+            with self.subTest(case=case):
+                os.environ["HMB_ZCODE_TEST_CASE"] = case
+                seen = []
+                correction = FastCorrection(SCHEMA, prompt)
+
+                def observer(facts):
+                    seen.append((facts["settled"], facts["modelResponded"]))
+                    return correction.observer(facts)
+
+                result = run(self.fast_request(prompt), observer=observer,
+                             services=None, cancelled=lambda: False)
+                self.assertIs(result.native_request_sent, True)
+                self.assertIs(result.model_responded, expected)
+                self.assertEqual(seen[0], (False, False))
+                if expected:
+                    self.assertIn((False, True), seen)
+                else:
+                    self.assertNotIn((False, True), seen)
+
+    def test_initial_native_input_refusal_keeps_structured_admission_facts(self):
+        select_fixture(self.environment, self.root, "zcode",
+                       Path(__file__).parent / "fixtures/mock_zcode.py")
+        os.environ.update(self.environment)
+        os.environ["HMB_ZCODE_TEST_CASE"] = "input-too-large"
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
+        result = run(self.fast_request(prompt), observer=FastCorrection(SCHEMA, prompt).observer,
+                     services=None, cancelled=lambda: False)
+        self.assertIs(result.native_request_sent, True)
+        self.assertIs(result.model_responded, False)
+        self.assertEqual(result.native_admission_error.value, {
+            "nativeMethod": "session/send", "nativeCode": "invalid_params",
+            "message": "fixture admission refusal", "input_error_code": "input_too_large",
+            "max_chars": 9, "actual_chars": 10})
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def test_native_failure_survives_a_disconnected_final_metadata_read(self):
         fixture = Path(__file__).parent / "fixtures/mock_zcode_usage.py"
         select_fixture(self.environment, self.root, "zcode", fixture)
@@ -343,7 +405,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
         self.assertNotIn("reported", result.effective_policy.tools.to_payload())
 
-    def test_router_review_uses_the_worker_plan_mode_without_a_service(self):
+    def test_router_review_uses_the_worker_normal_mode_without_a_service(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         os.environ["HMB_ZCODE_TEST_CASE"] = "write-final"
         request = self.fast_request(structured_prompt("Choose a buddy", SCHEMA))
@@ -352,7 +414,9 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.raw, '{"choice":"a"}')
-        self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "plan"})
+        # Read runs in the same normal mode as write: ZCode has no native
+        # read-only session for a headless turn.
+        self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
 
     def test_a_late_tool_frame_after_settlement_is_the_role_call_not_the_scopes(self):
         # The EOF drain hands a late tool fact to the role observer: a rule that
@@ -397,57 +461,51 @@ class FastSeamTests(NativeRunCase):
         # fields; the common result no longer carries it, so the surviving
         # facts here are the confirmed group stop and the failure reason.)
 
-    def test_an_unconfirmed_native_group_stop_reports_unknown_not_gone(self):
-        # The run module's own stop collection through the real run path: the
-        # narrow stop-observation point (ProcessHandle.shutdown_confirmed) is
-        # denied confirmation, so the halt still closes stdin, waits and
-        # terminates the real fake app-server while the reported group state
-        # stays the honest unknown — a factually reaped leader never becomes
-        # confirmed-gone evidence, and the settlement is refused without it.
+    def test_an_unconfirmed_native_session_stop_reports_unknown_not_gone(self):
         from unittest import mock as _mock
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-        observed: list[ProcessHandle] = []
-        observe = ProcessHandle.shutdown_confirmed
-
-        def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
-            if "--version" in handle.process.args:
-                return observe(handle, settle_seconds=settle_seconds)
-            observed.append(handle)
-            return False
-
+        observed = []
+        initialize = ProcessHandle.__init__
+        def fail_scan(handle, *args, **kwargs):
+            initialize(handle, *args, **kwargs)
+            if "--version" not in handle.process.args:
+                target, attribute = (handle._members, "snapshot") if handle._members is not None else (handle.job, "active")
+                observed.append((handle, target, attribute, getattr(target, attribute)))
+                setattr(target, attribute, _mock.Mock(side_effect=OSError("fixture member scan failed")))
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
-        with _mock.patch.object(ProcessHandle, "shutdown_confirmed", unconfirmed):
-            result = run(self.fast_request(prompt), observer=correction.observer,
-                         services=None, cancelled=lambda: False)
-        native = result.stop_evidence.native
-        self.assertEqual(native.group_state, "unknown")
-        self.assertIsNotNone(result.end.native_exit_code)
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-shutdown-failed")
-        # Denied confirmation applies to this run's owned handle. An EOF exit
-        # needs no signal; withholding evidence still refuses settlement.
-        self.assertGreaterEqual(len(observed), 1)
-        # No orphan: with the patch gone, the run's own captured handle shows
-        # the leader reaped and the whole group confirmed gone by the real
-        # observation the halt performed.
-        handle = observed[0]
-        self.assertIsNotNone(handle.process.poll())
-        self.assertTrue(handle.shutdown_confirmed(settle_seconds=0.5))
-        self.assertFalse(handle.group_alive())
+        try:
+            with _mock.patch.object(ProcessHandle, "__init__", fail_scan):
+                result = run(self.fast_request(prompt), observer=correction.observer,
+                             services=None, cancelled=lambda: False)
+            self.assertEqual(result.stop_evidence.native.group_state, "unknown")
+            self.assertIsNotNone(result.end.native_exit_code)
+            self.assertEqual(result.end.status, "error")
+            self.assertEqual(result.end.reason_code, "native-shutdown-failed")
+            self.assertIsNotNone(observed[0][0].poll())
+        finally:
+            for handle, target, attribute, observation in observed:
+                setattr(target, attribute, observation)
+                self.assertTrue(handle.terminate(grace_seconds=0)[0])
 
     def test_the_peer_receives_the_refusal_before_the_observer_stop_ends_the_run(self):
         # The refusal answer completes first — the peer reads the reply with
         # the same id and records it — and only then does the role's stop take
         # effect on the driver's next boundary, with no settlement behind it.
+        # The wall-clock bound guards promptness, not correctness (the reason
+        # code below carries that): a stop dispatched at the next pump step
+        # costs the platform's spawn plus the owned stop's fixed 3-second
+        # grace — 0.3 s locally, 6.4 s on a slow Windows CI runner — while a
+        # run that waited for the deadline consumes the whole 30-second budget,
+        # so the bound sits with multiples of margin on both sides.
         os.environ["HMB_ZCODE_TEST_CASE"] = "reverse-request"
         prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         started = time.monotonic()
-        result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
+        result = run(self.fast_request(prompt, timeout=30), observer=correction.observer,
                      services=None, cancelled=lambda: False)
-        self.assertLess(time.monotonic() - started, 6, "the run waited instead of stopping on the denied fact")
+        self.assertLess(time.monotonic() - started, 15, "the run waited instead of stopping on the denied fact")
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(result.end.reason_code, "observer-interrupt")
         self.assertEqual(correction.stop_reason, "no-tool-violation")
@@ -464,14 +522,19 @@ class FastSeamTests(NativeRunCase):
             self.assertEqual(result.stop_evidence.interrupt.basis, "observer-request")
 
     def test_a_reverse_request_before_the_rpc_reply_stops_after_the_refusal(self):
+        # The same numbers as the case above: the peer never sends the pending
+        # RPC reply, so a driver that waited for it would consume the whole
+        # budget, while the refusal stop ends the run at the platform's spawn
+        # cost plus the fixed 3-second stop grace — 3.5 s locally, 6.4 s on a
+        # slow Windows CI runner — far below the bound.
         os.environ["HMB_ZCODE_TEST_CASE"] = "reverse-before-send-reply"
         prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         started = time.monotonic()
-        result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
+        result = run(self.fast_request(prompt, timeout=30), observer=correction.observer,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.reason_code, "observer-interrupt")
-        self.assertLess(time.monotonic() - started, 6, "the RPC waited for a reply after the refusal")
+        self.assertLess(time.monotonic() - started, 15, "the RPC waited for a reply after the refusal")
         self.assertEqual(result.end.status, "cancelled")
         self.assertEqual(correction.stop_reason, "no-tool-violation")
         # The refused interaction's own full record travels in the retained
@@ -525,16 +588,20 @@ class FastSeamTests(NativeRunCase):
     def test_a_reverse_request_ends_the_fast_run_immediately_with_the_fact_kept(self):
         # The refused interaction is answered and recorded, and the role's stop
         # takes effect on that same pump turn: no settlement, no later unknown
-        # event and no timeout wait may be needed to end the run.
+        # event and no timeout wait may be needed to end the run. The same
+        # budget and bound as the two cases above: reverse-request exits on its
+        # own at once, while reverse-oauth sleeps and is ended by the owned
+        # group stop's fixed 3-second grace, so a slow runner's whole path
+        # stays far below the bound and a waited-out run consumes the budget.
         for case in ("reverse-request", "reverse-oauth"):
             with self.subTest(case=case):
                 os.environ["HMB_ZCODE_TEST_CASE"] = case
                 prompt = structured_prompt("Choose a buddy", SCHEMA)
                 correction = FastCorrection(SCHEMA, prompt)
                 started = time.monotonic()
-                result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
+                result = run(self.fast_request(prompt, timeout=30), observer=correction.observer,
                              services=None, cancelled=lambda: False)
-                self.assertLess(time.monotonic() - started, 6,
+                self.assertLess(time.monotonic() - started, 15,
                                 "the run waited instead of stopping on the denied fact")
                 self.assertEqual(result.end.status, "cancelled")
                 self.assertEqual(result.end.reason_code, "observer-interrupt")
@@ -561,7 +628,7 @@ class FastSeamTests(NativeRunCase):
         # Nothing is claimed that the run never reached: no session opened, no
         # effective policy, no buddy check, no completion, no model,
         # and no native exit code — the holding side's own never-spawned fact.
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         self.assertIsNone(result.effective_policy.tools)
         checked = result.buddy.checked
         self.assertIsNone(checked.provider)
@@ -603,6 +670,21 @@ def evidence_call(result):
 
 
 class WorkerSeamTests(MockNativeCase):
+    def test_worker_model_start_reaches_observer_before_settlement(self):
+        os.environ.update(self.environment)
+        os.environ["HMB_ZCODE_TEST_CASE"] = "session-content"
+        request, services = self.worker_request(self.turn_input())
+        seen = []
+
+        def observer(facts):
+            seen.append((facts["settled"], facts["modelResponded"]))
+            return worker_observer(facts)
+
+        result = run(request, observer=observer, services=services, cancelled=lambda: False)
+        self.assertIs(result.model_responded, True)
+        self.assertEqual(seen[0], (False, False))
+        self.assertIn((False, True), seen)
+
     def test_oversized_native_session_identity_fails_before_activity(self):
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "oversized-session"
@@ -644,14 +726,13 @@ class WorkerSeamTests(MockNativeCase):
                 with mock.patch.object(native_run, "_open_root", wraps=original_open) as opened:
                     result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
                 self.assertEqual(result.end.status, "ok", result.end.message)
-                native_mode = "plan" if level == "read" else "yolo"
                 self.assertEqual(opened.call_args.kwargs["create_params"],
-                                 {"mode": native_mode, "mcpServers": list(services.mount.mcp_servers)})
-                self.assertEqual(result.effective_policy.tools.requested.value, {"mode": native_mode})
+                                 {"mode": "yolo", "mcpServers": list(services.mount.mcp_servers)})
+                self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
                 self.assertEqual(result.value.schema_status, "valid")
                 self.assertEqual(result.value.parsed.value["summary"], "fixture work completed")
                 self.assertEqual(PERMISSION_LEVELS["zcode"][level],
-                                 "convention" if level == "write" else "enforced")
+                                 "convention" if level in ("read", "write") else "enforced")
 
     def resume_with_levels(self, first_level, second_level, *, case="ok"):
         os.environ.update(self.environment)
@@ -668,9 +749,9 @@ class WorkerSeamTests(MockNativeCase):
         calls, mode_readbacks = [], []
         original = native_run.NativeConnection.call
 
-        def call(connection, method, params):
+        def call(connection, method, params, *, on_sent=None):
             calls.append((method, params))
-            result = original(connection, method, params)
+            result = original(connection, method, params, on_sent=on_sent)
             if method in ("session/resume", "session/setMode"):
                 mode_readbacks.append((method, result["settings"]["mode"]))
             return result
@@ -685,54 +766,44 @@ class WorkerSeamTests(MockNativeCase):
         expected = json.loads(fixture.with_name("native-usage-zcode.json").read_text(encoding="utf-8"))["expectedMessages"]
         with mock.patch.dict(self.environment):
             select_fixture(self.environment, self.root, "zcode", fixture)
-            for first_level, second_level, before, after in (
-                    ("read", "write", "build", "yolo"),
-                    ("write", "read", "yolo", "yolo"),
-                    ("read", "read", "build", "build")):
+            for first_level, second_level in (
+                    ("read", "write"), ("write", "read"), ("read", "read")):
                 with self.subTest(first=first_level, second=second_level), mock.patch.object(
                         self, "base", self.base / f"usage-{first_level}-{second_level}"):
                     first, second, calls, readbacks = self.resume_with_levels(
                         first_level, second_level, case="resume-ok")
                     self.assertEqual(second.end.status, "ok", second.end.message)
                     self.assertEqual(second.native_identity.session_id, first.native_identity.session_id)
-                    mode = "plan" if second_level == "read" else "yolo"
                     self.assertIn(("session/setMode", {"sessionId": first.native_identity.session_id,
-                                                       "mode": mode}), calls)
-                    self.assertEqual(readbacks, [("session/resume", {"current": before}),
-                                                ("session/setMode", {"current": after})])
+                                                       "mode": "yolo"}), calls)
+                    self.assertEqual(readbacks, [("session/resume", {"current": "yolo"}),
+                                                ("session/setMode", {"current": "yolo"})])
                     token_usage = normalize_token_usage(second.usage.value)
                     self.assertEqual(token_usage["inputTokens"], expected["inputTokens"])
                     self.assertEqual(token_usage["nativeRecords"], expected["records"])
                     self.assertEqual(token_usage["completeness"], "complete")
 
-    def check_resumed_level(self, first_level, second_level, native_mode):
-        first, second, calls, readbacks = self.resume_with_levels(first_level, second_level,
-            case="mode-plan-required" if second_level == "read" else "ok")
+    def check_resumed_level(self, first_level, second_level):
+        first, second, calls, readbacks = self.resume_with_levels(first_level, second_level)
         self.assertEqual(second.end.status, "ok", second.end.message)
         self.assertEqual(second.native_identity.session_id, first.native_identity.session_id)
         self.assertEqual([params for method, params in calls if method == "session/setMode"],
-                         [{"sessionId": first.native_identity.session_id, "mode": native_mode}])
+                         [{"sessionId": first.native_identity.session_id, "mode": "yolo"}])
         methods = [method for method, _ in calls]
         self.assertLess(methods.index("session/resume"), methods.index("session/setMode"))
         self.assertLess(methods.index("session/setMode"), methods.index("session/setModel"))
         self.assertLess(methods.index("session/setMode"), methods.index("session/send"))
-        self.assertEqual(second.effective_policy.tools.requested.value, {"mode": native_mode})
+        self.assertEqual(second.effective_policy.tools.requested.value, {"mode": "yolo"})
         self.assertEqual(second.value.schema_status, "valid")
-        underlying = "build" if first_level == "read" else "yolo"
-        self.assertEqual(readbacks, [("session/resume", {"current": underlying}),
-                                   ("session/setMode", {"current": underlying if native_mode == "plan" else "yolo"})])
-        if native_mode == "plan":
-            self.assertEqual(dict(second.native_evidence.unknown_events.counts_by_type)
-                             ["permission-mode-readback-unconfirmed"], 1)
+        self.assertEqual(readbacks, [("session/resume", {"current": "yolo"}),
+                                   ("session/setMode", {"current": "yolo"})])
 
-    def test_read_to_write_resume_sets_yolo_on_the_same_session(self):
-        self.check_resumed_level("read", "write", "yolo")
-
-    def test_write_to_read_resume_sets_plan_on_the_same_session(self):
-        self.check_resumed_level("write", "read", "plan")
-
-    def test_read_to_read_resume_reapplies_plan_despite_build_readback(self):
-        self.check_resumed_level("read", "read", "plan")
+    def test_every_level_resume_reapplies_the_normal_mode_on_the_same_session(self):
+        # Read, write and full all run in the same native mode now, so every
+        # resumed level pair re-applies and confirms that one mode.
+        for first_level, second_level in (("read", "write"), ("write", "read"), ("read", "read")):
+            with self.subTest(first=first_level, second=second_level):
+                self.check_resumed_level(first_level, second_level)
 
     def test_resume_mode_mismatch_fails_before_model_input_and_retains_requested_mode(self):
         _first, second, calls, _readbacks = self.resume_with_levels("read", "write", case="mode-mismatch")
@@ -857,10 +928,11 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(result.end.reason_code, "wrong-native-turn")
         # Configure ran and the readback confirmed; the session opened; the
         # input was sent. Each reached stage keeps its fact in the failure: the
-        # readback values, the session-create fact and the model start.
+        # readback values and the session-create fact. A wrong input identity
+        # leaves the root output status unprovable.
         self.assertEqual(result.buddy.checked.model.value, "fixture-model")
         self.assertIsNotNone(result.effective_policy.tools)
-        self.assertTrue(result.model_started)
+        self.assertIsNone(result.model_responded)
         self.assertIsNone(result.completion_evidence)
         self.assertIsNotNone(result.end.message)
 
@@ -1045,7 +1117,7 @@ class WorkerSeamTests(MockNativeCase):
         self.assertTrue(provenance["receiptVerified"])
         self.assertEqual(provenance["toolCallId"], evidence_call(result))
 
-    def test_a_read_permission_uses_plan_mode_with_the_worker_service(self):
+    def test_a_read_permission_uses_the_write_mode_with_the_worker_service(self):
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         turn_input = self.turn_input()
@@ -1053,9 +1125,10 @@ class WorkerSeamTests(MockNativeCase):
         scoped = request.model_copy(update={"permission": "read"})
         result = run(scoped, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok")
-        # The same plan mode applies to a Worker turn and a Router review.
+        # Read runs the same normal mode as write: read-only holds by role
+        # convention alone, with no native mode enforcing it.
         self.assertIsNotNone(result.effective_policy.tools)
-        self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "plan"})
+        self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
 
 
 class NoToolReverseRequestTests(unittest.TestCase):
@@ -1081,13 +1154,61 @@ class NoToolReverseRequestTests(unittest.TestCase):
         connection = NativeConnection(process, time.monotonic() + 10, threading.Event(), no_tools=True, runtime_preferences=FALLBACK_PREFERENCES)
         connection.attention = recorded.append
         connection.messages.put({"id": 7, "method": "interaction/requestPermission",
-                                 "params": {"sessionId": "s", "kind": "shell"}})
+                                 "params": {"sessionId": "s", "toolCallId": "call-1",
+                                            "toolName": "Bash",
+                                            "input": {"command": "printf marker"},
+                                            "prompt": "Tool Bash requires permission"}})
         try:
             connection.pump()
         except Exception as error:  # noqa: BLE001 - the pump must not raise here
             self.fail(f"a no-tool reverse request raised out of the pump: {error!r}")
         self.assertEqual(recorded[0]["method"], "interaction/requestPermission")
         self.assertEqual(recorded[0]["outcome"], "refused-with-jsonrpc-error")
+        # The record carries what the request asked to approve, in the Claude
+        # adapter's caliber: bounded tool name, tool call id and one operation
+        # value; the raw input and the prompt never reach evidence.
+        self.assertEqual(recorded[0]["toolName"], "Bash")
+        self.assertEqual(recorded[0]["toolCallId"], "call-1")
+        self.assertEqual(recorded[0]["operation"], "printf marker")
+        self.assertNotIn("prompt", recorded[0])
+
+    def test_a_permission_request_without_readable_facts_stays_bounded_and_honest(self):
+        import subprocess
+        import sys
+        import threading
+        import time
+        from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeConnection
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+        def reap():
+            process.kill()
+            process.wait(timeout=5)
+            process.stdin.close()
+            process.stdout.close()
+
+        self.addCleanup(reap)
+        recorded = []
+        connection = NativeConnection(process, time.monotonic() + 10, threading.Event(),
+                                      runtime_preferences=FALLBACK_PREFERENCES)
+        connection.attention = recorded.append
+        connection.send = lambda _message: None
+        long_command = "echo " + "测" * 600
+        connection.messages.put({"id": 8, "method": "interaction/requestPermission",
+                                 "params": {"toolCallId": "call-long", "toolName": "Bash",
+                                            "input": {"command": long_command}}})
+        connection.messages.put({"id": 9, "method": "interaction/requestPermission",
+                                 "params": {"sessionId": "s"}})
+        for _ in range(2):
+            connection.pump()
+        self.assertLessEqual(len(recorded[0]["operation"].encode("utf-8")), 512)
+        self.assertTrue(recorded[0]["operation"].startswith("echo 测"))
+        # A request naming no tool and no input says so instead of inventing
+        # facts; its other members are unchanged.
+        self.assertEqual(recorded[1]["toolName"], "<unknown>")
+        self.assertIsNone(recorded[1]["toolCallId"])
+        self.assertEqual(recorded[1]["operation"], "<command or path unread>")
+        self.assertEqual(recorded[1]["method"], "interaction/requestPermission")
 
     def test_provider_headers_are_an_unsupported_host_capability_not_a_provider_ban(self):
         process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
@@ -1101,16 +1222,30 @@ class NoToolReverseRequestTests(unittest.TestCase):
         connection = native_run.NativeConnection(process, time.monotonic() + 10, threading.Event(), runtime_preferences=FALLBACK_PREFERENCES)
         for no_tools in (False, True):
             with self.subTest(no_tools=no_tools):
-                recorded = []
+                denied = []
+                unsupported = []
                 connection.no_tools = no_tools
-                connection.attention = recorded.append
+                connection.attention = denied.append
+                connection.on_unsupported = unsupported.append
                 connection.send = mock.Mock()
                 connection.messages.put({"id": 7, "method": "interaction/requestProviderRuntimeHeaders",
                                          "params": {"sessionId": "s", "providerId": "fixture-account"}})
                 connection.pump()
-                self.assertEqual(recorded[0]["method"], "interaction/requestProviderRuntimeHeaders")
-                self.assertEqual(recorded[0]["outcome"], "refused-with-jsonrpc-error")
                 self.assertEqual(connection.send.call_args.args[0]["error"]["code"], -32601)
+                if no_tools:
+                    # A no-tool call can grant nothing: every interaction is a
+                    # denied interaction the role stops the call over.
+                    self.assertEqual(denied[0]["method"], "interaction/requestProviderRuntimeHeaders")
+                    self.assertEqual(denied[0]["outcome"], "refused-with-jsonrpc-error")
+                    self.assertEqual(unsupported, [])
+                else:
+                    # A tool-enabled turn answers the same refusal the same way,
+                    # but as unsupported evidence: no Host answer exists for
+                    # provider headers, so the request never needs attention.
+                    self.assertEqual(denied, [])
+                    self.assertEqual(unsupported[0]["kind"], "unsupported-native-request")
+                    self.assertEqual(unsupported[0]["method"], "interaction/requestProviderRuntimeHeaders")
+                    self.assertIn("at", unsupported[0])
 
 
 class ProducerContractTests(NativeRunCase):
@@ -1153,7 +1288,7 @@ class ProducerContractTests(NativeRunCase):
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
         from hey_my_buddy.protocol import activity as activity_protocol
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1170,7 +1305,7 @@ class ProducerContractTests(NativeRunCase):
         channel = bind_live_channel(identity, credentials=credentials, journal_path=str(journal),
                                     activity_path=temp / "activity.json")
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveCapabilities, LiveRequest
-        self.assertEqual(LiveCapabilities.model_validate_json(channel.capabilities_local()).inquiry_delivery, "cooperative-checkpoint")
+        self.assertEqual(LiveCapabilities.model_validate_json(channel.capabilities_local()).inquiry_delivery, "realtime")
         reply = fixture_request(channel, LiveRequest(identity=identity, request_id="q-1", kind="inquiry",
                                             payload=InquiryPayload(question_id="i-1",
                                                                    question="is the binding real?")),
@@ -1199,7 +1334,7 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-a-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-a-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1240,7 +1375,7 @@ class ProducerContractTests(NativeRunCase):
 
     def test_foreign_activity_and_journal_records_read_as_nothing(self):
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-f-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-f-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1268,7 +1403,7 @@ class ProducerContractTests(NativeRunCase):
     def test_journal_states_follow_the_shared_reader_semantics(self):
         """Empty is available, over-limit and unreadable keep their own reasons."""
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-j-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-j-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1312,7 +1447,7 @@ class ProducerContractTests(NativeRunCase):
         # The final effective record decides: the answer imports, the stale
         # rejection is gone, and the reader's count covers the question once.
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-sup-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-sup-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1340,7 +1475,7 @@ class ProducerContractTests(NativeRunCase):
         # leaves exactly one rejection for that id — never an accumulation of
         # every historical refusal — and no bound record is projected for it.
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-rej-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-rej-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1372,7 +1507,7 @@ class ProducerContractTests(NativeRunCase):
         # the actual canonical wire frame returned by the C-Two pager.
         from hey_my_buddy.json_codec import canonical_json
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-frame-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-frame-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1421,7 +1556,7 @@ class ProducerContractTests(NativeRunCase):
         import hashlib as _hashlib
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-s-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-s-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1457,7 +1592,7 @@ class ProducerContractTests(NativeRunCase):
         self.assertIs(entry.truncated, False)
         # The queued record's delivery dict survives later records.
         self.assertIsNotNone(entry.delivery)
-        self.assertEqual(entry.delivery.value["admittedDelivery"], "cooperative-checkpoint")
+        self.assertEqual(entry.delivery.value["admittedDelivery"], "realtime")
         # The journal fact: available, the reader's own deduplicated count and
         # no rejections for this bound journal.
         self.assertIsNotNone(snapshot.journal)
@@ -1469,7 +1604,7 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import LiveObservation
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-o-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-o-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1495,14 +1630,13 @@ class ProducerContractTests(NativeRunCase):
         self.assertIs(observation.ready, True)
         self.assertEqual(observation.session_id, "sess-live")
         self.assertEqual(observation.agent_status, "running")
-        self.assertEqual(observation.delivery_mode, "cooperative-checkpoint")
+        self.assertEqual(observation.delivery_mode, "realtime")
         self.assertEqual(observation.reply_tool.value["name"], "hey_my_buddy_answer_inquiry")
         self.assertEqual(observation.journal.value["enabled"], True)
         self.assertEqual(observation.recent_activity[0].kind, "k" * 80)
         self.assertEqual(observation.recent_activity[0].tool_name, "t" * 120)
         self.assertEqual(observation.unavailable,
-                         ("nativeReasoning", "toolArguments", "toolOutput", "providerCredentials",
-                          "immediateDelivery"))
+                         ("nativeReasoning", "toolArguments", "toolOutput", "providerCredentials"))
         # The producing bridge's truncations are upper bounds: a kind one
         # character longer is refused by the strict model, and the read is
         # reported as an unavailable observation, never reshaped into
@@ -1523,7 +1657,7 @@ class ProducerContractTests(NativeRunCase):
         import hashlib as _hashlib
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-a2-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-a2-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1578,7 +1712,7 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-r-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-r-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1643,7 +1777,7 @@ class DiscoveryStopTests(NativeRunCase):
             finally:
                 connection.assert_not_called()
 
-    def discover_with_fd_close_failure(self, error, *, windows_api=None, process=None):
+    def discover_with_fd_close_failure(self, error, *, windows_api=None, process=None, fail_observation=False):
         """Fail only the app-server stderr close after real owned_popen runs.
 
         Windows uses injected API/Popen handles; POSIX starts the real private
@@ -1668,21 +1802,30 @@ class DiscoveryStopTests(NativeRunCase):
                 raise OSError("fixture process creation refused")
             return process
 
+        handle_type = native_run.ProcessHandle
+
         def owned_popen(*args, **kwargs):
             child = windows_process.owned_popen(*args, windows_api=windows_api, **kwargs)
             self.fd_close_child = child
+            return child
+
+        def capture(*args, **kwargs):
             creation_time = (mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10)
                              if windows_api is not None else nullcontext())
             with creation_time:
-                owner = native_run.ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
-
+                owner = handle_type(*args, **kwargs)
+            if fail_observation and owner._members is not None:
+                owner._members.snapshot = lambda: (_ for _ in ()).throw(
+                    PermissionError("fixture session scan refused"))
             def reap():
                 try:
-                    native_run.halt_owned_group(owner, time.monotonic() + 5)
+                    if owner._members is not None:
+                        owner._members.snapshot = process_members.process_snapshot
+                    native_run.halt_owned_session(owner, time.monotonic() + 5)
                 finally:
-                    child.stdout.close()
+                    owner.process.stdout.close()
             self.addCleanup(reap)
-            return child
+            return owner
 
         def close(fd):
             nonlocal close_failed
@@ -1692,6 +1835,7 @@ class DiscoveryStopTests(NativeRunCase):
                 raise error
 
         with mock.patch.object(native_run, "owned_popen", owned_popen), \
+             mock.patch.object(native_run, "ProcessHandle", side_effect=capture), \
              mock.patch.object(windows_process.subprocess, "Popen", side_effect=popen), \
              mock.patch.object(native_run.os, "close", side_effect=close), \
              mock.patch.object(native_run, "NativeConnection") as connection:
@@ -1729,7 +1873,8 @@ class DiscoveryStopTests(NativeRunCase):
         error = OSError("fixture stderr close failed")
         with self.assertRaises(Exception) as caught:
             self.discover_with_fd_close_failure(error, windows_api=api, process=process)
-        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False,
+                      f"{type(caught.exception).__name__}: {caught.exception!r}")
         self.assertIs(caught.exception, error)
         self.assertIs(self.fd_close_child, process)
         self.assertIn(("terminate", 77), api.events)
@@ -1757,7 +1902,8 @@ class DiscoveryStopTests(NativeRunCase):
         with mock.patch.object(process, "kill", side_effect=OSError("fixture kill refused")):
             with self.assertRaises(Exception) as caught:
                 self.discover_with_fd_close_failure(error, windows_api=api, process=process)
-        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False,
+                      f"{type(caught.exception).__name__}: {caught.exception!r}")
         self.assertIs(caught.exception, error)
         self.assertIsNone(self.fd_close_child)
         self.assertTrue(caught.exception.__context__.owned_popen_evidence.created)
@@ -1792,20 +1938,12 @@ class DiscoveryStopTests(NativeRunCase):
     @unittest.skipIf(os.name == "nt", "POSIX group observation; Windows Job uncertainty is tested above")
     def test_fd_close_failure_after_posix_creation_keeps_unknown_stop(self):
         error = OSError("fixture stderr close failed")
-        real_killpg = os.killpg
-
-        def killpg(pgid, sig):
-            if self.fd_close_child is not None and pgid == self.fd_close_child.pid and sig == 0:
-                raise PermissionError("fixture group observation refused")
-            return real_killpg(pgid, sig)
-
-        with mock.patch.object(os, "killpg", side_effect=killpg):
-            with self.assertRaises(Exception) as caught:
-                self.discover_with_fd_close_failure(error)
+        with self.assertRaises(Exception) as caught:
+            self.discover_with_fd_close_failure(error, fail_observation=True)
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
         self.assertIs(caught.exception, error)
         self.assertIsNotNone(self.fd_close_child)
-        self.assertIsNotNone(self.fd_close_child.poll())
+        self.assertIsNone(self.fd_close_child.returncode)
         self.assertTrue(self.fd_close_child.stdout.closed)
 
     def test_original_non_native_read_error_keeps_confirmed_stop(self):
@@ -1929,12 +2067,12 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
     def test_connection_construction_failure_keeps_unconfirmed_stop(self):
-        halt = native_run.halt_owned_group
+        halt = native_run.halt_owned_session
         def unobserved(handle, deadline):
             halt(handle, deadline)
             return False, True
         with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
-             mock.patch.object(native_run, 'halt_owned_group', side_effect=unobserved):
+             mock.patch.object(native_run, 'halt_owned_session', side_effect=unobserved):
             with self.assertRaises(ValueError) as caught:
                 self.discover()
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
@@ -1959,12 +2097,12 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
 
     def test_unknown_connection_stop_keeps_owned_child_uncertain(self):
-        halt = native_run.halt_owned_group
+        halt = native_run.halt_owned_session
         def stopped_without_receipt(handle, deadline):
             halt(handle, deadline)
             raise ValueError('fixture stop observation failed')
         with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
-             mock.patch.object(native_run, 'halt_owned_group', side_effect=stopped_without_receipt):
+             mock.patch.object(native_run, 'halt_owned_session', side_effect=stopped_without_receipt):
             with self.assertRaises(ValueError) as caught:
                 self.discover()
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)

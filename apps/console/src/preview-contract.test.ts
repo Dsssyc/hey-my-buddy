@@ -62,7 +62,7 @@ function resolveFixtures(): { directory: string; generated: boolean } {
   const configured = process.env.HMB_PREVIEW_FIXTURES;
   if (configured) return { directory: resolve(configured), generated: false };
   const python = process.env.HMB_PREVIEW_PYTHON;
-  const command = python ? [python] : ["uv", "run", "--no-project", "python"];
+  const command = python ? [python] : ["uv", "run", "--frozen", "python"];
   const directory = mkdtempSync(join(tmpdir(), "hey-my-buddy-preview-"));
   const previewEnvironment = { ...process.env };
   for (const key of ["HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
@@ -172,16 +172,12 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
     } else {
       const runId = entry.request?.runId ?? "";
       const { value: workflow } = await createTaskDetailClient(api, "fixture-csrf").workflow(runId);
-      expect(workflow.hostId === null || typeof workflow.hostId === "string").toBe(true);
       if (workflow.hostConclusion?.actor) expect(parseActor(workflow.hostConclusion.actor)).toEqual(workflow.hostConclusion.actor);
       for (const record of workflow.integrations) if (record.actor) expect(parseActor(record.actor)).toEqual(record.actor);
       const t = i18n.getFixedT(null, "taskDetail");
       const conclusion = workflow.hostConclusion;
       outcome.facts = {
         runId: workflow.runId,
-        hostId: workflow.hostId,
-        revision: workflow.revision,
-        buddyLocked: workflow.buddyLocked,
         hostConclusion: conclusion && {
           executionStatus: conclusion.executionStatus,
           statusLabel: t(`acceptance.status.${conclusion.executionStatus}` as "acceptance.status.failed", { defaultValue: conclusion.executionStatus }),
@@ -259,14 +255,19 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     const workflows = outcomes.filter(outcome => outcome.kind === "workflow-get");
     expect(snapshots).toHaveLength(1);
     expect(workflows.length).toBeGreaterThanOrEqual(3);
+    expect(outcomes.find(outcome => outcome.path === "normal/timeline-macro-input.json")).toMatchObject({
+      accepted: true, facts: { macroTaskId: "macro-55555555-5555-4555-8555-555555555555", rows: 2 },
+    });
+    expect(outcomes.find(outcome => outcome.path === "normal/timeline-macro-c.json")).toMatchObject({
+      accepted: true, facts: { macroTaskId: "macro-33333333-3333-4333-8333-333333333333", rows: 7 },
+    });
 
-    // A preview snapshot must carry the single Router and the model service note
-    // schema the current console requires (the original schema-13 defect).
+    // A preview snapshot must carry the current Router and profile settings.
     const snapshotFacts = snapshots[0].facts as { configuration: Record<string, unknown>; harnesses: unknown[] };
     expect(snapshotFacts.configuration).toMatchObject({
       routerBuddyIds: expect.any(Array),
-      routerRetryIntervalSeconds: expect.any(Number),
-      defaultRoutingMode: "fast", routingBudget: "standard",
+      routerRetryIntervalSeconds: expect.any(Number), explorationEvery: 5,
+      defaultRoutingMode: "fast", modelResponseWaitSeconds: 60,
     });
     expect("decisionBuddyId" in snapshotFacts.configuration).toBe(false);
     expect("routerBuddyId" in snapshotFacts.configuration).toBe(false);

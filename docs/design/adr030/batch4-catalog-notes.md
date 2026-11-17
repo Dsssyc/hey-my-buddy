@@ -35,7 +35,7 @@ python -m unittest blackboard.catalog.test_catalog_observations blackboard.servi
 
 ## 未运行与 Host 验收边界
 
-修改过的三个测试文件均完整通过，没有未运行的测试项。完整 `hey_my_buddy.cli.checks`、真实 harness 回合与故障注入按任务约定交由 Host 运行；本批未启动服务或 Worker，未使用日常看板、用户 harness 配置、账户凭据或付费模型调用。前端没有变更，因此未运行前端检查。
+修改过的三个测试文件均完整通过，没有未运行的测试项。完整 `hey_my_buddy.cli.checks`、真实 harness 回合与故障注入按任务约定交由 Host 运行；本批未启动服务或 Worker，未使用日常黑板、用户 harness 配置、账户凭据或付费模型调用。前端没有变更，因此未运行前端检查。
 
 原生控制器与停止证据的测试文件 `blackboard.catalog.test_native_discovery_stop` 未运行，属于完整检查与故障注入的 Host 验证范围；其中需要实际控制器的 `CatalogNativeStopTests` 方法如下，Worker 未尝试绕过套接字、共享内存或启动器限制：
 

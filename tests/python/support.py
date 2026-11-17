@@ -10,6 +10,7 @@ import errno
 import json
 import os
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -23,11 +24,11 @@ DELEGATE_ROOT = PYTHON_ROOT.parent
 if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
-from hey_my_buddy import locking  # noqa: E402
+from hey_my_buddy import locking, private_files  # noqa: E402
 from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
-from hey_my_buddy.cli.checks import prepare_test_home, remove_private_test_root  # noqa: E402
+from hey_my_buddy.cli.checks import prepare_test_home, remove_private_test_root, cleanup_fixture_tree  # noqa: E402
 from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference, read_execution_receipt  # noqa: E402
-from hey_my_buddy.private_dirs import attempt_root, directory_mode  # noqa: E402
+from hey_my_buddy.private_dirs import attempt_root, directory_mode, remove_tree  # noqa: E402
 from hey_my_buddy.paths import native_path  # noqa: E402
 from hey_my_buddy.blackboard.store.db import DB_FILE  # noqa: E402
 from hey_my_buddy.console.server import Console  # noqa: E402
@@ -38,19 +39,69 @@ from hey_my_buddy.blackboard.service.service import BoardService, WaitAdmission,
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry  # noqa: E402
 from hey_my_buddy.blackboard.store.store import BoardStore  # noqa: E402
 
+
+def native_read_bytes(path: Path) -> bytes:
+    """Read one private-state file through the product's own read boundary."""
+    return private_files.read_bytes(Path(path))
+
+
+def native_read_text(path: Path, *, encoding: str = "utf-8") -> str:
+    """Read private-state text with an explicit encoding on the native spelling."""
+    return native_path(Path(path)).read_text(encoding=encoding)
+
+
+def native_write_bytes(path: Path, content: bytes) -> None:
+    """Publish private-state bytes through the product's own writer."""
+    private_files.publish_bytes(Path(path), content)
+
+
+def native_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    """Publish private-state text as exact bytes, never locale newlines."""
+    private_files.publish_bytes(Path(path), text.encode(encoding))
+
+
+def native_exists(path: Path) -> bool:
+    return native_path(Path(path)).exists()
+
+
+def native_is_file(path: Path) -> bool:
+    return native_path(Path(path)).is_file()
+
+
+def native_is_dir(path: Path) -> bool:
+    return native_path(Path(path)).is_dir()
+
+
+def native_unlink(path: Path) -> None:
+    native_path(Path(path)).unlink()
+
+
+def native_remove_tree(path: Path) -> bool:
+    """Remove one private-state tree through the product's own remover."""
+    return remove_tree(Path(path))
+
+
+def unlink_read_only(path: Path) -> None:
+    """Delete one Git file even where Git marks it read-only (Windows)."""
+    if os.name == "nt":
+        os.chmod(path, stat.S_IWRITE)
+    path.unlink()
+
+
+def macro_summaries(page: dict) -> list[dict]:
+    """Flatten the wire groups for tests concerned with individual summaries."""
+    return [summary for group in page["groups"] for summary in group["macroTasks"]]
+
 #: A discovery document with the same shape the installed-harness helper emits. Tests
 #: point ``HMB_MODEL_CATALOG_FILE`` at this fixture instead of invoking Node.
 FIXTURE_CATALOG = {
     "source": "file:test-fixture",
     "harnessVersion": "test-harness-1",
-    "providerVersion": "@deepseek-ai/dsh-llm-deepseek@test",
     "discoveredAt": "2026-01-01T00:00:00.000Z",
     "providers": [
         {
             "provider": "deepseek-official",
             "displayName": "DeepSeek",
-            "packageName": "@deepseek-ai/dsh-llm-deepseek",
-            "packageVersion": "test",
             "harness": "dsh",
             "efforts": ["off", "low", "high", "max"],
             "models": [
@@ -202,7 +253,29 @@ def assert_private_processes_gone(directory: Path) -> None:
     processes, problems, _ = observed_processes(Path(directory))
     if processes or problems:
         raise AssertionError(f"Private test process shutdown unconfirmed; preserved {directory}: "
-                             f"{len(processes)} process(es), {problems}")
+                             f"{len(processes)} process(es), {problems}; processes={processes}")
+
+
+def private_process_failure_evidence(directory: Path, processes: list[dict]) -> dict:
+    """Capture why the failed observation associated these PIDs with this root."""
+    from hey_my_buddy.cli.checks import observe_process_argv, observe_open_paths
+
+    pids = {item['pid'] for item in processes}
+    prefixes = (str(directory), str(directory.resolve()))
+
+    def matches(value):
+        return any(value == prefix or value.startswith(prefix + os.sep) for prefix in prefixes)
+
+    rows, problems = observe_process_argv()
+    opened, error, available, denied = observe_open_paths()
+    return {'processes': processes, 'identitySnapshot': [
+                {'pid': process.pid, 'createTime': process.create_time(),
+                 'rootArguments': [value for value in argv if matches(value)][:16]}
+                for process, argv in rows if process.pid in pids],
+            'rootReferences': {str(pid): sorted(value for value in opened.get(pid, ()) if matches(value))[:16]
+                               for pid in sorted(pids)},
+            'argvProblems': problems, 'pathError': error, 'pathObservationAvailable': available,
+            'denied': [str(item) for item in denied if item.pid in pids]}
 
 
 def cleanup_private_tree(directory: Path, state_directories: tuple[Path, ...]) -> None:
@@ -224,9 +297,11 @@ def cleanup_private_tree(directory: Path, state_directories: tuple[Path, ...]) -
         problems.extend(observation_problems)
     held = held_locks(directory)["daemon"]
     if held or processes or problems:
+        evidence = private_process_failure_evidence(directory, processes) if processes else {}
         raise AssertionError(f"Private fixture shutdown unconfirmed; preserved {directory}: "
-                             f"{len(held)} lock(s), {len(processes)} process(es), {problems}")
-    remove_private_test_root(directory)
+                             f"{len(held)} lock(s), {len(processes)} process(es), {problems}; "
+                             f"processEvidence={json.dumps(evidence, ensure_ascii=False)}")
+    cleanup_fixture_tree(directory)
 
 
 _INHERITED_CHILD_KEYS = {
@@ -298,7 +373,7 @@ def private_state_dir(prefix: str = "hey-my-buddy-test-"):
         stop_private_service(directory)
         shutdown_private_rpc()
         assert_private_processes_gone(directory)
-        remove_private_test_root(directory)
+        cleanup_fixture_tree(directory)
 
 
 def publish_result_receipt(state_dir: Path, params: dict) -> dict:
@@ -309,6 +384,14 @@ def publish_result_receipt(state_dir: Path, params: dict) -> dict:
         db.row_factory = sqlite3.Row
         row = db.execute("SELECT task_id, adapter, model_harness, created_at FROM attempts WHERE attempt_id = ?",
                          (attempt_id,)).fetchone()
+        turn = db.execute("SELECT input_json FROM workflow_turns WHERE attempt_id=?", (attempt_id,)).fetchone()
+        from hey_my_buddy.protocol.turn_input import NONE_TURN_INPUT_VERSION
+        if turn is not None and json.loads(turn['input_json'])['version'] != NONE_TURN_INPUT_VERSION:
+            from hey_my_buddy.blackboard.tasks.workspace_bindings import MANIFEST_OWNERS_CTE
+            original = db.execute(
+                f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE}) SELECT o.input_commit FROM workflow_artifacts a"
+                " JOIN manifest_owners o ON o.workspace_id=a.workspace_id AND o.manifest_sha256=a.input_manifest_sha256"
+                " WHERE a.run_id=? AND a.kind='input' ORDER BY a.rowid LIMIT 1", (row["task_id"],)).fetchone()[0]
     if row is None:
         raise AssertionError(f"Fixture result has no claimed attempt: {attempt_id}")
     adapter = row["model_harness"] if row["adapter"] == "decision" else row["adapter"]
@@ -316,8 +399,20 @@ def publish_result_receipt(state_dir: Path, params: dict) -> dict:
     path = directory / RECEIPT
     report = {key: value for key, value in params.items()
               if key not in ("attemptId", "generation", "nonce")}
+    if turn is not None and params.get("shutdownConfirmed") is True:
+        from hey_my_buddy.protocol.workspace_manifest import turn_manifest, resolve_record
+        from hey_my_buddy.blackboard.tasks.workflow import workspace_module
+        payload = report.get("result") or {}
+        seal_ref = payload.get("partialWorkspaceSeal") or payload.get("workspaceSeal")
+        if (isinstance(seal_ref, dict) and set(seal_ref) == {"recordFile", "snapshotSha256"}
+                and "cumulativePatchError" not in payload):
+            # Synthetic executors preserve the same existing cumulative file as
+            # runtime.enrich before publishing the immutable current receipt.
+            manifest = turn_manifest(state_dir, json.loads(turn["input_json"]))
+            sealed = resolve_record(state_dir, seal_ref)
+            workspace_module().cumulative_patch(manifest, sealed, original)
     native_path(directory).mkdir(mode=directory_mode(), parents=True, exist_ok=True)
-    fsync_json(path, {"taskId": row["task_id"], "attemptId": attempt_id,
+    fsync_json(path, {"version": 2, "taskId": row["task_id"], "attemptId": attempt_id,
                                         "generation": params["generation"], "report": report,
                                         "createdAt": row["created_at"]})
     return {"attemptId": attempt_id, "generation": params["generation"], "nonce": params["nonce"],
@@ -395,7 +490,8 @@ class InProcessBoard:
                 db.execute("INSERT OR IGNORE INTO harness_health(harness,status,record_json) VALUES(?,'ready',?)",
                            (name, json.dumps({"reason": None})))
         self.admission = WaitAdmission(options.get("wait_capacity", 4))
-        self.control: dict = {"wait_admission": self.admission, "contract_version": CONTRACT_VERSION}
+        self.control: dict = {"wait_admission": self.admission, "contract_version": CONTRACT_VERSION,
+                              "runtime": options.get("runtime_identity", "source:in-process-test")}
         self.stopped: list[dict] = []
         self.restarted: list[dict] = []
         self.evaluation = self.store.evaluation
@@ -419,6 +515,7 @@ class InProcessBoard:
         self.console = Console(
             self.store,
             self.service,
+            runtime_identity=self.control["runtime"],
             port=0,
             assets_dir=options.get("console_assets", self.directory / "console-assets"),
         )
@@ -434,7 +531,7 @@ class InProcessBoard:
         return self.console.start()
 
     def call(self, operation: str, params: dict) -> dict:
-        service = self.wait_service if operation.startswith("events_wait") or operation == "wait_capacity" else self.service
+        service = self.wait_service if operation in ('events_wait', 'task_wait', 'wait_capacity') else self.service
         if operation == "execution_result" and "receipt" not in params:
             params = publish_result_receipt(self.directory, params)
             call_operation(service, operation, params)
@@ -456,6 +553,14 @@ class InProcessBoard:
 
     def close(self) -> None:
         self._resources.close()
+
+
+#: How long any real-daemon readiness wait allows: a cold interpreter and full
+#: package import on a slow CI runner can take tens of seconds before health,
+#: while a healthy daemon writes nothing to its log pipes, so only the wait
+#: itself tells readiness from slowness. Shared by BoardTestCase.daemon and the
+#: real-daemon cases in protocol/test_public_state.py.
+DAEMON_READY_TIMEOUT_SECONDS = 180
 
 
 class BoardTestCase(unittest.TestCase):
@@ -504,7 +609,7 @@ class BoardTestCase(unittest.TestCase):
         attempt(assert_private_processes_gone, self.directory)
         if failures:
             raise ExceptionGroup(f"Test resource close failed; preserved {self.directory}", failures)
-        remove_private_test_root(self.directory)
+        cleanup_fixture_tree(self.directory)
 
     def board(self, **options) -> InProcessBoard:
         board = InProcessBoard(self.directory, **options)
@@ -603,7 +708,7 @@ class BoardTestCase(unittest.TestCase):
             except subprocess.TimeoutExpired:  # pragma: no cover - test watchdog
                 process.kill()
 
-        deadline = time.monotonic() + 180
+        deadline = time.monotonic() + DAEMON_READY_TIMEOUT_SECONDS
         try:
             while time.monotonic() < deadline:
                 endpoint = _read_endpoint(self.directory)
@@ -677,5 +782,26 @@ def enable_fixture_buddy(store, buddy):
     if not all(buddy.get(key) for key in keys):
         return
     with store.db.write() as db:
-        db.execute("INSERT OR IGNORE INTO buddies(buddy_id,label,harness,provider,model,effort,enabled,available) VALUES(?,?,?,?,?,?,1,1) ON CONFLICT(buddy_id) DO UPDATE SET enabled=1,available=1",
-                   (":".join(buddy[key] for key in keys), "Private enabled fixture", *(buddy[key] for key in keys)))
+        buddy_id = ":".join(buddy[key] for key in keys)
+        if db.execute("SELECT 1 FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone() is None:
+            seed_buddy(db, buddy_id=buddy_id, **{key: buddy[key] for key in keys}, now=store.now())
+        db.execute("UPDATE buddies SET enabled=1,retired=0 WHERE buddy_id=?",
+                   (buddy_id,))
+
+
+def seed_buddy(db, *, buddy_id: str, harness: str, provider: str, model: str,
+               effort: str, available: int = 1, enabled: int = 1,
+               input_modalities: tuple[str, ...] = ('text',), description: str = '',
+               context_window: int | None = None, unavailable_reason: str | None = None,
+               now: str = '2026-01-01T00:00:00.000Z') -> None:
+    """Insert one normalized private fixture and its model correspondence."""
+    db.execute(
+        "INSERT OR IGNORE INTO model_services(harness,provider,model,description,context_window,"
+        "input_modalities_json,unavailable_code,unavailable_params_json) VALUES(?,?,?,?,?,?,?,?)",
+        (harness, provider, model, description, context_window, json.dumps(input_modalities),
+         unavailable_reason, '{}' if unavailable_reason else None))
+    db.execute(
+        "INSERT INTO buddies(buddy_id,harness,provider,model,effort,retired,enabled) VALUES(?,?,?,?,?,?,?)",
+        (buddy_id, harness, provider, model, effort, int(not available and unavailable_reason is None), enabled))
+    from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
+    ensure_model_service(db, harness, provider, model, now)

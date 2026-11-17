@@ -51,6 +51,8 @@ from ..native_support import (
     utc_now,
 )
 from ..inquiry_bridge import InquiryBridge
+from ..input_admission import admission_error
+from ....protocol.input_failure import is_input_too_large
 from ..session_receipts import ReceiptError
 from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.activity import ActivityPublisher, MAX_SESSION_ID
@@ -85,9 +87,10 @@ from ..run_contract import (
     fold_unknown_events,
     unknown_event_name,
 )
-from ..runtime_selection import launch_for, environment_for
+from ..runtime_selection import launch_for, environment_for, selected
 from ..session_record import SessionRecord
 from .session_content import DshSessionProjector
+from .tool_inventory import read_tool_rows, UNREADABLE, UNRECOGNIZED
 from .acp import AcpClient
 from .acp.client import PermissionPolicy
 from .acp.connection import (
@@ -95,7 +98,6 @@ from .acp.connection import (
 )
 from .acp.launch import LaunchOwnershipError
 from .protocol import (
-    MODEL_ACTIVITY_KINDS,
     UPDATE_KINDS,
     DshActivity,
     DshToolFacts,
@@ -118,22 +120,22 @@ PERMISSION_MODES = {"read": READ_ONLY_MODE, "write": "workspace-write",
 #: The mode-control tool row the none-scope probe disables together with the
 #: tool rows, so no plan-mode tool survives either.
 PLAN_MODE_ROW = "plan-mode"
-#: The confirmed DSH tool-providing rows the ``none`` scope disables through the
-#: public launch patch. The list is a public value of this integration line,
-#: bound to the installed DSH's public composition surface: the Host's
-#: no-model ``dump-config`` read (2026-10-06, private HOME/DSH_HOME) found
-#: sixteen ``tool-`` rows, of which ``tool-result-pruner`` is context pruning
-#: and the remaining fifteen are the tool-providing rows — including the two
-#: platform-exclusive shells. The historical fourteen-row count predates this
-#: surface read and is superseded by it. A future row outside this list is
-#: reported as a retained fact, never claimed as restricted; ``commands`` rows
-#: cannot be disabled and no vendor package is statically proven here.
-NONE_SCOPE_DISABLED_ROWS: tuple[str, ...] = (
-    "tool-bash", "tool-pwsh", "tool-jobs", "tool-fs", "tool-fs-search",
-    "tool-skill", "tool-subagent-control", "tool-subagent-list-agents",
-    "tool-subagent", "tool-subagent-fork", "tool-workflow", "tool-todo",
-    "tool-goal", "tool-ralph", "tool-web",
-)
+#: The executor row every no-preset scope keeps: DSH CLI 0.2.2-rc.1 refuses the
+#: turn before any model activity when no executor row remains ("The selected
+#: tool executor is unavailable. Load an executor in this composition before
+#: running the agent."; isolated reproduction 2026-11-09). The row is the CLI's
+#: internal tool-running component, not a model-facing tool, so keeping it
+#: leaves the none scope with every tool row still disabled.
+EXECUTOR_ROW = "tool-executor-native"
+#: The web scope keeps the web tools and the native executor row; DSH CLI
+#: 0.2.2-rc.1's working_directory also changes the session's working directory,
+#: which this plane never needs. This combination passed the native web probe,
+#: the board's judgment included, on DSH CLI 0.2.2-rc.1 (2026-11-07). Newly
+#: discovered rows are disabled, including disabled defaults.
+WEB_SCOPE_RETAINED_ROWS = frozenset({"tool-web", EXECUTOR_ROW})
+NONE_SCOPE_RETAINED_ROWS: frozenset[str] = frozenset({EXECUTOR_ROW})
+_INVENTORY_REASONS = {UNREADABLE: "dsh-tool-inventory-unreadable",
+                      UNRECOGNIZED: "dsh-tool-inventory-format-unrecognized"}
 # -- the private session record's launch constants ------------------------------------
 
 #: DSH writes its session rollout under the sessions root this run's launch
@@ -174,12 +176,25 @@ UNREAD_SHAPE_KINDS = ("initialize", "agentInfo", "configOptions",
 #: empty reading.
 
 
-def _launch_policy(request: RunRequest) -> tuple[list[dict], dict[str, str]]:
-    """Map the shared permission to DSH's native launch configuration."""
-    if request.permission == "none":
-        rows = [{"id": name, "disabled": True}
-                for name in (*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW)]
-        return rows, {}
+def _launch_policy(request: RunRequest, state: _RunState, deadline: float) -> tuple[list[dict], dict[str, str]]:
+    """Express the scope against every tool row in the current ACP profile."""
+    if request.permission in ("none", "web"):
+        environment = dict(environment_for())
+        record = selected("dsh", environment)
+        version = version_text(record.get("version")) if record is not None else None
+        state.harness_version = version
+        command, launch_environment = launch_for("dsh", environment)
+        inventory, problem = read_tool_rows(
+            command, environment=environment, launch_environment=launch_environment,
+            cwd=request.cwd, private_root=Path(request.private_state.invocation_root), deadline=deadline)
+        if problem is not None:
+            state.native_facts["toolInventory"] = make_reason(_INVENTORY_REASONS[problem], version=version or "unknown")
+            if request.permission == "web":
+                detail = ("could not be read" if problem == UNREADABLE else "has an unrecognized YAML entry format")
+                raise NativeError(problem, f"DSH CLI {version or 'unknown'}: tool inventory {detail}; web scope unavailable")
+        retained = (NONE_SCOPE_RETAINED_ROWS if request.permission == "none" else WEB_SCOPE_RETAINED_ROWS)
+        rows = [{"id": name, "disabled": True} for name in (inventory or ()) if name not in retained]
+        return [*rows, {"id": PLAN_MODE_ROW, "disabled": True}], {}
     return [], {PERMISSION_MODE_ENV: PERMISSION_MODES[request.permission]}
 
 
@@ -260,7 +275,8 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
     checkpoint_tool = qualified.get("hey_my_buddy_checkpoint")
     answer_tool = qualified.get("hey_my_buddy_answer_inquiry")
     bridge = {"identity": dict(identity), "inputSha256": input_sha256, "key": secrets.token_hex(32),
-              "attentionPath": str(attention_path), "delegationAuthority": delegation_authority}
+              "attentionPath": str(attention_path), "delegationAuthority": delegation_authority,
+              "finishAcceptedPath": str(root / "finish-accepted.json")}
     if inquiry is not None:
         bridge["inquiryJournalPath"] = inquiry["resultsPath"]
     bridge_path = root / "finish-bridge.json"
@@ -483,7 +499,10 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
-    model_started: bool = False
+    model_responded: bool = False
+    native_request_sent: bool | None = False
+    native_admission_error: dict | None = None
+    initial_request_attempted: bool = False
     root_model_activity: bool = False
     harness_version: str | None = None
     session_opened: bool = False
@@ -568,7 +587,9 @@ def _native_call(call, *, code: str, message: str):
     try:
         return call()
     except AcpRequestError as error:
-        raise NativeError(code, f"{message}: the native agent refused {error.method}") from None
+        failure = NativeError(code, f"{message}: the native agent refused {error.method}")
+        failure.native_error = admission_error(error.method, error.error)
+        raise failure from None
     except AcpTimeout:
         raise NativeError("deadline", f"{message}: the run's overall deadline expired") from None
     except AcpConnectionClosed:
@@ -707,11 +728,12 @@ class _RunFacts:
     def note_unknown(self, label: object) -> None:
         fold_unknown_events(self.unknown_counts, unknown_event_name(label))
 
-    def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None,
+    def mapping(self, *, tool_calls: int, model_responded: bool, settled: bool, raw_answer: str | None,
                 denied: int) -> dict:
         return {
             "settled": settled,
             "rawAnswer": raw_answer,
+            "modelResponded": model_responded,
             "toolCalls": tool_calls,
             # DSH has no separate marker-frame family: every tool frame is
             # already a projected fact counted in toolCalls.
@@ -781,10 +803,8 @@ def _root_model_activity(update: dict) -> bool:
     if kind in ("agent_message_chunk", "agent_thought_chunk"):
         content = update.get("content")
         return isinstance(content, dict) and any(
-            isinstance(content.get(key), str) and bool(content[key].strip())
+            isinstance(content.get(key), str) and bool(content[key])
             for key in ("text", "content"))
-    if kind == "plan":
-        return bool(update.get("entries"))
     if kind == "usage_update":
         return any(type(update.get(key)) is int and update[key] > 0
                    for key in ("outputTokens", "reasoningTokens"))
@@ -817,10 +837,10 @@ def _fold_update(message: object, state: _RunState, *, facts: _RunFacts, tools: 
     tools.observe(message)
     if evidence is not None:
         evidence.observe(message, state.event_count)
-    if kind in MODEL_ACTIVITY_KINDS and not state.model_started:
-        state.model_started = True
     if params.get("sessionId") == activity.session_id and isinstance(update, dict):
-        state.root_model_activity |= _root_model_activity(update)
+        output = _root_model_activity(update)
+        state.root_model_activity |= output
+        state.model_responded |= output
     activity.note(message, state.event_count)
     if inquiry_bridge is not None:
         inquiry_bridge.note_event(message, activity.phase)
@@ -891,6 +911,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
 
         def notify(*, settled: bool = False, raw: str | None = None) -> RunFeedback:
             feedback = observer(facts.mapping(tool_calls=tools.tool_calls, settled=settled,
+                                              model_responded=state.model_responded,
                                               raw_answer=raw, denied=denied_count()))
             if feedback.action == "stop":
                 raise ObserverInterrupt()
@@ -932,7 +953,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                     raise NativeError("native-resume-unavailable",
                                       "the previous native session does not match this micro task, "
                                       "checkout and buddy")
-            scope_rows, extra_env = _launch_policy(request)
+            scope_rows, extra_env = _launch_policy(request, state, deadline)
             state.scope_rows = scope_rows
             state.permission_mode = extra_env.get(PERMISSION_MODE_ENV)
             policy = (_AttentionPolicy(AttentionRecorder(
@@ -1099,15 +1120,22 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
     state.root_model_activity = False
     activity.note_prompt()
     result: dict = {}
+    initial = not state.initial_request_attempted
+    state.initial_request_attempted = True
+    if initial:
+        state.native_request_sent = None
 
     def send() -> None:
         try:
-            result["value"] = client.prompt(session_id, input_text, timeout=_remaining(deadline))
+            result["value"] = client.prompt(session_id, input_text, timeout=_remaining(deadline),
+                                             on_sent=(lambda: setattr(state, "native_request_sent", True))
+                                             if initial else None)
         except BaseException as error:  # noqa: BLE001 - the loop maps every failure below
             result["error"] = error
 
     thread = threading.Thread(target=send, daemon=True, name="dsh-acp-prompt")
     thread.start()
+    notify()
     interrupted = False
     interrupted_at: float | None = None
     denied_seen = -1
@@ -1133,6 +1161,10 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
     thread.join(timeout=5.0)
     if "error" in result:
         error = result["error"]
+        if isinstance(error, AcpRequestError):
+            if initial:
+                state.native_admission_error = admission_error(error.method, error.error)
+            raise NativeError("native-prompt-refused", "the native agent refused the root prompt") from None
         if isinstance(error, AcpConnectionClosed):
             raise NativeError("transport-error", "the native agent connection ended during the prompt")
         if isinstance(error, AcpTimeout):
@@ -1162,10 +1194,6 @@ def _settle_stop_reason(state: _RunState, stop_reason: object) -> str | None:
         return UNREAD_STOP_REASON
     state.prompt_stop_reason = stop_reason
     if stop_reason == "end_turn":
-        # The native stop reason is itself the model turn's end fact; turn
-        # Earlier native activity may already have confirmed this fact.
-        if not state.model_started:
-            state.model_started = True
         return None
     if stop_reason == "cancelled":
         return "native-cancelled"
@@ -1297,6 +1325,13 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
                                              servers=list(mount.mcp_servers),
                                              state=state, tools=tools, activity=activity,
                                              sessions=sessions, deadline=deadline)
+    def accept_finish_receipt(receipt: dict) -> None:
+        # Published the moment the receipt becomes this turn's fixed answer:
+        # the session-tools bridge reads this marker to answer a repeated
+        # finish call with the truth instead of a second receipt.
+        private_json(Path(mount.bridge["finishAcceptedPath"]),
+                     {"receiptId": receipt["receiptId"]}, exclusive=True)
+
     evidence = RootTurnEvidence(
         session_id, mount.finish_tool, mount.bridge,
         checkpoint_name=mount.checkpoint_tool, answer_name=mount.answer_tool,
@@ -1304,7 +1339,8 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         if inquiry_bridge is not None else None,
         on_answer=(lambda receipt, call_id: inquiry_bridge.record_answer(receipt, call_id))
         if inquiry_bridge is not None else None,
-        validate_outcome=services.validate_outcome, mounted_tools=mount.bare_tools)
+        validate_outcome=services.validate_outcome, mounted_tools=mount.bare_tools,
+        on_finish_receipt=accept_finish_receipt)
     state.round_evidence = evidence
     if inquiry_bridge is not None:
         inquiry_bridge.activate(session_id)
@@ -1478,7 +1514,7 @@ def _build_result(request: RunRequest, *, state: _RunState,
     if state.status == "ok" and sessions and not stop.get("shutdown"):
         state.status = "error"
         state.reason = "native-shutdown-failed"
-        state.error_text = "the native agent did not exit with a confirmed group shutdown"
+        state.error_text = "the native agent did not exit with a confirmed session shutdown"
     if not sessions:
         # No root session was ever opened — three honest shapes, and a missing
         # session never means a missing process: a held client's own group
@@ -1538,7 +1574,12 @@ def _build_result(request: RunRequest, *, state: _RunState,
         harness_version=state.harness_version,
         native_event_count=state.event_count or None,
         native_evidence=_native_evidence_facts(state),
-        model_started=True if state.model_started else None,
+        model_responded=(True if state.model_responded else
+                       False if not state.initial_request_attempted or
+                       is_input_too_large(state.native_admission_error) or
+                       (drained is True and state.prompt_stop_reason is not None) else None),
+        native_request_sent=state.native_request_sent,
+        native_admission_error=state.native_admission_error,
         buddy=ResultBuddy(
             requested=RunBuddy(provider=request.buddy.provider,
                                model=request.buddy.model,
@@ -1590,7 +1631,7 @@ def _effective_policy(request: RunRequest, state: _RunState) -> EffectivePolicy:
             tools=PolicyFact(requested=_json_package({"permissionMode": state.permission_mode})))
     if not state.session_opened:
         return EffectivePolicy()
-    if request.permission == "none":
+    if request.permission in ("none", "web"):
         requested = {"disabledRows": [row["id"] for row in state.scope_rows]}
         return EffectivePolicy(
             tools=PolicyFact(requested=_json_package(requested)))
@@ -1601,10 +1642,7 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
                    record: dict | None = None,
                    stderr_mirror: str | None = None) -> tuple:
     """The run's retained private evidence: refusal records and protocol facts."""
-    if client is None:
-        return ()
     refs: list[EvidenceRef] = []
-    connection_facts = client.facts()
 
     def retain(kind: str, name: str, value: dict) -> None:
         target = invocation_root / name
@@ -1621,6 +1659,10 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
         retain("dsh-session-record", "dsh-session-record.json", record)
     if state.native_facts:
         retain("dsh-native-facts", "dsh-native-facts.json", state.native_facts)
+
+    if client is None:
+        return tuple(refs)
+    connection_facts = client.facts()
 
     if state.provenance is not None:
         # The accepted finish's ordered native evidence; the role reads it back
@@ -1717,7 +1759,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         raise error
     if not shutdown.get("shutdownConfirmed") or client.process.returncode != 0:
         failed = NativeError("native-shutdown-failed",
-                             "the native agent did not exit normally with confirmed group shutdown")
+                             "the native agent did not exit normally with confirmed session shutdown")
         failed.discovery_shutdown_confirmed = shutdown.get("shutdownConfirmed") is True
         raise failed
     return catalog_value
@@ -1803,7 +1845,7 @@ run_delete_sessions = None
 supported_request_controls = ()
 
 __all__ = [
-    "NONE_SCOPE_DISABLED_ROWS", "SessionServiceMount", "SessionServices",
+    "SessionServiceMount", "SessionServices",
     "check_preparation", "execution_deadline", "make_inquiry_bridge",
     "native_evidence", "prepare_run_services", "prepare_services", "prepare_session_service",
     "run", "run_delete_sessions", "run_discovery", "session_facts", "session_record_facts",

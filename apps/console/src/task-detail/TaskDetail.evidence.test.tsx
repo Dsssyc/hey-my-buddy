@@ -42,16 +42,16 @@ describe("a stop that is not confirmed", () => {
     found.events = found.events.filter(item => item.kind === "dispatch" || item.kind === "continue");
     open({ step: 7, timeline: found, replies: { workflow: workflow({ state: "executing" }) } });
     await ready();
-    expect(strip().querySelector('[data-key="acceptance-wait"]')).toBeNull();
+    expect(strip().querySelector('[data-key="settle:m1"]')).toBeNull();
     expect(pane().textContent).toContain("结束未确认");
   });
 });
 
 describe("the integration and the acceptance", () => {
-  const output: Artifact = { artifactId: "art-final", kind: "output", attemptId: "att-2", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
+  const output: Artifact = { artifactId: "art-final", kind: "output", contentForm: "sealed-inline-v1", attemptId: "att-2", sealedEvidence: null, legacyEvidence: { manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1" }, integrationSource: null, runId: null, generation: null, resultFile: null, unsealedChanges: false,
     diffPath: null, changedPaths: ["a.ts"], partial: false, verified: null, final: null, cumulativePatch: null };
   const verified: Integration = { integrationId: "int-1", artifactId: "art-final", state: "verified", strategy: "merge", target: { path: "~/p", ref: "main" },
-    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", hostPaths: ["new-integration.ts"], note: null, actor: HOST, createdAt: at("11:03") };
+    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", verification: { version: null, mergeBaseCommit: null, expectedTree: null, differingPaths: [], conflictingPaths: [], adjustments: [], hostPaths: ["new-integration.ts"], artifactMode: null, artifactOid: null, note: null }, hostPaths: ["new-integration.ts"], note: null, actor: HOST, createdAt: at("11:03") };
   const integrated = () => {
     const found = timeline();
     found.events.push(event(4, "integrate", at("11:03")));
@@ -63,8 +63,10 @@ describe("the integration and the acceptance", () => {
     await ready();
     expect(pane().textContent).toContain("等待验收");
     expect(pane().textContent).not.toContain("已结束");
+    expect(within(pane()).getByRole("button", { name: "已核实" }).getAttribute("aria-expanded")).toBe("true");
+    expect(within(pane()).getByRole("group", { name: "核验结果" }).textContent).toContain("历史核验");
     expect(pane().textContent).toContain("new-integration.ts");
-    expect(strip().querySelector('[data-key="acceptance-wait"]')!.getAttribute("aria-label")).toContain("等待验收");
+    expect(strip().querySelector('[data-key="settle:m1"]')!.getAttribute("aria-label")).toContain("等待验收");
     expect(head().textContent).toContain("等待验收");
   });
 
@@ -75,6 +77,8 @@ describe("the integration and the acceptance", () => {
     open({ step: 8, timeline: integrated(), replies: { workflow: workflow({ artifacts: [partial, resolved, output], finalArtifactId: "art-resolved",
       integrations: [{ ...verified, artifactId: "art-resolved" }, { ...older, artifactId: "art-resolved" }] }) } });
     await ready();
+    expect(within(pane()).getByRole("button", { name: "已核实" }).getAttribute("aria-expanded")).toBe("true");
+    expect(within(pane()).getByRole("group", { name: "核验结果" }).textContent).toContain("历史核验");
     expect(pane().textContent).toContain("new-integration.ts");
     expect(pane().textContent).not.toContain("old-integration.ts");
     cleanup();
@@ -89,6 +93,33 @@ describe("the integration and the acceptance", () => {
 });
 
 describe("a route", () => {
+  it.each([[true, true], [true, false], [false, false]])("marks exploration only when quota=%s and reselected=%s", async (quota, reselected) => {
+    open({ step: 2, replies: { routing: [routing({ routerIndex: 1, exploration: { quota, reselected, preferredBuddyId: "dsh:p:preferred:max" } })] } });
+    await ready();
+    expect(pane().textContent).toContain("第 2 个 Router");
+    const mark = within(pane()).queryByText("探索", { exact: true });
+    if (quota && reselected) expect(mark?.getAttribute("aria-description")).toBe("首选：未记录");
+    else expect(mark).toBeNull();
+  });
+  it("shows a recorded domain and task type, including an unclassified domain, but leaves old routes clear", async () => {
+    open({ step: 2, replies: { routing: [routing({ domainNodeId: "domain-1", domainNodeName: "界面工程", taskType: "change" })] } });
+    await ready();
+    expect(pane().textContent).toContain("领域节点");
+    expect(pane().textContent).toContain("界面工程");
+    expect(pane().textContent).toContain("任务类型");
+    expect(pane().textContent).toContain("改造");
+    cleanup();
+    open({ step: 2, replies: { routing: [routing({ domainNodeId: null, domainNodeName: null, taskType: "review" })] } });
+    await ready();
+    expect(pane().textContent).toContain("未归类");
+    expect(pane().textContent).toContain("审查");
+    cleanup();
+    open({ step: 2 });
+    await ready();
+    expect(pane().textContent).not.toContain("领域节点");
+    expect(pane().textContent).not.toContain("任务类型");
+  });
+
   const two = () => {
     const found = timeline();
     found.spans.find(item => item.spanId === "r1")!.routing = { routingMode: "review", selectedBuddy: OPUS, reason: null, note: "审阅模式不可用之前的结论", usage: { elapsedMs: 9000, toolCalls: 4 } };
@@ -143,7 +174,7 @@ describe("a route", () => {
       excluded: [{ buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" }, note: "提交时排除低推理强度" }], overloadedModelServices: [], cooling: [], preferences: [] };
     const f = open({ step: 2, replies: { routing: [routing({ source: "no-candidate", routerBuddy: null, routingMode: null })], bases: { "decision-1": bounds } } });
     await ready();
-    await waitFor(() => expect(pane().textContent).toContain("没有合法候选"));
+    await waitFor(() => expect(pane().textContent).toContain("无合法候选"));
     expect(pane().textContent).not.toContain("模型选择");
     expect(band().textContent).toContain("未调用 Router");
     await waitFor(() => expect(f.reads.basis).toHaveBeenCalledExactlyOnceWith("decision-1"));
@@ -154,15 +185,14 @@ describe("a route", () => {
     expect(pane().textContent).toContain("提交时冻结候选 0 个");
   });
 
-  it("shows the bounds beside the only candidate, in a hint on the word that says so, with the preference the program applied", async () => {
+  it("opens the frozen bounds below the result, with the preference the program applied", async () => {
     const bounds: Basis = { ...NO_BASIS, constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], candidateCount: 1,
       excluded: [{ buddy: { model: "m" }, note: "提交时排除低推理强度" }], preferences: [{ buddyId: "dsh:p:m:max", mode: "pin", note: "当时固定此 buddy" }] };
     const f = open({ step: 3, replies: { routing: [routing({ source: "single-candidate" })], bases: { "decision-1": bounds } } });
     await ready();
     await waitFor(() => expect(f.reads.basis).toHaveBeenCalledWith("decision-1"));
-    await waitFor(() => expect(within(band()).getByText("唯一候选").getAttribute("tabindex")).toBe("0"));
-    await f.user.hover(within(band()).getByText("唯一候选"));
-    const tip = (await screen.findAllByText(/硬约束：dsh/))[0]!.closest("ul")!.textContent!;
+    await f.user.click(within(pane()).getByRole("button", { name: "提交时的约束" }));
+    const tip = (await screen.findAllByText((_, node) => node?.tagName === "LI" && node.textContent === "硬约束：dsh"))[0]!.closest("ul")!.textContent!;
     expect(tip).toContain("所需能力：execution:dsh");
     expect(tip).toMatch(/用户排除 1 个：m \(提交时排除低推理强度\)/);
     expect(tip).toContain("固定选择 dsh:p:m:max：当时固定此 buddy");
@@ -282,11 +312,11 @@ describe("the inquiries", () => {
     const cut = { items: [inquiry({ messageId: "x", attemptId: "att-1", question: "最早列出的问询", createdAt: at("10:20") })], more: true };
     open({ step: 3, replies: { inquiries: cut } });
     await ready();
-    expect(pane().textContent).toContain("更早的问询可能没有列出");
+    expect(pane().textContent).toContain("更早的问询可能未列出");
     cleanup();
     open({ step: 7, replies: { inquiries: cut } });
     await ready();
-    expect(pane().textContent).not.toContain("更早的问询可能没有列出");
+    expect(pane().textContent).not.toContain("更早的问询可能未列出");
   });
 });
 
@@ -303,7 +333,8 @@ describe("the head", () => {
     expect(f.onBack).toHaveBeenCalledOnce();
     expect(titled.textContent).not.toContain("等待验收");
     const right = children[1] as HTMLElement;
-    expect(right.textContent).toMatch(/开始.*历时.*回合/);
+    expect(right.textContent).toMatch(/历时.*回合/);
+    expect(within(right).queryByText("开始")).toBeNull();
     expect(within(right).getByText("等待验收")).toBeTruthy();
     expect(right.querySelector("[data-slot=detail-status]")?.parentElement?.querySelector("button[aria-label=重新读取]")).toBeTruthy();
     expect(within(right).getByRole("button", { name: "重新读取" })).toBeTruthy();
@@ -318,7 +349,7 @@ describe("the head", () => {
     await ready();
     const button = screen.getByRole("button", { name: "重新读取" });
     const before = slow.mock.calls.length;
-    slow.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ value: undefined, verifiedAtMs: null }); }));
+    slow.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ value: undefined }); }));
     await f.user.click(button);
     await waitFor(() => expect(button.getAttribute("aria-busy")).toBe("true"));
     await f.user.click(button);
@@ -326,19 +357,13 @@ describe("the head", () => {
     release();
   });
 
-  it("says the checking time of the read the head rests on, and none when that read carries none", async () => {
+  it("keeps refresh free of a checking-time tooltip", async () => {
     const reads = client();
     const f = open({ client: reads });
     await ready();
     await f.user.hover(screen.getByRole("button", { name: "重新读取" }));
-    expect((await screen.findAllByText(/核对时间 \d{2}:\d{2}:\d{2}/))[0]).toBeTruthy();
-    cleanup();
-    const bare = client();
-    (bare.workflow as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ value: workflow(), verifiedAtMs: null }));
-    const g = open({ client: bare });
-    await ready();
-    await g.user.hover(screen.getByRole("button", { name: "重新读取" }));
-    expect((await screen.findAllByText("核对时间未记录"))[0]).toBeTruthy();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(screen.getByRole("button", { name: "重新读取" }).hasAttribute("aria-description")).toBe(false);
   });
 
   it("writes a relative time with a space between the number and the unit", async () => {
@@ -362,24 +387,24 @@ describe("the title of a turn that runs", () => {
   it("says possibly stuck in orange where it would say running, and past the expected time when only that is so", async () => {
     running({ overdue: true, possiblyStuck: true });
     await ready();
-    expect(turnTitle().textContent).toContain("可能卡住");
-    expect(within(turnTitle()).getByText("可能卡住").className).toContain("text-hand");
+    expect(turnTitle().textContent).toContain("疑似停滞");
+    expect(within(turnTitle()).getByText("疑似停滞").className).toContain("text-hand");
     cleanup();
     running({ overdue: true, possiblyStuck: false });
     await ready();
     expect(turnTitle().textContent).toContain("已超过预期");
-    expect(within(turnTitle()).queryByText("可能卡住")).toBeNull();
+    expect(within(turnTitle()).queryByText("疑似停滞")).toBeNull();
     cleanup();
     running({ overdue: false, possiblyStuck: false });
     await ready();
     expect(within(turnTitle()).getByText("进行中").className).toContain("state-breathe");
   });
 
-  it("says what backs the report of a running turn in a hint on its phase", async () => {
+  it("shows the running phase without an explanatory hover", async () => {
     const f = running({ overdue: false, possiblyStuck: false });
     await ready();
     await f.user.hover(within(pane().querySelector("[data-slot=detail-live]") as HTMLElement).getByText("工具执行中"));
-    expect((await screen.findAllByText(/收到工具活动/))[0]).toBeTruthy();
+    expect(screen.queryByText(/收到工具活动/)).toBeNull();
   });
 });
 
@@ -402,8 +427,8 @@ describe("the turn that ended otherwise than it should", () => {
   const ended = (record: Record<string, unknown>) => open({ step: 7, replies: { task: task(record), workflow: workflow({ state: "cancelled" }) } });
 
   it("names each cause in words, and a wrap-up that a Lead asked for as the Lead's", async () => {
-    for (const [cause, words] of [["deadline", "Router 预算用完"], ["forced-stop", "强制停止"], ["console-stop", "控制台停止"], ["service-stop", "服务停止"],
-      ["unknown-stop", "停止（发起者未知）"], ["harness-error", "Harness 错误"], ["transport-error", "传输故障"], ["grace-expired", "有序收尾的宽限期到期后停止"]] as const) {
+    for (const [cause, words] of [["deadline", "Router 的模型未能及时开始作答"], ["forced-stop", "强制停止"], ["console-stop", "控制台停止"], ["service-stop", "服务停止"],
+      ["unknown-stop", "停止（发起者未知）"], ["harness-error", "harness 错误"], ["transport-error", "传输故障"], ["grace-expired", "有序收尾的宽限期到期后停止"]] as const) {
       cleanup();
       ended({ state: "failed", selectedAttempt: { result: { terminationReason: cause } } });
       await ready();
@@ -414,26 +439,31 @@ describe("the turn that ended otherwise than it should", () => {
       selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "wrap-up" } } });
     await ready();
     expect(pane().textContent).toContain("Lead 有序收尾完成");
-    expect(pane().textContent).toContain("Lead 停止");
+    expect(pane().textContent).toContain("由 Lead 停止");
     expect(pane().textContent).toContain("review-lead");
     expect(pane().textContent).toContain("Please summarize the current work");
     expect(pane().textContent).not.toContain("Host 有序收尾完成");
   });
 
   it("names the person who stopped it only when the stopper was a person, and the console or the service never by a name", async () => {
+    ended({ state: "cancelled", cancellation: { actor: { role: "host" }, note: "Host stopped this turn" }, selectedAttempt: { stopInitiator: "host", result: { terminationReason: "forced-stop" } } });
+    await ready();
+    expect(pane().textContent).toContain("由 Host 停止");
+    expect(pane().textContent).not.toContain("undefined");
+    cleanup();
     ended({ state: "cancelled", cancellation: { actor: { role: "host", id: "old-actor" }, note: null }, selectedAttempt: { stopInitiator: "console", result: { terminationReason: "console-stop" } } });
     await ready();
-    expect(pane().textContent).toContain("控制台停止");
+    expect(pane().textContent).toContain("从控制台停止");
     expect(pane().textContent).not.toContain("old-actor");
     cleanup();
     ended({ state: "cancelled", cancellation: { actor: { role: "host", id: "old-owner" }, note: null }, selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "forced-stop" } } });
     await ready();
-    expect(pane().textContent).toContain("Lead 停止");
+    expect(pane().textContent).toContain("由 Lead 停止");
     expect(pane().textContent).not.toContain("old-owner");
     cleanup();
     ended({ state: "cancelled", selectedAttempt: { result: { terminationReason: "unknown-stop" } } });
     await ready();
-    expect(pane().textContent).toContain("停止（发起者未知）");
+    expect(pane().textContent).toContain("已停止（发起者未知）");
     expect(pane().textContent).not.toContain("用户取消");
   });
 
@@ -448,54 +478,47 @@ describe("the turn that ended otherwise than it should", () => {
   });
 });
 
-describe("the seal of a turn", () => {
-  const sealed = (overrides: Partial<Artifact>): Artifact => ({ artifactId: "art-p", kind: "partial-output", attemptId: "att-1", manifestSha256: "b".repeat(64), outputCommit: "9aa8b7c6d5",
-    diffPath: "/d.diff", changedPaths: ["src/a.py"], partial: true, verified: false, final: false, cumulativePatch: null, ...overrides });
-
-  it("says a partial output is neither verified nor final, and gives its hash and its paths", async () => {
-    const f = open({ step: 3, replies: { workflow: workflow({ artifacts: [sealed({ cumulativePatch: { baseCommit: "d286db0aa", outputCommit: "9aa8b7c6d5", path: "/p.patch", sha256: "a".repeat(64), changedPaths: ["src/a.py", "src/b.py"] } })] }) } });
+describe("delivery evidence", () => {
+  it("shows a fixed result without a Git seal or patch", async () => {
+    const fixed: Artifact = { artifactId: "result-1", kind: "result", contentForm: "result-reference", attemptId: "att-1",
+      sealedEvidence: null, legacyEvidence: null, integrationSource: null, runId: "m1", generation: 1,
+      resultFile: { path: "<state>/result.json", sha256: "a".repeat(64) }, unsealedChanges: true,
+      diffPath: null, changedPaths: [], partial: false, verified: null, final: null, cumulativePatch: null };
+    const record = workflow({ checkout: "none", projectKind: "folder", artifacts: [fixed], unsealedChanges: true,
+      turns: [{ ...workflow().turns[1]!, checkout: "none", projectKind: "folder", access: "write" }] });
+    open({ step: 3, replies: { workflow: record } });
     await ready();
-    const seal = await within(pane()).findByRole("button", { name: /封存/ });
-    expect(seal.textContent).toContain("部分产物");
-    await f.user.click(seal);
-    await waitFor(() => expect(pane().textContent).toContain("部分、未验证、非最终"));
-    expect(pane().textContent).toContain("b".repeat(64));
-    expect(pane().textContent).toContain("src/b.py");
-  });
-
-  it("writes the parts of a cumulative patch that were not recorded as unrecorded, not as empty", async () => {
-    const f = open({ step: 3, replies: { workflow: workflow({ artifacts: [sealed({ kind: "output", partial: false, verified: null, final: null,
-      cumulativePatch: { baseCommit: "d286db0aa", outputCommit: null, path: null, sha256: null, changedPaths: [] } })] }) } });
-    await f.user.click(await within(await (async () => { await ready(); return pane(); })()).findByRole("button", { name: /封存/ }));
-    await waitFor(() => expect(pane().textContent).toContain("累计补丁"));
-    expect(pane().textContent!.match(/未记录/g)!.length).toBeGreaterThanOrEqual(3);
+    const paneText = pane().textContent!;
+    expect(paneText).toContain("固定结果");
+    expect(paneText).toContain("原文件夹");
+    expect(paneText).not.toContain("封存证据");
+    expect(paneText).not.toContain("整合来源");
+    // A turn without a checkout still names the buddy that ran it, like a Git turn.
+    expect(within(band()).getByText("codex / openai / gpt-6.1-sol / high")).toBeTruthy();
   });
 });
 
 describe("what a turn says of its session, its usage and its buddy's origin", () => {
-  it("says in the hint of the session where it is kept, who holds it, whether the app lists it, whether it can be resumed, whether it is bound, and the harness's own note", async () => {
-    const sessioned = task({ selectedAttempt: { result: { terminationReason: "completed", result: { nativeSession: { storageScope: "harness-user-store", storageOwner: "harness-user-store",
-      nativeAppVisibility: "listed-in-native-app", resumable: true, bindingPresent: false, note: "Codex owns the native thread" } } } } });
-    open({ step: 7, replies: { task: sessioned } });
+  it("does not attach session storage explanations to the copy action", async () => {
+    open({ step: 7 });
     await ready();
-    await userEvent.setup().hover(within(band()).getByRole("button", { name: /复制标识 01a2f7c4-2e31/ }));
-    expect((await screen.findAllByText(/Harness 用户存储 · 由 Harness 的用户目录持有 · 原生应用里列出 · 可恢复 · 私有绑定不存在 · Codex owns the native thread/))[0]).toBeTruthy();
+    const copy = within(band()).getByRole("button", { name: /复制标识 01a2f7c4-2e31/ });
+    await userEvent.setup().hover(copy);
+    expect(screen.queryByText(/存储位置未记录/)).toBeNull();
   });
 
-  it("says in the hint of the usage whose it is, where it came from, that it is partial, and that the cache is counted apart when its basis says so", async () => {
+  it("labels execution usage with its source, completeness and cache accounting without a tooltip", async () => {
     const usage = (extra: object) => ({ inputTokens: 100, cachedInputTokens: 60, outputTokens: 7, source: "codex-native", scope: "attempt" as const, ...extra });
     const withUsage = (tokenUsage: ReturnType<typeof usage>) => { const found = workflow(); found.turns = [found.turns[0]!, { ...found.turns[1]!, tokenUsage }]; return found; };
     const f = open({ step: 3, replies: { workflow: withUsage(usage({ completeness: "partial" })) } });
     await ready();
-    await f.user.hover(within(band()).getByText(/输入 100/));
-    const tip = (await screen.findAllByText(/来源 codex-native/))[0]!.textContent!;
+    const tip = within(band()).getByLabelText(/来源 codex-native/).getAttribute("aria-label")!;
     expect(tip).toContain("输入 100（含缓存 60）");
     expect(tip).toContain("只含已报告的部分");
     cleanup();
     const apart = open({ step: 3, replies: { workflow: withUsage(usage({ inputBasis: "excludes-cached", inputTokens: 40 })) } });
     await ready();
-    await apart.user.hover(within(band()).getByText(/输入 40/));
-    expect((await screen.findAllByText(/输入 40（缓存 60 另计）/))[0]!.textContent).toContain("缓存不在输入之内");
+    expect(within(band()).getByLabelText(/输入 40（缓存 60 另计）/).getAttribute("aria-label")).toContain("缓存不在输入之内");
   });
 
   it("shows the bounds beside a buddy the Host chose, for the turn that runs under that choice", async () => {
@@ -504,8 +527,8 @@ describe("what a turn says of its session, its usage and its buddy's origin", ()
     found.routing = { status: "explicit", decisionId: null, source: "host-override", basis: bounds };
     open({ step: 7, replies: { workflow: found } });
     await ready();
-    await userEvent.setup().hover(within(band()).getByText("Host 指定"));
-    expect((await screen.findAllByText(/硬约束：claude \/ claude-opus-5-5/))[0]).toBeTruthy();
+    await userEvent.setup().click(within(pane()).getByRole("button", { name: "提交时的约束" }));
+    expect((await screen.findAllByText((_, node) => node?.tagName === "LI" && node.textContent === "硬约束：claude / claude-opus-5-5"))[0]).toBeTruthy();
   });
 });
 
@@ -516,10 +539,11 @@ describe("the delegation", () => {
     expect(pane().textContent).toContain("未记录项目");
   });
 
-  it("says the delegator is not recorded when it is not, and shows the title, not the result, in the head", async () => {
-    open({ step: 1, replies: { task: task({ lineage: { ...task().lineage, sourceHostId: null, currentHostId: null } }) } });
+  it("shows Host ownership and the task title in the head", async () => {
+    open({ step: 1, replies: { task: task() } });
     await ready();
-    expect(pane().textContent).toContain("未记录委派方");
+    expect(pane().textContent).not.toContain("原始委派方");
+    expect(pane().querySelector("[data-slot=pane-title]")?.textContent).toContain("Host");
     expect(head().querySelector("h2")!.textContent).toBe("微任务详情");
     expect(head().textContent).not.toContain("第二轮：详情页已经按回合重做。");
   });

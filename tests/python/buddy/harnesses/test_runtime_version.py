@@ -157,13 +157,13 @@ class RuntimeVersionTests(unittest.TestCase):
             self.assertIsNone(result.harness_version)
         else:
             self.assertIsInstance(result.harness_version, str)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
     def assert_refused(self, result):
         self.assertEqual((result.end.status, result.end.reason_code), ("error", "native-shutdown-failed"))
         self.assertEqual(result.stop_evidence.native.group_state, "unknown")
-        self.assertFalse(result.model_started)
+        self.assertFalse(result.model_responded)
         self.assertIsNone(result.harness_version)
 
     def test_four_harnesses_report_version_or_none_and_continue(self):
@@ -319,7 +319,7 @@ class RuntimeVersionTests(unittest.TestCase):
     def claude_main_close_failure(self, *, stopped, stop_error=False):
         for operation in (self.execute, self.discover):
             with self.subTest(seam=operation.__name__), self.harness("claude") as (case, module):
-                create, close, halt = module.owned_popen, os.close, module._halt_owned_group
+                create, close, halt = module.owned_popen, os.close, module._halt_owned_session
                 children, failed_fds = [], []
                 fault = OSError(errno.EIO, "synthetic post-create stderr close failed")
                 halt_fault = OSError(errno.EIO, "synthetic stop observation failed")
@@ -329,7 +329,7 @@ class RuntimeVersionTests(unittest.TestCase):
                     nonlocal pending_fd
                     child = create(*args, **kwargs)
                     pending_fd = kwargs["stderr"]
-                    children.append((child, module.ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")))
+                    children.append((child, module.ProcessHandle(child, log_paths={}, stop_channel="signal")))
                     return child
 
                 def close_failed(fd):
@@ -357,7 +357,7 @@ class RuntimeVersionTests(unittest.TestCase):
                     with mock.patch.object(module, "probe_version", wraps=version.probe_version) as shared, \
                             mock.patch.object(module, "owned_popen", side_effect=held_create) as main, \
                             mock.patch.object(module.os, "close", side_effect=close_failed), \
-                            mock.patch.object(module, "_halt_owned_group", side_effect=halt_observed) as stop, \
+                            mock.patch.object(module, "_halt_owned_session", side_effect=halt_observed) as stop, \
                             mock.patch.object(module, "Connection") as connection:
                         if operation == self.execute:
                             result = operation("claude", case, module)
@@ -365,7 +365,7 @@ class RuntimeVersionTests(unittest.TestCase):
                                              ("error", "invalid-native-result"))
                             self.assertEqual(result.stop_evidence.native.group_state,
                                              "gone" if stopped and not stop_error else "unknown")
-                            self.assertFalse(result.model_started)
+                            self.assertFalse(result.model_responded)
                         else:
                             with self.assertRaises(OSError) as caught:
                                 operation("claude", case, module)
@@ -438,7 +438,7 @@ class RuntimeVersionTests(unittest.TestCase):
                             mock.patch.object(module, "owned_popen", side_effect=producer) as main, \
                             mock.patch.object(windows_process.subprocess, "Popen", side_effect=popen), \
                             mock.patch.object(module, "Connection") as connection, \
-                            mock.patch.object(module, "_halt_owned_group") as stop:
+                            mock.patch.object(module, "_halt_owned_session") as stop:
                         if not created:
                             failure = mock.patch.object(api, "create_job", side_effect=OSError("synthetic job creation refused"))
                         elif not stopped:
@@ -451,7 +451,7 @@ class RuntimeVersionTests(unittest.TestCase):
                                 self.assertEqual((result.end.status, result.end.reason_code),
                                                  ("error", "harness-unavailable"))
                                 self.assertEqual(result.stop_evidence.native.group_state, "gone")
-                                self.assertFalse(result.model_started)
+                                self.assertFalse(result.model_responded)
                             else:
                                 error_type = module.ClaudeProtocolError if stopped else RuntimeError
                                 with self.assertRaises(error_type) as caught:
@@ -516,7 +516,7 @@ class RuntimeVersionTests(unittest.TestCase):
                         result = operation("dsh", case, module)
                         self.assertEqual((result.end.status, result.end.reason_code),
                                          ("error", "transport-error"))
-                        self.assertFalse(result.model_started)
+                        self.assertFalse(result.model_responded)
                     else:
                         with self.assertRaises(module.NativeError) as caught:
                             operation("dsh", case, module)

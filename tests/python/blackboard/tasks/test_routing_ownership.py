@@ -12,6 +12,7 @@ from console.test_console import ConsoleTestCase
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.tasks import micro_task, storage
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.reasons import reason
 
 
 class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
@@ -21,6 +22,21 @@ class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
     report = failover.FailoverTests.report
     current_task = failover.FailoverTests.current_task
     next_claim = failover.FailoverTests.next_claim
+
+    def test_repeated_routing_stop_records_only_new_requests_and_escalations(self):
+        request, claim = self.start(micro_task=True)
+        task_id = claim["task"]["taskId"]
+        for initiator in ("host", "host", "host", "console", "console"):
+            with self.board_.store.db.write() as connection:
+                self.board_.store.workflow._cancel_routes(
+                    connection, "run-1", reason("micro-task-cancelled"), self.board_.store.now(),
+                    actor={"role": initiator}, initiator=initiator)
+            with self.board_.store.db.read() as connection:
+                count = connection.execute("SELECT COUNT(*) FROM events WHERE task_id=? AND kind='task.cancel_requested'",
+                                           (task_id,)).fetchone()[0]
+                self.assertEqual(count, 1 if initiator == "host" else 2)
+        attempt = self.board_.call("task_get", {"runId": task_id})["task"]["selectedAttempt"]
+        self.assertEqual(attempt["stopInitiator"], "console")
 
     def claim(self, suffix="1", *, task_id=None):
         result = super().claim(suffix, task_id=task_id)
@@ -75,15 +91,15 @@ class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
                 row = db.execute(f"SELECT * FROM ({micro_task.RELATION_SQL}) WHERE task_id=?",
                                  (claim["task"]["taskId"],)).fetchone()
                 self.assertEqual(row["decision_id"], request["decisionId"])
-                self.assertEqual(row["source_host_id"], "host-1")
+                self.assertEqual(view["lineage"]["actor"], {"role": "host"})
                 self.assertEqual(row["router_model"], claim["decisionInput"]["routerBuddy"]["model"])
 
     def test_review_gate_includes_the_replaced_routers_attempt(self):
         _request, first, second = self.replaced_router()
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,"
-                       "shutdown_confirmed,result_json,created_at,updated_at)"
-                       " VALUES('root-attempt','run-1',1,'verifier','finished','dsh',1,'{}',?,?)", (T0, T0))
+                       "shutdown_confirmed,result_json,result_form,created_at,updated_at)"
+                       " VALUES('root-attempt','run-1',1,'verifier','finished','dsh',1,'{}','current-report-v2',?,?)", (T0, T0))
             db.execute("UPDATE tasks SET state='completed',selected_attempt_id='root-attempt' WHERE task_id='run-1'")
             db.execute("UPDATE workflow_runs SET state='delivered' WHERE run_id='run-1'")
         for claim in (first, second):
@@ -130,4 +146,4 @@ class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
                 self.assertIsNone(span["routing"]["reason"])
                 self.assertEqual(span["routing"]["note"], "The frozen legal choice")
                 self.assertEqual(span["routing"]["usage"], {
-                    "elapsedMs": 100, "toolCalls": 0, "bytesRead": None})
+                    "elapsedMs": 100, "toolCalls": 0})

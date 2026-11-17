@@ -47,6 +47,7 @@ BASELINE_SHA = "613faa4089c02ef1d5ef9b1d0743920de6f4a7cc"
 BUDDY = {"harness": "dsh", "provider": "deepseek-official",
                  "model": "deepseek-flash", "effort": "off"}
 BUDDY_ID = ":".join(BUDDY.values())
+BUDDY_NAME = " / ".join(BUDDY.values())
 NONCE = "synthetic-nonce-1"
 SCENARIOS = ("no-write", "unrelated-meta", "unrelated-plain",
              "other-macro", "single-macro", "all-macros")
@@ -139,7 +140,6 @@ class SyntheticBoard:
         self.helpers: list[str] = []
         self.completed_attempts: list[str] = []
         self.plain: list[str] = []
-        self.controls: dict[str, dict] = {}
         self.operations = 0
 
     def __enter__(self):
@@ -187,19 +187,19 @@ class SyntheticBoard:
         return self.board.call(operation, params)
 
     def _submit(self, name, *, macro_task=None, macro_task_id=None, routed=False):
+
         cwd = self.state / "fictional-project" / name
         cwd.mkdir(parents=True, exist_ok=True)
-        params = {"requestId": f"synthetic-{self.seed}-{name}", "hostId": "fictional-host",
-                  "task": f"Fictional work {name}", "title": f"Synthetic {name}", "cwd": str(cwd),
-                  "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src/feature.py"]}}
-        if not routed:
-            params.update(BUDDY)
+        title, task = f"Synthetic {name}", f"Fictional work {name}"
         if macro_task is not None:
-            params["macroTask"] = {"title": macro_task, "description": "Fictional benchmark; no real work."}
-        if macro_task_id is not None:
-            params["macroTaskId"] = macro_task_id
-        view = self.call("workflow_submit", params)
-        self.controls[view["runId"]] = view["control"]
+            created = self.call("workflow_create", {"cwd": str(cwd), "title": macro_task,
+                                                    "goal": "Fictional benchmark; no real work."})
+            macro_task_id = created["macroTaskId"]
+        params = {"task": task, "title": title, "cwd": str(cwd), "macroTaskId": macro_task_id or "standalone",
+                  "buddy": "route" if routed else BUDDY_NAME, "checkout": "worktree", "access": "write",
+                  "inputs": [], "writeScope": ["src/feature.py"], "expectedSeconds": 1800}
+        response = self.call("workflow_submit", params)
+        view = self.call("workflow_get", {"runId": response["runId"]})
         if routed:
             self._select(view)
         return view
@@ -211,7 +211,12 @@ class SyntheticBoard:
             raise AssertionError({"syntheticRouterClaim": response, "routing": view.get("routing")})
         claim = response["claim"]
         attempt, document = claim["attempt"], claim["decisionInput"]
-        self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim, state_dir=self.board.directory), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 0, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'note': 'Fictional fixture selection', 'evidence': []}}})
+        decision = {"domainNodeId": None, "taskType": "change", 'buddyId': BUDDY_ID, 'note': 'Fictional fixture selection', 'evidence': []}
+        if (document.get("exploration") or {}).get("quota") is True:
+            # Every fifth synthetic routing carries an exploration quota; its
+            # answer names the preferred buddy and keeps it.
+            decision.update(preferredBuddyId=BUDDY_ID, reselected=False)
+        self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim, state_dir=self.board.directory), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 0, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': decision}})
 
     def _finish(self, run_id, *, disposition="completed"):
         from protocol.fixtures.native_turn import claim_record
@@ -228,24 +233,28 @@ class SyntheticBoard:
         evidence = self.state / "attempts" / run_id / attempt["attemptId"]
         evidence.mkdir(parents=True, exist_ok=True)
         (evidence / "turn-output.json").write_text(json.dumps(record), encoding="utf-8", newline="\n")
+        from hey_my_buddy.protocol.workspace_manifest import record_reference, turn_manifest
+        manifest = turn_manifest(self.state, claim["turn"]["input"])
         result = {"status": "ok", "mode": "run", "processState": {"shutdownConfirmed": True},
                   "logPaths": {}, "turn": record, "turnResultPath": str(evidence / "turn-output.json"),
-                  "workspaceSeal": self.workspace.seal(self.state, claim["turn"]["input"]["executionWorkspace"],
-                                                       run_id, attempt["attemptId"])}
+                  "workspaceSeal": record_reference(self.state, self.workspace.seal(
+                      self.state, manifest, run_id, attempt["attemptId"]))}
         self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
         if disposition == "completed":
             self.completed_attempts.append(attempt["attemptId"])
 
     def _helper(self, parent, name):
         view = self.call("workflow_get", {"runId": parent})
-        result = self.call("workflow_decide", {
-            "runId": parent, **self.controls[parent], "requestId": view["activeRequest"]["requestId"],
-            "commandId": f"approve-{parent}", "expectedRevision": view["revision"], "decision": "approve",
-            "helpers": [{**BUDDY, "requestId": name, "task": "Fictional helper",
-                         "cwd": str(self.state / "fictional-project"),
-                         "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src/feature.py"]}}],
+        request_id = view["activeRequest"]["requestId"]
+        self.call("workflow_continue", {
+            "runId": parent, "requestId": request_id, "decision": "approve", "autoContinue": True,
+            "helpers": [{"title": name, "task": "Fictional helper", "cwd": str(self.state / "fictional-project"),
+                         "buddy": BUDDY_NAME, "checkout": "worktree", "access": "write",
+                         "inputs": [], "writeScope": ["src/feature.py"], "expectedSeconds": 1800}],
         })
-        helper = result["children"][0]["taskId"]
+        with self.board.store.db.read() as connection:
+            helper = connection.execute("SELECT child_task_id FROM workflow_children WHERE parent_run_id=?"
+                                        " AND request_id=?", (parent, request_id)).fetchone()[0]
         self.helpers.append(helper)
         self._finish(helper, disposition="assistance")
 
@@ -254,15 +263,13 @@ class SyntheticBoard:
         # MockWorkspace recognizes this empty marker as one fictional project.
         # It is not a Git repository and no Git operation is performed.
         (self.state / "fictional-project/.git").mkdir(parents=True)
-        self.call("model_catalog_refresh", {"requestId": "synthetic-catalog"})
+        self.call("model_catalog_refresh", {})
         self.board.console_call("user_policy_publish", {
             "commandId": "synthetic-policy",
             "buddySettings": [{"buddyId": item, "enabled": True} for item in
                                 (BUDDY_ID, "dsh:deepseek-official:deepseek-v4-pro:high")],
             "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": [BUDDY_ID]},
         })
-        None
-        None
         pending, accepted = 0, 0
         for macro in range(r.macros):
             macro_task_id = None
@@ -283,7 +290,7 @@ class SyntheticBoard:
                     pending += 1
                 elif accepted < r.accepted_roots:
                     delivered = self.call("workflow_get", {"runId": run_id})
-                    self.call("workflow_accept", {"runId": run_id, **self.controls[run_id],
+                    self.call("workflow_accept", {"runId": run_id,
                                                   "artifactId": delivered["finalArtifactId"],
                                                   "note": "Synthetic fixture review only",
                                                   "notRequired": "Fictional fixture has no Git target"})
@@ -489,7 +496,8 @@ class HandlerProbe:
                    wireBodyBytes=len(body), rawBodyBytes=len(raw),
                    gzipBodyBytes=len(body) if encoding == "gzip" else None,
                    bodySha256=hashlib.sha256(body).hexdigest(), rawSha256=hashlib.sha256(raw).hexdigest(),
-                   responseHeaders=response_headers, returnedMacros=len(parsed["macroTasks"]) if parsed else 0,
+                   responseHeaders=response_headers,
+                   returnedMacros=sum(len(group["macroTasks"]) for group in parsed["groups"]) if parsed else 0,
                    totalMacros=parsed["totals"]["all"] if parsed else None)
         return row, parsed
 
@@ -508,12 +516,13 @@ def measure(fixture: SyntheticBoard, *, samples=5, on_sample=None):
     with HandlerProbe(fixture.board) as probe:
         first, page = probe.request("identity")
         warmups.append({"scenario": "initial-page", **first})
-        relevant = page["macroTasks"][0]["macroTaskId"]
+        visible_rows = [item for group in page["groups"] for item in group["macroTasks"]]
+        relevant = visible_rows[0]["macroTaskId"]
         # Other macro starts off-page at full scale; its activity may move it
         # onto the page. It is unrelated to the pinned relevant macro, not to
         # the entire board-wide list. Smoke uses one group's stable task-name
         # filter and retains limit=50. The exact query is saved in every sample.
-        visible = {item["macroTaskId"] for item in page["macroTasks"]}
+        visible = {item["macroTaskId"] for item in visible_rows}
         outside = [item for item in fixture.macros if item not in visible]
         other = outside[0] if outside else next(item for item in fixture.macros if item != relevant)
         query = "limit=50" if outside else f"limit=50&query=macro-{fixture.macros.index(relevant):03d}"

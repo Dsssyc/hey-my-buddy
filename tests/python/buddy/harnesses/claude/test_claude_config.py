@@ -39,6 +39,20 @@ FOCUSED_CLEARED_VARIABLES = (
 
 
 class ClaudeConfigTests(unittest.TestCase):
+    def test_web_invocation_limits_builtins_and_ignores_all_user_mcp(self):
+        args = execution_args(session_id="session", model="model", effort="default",
+                              settings_path="settings.json", read_only=False, web_only=True,
+                              output_schema={}, mcp_config_path="inquiry.json", inquiry_tools=("mcp__x__tool",))
+        self.assertEqual(flag_value(args, "--tools"), "WebSearch,WebFetch")
+        self.assertEqual(flag_value(args, "--allowedTools"), "WebSearch,WebFetch")
+        self.assertEqual(flag_value(args, "--disallowedTools"), "mcp__*")
+        self.assertEqual(flag_value(args, "--mcp-config"), canonical_json({"mcpServers": {}}))
+        self.assertEqual(args.count("--mcp-config"), 1)
+        self.assertIn("--strict-mcp-config", args)
+        self.assertEqual(flag_value(args, "--permission-mode"), "default")
+        self.assertNotIn("--setting-sources", args)
+        self.assertNotIn("--bare", args)
+
     def test_session_mcp_uses_native_mount_and_tool_permission(self):
         tools = ("mcp__attempt__hey_my_buddy_checkpoint", "mcp__attempt__hey_my_buddy_answer_inquiry")
         args = execution_args(session_id="session", model="model", effort="default",

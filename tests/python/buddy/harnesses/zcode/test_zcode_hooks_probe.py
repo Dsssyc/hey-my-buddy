@@ -11,7 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-from temporary import TemporaryDirectory
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -54,7 +54,7 @@ class EnvironmentIsolationTests(unittest.TestCase):
         self.assertEqual(scrubbed["PATH"], "/usr/bin:/bin")
 
     def test_private_environment_uses_private_paths_and_never_inherits_credentials(self):
-        with TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             fake = {
                 "HOME": tmp,
@@ -75,12 +75,12 @@ class EnvironmentIsolationTests(unittest.TestCase):
             self.assertEqual(env["HTTP_PROXY"], "http://127.0.0.1:9")
 
     def test_paid_environment_requires_provider_vars(self):
-        with TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=True):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(SystemExit):
                 probe.build_private_environment(Path(tmp), require_provider=True)
 
     def test_free_probe_fixture_replaces_inherited_home_and_provider_pins(self):
-        with TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             native_probe = _load_probe("zcode_hooks_native.py")
             fixture = native_probe.FreeProbePipelineTests("test_gather_versions_reports_native_identities")
             inherited = {"HOME": str(Path(tmp) / "user-home"),
@@ -104,7 +104,7 @@ class EnvironmentIsolationTests(unittest.TestCase):
 
 class SnapshotTests(unittest.TestCase):
     def test_snapshot_and_diff_detect_every_change_kind(self):
-        with TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "a.txt").write_text("one", encoding="utf-8", newline="\n")
             (root / "b.txt").write_text("two", encoding="utf-8", newline="\n")
@@ -134,7 +134,7 @@ class HookAssemblyTests(unittest.TestCase):
         self.assertEqual(hook["args"][4], "run-token")
 
     def test_write_config_embeds_nonce_and_parses(self):
-        with TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             parts = probe.assemble_workspace(work, "config")
             nonce = probe.NONCE_PREFIX + "0011223344556677"
@@ -146,7 +146,7 @@ class HookAssemblyTests(unittest.TestCase):
             self.assertEqual(hook["args"][4], parts["run_token"])
 
     def test_plugin_mode_assembles_inline_plugin_and_workspace_config(self):
-        with TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             parts = probe.assemble_workspace(work, "plugin")
             nonce = probe.NONCE_PREFIX + "9988776655443322"
@@ -167,7 +167,7 @@ class HookAssemblyTests(unittest.TestCase):
             self.assertIsNone(parts["config"])
 
     def test_hook_script_selftest_records_and_injects_nonce(self):
-        with TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             parts = probe.assemble_workspace(work, "config")
             nonce = probe.NONCE_PREFIX + "aabbccdd11223344"

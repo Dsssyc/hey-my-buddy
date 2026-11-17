@@ -1,6 +1,6 @@
 # 有界保存方案的独立审查
 
-2026-10-16，检出 `bdb27fee`，审查对象是同目录的 `bounded-history-design.md`。依据是本检出的源码、AGENTS.md 的 Invariants 与积压事项里“数据库的八成是命令日志与心跳事件”一条。只读源码：没有运行检查套件、服务或 harness，没有碰日常看板，所以文中关于体积的判断都是从代码推出的，没有测量。源码引用从 `src/hey_my_buddy/` 起算；`S` = `blackboard/store/store.py`，`W` = `blackboard/tasks/workflow.py`，`V` = `blackboard/service/service.py`。
+2026-10-16，检出 `bdb27fee`，审查对象是同目录的 `bounded-history-design.md`。依据是本检出的源码、AGENTS.md 的 Invariants 与积压事项里“数据库的八成是命令日志与心跳事件”一条。只读源码：没有运行检查套件、服务或 harness，没有碰日常黑板，所以文中关于体积的判断都是从代码推出的，没有测量。源码引用从 `src/hey_my_buddy/` 起算；`S` = `blackboard/store/store.py`，`W` = `blackboard/tasks/workflow.py`，`V` = `blackboard/service/service.py`。
 
 结论：方案对现状的调查大体准确，活动部分基本站得住；命令部分多了一层。命令回答之所以大，是因为回答里嵌着一份微任务视图或清理计划视图，而这些视图都能从当前表里重新读出，验收与写结论的重放本来就会用当前视图覆盖存下的那份。所以收据在写入时只存提交身份、重放时补当前视图，一个机制就够：不需要保留窗口、`response_form` 列、`COMMAND_ALREADY_APPLIED`、控制台改动，也不需要命令侧的定期维护，takeover 与 applying 两个例外也就不存在了。另有一处方案没看到的冲突：服务启动后立即收简，会让以后每一次改契约的安装都在校验时失败（B5）。
 

@@ -4,7 +4,7 @@
 
 ## 状态与修订
 
-状态：修订提案，供讨论；没有实现运行时，也没有调用 Jev 验证效果。日期：2026-09-21。
+状态：修订提案，供讨论；没有实现运行时，也没有调用 Jev 验证效果。日期：2026-09-21。2026-10-27 补注：这是历史研究，没有被采纳为现行设计；[ADR-004](004-buddy-decision-support-and-console.md) 把 Jev 降为可选的实验后端，选择 buddy 的方式后来由 [ADR-014](014-router-buddy-and-read-only-routing.md)、[ADR-018](018-routing-modes-and-host-workflow.md) 与 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 的 Router 决定。
 
 > 后续状态说明（2026-09-21）：本文正文保留为历史研究，其中的接口、存储布局与默认后端描述不代表当前提案。当前综合提案见 [ADR-004：决策支持、评估维护与本地控制台](004-buddy-decision-support-and-console.md)；ADR-004 收敛本文方向并加入新的边界建议，同样属于讨论、未被接受也未实现。
 

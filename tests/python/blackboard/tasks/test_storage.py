@@ -26,9 +26,9 @@ class StorageTests(BoardTestCase):
             deep /= 'directory-' + 'a' * 35
         private_dirs.ensure_private_dir(deep)
         publish_bytes(deep / 'evidence.json', b'payload')
-        size, fingerprint, safe = storage.tree_info(root)
-        self.assertEqual((size, safe), (len(b'payload'), True))
-        self.assertEqual(storage.tree_info(root), (size, fingerprint, safe))
+        size, fingerprint, safe, stable = storage.tree_info(root)
+        self.assertEqual((size, safe, stable), (len(b'payload'), True, True))
+        self.assertEqual(storage.tree_info(root), (size, fingerprint, safe, True))
         publish_bytes(deep / 'evidence.json', b'changed')
         self.assertNotEqual(storage.tree_info(root)[1], fingerprint)
         metadata = root.lstat()
@@ -42,6 +42,71 @@ class StorageTests(BoardTestCase):
         self.assertFalse(tomb.exists())
         self.assertEqual(result['removed'][0]['path'], str(root))
         self.assertNotIn('\\\\?\\', read_bytes(receipt).decode())
+
+    def test_a_tree_changing_under_the_scan_is_listed_and_never_reclaimed(self):
+        board = self.board()
+        root = Path(os.environ['HMB_RUNTIME_ROOT'])
+        root.mkdir()
+        # A directory the owning process empties and removes while the scan
+        # enters it leaves the same fact as a file removed before its lstat.
+        vanishing_directory = root / 'vanishing-directory'
+        vanishing_directory.mkdir()
+        (vanishing_directory / 'payload').write_bytes(b'gone with the directory')
+        real_scandir = os.scandir
+        def emptied_first(path):
+            if native_path(path) == native_path(vanishing_directory):
+                native_path(vanishing_directory / 'payload').unlink()
+                native_path(vanishing_directory).rmdir()
+            return real_scandir(path)
+        with mock.patch.object(storage.os, 'scandir', emptied_first):
+            self.assertEqual(storage.tree_info(root), (0, '', True, False))
+        candidate = root / ('c' * 32)
+        candidate.mkdir()
+        (candidate / 'READY.json').write_text(json.dumps({
+            'state': 'READY', 'contentId': candidate.name, 'format': 0,
+            'runtimeRoot': str(root), 'python': str(candidate / 'venv/bin/python'),
+        }), encoding="utf-8", newline="\n")
+        (candidate / 'payload').write_bytes(b'private runtime')
+        vanishing = candidate / 'vanishing'
+        vanishing.write_bytes(b'deleted by its owning process')
+        (board.directory / 'runtime-retention.json').write_text(json.dumps({
+            'current': 'a' * 32, 'previous': 'b' * 32}), encoding="utf-8", newline="\n")
+        patches = (mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)),
+                   mock.patch('hey_my_buddy.blackboard.tasks.storage.runtime_usage', return_value=[]),
+                   mock.patch('hey_my_buddy.blackboard.tasks.storage.is_ready', return_value=True))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        # The owning process removes the entry after the scan listed it and
+        # before the scan measures it: the race that once failed whole plans.
+        real_lstat = Path.lstat
+        observations = []
+        def removed_before_lstat(path, *args, **kwargs):
+            if private_dirs._absolute(Path(path)) == vanishing:
+                observations.append(None)
+                if len(observations) > 1:
+                    native_path(vanishing).unlink()
+            return real_lstat(path, *args, **kwargs)
+        with mock.patch.object(Path, 'lstat', removed_before_lstat):
+            planned = board.call('storage_plan', {})
+        self.assertEqual(len(observations), 2)
+        row = next(row for row in planned['candidates'] if row['path'] == str(candidate))
+        self.assertFalse(row['eligible'])
+        self.assertEqual(row['reasons'], ['changing'])
+        self.assertEqual(row['fingerprint'], '')
+        self.assertEqual(row['bytes'],
+                         (candidate / 'READY.json').stat().st_size + len(b'private runtime'))
+        self.assertFalse(vanishing.exists())
+        # The settled tree measures a real fingerprint again and stays reclaimable.
+        self.assertNotEqual(storage.tree_info(candidate)[1], '')
+        result = board.call('storage_apply', {'planId': planned['planId'],
+                                               'commandId': 'changing-tree', 'confirm': True})
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['removed'], [])
+        skipped = next(item for item in result['skipped'] if item['path'] == str(candidate))
+        self.assertEqual(skipped['reasons'], ['changing'])
+        self.assertTrue(candidate.is_dir())
+        self.assertTrue((candidate / 'payload').exists())
 
     def test_session_record_inventory_is_disjoint_protected_and_does_not_follow_links(self):
         board = self.board()
@@ -69,10 +134,11 @@ class StorageTests(BoardTestCase):
             report = storage.inspect(board.store)
         records = [row for row in report['candidates'] if row['category'] == 'session-records']
         parent = next(row for row in report['candidates'] if row['category'] == 'harnesses')
+        self.assertEqual(parent['reasons'], ['owner-unproven'])
+        self.assertEqual(parent['bytes'], native_path(other).stat().st_size)
         category = next(row for row in report['categories'] if row['id'] == 'session-records')
         self.assertEqual({row['groupId'] for row in records}, {'run:orphan', 'run:linked'})
         self.assertEqual(category['bytes'], native_path(first).stat().st_size + native_path(second).stat().st_size)
-        self.assertEqual(parent['bytes'], native_path(other).stat().st_size)
         self.assertEqual(category['reclaimableBytes'], 0)
         self.assertTrue(all(row['reasons'] == ['macro-task-deletion'] and not row['eligible'] for row in records))
         self.assertEqual(outside.read_bytes(), b'private outside content')
@@ -338,7 +404,8 @@ class StorageTests(BoardTestCase):
             first = board.call('storage_plan', {})
             with self.assertRaises(BoardError) as caught:
                 board.call('storage_apply', {'planId':first['planId'], 'commandId':'x'})
-            self.assertEqual(caught.exception.code, 'CONFIRMATION_REQUIRED')
+            self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+            self.assertEqual(caught.exception.details['field'], 'confirm')
             board.call('storage_apply', {'planId':first['planId'], 'commandId':'x', 'confirm':True})
             second = board.call('storage_plan', {})
             with self.assertRaises(BoardError) as caught:
@@ -459,10 +526,11 @@ class StorageTests(BoardTestCase):
         self.assertFalse(any(Path(row['path']).is_relative_to(user_home) for row in candidates))
         private = next(row for row in candidates if row.get('adapter') == 'codex')
         self.assertEqual(private['bytes'], 0)
+        self.assertFalse(private['eligible'])
         private_dirs.remove_tree(private_dirs.micro_task_root(board.directory, 'codex', 'fixture-task'))
         self.assertEqual(session.read_bytes(), b'user-owned native session')
 
-    def test_all_adapters_private_micro_tasks_are_visible(self):
+    def test_native_roots_without_an_owner_remain_visible_and_protected(self):
         board = self.board()
         state = board.directory.resolve()
         for adapter in ('codex', 'claude', 'dsh', 'zcode'):
@@ -472,7 +540,7 @@ class StorageTests(BoardTestCase):
             planned = board.call('storage_plan', {})
             micro_tasks = [row for row in planned['candidates'] if row['category'] == 'harnesses']
             self.assertEqual({row['adapter'] for row in micro_tasks}, {'codex', 'claude', 'dsh', 'zcode'})
-            self.assertTrue(all(not row['eligible'] and 'owner-unproven' in row['reasons'] for row in micro_tasks))
+            self.assertTrue(all(row['reasons'] == ['owner-unproven'] and not row['eligible'] for row in micro_tasks))
             board.call('storage_apply', {'planId':planned['planId'], 'commandId':'protected-micro-tasks', 'confirm':True})
 
     def test_storage_lock_plan_receipt_and_save_reject_links_without_touching_targets(self):
@@ -737,13 +805,6 @@ class StorageTests(BoardTestCase):
                 self.assertIn('linked-path' if marked == candidate else 'runtime-format-unsupported', row['reasons'])
         self.assertEqual(ready_path.read_text(encoding="utf-8"), 'retained READY')
 
-    def test_unaccepted_unknown_shutdown_reports_both_protections(self):
-        workflow = mock.Mock()
-        workflow.shutdown_summary.return_value = {'selfConfirmed': None, 'descendantsConfirmed': None}
-        store = mock.Mock(workflow=workflow)
-        reasons = storage._zcode_reasons(store, object(), {'run_id': 'run', 'state': 'running'},
-                                         {'accepted_at': None}, 0)
-        self.assertEqual(reasons, ['continuation-supported', 'shutdown-unconfirmed'])
 
 
 class ProcessInventoryServiceTests(BoardTestCase):

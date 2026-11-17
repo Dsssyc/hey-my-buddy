@@ -1,7 +1,37 @@
 /** The frame around every page: top bar, connection state and the startup screen. */
 export default {
+  maintenanceValidation: {
+    "invalidJson": "维护回答不是有效 JSON。",
+    "citationOutsideBatch": "摘要引用了本批次之外的微任务。",
+    "unknown": "维护回答未通过校验。",
+    "wrongType": "回答中的字段类型不正确。",
+    "invalidValue": "回答包含不允许的值。",
+    "requiredField": "回答缺少必填字段。",
+    "unexpectedField": "回答包含未声明的字段。",
+    "textTooShort": "回答中的文字为空。",
+    "textTooLong": "回答中的文字超过长度上限。",
+    "tooManyItems": "回答包含过多条目。",
+    "duplicateNode": "新领域节点的标识重复。",
+    "blankNode": "新领域节点的名称或定义为空。",
+    "changedNode": "已写入的领域节点不能在更正中改动。",
+    "inactiveParent": "新领域节点的上级无效。",
+    "parentCycle": "领域节点的上级关系形成环。",
+    "duplicateName": "活动领域节点的名称重复。",
+    "duplicateMerge": "同一领域节点被重复合并。",
+    "inactiveMergeSource": "合并的来源节点无效。",
+    "inactiveMergeTarget": "合并的目标节点无效。",
+    "invalidMerge": "领域节点的合并无效。",
+    "duplicateClassification": "同一微任务被重复分类。",
+    "inactiveClassificationNode": "分类指向无效的领域节点。",
+    "missingClassification": "微任务缺少分类。",
+    "duplicateCitation": "摘要重复引用了同一微任务。",
+    "deletedCitation": "摘要引用的微任务已删除。",
+  },
+  reasonNoProcesses: "无",
+  reasonProcess: "{{executable}}（{{pid}}）",
   reasonFact: "{{name}}：{{value}}",
   reasonParam: {
+    "errors": "问题",
     "access": "权限",
     "adapter": "执行适配器",
     "bound": "边界",
@@ -33,6 +63,12 @@ export default {
     "unfinished": "未完成的微任务"
   },
   reasonValue: {
+    "violation": {
+      "type": "必须是文字",
+      "empty": "不能为空",
+      "length": "最多 64 个字符",
+      "format": "不能含“ / ”、方括号或控制字符"
+    },
     "yes": "是",
     "no": "否",
     "operation": {
@@ -47,7 +83,7 @@ export default {
       "identity-changed": "身份已变化",
       "constraints": "约束不符",
       "not-pinned": "未被固定选择",
-      "harness-unavailable": "Harness 不可用",
+      "harness-unavailable": "harness 不可用",
       "quota-exhausted": "额度已耗尽",
       "not-a-candidate": "不在候选内"
     },
@@ -60,7 +96,7 @@ export default {
     "state": {
       "queued": "排队",
       "executing": "执行中",
-      "waiting-helpers": "等待 helper",
+      "waiting-helpers": "等待协助任务",
       "waiting-owned": "等待名下微任务",
       "awaiting-host": "等待 Host",
       "delivered": "待验收",
@@ -72,13 +108,11 @@ export default {
   },
   identifier: { copy: "复制标识 {{value}}", copied: "已复制", failed: "复制失败，请重试" },
   actor: {
-    delegator: "委派方：{{source}}", originalDelegator: "原始委派方", unrecordedDelegator: "未记录委派方",
-    currentOwner: "当前管理方",
     unknownOrigin: "未记录发起者", microTask: "微任务 {{id}}",
     events: {
       dispatch: "{{time}} {{role}} 派发「{{title}}」", approved: "{{time}} {{role}} 批准了「{{title}}」的请求",
       declined: "{{time}} {{role}} 拒绝了「{{title}}」的请求", decide: "{{time}} {{role}} 批准 / 拒绝了「{{title}}」的请求",
-      continue: "{{time}} {{role}} 让「{{title}}」继续", integrate: "{{time}} {{role}} 整合了「{{title}}」的产出",
+      continue: "{{time}} {{role}} 续接「{{title}}」", integrate: "{{time}} {{role}} 整合了「{{title}}」的产出",
       accept: "{{time}} {{role}} 验收通过「{{title}}」", reject: "{{time}} {{role}} 对「{{title}}」提出验收问题",
       stop: "{{time}} {{role}} 停止了「{{title}}」", console: "{{time}} 控制台停止了「{{title}}」",
       service: "{{time}} 服务停止了「{{title}}」", unknown: "{{time}} 停止了「{{title}}」（发起者未知）",
@@ -87,7 +121,7 @@ export default {
     unrecorded: "未记录", identity: "{{role}} · {{id}}", recordedBy: "记录来源",
     markerIdentity: "{{sentence}}，记录来源 {{actor}}", origin: "发起 {{role}}", reason: "停止理由",
     roles: { host: "Host", lead: "Lead", console: "控制台", service: "服务", workflow: "黑板", bridge: "桥接" },
-    stop: { host: "Host 停止", lead: "Lead 停止", console: "控制台停止", service: "服务停止", workflow: "黑板停止", bridge: "桥接停止", unknown: "停止（发起者未知）" },
+    stop: { host: "由 Host 停止", lead: "由 Lead 停止", console: "从控制台停止", service: "由服务停止", workflow: "由黑板停止", bridge: "由桥接停止", unknown: "已停止（发起者未知）" },
   },
   /** A length of time: the number comes first, then the unit. */
   duration: { hour: "{{n}} 时", minute: "{{n}} 分", second: "{{n}} 秒" },
@@ -110,31 +144,24 @@ export default {
     lost: "连接中断",
     retry: "重试连接",
   },
+  runtimeUpdated: {
+    message: "控制台已更新，刷新后使用新版本",
+    refresh: "刷新",
+  },
   reminders: {
     overdue: "已超过预期",
-    possiblyStuck: "可能卡住",
+    possiblyStuck: "疑似停滞",
   },
-  macroStop: {
-    title: "停止宏任务", cancel: "取消", confirm: "确认停止宏任务",
-    scope: "将停止此宏任务中进行的工作；已有结果保留。",
-    scopeRoots: "停止 {{count}} 个微任务", scopeHelpers: "停止 {{count}} 个协助任务",
-    scopeDelivered: "保留 {{count}} 个已交付微任务", scopeAwaitingHost: "保留 {{count}} 个等待 Host 的微任务",
-    scopeAccepted: "保留 {{count}} 个已验收微任务",
-    pending: "停止请求已发出，等待回复。", noActive: "没有进行中的微任务或协助任务。",
-    actionHint: "停止进行中的微任务及协助任务（需确认）。",
-    refused: "停止请求未提交", refusedDetail: "请求被拒绝。", unknown: "停止未确认",
-    unknownDetail: "停止结果未知，可能已生效；可重试同一请求或刷新核对。",
-    stopping: "正在停止", stoppingDetail: "停止中 · 等待证据",
-    incomplete: "这个宏任务的记录没有读全", incompleteDetail: "这个宏任务的记录没有读全 · 停止未确认",
-    pendingCount: "仍有 {{count}} 项停止未确认", uncertainCount: "{{count}} 项停止未确认或超出读取范围",
-    stopped: "已停止", stoppedCount: "{{roots}}及 {{helpers}}已停止",
-    stoppedRoots: "{{count}} 个微任务", stoppedHelpers: "{{count}} 个协助任务",
-    noOp: "无需停止", noOpDetail: "本次没有微任务需要停止；清单内状态已保留。",
-    retry: "重试停止", retryHint: "重试同一停止请求；不会重复取消，也不会扩大取消范围。",
-    dismiss: "知道了", replayUnknown: "停止结果未知；可重试同一请求。",
-    invalidResponse: "停止宏任务的响应不完整，提交结果尚未确认。",
+  macroWork: {
+    pause: "暂停", resume: "继续", end: "结束",
+    pausing: "暂停中", paused: "已暂停",
+    title: "结束宏任务", cancel: "取消", confirm: "确认结束",
+    scope: "没了结的微任务会停下，并写上你在控制台结束它们的结论，检出随后回收。已交付的留给 Host 验收。结束不能撤销。",
+    scopeUnfinished: "结束 {{count}} 个微任务", scopeDelivered: "保留 {{count}} 个已交付微任务",
+    pauseUnknown: "暂停的结果未知，可能已生效；可以重试同一请求或刷新核对。",
+    resumeUnknown: "继续的结果未知，可能已生效；可以重试同一请求或刷新核对。",
+    endUnknown: "结束的结果未知，可能已生效；可以重试同一请求或刷新核对。",
   },
-  /** The state of the page's draft: what waits to be saved, and what a save ran into. */
   draft: {
     label: "未保存的修改",
     unsaved: "{{n}} 项未保存",

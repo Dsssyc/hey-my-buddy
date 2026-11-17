@@ -1,4 +1,3 @@
-import { Hint } from "../components/hint";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { clockTime } from "../macro-task-display";
@@ -16,13 +15,13 @@ export const markerAt = (marker: TimelineMarker) => marker.kind === "event" ? ma
 export const markerHasKey = (marker: TimelineMarker, key: string | null | undefined) => markerKey(marker) === key
   || marker.kind === "event" && !!marker.relatedEvents?.some(event => `event:${event.seq}` === key);
 
-export function MarkerCluster({ markers, x, y, hitPath, runId, taskTitle, tabKey, boundary, onOpen, onSelect, onFocusMarker, markerName, markerReadout, selectedKey, highlightedKey }: {
+export function MarkerCluster({ markers, x, y, hitPath, runId, taskTitle, tabKey, boundary, onOpen, onSelect, onFocusMarker, markerName, markerReadout, selectedKey, highlightedKey, itemLinks }: {
   markers: TimelineMarker[]; x: number; y: number; hitPath: string; runId: string; taskTitle: string; tabKey?: string | null; boundary?: HTMLElement | null;
   onOpen: (runId: string, key: string) => void; onFocusMarker: (marker: TimelineMarker | null, source: "hover" | "focus") => void;
   onSelect: (runId: string, key: string) => void;
   markerName: (marker: TimelineMarker) => string; markerReadout: (marker: TimelineMarker) => string;
   /** The cluster is selected when it holds the selected event or inquiry. */
-  selectedKey?: string | null; highlightedKey?: string | null;
+  selectedKey?: string | null; highlightedKey?: string | null; itemLinks?: ReadonlySet<string>;
 }) {
   const { t } = useTranslation("tasks");
   const [open, setOpen] = useState(false);
@@ -38,15 +37,15 @@ export function MarkerCluster({ markers, x, y, hitPath, runId, taskTitle, tabKey
     onOpen(runId, markerKey(marker));
   };
   return <Popover open={open} onOpenChange={setOpen}>
-    <Hint text={label}><PopoverTrigger asChild><g ref={trigger} role="button" tabIndex={tabKey === key ? 0 : -1} data-slot="event-cluster" data-at={Date.parse(markerAt(first))} data-key={key} aria-pressed={selected}
+    <PopoverTrigger asChild><g ref={trigger} role="button" tabIndex={itemLinks || tabKey === key ? 0 : -1} data-slot="event-cluster" data-at={Date.parse(markerAt(first))} data-key={key} aria-pressed={selected}
       aria-label={`${label} · ${taskTitle}`} onPointerEnter={() => onFocusMarker(first, "hover")} onPointerLeave={() => onFocusMarker(null, "hover")} onFocus={() => onFocusMarker(first, "focus")} onBlur={() => onFocusMarker(null, "focus")}
       onClick={() => onSelect(runId, markerKey(first))}
       onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onSelect(runId, markerKey(first)); setOpen(true); } }}
       className="group/fragment outline-none">
       <path data-slot="marker-hit" d={hitPath} fill="transparent"/>
       <ClusterMark count={markers.length} x={x} y={y} selected={selected || markers.some(marker => markerHasKey(marker, highlightedKey))} focusFrame/>
-    </g></PopoverTrigger></Hint>
-    <PopoverContent collisionBoundary={boundary ?? undefined} avoidCollisions sideOffset={8} aria-label={label} className="w-72 max-w-(--radix-popover-content-available-width) max-h-(--radix-popover-content-available-height) overflow-y-auto rounded-none p-1"
+    </g></PopoverTrigger>
+    <PopoverContent collisionBoundary={boundary ?? undefined} avoidCollisions sideOffset={8} aria-label={label} className="w-72 max-w-(--radix-popover-content-available-width) max-h-(--radix-popover-content-available-height) overflow-y-auto p-1"
       onOpenAutoFocus={event => { event.preventDefault(); items.current[0]?.focus(); }}
       onCloseAutoFocus={event => { event.preventDefault(); trigger.current?.focus(); }}>
       <div className="border-b px-2 py-1 text-xs text-ink3">{label}</div>

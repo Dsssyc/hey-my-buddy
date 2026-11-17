@@ -33,7 +33,7 @@ from .run_contract import NativeIdentity, RunRequest
 
 __all__ = [
     "CancelFlag", "ObserverInterrupt", "buddy_spec", "execution_deadline",
-    "halt_owned_group", "identity_or_none", "shape_guard", "utc_now",
+    "halt_owned_session", "identity_or_none", "shape_guard", "utc_now",
     "bounded_utf8", "truncate_utf8", "truncate_text",
 ]
 
@@ -112,7 +112,7 @@ def shape_guard(shape: Any) -> Callable[[Any], Any]:
     return check
 
 
-def halt_owned_group(handle: ProcessHandle, deadline: float) -> tuple[bool, bool]:
+def halt_owned_session(handle: ProcessHandle, deadline: float) -> tuple[bool, bool]:
     """Apply the owned handle's stop sequence after the native interrupt."""
     return handle.terminate(grace_seconds=min(3.0, max(0.0, deadline - time.monotonic())))
 

@@ -2,8 +2,15 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "./tokens.css";
+@source "../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  --radius-card: 6px;
+  --ease-out-quart: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
 
 /* One palette: the utilities read the tokens of tokens.css. The first group is
    what the generated components expect; the second is the design's own names. */
@@ -42,6 +49,7 @@
   --color-ink4: var(--ink4);
   --color-line2: var(--line2);
   --color-live: var(--live);
+  --color-goal: var(--goal);
   --color-selected-row: var(--selected-row);
   --color-hand: var(--hand);
   --color-hand-mark: var(--hand-mark);
@@ -58,11 +66,16 @@
   --color-brand-mark: var(--brand-mark);
   --color-bar-hand: var(--bar-hand);
   --color-bar-fail: var(--bar-fail);
-  /* Controls and floating surfaces have a small radius; containers are square. */
+  /* Controls keep their own geometry; cards and floating surfaces use --radius-card. */
   --radius-sm: 2px;
   --radius-md: 4px;
   --radius-lg: 4px;
   --radius-xl: 4px;
+}
+
+/* Floating components own their shared shape, including renamed slot roots. */
+:root .overlay-surface {
+  border-radius: var(--radius-card);
 }
 
 @keyframes detail-refresh-turn {
@@ -76,6 +89,120 @@
 
 @keyframes state-breathe {
   50% { opacity: .45; }
+}
+
+@keyframes ink-glide {
+  from { transform: translateX(var(--ink-dx, 0px)) scaleX(var(--ink-sx, 1)); }
+  to { transform: translateX(0) scaleX(1); }
+}
+
+@keyframes detail-stage-in {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes stage-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes panel-fade-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes step-next-in {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes step-prev-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes icon-swap-in {
+  from { opacity: 0; transform: scale(0.82); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes row-fresh-in {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
+
+.notice-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.notice-collapse > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-ink-glide="run"]::after {
+    transform-origin: left center;
+    animation: ink-glide 170ms var(--ease-out-quart);
+  }
+  .view-presence {
+    transition: opacity 140ms var(--ease-out-quart);
+  }
+  @starting-style {
+    .view-presence {
+      opacity: 0;
+    }
+  }
+  .detail-stage-enter {
+    animation: detail-stage-in 170ms var(--ease-out-expo);
+  }
+  .panel-enter {
+    animation: panel-fade-up 150ms var(--ease-out-quart);
+  }
+  .canvas-enter {
+    animation: stage-fade-in 140ms var(--ease-out-quart);
+  }
+  .step-pane-enter[data-step-direction="next"] {
+    animation: step-next-in 140ms var(--ease-out-quart);
+  }
+  .step-pane-enter[data-step-direction="prev"] {
+    animation: step-prev-in 140ms var(--ease-out-quart);
+  }
+  .step-pane-enter[data-step-direction="jump"] {
+    animation: stage-fade-in 130ms var(--ease-out-quart);
+  }
+  [data-slot="detail-strip"] [data-slot="selected-item"] {
+    animation: stage-fade-in 120ms var(--ease-out-quart);
+  }
+  .icon-swap {
+    display: inline-flex;
+    animation: icon-swap-in 120ms var(--ease-out-quart);
+  }
+  .row-fresh {
+    animation: row-fresh-in 500ms var(--ease-out-quart);
+  }
+  .notice-collapse {
+    transition: grid-template-rows 200ms var(--ease-out-quart), opacity 200ms var(--ease-out-quart);
+  }
+  @starting-style {
+    .notice-collapse {
+      grid-template-rows: 0fr;
+      opacity: 0;
+    }
+  }
+  .notice-collapse[data-fading="true"] {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  .banner-enter {
+    transition: opacity 160ms var(--ease-out-quart);
+  }
+  @starting-style {
+    .banner-enter {
+      opacity: 0;
+    }
+  }
 }
 
 @layer components {
@@ -146,3 +273,101 @@
     to { height: 0; opacity: 0; }
   }
 }
+
+/* Only the edge grows sideways; the card always reveals at its full width. */
+@property --reveal-progress {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+.popover-reveal {
+  --reveal-progress: 0;
+  transition: --reveal-progress 200ms ease-out;
+  --reveal-color: var(--ink2);
+  --reveal-start-y: 0px;
+  --reveal-left: 0px;
+  --reveal-right: 0px;
+  transform: translateY(calc(var(--reveal-start-y) * (1 - var(--reveal-progress))));
+  clip-path: inset(0 0 calc((100% - 2px) * (1 - var(--reveal-progress))) 0 round var(--radius-card));
+}
+.popover-reveal:not([data-reveal-ready]) { opacity: 0; }
+.popover-reveal[data-side="top"] { clip-path: inset(calc((100% - 2px) * (1 - var(--reveal-progress))) 0 0 0 round var(--radius-card)); }
+.popover-reveal::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  height: 2px;
+  top: calc((100% - 2px) * var(--reveal-progress));
+  left: calc(var(--reveal-left) * (1 - var(--reveal-progress)));
+  right: calc(var(--reveal-right) * (1 - var(--reveal-progress)));
+  background: var(--reveal-color);
+}
+.popover-reveal[data-side="top"]::after { top: calc((100% - 2px) * (1 - var(--reveal-progress))); }
+.popover-reveal[data-reveal-ready][data-state="open"] { --reveal-progress: 1; }
+.popover-reveal[data-reveal-ready][data-state="closed"] { --reveal-progress: 0; animation: popover-close-presence 200ms; }
+/* Presence retains the closing card while the transition reverses from its current value. */
+@keyframes popover-close-presence { from { opacity: 1; } to { opacity: 1; } }
+.goal-card {
+  --reveal-color: var(--goal);
+  /* Radix's two 12px collision insets leave 576px at the old 600px panel breakpoint. */
+  --goal-history-room: calc((var(--radix-popover-content-available-width) - 576px) * 1000);
+  width: max-content;
+  max-width: var(--radix-popover-content-available-width);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(24rem, var(--radix-popover-content-available-height));
+  padding: 0;
+  border-color: var(--line2);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 30%);
+}
+.goal-scroll {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.goal-scroll[data-history="true"] { grid-template-columns: minmax(0, 1fr) clamp(110px, var(--goal-history-room), 220px); }
+.goal-main { min-width: 0; padding: 18px 24px 22px; }
+.goal-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-height: 22px; padding-right: 20px; }
+.goal-body { min-width: 0; width: 38em; max-width: 100%; margin-top: 12px; font-size: 14.5px; line-height: 1.85; }
+.goal-close { position: absolute; z-index: 2; top: 10px; right: 10px; }
+.goal-history { min-width: 0; padding: 18px clamp(12px, var(--goal-history-room), 16px) 22px clamp(12px, var(--goal-history-room), 20px); background: var(--sunk); }
+.goal-versions { margin-top: 6px; }
+.goal-version { position: relative; display: block; width: calc(100% + 16px); margin: 0 -8px 2px; padding: 6px 8px 6px 30px; text-align: left; color: var(--ink3); outline: none; transition: color 150ms, background-color 150ms; }
+.goal-version-dot { position: absolute; left: 8px; top: 12px; width: 7px; height: 7px; border: 1.5px solid var(--ink3); border-radius: 50%; }
+.goal-version[data-current="true"] .goal-version-dot { background: var(--ink); border-color: var(--ink); }
+.goal-version:hover, .goal-version[aria-pressed="true"] { color: var(--ink); background: var(--selected-row); }
+.goal-version:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
+@media (prefers-reduced-motion: reduce) {
+  .popover-reveal[data-reveal-ready][data-state] { animation: none; transition: none; }
+  .goal-version { transition: none; }
+}
+
+/* A clipped title holds at its end; leaving brings it back gently. */
+.scrolling-title { display: block; min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; }
+.scrolling-title > span { display: inline-block; width: max-content; }
+.scrolling-title[data-overflow="true"] { mask-image: linear-gradient(to right, #000 calc(100% - var(--title-fade)), transparent); }
+@media (prefers-reduced-motion: no-preference) {
+  .scrolling-title > span { transition: transform 200ms ease-out; }
+  .scrolling-title[data-overflow="true"]:is(:hover, :focus-visible),
+  button:is(:hover, :focus-visible) .scrolling-title[data-overflow="true"] {
+    mask-image: linear-gradient(to right, transparent, #000 var(--title-fade), #000 calc(100% - var(--title-fade)), transparent);
+  }
+  .scrolling-title[data-overflow="true"]:is(:hover, :focus-visible) > span,
+  button:is(:hover, :focus-visible) .scrolling-title[data-overflow="true"] > span {
+    transform: translateX(calc(-1 * var(--title-distance)));
+    transition-duration: var(--title-duration);
+    transition-timing-function: linear;
+  }
+}
+.sidebar-resize { position: relative; z-index: 2; outline: none; }
+.sidebar-resize::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 1px; background: var(--line); }
+.sidebar-resize[data-separator="hover"]::after,
+.sidebar-resize[data-separator="active"]::after,
+.sidebar-resize[data-separator="focus"]::after,
+.sidebar-resize:focus-visible::after { background: var(--ink3); }
+/* Overlay the boundary so the visible line adds no width to the two columns. */
+.sidebar-resize:not(.invisible) { margin-left: -1px; }

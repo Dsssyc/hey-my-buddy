@@ -1,0 +1,281 @@
+{
+  "fixtureSqlSha256": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
+  "schemaSha256": "fe82c73ae64fc261d1d02555baff243e7b9e3ce3b59e939531e00f330abb5166",
+  "sourceCommit": "bad89c7b24c5a110bf1117cf8ea4b6a428026e96",
+  "sources": {
+    "src/hey_my_buddy/blackboard/routing/statistics.py": "7eb5c4fb2e6f4264391c7108b4a7fc0d3c4943c7008760c5d9bd5fcf076624c2",
+    "src/hey_my_buddy/blackboard/store/db.py": "5259e760c36e6ba797c1d91ad1072a195fe4eb8844d008b439db543fecbdbce1",
+    "src/hey_my_buddy/blackboard/store/upgrade.py": "31f1cf30da7e3911ede2c516d568f4e1948298f5c58ba765db4df6ebfec081d0",
+    "src/hey_my_buddy/protocol/turn_input.py": "3db7fcd9c51d17dc9a55b9e2fb74d9cec067b6bfebdc8e425a0c0e4fc4295b2e"
+  },
+  "tables": {
+    "agent_credentials": {
+      "rows": 16,
+      "sha256": "b963f4751343c1a58e2be8d433083534c8e17f33229360e37bfb1337598590dd"
+    },
+    "artifacts": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "attempt_activity": {
+      "rows": 1,
+      "sha256": "728144d3abd1adf0e3595145b57588afbfc160aaa0264a47235e57bafa2edcf2"
+    },
+    "attempt_interruptions": {
+      "rows": 2,
+      "sha256": "40b77ef3db1b57cb6515dbe4158ba4ba6da5485b6692f9188de4adcfdfd0cf1c"
+    },
+    "attempt_process_identities": {
+      "rows": 2,
+      "sha256": "9e0e3f89b548937643f96f6c9e4a0a1c4f2431efd4029a028e1f682d81ab6529"
+    },
+    "attempt_received_receipts": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "attempt_reminders": {
+      "rows": 2,
+      "sha256": "9dd6ce1a64f804ca206a64b8661b3ea6d79f0cd691e47932015f1a8f817d87c1"
+    },
+    "attempt_shutdown_evidence": {
+      "rows": 23,
+      "sha256": "31bb7c1a542763d69412be866c5cd8fec926ac7f027fbf7cd3076024e6bb1394"
+    },
+    "attempts": {
+      "rows": 23,
+      "sha256": "81ea568b00992d9f273de8aa8cb27e395a2b34d3d620eeb5bd24b1a71a035e69"
+    },
+    "buddies": {
+      "rows": 3,
+      "sha256": "c81d6ef0bd74334e74e1aa803f7fe93bd07d2932c441783a19b9add607f5efb1"
+    },
+    "buddy_infrastructure_failures": {
+      "rows": 1,
+      "sha256": "f91c8372cb63c15f8ca310b06e9b6805a37ccefee8fa28eda6b5106ca7dfc0d6"
+    },
+    "catalog_current": {
+      "rows": 1,
+      "sha256": "90493bd0d6f1dfdfab049aa9c94da5d598e082800fea4d170147e0ef9c25db7f"
+    },
+    "catalog_observations": {
+      "rows": 4,
+      "sha256": "e3477a31cc7a83e39a822fa50eeeef7e45000fece2f539f5500cf2a24163c92d"
+    },
+    "catalog_pending": {
+      "rows": 2,
+      "sha256": "a4d9d036842ab7ec564f5b978d1b47a38169e8695e2ef8141485252276b1c0f0"
+    },
+    "commands": {
+      "rows": 46,
+      "sha256": "87554e9ff904d6427fd11e58a44dc182eb1ee1246ff14e95a6d0d1843f552021"
+    },
+    "decision_requests": {
+      "rows": 8,
+      "sha256": "0782d1abc18bb05c11a18ffa24ad4a6bf66a4570b083f13333b59a4505276839"
+    },
+    "domain_nodes": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "evaluation_catalog": {
+      "rows": 3,
+      "sha256": "7e290843dd7d0ddcbcfad34f5f07c7d5e3c613e4b7323b9cc948b7b4d5af6b2e"
+    },
+    "evaluation_decisions": {
+      "rows": 8,
+      "sha256": "b18c4d6b394765096ccf9a139fce2c423e5882d946e43e483c9e533a69100e91"
+    },
+    "evaluation_preferences": {
+      "rows": 2,
+      "sha256": "ba82b0f8385c68091199af46d0cd2a9a31b21f356eb31f628fa13d437e8ffa43"
+    },
+    "events": {
+      "rows": 311,
+      "sha256": "2a1ee0715ed543c232e57e0828f7e2d53d658eab2ff2b4bc26b92dea9bc0e21b"
+    },
+    "execution_issues": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "harness_account_reads": {
+      "rows": 1,
+      "sha256": "acb32498530e23635b03c4df7e0329e254990e59ce43e34816580c510f1d5102"
+    },
+    "harness_health": {
+      "rows": 4,
+      "sha256": "52dc924315a309a5dced2c2248d05632626beb31afeccb66e046ba11b1661936"
+    },
+    "kind_cell_statistics": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "kind_cell_statistics_buckets": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "kind_statistics": {
+      "rows": 1,
+      "sha256": "ab7deafc52f04d861d98acd452b4f00fd8d77f692109eccac1dda9d8c1afbfdb"
+    },
+    "kind_statistics_buckets": {
+      "rows": 2,
+      "sha256": "0ac568908c185907298acb34b00b7727a9d94a5944701bbb5170196d60397dcd"
+    },
+    "kind_summaries": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "kind_summary_evidence": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "macro_task_deletions": {
+      "rows": 1,
+      "sha256": "d3c88ead24a35cac18514d758b90faf77349c74fd639a1204fb18b5f807f8b5a"
+    },
+    "macro_tasks": {
+      "rows": 2,
+      "sha256": "ad0e1b8cb8ffa69e05b7777912f4b84f73380573a29623796d8afdf74d6a9629"
+    },
+    "maintenance_runs": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "messages": {
+      "rows": 12,
+      "sha256": "3ac9f7c93b6494151e1edf1895689df7b96a0d547ca1873cdddfd107e786f583"
+    },
+    "meta": {
+      "rows": 2,
+      "sha256": "2371cd55901ca2947cd6c7914d6b69cf870ec89a36b45c8a9ef88b0dcf03bc21"
+    },
+    "micro_task_classifications": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "model_service_concurrency": {
+      "rows": 1,
+      "sha256": "edd641040e8d44bfaa823ad86927679472cbae155ab29c55752b5d994a10a95f"
+    },
+    "model_service_notes": {
+      "rows": 1,
+      "sha256": "5cabae6be223b4587e94d26338162147e79e155cf6aeb2f6102b6e44c3dfb40d"
+    },
+    "provider_cooling": {
+      "rows": 1,
+      "sha256": "26578e79c0fe7aab01f3e63c03ecb453a6ab9fb2f7928a876d204d24dfcb48ab"
+    },
+    "reminder_settings": {
+      "rows": 1,
+      "sha256": "37dc69d358ff91f375337f7ce5ed055f623211b28d4f88f888a6b7b82cb499e2"
+    },
+    "resource_claims": {
+      "rows": 22,
+      "sha256": "397301c19aa046e2e9c0e9d5569a6baf78fa7ea3666eb3a69dfcff92c911348b"
+    },
+    "router_buddies": {
+      "rows": 2,
+      "sha256": "71f41042dd302999910f658df9187f37cf9019ecf2d94af81655fd20508ebe86"
+    },
+    "router_claims": {
+      "rows": 7,
+      "sha256": "1090d4eaf0d794cd348229fe8737dccd4cdcce68bdf636ad6c2728e327c450b6"
+    },
+    "router_dispatches": {
+      "rows": 7,
+      "sha256": "9b41449b70dec74202155e6fa1fb11f42a4ecd39e189032202c8d88ea6f1968b"
+    },
+    "router_outcomes": {
+      "rows": 4,
+      "sha256": "974073551c464c53257cb3f230c6b8da35635e0607dc786659880253bec3d66e"
+    },
+    "router_requests": {
+      "rows": 11,
+      "sha256": "617cd972bbf8d26e72c09444cdf71a66d2b6c6f990fe119f81c59e4322a2e05d"
+    },
+    "router_settings": {
+      "rows": 1,
+      "sha256": "229ae6fa95942bffb9d3334fa35e4ddde5e3bfa29e7390081be0a5d8cd18881e"
+    },
+    "routing_judgments": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "service_issues": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "sqlite_sequence": {
+      "rows": 3,
+      "sha256": "bf511159bd22ff202696e639a73b77661874f11d21d8694b67c720fc54a21225"
+    },
+    "tasks": {
+      "rows": 26,
+      "sha256": "95c866db5a4fe01055c23f3e87d5ec62be0a2904af2e7e79abbefac30f51f18c"
+    },
+    "workflow_artifacts": {
+      "rows": 59,
+      "sha256": "3734c4ee69b34e0f44f43f0749700c02196d22129a1eb2e74177a48f6aa5b393"
+    },
+    "workflow_children": {
+      "rows": 2,
+      "sha256": "7ae31733560388b176edf618cfc5ae61b069c63ae4b5df2fda20f1dfdd38fd05"
+    },
+    "workflow_continuations": {
+      "rows": 1,
+      "sha256": "fd9c94e8a53a7701ef0854b1158491d8f529aa4020e76feb946bf8d09f3e755f"
+    },
+    "workflow_fixes": {
+      "rows": 2,
+      "sha256": "b7cfa39b1c5859f27cbe60f15e287e6f29be104f3c562fc1b96bcc4782082853"
+    },
+    "workflow_host_conclusions": {
+      "rows": 4,
+      "sha256": "1be2d3073dc12a47e5d59f3059399d35962263892bd569b92f354d8f953ad388"
+    },
+    "workflow_integrations": {
+      "rows": 6,
+      "sha256": "93e4741c42638e30f4e3ce1fdaeade5baff02a746f3d768dd9121535474e90e3"
+    },
+    "workflow_lead_tasks": {
+      "rows": 1,
+      "sha256": "6e47a02c65769fb2e11ce943120d1450d4ae9100930f5ac42d82d025d8943282"
+    },
+    "workflow_requests": {
+      "rows": 7,
+      "sha256": "dcab4ceacb9da190464b5d2a43c8de28ba25bbb28d719f13b73b14cd6b33ebde"
+    },
+    "workflow_routes": {
+      "rows": 1,
+      "sha256": "bae6b94678a72616c7711d17861da8b8656c7cd991e9ec51f5e0e19d1cc523c3"
+    },
+    "workflow_runs": {
+      "rows": 19,
+      "sha256": "b34177e7ee85c22f650c9811329469359595a374d2dc78f64ce44ecb54533a76"
+    },
+    "workflow_scope_versions": {
+      "rows": 19,
+      "sha256": "cd464843e263bfacd601cd10254a9e17acdab581fced977bffa6fd011a891d61"
+    },
+    "workflow_suggestions": {
+      "rows": 2,
+      "sha256": "253e8f3241947baac3194e3096b6bc67ecf4498708c9318a193e13df3b761ed8"
+    },
+    "workflow_turns": {
+      "rows": 16,
+      "sha256": "b77ab8b6f2a08b80b238f8bb3bda04adb28e247ed27415d0c2c5d23f9bdd5927"
+    },
+    "workflow_workspace_conflicts": {
+      "rows": 3,
+      "sha256": "a0a02693c95401ff75510c49e9c932ea7e1b05d2863c29d2af0c4151bc6a6531"
+    },
+    "workspace_cleanup_plans": {
+      "rows": 6,
+      "sha256": "37ac0440ce2663e1bf1f562548158fef93914abfaf7c4e019197c27feb1f6c5b"
+    },
+    "workspace_reservations": {
+      "rows": 19,
+      "sha256": "3ee69e51ca6491cf39f7458d0105138803a98f6fd31b3f6cbfbe66c24c1d4a1d"
+    }
+  }
+}

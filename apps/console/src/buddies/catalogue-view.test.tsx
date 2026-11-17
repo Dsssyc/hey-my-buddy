@@ -1,3 +1,4 @@
+import { modelFacts } from "./model-fixtures";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -5,7 +6,7 @@ import { App } from "../App";
 import { ApiError, type ConsoleApi } from "../api";
 import type { HarnessHealth, Buddy, Snapshot } from "../types";
 import {
-  effortCell, foldHandle, level, levelPreference, levelSwitch, listed, modelButton, modelRow, catalogue, note, pane, search, selectModel,
+  effortCell, foldHandle, level, levelPreference, levelSwitch, listed, modelButton, modelRow, catalogue, pane, search, selectModel,
 } from "./page.testing";
 
 /**
@@ -22,26 +23,27 @@ const SOL = "codex / openai / gpt-6-sol";
 
 function buddy(modelService: typeof sonnet, effort: string, extra: Partial<Buddy> = {}): Buddy {
   return { effortRank: null,
-    buddyId: `${modelService.harness}:${modelService.provider}:${modelService.model}:${effort}`, label: `${modelService.model} · ${effort}`, ...modelService, effort,
+    buddyId: `${modelService.harness}:${modelService.provider}:${modelService.model}:${effort}`, alias: null, ...modelService, effort,
     available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
   };
 }
 
 function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: HarnessHealth[] } {
-  return {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
+  const state: Snapshot & { harnesses: HarnessHealth[] } = {
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: [buddy(sonnet, "medium", { enabled: true }), buddy(sonnet, "high"), buddy(sol, "medium"), buddy(sol, "low")],
-    preferences: [], modelServiceNotes: [], decisions: [],
+    preferences: [], models: [], modelCorrespondences: [], decisions: [],
  modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 }, capabilities: {},
     harnesses: [
-      { harness: "claude", status: "ready", revision: 1, manualPath: null },
-      { harness: "codex", status: "ready", revision: 1, manualPath: null },
+      { harness: "claude", status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null },
+      { harness: "codex", status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null },
     ],
     ...extra,
   };
+  return { ...state, ...modelFacts(state.buddies) };
 }
 
 type Reply = (params: Record<string, any>) => unknown;
@@ -58,20 +60,19 @@ function fixture(state: Snapshot = snapshot(), replies: Record<string, Reply> = 
   const api = {
     snapshot: vi.fn(async () => structuredClone(state)), command, task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
   return { api, command, published };
 }
 
 function open(f: ReturnType<typeof fixture>) {
-  window.location.hash = "#buddies";
+  window.location.hash = "#buddies/models";
   render(<App suppliedApi={f.api} />);
 }
 
 /** One page of retained rows, as `buddy_list` returns it. */
 function page(buddies: Buddy[], _state: Snapshot) {
-  return { buddies, preferences: [], modelServiceNotes: [],
- modelServiceConcurrency: [], nextCursor: null };
+  return { buddies, preferences: [], ...modelFacts(buddies), modelServiceConcurrency: [], nextCursor: null };
 }
 
 afterEach(() => {
@@ -86,8 +87,8 @@ describe("an empty catalogue", () => {
     const f = fixture(snapshot({ buddies: [], modelServiceConcurrency: [] }));
     open(f);
     await listed(0, 0);
-    expect(screen.getByText("还没有模型")).toBeTruthy();
-    expect(screen.getByText("点“发现模型”，查找本机的 Harness 能用的模型。")).toBeTruthy();
+    expect(screen.getByText("暂无模型")).toBeTruthy();
+    expect(screen.getByText("使用“发现模型”查找本机 harness 可用的模型。")).toBeTruthy();
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     expect(catalogue()).toBeTruthy();
   });
@@ -100,8 +101,8 @@ describe("an empty catalogue", () => {
     await user.type(search(), "no-such-model");
     await listed(0, 0);
     expect(screen.getByText("没有匹配的模型")).toBeTruthy();
-    expect(screen.getByText("换一个搜索词，或者去掉筛选。")).toBeTruthy();
-    expect(screen.queryByText("还没有模型")).toBeNull();
+    expect(screen.getByText("更换搜索词或清除筛选。")).toBeTruthy();
+    expect(screen.queryByText("暂无模型")).toBeNull();
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
   });
 });
@@ -125,14 +126,13 @@ describe("the harness sections", () => {
     expect(section.textContent).toContain("1 个模型");
     expect(section.textContent).toContain("启用 1 / 2");
     expect(section.querySelector("[data-slot=model-row]")).toBeNull();
-    await user.click(within(section).getByRole("button", { name: "Claude Code 账户" }));
-    expect(within(section).getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
+    expect(document.querySelector('[data-slot="harness-details"][aria-label="Claude Code 设置"]')).toBeTruthy();
     await user.type(search(), "no-such-model");
     await listed(0, 0);
     expect(within(catalogue()).getByRole("region", { name: "Claude Code" })).toBe(section);
-    expect(within(section).getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
+    expect(document.querySelector('[data-slot="harness-details"][aria-label="Claude Code 设置"]')).toBeTruthy();
     await user.clear(search());
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await user.click(screen.getByRole("checkbox", { name: "仅显示已启用" }));
     await listed(0, 0);
     expect(header.getByText("未登录")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
@@ -153,6 +153,10 @@ describe("the selected model", () => {
     await listed(1, 4);
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     await selectModel(user, SOL, "Codex");
+    expect(modelRow(SOL).querySelector("[data-slot=disclosure]")).toBeNull();
+    const controls = modelButton(SOL).getAttribute("aria-controls");
+    expect(controls).toBeTruthy();
+    expect(document.getElementById(controls!)?.getAttribute("data-slot")).toBe("collapsible-content");
     await user.type(search(), "claude");
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     await user.clear(search());
@@ -171,11 +175,11 @@ describe("the selected model", () => {
     const user = userEvent.setup();
     open(f);
     await listed(1, 4);
-    expect(within(modelRow(SONNET)).getByLabelText("占用 0，上限 2").textContent).toBe("0 / 2");
+    expect(within(modelRow(SONNET)).getByLabelText("占用 0 / 2").textContent).toBe("0 / 2");
     await selectModel(user, SOL, "Codex");
     // The board reported no entry for this model: the limit is the default, the occupancy unknown.
-    expect(within(modelRow(SOL)).getByLabelText("占用未知").textContent).toBe("— / 2");
-    expect(within(pane()).getByText("占用未知")).toBeTruthy();
+    expect(within(modelRow(SOL)).getByLabelText("占用未知").textContent).toBe("—");
+    expect(within(pane()).getByLabelText("占用未知", { selector: "span[id]" })).toBeTruthy();
   });
 });
 
@@ -194,7 +198,7 @@ describe("a buddy's own preference", () => {
     await user.click(levelSwitch("medium"));
     expect(pin.hasAttribute("aria-disabled")).toBe(false);
     await user.click(within(levelPreference("medium")).getByRole("radio", { name: "优先" }));
-    await user.type(within(level("medium")).getByRole("textbox", { name: "medium 的偏好备注" }), "机械改动");
+    await user.type(within(level("medium")).getByRole("textbox", { name: "medium 的偏好理由" }), "机械改动");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published[0].preferenceChanges).toEqual([{ buddyId: "codex:openai:gpt-6-sol:medium", mode: "prefer", note: "机械改动" }]);
@@ -203,7 +207,7 @@ describe("a buddy's own preference", () => {
 });
 
 describe("a session that cannot write", () => {
-  it("shows every setting and changes none, and says why on the switch", async () => {
+  it("shows settings without applying changes", async () => {
     const f = fixture(snapshot({ consoleSession: undefined as unknown as Snapshot["consoleSession"] }));
     const user = userEvent.setup();
     open(f);
@@ -212,13 +216,10 @@ describe("a session that cannot write", () => {
     const lock = levelSwitch("medium");
     expect(lock.getAttribute("aria-checked")).toBe("true");
     expect(lock.getAttribute("aria-disabled")).toBe("true");
-    expect(lock.getAttribute("aria-description")).toBe("浏览器授权已失效，重新授权后可以修改");
     await user.click(lock);
     expect(levelSwitch("medium").getAttribute("aria-checked")).toBe("true");
     expect(within(levelPreference("medium")).getAllByRole("radio").every(radio => radio.getAttribute("aria-disabled") === "true")).toBe(true);
     expect(within(pane()).getByRole("spinbutton", { name: "并发上限" })).toHaveProperty("readOnly", true);
-    // The note stays readable and copyable, never editable.
-    expect(note()).toHaveProperty("readOnly", true);
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
@@ -329,7 +330,8 @@ describe("the inline model drawer", () => {
     expect(effortCell("high").getAttribute("aria-pressed")).toBe("true");
     expect(levelSwitch("high").getAttribute("aria-checked")).toBe("false");
     expect(within(pane()).queryByRole("group", { name: "medium" })).toBeNull();
-    expect(within(pane()).getByText("claude / anthropic / claude-sonnet-5 /", { exact: false })).toBeTruthy();
+    expect(within(pane()).queryByText("claude / anthropic / claude-sonnet-5 /", { exact: false })).toBeNull();
+    expect(within(level("high")).getByText("计入评价")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
@@ -394,5 +396,78 @@ describe("keyboard catalogue handles", () => {
     expect(modelButton(SONNET).getAttribute("aria-expanded")).toBe("false");
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
+  });
+});
+
+describe("model-keyed evaluation links", () => {
+  const statistics = {
+    overall: { samples: 4, successes: 3, failures: 1, firstPasses: 2, reworkRounds: 1,
+      firstPassRate: 0.5, failureRate: 0.25, medianDeliverySeconds: null,
+      usage: { samples: 0, medianInputTokens: null, medianCachedInputTokens: null, medianOutputTokens: null } },
+    byDomain: {}, byDomainTaskType: {}, infrastructureFailures: [],
+  };
+
+  it("uses each provider's current correspondence and matches harness and effort", async () => {
+    const partner = { ...sol, provider: "partner" };
+    const state = snapshot({ buddies: [buddy(sol, "medium", { enabled: true }), buddy(partner, "medium", { enabled: true })] });
+    state.modelCorrespondences = state.modelCorrespondences.map(entry => ({ ...entry,
+      modelId: entry.provider === "openai" ? "current-generation" : "partner-generation" }));
+    state.models = state.modelCorrespondences.map(entry => ({ modelId: entry.modelId,
+      displayName: entry.modelId, names: [entry], profile: null, latestProfileRun: null }));
+    // Recorded names include the same service in an old generation; only its
+    // current correspondence decides which kind the catalogue displays.
+    state.kindEvaluations = [
+      { harness: "codex", modelId: sol.model, effort: "medium", modelDisplayName: "Old generation",
+        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Old evaluation" } },
+      { harness: "claude", modelId: "current-generation", effort: "medium", modelDisplayName: "Other harness",
+        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Wrong harness" } },
+      { harness: "codex", modelId: "current-generation", effort: "high", modelDisplayName: "Other effort",
+        modelNames: [sol], previousGroups: [], statistics, summary: { text: "Wrong effort" } },
+      { harness: "codex", modelId: "current-generation", effort: "medium", modelDisplayName: "Current model",
+        modelNames: [{ ...sol, model: "upstream-alias" }], previousGroups: [], statistics: { ...statistics, overall: { ...statistics.overall, samples: 30 }, infrastructureFailures: [{ provider: "openai", count: 2, lastAt: null }] }, summary: { text: "Current evaluation" } },
+      { harness: "codex", modelId: "partner-generation", effort: "medium", modelDisplayName: "Partner model",
+        modelNames: [partner], previousGroups: [], statistics, summary: { text: "Partner evaluation" } },
+    ];
+    const user = userEvent.setup();
+    open(fixture(state));
+    await listed(2, 2);
+    await selectModel(user, SOL, "Codex");
+    expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("30 次");
+    expect(pane().querySelector("[data-slot=buddy-infrastructure-failures]")).toBeNull();
+    const currentLink = within(pane()).getByRole("link", { name: "30 次" });
+    expect(currentLink.getAttribute("href")).toBe("#buddies/evaluation/codex/current-generation/medium");
+    await user.click(currentLink);
+    expect(window.location.hash).toBe(currentLink.getAttribute("href"));
+    const detail = document.querySelector<HTMLElement>("[data-slot=evaluation-detail]")!;
+    expect(within(detail).getByText("Current evaluation")).toBeTruthy();
+    expect(within(detail).getByRole("heading", { name: "codex / Current model / medium" })).toBeTruthy();
+    for (const text of ["Old evaluation", "Wrong harness", "Wrong effort", "Partner evaluation"]) {
+      expect(within(detail).queryByText(text)).toBeNull();
+    }
+    await user.click(screen.getByRole("link", { name: "模型" }));
+    await selectModel(user, "codex / partner / gpt-6-sol", "Codex");
+    expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("4 次");
+    expect(pane().querySelector("[data-slot=buddy-infrastructure-failures]")).toBeNull();
+    const partnerLink = within(pane()).getByRole("link", { name: "4 次" });
+    expect(partnerLink.getAttribute("href")).toBe("#buddies/evaluation/codex/partner-generation/medium");
+    await user.click(partnerLink);
+    expect(within(document.querySelector<HTMLElement>("[data-slot=evaluation-detail]")!).getByText("Partner evaluation")).toBeTruthy();
+    expect(within(document.querySelector<HTMLElement>("[data-slot=evaluation-detail]")!).queryByText("Current evaluation")).toBeNull();
+  });
+
+  it("shows no evaluation when a service has no current correspondence", async () => {
+    const state = snapshot({ buddies: [buddy(sol, "medium", { enabled: true })] });
+    state.modelCorrespondences = [];
+    state.kindEvaluations = [{ harness: "codex", modelId: sol.model, effort: "medium",
+      modelDisplayName: "Previously mapped model", modelNames: [sol], previousGroups: [], statistics,
+      summary: { text: "Previous evaluation" } }];
+    const user = userEvent.setup();
+    open(fixture(state));
+    await listed(1, 1);
+    await selectModel(user, SOL, "Codex");
+    expect(pane().querySelector("[data-slot=buddy-samples]")!.textContent).toBe("—");
+    expect(within(pane()).queryByRole("link", { name: "0" })).toBeNull();
+    await user.click(screen.getByRole("link", { name: "评价" }));
+    expect(within(document.querySelector<HTMLElement>("[data-slot=evaluation-detail]")!).queryByText("Previous evaluation")).toBeNull();
   });
 });

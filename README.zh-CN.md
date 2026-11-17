@@ -9,7 +9,7 @@
 
 <p align="center">
   你正在用的编码 agent 把边界明确的任务交给本机的其他编码 agent，<br>
-  每一份封存的结果都由它核对之后才落地。
+  每一份结果都由它核对之后才验收。
 </p>
 
 <p align="center">
@@ -22,41 +22,54 @@
 
 ---
 
-## 为什么用 hey-my-buddy
+## hey-my-buddy 是什么
 
-- **你信任的 agent 始终做主。** 你平常用的编码 agent（例如 Codex 或 Claude Code，CLI 或 app 都可以）就是你的 Host buddy：它拆分工作、把边界明确的部分委派出去，每一份结果都由它自己验收。
-- **每一部分交给合适的 buddy。** Worker 在 DeepSeek Harness、ZCode、Codex 或 Claude Code 的 CLI 里运行，用的是你启用的模型与推理强度；由路由来选，或者由 Host 指定。
-- **没有核对过的东西不会落地。** 每个微任务在分给它的检出里从固定的输入开始，以封存的产物结束；并行的写者从不共用一个检出。Host 读过差异、跑过检查之后才验收。
+hey-my-buddy 让你正在用的编码 agent 把一部分工作交给本机的其他编码 agent，每一份结果都由它核对之后才落地。
+
+- **你的 agent 始终做主。** 你平常用的编码 agent 就是 *Host buddy*：它拆分工作，把边界明确的部分交给别的 agent，由它决定验收什么。能运行 hey-my-buddy 命令的 agent 都可以当 Host。
+- **别的 agent 分头去做。** *Worker buddy* 是在 DeepSeek Harness、ZCode、Codex 或 Claude Code 的 CLI 里运行的编码 agent，用的是你启用的模型与推理强度；每一部分交给谁，由 hey-my-buddy 挑选，或者由 Host 指定。
+- **没有核对过的东西不会被验收。** 在 Git 仓库里，每个 Worker 在一份单独的检出里工作；Host 审查结果、跑过检查之后，才会有东西进到你的分支。Worker 也可以不要检出，在你指定的文件夹里工作，适合只要一个回答或一份文档的事；它在那里写下的改动不封存，由 Host 自己去文件夹里看。
 - **工作比你的会话活得久。** 终端关掉、连接断开、服务重启都不会取消工作；凭它的标识接着处理。
-- **看得见谁在做什么。** 本机私有的控制台把每个宏任务画成一条时间线，显示每个 buddy 的负载与你的设置。
-- **用你自己的账户与套餐。** Worker 用你自己的 harness 账户登录，hey-my-buddy 从不保存也不转交你的凭据。见[账户与条款](docs/terms.zh-CN.md)。
+- **看得见谁在做什么。** 本机私有的控制台把每一项工作画成一条时间线，显示每个 buddy 的负载与你的设置。
+- **用你自己配好的 harness。** Worker 跑在你自己的 harness 里，用你的设置、provider、登录、skills、MCP 与 hooks；hey-my-buddy 不改动其中任何一项，也从不保存或转交你的凭据。见[账户与条款](docs/terms.zh-CN.md)。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/console-timeline-zh-dark.png">
+  <img alt="控制台里的宏任务详情" src="docs/assets/console-timeline-zh-light.png" width="100%">
+</picture>
 
 ## 怎样工作
 
+1. **委派。** Host 写一个*微任务*：做什么、可以改哪些文件、怎样检查，再把它交给*黑板*。黑板是本机的一个服务，每一步都记下来。
+2. **执行。** 黑板选出一个 Worker：合格的只有一个就直接用它，有几个就由 *Router buddy* 从中选，Host 也可以点名。Worker 在自己的检出里工作，或者不要检出，在 Host 指定的文件夹里工作。Host 可以向运行中的回合问询；Worker 需要决定时，会停下来问。
+3. **封存。** 回合结束时，黑板按当时的样子封存这份检出，结果之后不会再变。不要检出的工作，黑板固定的是 Worker 交回的结果，文件夹里的改动不封存。
+4. **审查。** Host 对照微任务审查结果，并跑检查；不对就打回，再跑一个回合，默认还是同一个 Worker，Host 也可以换一个。
+5. **验收。** Host 把封存的结果整合进你的仓库并验收；只有验收过的工作才落进仓库。不要检出的工作，验收时不需要整合。
+
+相关的微任务组成一个*宏任务*。完整的流程，包括路由、问询、打回，以及替 Host 继续委派的 *Lead buddy*：
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-zh-dark.svg">
-  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，合格的 buddy 只有一个时黑板直接选它，有几个时由 Router buddy 从中选；Worker buddy 在分给这个微任务的检出里跑一个回合；Host 可以经黑板向这个运行中的回合问询；回合结束时黑板封存检出；Host 对照封存核对 Worker 的报告，要么整合并验收进你的仓库，要么打回给同一个 Worker，不再经过路由。Lead buddy 为它委派的微任务按同一个循环担任 Host。" src="docs/assets/architecture-zh-light.svg" width="100%">
+  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，黑板取唯一合适的 buddy，或由 Router buddy 在候选之中选一个，没有合适的就交回 Host；Worker buddy 在自己的检出里，或者直接在你的文件夹里运行一个回合；Host 可以经黑板向运行中的回合问询；回合结束时产物被固定下来，等待 Host 验收；Host 把任务书、Worker 的报告与产物相互对照，然后验收，或者打回，默认交给同一个 Worker。Git 项目只并入验收过的工作。Lead buddy 委派自己名下的微任务，并负责验收。" src="docs/assets/architecture-zh-light.svg" width="100%">
 </picture>
 
-1. **委派。** Host 写一个微任务：做什么、可以改哪些文件、怎样检查。除非 Host 点名，由路由来选：合格的只有一个就直接选它，有几个就由 Router buddy 从中选一个。
-2. **执行。** Worker 在它的 harness 里、在分给这个微任务的检出里工作。Host 可以经黑板向运行中的回合问询，回合不必停下；Worker 需要决定或帮助时，它停下来提问，Host 回答，或者让它接着做。
-3. **验收。** Host 审查封存的结果：要么整合并验收，验收会核对这次整合并回收检出；要么打回给同一个微任务再跑一个回合；放弃的工作以结论结束。
-
-微任务、决定与结果都记在本地的黑板上，黑板是一个由私有服务独占的 SQLite 数据库。详见[工作流](docs/reference/workflow.md)与[架构](docs/reference/architecture.md)。
+细节见[工作流](docs/reference/workflow.md)与[架构](docs/reference/architecture.md)。
 
 ## 安装
 
-hey-my-buddy 是一个共享的 agent skill，装在 `~/.agents/skills/hey-my-buddy`，自带启动器；私有的服务与运行时在 `~/.local/share/hey-my-buddy` 之下（Windows 上是 `%LOCALAPPDATA%\hey-my-buddy`）。Claude Code 通过 `~/.claude/skills/hey-my-buddy` 这个链接找到它（Windows 上是一个 junction）。安装不改你的 `PATH`、shell 与 agent 设置。需要 [uv](https://docs.astral.sh/uv/)。
+需要 [uv](https://docs.astral.sh/uv/)；在 Git 仓库里工作还需要 Git 2.40 或更高版本。
 
 ```sh
-uvx hey-my-buddy@0.54.1 install
+uvx hey-my-buddy@0.69.7 install
 ```
+
+它把一个共享的 agent skill 装到 `~/.agents/skills/hey-my-buddy`，自带启动器；私有的服务装在 `~/.local/share/hey-my-buddy` 之下（Windows 上是 `%LOCALAPPDATA%\hey-my-buddy`）。装了 Claude Code 或 Antigravity 时，它还在它们找 skill 的地方放一个指向这个 skill 的链接：`~/.claude/skills/hey-my-buddy` 与 `~/.gemini/config/skills/hey-my-buddy`。安装不改你的 `PATH`、shell 与 agent 设置。
 
 也可以从这个仓库的检出构建 wheel 再安装：
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.54.1-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.69.7-py3-none-any.whl" hey-my-buddy install
 ```
 
 <details>
@@ -68,7 +81,7 @@ uvx --from "$PWD/dist/hey_my_buddy-0.54.1-py3-none-any.whl" hey-my-buddy install
 1. 用我指定的版本，或者我给的 wheel。
 2. 在你的沙盒之外、经你自己的权限机制运行安装，不用 sudo。
 3. 写入任何东西之前，列出它将创建或替换的每一个路径。
-4. 报告 skill 的版本与位置、Claude Code 的链接、服务的动作，以及有没有做备份。
+4. 报告 skill 的版本与位置、各 harness 的链接、服务的动作，以及有没有做备份。
 5. 用 ~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy health 核对。
 6. 遇到 LAUNCH_ACCESS_DENIED，只放行这一条启动器命令再试；遇到 UPGRADE_NOT_IDLE，报告列出的工作并等待，绝不为了强行升级去取消工作。
 ```
@@ -95,11 +108,9 @@ uvx --from "$PWD/dist/hey_my_buddy-0.54.1-py3-none-any.whl" hey-my-buddy install
 ## 现状与限制
 
 - **0.x。** 版本号是 0.x 期间，契约可以在中间那位数字变动时改变；这样的升级会在一次明确的、先做备份的步骤里转换你的黑板。
-- **平台。** 每天在 macOS 上使用。完整的检查套件在持续集成里于 Linux 与 Windows 11（x64 与 ARM64）上通过；在 Linux 与 Windows 上实际运行各个 harness，还没有验证过。
-- **Harness。** Codex 经它的实验性 App Server 运行。各个 harness 支持什么、验证到哪一步，见[harness](docs/reference/harnesses.md)。
-- **路由会看到任务。** 由 Router buddy 从几个 buddy 中选择时，任务的文字会发给那个 Router 的模型提供方，即使最后做事的是别的模型。
-- **不是沙盒。** 检出与私有目录把工作隔开，但它们不是操作系统的沙盒；Worker 拥有它的 harness 给它的权限。
-- **不管花费。** 用量计入你自己的套餐与密钥；hey-my-buddy 不记录金额。
+- **平台。** macOS、Linux 与 Windows 11（x64 与 ARM64）。
+- **Harness。** Worker 在 DeepSeek Harness、ZCode、Codex 或 Claude Code 的 CLI 里运行。各个 harness 支持什么、在各个平台上验证到哪一步，见[harness](docs/reference/harnesses.md)。
+- **账户与条款。** hey-my-buddy 用的是你自己的 harness 账户与套餐。它怎样使用这些账户、任务的文字会发到哪里、哪些条款适用，见[账户与条款](docs/terms.zh-CN.md)。
 
 ## 文档
 

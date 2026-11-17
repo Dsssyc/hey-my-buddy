@@ -7,9 +7,10 @@ export function parseActor(value: unknown): Actor | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const actor = value as Record<string, unknown>;
   if (!ACTOR_ROLES.includes(actor.role as ActorRole)
-    || typeof actor.id !== "string" || !actor.id.trim() || actor.id.length > 256
-    || /[\x00-\x1f\x7f]/.test(String(actor.role) + actor.id)) return null;
-  return { role: actor.role as ActorRole, id: actor.id };
+    || (actor.role !== "host" || Object.hasOwn(actor, "id")) && (typeof actor.id !== "string" || !actor.id.trim() || actor.id.length > 256
+    || /[\x00-\x1f\x7f]/.test(actor.id))) return null;
+  if (actor.role === "host") return { role: "host" };
+  return { role: actor.role as ActorRole, id: actor.id as string };
 }
 
 export function actorRoleText(name?: ActorRole): string {
@@ -28,13 +29,12 @@ export function stopActorText(role: ActorRole | "unknown" | null | undefined): s
 
 export function actorText(actor: Actor | null | undefined): string {
   if (!actor) return i18n.t("shell:actor.unrecorded");
+  if (actor.role === "host") return actorRoleText("host");
   return i18n.t("shell:actor.identity", { role: actorRoleText(actor.role), id: actor.id });
 }
 
-/** A Lead relationship explains an absent Host name; it never invents one. */
-export function workflowOwnerText(task: Pick<Task, "lineage" | "workflow">, hostId?: string | null): string {
-  const host = task.lineage?.currentHostId ?? hostId ?? task.workflow?.hostId;
-  if (host) return host;
+/** Current ownership follows the recorded Lead relationship. */
+export function workflowOwnerText(task: Pick<Task, "lineage">): string {
   const lead = task.lineage?.leadOwnership?.leadRunId ?? task.lineage?.rootLeadRunId;
-  return actorText(lead ? { role: "lead", id: lead } : null);
+  return lead ? actorText({ role: "lead", id: lead }) : actorRoleText("host");
 }

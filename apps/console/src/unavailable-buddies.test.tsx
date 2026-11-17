@@ -4,9 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
-import type { ModelServiceNote, Preference, Buddy, BuddyPage, Snapshot } from "./types";
+import type { Preference, Buddy, BuddyPage, Snapshot } from "./types";
 import {
-  chip, choosePreference, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, note, pane, queryModel, search, selectModel,
+  chip, choosePreference, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, pane, queryModel, search, selectModel,
 } from "./buddies/page.testing";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
@@ -23,11 +23,11 @@ function catalog(): Buddy[] {
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [
-    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off", available: true, enabled: true },
-    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high", available: true, enabled: false },
-    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
+    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", alias: null, available: true, enabled: true },
+    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", alias: null, available: true, enabled: false },
+    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", alias: null,
       available: false, enabled: true, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
-    { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", label: "retired-model · low",
+    { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", alias: null,
       available: false, enabled: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
   ];
 }
@@ -40,7 +40,8 @@ function catalog(): Buddy[] {
 function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSize?: number } = {}) {
   const buddies = catalog();
   const decisionId = options.staleDecision ? retiredMax : flashOff;
-  const modelServiceNotes: ModelServiceNote[] = [{ ...retiredModelService, text: "用户保留的历史意见", updatedAt: null }];
+  const models = ["deepseek-flash", "retired-model"].map(model => ({ modelId: model, displayName: model, names: [{ harness: "dsh", provider: "deepseek-official", model }], profile: null, latestProfileRun: null }));
+  const correspondences = ["deepseek-flash", "retired-model"].map(model => ({ harness: "dsh", provider: "deepseek-official", model, correspondenceId: model, modelId: model, createdAt: "2026-11-01T00:00:00Z", source: "same-name" as const, evidenceUrl: null, evidenceDate: null, canUndo: false }));
   const preferences: Preference[] = options.stalePin
     ? [{ buddyId: retiredMax, mode: "pin" as const, note: "以前固定" }]
     : [];
@@ -56,7 +57,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     return {
       buddies: slice,
 
-      modelServiceNotes: ids.has(retiredMax) || ids.has(retiredLow) ? modelServiceNotes : [],
+      models, modelCorrespondences: correspondences.filter(row => [...slice].some(buddy => buddy.model === row.model)),
       preferences: preferences.filter(p => ids.has(p.buddyId)),
 
       modelServiceConcurrency: [],
@@ -65,16 +66,16 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   };
   const live = buddies.filter(p => p.available || p.buddyId === decisionId);
   let state: Snapshot = {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies: live,
     // `unavailableBuddyCount` counts every unavailable row in the table,
     // including a listed one such as the retained decision buddy; the console
     // subtracts what it has loaded and pages the rest.
     unavailableBuddyCount: buddies.filter(p => !p.available).length,
 
-    modelServiceNotes: live.some(p => p.buddyId === retiredMax || p.buddyId === retiredLow) ? modelServiceNotes : [],
+    models, modelCorrespondences: correspondences.filter(row => live.some(buddy => buddy.model === row.model)),
     preferences: preferences.filter(p => live.some(x => x.buddyId === p.buddyId)),
      decisions: [],
 
@@ -95,8 +96,10 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
 
     if (operation === "user_policy_publish") {
       published.push(params);
-      state = { ...state,
- };
+      state = { ...state, buddies: state.buddies.map(buddy => {
+        const change = params.buddySettings?.find((entry: { buddyId: string }) => entry.buddyId === buddy.buddyId);
+        return change ? { ...buddy, enabled: change.enabled } : buddy;
+      }) };
       return {};
     }
     if (operation === "model_catalog_refresh") {
@@ -112,12 +115,12 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     command,
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
   return { api, command, published, operations, snapshot: () => state };
 }
 
-const enabledOnly = () => screen.getByRole("checkbox", { name: "只看已启用" });
+const enabledOnly = () => screen.getByRole("checkbox", { name: "仅显示已启用" });
 const showUnavailable = () => screen.getByRole("checkbox", { name: /^显示不可用/ });
 const checked = (box: HTMLElement | null) => box?.getAttribute("aria-checked");
 
@@ -165,7 +168,6 @@ describe("unavailable buddies", () => {
     // The side column says it once for the model and keeps the note.
     expect(within(pane(RETIRED)).getByText("不可用").getAttribute("aria-description")).toBe(reasonText({ code: "catalog.native-unavailable", params: {} }));
     expect(within(pane()).getAllByText("不可用")).toHaveLength(1);
-    expect(note()).toHaveProperty("value", "用户保留的历史意见");
   });
 
   it("counts a listed offline Router once and pages the rest in by itself", async () => {
@@ -207,13 +209,13 @@ describe("unavailable buddies", () => {
     expect(f.operations.filter(op => op === "buddy_list")).toHaveLength(2);
   });
 
-  it("combines 只看已启用 with 显示不可用", async () => {
+  it("combines 仅显示已启用 with 显示不可用", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(1, 2);
-    // 只看已启用 alone still hides the model: none of its available buddies exist.
+    // 仅显示已启用 alone still hides the model: none of its available buddies exist.
     await user.click(enabledOnly());
     await listed(1, 2);
     expect(queryModel(RETIRED)).toBeNull();
@@ -252,27 +254,6 @@ describe("unavailable buddies", () => {
     expect(f.operations).not.toContain("user_policy_publish");
   });
 
-  it("publishes a disable and a note as patches without program fields", async () => {
-    const f = fixture();
-    const user = userEvent.setup();
-    window.location.hash = "#buddies";
-    render(<App suppliedApi={f.api} />);
-    await openRetired(user);
-    await user.click(levelSwitch("max"));
-    await user.type(note(), "，仍可用于历史对照");
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("设置已保存");
-    expect(f.operations.slice(0, 2)).toEqual(["buddy_list", "user_policy_publish"]);
-    expect(f.published[0]).toEqual({
-      commandId: expect.any(String),
-      buddySettings: [{ buddyId: retiredMax, enabled: false }],
-      modelServiceNoteChanges: [{ ...retiredModelService, text: "用户保留的历史意见，仍可用于历史对照" }],
-    });
-    const wire = JSON.stringify(f.published[0]);
-    // Availability, provider and model are program-owned and are never uploaded.
-    expect(wire).not.toContain("available");
-    expect(wire).not.toContain("cards");
-  });
 
   it("allows a reason-only edit of a retired pin while a new pin on an unavailable buddy stays blocked", async () => {
     const f = fixture({ stalePin: true });
@@ -283,7 +264,7 @@ describe("unavailable buddies", () => {
     await screen.findByText(/固定选择指向.*请启用或改为/);
     // The existing pin stays a reachable value on its own level; only its reason changes.
     expect(within(levelPreference("max")).getByRole("radio", { name: "固定" }).getAttribute("aria-checked")).toBe("true");
-    const reason = within(level("max")).getByRole("textbox", { name: "max 的偏好备注" });
+    const reason = within(level("max")).getByRole("textbox", { name: "max 的偏好理由" });
     expect(reason).toHaveProperty("value", "以前固定");
     await user.clear(reason);
     await user.type(reason, "仍然适用");
@@ -291,7 +272,7 @@ describe("unavailable buddies", () => {
     await user.click(effortCell("low"));
     const pin = within(levelPreference("low")).getByRole("radio", { name: /^固定/ });
     expect(pin.getAttribute("aria-disabled")).toBe("true");
-    expect(pin.getAttribute("aria-description")).toBe("这个 buddy 不可用或未启用，不能固定");
+    expect(pin.getAttribute("aria-description")).toBe("该 buddy 不可用或未启用，不能固定");
     await user.click(pin);
     expect(pin.getAttribute("aria-checked")).toBe("false");
     await user.click(screen.getByRole("button", { name: "保存" }));
@@ -356,7 +337,7 @@ describe("unavailable buddies", () => {
 });
 
 describe("stale settings and unrelated saves", () => {
-  it("shows a stale Router as a mark on the roles section and still saves a note elsewhere", async () => {
+  it("shows a stale Router as a mark on the roles section and still saves an unrelated Buddy setting", async () => {
     const f = fixture({ staleDecision: true });
     const user = userEvent.setup();
     window.location.hash = "#buddies";
@@ -366,18 +347,17 @@ describe("stale settings and unrelated saves", () => {
     // The stale review Router is no longer a stacked detail page: the roles
     // section carries the mark.
     const sections = screen.getByRole("navigation", { name: "Buddy 的分区" });
-    expect(within(sections).getByRole("link", { name: /^角色\s*Router 不可用$/ })).toBeTruthy();
+    expect(within(sections).getByRole("link", { name: /^Router\s*Router 不可用$/ })).toBeTruthy();
 
     await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "只改这条意见");
+    await user.click(effortCell("high"));
+    await user.click(levelSwitch("high"));
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     // The stale selector stays untouched and does not block the unrelated patch.
     expect(f.published[0].configuration).toBeUndefined();
     expect(f.published[0].preferenceChanges).toBeUndefined();
-    expect(f.published[0].modelServiceNoteChanges).toEqual([
-      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "只改这条意见" },
-    ]);
+    expect(f.published[0].buddySettings).toEqual([{ buddyId: flashHigh, enabled: true }]);
   });
 
   it("keeps a stale pin visible without requiring a repair before saving", async () => {
@@ -389,13 +369,12 @@ describe("stale settings and unrelated saves", () => {
     await screen.findByText(/固定选择指向.*请启用或改为/);
     expect(chip(RETIRED, "max").textContent).toBe("max固定");
     await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "，补充说明");
+    await user.click(effortCell("high"));
+    await user.click(levelSwitch("high"));
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published[0]).not.toHaveProperty("preferenceChanges");
-    expect(f.published[0].modelServiceNoteChanges).toEqual([
-      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "，补充说明" },
-    ]);
+    expect(f.published[0].buddySettings).toEqual([{ buddyId: flashHigh, enabled: true }]);
   });
 });
 
@@ -413,7 +392,7 @@ describe("the two filters as browser habits", () => {
     view.unmount();
     const reloaded = fixture();
     view = render(<App suppliedApi={reloaded.api} />);
-    await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "只看已启用" }))).toBe("true"));
+    await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "仅显示已启用" }))).toBe("true"));
     expect(checked(showUnavailable())).toBe("true");
     await listed(2, 4);
     await user.click(showUnavailable());
@@ -428,7 +407,8 @@ describe("the two filters as browser habits", () => {
     const f = fixture();
     const state = f.snapshot();
     state.unavailableBuddyCount = 0;
-    f.command.mockImplementation(async () => ({ buddies: state.buddies, preferences: [], modelServiceConcurrency: [], nextCursor: null }));
+    f.command.mockImplementation(async () => ({ buddies: state.buddies, preferences: [], models: state.models,
+      modelCorrespondences: state.modelCorrespondences, modelServiceConcurrency: [], nextCursor: null }));
     window.location.hash = "#buddies";
     const view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);
@@ -461,7 +441,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
   const unavailableKey = "hey-my-buddy.console.view.models.showUnavailable";
   function jump(buddyId: string) {
     act(() => {
-      window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(buddyId)}`;
+      window.location.hash = `#buddies/models/buddy/${encodeURIComponent(buddyId)}`;
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
   }
@@ -470,7 +450,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
     const f = fixture();
     for (const buddy of f.snapshot().buddies) buddy.enabled = false;
     const user = userEvent.setup();
-    window.location.hash = "#buddies/catalog";
+    window.location.hash = "#buddies/models";
     let view = render(<App suppliedApi={f.api} />);
     await listed(0, 2);
     await user.click(enabledOnly());
@@ -488,9 +468,9 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
     expect(localStorage.getItem(enabledKey)).toBe("true");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     view.unmount();
-    window.location.hash = "#buddies/catalog";
+    window.location.hash = "#buddies/models";
     view = render(<App suppliedApi={f.api} />);
-    await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "只看已启用" }))).toBe("true"));
+    await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "仅显示已启用" }))).toBe("true"));
     expect(checked(showUnavailable())).toBe("false");
     expect(localStorage.getItem(enabledKey)).toBe("true");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
@@ -499,7 +479,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
   it("reveals an unavailable Router target without overwriting the manually unchecked filter", async () => {
     const f = fixture({ staleDecision: true });
     const user = userEvent.setup();
-    window.location.hash = "#buddies/catalog";
+    window.location.hash = "#buddies/models";
     let view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);
     await user.click(enabledOnly());
@@ -516,7 +496,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
     expect(localStorage.getItem(enabledKey)).toBe("false");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     view.unmount();
-    window.location.hash = "#buddies/catalog";
+    window.location.hash = "#buddies/models";
     view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);
     expect(checked(enabledOnly())).toBe("false");

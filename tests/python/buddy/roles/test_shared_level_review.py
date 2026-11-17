@@ -15,6 +15,7 @@ import uuid
 
 from buddy.harnesses.dsh.test_native_run import NativeRunCase as DshNativeCase
 from buddy.harnesses.zcode.test_native_run import NativeRunCase as ZcodeNativeCase
+from blackboard.routing.test_router_prompt import candidate as router_candidate
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
@@ -24,7 +25,7 @@ from hey_my_buddy.buddy.roles.structured_call import structured_prompt
 from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
 
 
-ANSWER = '{"buddyId":"legal","note":"fixture","evidence":[]}'
+ANSWER = '{"buddyId":"legal","note":"fixture","evidence":[],"domainNodeId":null,"taskType":"change"}'
 SCHEMA = router.answer_schema(["legal"], "review")
 
 
@@ -42,17 +43,16 @@ class _ReviewCases:
         return ExecutionContext(
             task_id="task", attempt_id="attempt", generation=1,
             spec={"provider": self.provider, "model": self.model,
-                  "effort": self.effort, "cwd": str(cwd), "routerBudgetSeconds": 10},
+                  "effort": self.effort, "cwd": str(cwd), "modelResponseWaitSeconds": 10},
             directory=self.base / ("router-attempt-" + uuid.uuid4().hex),
             runtime={}, environment=dict(os.environ),
             decision_input=document,
             session_record_path=str(self.base / ("session-" + uuid.uuid4().hex + ".jsonl")))
 
     def document(self) -> dict:
-        return {"routingMode": "review", "task": "Choose the legal buddy",
+        return {"domainNodes": [], "routingMode": "review", "task": "Choose the legal buddy",
                 "buddy": {"harness": self.harness},
-                "buddies": [{"buddyId": "legal"}], "outputSchema": SCHEMA,
-                "budget": {"timeoutSeconds": 10, "toolCalls": 0}}
+                "buddies": [router_candidate()], "outputSchema": SCHEMA}
 
     def test_inline_review_returns_a_structured_answer_under_read(self):
         self.prepare_fixture()
@@ -67,14 +67,14 @@ class _ReviewCases:
             "stateDir": str(self.base / "state"),
             "directory": str(root), "nativeRoot": str(root / "native"),
             "sessionRecordPath": str(root / "session.jsonl"), "cwd": str(cwd),
-            "timeoutSeconds": 10, "canCorrect": False,
+            "canCorrect": False,
             "readOnlyRequest": {"prompt": "Choose the legal buddy",
-                                "outputSchema": SCHEMA, "budget": {"toolCalls": 0},
+                                "outputSchema": SCHEMA,
                                 "captureEvidence": False},
         }
         identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                invocation_id=control["invocationId"])
-        handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
+        handle = run_execution.InlineRunHandle(control, identity)
         with mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)):
             result, request, verdict, code = inline_run.execute(control, handle)
         payload = run_execution._review_result(result, request, verdict)
@@ -83,9 +83,8 @@ class _ReviewCases:
         self.assertEqual(request.input_text, structured_prompt("Choose the legal buddy", SCHEMA))
         self.assertEqual(self.native_prompts(), [request.input_text])
         self.assertEqual(json.loads(payload["rawAnswer"]),
-                         {"buddyId": "legal", "note": "fixture", "evidence": []})
+                         {"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "fixture", "evidence": []})
         self.assertEqual(payload["usage"]["toolCalls"], 0)
-        self.assertLessEqual(payload["usage"]["toolCalls"], control["readOnlyRequest"]["budget"]["toolCalls"])
         self.assertIsNone(judge_tool_evidence(payload["toolEvidence"], "read",
                                                state_dir=Path(control["stateDir"])))
         self.assertEqual(result.effective_policy.tools.requested.value, self.native_policy)
@@ -111,7 +110,7 @@ class _ReviewCases:
             self.assertEqual(json.loads(supplied), SCHEMA)
         self.assertTrue(prompts[1].startswith(prompts[0] + "\n\nFormat correction:"))
 
-    def test_router_accepts_an_unchanged_frozen_copy_within_budget(self):
+    def test_router_accepts_an_unchanged_frozen_copy(self):
         self.prepare_fixture()
         document = self.document()
         context = self.review_context(document)
@@ -125,9 +124,9 @@ class _ReviewCases:
             outcome = adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.result)
         self.assertEqual(outcome.result["decision"],
-                         {"buddyId": "legal", "note": "fixture", "evidence": []})
+                         {"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "fixture", "evidence": []})
         self.assertTrue(outcome.result["inputVerification"]["unchanged"])
-        self.assertLessEqual(outcome.result["usage"]["toolCalls"], document["budget"]["toolCalls"])
+        self.assertNotIn("budget", outcome.result)
         self.assertIsNone(judge_tool_evidence(outcome.result["toolEvidence"], "read",
                                                state_dir=Path(context.environment["HMB_STATE_DIR"])))
         self.assertFalse(frozen.exists(), "a verified private copy is discarded")
@@ -175,11 +174,11 @@ class DshSharedLevelReviewTests(_ReviewCases, DshNativeCase):
 class ZcodeSharedLevelReviewTests(_ReviewCases, ZcodeNativeCase):
     harness = "zcode"
     provider, model, effort = "fixture-api", "fixture-model", "low"
-    native_policy = {"mode": "plan"}
+    native_policy = {"mode": "yolo"}
 
     def prepare_fixture(self, *, correction=False):
         # This copy of the offline fake app server gives the Router's own
-        # schema-shaped answer while retaining its native plan-mode assertions.
+        # schema-shaped answer while retaining its native yolo-mode assertion.
         source = self.fake.read_text(encoding="utf-8")
         source = source.replace('{"choice":"a"}', ANSWER)
         source = source.replace("elif case in ('write-final', 'write-post-close'):",

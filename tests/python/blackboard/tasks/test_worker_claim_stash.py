@@ -8,6 +8,7 @@ at all. Every fact is a per-repository observation keyed by the manifest's own
 repository path.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from admission import admit_board, admit_store
 
 import json
@@ -15,7 +16,7 @@ import unittest
 from unittest import mock
 
 from mock_workspace import MockWorkspace
-from support import BoardTestCase
+from support import BoardTestCase, enable_fixture_buddy
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.errors import BoardError
@@ -48,12 +49,22 @@ class ClaimStashTestCase(BoardTestCase):
         workflow_module._workspace_module = self._previous_workspace
 
     def submit(self, board, *, request_id, cwd, **extra):
-        return board.call("workflow_submit", {
-            **BUDDY, "requestId": request_id, "hostId": "host-1", "task": "claim stash task",
-            "cwd": str(cwd), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]},
-            **extra,
+        selected = {**BUDDY, **{key: extra[key] for key in BUDDY if key in extra}}
+        enable_fixture_buddy(board.store, selected)
+        cwd = str(cwd)
+        title = request_id
+        task = 'claim stash task'
+        response = board.call("workflow_submit", {
+            "cwd": cwd, "title": title, "task": task, "macroTaskId": "standalone",
+            "buddy": ' / '.join(selected.values()), "checkout": "existing", "access": "write",
+            "inputs": [], "writeScope": ["."], "expectedSeconds": 1800,
         })
+        if required := extra.get("requiredCapabilities"):
+            # Model an internal scheduler constraint after Host admission.
+            with board.store.db.write() as connection:
+                connection.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.requiredCapabilities',json(?))"
+                                   " WHERE task_id=?", (json.dumps(required), response["runId"]))
+        return response
 
     def claim(self, board, *, claim_request_id="c1", run_id=None):
         params = {'nonce': NONCE}
@@ -68,12 +79,12 @@ class ClaimStashTestCase(BoardTestCase):
         attempt = claim["attempt"]
         outcome = {"disposition": "completed", "summary": "did the work", "remaining": [], "decisions": [],
                    "artifacts": [], "request": None}
-        manifest = claim["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claim["turn"]["input"])
         result = {"status": "ok", "processState": {"shutdownConfirmed": True},
                   "turn": native_turn.claim_record(claim, outcome=outcome, session_id=session_id),
                   "turnResultPath": "/tmp/turn.json",
-                  "workspaceSeal": self.workspace.seal(self.directory, manifest, attempt["taskId"],
-                                                       attempt["attemptId"])}
+                  "workspaceSeal": record_reference(self.directory, self.workspace.seal(self.directory, manifest, attempt["taskId"],
+                                                       attempt["attemptId"]))}
         return board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
 
 
@@ -87,7 +98,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
 
     def test_collection_mirrors_the_claim_candidates_even_when_blocked(self):
         board = self.board()
-        repository = "mock+repo:" + str(self.workdir("blocked"))
+        repository = str(self.workdir("blocked"))
         self.workspace.stash_inventories[repository] = observed([entry("d" * 40, "still a candidate")])
         submitted = self.submit(board, request_id="req-1", cwd=self.workdir("blocked"))
         with board.store.db.write() as connection:
@@ -108,7 +119,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
     def test_claimable_work_reads_its_repository_before_the_claim_commits(self):
         board = self.board()
         submitted = self.submit(board, request_id="req-1", cwd=self.workdir("ready"))
-        repository = "mock+repo:" + str(self.workdir("ready"))
+        repository = str(self.workdir("ready"))
         self.workspace.stash_inventories[repository] = observed([entry("a" * 40, "ready entry")])
         pass  # Admission is owned by the service.
         claimed = self.claim(board, run_id=submitted["runId"])
@@ -120,7 +131,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
     def test_claim_freezes_all_entries_in_a_large_observation(self):
         board = self.board()
         submitted = self.submit(board, request_id="req-large", cwd=self.workdir("many-stashes"))
-        repository = "mock+repo:" + str(self.workdir("many-stashes"))
+        repository = str(self.workdir("many-stashes"))
         entries = [entry(f"{number:040x}", f"entry {number}") for number in range(69)]
         self.workspace.stash_inventories[repository] = observed(entries)
         claimed = self.claim(board, run_id=submitted["runId"])
@@ -192,7 +203,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
             self.submit(board, request_id=f"blocked-{number}", cwd=self.workdir(f"blocked-{number}"),
                         requiredCapabilities=["capability-this-worker-lacks"])
         target = self.submit(board, request_id="target", cwd=self.workdir("target"))
-        repository = "mock+repo:" + str(self.workdir("target"))
+        repository = str(self.workdir("target"))
         self.workspace.stash_inventories[repository] = observed([entry("e" * 40, "chosen run entry")])
         collect_calls = []
         real_collect = workflow_module.WorkflowCoordinator.collect_claim_stash_facts
@@ -230,7 +241,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
             self.submit(board, request_id=f"blocked-{number}", cwd=self.workdir(f"blocked-{number}"),
                         requiredCapabilities=["capability-this-worker-lacks"])
         target = self.submit(board, request_id="retry-same", cwd=self.workdir("same"))
-        repository = "mock+repo:" + str(self.workdir("same"))
+        repository = str(self.workdir("same"))
         self.workspace.stash_inventories[repository] = observed([entry("e" * 40, "same repo entry")])
         pass  # Admission is owned by the service.
         pass  # Admission is owned by the service.
@@ -256,9 +267,8 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
                 view = board.call("workflow_get", {"runId": target["runId"]})
                 self.assertEqual(view["state"], "delivered")
                 board.call("workflow_continue", {
-                    "runId": target["runId"], "commandId": "host-requeue", "expectedRevision": view["revision"],
+                    "runId": target["runId"], "artifactId": view["finalArtifactId"],
                     'note': "explicit private rejection and retry", "input": "repeat the fixture work",
-                    **target["control"],
                 })
                 coordinator.prepare_continuation_workspace({"runId": target["runId"]})
                 coordinator.prepare_dispatch({"runId": target["runId"]})
@@ -304,7 +314,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
         eligible_a = self.submit(board, request_id="eligible-a", cwd=self.workdir("eligible-a"))
         eligible_b = self.submit(board, request_id="eligible-b", cwd=self.workdir("eligible-b"))
         for key, commit in (("eligible-a", "a" * 40), ("eligible-b", "b" * 40)):
-            self.workspace.stash_inventories["mock+repo:" + str(self.workdir(key))] = observed([entry(commit, key)])
+            self.workspace.stash_inventories[str(self.workdir(key))] = observed([entry(commit, key)])
         pass  # Admission is owned by the service.
         collect_calls = []
         real_collect = workflow_module.WorkflowCoordinator.collect_claim_stash_facts
@@ -346,8 +356,8 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
         board = self.board()
         first = self.submit(board, request_id="req-1", cwd=self.workdir("first"))
         second = self.submit(board, request_id="req-2", cwd=self.workdir("second"))
-        repository_one = "mock+repo:" + str(self.workdir("first"))
-        repository_two = "mock+repo:" + str(self.workdir("second"))
+        repository_one = str(self.workdir("first"))
+        repository_two = str(self.workdir("second"))
         self.workspace.stash_inventories[repository_one] = observed([entry("1" * 40, "first repo entry")])
         self.workspace.stash_inventories[repository_two] = observed([entry("2" * 40, "second repo entry")])
         pass  # Admission is owned by the service.
@@ -357,9 +367,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
         self.assertEqual(frozen["repositoryPath"], repository_two)
         self.assertEqual(frozen["start"]["entries"][0]["commit"], "2" * 40)
         with board.store.db.read() as connection:
-            manifest = json.loads(connection.execute(
-                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (second["runId"],)
-            ).fetchone()[0])
+            manifest = board.store.workflow._run_manifest(connection, board.store.workflow._run_row(connection, second["runId"]))
         self.assertEqual(frozen["manifestSha256"], manifest["manifestSha256"])
 
 

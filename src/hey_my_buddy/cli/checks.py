@@ -79,11 +79,44 @@ SANITIZED_VARIABLES = (
 DAEMON_LOCK_NAMES = ("control-start.lock", "control-daemon.lock", "board-owner.lock")
 EVIDENCE_FILE_NAME = "teardown-evidence.json"
 CREATOR_FILE_NAME = "creator.pid"
+FIXTURE_CLEANUP_DEFERRED = "hey_my_buddy.cli.checks: fixture cleanup deferred: "
 
 # These handles belong to this runner, never to a later --sweep process. In
 # particular, reopening a vanished, non-kill-on-close Job proves nothing.
 _windows_suite_children: dict[Path, list[ProcessHandle]] = {}
 _windows_spawn_problems: dict[Path, list[str]] = {}
+_fixture_temp_root: Path | None = None
+
+
+class FixtureTemporaryDirectory(tempfile.TemporaryDirectory):
+    @classmethod
+    def _rmtree(cls, name, ignore_errors=False, repeated=False):
+        cleanup_fixture_tree(Path(name))
+
+
+def configure_fixture_cleanup() -> None:
+    """Leave blocked fixture files to the enclosing runner's final teardown."""
+    global _fixture_temp_root
+    _fixture_temp_root = Path(os.environ["TMPDIR"]).resolve()
+    tempfile.TemporaryDirectory = FixtureTemporaryDirectory
+
+
+def cleanup_fixture_tree(directory: Path) -> None:
+    """A fixture's deletion failure is teardown debt, not a failed assertion.
+
+    Disappeared fixture entries and transient Windows failures inside the
+    running suite's private temp root can be deferred. The runner observes shutdown and
+    removes the whole root, or exits 3 with the root and evidence retained.
+    """
+    try:
+        remove_private_test_root(directory, retry_seconds=0)
+    except OSError as error:
+        if (not isinstance(error, FileNotFoundError)
+                and (os.name != "nt" or getattr(error, "winerror", None) not in (5, 32, 145))
+                or _fixture_temp_root is None
+                or not directory.resolve().is_relative_to(_fixture_temp_root)):
+            raise
+        print(f"{FIXTURE_CLEANUP_DEFERRED}{directory}: {error}", file=sys.stderr)
 
 
 class _SuiteWindowsAPI(WindowsAPI):
@@ -100,7 +133,7 @@ def _suite_popen(root: Path, command: list[str], **kwargs):
     children = _windows_suite_children.setdefault(key, [])
     try:
         process = owned_popen(command, windows_api=_SuiteWindowsAPI(), **kwargs)
-        handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+        handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
         children.append(handle)
         return process
     except BaseException as error:
@@ -175,6 +208,11 @@ def create_private_root(*, directory: Path | None = None) -> Path:
     """One private root this runner owns and can inspect after the suites exit."""
     parent = private_root_directory() if directory is None else directory
     root = private_dirs.make_temporary_dir(prefix="hey-my-buddy-checks-", directory=parent).resolve()
+    try:
+        state_root.check_state_root(root)
+    except BoardError as error:
+        root.rmdir()
+        raise ValueError(f"private test root {root}: {error.message}") from error
     (root / CREATOR_FILE_NAME).write_text(f"{os.getpid()}\n", encoding="utf-8", newline="\n")
     (root / "tmp").mkdir(mode=private_dirs.directory_mode())
     if os.name == "nt":
@@ -278,27 +316,27 @@ def python_test_modules(root: Path) -> list[str]:
 
 
 def selected_test_modules(root: Path, arguments: list[str]) -> list[str]:
-    """Select paths from the same package discovery used for a full run."""
+    """Preserve explicit path priority; expand directories in discovery order."""
     modules = python_test_modules(root)
     if not arguments:
         return modules
     top = (root / "tests" / "python").resolve()
     files = {top.joinpath(*module.split(".")).with_suffix(".py"): module
              for module in modules}
-    selected: set[str] = set()
+    selected: dict[str, None] = {}
     for argument in arguments:
         path = (root / argument).resolve()
         if not path.is_relative_to(top):
             raise ValueError(f"{argument!r}: path must be below tests/python")
         if not path.exists():
             raise ValueError(f"{argument!r}: path does not exist")
-        matches = {module for file, module in files.items()
+        matches = [module for file, module in files.items()
                    if file.match("test_*.py")
-                   and (file == path or (path.is_dir() and file.is_relative_to(path)))}
+                   and (file == path or (path.is_dir() and file.is_relative_to(path)))]
         if not matches:
             raise ValueError(f"{argument!r}: path contains no discoverable test_*.py files")
-        selected.update(matches)
-    return sorted(selected)
+        selected.update(dict.fromkeys(matches))
+    return list(selected)
 
 
 class ChildOutcome:
@@ -383,6 +421,59 @@ def run_suite_child(root: Path, private_root: Path, directory_name: str, label: 
     return ChildOutcome(label, returncode, "".join(stdout), "".join(stderr), time.monotonic() - started)
 
 
+#: One budget for each short run of the selected Node that reads or judges its version.
+NODE_VERSION_SECONDS = 30.0
+
+#: Decides one Node version against the console's ``engines.node`` range with
+#: npm's semver, the range format's own implementation. It runs under the
+#: selected Node itself, so a Node too old for the frontend toolchain still
+#: reads its own conclusion instead of failing later in an unexplained
+#: ``SyntaxError``.
+NODE_RANGE_JUDGE = (
+    "const semver = require(process.argv[1]);"
+    "const range = require(process.argv[2]).engines.node;"
+    "process.stdout.write(semver.satisfies(process.argv[3], range) ? 'true' : 'false');"
+)
+
+
+def node_version_failure(node: str, console: Path) -> str | None:
+    """The frontend step's Node gate; ``None`` when the selection is supported.
+
+    The version is read from the selected Node itself and judged against the
+    console's declared ``engines.node`` range by npm's semver package, each in
+    one short run of that same Node: the step fails with the Node's location,
+    its version and the required range instead of an unexplained toolchain
+    error further in.
+    """
+    try:
+        probe = subprocess.run([node, "--version"], capture_output=True, encoding="utf-8",
+                                errors="replace", timeout=NODE_VERSION_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"Node.js at {node} could not be run to read its version: {error}\n"
+    version = probe.stdout.strip()
+    if probe.returncode != 0 or not version:
+        detail = probe.stderr.strip() or probe.stdout.strip() or f"exit {probe.returncode}"
+        return f"Node.js at {node} did not report a version: {detail}\n"
+    try:
+        judged = subprocess.run([node, "-e", NODE_RANGE_JUDGE,
+                                 str(console / "node_modules" / "semver"),
+                                 str(console / "package.json"), version],
+                                capture_output=True, encoding="utf-8", errors="replace",
+                                timeout=NODE_VERSION_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"Node.js {version} at {node} could not judge its version: {error}\n"
+    range_text = json.loads((console / "package.json").read_text(encoding="utf-8"))["engines"]["node"]
+    verdict = judged.stdout.strip()
+    if judged.returncode != 0 or verdict not in ("true", "false"):
+        detail = judged.stderr.strip() or judged.stdout.strip() or f"exit {judged.returncode}"
+        return (f"Node.js {version} at {node} could not be checked against apps/console's "
+                f"engines.node {range_text}: {detail}\n")
+    if verdict == "false":
+        return (f"Node.js {version} at {node} does not satisfy apps/console's engines.node "
+                f"{range_text}; point HMB_NODE at a supported Node.js.\n")
+    return None
+
+
 def run_frontend_suite(root: Path, private_root: Path, live: set, guard: threading.Lock,
                        stop: threading.Event) -> ChildOutcome | None:
     """One pool job: typecheck, unit tests, and a fresh build matching packaged assets."""
@@ -392,12 +483,17 @@ def run_frontend_suite(root: Path, private_root: Path, live: set, guard: threadi
     tsc = console / "node_modules" / "typescript" / "bin" / "tsc"
     vitest = console / "node_modules" / "vitest" / "vitest.mjs"
     vite = console / "node_modules" / "vite" / "bin" / "vite.js"
-    if not node or not tsc.is_file() or not vitest.is_file() or not vite.is_file():
+    semver = console / "node_modules" / "semver" / "package.json"
+    if (not node or not tsc.is_file() or not vitest.is_file() or not vite.is_file()
+            or not semver.is_file()):
         return ChildOutcome(
             FRONTEND_LABEL, 1, "",
             "Frontend checks require Node.js and console dev dependencies; "
             "run `npm --prefix apps/console ci` first.\n", time.monotonic() - started,
         )
+    unsupported = node_version_failure(node, console)
+    if unsupported is not None:
+        return ChildOutcome(FRONTEND_LABEL, 1, "", unsupported, time.monotonic() - started)
     built = private_root / "frontend" / "assets"
     outcome = run_suite_child(
         root, private_root, "frontend", FRONTEND_LABEL,
@@ -450,7 +546,7 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
 
     Every child gets its own private sub-root below the checks root, so no state,
     runtime or temp directory is shared while the suites run; the whole-root teardown
-    afterwards still covers them all. Python files retain discovery order.
+    afterwards still covers them all. Python files retain selection order.
     A failing child's captured output is printed in full — unittest's verbose
     listing names the module, class and test — and the failure is summarized by file.
     """
@@ -459,6 +555,8 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
     # from test fixtures and third-party packages. Python writes UTF-8 to our
     # binary pipes regardless of the machine's locale.
     bootstrap = ("import runpy, sys, warnings; "
+                 "from hey_my_buddy.cli.checks import configure_fixture_cleanup; "
+                 "configure_fixture_cleanup(); "
                  "sys.stdout.reconfigure(encoding='utf-8'); "
                  "sys.stderr.reconfigure(encoding='utf-8'); "
                  "warnings.filterwarnings('error', category=EncodingWarning, "
@@ -565,6 +663,13 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
     python_files = len(modules)
     print(f"hey_my_buddy.cli.checks: python tests run: {ran_total} (skipped {skipped_total}) "
           f"in {python_files - len(python_failed) - len(uncounted)} of {python_files} files")
+    deferred = [(outcome.label, line.split(FIXTURE_CLEANUP_DEFERRED, 1)[1])
+                for outcome in python_outcomes for line in outcome.stderr.splitlines()
+                if FIXTURE_CLEANUP_DEFERRED in line]
+    if deferred:
+        print(f"hey_my_buddy.cli.checks: fixture cleanup deferred {len(deferred)} time(s):")
+        for label, detail in deferred:
+            print(f"  {label}: {detail}")
     failures = []
     if never_ran:
         failures.append(f"{len(never_ran)} suite(s) never ran: {', '.join(never_ran)}")
@@ -805,19 +910,27 @@ def _log_tail(path: Path, limit: int = 4000) -> str | None:
         return None
 
 
-def remove_private_test_root(directory: Path) -> None:
+def remove_private_test_root(directory: Path, *, retry_seconds: float = 60) -> None:
     """Remove a stopped fixture without changing attributes shared by hardlinks.
 
     The caller must first close its resources and confirm its work has stopped.
     On Windows an exited process's handles, such as its working directory, may
-    still be closing after shutdown is confirmed. Retry sharing violations for
-    up to 60 seconds to allow that cleanup; a process that leaked will keep its
-    handles open and still fail at the deadline. Other deletion failures raise
-    immediately, and any final failure preserves the remaining tree.
+    still be closing after shutdown is confirmed. A mapped extension can report
+    access denied (5), and an open handle a sharing violation (32). A deleted
+    file held open by another component can leave a directory nonempty (145).
+    Retry these for up to 60 seconds; remaining failures reach the runner's
+    retained-root report. Fixture cleanup can defer immediately to that phase.
+    Other deletion failures raise immediately, and any final failure preserves
+    the remaining tree.
     """
     directory = native_path(directory)
 
     def readonly_file(operation, name, error):
+        # Python 3.12's rmtree still reports a child disappearing after scandir.
+        # Delete-pending entries can do that too; the final rmdir must still
+        # succeed before the root is considered removed.
+        if isinstance(error, FileNotFoundError) and Path(name) != directory:
+            return
         if os.name != "nt" or operation is not os.unlink or getattr(error, "winerror", None) != 5:
             raise error
         path = Path(name)
@@ -834,37 +947,21 @@ def remove_private_test_root(directory: Path) -> None:
                 break
         else:
             raise error
-        _delete_readonly_test_leaf(path)
+        from ..windows_files import unlink_regular_file
+        unlink_regular_file(path)
 
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + retry_seconds
     while True:
         try:
             shutil.rmtree(directory, onexc=readonly_file)
             return
         except OSError as error:
-            if os.name != "nt" or getattr(error, "winerror", None) != 32:
+            if os.name != "nt" or getattr(error, "winerror", None) not in (5, 32, 145):
                 raise
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise
             time.sleep(min(0.1, remaining))
-
-
-def _delete_readonly_test_leaf(path: Path) -> None:
-    """Delete this private test link, preserving every other hardlink's attributes."""
-    import ctypes
-    from ctypes import wintypes
-    from ..windows_files import WindowsFileAPI, DELETE, FILE_READ_ATTRIBUTES, OPEN_EXISTING
-
-    api = WindowsFileAPI()
-    handle = api._open(path, DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
-    try:
-        # FileDispositionInfoEx: DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE.
-        flags = wintypes.DWORD(0x1 | 0x2 | 0x10)
-        if not api.kernel.SetFileInformationByHandle(int(handle), 21, ctypes.byref(flags), ctypes.sizeof(flags)):
-            raise ctypes.WinError(ctypes.get_last_error())
-    finally:
-        api.close(handle)
 
 
 def _write_evidence(root: Path, evidence: dict) -> Path:
@@ -957,11 +1054,8 @@ def _safe_teardown(private_root: Path) -> dict | None:
 
 def private_root_directory() -> Path:
     """The shared location for new roots and abandoned-root sweeps."""
-    # macOS's per-user temporary path leaves too little room for nested native
-    # AF_UNIX sockets (sun_path is only 104 bytes). Keep the suite's one owned
-    # root short; all child TMPDIRs still stay inside it and share its teardown.
     temporary = os.environ.get("HMB_CHECKS_TMPDIR")
-    return Path(temporary) if temporary else (Path("/tmp") if sys.platform == "darwin" else Path(tempfile.gettempdir()))
+    return Path(temporary) if temporary else Path(tempfile.gettempdir())
 
 
 def sweep_private_roots(directory: Path) -> int:
@@ -1033,7 +1127,10 @@ def main(argv: list[str] | None = None) -> None:
         modules = selected_test_modules(root, options.paths)
     except ValueError as error:
         parser.error(str(error))
-    private_root = create_private_root(directory=private_root_directory())
+    try:
+        private_root = create_private_root(directory=private_root_directory())
+    except ValueError as error:
+        parser.error(str(error))
     print(f"hey_my_buddy.cli.checks: private test root {private_root}", file=sys.stderr)
     failure: str | None = None
     evidence: dict | None = None

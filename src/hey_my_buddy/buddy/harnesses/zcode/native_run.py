@@ -49,6 +49,8 @@ from ...roles.turn_io import private_json
 from ...roles.attention import AttentionRecorder
 from ..version import VersionShutdownError, probe_version
 from ..base import BoundSessionServices, ProcessHandle
+from ..input_admission import admission_error
+from ....protocol.input_failure import is_input_too_large
 from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ..native_support import (
@@ -56,7 +58,7 @@ from ..native_support import (
     ObserverInterrupt,
     buddy_spec,
     execution_deadline,
-    halt_owned_group,
+    halt_owned_session,
     identity_or_none,
     shape_guard,
     utc_now,
@@ -95,6 +97,7 @@ from ..run_contract import (
 )
 from .config import cli_command, launch, load_runtime_preferences, provider_access_types, provider_paths
 from ..inquiry_bridge import InquiryBridge
+from .inquiry import NativeInquiry
 from ..session_receipts import ReceiptError
 from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.activity import ActivityPublisher, MAX_SESSION_ID
@@ -104,6 +107,7 @@ from .protocol import (
     NATIVE_NOTIFICATION_METHODS,
     NativeConnection,
     NativeError,
+    NativeRpcError,
     RootTurnEvidence,
     ZcodeAttemptUsage,
     combined_usage,
@@ -155,7 +159,9 @@ def configure_mode(connection: NativeConnection, session_id: str, mode: str) -> 
     setting = settings.get("mode") if isinstance(settings, dict) else None
     actual = setting.get("current") if isinstance(setting, dict) else None
     # Native mode.current reports the underlying permission mode. plan is a
-    # separate tool restriction and is never confirmed by that readback.
+    # separate tool restriction and is never confirmed by that readback; no
+    # shared permission requests it any more, so only the deliberate mode
+    # probe reaches this branch.
     if mode == "plan" or not isinstance(actual, str) or not actual.strip():
         connection.on_unknown("permission-mode-readback-unconfirmed")
     elif actual != mode:
@@ -232,7 +238,7 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
             missing_effort = True
             continue
         entry = providers.setdefault(provider, {"provider": provider, "displayName": model.get("providerLabel") or provider,
-                                                 "harness": "zcode", "packageVersion": version, "accessType": access.get(provider, "unknown"), "models": []})
+                                                 "harness": "zcode", "accessType": access.get(provider, "unknown"), "models": []})
         properties = model.get("properties")
         formats = properties.get("inputFormat") if isinstance(properties, dict) else None
         formats = formats if isinstance(formats, dict) else {}
@@ -272,7 +278,6 @@ class SessionServiceMount:
 
     server_name: str
     finish_tool: str
-    checkpoint_tool: str | None
     answer_tool: str | None
     bare_tools: tuple[str, ...]
     bridge: dict
@@ -330,11 +335,12 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
         raise BoardError("INVALID_ARGUMENT",
                          "the completion tool must be one of this run's mounted session tools")
     finish_tool = qualified[completion_tool]
-    inquiry_names = tuple(qualified[name] for name in inquiry_tools) \
-        if inquiry is not None else ()
+    inquiry_names = {name: qualified[name] for name in inquiry_tools} if inquiry is not None else {}
     has_inquiry = inquiry is not None
     bridge = {"identity": dict(identity), "inputSha256": input_sha256, "key": secrets.token_hex(32),
-              "attentionPath": str(attention_path), "delegationAuthority": delegation_authority}
+              "attentionPath": str(attention_path), "delegationAuthority": delegation_authority,
+              "toolNames": [tool["name"] for tool in session_tools],
+              "finishAcceptedPath": str(root / "finish-accepted.json")}
     if has_inquiry:
         # The MCP tools only read this journal; every record in it is written
         # by the driver after root-turn evidence verified.
@@ -348,8 +354,7 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
     input_id = "hey-my-buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest()
     return SessionServiceMount(
         server_name=server_name, finish_tool=finish_tool,
-        checkpoint_tool=inquiry_names[0] if len(inquiry_names) > 0 else None,
-        answer_tool=inquiry_names[1] if len(inquiry_names) > 1 else None,
+        answer_tool=inquiry_names.get("hey_my_buddy_answer_inquiry"),
         bare_tools=tuple(tool["name"] for tool in session_tools),
         bridge=bridge, mcp_servers=tuple(mcp), input_id=input_id, bridge_config_path=str(bridge_path),
         tool_contracts=tuple({"name": tool["name"], "inputSchema": tool["inputSchema"]}
@@ -375,7 +380,7 @@ def make_inquiry_bridge(*, identity: dict, journal_path: str,
                         live: CTwoLiveEndpoint | None = None) -> InquiryBridge:
     return InquiryBridge(identity=identity, journal_path=journal_path,
                          attention_path=attention_path, live=live, error_factory=NativeError,
-                         event_metadata=_inquiry_event_metadata)
+                         event_metadata=_inquiry_event_metadata, delivery_mode="realtime", checkpoint_tool=None)
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
@@ -400,7 +405,7 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
     return BoundSessionServices(
         description=SessionService(
             tool_names=tuple(f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools)),
-        completion_tool=mount.finish_tool, checkpoint_tool=mount.checkpoint_tool,
+        completion_tool=mount.finish_tool, checkpoint_tool=None,
         answer_tool=mount.answer_tool,
         services=SessionServices(mount=mount, validate_outcome=validate_outcome, inquiry=inquiry,
                                  native_stderr=native_stderr))
@@ -458,9 +463,11 @@ class _RunFacts:
     """The cumulative, normalized facts of one run, as the observer sees them."""
 
     def __init__(self):
+        self.model_responded = False
         self.unknown_counts: dict[str, int] = {}
         self.markers = 0
         self.denied: list[dict] = []
+        self.unsupported: list[dict] = []
 
     def note_unknown(self, label: object) -> None:
         fold_unknown_events(self.unknown_counts, unknown_event_name(label))
@@ -469,6 +476,7 @@ class _RunFacts:
         return {
             "settled": settled,
             "rawAnswer": raw_answer,
+            "modelResponded": self.model_responded,
             "toolCalls": tool_calls,
             "toolMarkerFrames": self.markers,
             "unknownEvents": {"countsByType": dict(self.unknown_counts),
@@ -642,7 +650,9 @@ class _RunState:
     native_error: dict | None = None
     provider_rejection: dict | None = None
     root_model_activity: bool = False
-    model_started: bool = False
+    native_request_sent: bool | None = False
+    native_admission_error: dict | None = None
+    initial_request_attempted: bool = False
     shutdown: bool = False
     exit_code: int | None = None
     interrupted: bool = False
@@ -725,7 +735,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
                 raise
             # Take the actual process/group handle before releasing the stderr
             # descriptor: descriptor cleanup can fail after successful creation.
-            handle = ProcessHandle(process, stop_channel="stdin", own_group=True, log_paths={})
+            handle = ProcessHandle(process, stop_channel="stdin", log_paths={})
             if owned is not None:
                 owned[:] = [handle]
         finally:
@@ -737,7 +747,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
         # actual handle registered, never the initial no-child receipt.
         if process is not None:
             try:
-                shutdown, _escalated = halt_owned_group(handle, time.monotonic() + 5.0)
+                shutdown, _escalated = halt_owned_session(handle, time.monotonic() + 5.0)
                 if owned is not None:
                     owned[:] = [{"created": True, "shutdown": shutdown,
                                  "exit_code": process.returncode}]
@@ -749,7 +759,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
 
 def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, bool]:
     """Stop the run's owned app-server through the shared halt primitive."""
-    return halt_owned_group(spawn.handle, deadline)
+    return halt_owned_session(spawn.handle, deadline)
 
 
 def _project_session(session: ZcodeSessionProjector | None, state: _RunState, message: dict) -> None:
@@ -900,12 +910,25 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
         before_send(session_id)
     if session is not None:
         session.record.project(session.start_prompt, session_id, input_id, input_text, request.identity.invocation_id)
-    state.model_started = True
-    accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id,
-                                                "content": input_text})
+    initial = not state.initial_request_attempted
+    state.initial_request_attempted = True
+    if initial:
+        state.native_request_sent = None
+    try:
+        accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id,
+                                                    "content": input_text},
+                                   on_sent=(lambda: setattr(state, "native_request_sent", True))
+                                   if initial else None)
+    except NativeRpcError as error:
+        if initial:
+            state.native_admission_error = getattr(error, "native_error", None)
+        raise
     if accepted.get("sessionId") != session_id:
         raise NativeError("wrong-native-session", "native input admission belongs to a different session")
     if accepted.get("accepted") is not True:
+        if initial:
+            state.native_admission_error = admission_error("session/send",
+                accepted.get("error") if isinstance(accepted.get("error"), dict) else accepted)
         raise NativeError("native-admission-failed", "the root input was not admitted by the native session")
     if after_admit is not None:
         after_admit(session_id)
@@ -929,29 +952,18 @@ def _root_model_activity(message: dict, session_id: str, turn_id: str | None) ->
             "source", "parentToolCallId", "childSessionId", "childToolCallId", "agentId", "background")):
         return False
     kind = params.get("type")
+    if kind == "turn.completed":
+        return isinstance(data.get("response"), str) and bool(data["response"])
     if kind == "tool.updated":
-        return data.get("kind") in ("scheduled", "started", "progress", "result", "error")
-    if kind == "message.upserted":
-        item = data.get("message")
-        if not isinstance(item, dict):
-            return False
-        info = item.get("info") if isinstance(item.get("info"), dict) else item
-        if info.get("role") not in (None, "assistant"):
-            return False
-        tokens = info.get("tokens") if isinstance(info.get("tokens"), dict) else {}
-        if any(type(tokens.get(key)) is int and tokens[key] > 0 for key in ("output", "reasoning")):
+        return data.get("kind") in ("scheduled", "started")
+    if kind == "model.streaming":
+        stream_kind = data.get("kind")
+        if stream_kind == "tool_call":
             return True
-        parts = item.get("parts") if isinstance(item.get("parts"), list) else []
-        return any(isinstance(part, dict) and part.get("type") in ("text", "reasoning", "thinking")
-                   and isinstance(part.get("text"), str) and bool(part["text"].strip()) for part in parts)
-    if kind in ("part.started", "part.delta", "part.upserted"):
-        part = data.get("part") if isinstance(data.get("part"), dict) else data.get("delta")
-        if not isinstance(part, dict):
-            return False
-        if part.get("type") in ("tool", "tool-call", "tool_call"):
-            return True
-        return part.get("type") in ("text", "reasoning", "thinking") and any(
-            isinstance(part.get(key), str) and bool(part[key].strip()) for key in ("text", "content"))
+        # The two content stream frames the 0.17.0 app really emits (recorded
+        # by the session-content probe); envelope frames carry no activity.
+        return stream_kind in ("text_delta", "reasoning_delta") and isinstance(
+            data.get("delta"), str) and bool(data["delta"])
     return False
 
 
@@ -995,6 +1007,7 @@ class _CarrierOutcome:
     attempt_usage: ZcodeAttemptUsage | None = None
     usage_rounds: list[ZcodeAttemptUsage] = dataclasses.field(default_factory=list)
     inquiry_bridge: InquiryBridge | None = None
+    inquiry_driver: NativeInquiry | None = None
     attention_recorder: AttentionRecorder | None = None
     binding_path: Path | None = None
     binding_save_failed: bool = False
@@ -1003,9 +1016,16 @@ class _CarrierOutcome:
     verified_completion: dict | None = None
 
 
-def _session_mode(request: RunRequest) -> str:
-    """Map the shared permission independently of its completion carrier."""
-    return {"none": "yolo", "read": "plan", "write": "yolo", "full": "yolo"}[request.permission]
+def _session_mode() -> str:
+    """The one native mode every tool-enabled shared permission runs in.
+
+    ZCode has no read-only session and no per-tool pre-approval for a
+    headless session (docs/research/2026-11-06-zcode-read-only-mode.md), so
+    read runs in the same normal mode as write and full; only the no-tool
+    scope keeps its own creation parameters. The deliberate mode probe
+    still overrides this to measure native modes directly.
+    """
+    return "yolo"
 
 
 def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
@@ -1083,6 +1103,12 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             outcome.attention_recorder.record(record_item)
             feedback_due[0] = True
 
+        def unsupported_sink(record_item: dict) -> None:
+            # The pump has already answered the request itself. No Host answer
+            # exists for these methods, so the refusal is evidence only: no
+            # attention record, no finish-tool block and no observer feedback.
+            facts.unsupported.append(record_item)
+
         def dispatch_feedback() -> None:
             # NativeConnection invokes this after every pump step, including the
             # steps inside RPC reply waits. Its reverse-request refusal is already
@@ -1090,18 +1116,22 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             if feedback_due[0]:
                 feedback_due[0] = False
                 notify()
+            if outcome.inquiry_driver is not None:
+                outcome.inquiry_driver.poll()
 
         def unknown_sink(label: str) -> None:
             facts.note_unknown(label)
             feedback_due[0] = True
 
         try:
+            notify()
             spawn = _spawn_app_server(cwd=request.cwd, invocation_root=invocation_root, native_root=native_root,
                                       deadline=deadline, cancel=cancel, stderr_path=stderr_path, no_tools=no_tool,
                                       owned=owned_spawn)
             connection = spawn.connection
             connection.on_unknown = unknown_sink
             connection.attention = attention_sink
+            connection.on_unsupported = unsupported_sink
             connection.after_pump = dispatch_feedback
             connection.call("runtime/capabilities", {})
             workspace = {"workspacePath": request.cwd, "workspaceKey": request.cwd}
@@ -1167,7 +1197,8 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                 "during-model" if state.root_model_activity or has_output or has_text else "before-model")
         if (completion_carrier and state.status == "ok" and state.shutdown
                 and state.exit_code == 0 and outcome.record is not None
-                and outcome.binding_path is not None and outcome.session_id is not None):
+                and outcome.binding_path is not None and outcome.session_id is not None
+                and not outcome.binding_save_failed):
             try:
                 expected = {"taskId": request.identity.task_id, "sessionId": outcome.session_id,
                             "cwd": request.cwd, "buddy": outcome.resolved}
@@ -1214,14 +1245,18 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
             # the role before any driver-side protocol check runs.
             tools.observe(message)
             _project_session(session, state, message)
-            changed = classifier.observe(message)
-            if changed:
-                notify()
+            first_output = False
             if holder:
                 holder[0].observe(message, ordinal)
                 outcome.attempt_usage.observe(message, holder[0].turn_id)
-                state.root_model_activity |= _root_model_activity(
-                    message, holder[0].session_id, holder[0].turn_id)
+                model_activity = _root_model_activity(message, holder[0].session_id, holder[0].turn_id)
+                state.root_model_activity |= model_activity
+                first_output = model_activity and not facts.model_responded
+                if first_output:
+                    facts.model_responded = True
+            changed = classifier.observe(message)
+            if changed or first_output:
+                notify()
         return observe
 
     protocol_holder: list = []
@@ -1246,7 +1281,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
     else:
         # A read or write permission without a bound service runs the same
         # final-message carrier over the user's native tools.
-        create_params = {"mode": _session_mode(request), "mcpServers": []}
+        create_params = {"mode": _session_mode(), "mcpServers": []}
     state.create_params = create_params
     while True:
         protocol_holder[:] = []
@@ -1294,7 +1329,7 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
     mounted session service, a continuation and live observers."""
     mount = services.mount
     mode, previous = _continuation_of(request)
-    create_params = {"mode": _session_mode(request), "mcpServers": list(mount.mcp_servers)}
+    create_params = {"mode": _session_mode(), "mcpServers": list(mount.mcp_servers)}
     state.create_params = create_params
     snapshot = None
     if mode == "native-session":
@@ -1347,19 +1382,24 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         tools.observe(message)
         outcome.evidence.observe(message, ordinal)
         _project_session(session, state, message)
+        if outcome.inquiry_driver is not None:
+            outcome.inquiry_driver.observe(message, ordinal)
         if outcome.evidence.turn_id is not None:
             # The trusted root identity comes only from this verified
             # canonical turn start, never from the observed events;
             # add_root keeps it unique by itself.
             tools.add_root(outcome.session_id, outcome.evidence.turn_id)
-        changed = classifier.observe(message)
-        if changed:
-            notify()
         # Attempt usage is observed next to the root-turn evidence; a
         # foreign session or an unstarted turn contributes nothing.
         outcome.attempt_usage.observe(message, outcome.evidence.turn_id)
-        state.root_model_activity |= _root_model_activity(
-            message, outcome.evidence.session_id, outcome.evidence.turn_id)
+        model_activity = _root_model_activity(message, outcome.evidence.session_id, outcome.evidence.turn_id)
+        state.root_model_activity |= model_activity
+        first_output = model_activity and not facts.model_responded
+        if first_output:
+            facts.model_responded = True
+        changed = classifier.observe(message)
+        if changed or first_output:
+            notify()
         outcome.projection.note(message, ordinal)
         if outcome.inquiry_bridge is not None:
             outcome.inquiry_bridge.note_event(message, outcome.projection.phase)
@@ -1368,18 +1408,28 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         publish_activity()
 
     def bind_worker_session(opened_session: str) -> None:
+        def accept_finish_receipt(receipt: dict) -> None:
+            # Published the moment the receipt becomes this turn's fixed
+            # answer: the session-tools bridge reads this marker to answer a
+            # repeated finish call with the truth instead of a second receipt.
+            private_json(Path(mount.bridge["finishAcceptedPath"]),
+                         {"receiptId": receipt["receiptId"]}, exclusive=True)
+
         outcome.evidence = RootTurnEvidence(
             opened_session, mount.input_id, mount.finish_tool, mount.bridge,
-            checkpoint_name=mount.checkpoint_tool, answer_name=mount.answer_tool,
-            on_delivery=(lambda receipt, call_id: outcome.inquiry_bridge.deliver_inquiries(receipt, call_id)),
-            on_answer=(lambda receipt, call_id: outcome.inquiry_bridge.record_answer(receipt, call_id)),
+            answer_name=mount.answer_tool,
+            on_answer=outcome.inquiry_bridge.record_answer if outcome.inquiry_bridge is not None else None,
             validate_outcome=services.validate_outcome,
-            mounted_tools=mount.bare_tools, on_unknown=connection.on_unknown)
+            mounted_tools=mount.bare_tools, on_unknown=connection.on_unknown,
+            on_finish_receipt=accept_finish_receipt)
         outcome.projection.session_id = opened_session
         outcome.attempt_usage.session_id = opened_session
         connection.observe = observe
         outcome.projection.phase = "waiting-model"
         publish_activity()
+        outcome.inquiry_driver = NativeInquiry(connection, outcome.evidence, outcome.inquiry_bridge,
+                                               mount.answer_tool, session)
+        outcome.inquiry_driver.hold_queue()
         # Read the pre-model cursor through every page. Without a complete
         # baseline, no message is attributed to this turn.
         outcome.attempt_usage.capture_baseline(connection)
@@ -1394,13 +1444,18 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         if outcome.inquiry_bridge is not None:
             outcome.inquiry_bridge.activate(opened_session)
 
-    outcome.session_id, outcome.resolved = _admit_root_input(
-        connection, snapshot=snapshot, request=request, spec=buddy_spec(request),
-        input_id=mount.input_id, input_text=request.input_text,
-        previous=previous, mode=mode, require_interactive=True,
-        settled=lambda: bool(outcome.evidence is not None and outcome.evidence.settled_ordinal),
-        classifier=classifier, state=state, session=session, on_configured=note_configured,
-        before_send=bind_worker_session, after_admit=after_admit)
+    try:
+        outcome.session_id, outcome.resolved = _admit_root_input(
+            connection, snapshot=snapshot, request=request, spec=buddy_spec(request),
+            input_id=mount.input_id, input_text=request.input_text,
+            previous=previous, mode=mode, require_interactive=True,
+            settled=lambda: bool(outcome.evidence is not None and outcome.evidence.settled_ordinal),
+            classifier=classifier, state=state, session=session, on_configured=note_configured,
+            before_send=bind_worker_session, after_admit=after_admit)
+    finally:
+        # Cleanup RPCs still dispatch root evidence. A real native failure here
+        # must reach _run's normal error handling and owned-process shutdown.
+        _clear_inquiry_queue(outcome)
     # The settlement read is paged; RPC rejection or timeout leaves usage
     # unknown, while errors from native observers continue to propagate.
     outcome.attempt_usage.capture_final(connection)
@@ -1431,6 +1486,15 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
     outcome.record["provenance"] = outcome.evidence.provenance()
 
 
+def _clear_inquiry_queue(outcome: _CarrierOutcome) -> None:
+    if outcome.inquiry_driver is not None and not outcome.inquiry_driver.clear_held():
+        outcome.binding_save_failed = True
+        if outcome.binding_path is not None:
+            # A resumed session already has a binding from its predecessor.
+            # Remove only this owned, previously verified mutable binding.
+            native_path(outcome.binding_path).unlink(missing_ok=True)
+
+
 def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFlag,
                      state: _RunState, tools: ZcodeToolFacts, classifier: _Classifier,
                      facts: _RunFacts, notify: Callable[..., RunFeedback],
@@ -1458,14 +1522,14 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
         state.runtime_preferences = spawn.connection.runtime_preferences_facts
         shutdown, escalated = _stop_native(spawn, deadline)
         state.shutdown = shutdown
-        state.exit_code = spawn.process.returncode
+        state.exit_code = spawn.handle.poll()
         state.escalated = escalated
         state.interrupted = escalated or state.observer_stopped
-        if state.status == "ok" and (not shutdown or spawn.process.returncode != 0):
+        if state.status == "ok" and (not shutdown or state.exit_code != 0):
             state.status = "error"
             state.reason = "native-shutdown-failed"
             state.error_text = ("the native app server did not exit normally "
-                                "with confirmed group shutdown")
+                                "with confirmed session shutdown")
             outcome.record = None
         if tools is not None and shutdown:
             # The native server has exited. Read through its terminal EOF so
@@ -1524,6 +1588,14 @@ def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState
         # stay as their clearly-sourced evidence reference; the common result
         # carries the method/action/reason triple.
         retain("denied-interactions", "denied-interactions.json", {"records": facts.denied})
+    if facts.unsupported:
+        # Refused requests no Host answer exists for keep each method and time
+        # as their own private evidence; the count alone reaches the receipt
+        # through the native-observations reference the role already reads.
+        retain("unsupported-native-requests", "unsupported-native-requests.json",
+               {"records": facts.unsupported})
+        retain("native-observations", "native-observations.json",
+               {"unsupportedNativeRequests": len(facts.unsupported)})
     if native_path(stderr_path).is_file():
         raw_stderr = read_bytes(stderr_path)
         refs.append(EvidenceRef(kind="native-stderr", location=str(stderr_path),
@@ -1651,12 +1723,12 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
             completion = CompletionEvidence(stream_end=drained)
     effective = EffectivePolicy()
     if state.session_opened and state.create_params is not None:
-        if request.permission != "none":
-            effective = EffectivePolicy(
-                tools=PolicyFact(requested=_json_package({"mode": state.create_params["mode"]})))
-        else:
+        if request.permission == "none":
             effective = EffectivePolicy(
                 tools=PolicyFact(requested=_json_package(state.create_params)))
+        else:
+            effective = EffectivePolicy(
+                tools=PolicyFact(requested=_json_package({"mode": state.create_params["mode"]})))
     continuation = None
     if binding_path is not None and session_id is not None:
         continuation = ContinuationFacts(
@@ -1668,7 +1740,11 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
                    native_exit_code=state.exit_code,
                    message=state.error_text),
         harness_version=spawn.version if spawn is not None else None,
-        model_started=True if state.model_started else None,
+        model_responded=(True if facts.model_responded else
+                       False if not state.initial_request_attempted or
+                       is_input_too_large(state.native_admission_error) or drained is True else None),
+        native_request_sent=state.native_request_sent,
+        native_admission_error=_native_error_package(state.native_admission_error),
         native_event_count=event_count if event_count else None,
         native_evidence=_shared_unknown_events(facts),
         buddy=ResultBuddy(
@@ -1758,7 +1834,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
                 spawn.process.stdout.close()
         if not shutdown:
             raise NativeError("native-shutdown-failed",
-                              "the native app server group shutdown was not confirmed")
+                              "the native app server session shutdown was not confirmed")
         if spawn.process.returncode != 0:
             raise NativeError("native-process-failed", "the native app server exited unsuccessfully")
         return catalog_value

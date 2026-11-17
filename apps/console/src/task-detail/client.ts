@@ -7,8 +7,8 @@ const INQUIRY_LIMIT = 200;
 /** How many routing decisions one page of the history asks for. */
 const ROUTING_LIMIT = 100;
 
-/** One read: what was parsed, and the instant the server checked it (null when the reply carries none). */
-export type Read<T> = { value: T; verifiedAtMs: number | null };
+/** One parsed read. */
+export type Read<T> = { value: T };
 
 /** What the detail reads, each reply parsed once. */
 export type TaskDetailClient = {
@@ -21,15 +21,14 @@ export type TaskDetailClient = {
 };
 
 export function createTaskDetailClient(api: ConsoleApi, csrfToken: string): TaskDetailClient {
-  const verified = (reply: unknown) => api.readVerifiedAt?.(reply) ?? null;
   return {
     async task(runId, signal) {
       const reply = await api.task(runId, signal);
-      return { value: parseTask(reply, runId), verifiedAtMs: verified(reply) };
+      return { value: parseTask(reply, runId) };
     },
     async workflow(runId) {
       const reply = await api.command("workflow_get", { runId }, csrfToken);
-      return { value: parseWorkflow(reply, runId), verifiedAtMs: verified(reply) };
+      return { value: parseWorkflow(reply, runId) };
     },
     async audit(runId, decisionIds) {
       const reply = await api.command("workflow_get", { runId, includeAudit: true, routingHistory: { limit: ROUTING_LIMIT } }, csrfToken);
@@ -41,15 +40,15 @@ export function createTaskDetailClient(api: ConsoleApi, csrfToken: string): Task
         entries.push(...page.entries);
         cursor = page.nextCursor;
       }
-      return { value: { audit, routing: entries }, verifiedAtMs: verified(reply) };
+      return { value: { audit, routing: entries } };
     },
     async inquiries(runId) {
       const reply = await api.command("message_list", { runId, limit: INQUIRY_LIMIT }, csrfToken);
-      return { value: parseInquiries(reply, INQUIRY_LIMIT), verifiedAtMs: verified(reply) };
+      return { value: parseInquiries(reply, INQUIRY_LIMIT) };
     },
     async basis(decisionId) {
       const reply = await api.command("selection_get", { decisionId, includeAudit: true }, csrfToken);
-      return { value: parseBasis(reply, decisionId), verifiedAtMs: verified(reply) };
+      return { value: parseBasis(reply, decisionId) };
     },
   };
 }

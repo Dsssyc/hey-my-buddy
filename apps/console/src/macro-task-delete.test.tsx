@@ -11,14 +11,14 @@ import { MacroTasks } from "./MacroTasks";
 import { MacroTaskDeleteDialog } from "./MacroTaskDeleteDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { createAuthorityLatch } from "./console-session";
-import { macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { listSummary, macroTaskDetail, macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import type { MacroTaskSummary, MacroTaskTimeline } from "./macro-task-types";
 import type { DeletionBlocker, DeletionBlockerKind, MacroTaskDeletionPreview } from "./macro-task-deletion";
 
 function snapshotFixture(): Snapshot {
-  return { csrfToken: "synthetic-csrf", eventCursor: 0, consoleSession: { id: "session-fixture" },
-    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
-    buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], decisions: [], tasks: { pendingCount: 0 }, capabilities: {} };
+  return { csrfToken: "synthetic-csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: { id: "session-fixture" },
+    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", modelResponseWaitSeconds: 60, profileBuddyId: null },
+    buddies: [], preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [], decisions: [], tasks: { pendingCount: 0 }, capabilities: {} };
 }
 function preview(extra: Partial<MacroTaskDeletionPreview> = {}): MacroTaskDeletionPreview {
   return { macroTaskId: "macro-1", microTaskCount: 73, unconcludedFailureCount: 2,
@@ -58,7 +58,7 @@ describe("macro task deletion confirmation", () => {
   it("names the fixed target, reads complete backend counts and safely focuses cancel", async () => {
     const f = dialogHarness();
     const dialog = await screen.findByRole("dialog", { name: `删除「${f.props.summary.title}」` });
-    await screen.findByText("73 个，其中 2 个取消或失败而没有结论");
+    await screen.findByText("73 个，其中 2 个已取消或失败且无结论");
     expect(f.command).toHaveBeenCalledWith("macro_task_deletion_preview", { macroTaskId: "macro-1" }, "synthetic-csrf");
     expect(dialog.querySelector("[data-slot=macro-delete-scope]")?.textContent).toContain("封存的产物14 份，共 6.2 MB会话11 个，共 48.0 MB检出与 Git 引用3 个检出，12 个引用");
     expect(dialog.textContent).toContain("备份轮换");
@@ -96,7 +96,7 @@ describe("macro task deletion confirmation", () => {
       { ...blocker("running", "unloaded-task"), title: task, titleSource: "task" },
       { ...blocker("stop-unconfirmed", "unloaded-unnamed"), title: null, titleSource: "none" }];
     dialogHarness({ api: { command: vi.fn(async () => preview({ blockerTotal: 3, blockers })) } as unknown as ConsoleApi });
-    await screen.findByRole("dialog", { name: language === "zh" ? /还不能删除/ : /Cannot delete/ });
+    await screen.findByRole("dialog", { name: language === "zh" ? /暂不能删除/ : /Cannot delete/ });
     const titles = [...document.querySelectorAll("[data-slot=macro-delete-blockers] li p.font-medium")].map(node => node.textContent);
     expect(titles).toEqual([authored, task, language === "zh" ? "未命名" : "Unnamed"]);
   });
@@ -105,12 +105,12 @@ describe("macro task deletion confirmation", () => {
     const blockers = [blocker("queued"), blocker("running"), blocker("routing", "r2"), blocker("review", "r3"),
       blocker("awaiting-host", "r4"), blocker("stop-unconfirmed", "r5")];
     const f = dialogHarness({ api: { command: vi.fn(async () => preview({ blockerTotal: 6, blockers })) } as unknown as ConsoleApi });
-    const dialog = await screen.findByRole("dialog", { name: /还不能删除/ });
-    expect(dialog.textContent).toContain("名下还有 5 个微任务或路由计算没有了结");
+    const dialog = await screen.findByRole("dialog", { name: /暂不能删除/ });
+    expect(dialog.textContent).toContain("名下有 5 个微任务或路由计算尚未了结");
     expect(dialog.querySelectorAll("[data-slot=macro-delete-blockers] > li")).toHaveLength(5);
     for (const text of ["排队中", "路由中", "进行中", "等待验收", "等待 Host", "停止未确认", "由 Host 验收、打回或给出结论"]) expect(dialog.textContent).toContain(text);
     expect(within(dialog).queryByRole("button", { name: "删除" })).toBeNull();
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "知道了" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "关闭" }));
     await f.user.keyboard("{Escape}");
     expect(f.onClose).toHaveBeenCalled();
   });
@@ -118,8 +118,8 @@ describe("macro task deletion confirmation", () => {
   it("explains the server's fifty-reason limit without claiming a complete task count", async () => {
     dialogHarness({ api: { command: vi.fn(async () => preview({ blockerTotal: 51,
       blockers: Array.from({ length: 50 }, (_, index) => blocker("review", `r${index}`)) })) } as unknown as ConsoleApi });
-    expect((await screen.findByRole("dialog", { name: /还不能删除/ })).textContent).toContain("前 50 条拦截原因，共 51 条");
-    expect(screen.queryByText("名下还有 50 个微任务或路由计算没有了结。")).toBeNull();
+    expect((await screen.findByRole("dialog", { name: /暂不能删除/ })).textContent).toContain("前 50 条拦截原因，共 51 条");
+    expect(screen.queryByText("名下有 50 个微任务或路由计算尚未了结。")).toBeNull();
   });
 
   it("prevents duplicate submission and dismissal while deleting", async () => {
@@ -135,21 +135,106 @@ describe("macro task deletion confirmation", () => {
     fireEvent.pointerDown(document.querySelector("[data-slot=dialog-overlay]")!);
     expect(f.onClose).not.toHaveBeenCalled();
     await act(async () => pending.resolve(receipt()));
-    expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0);
+    expect(f.onDeleted).toHaveBeenCalledWith("macro-1");
   });
 
-  it("retries the identical confirmed scope after a physical failure", async () => {
+  it("shows every failed object and diagnostic, then replays the same confirmed scope", async () => {
     const f = dialogHarness();
     await screen.findByRole("button", { name: "删除" });
-    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, objectKind: "native-session",
-      reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } } }));
+    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+      { objectKind: "native-session", path: "/synthetic/native", reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } },
+        error: { message: "[Errno 13] Permission denied: '/synthetic/native'", errno: 13, winerror: 32 } },
+      { objectKind: "workspace", path: "/synthetic/checkout", reason: { code: "macro-task-deletion.lock-mismatch", params: {} }, error: null },
+    ] }));
     await confirm();
-    expect(await screen.findByText(/原生会话未能删除/)).toBeTruthy();
+    expect(await screen.findByText("/synthetic/native")).toBeTruthy();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.querySelectorAll("[data-slot=macro-delete-failures] > li")).toHaveLength(2);
+    for (const text of ["原生会话", "Permission denied", "/synthetic/checkout", "检出锁与登记不符", "仅重复请求不会解决"]) expect(dialog.textContent).toContain(text);
+    expect(dialog.textContent).not.toContain("Errno 13");
+    expect(dialog.textContent).not.toContain("errno 13");
+    expect(dialog.textContent).not.toContain("winerror 32");
+    expect(dialog.textContent?.match(/\/synthetic\/native/g)).toHaveLength(1);
     expect(f.onDeleted).not.toHaveBeenCalled();
     f.command.mockResolvedValueOnce(receipt({ duplicate: true }));
     await f.user.click(screen.getByRole("button", { name: "重试删除" }));
     expect(f.command.mock.calls[2]).toEqual(f.command.mock.calls[1]);
-    expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0);
+    expect(f.onDeleted).toHaveBeenCalledWith("macro-1");
+  });
+
+  it.each(["zh", "en"])("explains a busy workspace on either deletion reply path in %s", async language => {
+    await i18n.changeLanguage(language);
+    const message = language === "zh" ? "检出正在处理另一项操作，请稍后重试删除。"
+      : "Another operation is using a checkout. Retry deletion shortly.";
+    for (const physical of [false, true]) {
+      const f = dialogHarness();
+      const confirm = await screen.findByRole("button", { name: language === "zh" ? "删除" : "Delete" });
+      if (physical) f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+        { objectKind: "workspace", path: null, reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "WORKSPACE_BUSY" } }, error: null },
+      ] }));
+      else f.command.mockRejectedValueOnce(new ApiError("WORKSPACE_BUSY", "Another operation is preparing or sealing this workspace"));
+      await f.user.click(confirm);
+      if (physical) {
+        expect(await screen.findByText(language === "zh" ? "等待占用检出的进程退出后重试。"
+          : "Wait for the processes using the checkout to exit, then retry.")).toBeTruthy();
+        expect(screen.getByRole("dialog").textContent).toContain("WORKSPACE_BUSY");
+      } else {
+        expect(await screen.findByText(message)).toBeTruthy();
+        expect(screen.getByRole("dialog").textContent).not.toMatch(/WORKSPACE_BUSY|preparing or sealing/);
+      }
+      expect(f.onDeleted).not.toHaveBeenCalled();
+      cleanup();
+    }
+  });
+
+  it("replaces earlier physical failures with the current retry refusal", async () => {
+    const f = dialogHarness();
+    await screen.findByRole("button", { name: "删除" });
+    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+      { objectKind: "workspace", path: "/synthetic/old-checkout", reason: { code: "macro-task-deletion.lock-mismatch", params: {} }, error: null },
+    ] }));
+    await confirm();
+    await screen.findByText("/synthetic/old-checkout");
+    f.command.mockRejectedValueOnce(new ApiError("WORKSPACE_BUSY", "new refusal"));
+    await f.user.click(screen.getByRole("button", { name: "重试删除" }));
+    expect(await screen.findByText("检出正在处理另一项操作，请稍后重试删除。")).toBeTruthy();
+    expect(screen.getByText("删除尚未完成。请查看当前错误后重试。")).toBeTruthy();
+    expect(screen.queryByText("删除已开始，以下对象仍未清理。请先查看各项原因。")).toBeNull();
+    expect(screen.queryByText("/synthetic/old-checkout")).toBeNull();
+    expect(screen.queryByText("检出锁与登记不符")).toBeNull();
+    expect(f.onDeleted).not.toHaveBeenCalled();
+  });
+
+  it("handles Windows system errors, Git timeouts and dependency-only failures", async () => {
+    const f = dialogHarness();
+    await screen.findByRole("button", { name: "删除" });
+    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+      { objectKind: "workspace", path: "C:\\checkout", reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "WORKSPACE_IO_ERROR" } },
+        error: { message: "[WinError 32] The process cannot access the file: 'C:\\checkout'", errno: null, winerror: 32 } },
+      { objectKind: "workspace", path: null, reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "WORKSPACE_GIT_UNKNOWN" } },
+        error: { message: "Git did not finish within the workspace wait limit", errno: null, winerror: null } },
+      { objectKind: "session-records", path: null, reason: { code: "macro-task-deletion.dependency-retained", params: {} }, error: null },
+    ] }));
+    await confirm();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("系统错误：The process cannot access the file");
+    expect(dialog.textContent?.match(/C:\\checkout/g)).toHaveLength(1);
+    expect(dialog.textContent).toContain("检查系统错误及文件权限；问题解除后重试。");
+    expect(dialog.textContent).toContain("Git 操作超时，稍后重试删除。");
+    expect(dialog.textContent).not.toContain("Git did not finish within the workspace wait limit");
+    const dependencies = dialog.querySelectorAll("[data-slot=macro-delete-failures] > li")[2]!;
+    expect(dependencies.querySelectorAll("p")).toHaveLength(2);
+  });
+
+  it("hides blackboard messages even when their errors carry an OS number", async () => {
+    const f = dialogHarness();
+    await screen.findByRole("button", { name: "删除" });
+    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+      { objectKind: "workspace", path: null, reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "WORKSPACE_IO_ERROR" } },
+        error: { message: "Internal workspace message", errno: 13, winerror: null } },
+    ] }));
+    await confirm();
+    expect(screen.getByRole("dialog").textContent).not.toContain("Internal workspace message");
   });
 
   it.each([new ApiError("NETWORK", "raw transport text"), new ApiError("INVALID_RESPONSE", "raw reply text")])(
@@ -185,7 +270,7 @@ describe("macro task deletion confirmation", () => {
     expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
     f.command.mockResolvedValueOnce(preview({ microTaskCount: 74 }));
     await f.user.click(screen.getByRole("button", { name: "重新读取" }));
-    await screen.findByText("74 个，其中 2 个取消或失败而没有结论");
+    await screen.findByText("74 个，其中 2 个已取消或失败且无结论");
     expect(f.onDeleted).not.toHaveBeenCalled();
     f.command.mockResolvedValueOnce(receipt({ microTaskCount: 74 }));
     await confirm();
@@ -197,10 +282,10 @@ describe("macro task deletion confirmation", () => {
     await screen.findByRole("button", { name: "删除" });
     f.command.mockRejectedValueOnce(new ApiError("MACRO_TASK_NOT_SETTLED", "untranslated backend message"));
     await confirm();
-    await screen.findByText(/还有未了结的微任务/);
+    await screen.findByText(/仍有未了结的微任务/);
     f.command.mockResolvedValueOnce(preview({ blockerTotal: 1, blockers: [blocker("review")] }));
     await f.user.click(screen.getByRole("button", { name: "重新读取" }));
-    expect(await screen.findByRole("dialog", { name: /还不能删除/ })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: /暂不能删除/ })).toBeTruthy();
     expect(f.command.mock.calls.filter(call => call[0] === "macro_task_delete")).toHaveLength(1);
   });
 
@@ -244,6 +329,8 @@ describe("macro task deletion confirmation", () => {
   it("resumes a deletion already started in another browser", async () => {
     const command = vi.fn().mockResolvedValueOnce(preview({ deletionState: "deleting" })).mockResolvedValueOnce(receipt({ duplicate: true }));
     const f = dialogHarness({ api: { command } as unknown as ConsoleApi });
+    expect(await screen.findByText("删除已开始。可重试同一个删除请求以继续清理。")).toBeTruthy();
+    expect(screen.queryByText(/删除回复无效/)).toBeNull();
     await f.user.click(await screen.findByRole("button", { name: "重试删除" }));
     expect(command).toHaveBeenLastCalledWith("macro_task_delete", { macroTaskId: "macro-1", microTaskCount: 73, confirm: true }, "synthetic-csrf");
     expect(f.onDeleted).toHaveBeenCalledOnce();
@@ -257,7 +344,7 @@ describe("macro task deletion confirmation", () => {
     await screen.findByText(/删除结果尚未确认/);
     f.command.mockRejectedValueOnce(new ApiError("NOT_FOUND", "gone"));
     await f.user.click(screen.getByRole("button", { name: "重试删除" }));
-    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0));
+    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1"));
   });
 
   it("treats NOT_FOUND on the first deletion attempt as completed", async () => {
@@ -265,13 +352,13 @@ describe("macro task deletion confirmation", () => {
     await screen.findByRole("button", { name: "删除" });
     f.command.mockRejectedValueOnce(new ApiError("NOT_FOUND", "gone"));
     await confirm();
-    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0));
+    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1"));
   });
 
   it("treats NOT_FOUND while reading the deletion preview as completed", async () => {
     const command = vi.fn().mockRejectedValueOnce(new ApiError("NOT_FOUND", "gone"));
     const f = dialogHarness({ api: { command } as unknown as ConsoleApi });
-    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0));
+    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1"));
   });
 
   it("ignores a preview completing after its confirmation has been cancelled", async () => {
@@ -296,43 +383,48 @@ describe("macro task deletion confirmation", () => {
   });
 });
 
-function workspaceHarness(extraRows: MacroTaskSummary[] = []) {
+function workspaceHarness(extraRows: MacroTaskSummary[] = [], unnamed = false) {
   const snapshot = snapshotFixture();
   const timeline = macroTaskTimelineFixture();
-  let rows = [timeline.macroTask, ...extraRows];
+  if (unnamed) Object.assign(timeline.macroTask, { title: "", titleSource: "none" });
+  let rows = [listSummary(timeline.macroTask), ...extraRows];
   const command = vi.fn(async (operation: string, params: unknown): Promise<unknown> => {
     if (operation === "macro_task_deletion_preview") return preview();
     if (operation === "macro_task_delete") { rows = rows.filter(row => row.macroTaskId !== "macro-1"); return receipt(); }
     throw new Error(`Unexpected fixture operation: ${operation} ${JSON.stringify(params)}`);
   });
-  const api = { command, macroTasks: vi.fn(async () => ({ macroTasks: rows, totals: { all: rows.length, active: rows.length, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false })),
-    macroTaskTimeline: vi.fn(async (id: string) => ({ timeline: id === "macro-1" ? timeline : { ...timeline, macroTask: rows.find(row => row.macroTaskId === id)!, rows: [], spans: [], events: [] }, verifiedAtMs: null })) } as unknown as ConsoleApi;
+  const api = { command, macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(rows), totals: { all: rows.length, active: rows.length, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 41, changed: false })),
+    macroTaskTimeline: vi.fn(async (id: string) => ({ timeline: id === "macro-1" ? timeline : { ...timeline, macroTask: macroTaskDetail(rows.find(row => row.macroTaskId === id)!), rows: [], spans: [], events: [] }, verifiedAtMs: null })) } as unknown as ConsoleApi;
   const refresh = vi.fn(async (): Promise<Snapshot | null> => structuredClone(snapshot));
   const onAddress = vi.fn();
   const view = render(wrap(<MacroTasks api={api} snapshot={snapshot} refresh={refresh} onAddress={onAddress}/>));
   return { ...view, api, command, timeline, refresh, onAddress, user: userEvent.setup(),
     setRows: (next: MacroTaskSummary[]) => { rows = next; } };
 }
-async function openDelete() {
-  await userEvent.click(await screen.findByRole("button", { name: "更多" }));
-  await userEvent.click(await screen.findByRole("button", { name: "删除宏任务…" }));
+async function openDelete(f: ReturnType<typeof workspaceHarness>) {
+  await waitFor(() => expect(document.querySelector('[data-macro-task-id="macro-1"]')).toBeTruthy());
+  const row = document.querySelector('[data-macro-task-id="macro-1"]') as HTMLElement;
+  within(row).getByRole("button", { name: "更多" }).focus();
+  await f.user.keyboard("{Enter}");
+  await f.user.click(await screen.findByRole("menuitem", { name: "删除宏任务…" }));
   return screen.findByRole("dialog");
 }
 
 describe("macro task deletion workspace integration", () => {
   it("offers deletion in the existing menu, cancels safely and restores focus to More", async () => {
     const f = workspaceHarness();
-    const dialog = await openDelete();
+    const dialog = await openDelete(f);
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
     await f.user.click(within(dialog).getByRole("button", { name: "取消" }));
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "更多" })));
+    const row = document.querySelector('[data-macro-task-id="macro-1"]') as HTMLElement;
+    await waitFor(() => expect(document.activeElement).toBe(within(row).getByRole("button", { name: "更多" })));
     expect(f.command.mock.calls.every(call => call[0] === "macro_task_deletion_preview")).toBe(true);
   });
 
   it("removes only the deleted row, replaces its address and refreshes the list", async () => {
     const other = macroTaskSummary({ macroTaskId: "macro-2", title: "保留的宏任务", lastActivitySeq: 40 });
     const f = workspaceHarness([other]);
-    await openDelete();
+    await openDelete(f);
     await confirm();
     await waitFor(() => expect(window.location.hash).toBe("#tasks/macro-2"));
     expect(screen.queryByRole("button", { name: new RegExp(`^${f.timeline.macroTask.title}`) })).toBeNull();
@@ -344,37 +436,39 @@ describe("macro task deletion workspace integration", () => {
     await waitFor(() => expect(window.location.hash).toBe("#tasks/macro-2"));
   });
 
-  it("returns to the empty list after deleting the last item and reports retained storage", async () => {
+  it("retains the selected macro task for a skipped physical object and completes only after retry", async () => {
     const f = workspaceHarness();
-    await openDelete();
-    f.command.mockImplementationOnce(async () => {
-      f.setRows([]);
-      return receipt({ skipped: [{ objectKind: "private-root", path: "/synthetic/retained", reason: { code: "macro-task-deletion.owner-unproven", params: {} } }] });
-    });
+    await openDelete(f);
+    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+      { objectKind: "session-records", path: "/synthetic/records", reason: { code: "macro-task-deletion.owner-unproven", params: {} }, error: null },
+    ] }));
     await confirm();
+    await screen.findByText("删除已开始，以下对象仍未清理。请先查看各项原因。");
+    expect(screen.getByText("无法证明对象的归属。")).toBeTruthy();
+    expect(window.location.hash).toBe("#tasks/macro-1");
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    f.command.mockImplementationOnce(async () => { f.setRows([]); return receipt(); });
+    await f.user.click(screen.getByRole("button", { name: "重试删除" }));
     await waitFor(() => expect(window.location.hash).toBe("#tasks"));
-    await screen.findByText(/1 项存储内容按检查结果留在原处/);
-    expect(screen.getByRole("link", { name: "查看存储" }).getAttribute("href")).toBe("#settings");
-    expect(await screen.findByRole("heading", { name: "还没有宏任务" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "暂无宏任务" })).toBeTruthy();
     expect(document.activeElement).toBe(document.querySelector("[data-slot=macro-delete-result]"));
   });
 
   it("keeps confirmed deletion true when subsequent reads fail", async () => {
     const f = workspaceHarness();
-    await openDelete();
+    await openDelete(f);
     f.refresh.mockRejectedValueOnce(new Error("synthetic refresh failure"));
     vi.mocked(f.api.macroTasks).mockRejectedValueOnce(new ApiError("NETWORK", "synthetic list failure"));
     await confirm();
-    await screen.findByText("列表或看板刷新失败，请重新读取；删除已完成。");
+    await screen.findByText("列表或详情刷新失败，请重新读取；删除已完成。");
     expect(screen.queryByRole("button", { name: new RegExp(`^${f.timeline.macroTask.title}`) })).toBeNull();
     expect(window.location.hash).toBe("#tasks");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("keeps an unnamed deletion result localized after a language change", async () => {
-    const f = workspaceHarness();
-    Object.assign(f.timeline.macroTask, { title: "", titleSource: "none" });
-    await openDelete();
+    const f = workspaceHarness([], true);
+    await openDelete(f);
     await confirm();
     await screen.findByText("已删除「未命名」。");
     await act(async () => { await i18n.changeLanguage("en"); });
@@ -383,7 +477,7 @@ describe("macro task deletion workspace integration", () => {
 
   it("does not replace another selected task when an earlier deletion completes", async () => {
     const f = workspaceHarness([macroTaskSummary({ macroTaskId: "macro-2", title: "保留的宏任务", lastActivitySeq: 40 })]);
-    await openDelete();
+    await openDelete(f);
     const pending = deferred<unknown>();
     f.command.mockImplementationOnce(async () => pending.promise);
     await confirm();
@@ -395,32 +489,5 @@ describe("macro task deletion workspace integration", () => {
     expect(window.location.hash).toBe("#tasks/macro-2");
   });
 
-  it("keeps a micro task cancelled after console stop and allows deleting its whole macro task without a Host conclusion", async () => {
-    const f = workspaceHarness();
-    const row = { ...f.timeline.rows.find(row => row.runId === "r4")!, rootLeadRunId: null };
-    const summary = macroTaskSummary({ counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 1, host: 0, review: 0, ended: 0,
-      stoppableRoots: 1, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 }, rootRunIds: [row.runId] });
-    Object.assign(f.timeline, { macroTask: summary, rows: [row], spans: [], events: [], totals: { rows: 1, allRows: 1, events: 0, spans: 0 } } satisfies Partial<MacroTaskTimeline>);
-    f.setRows([summary]);
-    f.command.mockImplementation(async (operation: string): Promise<unknown> => {
-      if (operation === "macro_task_stop") {
-        Object.assign(row, { state: "cancelled", status: "cancelled", shutdownConfirmed: true });
-        Object.assign(summary, { state: "ended", counts: { ...summary.counts, active: 0, ended: 1, stoppableRoots: 0 } });
-        return { macroTaskId: "macro-1", duplicate: false, results: [{ runId: row.runId, state: "cancelled", stopped: true }] };
-      }
-      if (operation === "macro_task_deletion_preview") return preview({ microTaskCount: 1, unconcludedFailureCount: 1 });
-      if (operation === "macro_task_delete") { f.setRows([]); return receipt({ microTaskCount: 1 }); }
-      throw new Error(`Unexpected fixture operation: ${operation}`);
-    });
-    await f.user.click(await screen.findByRole("button", { name: "更多" }));
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
-    const stop = await screen.findByRole("dialog", { name: "停止宏任务" });
-    await f.user.click(within(stop).getByRole("button", { name: "确认停止宏任务" }));
-    await waitFor(() => expect(document.querySelector("[data-slot=timeline-row-name]")?.getAttribute("aria-label")).toContain("已取消"));
-    const dialog = await openDelete();
-    await within(dialog).findByText("1 个，其中 1 个取消或失败而没有结论");
-    await confirm();
-    await waitFor(() => expect(window.location.hash).toBe("#tasks"));
-    expect(f.command).toHaveBeenLastCalledWith("macro_task_delete", { macroTaskId: "macro-1", microTaskCount: 1, confirm: true }, "synthetic-csrf");
-  });
+
 });

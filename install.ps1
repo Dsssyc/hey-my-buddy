@@ -55,7 +55,8 @@ elseif (-not (Test-Path $uv)) {
 $source = if ($WheelUrl) { $WheelUrl } else { "hey-my-buddy==$Version" }
 Write-Output "Package source: $source"
 Write-Output "uv: $uv"
-Write-Output "Writes: $privateDir; ~/.agents/skills/hey-my-buddy; ~/.claude/skills/hey-my-buddy; ~/.local/share/hey-my-buddy"
+Write-Output "Writes: $privateDir; ~/.agents/skills/hey-my-buddy; ~/.local/share/hey-my-buddy"
+Write-Output 'Also links the shared skill for installed harnesses that do not read ~/.agents/skills; see the installer install-plan for exact paths.'
 $oldUvBin = $env:UV_BIN
 try {
     $env:UV_BIN = $uv

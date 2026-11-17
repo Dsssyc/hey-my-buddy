@@ -51,8 +51,27 @@ describe("the colour changes of the Buddy page", () => {
     expect(source).toContain("motion-safe:data-[state=closed]:animate-collapsible-up");
     expect(source).toContain("transition-transform duration-200");
     expect(source).toContain("motion-reduce:transition-none");
-    // No height of ours: the page measures nothing.
-    for (const [path, view] of Object.entries(views).filter(([path]) => !support.test(path)))
-      expect(view, path).not.toMatch(/getBoundingClientRect|scrollHeight|offsetHeight|ResizeObserver/);
+    // Fold detects overflow to decide whether eight rendered lines need folding.
+    // The branch tree also measures labels and popover obstacles; its geometry is checked in the browser.
+    for (const [path, view] of Object.entries(views).filter(([path]) => !support.test(path))) {
+      if (path === "../buddies/DomainTree.tsx") continue;
+      const checked = path === "../task-detail/parts.tsx"
+        ? view.replace(/export function Fold\([\s\S]*?\n\}/, "")
+        : path === "../buddies/ModelDrawer.tsx"
+          ? view.replace(/useLayoutEffect\(\(\) => \{[\s\S]*?\n  \}, \[selectedBuddyId\]\);/, "") : view;
+      expect(checked, path).not.toMatch(/getBoundingClientRect|scrollHeight|offsetHeight|ResizeObserver/);
+    }
+    const drawer = views["../buddies/ModelDrawer.tsx"];
+    expect(drawer).toContain("viewport.scrollTop");
+    expect(drawer).not.toMatch(/scrollHeight|offsetHeight|ResizeObserver/);
+  });
+  it("allows only Fold to observe its own overflow, without a measured height animation", () => {
+    const fold = views["../task-detail/parts.tsx"].match(/export function Fold\([\s\S]*?\n\}/)![0];
+    // Height folding must know whether the complete Markdown fits; it never drives animation.
+    expect(fold).toContain("const node = body.current!");
+    expect(fold).toContain("node.scrollHeight");
+    expect(fold).toContain("new ResizeObserver(measure)");
+    expect(fold).toContain("observer.observe(node)");
+    expect(fold).not.toMatch(/getBoundingClientRect|offsetHeight|requestAnimationFrame|style=|animate-|transition-/);
   });
 });

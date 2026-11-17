@@ -91,7 +91,7 @@ class ControllerCollection:
 def collect_controller(handle: ProcessHandle, *, read, stop) -> ControllerCollection:
     """Read the owned result, snapshot its return code and apply its stop rule."""
     payload = read(Path(handle.log_paths["stdout"]))
-    exit_code = handle.process.returncode
+    exit_code = handle.poll()
     return ControllerCollection(payload=payload, exit_code=exit_code,
                                 stop_confirmed=stop(payload, handle))
 

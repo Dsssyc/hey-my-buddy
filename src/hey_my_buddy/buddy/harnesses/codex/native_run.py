@@ -50,6 +50,8 @@ from ....protocol.reasons import reason as make_reason
 from ....protocol.activity import ActivityPublisher, native_tool_name
 from ..c_two_live import CTwoLiveEndpoint
 from ..inquiry_bridge import InquiryBridge
+from ..input_admission import admission_error
+from ....protocol.input_failure import is_input_too_large
 from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
 from ....private_dirs import ensure_private_dir
 from ....private_files import open_read, read_bytes
@@ -63,7 +65,7 @@ from ..native_support import (
     ObserverInterrupt,
     buddy_spec,
     execution_deadline,
-    halt_owned_group as _halt_owned_group,
+    halt_owned_session as _halt_owned_session,
     identity_or_none,
     shape_guard,
     utc_now,
@@ -154,6 +156,7 @@ def _permission_sandbox(request: RunRequest) -> tuple[str, dict]:
     """One turn's native thread mode and explicit file/network policy."""
     level = request.permission
     return {
+        "web": ("read-only", {"type": "readOnly", "networkAccess": True}),
         "read": ("read-only", {"type": "readOnly", "networkAccess": True}),
         "write": ("workspace-write", {"type": "workspaceWrite", "writableRoots": [request.cwd],
                                     "networkAccess": True}),
@@ -168,6 +171,7 @@ class _RunFacts:
     """The cumulative, normalized facts of one run, as the observer sees them."""
 
     def __init__(self):
+        self.model_responded = False
         self.unknown_counts: dict[str, int] = {}
         self.thread_notifications: dict[str, int] = {}
         self.markers = 0
@@ -185,6 +189,7 @@ class _RunFacts:
 
     def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None) -> dict:
         return {"settled": settled, "rawAnswer": raw_answer, "toolCalls": tool_calls,
+                "modelResponded": self.model_responded,
                 "toolMarkerFrames": self.markers,
                 "unknownEvents": {"countsByType": dict(self.unknown_counts),
                                   "total": sum(self.unknown_counts.values())},
@@ -343,7 +348,10 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
-    model_started: bool = False
+    stream_truncated: bool = False
+    native_request_sent: bool | None = False
+    native_admission_error: dict | None = None
+    initial_request_attempted: bool = False
     thread_opened: bool = False
     configured: bool = False
     version: str | None = None
@@ -502,7 +510,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
                     raise CodexProtocolError("harness-unavailable",
                                              "The selected Codex executable could not start") from None
                 raise
-            handle = ProcessHandle(process, stop_channel="stdin", own_group=True, log_paths={})
+            handle = ProcessHandle(process, stop_channel="stdin", log_paths={})
             owned[:] = [handle]
         finally:
             os.close(fd)
@@ -510,7 +518,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
     except BaseException:
         if process is not None:
             try:
-                shutdown, _signalled = _halt_owned_group(handle, time.monotonic() + 5.0)
+                shutdown, _signalled = _halt_owned_session(handle, time.monotonic() + 5.0)
                 owned[:] = [{"created": True, "shutdown": shutdown, "exit_code": process.returncode}]
             finally:
                 process.stdout.close()
@@ -567,7 +575,7 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
     catalog = {"source": "codex-native-app-server", "harness": "codex", "harnessVersion": version or "unknown",
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
                "providers": [{"harness": "codex", "provider": provider, "displayName": provider,
-                              "packageName": "codex", "packageVersion": version or "unknown", "models": models}]
+                              "models": models}]
                             if provider is not None else [],
                "warnings": warnings,
                "discoveries": [{"harness": "codex", "status": read_status,
@@ -667,6 +675,43 @@ def _check_thread_receipt(response: dict, cwd: str, *, mode: str, previous: str 
     return thread_id
 
 
+def _web_config(connection: Connection, request: RunRequest) -> dict:
+    """Restrict this thread through native overrides, never user config files.
+
+    config/read reports the merged server names, including disabled servers.
+    Nested objects keep server ids literal: Codex CLI 0.164.0's
+    override path parser splits dots without interpreting TOML quotes.
+    Plugins are disabled at their native load gate because config/read does
+    not enumerate every MCP server that a plugin manifest can contribute.
+    """
+    if request.permission != "web":
+        return {}
+    configured = connection.call("config/read", {"cwd": request.cwd, "includeLayers": False}).get("config")
+    if not isinstance(configured, dict):
+        raise CodexProtocolError("invalid-config-readback", "Codex did not report its native configuration")
+    overrides = {"web_search": "live", "features.shell_tool": False,
+                 "features.view_image": False, "agents.enabled": False,
+                 "features.multi_agent": False, "features.multi_agent_v2": False,
+                 "features.apps": False, "features.plugins": False,
+                 "features.image_generation": False}
+
+    def disable_servers(servers):
+        if not isinstance(servers, dict):
+            raise CodexProtocolError("invalid-config-readback", "Codex reported an invalid MCP server table")
+        disabled = {}
+        for name, server in servers.items():
+            if not isinstance(server, dict):
+                raise CodexProtocolError("invalid-config-readback", "Codex reported an invalid MCP server configuration")
+            if server.get("enabled") is not False:
+                disabled[name] = {"enabled": False}
+        return disabled
+
+    disabled = disable_servers(configured.get("mcp_servers", {}))
+    if disabled:
+        overrides["mcp_servers"] = disabled
+    return overrides
+
+
 def _configure_worker(connection: Connection, request: RunRequest, prep: _Preparation,
                       state: _RunState, inquiry: ClientInquiryServices | None = None) -> str:
     """Worker buddy selection: continuation checks, then one start or resume."""
@@ -675,6 +720,10 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     sandbox, _policy = _permission_sandbox(request)
     state.requested = requested
     inquiry_config = {"dynamicTools": inquiry.dynamic_tools} if inquiry is not None else {}
+    config = _web_config(connection, request)
+    permission_config = {"config": config} if config else {}
+    if config:
+        state.worker_policy = {"config": config}
     if mode == "native-session":
         binding = _read_binding(prep.native_root, previous)
         expected = {"taskId": request.identity.task_id, "threadId": previous,
@@ -714,7 +763,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
         response = connection.call("thread/start", {"cwd": request.cwd, "model": requested["model"],
                                                     "modelProvider": requested["provider"], "approvalPolicy": "never",
                                                     "sandbox": sandbox, "serviceName": "hey-my-buddy",
-                                                    **inquiry_config})
+                                                    **inquiry_config, **permission_config})
     else:
         raise CodexProtocolError("invalid-resume-mode",
                                  "Codex requires an explicit initial, native or reconstructed turn")
@@ -741,12 +790,16 @@ def _configure_review(connection: Connection, request: RunRequest,
     """One-shot read configuration with the same sandbox as a read Worker."""
     cwd, spec = request.cwd, buddy_spec(request)
     sandbox, policy = _permission_sandbox(request)
+    config = _web_config(connection, request)
     response = connection.call("thread/start", {
         "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
         "approvalPolicy": "never", "sandbox": sandbox, "serviceName": "hey-my-buddy",
         "experimentalRawEvents": True, "ephemeral": True,
+        **({"config": config} if config else {}),
     })
     state.worker_policy = {"sandboxPolicy": policy, "approvalPolicy": "never"}
+    if config:
+        state.worker_policy["config"] = config
     sandbox = response.get("sandbox")
     acknowledged = {"sandbox": sandbox,
                     "approvalPolicy": response.get("approvalPolicy"), "model": response.get("model"),
@@ -826,6 +879,46 @@ def _configure_fast(connection: Connection, request: RunRequest, state: _RunStat
 # -- phase 4: input and events -----------------------------------------------------
 
 
+def _root_model_output(message: dict, thread_id: str, turn_id: str) -> bool:
+    """An output frame from the admitted root turn, never its start receipt."""
+    params = message.get("params")
+    if not isinstance(params, dict) or params.get("threadId") != thread_id or _event_turn(params) != turn_id:
+        return False
+    method = message.get("method")
+    if method in ("item/agentMessage/delta", "item/reasoning/textDelta",
+                  "item/reasoning/summaryTextDelta"):
+        return isinstance(params.get("delta"), str) and bool(params["delta"])
+    if method == "thread/tokenUsage/updated":
+        usage = params.get("tokenUsage")
+        last = usage.get("last") if isinstance(usage, dict) else None
+        return isinstance(last, dict) and any(type(last.get(key)) is int and last[key] > 0
+                                              for key in ("outputTokens", "reasoningOutputTokens"))
+    if method == "rawResponseItem/completed":
+        item = params.get("item")
+        kind = item.get("type") if isinstance(item, dict) else None
+        return isinstance(kind, str) and kind in RAW_TOOL_STARTS
+    if method == "turn/completed":
+        turn = params.get("turn")
+        items = turn.get("items") if isinstance(turn, dict) else None
+        return isinstance(items, list) and any(_model_output_item(item) for item in items)
+    if method in ("item/started", "item/updated", "item/completed"):
+        return _model_output_item(params.get("item"))
+    return False
+
+
+def _model_output_item(item: object) -> bool:
+    if not isinstance(item, dict):
+        return False
+    kind = item.get("type")
+    if isinstance(kind, str) and kind in TYPED_TOOL_ITEMS:
+        return True
+    if kind == "agentMessage":
+        return isinstance(item.get("text"), str) and bool(item["text"])
+    if kind == "reasoning":
+        return any(bool(item.get(key)) for key in ("text", "summary"))
+    return False
+
+
 class _EventChain:
     """Facts first, then the carrier's protocol stage.
 
@@ -836,9 +929,10 @@ class _EventChain:
     once the turn receipt binds the chain.
     """
 
-    def __init__(self, facts: _RunFacts, classifier: _Classifier,
+    def __init__(self, facts: _RunFacts, classifier: _Classifier, state: _RunState,
                  projector: CodexToolEventProjector | None, session: CodexSessionProjector | None, *, overflow_raises: bool):
         self.facts = facts
+        self.state = state
         self.classifier = classifier
         self.projector = projector
         self.overflow_raises = overflow_raises
@@ -867,13 +961,26 @@ class _EventChain:
                 return
             self.pending.append(message)
             return
-        self.carrier(message)
+        try:
+            self.carrier(message)
+        finally:
+            self.note_model_activity(message)
+
+    def note_model_activity(self, message: dict) -> None:
+        evidence = self.state.turn_evidence
+        if evidence is not None and not self.facts.model_responded and _root_model_output(
+                message, evidence.thread_id, evidence.turn_id):
+            self.facts.model_responded = True
+            self.facts.dirty = True
 
     def bind(self, carrier: Callable[[dict], Any]) -> None:
         self.carrier = carrier
         pending, self.pending = self.pending, []
         for message in pending:
-            carrier(message)
+            try:
+                carrier(message)
+            finally:
+                self.note_model_activity(message)
 
     def unbind(self) -> None:
         """Buffer again: the next round's frames precede its turn identity."""
@@ -1058,11 +1165,25 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
     if mode in ("worker", "review"):
         _sandbox, params["sandboxPolicy"] = _permission_sandbox(request)
     if mode == "worker":
-        state.worker_policy = {"sandboxPolicy": params["sandboxPolicy"],
+        state.worker_policy = {**(state.worker_policy or {}), "sandboxPolicy": params["sandboxPolicy"],
                                "approvalPolicy": params["approvalPolicy"]}
-    return connection.call("turn/start", params,
-                           on_sent=(lambda: chain.session.record.project(chain.session.record_input, input_text))
-                           if chain.session is not None else None)
+    initial = not state.initial_request_attempted
+    state.initial_request_attempted = True
+    if initial:
+        state.native_request_sent = None
+
+    def on_sent() -> None:
+        if initial:
+            state.native_request_sent = True
+        if chain.session is not None:
+            chain.session.record.project(chain.session.record_input, input_text)
+
+    try:
+        return connection.call("turn/start", params, on_sent=on_sent)
+    except CodexProtocolError as error:
+        if initial and error.native_error is not None:
+            state.native_admission_error = admission_error("turn/start", error.native_error)
+        raise
 
 
 def _checkpoint(request: RunRequest, evidence: TurnEvidence) -> dict:
@@ -1127,10 +1248,12 @@ def _run(request: RunRequest, services: RunServices, mode: str,
     with (session_record.protect() if session_record is not None else nullcontext()):
         session = (session_record.project(CodexSessionProjector, session_record)
                    if session_record is not None else None)
-        chain = _EventChain(facts, _Classifier(facts), projector, session, overflow_raises=mode == "fast")
+        chain = _EventChain(facts, _Classifier(facts), state, projector, session, overflow_raises=mode == "fast")
         inquiry_bridge: InquiryBridge | None = None
         inquiry_poller: list[_NativeInquiry] = []
         try:
+            _take_feedback(observer(facts.mapping(tool_calls=0, settled=False, raw_answer=None)),
+                           mode, settled=False)
             prep = _prepare(request, mode)
             if mode == "worker" and services.inquiry is not None:
                 configuration = services.inquiry.configuration
@@ -1192,6 +1315,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         if session is not None:
             session.record.project(session.close)
         _collect_provider_rejection(state, stream_truncated=chain.truncated)
+        state.stream_truncated = chain.truncated
         return _build_result(request, prep, state, mode, projector, facts, activity).model_copy(
             update={"session_record_failure": SessionRecordFailure(**session_record.failure)
                     if session_record is not None and session_record.failure is not None
@@ -1266,7 +1390,6 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
                  inquiry_services: ClientInquiryServices | None = None,
                  inquiry_poller: list[_NativeInquiry] | None = None) -> None:
     """The micro task turn: one admission, settlement, usage, checkpoint."""
-    state.model_started = True
     response = _admit_turn(connection, request, thread_id, request.input_text, "worker", state, chain)
     turn = response.get("turn")
     turn_id = turn.get("id") if isinstance(turn, dict) else None
@@ -1282,6 +1405,8 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     if isinstance(items, list):
         for item in items:
             evidence._observe_activity("item/started", {"item": item})
+            chain.note_model_activity({"method": "item/started", "params": {
+                "threadId": thread_id, "turnId": turn_id, "item": item}})
     native_inquiry = None
     if inquiry_bridge is not None and inquiry_services is not None:
         native_inquiry = _NativeInquiry(connection, evidence, thread_id, turn_id,
@@ -1300,6 +1425,8 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
 
     try:
         chain.bind(carrier)
+        if chain.facts.dirty:
+            connection.after_pump()
         if chain.session is not None:
             chain.session.record.project(chain.session.observe_root, thread_id, turn_id, request.input_text, turn.get("items") or [])
         activity.write(evidence, "waiting-model")
@@ -1347,8 +1474,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
                        observer: Callable[[Mapping], RunFeedback], activity: _ActivityWriter) -> None:
     """Fast/review: rounds on one thread; corrections are the role's decision.
 
-    How often a correction is offered — at most once, never for an enum
-    violation — is the role's rule alone; this loop only executes what a
+    How often a correction is offered, and for which errors, is the role's
+    rule alone; this loop only executes what a
     settled feedback asks, under the shared deadline and cancel.
     """
     input_text = request.input_text
@@ -1356,7 +1483,6 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
     while True:
         fast_state = {"started": False, "completed": None, "final": None}
         chain.unbind()
-        state.model_started = True
         response = _admit_turn(connection, request, thread_id, input_text, mode, state, chain)
         turn = response.get("turn")
         turn_id = turn.get("id") if isinstance(turn, dict) else None
@@ -1385,6 +1511,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
         if isinstance(items, list):
             for item in items:
                 evidence._observe_activity("item/started", {"item": item})
+                chain.note_model_activity({"method": "item/started", "params": {
+                    "threadId": thread_id, "turnId": turn_id, "item": item}})
         state.usage_rounds.append(evidence)
         if mode == "fast":
             chain.bind(_FastProtocol(thread_id, turn_id, fast_state, evidence, state))
@@ -1403,6 +1531,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
                     activity.write(_evidence, observed[0], observed[1], model_turns_base=_round,
                                    tool_calls=chain.projector.tool_calls)
             chain.bind(carrier)
+        if chain.facts.dirty:
+            connection.after_pump()
         try:
             items = turn.get("items")
             if chain.session is not None:
@@ -1551,20 +1681,20 @@ def _stop_collection(request: RunRequest, prep: _Preparation,
         # The initial no-child fact, public probe result and creation receipt
         # occupy the same boundary. A retained handle without a receipt is unknown.
         state.shutdown = isinstance(receipt, dict) and receipt["shutdown"] is True
-        state.exit_code = receipt["exit_code"] if isinstance(receipt, dict) else receipt.process.returncode
+        state.exit_code = receipt["exit_code"] if isinstance(receipt, dict) else receipt.poll()
         return
-    shutdown, _signalled = _halt_owned_group(spawn.handle, prep.deadline)
+    shutdown, _signalled = _halt_owned_session(spawn.handle, prep.deadline)
     state.shutdown = shutdown
-    state.exit_code = spawn.process.returncode
+    state.exit_code = spawn.handle.poll()
     try:
         spawn.process.stdout.close()
     except OSError:
         pass
     if mode == "worker":
         _save_binding(request, prep, state)
-    if state.status == "ok" and (not shutdown or spawn.process.returncode != 0):
+    if state.status == "ok" and (not shutdown or state.exit_code != 0):
         state.status, state.reason = "error", "native-shutdown-failed"
-        state.error_text = "Codex App Server did not exit with confirmed process-group shutdown"
+        state.error_text = "Codex App Server did not exit with confirmed session shutdown"
     if cancel.is_set() and state.status != "ok":
         state.status, state.reason = "cancelled", "user-cancel"
         state.error_text = "the Codex execution was cancelled"
@@ -1843,7 +1973,13 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
                    message=bounded_utf8(state.error_text, NATIVE_SUMMARY_BYTES)),
         harness_version=state.version,
         native_event_count=state.event_count or None,
-        model_started=True if state.model_started else None,
+        model_responded=(True if facts.model_responded else
+                       False if not state.initial_request_attempted or
+                       is_input_too_large(state.native_admission_error) or
+                       (state.turn_evidence is not None and state.turn_evidence.completed is not None
+                        and not state.stream_truncated) else None),
+        native_request_sent=state.native_request_sent,
+        native_admission_error=_native_error_package(state.native_admission_error),
         buddy=_checked_buddy(request, state, mode),
         native_identity=native_identity,
         native_evidence=NativeEvidence(
@@ -1943,12 +2079,12 @@ def _control_connection(*, cwd: str, invocation_root: Path, native_root: Path,
             yield connection, version, facts
         finally:
             try:
-                shutdown, _signalled = _halt_owned_group(spawn.handle, deadline)
+                shutdown, _signalled = _halt_owned_session(spawn.handle, deadline)
             finally:
                 spawn.process.stdout.close()
         if not shutdown or spawn.process.returncode != 0:
             raise CodexProtocolError("native-shutdown-failed",
-                                     "the native app server did not exit normally with confirmed group shutdown")
+                                     "the native app server did not exit normally with confirmed session shutdown")
     except Exception as error:
         error.discovery_shutdown_confirmed = shutdown
         raise

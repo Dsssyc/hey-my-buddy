@@ -1,3 +1,7 @@
+import { createElement, type ReactNode } from "react";
+import { Joined, Message } from "./i18n/Message";
+import { isReason } from "./reason";
+import type { Reason } from "./reason";
 import i18n from "i18next";
 import { useCopyState } from "./i18n/use-copy-state";
 import { useTranslation } from "react-i18next";
@@ -17,6 +21,11 @@ import { attentionIssues, blockingIssues } from "./policy";
 import type { ConsoleView, Draft, Snapshot } from "./types";
 import { historySourceKey } from "./use-buddy-history";
 
+/** A success note shows this long, then fades; notes that need the reader stay until handled. */
+export const SUCCESS_NOTICE_MS = 4000;
+/** The fade's own length; the notice line draws its transition at the same duration. */
+export const NOTICE_FADE_MS = 200;
+
 /** Local Buddy settings draft with a single idempotent policy publication. */
 export function useEditor(
   api: ConsoleApi,
@@ -31,11 +40,13 @@ export function useEditor(
   const [draft, setDraftState] = useState<Draft | null>(null);
   const [baseline, setBaseline] = useState<Draft | null>(null);
   const [historyEntries, setHistoryEntries] = useState<{ key: string; entries: HistoryEntries | null } | null>(null);
+  const [aliasRefusal, setAliasRefusal] = useState<{ buddyId: string; reason: Reason } | null>(null);
   const [saving, setSaving] = useState(false);
   const [auxiliaryBusy, setAuxiliaryBusy] = useState(false);
-  const [error, setError] = useCopyState();
+  const [error, setError] = useCopyState<ReactNode>();
   const [blocked, setBlocked] = useCopyState();
-  const [notice, setNotice] = useCopyState();
+  const [noticeCopy, setNoticeCopy] = useCopyState();
+  const [noticeFading, setNoticeFading] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const csrf = useRef(snapshot.csrfToken);
@@ -61,6 +72,32 @@ export function useEditor(
     alive.current = true;
     return () => { alive.current = false; };
   }, []);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopNoticeTimer = () => {
+    if (noticeTimer.current === null) return;
+    clearTimeout(noticeTimer.current);
+    noticeTimer.current = null;
+  };
+  useEffect(() => stopNoticeTimer, []);
+  const setNotice = (text: string | (() => string)) => {
+    stopNoticeTimer();
+    setNoticeFading(false);
+    setNoticeCopy(text);
+  };
+  /** A success note leaves on its own; with reduced motion it goes without the fade. */
+  const setSuccessNotice = (text: string | (() => string)) => {
+    setNotice(text);
+    noticeTimer.current = setTimeout(() => {
+      noticeTimer.current = null;
+      if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { setNoticeCopy(""); return; }
+      setNoticeFading(true);
+      noticeTimer.current = setTimeout(() => {
+        noticeTimer.current = null;
+        setNoticeCopy("");
+        setNoticeFading(false);
+      }, NOTICE_FADE_MS);
+    }, SUCCESS_NOTICE_MS);
+  };
   const setDraft: Dispatch<SetStateAction<Draft | null>> = useCallback(update => {
     setDraftState(previous => {
       const next = typeof update === "function" ? update(previous) : update;
@@ -80,10 +117,11 @@ export function useEditor(
   const currentHistory = historyEntries?.key === sourceKey ? historyEntries.entries : null;
   const view: ConsoleView = useMemo(() => {
     const recorded = historyView(snapshot, currentHistory);
-    if (!draft) return recorded;
+    if (!draft) return { ...recorded, modelCorrespondenceChanges: [] };
     const edited = { ...recorded, buddies: draft.buddies,
       preferences: draft.preferences,
-      modelServiceNotes: draft.modelServiceNotes, configuration: draft.configuration,
+      modelCorrespondenceChanges: draft.modelCorrespondenceChanges,
+      configuration: draft.configuration,
       modelServiceConcurrency: draft.modelServiceConcurrency };
     return edited;
   }, [snapshot, draft, currentHistory]);
@@ -97,6 +135,7 @@ export function useEditor(
   const loseAuthority = () => { latch.lose(sessionId.current); writable.current = false; };
 
   function closeDraft() {
+    setAliasRefusal(null);
     draftRef.current = null;
     setDraft(null);
     setBaselineValue(null);
@@ -121,6 +160,7 @@ export function useEditor(
       setDraft(next);
       setBaselineValue(structuredClone(next));
     }
+    setAliasRefusal(null);
     setDraft(current => current ? change(current) : current);
   }
 
@@ -151,7 +191,7 @@ export function useEditor(
         return;
       }
       closeDraft();
-      setNotice(() => i18n.t("console:settingsSaved"));
+      setSuccessNotice(() => i18n.t("console:settingsSaved"));
     } catch (failure) {
       if (!alive.current) return;
       if (isSessionExpiredRefusal(failure)) {
@@ -180,7 +220,14 @@ export function useEditor(
       saveDispatched.current = false;
       saveAmbiguous.current = false;
       setConfirming(false); setUncertain(false);
-      setError(() => errorText(failure));
+      if (failure instanceof ApiError && typeof failure.details?.buddyId === "string"
+        && isReason(failure.details.reason) && failure.details.reason.code.startsWith("alias.")) {
+        setAliasRefusal({ buddyId: failure.details.buddyId, reason: failure.details.reason });
+        return;
+      }
+      setError(() => failure instanceof ApiError && failure.code === "CONFLICT"
+        && payload.modelCorrespondenceChanges?.some(change => change.action === "undo")
+        ? i18n.t("console:correspondenceChanged") : errorText(failure));
     }
   }
 
@@ -199,10 +246,11 @@ export function useEditor(
       setBlocked(() => unavailable() || i18n.t("console:cannotSaveRightNowRetryShortlyYour"));
       return;
     }
+    setAliasRefusal(null);
     setBlocked(""); setError(""); setNotice("");
     const blockedIssues = blockingIssues(base, current);
     if (blockedIssues.length) {
-      setError(() => i18n.t("console:cannotSaveItems", { v0: blockedIssues.length, v1: blockingIssues(base, current).map(issue => issue.message).join(" ") }));
+      setError(() => createElement(Message, { ns: "console", id: "cannotSaveItems", values: { v0: blockedIssues.length, v1: createElement(Joined, { items: blockingIssues(base, current).map(issue => issue.message), separator: " " }) } }));
       return;
     }
     setSaving(true);
@@ -221,7 +269,7 @@ export function useEditor(
     if (busy) { setBlocked(() => i18n.t("console:savingWaitForTheResult")); return; }
     if (confirming) { setBlocked(() => i18n.t("console:theSaveResultIsUnknownCheckIt")); return; }
     closeDraft();
-    setError(""); setNotice(() => i18n.t("console:draftDiscarded"));
+    setError(""); setSuccessNotice(() => i18n.t("console:draftDiscarded"));
     await refresh();
   }
 
@@ -292,7 +340,7 @@ export function useEditor(
     mode: draft !== null, editing, sessionWritable, draft, view, setDraft, baseline,
     busy, setAuxiliaryBusy, uncertain, confirming, dirty, changeCount,
     configurationDirty, blocking, attention,
-    error, notice, blocked, saveBlockedReason,
+    aliasRefusal, error, notice: noticeCopy ? { text: noticeCopy, fading: noticeFading } : null, blocked, saveBlockedReason,
     update, save, discard, reloadLatest, rebase, adoptHistory,
   };
 }

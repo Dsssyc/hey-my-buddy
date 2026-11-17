@@ -38,22 +38,22 @@ function catalog(): Buddy[] {
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [
-    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off",
+    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", alias: null,
       available: true, enabled: true, catalogStatus: "pending" as const, pendingSince: earlyMissing },
-    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high",
+    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", alias: null,
       available: true, enabled: false, catalogStatus: "pending" as const, pendingSince: lateMissing },
     // Catalog-available by the board, unusable by harness health: the two
     // facts must never merge into one state.
-    { ...base, buddyId: plainMax, model: "plain-model", effort: "max", label: "plain-model · max",
+    { ...base, buddyId: plainMax, model: "plain-model", effort: "max", alias: null,
       available: false, enabled: true, catalogStatus: "available" as const,
       unavailableReason: { code: "harness.probe-failed", params: {} } },
-    { ...base, buddyId: legacyMax, model: "legacy-model", effort: "max", label: "legacy-model · max",
+    { ...base, buddyId: legacyMax, model: "legacy-model", effort: "max", alias: null,
       available: true, enabled: true },
-    { ...base, buddyId: ghostLow, model: "ghost-model", effort: "low", label: "ghost-model · low",
+    { ...base, buddyId: ghostLow, model: "ghost-model", effort: "low", alias: null,
       available: true, enabled: false, catalogStatus: "pending" as const, pendingSince: null },
-    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
+    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", alias: null,
       available: false, enabled: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
-    { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", label: "retired-model · low",
+    { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", alias: null,
       available: false, enabled: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
   ];
 }
@@ -62,13 +62,13 @@ function fixture() {
   const buddies = catalog();
   const live = buddies.filter(p => p.available);
   const state: Snapshot = {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "review" as const, routingBudget: "standard" },
+    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600,
+      defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: live,
     unavailableBuddyCount: buddies.filter(p => !p.available).length,
- modelServiceNotes: [], preferences: [],  decisions: [],
+ models: [], modelCorrespondences: [], preferences: [],  decisions: [],
 
     modelServiceConcurrency: [],
     tasks: { pendingCount: 0 },
@@ -85,7 +85,7 @@ function fixture() {
       const slice = [...visible].sort((a, b) => a.buddyId.localeCompare(b.buddyId))
         .filter(p => p.buddyId > after).slice(0, limit);
       const page: BuddyPage = {
-        buddies: slice, preferences: [],         modelServiceNotes: [], modelServiceConcurrency: [],
+        buddies: slice, preferences: [],         models: [], modelCorrespondences: [], modelServiceConcurrency: [],
         nextCursor: null,
       };
       return page;
@@ -100,7 +100,7 @@ function fixture() {
     command,
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
   return { api, command, operations };
 }
@@ -146,17 +146,19 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     expect(within(nameCell("retired-model")).queryByText("待确认")).toBeNull();
   });
 
-  it("explains the one mark of a model with the earliest recorded first-absence time", async () => {
+  it("explains first absence, continued usability and the one-hour recheck on hover", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(2, 4);
-    // Both levels are pending with different times; the model says it once, with the earliest.
+    // The compact row names the state; the drawer still carries its recorded time.
     const mark = within(nameCell("deepseek-flash")).getByText("待确认");
-    expect(mark.getAttribute("aria-description")).toBe(`待确认，自 ${early}`);
+    expect(mark.getAttribute("aria-description")).toContain(early);
+    expect(mark.getAttribute("aria-description")).toContain("满一小时后复查");
+    expect(mark.getAttribute("aria-description")).toContain("无需操作");
     await user.hover(mark);
-    expect((await screen.findByRole("tooltip", undefined, { timeout: 2000 })).textContent).toBe(`待确认，自 ${early}`);
+    expect((await screen.findByRole("tooltip")).textContent).toContain("复查前仍可使用");
     expect(document.body.textContent).not.toContain(late);
   });
 
@@ -190,7 +192,7 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     render(<App suppliedApi={f.api} />);
     await listed(2, 4);
     const mark = within(nameCell("ghost-model")).getByText("待确认");
-    expect(mark.hasAttribute("aria-description")).toBe(false);
+    expect(mark.getAttribute("aria-description")).toContain("无需操作");
     await selectModel(user, model("ghost-model"), "DSH");
     expect(within(pane()).getByText("待确认")).toBeTruthy();
     expect(pane().querySelector("time")).toBeNull();

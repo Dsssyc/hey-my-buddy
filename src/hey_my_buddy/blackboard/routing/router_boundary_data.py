@@ -14,6 +14,7 @@ from ...protocol import schemas
 from ...protocol.reasons import reason_from_json
 from .router_boundary import build_boundary
 from .candidate import candidate_bound
+from ..tasks.workspace_bindings import effective_manifest
 
 _CHANGED_CODES = frozenset({
     "router-input-changed",
@@ -64,8 +65,8 @@ def _preflight_no_answer(connection, item, event, state, now):
     """Project a recorded qualification failure, including after a dispatch queued."""
     item.update(outcome="no_answer", phase=event["payload"].get("phase"),
                 code=event["payload"].get("code"), retryAt=None)
-    buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?",
-                                 (item["buddyId"],)).fetchone()
+    from ..catalog import buddy_state
+    buddy = buddy_state.get(connection, item["buddyId"])
     if item["code"] == "router-quota-exhausted":
         _, item["retryAt"] = _quota_recovery(connection, buddy, now)
         if (item["retryAt"] and state.get("inSkipWindow")
@@ -133,7 +134,8 @@ def router_trials(connection, row, *, now):
                 item.update(phase=None, outcome="skipped")
             if item["code"] not in (None, "router-skip-window"):
                 item["retryAt"] = None
-                buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
+                from ..catalog import buddy_state
+                buddy = buddy_state.get(connection, buddy_id)
                 if item["code"] == "router-quota-exhausted":
                     _, item["retryAt"] = _quota_recovery(connection, buddy, now)
                     if item["retryAt"] and state.get("inSkipWindow") and router_history._parse(state["retryAt"]) > router_history._parse(item["retryAt"]):
@@ -169,7 +171,7 @@ def router_trials(connection, row, *, now):
                           and event["kind"] in ("router.no_answer", "router.answered")]
             outcome_event = own_events[-1] if own_events else None
             trial.update(attemptId=attempt["attempt_id"], phase="runtime", code=None,
-                         usage=deepcopy(output.get("usage") or output.get("tokenUsage")),
+                         usage=deepcopy(output.get("usage")),
                          nativeIdentity=deepcopy(output.get("nativeIdentity")))
             outer_stopped = attempt["execution_state"] == "finished" and attempt["shutdown_confirmed"] == 1
             stop = output.get("stopEvidence") or {}
@@ -200,7 +202,7 @@ def router_trials(connection, row, *, now):
     return trials
 
 
-def _continuation_context(connection, row, run_id, owner_run_id):
+def _continuation_context(connection, row, run_id, owner_run_id, state_dir):
     """Read existing permission/lineage/stop/workspace gates; grant no authority."""
     if run_id is None:
         return False, None, None, None
@@ -215,8 +217,7 @@ def _continuation_context(connection, row, run_id, owner_run_id):
     if run_id not in {item[0] for item in owned}:
         return own_stopped, "micro-task-not-owned", None, run
     route = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (row["decision_id"],)).fetchone()
-    if (run["current_routing_id"] != row["decision_id"] or route is None or route["run_id"] != run_id
-            or route["owner_generation"] != run["owner_generation"]):
+    if (run["current_routing_id"] != row["decision_id"] or route is None or route["run_id"] != run_id):
         return own_stopped, "workflow-routing-fenced", None, run
     ancestors = connection.execute(
         "WITH RECURSIVE ancestors(id) AS (SELECT ? UNION SELECT c.parent_run_id FROM workflow_children c JOIN ancestors a ON c.child_task_id=a.id) SELECT w.* FROM workflow_runs w JOIN ancestors a ON w.run_id=a.id",
@@ -242,21 +243,20 @@ def _continuation_context(connection, row, run_id, owner_run_id):
         f"SELECT r.task_id FROM decision_requests r JOIN workflow_routes w ON w.decision_id=r.decision_id WHERE w.run_id IN ({markers}) AND r.task_id IS NOT NULL", ids)
     if any(not _stopped(connection, item[0]) for item in routing_tasks):
         return False, None, helper_policy, run
-    manifest = json.loads(run["workspace_manifest_json"])
+    manifest = effective_manifest(state_dir, connection, run)
     reservations = connection.execute("SELECT * FROM workspace_reservations WHERE holder_task_id=? ORDER BY rowid DESC", (run_id,)).fetchall()
     current = next((item for item in reservations if item["state"] in ("held", "transferred")), None)
-    current = current or next((item for item in reservations if item["checkout_id"] == manifest["checkoutId"]), None)
+    current = current or next((item for item in reservations if item["checkout_root"] == manifest["checkoutRoot"]), None)
     task = connection.execute("SELECT cwd FROM tasks WHERE task_id=?", (run_id,)).fetchone()
     reservation_access = "read" if manifest["access"] == "read" else "write"
-    if current is None or task is None or current["access"] != reservation_access or task["cwd"] != manifest.get("path") or any(
-            current[key] != manifest.get(field)
-            for key, field in (
-            ("checkout_id", "checkoutId"), ("repository_id", "repositoryId"), ("path", "path"))):
+    if (current is None or task is None or current["access"] != reservation_access
+            or task["cwd"] != manifest["path"]
+            or current["checkout_root"] != manifest["checkoutRoot"]):
         return True, "workspace-ownership-lost", helper_policy, run
     conflicts = connection.execute(
-        "SELECT holder_task_id FROM workspace_reservations WHERE checkout_id=?"
+        "SELECT holder_task_id FROM workspace_reservations WHERE checkout_root=?"
         " AND holder_task_id!=? AND state='held' AND (access='write' OR ?='write')",
-        (manifest["checkoutId"], run_id, reservation_access)).fetchall()
+        (manifest["checkoutRoot"], run_id, reservation_access)).fetchall()
     if conflicts and (current["state"] != "transferred" or any(
             item["holder_task_id"] not in ids for item in conflicts)):
         return True, "workspace-ownership-lost", helper_policy, run
@@ -264,11 +264,9 @@ def _continuation_context(connection, row, run_id, owner_run_id):
 
 
 def _candidate_problem(connection, candidate, request, run, now):
-    published = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (candidate["buddyId"],)).fetchone()
+    from ..catalog import buddy_state
+    published = buddy_state.get(connection, candidate["buddyId"])
     constraints = request.get("constraints", {})
-    if run is not None and run["buddy_locked"]:
-        spec = connection.execute("SELECT spec_json FROM tasks WHERE task_id=?", (run["run_id"],)).fetchone()
-        constraints = {**constraints, **schemas.buddy_constraints(_json(spec["spec_json"], {}))}
     bound = candidate_bound(connection, published, {**request, "constraints": constraints}, now, frozen=candidate)
     return {"code": "router-out-of-bounds", "bound": bound} if bound is not None else None
 
@@ -281,7 +279,8 @@ def _retry_at(connection, facts, trials, *, now, kind):
     known = []
     for index, buddy_id in enumerate(facts.get("routerBuddyIds") or []):
         identity = (facts.get("routerIdentities") or [])[index]
-        buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
+        from ..catalog import buddy_state
+        buddy = buddy_state.get(connection, buddy_id)
         if candidate_bound(connection, buddy, {"codingOnly": False}, now,
                            frozen=identity, apply_preferences=False, check_cooling=False) is not None:
             continue
@@ -309,8 +308,7 @@ def _retry_at(connection, facts, trials, *, now, kind):
     return min(known, key=router_history._parse) if known else None
 
 
-def routing_boundary(connection, row, *, now, run_id=None, revision=None,
-                     owner_run_id=None, owner_revision=None) -> dict | None:
+def routing_boundary(connection, row, *, now, run_id=None, owner_run_id=None, state_dir=None) -> dict | None:
     """Build a current readable Host boundary from frozen evidence, without writes."""
     route = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (row["decision_id"],)).fetchone()
     execution_changed = row["status"] == "completed" and route is not None and route["state"] in ("needs-host", "fenced")
@@ -319,12 +317,12 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     request = _json(row["requested_json"], {})
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
     if (request.get("routingBasis") or {}).get("candidateCount") == 0:
-        stopped, problem, helper_policy, _run = _continuation_context(connection, row, run_id, owner_run_id)
+        stopped, problem, helper_policy, _run = _continuation_context(connection, row, run_id, owner_run_id, state_dir)
         return build_boundary(
             kind="routing-changed", code=row["reason_code"],
             reason=reason_from_json(row["reason_code"], row["reason_params_json"]),
             candidates=[], facts=request, router_trials=[], retry_at=None, decision_id=row["decision_id"],
-            run_id=owner_run_id or run_id, revision=owner_revision if owner_run_id else revision,
+            run_id=owner_run_id or run_id,
             target_run_id=run_id if owner_run_id and owner_run_id != run_id else None,
             helper_policy=helper_policy, shutdown_confirmed=stopped, continuation_problem=problem,
             explicit_buddy=True)
@@ -349,7 +347,7 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     candidates = facts.get("buddies") or []
     retry_at = _retry_at(connection, snapshot["facts"],
                          trials, now=now, kind=kind)
-    stopped, problem, helper_policy, run = _continuation_context(connection, row, run_id, owner_run_id)
+    stopped, problem, helper_policy, run = _continuation_context(connection, row, run_id, owner_run_id, state_dir)
     dispatch_docs = router_sequence.dispatches(connection, row["decision_id"])
     if any(not _stopped(connection, item["taskId"]) for item in dispatch_docs) or any(
             item["outcome"] in ("stopUnknown", "unknown", "executing") for item in trials if item["taskId"]):
@@ -357,15 +355,11 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     boundary = build_boundary(
         kind=kind, code=code, reason=reason, candidates=candidates, facts=facts,
         router_trials=trials, retry_at=retry_at, decision_id=row["decision_id"],
-        run_id=owner_run_id or run_id, revision=owner_revision if owner_run_id else revision,
+        run_id=owner_run_id or run_id,
         target_run_id=run_id if owner_run_id and owner_run_id != run_id else None,
         helper_policy=helper_policy, shutdown_confirmed=stopped, continuation_problem=problem)
-    choices = boundary["commands"]["continue"]["choices"]
-    for choice, candidate in zip(choices, candidates):
-        candidate_problem = _candidate_problem(connection, candidate, request, run, now)
-        choice.update(blocked=candidate_problem is not None, code=None)
-        if candidate_problem is not None:
-            choice.update(candidate_problem)
-    if choices and all(choice["blocked"] for choice in choices):
-        boundary["commands"]["continue"]["blocked"] = True
+    boundary["candidates"] = [
+        {**candidate, "problem": _candidate_problem(connection, candidate, request, run, now)}
+        for candidate in candidates
+    ]
     return boundary

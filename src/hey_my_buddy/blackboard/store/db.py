@@ -18,11 +18,11 @@ from pathlib import Path
 from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
+from .schema_37_38 import ROUTER_SETTINGS_DDL
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 41
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
-CONTROL_TOKEN_VERSION = 1
 AGENT_TOKEN_VERSION = 1
 
 WORKFLOW_REQUESTS_DDL = """
@@ -40,15 +40,25 @@ CREATE TABLE IF NOT EXISTS workflow_requests (
     payload_json        TEXT NOT NULL,
     state               TEXT NOT NULL CHECK (state IN ('open','approved','declined','superseded','cancelled')),
     decision_json       TEXT,
-    decision_command_id TEXT,
-    expected_revision   INTEGER NOT NULL,
+    response_kind       TEXT,
+    response_id         TEXT,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     decided_at          TEXT,
+    CHECK ((response_kind IS NULL) = (response_id IS NULL)),
+    CHECK (response_kind IS NULL OR response_kind IN ('decision','continue','resolution')),
     CHECK ((summary IS NOT NULL AND reason_code IS NULL AND reason_params_json IS NULL AND decision_id IS NULL)
         OR (summary IS NULL AND reason_code IS NOT NULL AND reason_params_json IS NOT NULL
             AND json_valid(reason_params_json) AND json_type(reason_params_json)='object')
         OR (summary IS NULL AND reason_code IS NULL AND reason_params_json IS NULL AND decision_id IS NOT NULL))
+);
+"""
+
+ALLOCATION_REVOCATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS allocation_revocations (
+    allocation_id TEXT PRIMARY KEY,
+    request_id    TEXT NOT NULL,
+    revoked_at    TEXT NOT NULL
 );
 """
 
@@ -127,19 +137,14 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS tasks (
+CREATE TABLE IF NOT EXISTS "tasks" (
     task_id                 TEXT PRIMARY KEY,
     request_id              TEXT NOT NULL UNIQUE,
-    owner                   TEXT,
     spec_json               TEXT NOT NULL,
     input_fingerprint       TEXT NOT NULL,
     fingerprint_version     INTEGER NOT NULL,
     adapter                 TEXT NOT NULL,
-    required_capabilities   TEXT NOT NULL DEFAULT '[]',
     cwd                     TEXT NOT NULL,
-    exclusive_resources     TEXT NOT NULL DEFAULT '[]',
-    expected_seconds        INTEGER CHECK (expected_seconds > 0),
-    router_budget_seconds   INTEGER CHECK (router_budget_seconds > 0),
     state                   TEXT NOT NULL
         CHECK (state IN ('queued','running','cancelling','completed','concluded','failed','cancelled','reconciliation-needed')),
     queue_reason            TEXT,
@@ -152,8 +157,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     acceptance_note         TEXT,
     review_rejected_at      TEXT,
     review_rejection_note   TEXT,
-    CHECK ((adapter='decision' AND expected_seconds IS NULL AND router_budget_seconds IS NOT NULL)
-        OR (adapter!='decision' AND expected_seconds IS NOT NULL AND router_budget_seconds IS NULL))
+    CHECK ((adapter='decision' AND json_extract(spec_json,'$.expectedSeconds') IS NULL)
+        OR (adapter!='decision' AND json_type(spec_json,'$.expectedSeconds') IS 'integer'
+            AND json_extract(spec_json,'$.expectedSeconds') > 0))
 );
 CREATE INDEX IF NOT EXISTS tasks_state_idx ON tasks(state, created_at);
 
@@ -175,10 +181,13 @@ CREATE TABLE IF NOT EXISTS attempts (
     model_harness       TEXT,
     model_provider      TEXT,
     model_model         TEXT,
+    model_id            TEXT REFERENCES models(model_id) ON DELETE RESTRICT,
     result_json         TEXT,
+    result_form         TEXT CHECK (result_form IN ('archived-report-v1','current-report-v2')),
     shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,
     cancel_requested_at TEXT,
     stop_initiator      TEXT CHECK (stop_initiator IN ('host','lead','console','service','unknown')),
+    stop_purpose        TEXT CHECK (stop_purpose IN ('pause','end')),
     grace_deadline      TEXT,
     force_reason        TEXT,
     force_requested_at  TEXT,
@@ -189,6 +198,8 @@ CREATE TABLE IF NOT EXISTS attempts (
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     revision            INTEGER NOT NULL DEFAULT 1,
+    CHECK ((result_json IS NULL AND result_form IS NULL)
+        OR (result_json IS NOT NULL AND result_form IS NOT NULL)),
     UNIQUE(task_id, generation)
 );
 -- Relational guarantee of the documented invariant: at most one effective active
@@ -201,19 +212,82 @@ CREATE INDEX IF NOT EXISTS attempts_model_service_idx
     ON attempts(model_harness, model_provider, model_model) WHERE model_model IS NOT NULL;
 """
 
+MODEL_IDENTITY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS models (
+    model_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS model_correspondences (
+    correspondence_id TEXT PRIMARY KEY,
+    harness TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
+    created_at TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('same-name','profile','user')),
+    evidence_url TEXT,
+    evidence_date TEXT,
+    CHECK ((source='profile' AND evidence_url IS NOT NULL AND evidence_url <> '' AND evidence_date IS NOT NULL AND evidence_date <> '')
+        OR (source!='profile' AND evidence_url IS NULL AND evidence_date IS NULL))
+);
+CREATE INDEX IF NOT EXISTS model_correspondences_service_idx
+    ON model_correspondences(harness, provider, model);
+CREATE TRIGGER IF NOT EXISTS model_correspondences_no_update BEFORE UPDATE ON model_correspondences
+BEGIN SELECT RAISE(ABORT, 'model correspondence rows cannot be updated; undo deletes the latest change'); END;
+CREATE TRIGGER IF NOT EXISTS model_correspondences_delete_latest_only BEFORE DELETE ON model_correspondences
+WHEN NOT EXISTS(SELECT 1 FROM model_correspondences h WHERE h.harness=OLD.harness AND h.provider=OLD.provider AND h.model=OLD.model AND h.rowid<OLD.rowid)
+    OR EXISTS(SELECT 1 FROM model_correspondences h WHERE h.harness=OLD.harness AND h.provider=OLD.provider AND h.model=OLD.model AND h.rowid>OLD.rowid)
+BEGIN SELECT RAISE(ABORT, 'model correspondences only delete the latest change of a service'); END;
+CREATE TABLE IF NOT EXISTS profile_runs (
+    profile_run_id TEXT PRIMARY KEY,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
+    buddy_id TEXT NOT NULL REFERENCES buddies(buddy_id) ON DELETE RESTRICT,
+    task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    state TEXT NOT NULL CHECK (state IN ('running','completed','failed')),
+    reason_code TEXT,
+    reason_params_json TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    correction_rounds INTEGER NOT NULL DEFAULT 0
+        CHECK (typeof(correction_rounds)='integer' AND correction_rounds >= 0),
+    usage_json TEXT CHECK (usage_json IS NULL OR (json_valid(usage_json) AND json_type(usage_json)='object')),
+    CHECK ((state='running') = (finished_at IS NULL)),
+    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)
+        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object')),
+    CHECK (state!='failed' OR reason_code IS NOT NULL),
+    CHECK (finished_at IS NULL OR finished_at >= started_at)
+);
+CREATE TABLE IF NOT EXISTS model_profiles (
+    model_id TEXT PRIMARY KEY REFERENCES models(model_id) ON DELETE RESTRICT,
+    positioning TEXT NOT NULL,
+    built_at TEXT NOT NULL,
+    profile_run_id TEXT NOT NULL REFERENCES profile_runs(profile_run_id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS model_profile_claims (
+    model_id TEXT NOT NULL REFERENCES model_profiles(model_id) ON DELETE RESTRICT,
+    ordinal INTEGER NOT NULL CHECK (typeof(ordinal)='integer' AND ordinal >= 0),
+    polarity TEXT NOT NULL CHECK (polarity IN ('strength','weakness')),
+    claim TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    source_date TEXT NOT NULL,
+    source_kind TEXT NOT NULL CHECK (source_kind IN ('vendor','third-party')),
+    PRIMARY KEY (model_id, ordinal)
+);
+"""
+
 #: One row per recorded execution root. POSIX roots carry their boot session and
-#: process-group leader with no Job; Windows roots carry the exclusively created
-#: root Job with no boot or process-group id.
+#: session-leader PID with no Job; Windows roots carry the exclusively created
+#: root Job with no boot identifier.
 ATTEMPT_PROCESS_IDENTITIES_DDL = """
-CREATE TABLE IF NOT EXISTS attempt_process_identities (
+CREATE TABLE IF NOT EXISTS "attempt_process_identities" (
     attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
     boot_id             TEXT,
     root_pid            INTEGER NOT NULL CHECK (root_pid > 0),
     root_started_at     INTEGER NOT NULL CHECK (root_started_at > 0),
-    process_group_id    INTEGER CHECK (process_group_id > 0),
     job_name            TEXT,
-    CHECK ((boot_id IS NOT NULL AND process_group_id IS NOT NULL AND job_name IS NULL)
-        OR (boot_id IS NULL AND process_group_id IS NULL AND job_name IS NOT NULL))
+    CHECK ((boot_id IS NOT NULL AND job_name IS NULL)
+        OR (boot_id IS NULL AND job_name IS NOT NULL))
 );
 """
 
@@ -246,6 +320,7 @@ CREATE TABLE IF NOT EXISTS execution_issues (
     code                TEXT NOT NULL,
     message             TEXT NOT NULL,
     observed_at         TEXT NOT NULL,
+    occurrence_seq      INTEGER NOT NULL UNIQUE REFERENCES events(seq) ON DELETE RESTRICT,
     PRIMARY KEY (attempt_id, stage)
 );
 
@@ -253,7 +328,8 @@ CREATE TABLE IF NOT EXISTS service_issues (
     stage               TEXT PRIMARY KEY,
     code                TEXT NOT NULL,
     message             TEXT NOT NULL,
-    observed_at         TEXT NOT NULL
+    observed_at         TEXT NOT NULL,
+    occurrence_seq      INTEGER NOT NULL UNIQUE REFERENCES events(seq) ON DELETE RESTRICT
 );
 
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -280,10 +356,16 @@ CREATE TABLE IF NOT EXISTS events (
     actor_role   TEXT,
     actor_id     TEXT,
     created_at   TEXT NOT NULL,
-    CHECK ((actor_role IS NULL) = (actor_id IS NULL)),
+    CHECK ((actor_role IS NULL AND actor_id IS NULL)
+        OR actor_role='host'
+        OR (actor_role IS NOT NULL AND actor_role!='host' AND actor_id IS NOT NULL)),
     CHECK (actor_role IS NULL OR actor_role IN ('host','lead','console','service','workflow','bridge'))
 );
 CREATE INDEX IF NOT EXISTS events_task_idx ON events(task_id, seq);
+CREATE INDEX IF NOT EXISTS events_issue_occurrences_idx
+    ON events(kind, attempt_id, json_extract(payload_json, '$.stage'), seq)
+    WHERE kind='execution.issue' OR kind='service.issue'
+    OR kind='execution.issue_updated' OR kind='service.issue_updated';
 CREATE INDEX IF NOT EXISTS events_decision_status_idx ON events(kind, seq DESC)
     WHERE kind IN ('decision.completed','decision.failed','decision.needs_host','decision.cancelled');
 
@@ -302,12 +384,12 @@ CREATE TABLE IF NOT EXISTS resource_claims (
     task_id     TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
     attempt_id  TEXT,
     resource    TEXT NOT NULL,
-    kind        TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind='cwd'),
     state       TEXT NOT NULL,
     created_at  TEXT NOT NULL,
     UNIQUE(task_id, resource)
 );
-CREATE INDEX IF NOT EXISTS resource_claims_state_idx ON resource_claims(state, kind);
+CREATE INDEX IF NOT EXISTS resource_claims_state_idx ON resource_claims(state);
 
 -- One bounded latest activity projection per attempt. It is a projection, not a
 -- history: a native controller publishes phase/tool/waiting observations through
@@ -350,74 +432,64 @@ CREATE TABLE IF NOT EXISTS decision_requests (
     selected_json          TEXT,
     output_json            TEXT,
     requested_json         TEXT NOT NULL DEFAULT '{}',
+    request_form           TEXT NOT NULL DEFAULT 'manifest-reference-v2'
+        CHECK (request_form IN ('archived-inline-v1','manifest-reference-v2')),
     updated_at             TEXT NOT NULL
 );
 """
 
-MODEL_SERVICE_CONCURRENCY_DDL = """
-CREATE TABLE IF NOT EXISTS model_service_concurrency (
+MODEL_SERVICES_DDL = """
+CREATE TABLE IF NOT EXISTS model_services (
     harness           TEXT NOT NULL,
     provider          TEXT NOT NULL,
     model             TEXT NOT NULL,
-    concurrency_limit INTEGER NOT NULL DEFAULT 2 CHECK (concurrency_limit >= 1),
+    description TEXT NOT NULL DEFAULT '',
+    context_window INTEGER,
+    input_modalities_json TEXT NOT NULL DEFAULT '[]',
+    unavailable_code TEXT,
+    unavailable_params_json TEXT,
+    unavailable_content TEXT,
+    pending_since TEXT,
+    confirmed_absent_at TEXT,
+    concurrency_limit INTEGER CHECK (concurrency_limit >= 1),
+    source_sequence INTEGER,
+    CHECK ((unavailable_code IS NULL) = (unavailable_params_json IS NULL)),
     PRIMARY KEY (harness, provider, model)
 );
 """
 
 EVALUATION_TABLES = (
     """
-CREATE TABLE IF NOT EXISTS catalog_observations (
-    observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_id TEXT NOT NULL UNIQUE,
-    response_json TEXT,
-    harnesses_json TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS catalog_current (
     harness TEXT PRIMARY KEY,
-    observation_id INTEGER NOT NULL,
-    discovery_id TEXT,
+    sequence INTEGER NOT NULL,
     status TEXT NOT NULL,
     reason TEXT,
+    content TEXT,
     updated_at TEXT NOT NULL,
     read_at TEXT,
     account_status TEXT NOT NULL DEFAULT 'unknown'
 );
 """,
     """
-CREATE TABLE IF NOT EXISTS model_service_notes (
-    harness    TEXT NOT NULL,
-    provider   TEXT NOT NULL,
-    model      TEXT NOT NULL,
-    text       TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (harness, provider, model)
-);
-""",
-    """
 CREATE TABLE IF NOT EXISTS buddies (
     buddy_id          TEXT PRIMARY KEY,
-    label               TEXT NOT NULL,
+    alias             TEXT,
     harness             TEXT NOT NULL,
     provider            TEXT NOT NULL,
     model               TEXT NOT NULL,
     effort              TEXT NOT NULL,
-    available           INTEGER NOT NULL DEFAULT 0,
+    effort_rank         INTEGER NOT NULL DEFAULT 0,
+    retired             INTEGER NOT NULL DEFAULT 0,
     enabled             INTEGER NOT NULL DEFAULT 1,
-    capabilities_json   TEXT NOT NULL DEFAULT '[]',
-    context_window      INTEGER,
-    description         TEXT NOT NULL DEFAULT '',
-    source              TEXT NOT NULL DEFAULT '',
-    unavailable_code        TEXT,
-    unavailable_params_json TEXT,
-    unavailable_content     TEXT,
-    CHECK ((unavailable_code IS NULL) = (unavailable_params_json IS NULL)),
-    CHECK (unavailable_content IS NULL OR unavailable_code IS 'catalog.native-unavailable')
+    FOREIGN KEY (harness,provider,model)
+        REFERENCES model_services(harness,provider,model) ON DELETE RESTRICT
 );
 """,
     """
-CREATE INDEX IF NOT EXISTS buddies_current_idx ON buddies(available, buddy_id);
 CREATE INDEX IF NOT EXISTS buddies_harness_idx ON buddies(harness, buddy_id);
 """,
+    MODEL_SERVICES_DDL,
     """
 CREATE TABLE IF NOT EXISTS evaluation_preferences (
     buddy_id        TEXT PRIMARY KEY REFERENCES buddies(buddy_id) ON DELETE RESTRICT,
@@ -427,12 +499,6 @@ CREATE TABLE IF NOT EXISTS evaluation_preferences (
 CREATE INDEX IF NOT EXISTS evaluation_preferences_mode_idx ON evaluation_preferences(mode, buddy_id);
 """,
     EVALUATION_DECISIONS_DDL,
-    """
-CREATE TABLE IF NOT EXISTS evaluation_catalog (
-    discovery_id      TEXT PRIMARY KEY,
-    payload_json      TEXT NOT NULL
-);
-""",
     # Extended decision state. ``evaluation_decisions`` stays the bounded public
     # history row the console reads; this table carries the audit material (the
     # helper envelope and the selected buddy)
@@ -445,13 +511,6 @@ CREATE INDEX IF NOT EXISTS decision_requests_task_idx ON decision_requests(task_
 CREATE INDEX IF NOT EXISTS evaluation_decisions_created_idx
     ON evaluation_decisions(created_at, decision_id);
 """,
-    # User-owned per-model-service concurrent-attempt limits (ADR-011). A model service is the
-    # exact harness/provider/model tuple; effort variants share one row. The row
-    # is independent of ``buddies`` availability on purpose: a setting
-    # survives discovery marking a model unavailable, and a model service without a row
-    # uses the code-owned default. Only the authenticated console writer patch in
-    # ``user_policy.py`` ever writes here.
-    MODEL_SERVICE_CONCURRENCY_DDL,
 )
 
 EVALUATION_SCHEMA = "\n".join(EVALUATION_TABLES)
@@ -467,6 +526,10 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
         CHECK (resume_mode IN ('initial','reconstructed-new-session','native-session')),
     previous_session_id TEXT,
     input_json          TEXT NOT NULL,
+    workspace_id        TEXT,
+    workspace_manifest_sha256 TEXT,
+    response_kind       TEXT,
+    response_id         TEXT,
     -- Frozen access for this turn, independent of later run intent changes.
     access              TEXT NOT NULL CHECK (access IN ('read','write','full')),
     -- Only an explicit full turn carries the Host's one-line note.
@@ -475,7 +538,15 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     state               TEXT NOT NULL CHECK (state IN ('prepared','running','returned','failed','interrupted','rejected')),
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
+    CHECK ((response_kind IS NULL) = (response_id IS NULL)),
+    CHECK (response_kind IS NULL OR response_kind='continue'),
     CHECK ((access='full') = (access_note IS NOT NULL)),
+    CHECK ((json_extract(input_json,'$.version') IS 5
+            AND json_extract(input_json,'$.executionWorkspace.kind') IS 'none'
+            AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
+        OR (json_type(input_json,'$.version') IS 'integer'
+            AND json_extract(input_json,'$.version') BETWEEN 1 AND 4
+            AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL)),
     UNIQUE(run_id, turn_index)
 );
 """
@@ -488,21 +559,20 @@ WORKFLOW_RUNS_DDL = """
 CREATE TABLE IF NOT EXISTS workflow_runs (
     run_id                  TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
     macro_task_id            TEXT REFERENCES macro_tasks(macro_task_id) ON DELETE RESTRICT,
+    standalone_project_id    TEXT REFERENCES projects(project_id) ON DELETE RESTRICT,
+    project_kind             TEXT NOT NULL CHECK (project_kind IN ('git','folder')),
+    checkout                 TEXT NOT NULL CHECK (checkout IN ('existing','worktree','none')),
     title                   TEXT,
     activity_seq            INTEGER NOT NULL DEFAULT 0,
     activity_at             TEXT,
-    host_id                 TEXT,
-    source_host_id          TEXT,
-    owner_generation        INTEGER NOT NULL DEFAULT 1,
-    control_verifier        TEXT NOT NULL,
-    request_fingerprint     TEXT,
+    creation_key            TEXT,
     buddy_json TEXT,
     buddy_revision INTEGER NOT NULL DEFAULT 0,
     validated_buddy_revision INTEGER,
     current_routing_id      TEXT,
-    submission_verifier     TEXT,
     execution_workspace_json TEXT NOT NULL,
-    workspace_manifest_json TEXT NOT NULL,
+    workspace_id            TEXT,
+    workspace_manifest_sha256 TEXT,
     state                   TEXT NOT NULL
         CHECK (state IN ('executing','awaiting-host','waiting-helpers','waiting-owned','delivered','accepted','concluded','cancelled','failed')),
     active_request_id       TEXT,
@@ -511,11 +581,15 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     continuation_count      INTEGER NOT NULL DEFAULT 0,
     final_artifact_id       TEXT,
     final_attempt_id        TEXT,
-    revision                INTEGER NOT NULL DEFAULT 1,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
-    buddy_locked    INTEGER NOT NULL DEFAULT 0 CHECK (buddy_locked IN (0,1)),
-    delegation_authority INTEGER NOT NULL DEFAULT 0 CHECK (delegation_authority IN (0,1))
+    delegation_authority INTEGER NOT NULL DEFAULT 0 CHECK (delegation_authority IN (0,1)),
+    CHECK ((macro_task_id IS NULL AND standalone_project_id IS NOT NULL)
+        OR (macro_task_id IS NOT NULL AND standalone_project_id IS NULL)),
+    CHECK ((checkout='none' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
+        OR (checkout IN ('existing','worktree') AND project_kind='git' AND
+            ((state IN ('accepted','concluded') AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL)
+            OR (state NOT IN ('accepted','concluded') AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL))))
 );
 """
 
@@ -524,10 +598,7 @@ CREATE TABLE IF NOT EXISTS workflow_children (
     child_task_id       TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
     parent_run_id       TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     request_id          TEXT NOT NULL,
-    decision_command_id TEXT NOT NULL,
-    role                TEXT NOT NULL DEFAULT 'helper',
     state               TEXT NOT NULL CHECK (state IN ('active','succeeded','failed','cancelled','attention')),
-    workspace_manifest_json TEXT,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL
 );
@@ -535,42 +606,76 @@ CREATE TABLE IF NOT EXISTS workflow_children (
 
 WORKFLOW_TABLES = (
     """
+CREATE TABLE IF NOT EXISTS projects (
+    project_id TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL CHECK (kind IN ('git','folder')),
+    path       TEXT NOT NULL
+);
+""",
+    """
 CREATE TABLE IF NOT EXISTS macro_tasks (
     macro_task_id       TEXT PRIMARY KEY,
     title              TEXT NOT NULL,
-    project_id         TEXT NOT NULL,
-    project_path       TEXT NOT NULL,
-    source_host_id     TEXT NOT NULL,
+    project_id         TEXT NOT NULL REFERENCES projects(project_id) ON DELETE RESTRICT,
+    project_kind       TEXT NOT NULL CHECK (project_kind IN ('git','folder')),
+    project_cwd       TEXT NOT NULL,
+    repository_path   TEXT,
+    creation_key      TEXT,
     created_at         TEXT NOT NULL,
     activity_seq       INTEGER NOT NULL DEFAULT 0,
     activity_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS macro_tasks_activity_idx ON macro_tasks(activity_seq DESC, macro_task_id DESC);
 CREATE INDEX IF NOT EXISTS macro_tasks_project_idx ON macro_tasks(project_id, activity_seq DESC, macro_task_id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS macro_tasks_creation_key_unique ON macro_tasks(creation_key) WHERE creation_key IS NOT NULL;
 """,
-    # The logical micro task plus its Host ownership generation and prepared workspace.
+    """
+CREATE TABLE IF NOT EXISTS macro_task_goals (
+    macro_task_id TEXT NOT NULL REFERENCES macro_tasks(macro_task_id) ON DELETE CASCADE,
+    revision      INTEGER NOT NULL,
+    body          TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    PRIMARY KEY (macro_task_id, revision)
+);
+""",
+    # The logical micro task and its prepared workspace.
     # The immutable submitted spec and fingerprint live in tasks; continuations
     # record their own effective input in workflow_continuations.
     WORKFLOW_RUNS_DDL,
     """
+CREATE TABLE IF NOT EXISTS work_pauses (
+    macro_task_id TEXT REFERENCES macro_tasks(macro_task_id) ON DELETE RESTRICT,
+    run_id        TEXT REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    paused_at     TEXT NOT NULL,
+    CHECK ((macro_task_id IS NULL) <> (run_id IS NULL)),
+    UNIQUE (macro_task_id),
+    UNIQUE (run_id)
+);
+""",
+    """
 CREATE INDEX IF NOT EXISTS workflow_runs_state_idx ON workflow_runs(state, updated_at);
 CREATE INDEX IF NOT EXISTS workflow_runs_macro_task_idx ON workflow_runs(macro_task_id, activity_seq DESC, run_id DESC);
 CREATE INDEX IF NOT EXISTS workflow_runs_activity_idx ON workflow_runs(activity_seq);
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_runs_creation_key_unique ON workflow_runs(creation_key) WHERE creation_key IS NOT NULL;
 """,
     # Routing is owned work, but not a coding turn or a user-authorized helper.
-    # Each link binds one existing decision task to one owner generation; old
+    # Each link binds one existing decision task to a run; old
     # links remain auditable and retain their real attempt/stop evidence.
+    # exploration is this routing's frozen quota fact: what the routing was
+    # allowed and what it did with it, written while the routing runs and never
+    # rewritten after it settles.
     """
 CREATE TABLE IF NOT EXISTS workflow_routes (
     decision_id         TEXT PRIMARY KEY REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
     run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
-    owner_generation    INTEGER NOT NULL,
     state               TEXT NOT NULL CHECK (state IN ('pending','resolved','needs-host','fenced')),
+    exploration         TEXT NOT NULL CHECK (exploration IN ('pre-exploration','ineligible','counted','quota-kept','quota-reselected')),
     created_at          TEXT NOT NULL
 );
 """,
     """
 CREATE INDEX IF NOT EXISTS workflow_routes_run_idx ON workflow_routes(run_id);
+CREATE INDEX IF NOT EXISTS workflow_routes_exploration_idx ON workflow_routes(exploration);
 """,
     # One row per actual execution turn. The turn input is written to disk by the
     # adapter; this row pins the service-owned identity, the bounded context and the
@@ -611,21 +716,48 @@ CREATE INDEX IF NOT EXISTS workflow_lead_tasks_lead_idx ON workflow_lead_tasks(l
 CREATE TABLE IF NOT EXISTS workflow_continuations (
     continuation_id   TEXT PRIMARY KEY,
     run_id            TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
-    command_id        TEXT,
+    controlling_run_id TEXT REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     kind              TEXT NOT NULL CHECK (kind IN ('manual','helper','lead-wakeup')),
     request_id        TEXT,
+    artifact_id       TEXT REFERENCES workflow_artifacts(artifact_id) ON DELETE RESTRICT,
+    response_turn_id  TEXT REFERENCES workflow_turns(turn_id) ON DELETE RESTRICT,
+    buddy_selection_json TEXT,
+    access_selection_json TEXT,
+    resolution_json   TEXT,
     trigger_event_json TEXT,
-    expected_revision INTEGER NOT NULL,
     input_text        TEXT NOT NULL,
     note              TEXT,
-    helper_policy     TEXT NOT NULL DEFAULT 'keep' CHECK (helper_policy IN ('cancel','keep')),
+    helper_policy     TEXT CHECK (helper_policy IN ('cancel','keep') OR helper_policy IS NULL),
     helper_outcomes_json TEXT NOT NULL DEFAULT '[]',
-    workspace_manifest_json TEXT,
+    workspace_id      TEXT,
+    workspace_manifest_sha256 TEXT,
+    workspace_facts_role TEXT NOT NULL CHECK (workspace_facts_role IN ('pending','owner','reference','none')),
+    workspace_kind    TEXT CHECK (workspace_kind IN ('existing','worktree')),
+    checkout_root     TEXT,
+    repository_path   TEXT,
+    input_commit      TEXT,
+    staged_commit     TEXT,
     state             TEXT NOT NULL CHECK (state IN ('recorded','queued','consumed','cancelled','invalidated')),
     attempt_id        TEXT,
     turn_id           TEXT,
     created_at        TEXT NOT NULL,
     consumed_at       TEXT,
+    CHECK (kind!='manual' OR (request_id IS NOT NULL) + (artifact_id IS NOT NULL) + (response_turn_id IS NOT NULL) <= 1),
+    CHECK (buddy_selection_json IS NULL OR json_valid(buddy_selection_json)),
+    CHECK (access_selection_json IS NULL OR json_valid(access_selection_json)),
+    CHECK (resolution_json IS NULL OR json_valid(resolution_json)),
+    CHECK ((workspace_facts_role='none' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
+            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)
+        OR ((workspace_facts_role='pending' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
+            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)
+        OR (workspace_facts_role='owner' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
+            AND workspace_kind IS NOT NULL AND checkout_root IS NOT NULL AND repository_path IS NOT NULL
+            AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
+        OR (workspace_facts_role='reference' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
+            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL))),
     CHECK ((kind IN ('manual','helper') AND trigger_event_json IS NULL)
         OR (kind='lead-wakeup' AND trigger_event_json IS NOT NULL
             AND json_valid(trigger_event_json) AND json_type(trigger_event_json)='object'))
@@ -633,6 +765,8 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
 """,
     """
 CREATE INDEX IF NOT EXISTS workflow_continuations_run_idx ON workflow_continuations(run_id, state);
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_continuations_workspace_owner_unique
+    ON workflow_continuations(workspace_id, workspace_manifest_sha256) WHERE workspace_facts_role='owner';
 """,
     """
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_continuations_auto_unique
@@ -643,15 +777,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS workflow_continuations_lead_pending_unique
     ON workflow_continuations(run_id) WHERE kind='lead-wakeup' AND state IN ('recorded','queued');
 """,
     # Durable workspace reservations independent of attempt capacity. The partial
-    # unique index is the relational guarantee that one checkout has at most one
+    # unique index is the relational guarantee that one checkout root has at most one
     # held writer, while readers share a concrete unchanged snapshot.
     """
 CREATE TABLE IF NOT EXISTS workspace_reservations (
     reservation_id  TEXT PRIMARY KEY,
     workspace_id    TEXT NOT NULL,
-    checkout_id     TEXT NOT NULL,
-    repository_id   TEXT,
-    path            TEXT NOT NULL,
+    checkout_root   TEXT NOT NULL,
     access          TEXT NOT NULL CHECK (access IN ('read','write')),
     holder_task_id  TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
     holder_kind     TEXT NOT NULL CHECK (holder_kind IN ('parent','helper','reader')),
@@ -664,10 +796,10 @@ CREATE TABLE IF NOT EXISTS workspace_reservations (
 """,
     """
 CREATE UNIQUE INDEX IF NOT EXISTS workspace_reservations_writer_unique
-    ON workspace_reservations(checkout_id) WHERE state='held' AND access='write';
+    ON workspace_reservations(checkout_root) WHERE state='held' AND access='write';
 """,
     """
-CREATE INDEX IF NOT EXISTS workspace_reservations_checkout_idx ON workspace_reservations(checkout_id, state);
+CREATE INDEX IF NOT EXISTS workspace_reservations_checkout_idx ON workspace_reservations(checkout_root, state);
 """,
     """
 CREATE INDEX IF NOT EXISTS workspace_reservations_holder_idx ON workspace_reservations(holder_task_id, state);
@@ -681,16 +813,16 @@ CREATE INDEX IF NOT EXISTS workspace_reservations_holder_idx ON workspace_reserv
 CREATE TABLE IF NOT EXISTS workflow_scope_versions (
     run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     scope_version       INTEGER NOT NULL,
-    command_id          TEXT,
     actor_role          TEXT NOT NULL,
-    actor_id            TEXT NOT NULL,
+    actor_id            TEXT,
     note                TEXT,
     write_scope_json    TEXT NOT NULL,
     manifest_sha256     TEXT,
     stopped_evidence_json TEXT NOT NULL,
     created_at          TEXT NOT NULL,
     PRIMARY KEY (run_id, scope_version),
-    CHECK (actor_role IN ('host','lead','console','service','workflow','bridge'))
+    CHECK (actor_role IN ('host','lead','console','service','workflow','bridge')),
+    CHECK (actor_role='host' OR actor_id IS NOT NULL)
 );
 """,
     # Durable evidence of a failed seal that found managed changes outside the
@@ -716,12 +848,13 @@ CREATE TABLE IF NOT EXISTS workflow_workspace_conflicts (
     actor_role              TEXT,
     actor_id                TEXT,
     note                    TEXT,
-    command_id              TEXT,
     delivery_json           TEXT,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
     UNIQUE(run_id, attempt_id, observed_fingerprint),
-    CHECK ((actor_role IS NULL) = (actor_id IS NULL)),
+    CHECK ((actor_role IS NULL AND actor_id IS NULL)
+        OR actor_role='host'
+        OR (actor_role IS NOT NULL AND actor_role!='host' AND actor_id IS NOT NULL)),
     CHECK (actor_role IS NULL OR actor_role IN ('host','lead','console','service','workflow','bridge'))
 );
 """,
@@ -741,8 +874,7 @@ CREATE TABLE IF NOT EXISTS workflow_integrations (
     binding_sha256        TEXT NOT NULL,
     target_path           TEXT NOT NULL DEFAULT '',
     target_ref            TEXT NOT NULL DEFAULT '',
-    target_repository_id  TEXT,
-    target_checkout_id    TEXT,
+    target_project_id     TEXT, -- NULL when the target was unmarked at verification
     source_commit         TEXT,
     source_tree           TEXT,
     before_commit         TEXT,
@@ -751,11 +883,11 @@ CREATE TABLE IF NOT EXISTS workflow_integrations (
     after_tree            TEXT,
     verification_json     TEXT NOT NULL,
     note                  TEXT,
-    command_id            TEXT,
     actor_role            TEXT NOT NULL,
-    actor_id              TEXT NOT NULL,
+    actor_id              TEXT,
     created_at            TEXT NOT NULL,
     CHECK (actor_role IN ('host','lead','console','service','workflow','bridge')),
+    CHECK (actor_role='host' OR actor_id IS NOT NULL),
     UNIQUE(binding_sha256)
 );
 """,
@@ -763,15 +895,13 @@ CREATE TABLE IF NOT EXISTS workflow_integrations (
 CREATE INDEX IF NOT EXISTS workflow_integrations_run_idx ON workflow_integrations(run_id, artifact_id, created_at);
 """,
     # One cleanup plan per disposable managed checkout. The plan binds the exact
-    # path, the workspace/repository identity and the evidence that permitted it;
+    # path, the project identity and the evidence that permitted it;
     # apply rechecks all of them and deletes only that registered linked worktree.
     """
 CREATE TABLE IF NOT EXISTS workspace_cleanup_plans (
     plan_id          TEXT PRIMARY KEY,
     run_id           TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     workspace_id     TEXT NOT NULL,
-    checkout_id      TEXT NOT NULL,
-    repository_id    TEXT,
     path             TEXT NOT NULL,
     kind             TEXT NOT NULL,
     state            TEXT NOT NULL CHECK (state IN ('planned','applying','applied','blocked')),
@@ -779,12 +909,9 @@ CREATE TABLE IF NOT EXISTS workspace_cleanup_plans (
     retention_json   TEXT NOT NULL,
     reasons_json     TEXT NOT NULL DEFAULT '[]',
     result_json      TEXT,
-    command_id       TEXT,
     revision         INTEGER NOT NULL DEFAULT 1,
     created_at       TEXT NOT NULL,
-    applied_at       TEXT,
-    expires_at       TEXT NOT NULL
-);
+    applied_at       TEXT);
 """,
     """
 CREATE INDEX IF NOT EXISTS workspace_cleanup_plans_run_idx ON workspace_cleanup_plans(run_id, state);
@@ -810,23 +937,90 @@ CREATE UNIQUE INDEX IF NOT EXISTS agent_credentials_attempt_unique
     """
 CREATE INDEX IF NOT EXISTS agent_credentials_run_idx ON agent_credentials(run_id, state);
 """,
-    # Immutable pinned manifests (prepared inputs and sealed outputs). A worktree
-    # may be removed later; these references stay readable.
+    # Fixed Git inputs/outputs and none execution receipts have distinct forms.
+    # A worktree may be removed later; these references stay readable.
     """
 CREATE TABLE IF NOT EXISTS workflow_artifacts (
     artifact_id     TEXT PRIMARY KEY,
     run_id          TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     turn_id         TEXT,
     attempt_id      TEXT,
-    kind            TEXT NOT NULL,
-    manifest_json   TEXT NOT NULL,
-    manifest_sha256 TEXT NOT NULL,
+    kind            TEXT NOT NULL CHECK (kind IN ('input','turn-input','output','resolved-output','partial-output','abandoned-site','shared-refs','result')),
+    content_form    TEXT NOT NULL CHECK (content_form IN ('sealed-inline-v1','input-reference','record-reference','result-reference')),
+    manifest_json   TEXT,
+    workspace_id    TEXT,
+    input_manifest_sha256 TEXT,
+    output_snapshot_sha256 TEXT,
+    shared_refs_sha256 TEXT,
+    record_path     TEXT,
+    record_sha256   TEXT,
+    response_kind   TEXT,
+    response_id     TEXT,
+    workspace_facts_role TEXT CHECK (workspace_facts_role IN ('owner','reference')),
+    workspace_kind  TEXT CHECK (workspace_kind IN ('existing','worktree')),
+    checkout_root   TEXT,
+    repository_path TEXT,
+    input_commit    TEXT,
+    staged_commit   TEXT,
+    output_workspace_id TEXT,
+    output_manifest_sha256 TEXT,
+    output_commit   TEXT,
+    output_action   TEXT CHECK (output_action IN ('restore','adopt')),
+    output_origin   TEXT CHECK (output_origin IN ('worker','host')),
     created_at      TEXT NOT NULL,
-    UNIQUE(run_id, attempt_id, manifest_sha256)
+    CHECK ((response_kind IS NULL) = (response_id IS NULL)),
+    CHECK (response_kind IS NULL OR response_kind IN ('accept','continue','conclude')),
+    CHECK (response_kind IS NULL OR kind IN ('output','resolved-output','partial-output','abandoned-site','result')),
+    CHECK ((kind IN ('input','turn-input') AND workspace_id IS NOT NULL AND input_manifest_sha256 IS NOT NULL
+            AND output_snapshot_sha256 IS NULL AND shared_refs_sha256 IS NULL)
+        OR (kind IN ('output','resolved-output','partial-output','abandoned-site') AND workspace_id IS NULL
+            AND input_manifest_sha256 IS NULL AND output_snapshot_sha256 IS NOT NULL AND shared_refs_sha256 IS NULL)
+        OR (kind='shared-refs' AND workspace_id IS NULL AND input_manifest_sha256 IS NULL
+            AND output_snapshot_sha256 IS NULL AND shared_refs_sha256 IS NOT NULL)
+        OR (kind='result' AND workspace_id IS NULL AND input_manifest_sha256 IS NULL
+            AND output_snapshot_sha256 IS NULL AND shared_refs_sha256 IS NULL)),
+    CHECK ((content_form='sealed-inline-v1' AND manifest_json IS NOT NULL AND record_path IS NULL AND record_sha256 IS NULL)
+        OR (content_form='input-reference' AND kind='input' AND manifest_json IS NULL
+            AND record_path IS NULL AND record_sha256 IS NULL)
+        OR (content_form='record-reference' AND kind IN ('output','resolved-output','partial-output','abandoned-site')
+            AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)
+        OR (content_form='result-reference' AND kind='result' AND turn_id IS NOT NULL AND attempt_id IS NOT NULL
+            AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)),
+    CHECK ((kind='result') = (content_form='result-reference')),
+    CHECK ((kind='input' AND workspace_facts_role='owner' AND workspace_kind IS NOT NULL
+            AND checkout_root IS NOT NULL AND repository_path IS NOT NULL
+            AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
+        OR (kind='input' AND workspace_facts_role='reference' AND workspace_kind IS NULL
+            AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)
+        OR (kind!='input' AND workspace_facts_role IS NULL AND workspace_kind IS NULL
+            AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)),
+    CHECK (kind!='input' OR workspace_facts_role IS NOT NULL),
+    CHECK ((kind IN ('output','resolved-output','partial-output','abandoned-site')
+            AND attempt_id IS NOT NULL AND output_workspace_id IS NOT NULL
+            AND output_manifest_sha256 IS NOT NULL AND output_commit IS NOT NULL)
+        OR (kind NOT IN ('output','resolved-output','partial-output','abandoned-site')
+            AND output_workspace_id IS NULL AND output_manifest_sha256 IS NULL
+            AND output_commit IS NULL AND output_action IS NULL)),
+    CHECK ((kind='resolved-output' AND output_action IS NOT NULL)
+        OR (kind!='resolved-output' AND output_action IS NULL)),
+    CHECK ((kind IN ('output','partial-output') AND output_origin IS NOT NULL)
+        OR (kind NOT IN ('output','partial-output') AND output_origin IS NULL))
 );
 """,
     """
 CREATE INDEX IF NOT EXISTS workflow_artifacts_run_idx ON workflow_artifacts(run_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_artifacts_input_unique
+    ON workflow_artifacts(run_id, attempt_id, input_manifest_sha256) WHERE input_manifest_sha256 IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_artifacts_output_unique
+    ON workflow_artifacts(run_id, attempt_id, output_snapshot_sha256) WHERE output_snapshot_sha256 IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_artifacts_result_unique
+    ON workflow_artifacts(run_id, attempt_id) WHERE kind='result';
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_artifacts_shared_refs_unique
+    ON workflow_artifacts(run_id, attempt_id, shared_refs_sha256) WHERE shared_refs_sha256 IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_artifacts_workspace_owner_unique
+    ON workflow_artifacts(workspace_id, input_manifest_sha256) WHERE workspace_facts_role='owner';
 """,
     # Bounded suggestions an attempt-scoped credential may record on its own run.
     """
@@ -885,18 +1079,16 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
     conclusion_id    TEXT PRIMARY KEY,
     run_id           TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     attempt_id       TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
-    run_revision     INTEGER NOT NULL,
-    owner_generation INTEGER NOT NULL,
     execution_status TEXT NOT NULL CHECK (execution_status IN ('failed','cancelled','delivered')),
     note             TEXT,
     reason_code      TEXT,
     reason_params_json TEXT,
     artifact_id      TEXT REFERENCES workflow_artifacts(artifact_id) ON DELETE RESTRICT,
     actor_role       TEXT NOT NULL,
-    actor_id         TEXT NOT NULL,
-    command_id       TEXT NOT NULL UNIQUE,
+    actor_id         TEXT,
     created_at       TEXT NOT NULL,
     CHECK (actor_role IN ('host','lead','console','service','workflow','bridge')),
+    CHECK (actor_role='host' OR actor_id IS NOT NULL),
     CHECK ((note IS NOT NULL AND reason_code IS NULL AND reason_params_json IS NULL)
         OR (note IS NULL AND reason_code IS NOT NULL AND reason_params_json IS NOT NULL
             AND json_valid(reason_params_json) AND json_type(reason_params_json)='object'))
@@ -908,6 +1100,8 @@ CREATE TABLE IF NOT EXISTS router_requests (
     decision_id      TEXT NOT NULL REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
     round            INTEGER NOT NULL CHECK (round >= 1),
     snapshot_json    TEXT NOT NULL,
+    snapshot_form    TEXT NOT NULL DEFAULT 'manifest-reference-v2'
+        CHECK (snapshot_form IN ('archived-inline-v1','manifest-reference-v2')),
     frozen_at        TEXT NOT NULL,
     PRIMARY KEY (decision_id, round)
 );
@@ -947,12 +1141,7 @@ CREATE TABLE IF NOT EXISTS router_outcomes (
 """
 
 ROUTER_SCHEMA = f"""
-CREATE TABLE IF NOT EXISTS router_settings (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
-    budget_preset TEXT NOT NULL CHECK (budget_preset IN ('brief','standard','deep')),
-    retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
-);
+{ROUTER_SETTINGS_DDL}
 CREATE TABLE IF NOT EXISTS router_buddies (
     position INTEGER PRIMARY KEY CHECK (position >= 0),
     buddy_id TEXT NOT NULL UNIQUE
@@ -973,14 +1162,140 @@ CREATE INDEX IF NOT EXISTS router_outcomes_buddy_idx ON router_outcomes(buddy_id
 CREATE INDEX IF NOT EXISTS router_outcomes_task_idx ON router_outcomes(task_id, event_seq);
 CREATE INDEX IF NOT EXISTS router_outcomes_attempt_idx ON router_outcomes(attempt_id);
 """
-CATALOG_PENDING_SCHEMA = """
-CREATE TABLE IF NOT EXISTS catalog_pending (
-    harness      TEXT NOT NULL REFERENCES catalog_current(harness) ON DELETE RESTRICT,
-    provider     TEXT NOT NULL,
-    model        TEXT NOT NULL,
-    since        TEXT NOT NULL,
-    efforts_json TEXT NOT NULL,
-    PRIMARY KEY (harness, provider, model)
+
+DOMAIN_EVALUATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS maintenance_runs (
+    maintenance_run_id TEXT NOT NULL PRIMARY KEY,
+    trigger_type       TEXT NOT NULL CHECK (trigger_type IN ('interval','manual')),
+    buddy_id           TEXT NOT NULL,
+    task_id            TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    state              TEXT NOT NULL CHECK (state IN ('running','completed','failed')),
+    reason_code        TEXT,
+    reason_params_json TEXT,
+    started_at         TEXT NOT NULL,
+    finished_at        TEXT,
+    CHECK ((state='running') = (finished_at IS NULL)),
+    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)
+        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object')),
+    CHECK (state!='failed' OR reason_code IS NOT NULL),
+    CHECK (finished_at IS NULL OR finished_at >= started_at)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS maintenance_runs_running_unique
+    ON maintenance_runs(state) WHERE state='running';
+
+CREATE TABLE IF NOT EXISTS domain_nodes (
+    node_id            TEXT NOT NULL PRIMARY KEY,
+    name               TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    definition         TEXT NOT NULL CHECK (length(trim(definition)) > 0),
+    parent_id          TEXT REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
+    merged_into_id     TEXT REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
+    maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(maintenance_run_id) ON DELETE RESTRICT,
+    CHECK (parent_id IS NULL OR parent_id != node_id),
+    CHECK (merged_into_id IS NULL OR merged_into_id != node_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS domain_nodes_active_name_unique
+    ON domain_nodes(name) WHERE merged_into_id IS NULL;
+CREATE INDEX IF NOT EXISTS domain_nodes_parent_idx ON domain_nodes(parent_id);
+
+CREATE TABLE IF NOT EXISTS micro_task_classifications (
+    run_id             TEXT NOT NULL PRIMARY KEY REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    domain_node_id     TEXT NOT NULL REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
+    task_type          TEXT NOT NULL CHECK (task_type IN ('create','change','debug','verify','review','research','write')),
+    maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(maintenance_run_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS kind_summaries (
+    harness            TEXT NOT NULL,
+    model_id           TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
+    effort             TEXT NOT NULL,
+    text               TEXT NOT NULL,
+    maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(maintenance_run_id) ON DELETE RESTRICT,
+    PRIMARY KEY (harness, model_id, effort)
+);
+CREATE TABLE IF NOT EXISTS kind_summary_evidence (
+    harness TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
+    effort  TEXT NOT NULL,
+    run_id  TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    cited   INTEGER NOT NULL CHECK (cited IN (0, 1)),
+    PRIMARY KEY (harness, model_id, effort, run_id),
+    FOREIGN KEY (harness, model_id, effort) REFERENCES kind_summaries(harness, model_id, effort) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS kind_summary_evidence_run_idx ON kind_summary_evidence(run_id);
+
+CREATE TABLE IF NOT EXISTS routing_judgments (
+    decision_id    TEXT NOT NULL PRIMARY KEY REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
+    domain_node_id TEXT REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
+    task_type      TEXT NOT NULL CHECK (task_type IN ('create','change','debug','verify','review','research','write'))
+);
+"""
+STATISTICS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS kind_statistics (
+    harness TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
+    effort TEXT NOT NULL,
+    samples INTEGER NOT NULL CHECK (typeof(samples)='integer' AND samples > 0),
+    successes INTEGER NOT NULL CHECK (typeof(successes)='integer' AND successes >= 0),
+    first_passes INTEGER NOT NULL CHECK (typeof(first_passes)='integer' AND first_passes >= 0 AND first_passes <= successes),
+    rework_rounds INTEGER NOT NULL CHECK (typeof(rework_rounds)='integer' AND rework_rounds >= 0),
+    failures INTEGER NOT NULL CHECK (typeof(failures)='integer' AND failures >= 0),
+    defects INTEGER NOT NULL DEFAULT 0 CHECK (typeof(defects)='integer' AND defects >= 0 AND defects <= successes),
+    PRIMARY KEY (harness, model_id, effort),
+    CHECK (successes + failures = samples)
+);
+CREATE TABLE IF NOT EXISTS kind_cell_statistics (
+    harness TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
+    effort TEXT NOT NULL,
+    domain_node_id TEXT NOT NULL REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
+    task_type TEXT NOT NULL CHECK (task_type IN ('create','change','debug','verify','review','research','write')),
+    samples INTEGER NOT NULL CHECK (typeof(samples)='integer' AND samples > 0),
+    successes INTEGER NOT NULL CHECK (typeof(successes)='integer' AND successes >= 0),
+    first_passes INTEGER NOT NULL CHECK (typeof(first_passes)='integer' AND first_passes >= 0 AND first_passes <= successes),
+    rework_rounds INTEGER NOT NULL CHECK (typeof(rework_rounds)='integer' AND rework_rounds >= 0),
+    failures INTEGER NOT NULL CHECK (typeof(failures)='integer' AND failures >= 0),
+    defects INTEGER NOT NULL DEFAULT 0 CHECK (typeof(defects)='integer' AND defects >= 0 AND defects <= successes),
+    PRIMARY KEY (harness, model_id, effort, domain_node_id, task_type),
+    CHECK (successes + failures = samples)
+);
+CREATE TABLE IF NOT EXISTS kind_statistics_buckets (
+    harness TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
+    effort TEXT NOT NULL,
+    metric TEXT NOT NULL CHECK (metric IN ('delivery_seconds','input_tokens','cached_input_tokens','output_tokens')),
+    sign INTEGER NOT NULL CHECK (typeof(sign)='integer' AND sign IN (-1,0,1)),
+    bucket INTEGER NOT NULL CHECK (typeof(bucket)='integer'),
+    count INTEGER NOT NULL CHECK (typeof(count)='integer' AND count > 0),
+    CHECK (sign != 0 OR bucket = 0),
+    CHECK (sign != -1 OR metric = 'delivery_seconds'),
+    PRIMARY KEY (harness, model_id, effort, metric, sign, bucket),
+    FOREIGN KEY (harness, model_id, effort) REFERENCES kind_statistics(harness, model_id, effort) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS kind_cell_statistics_buckets (
+    harness TEXT NOT NULL,
+    model_id TEXT NOT NULL REFERENCES models(model_id) ON DELETE RESTRICT,
+    effort TEXT NOT NULL,
+    domain_node_id TEXT NOT NULL,
+    task_type TEXT NOT NULL,
+    metric TEXT NOT NULL CHECK (metric IN ('delivery_seconds','input_tokens','cached_input_tokens','output_tokens')),
+    sign INTEGER NOT NULL CHECK (typeof(sign)='integer' AND sign IN (-1,0,1)),
+    bucket INTEGER NOT NULL CHECK (typeof(bucket)='integer'),
+    count INTEGER NOT NULL CHECK (typeof(count)='integer' AND count > 0),
+    CHECK (sign != 0 OR bucket = 0),
+    CHECK (sign != -1 OR metric = 'delivery_seconds'),
+    PRIMARY KEY (harness, model_id, effort, domain_node_id, task_type, metric, sign, bucket),
+    FOREIGN KEY (harness, model_id, effort, domain_node_id, task_type)
+        REFERENCES kind_cell_statistics(harness, model_id, effort, domain_node_id, task_type) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS buddy_infrastructure_failures (
+    harness TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    effort TEXT NOT NULL,
+    count INTEGER NOT NULL CHECK (typeof(count)='integer' AND count > 0),
+    last_at TEXT NOT NULL,
+    PRIMARY KEY (harness, provider, model, effort)
 );
 """
 FIX_SCHEMA = """
@@ -1021,11 +1336,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_expected_idx
     ON attempt_reminders(attempt_id, expected_multiple) WHERE kind = 'expected-duration';
 CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_silence_idx
     ON attempt_reminders(attempt_id, silence_started_at) WHERE kind = 'native-silence';
+
+CREATE TABLE IF NOT EXISTS issue_deliveries (
+    task_id         TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    occurrence_seq  INTEGER NOT NULL REFERENCES events(seq) ON DELETE RESTRICT,
+    observation_seq INTEGER NOT NULL REFERENCES events(seq) ON DELETE RESTRICT,
+    observed_at     TEXT NOT NULL,
+    wait_id         TEXT NOT NULL UNIQUE,
+    PRIMARY KEY (task_id, occurrence_seq)
+);
 """
-SCHEMA = "\n".join((CORE_SCHEMA, ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, CORE_SCHEMA_TAIL,
-                    EVENTS_ROUTER_CLAIMED_INDEX_DDL, MESSAGES_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
-                    HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA,
-                    CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA, FIX_SCHEMA))
+SCHEMA = "\n".join((MODEL_IDENTITY_SCHEMA, CORE_SCHEMA, ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, CORE_SCHEMA_TAIL,
+                    EVENTS_ROUTER_CLAIMED_INDEX_DDL, MESSAGES_DDL, ALLOCATION_REVOCATIONS_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
+                    HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA, DOMAIN_EVALUATION_SCHEMA, STATISTICS_SCHEMA,
+                    REMINDER_SCHEMA, FIX_SCHEMA))
 
 
 def utc_now() -> str:
@@ -1061,10 +1385,11 @@ class Database:
         self.path = self.directory / DB_FILE
         self._lock = threading.Lock()
         self._secret: bytes | None = None
-        self._connection_lock = threading.Lock()
+        self._connection_lock = threading.Condition(threading.Lock())
         self._connections: dict[tuple[int, int], sqlite3.Connection] = {}
         self._connection_files: dict[tuple[int, int], tuple[int, int]] = {}
         self._connection_depths: dict[int, int] = {}
+        self._transaction_callbacks: dict[sqlite3.Connection, tuple[list, list]] = {}
         self._file_identity: tuple[int, int] | None = None
         self._closed = False
 
@@ -1119,16 +1444,24 @@ class Database:
             yield connection
         finally:
             with self._connection_lock:
-                self._connection_depths[identity] = depth
+                if depth:
+                    self._connection_depths[identity] = depth
+                else:
+                    del self._connection_depths[identity]
                 if self._connection_files[key] != self._file_identity:
                     connection.close()
                     del self._connections[key]
                     del self._connection_files[key]
+                self._connection_lock.notify_all()
 
     def close(self) -> None:
-        """Close all surviving thread connections after the service has stopped."""
+        """Refuse new borrows and wait for all borrowed connections before closing."""
         with self._connection_lock:
             self._closed = True
+            # Request callbacks and background threads can outlive their
+            # listener/scheduler. Only connect()'s exit proves SQLite is idle.
+            while self._connection_depths:
+                self._connection_lock.wait()
             for connection in self._connections.values():
                 connection.close()
             self._connections.clear()
@@ -1140,12 +1473,29 @@ class Database:
         """One short write transaction; rolled back on any exception."""
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+            callbacks = ([], [])
+            self._transaction_callbacks[connection] = callbacks
             try:
                 yield connection
                 connection.execute("COMMIT")
             except BaseException:
                 connection.rollback()
+                del self._transaction_callbacks[connection]
+                for callback in callbacks[1]:
+                    callback()
                 raise
+            else:
+                del self._transaction_callbacks[connection]
+                for callback in callbacks[0]:
+                    callback()
+
+    def after_commit(self, connection: sqlite3.Connection, callback) -> None:
+        """Run an owned filesystem effect only after this writer commits."""
+        self._transaction_callbacks[connection][0].append(callback)
+
+    def after_rollback(self, connection: sqlite3.Connection, callback) -> None:
+        """Remove material published by a writer whose facts did not commit."""
+        self._transaction_callbacks[connection][1].append(callback)
 
     @contextmanager
     def read(self) -> Iterator[sqlite3.Connection]:
@@ -1235,14 +1585,6 @@ class Database:
         return hmac.new(self.secret, f"nonce:{nonce}".encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-
-    def control_token(self, run_id: str, owner_generation: int) -> str:
-        """Derive the Host control capability of one owner generation."""
-        message = f"{CONTROL_TOKEN_VERSION}:control:{run_id}:{owner_generation}".encode("utf-8")
-        return hmac.new(self.secret, message, hashlib.sha256).hexdigest()
-
-    def control_token_verifier(self, token: str) -> str:
-        return hmac.new(self.secret, f"control-token:{token}".encode("utf-8"), hashlib.sha256).hexdigest()
 
     def agent_token(self, run_id: str, attempt_id: str, generation: int) -> str:
         """Derive the attempt-scoped credential handed to a DSH child."""

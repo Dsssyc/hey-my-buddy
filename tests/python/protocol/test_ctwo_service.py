@@ -24,6 +24,28 @@ from hey_my_buddy.protocol.client import BoardClient
 
 
 class TestNamedContract(BoardTestCase):
+    def test_relocate_crosses_the_named_contract_and_rejects_extra_fields(self):
+        repository = self.workdir("repository")
+        subprocess.run(["git", "init", "-q", str(repository)], check=True,
+                       env=_child_environment(self.directory), capture_output=True)
+        with self.daemon():
+            client = BoardClient(self.directory, autostart=False)
+            created = client.workflow_create(cwd=str(repository), title="Relocation", goal="Track project")
+            project = client.workflow_get(macroTaskId=created["macroTaskId"])["project"]
+            moved = self.directory / "moved-repository"
+            repository.rename(moved)
+            result = client.relocate(cwd=str(moved))
+            self.assertEqual(result["project"], {"id": project["id"], "kind": "git",
+                                                 "path": str(moved), "label": "moved-repository"})
+            self.assertIn("project_relocate", client.capabilities()["operations"]["control"])
+            endpoint = self._endpoint()
+            with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as control:
+                denied = json.loads(control.project_relocate(json.dumps({"token": "wrong", "cwd": str(moved)})))
+                self.assertEqual(denied["error"]["code"], "UNAUTHORIZED")
+                rejected = json.loads(control.project_relocate(json.dumps({"token": endpoint["token"],
+                                                                           "cwd": str(moved), "projectId": "forged"})))
+                self.assertEqual(rejected["error"]["code"], "INVALID_ARGUMENT")
+
     def test_idle_waits_reuse_one_named_connection_across_timeouts(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1", "HMB_WAIT_CAPACITY": "1"}):
             client = BoardClient(self.directory, autostart=False)
@@ -32,7 +54,9 @@ class TestNamedContract(BoardTestCase):
                 for _ in range(3):
                     frame = json.dumps({"token": endpoint["token"], "after": 2**62, "timeoutMs": 50})
                     self.assertTrue(json.loads(peer.events_wait(frame))["timedOut"])
-            capacity = client.call("wait_capacity", resource="wait")
+            health=client.call("health")
+            capacity = health["waitAdmission"]
+            self.assertEqual(health["waitCapacity"],capacity["capacity"])
             self.assertEqual(capacity["admitted"], 0)
             self.assertEqual(capacity["available"], 1)
 
@@ -45,7 +69,7 @@ class TestNamedContract(BoardTestCase):
                                          {"after": 2**62, "timeoutMs": 30000})
                 deadline = time.monotonic() + 3
                 while True:
-                    capacity = client.call("wait_capacity", resource="wait")
+                    capacity = client.call("health")["waitAdmission"]
                     if capacity["admitted"] == 1:
                         break
                     self.assertLess(time.monotonic(), deadline)
@@ -57,6 +81,10 @@ class TestNamedContract(BoardTestCase):
         endpoint = _read_endpoint(self.directory)
         self.assertIsNotNone(endpoint, "the daemon must publish a private endpoint")
         return endpoint
+
+    def _capacity(self, endpoint):
+        with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as control:
+            return json.loads(control.health(json.dumps({"token":endpoint["token"]})))["waitAdmission"]
 
     def _wait_call(self, endpoint, operation: str, params: dict) -> dict:
         with self.rpc_connection(BuddyWait, name=WAIT_NAME, address=endpoint["address"]) as wait:
@@ -77,6 +105,8 @@ class TestNamedContract(BoardTestCase):
                 self.assertIn("runtimeIdentity", health)
                 self.assertTrue(hasattr(board, "execution_result"))
                 self.assertFalse(hasattr(board, "worker_claim"))
+                for retired in ("workflow_takeover", "workflow_decide", "workflow_reclaim", "console_snapshot", "selection_request", "task_retry", "task_acknowledge", "task_wait"):
+                    self.assertFalse(hasattr(board,retired),retired)
                 self.assertTrue(hasattr(board, "events_read"))
                 self.assertFalse(hasattr(board, "dispatch"), "no generic dispatch facade may exist")
                 denied = json.loads(board.task_list(json.dumps({"token": "wrong"})))
@@ -93,32 +123,35 @@ class TestNamedContract(BoardTestCase):
     def test_the_wait_route_is_a_separate_resource_with_its_own_capacity(self):
         with self.daemon(env={"HMB_WAIT_CAPACITY": "1"}):
             endpoint = self._endpoint()
-            capacity = self._wait_call(endpoint, "wait_capacity", {})
+            capacity = self._capacity(endpoint)
             self.assertEqual(capacity["capacity"], 1)
             with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
                 reply = self.submit_execution(
                     requestId="wait-route", task="do", cwd=str(self.workdir()),
-                    adapter="command", argv=[sys.executable, "-c", "import time; time.sleep(30)"],
+                    adapter="command", argv=[sys.executable, "-c", "import time\nwhile True: time.sleep(1)"],
                     expectedSeconds=60,
                 )
                 self.assertEqual(reply["task"]["state"], "queued")
                 task_id = reply["task"]["runId"]
-                # The attempt becomes `executing` only when its process reports in,
-                # in the same transaction that appends attempt.progress; waiting for
-                # that state leaves the cancellation below as the only later event of
-                # this task, so nothing else can end the scoped wait.
-                deadline = time.monotonic() + 10
-                while json.loads(board.task_get(json.dumps({"token": endpoint["token"],
-                                                           "runId": task_id})))["task"].get("attemptState") != "executing":
-                    self.assertLess(time.monotonic(), deadline)
+                # Admission can publish an executing attempt before its first
+                # progress. Read the cursor from a page containing that progress,
+                # after which only our cancellation can wake this command's wait.
+                deadline = time.monotonic() + 180
+                while True:
+                    page = json.loads(board.events_read(json.dumps({
+                        "token": endpoint["token"], "runId": task_id})))
+                    if any(event["kind"] == "attempt.progress" and event["payload"]["phase"] == "executing"
+                           for event in page["events"]):
+                        break
+                    self.assertLess(time.monotonic(), deadline, page)
                     time.sleep(0.02)
-                cursor = json.loads(board.events_read(json.dumps({"token": endpoint["token"]})))["cursor"]
+                cursor = page["cursor"]
                 # Scope the wait to this task; unrelated events cannot release it.
                 params = {"after": cursor, "runId": task_id, "timeoutMs": 10000}
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     holder = pool.submit(self._wait_call, endpoint, "events_wait", params)
                     deadline = time.monotonic() + 5
-                    while self._wait_call(endpoint, "wait_capacity", {})["admitted"] != 1:
+                    while self._capacity(endpoint)["admitted"] != 1:
                         if holder.done():
                             self.fail(f"The holder returned before admission was observed: {holder.result()}")
                         if time.monotonic() >= deadline:

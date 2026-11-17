@@ -4,6 +4,8 @@
 
 状态：已接受，0.8.0 源码候选已完成验证，待开发者通知安装，2026-09-25。本文件保留实施目标和验收条件；实际检查、失败修正、原生能力限制和安装状态以[验收记录](../acceptance/adr010/production-repairs-0.8.0.md)为准。代码基线为 `socu/buddy-core` 的 `9518b2a`，计划提交为 `9af11db`。开发者随后通知立即安装，已验证的 0.7.0 已完成日常切换；本轮新增修缮构成独立的 0.8.0 候选，其安装另行确认。
 
+2026-10-27 补注：0.8.0 已于 2026-09-25 安装（[安装记录](../acceptance/installs/0.8.0.md)）。显式 `timeoutSeconds` 到点停止执行的语义由 [ADR-022](022-expected-duration-and-graceful-stop.md) 改为预期时长；分步的整合、确认与清理由 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 合并为 `accept`、`conclude` 与 `reclaim`。
+
 目标是让使用 skill 的任意 Host 能够委派、观察、请求帮助、整合、验收和回收，并使用户所有的数据、程序维护的目录事实、模型归纳的评价各有明确写入边界。保留 Python 对 SQLite 的唯一写入权威、C-Two 命名接口、独立 Worker 子进程所有权、不可变产物和跨项目共享经验。Host 仍可亲自实现部分工作，Worker 内部 subagent 不受新增限制。
 
 0.x 阶段按单一当前契约实现，不为旧调用方式增加兼容分支。保留并递增 `CONTRACT_VERSION`；本轮建议形成新的 0.8.0 候选，schema 按实际结构变化递增。历史数据库通过一次性、可核验的离线副本准备保留，运行时不携带逐版转换链。

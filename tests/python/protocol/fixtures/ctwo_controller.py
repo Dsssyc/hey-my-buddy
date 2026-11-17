@@ -46,7 +46,7 @@ def emit(value):
     print(canonical_json(value), flush=True)
 
 
-def exchange(process, value, *, timeout=5):
+def exchange(process, value, *, timeout=180):
     """One bounded fixture-pipe exchange; this is not the SDK transport.
 
     Check the saved child while a thread performs blocking pipe I/O. The caller
@@ -119,6 +119,19 @@ def write_fact(path, value):
         os.fsync(stream.fileno())
 
 
+def read_execution_material(root):
+    materials = list((root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/execution-live.json"))
+    if not materials:
+        return None
+    try:
+        raw = materials[0].read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # The execution retires its endpoint during normal shutdown. A glob is
+        # not ownership of that file; absence is a valid status snapshot.
+        return None
+    return json.loads(raw)
+
+
 def native(root):
     """A real subprocess, with EOF as its cooperative stop boundary."""
     entries = 0
@@ -158,11 +171,11 @@ def simulated_run(module, request, *, services, **options):
     bridge.activate("simulated-native")
     process = owned_popen([sys.executable, str(SELF), "native", "--root", str(root)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8", start_new_session=True)
-    owned = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+    owned = ProcessHandle(process, log_paths={}, stop_channel="signal")
     try:
         endpoint.publish_observation(LiveObservation(ready=True, session_id="simulated-native",
             agent_status="active", supported=True, delivery_mode="cooperative-checkpoint"))
-        while not (root / "finish.request").exists():
+        while not (root / "finish.request").exists() and not options["cancelled"]():
             incoming = endpoint.consume_request(0.02)
             if incoming is None:
                 continue
@@ -190,7 +203,7 @@ def simulated_run(module, request, *, services, **options):
             process.stdout.close()
     return RunResult(identity=request.identity, harness=request.harness,
         end=RunEnd(status="error", reason_code="native-refused", message="model-free fixture"),
-        model_started=False, stop_evidence=StopEvidence(
+        model_responded=False, stop_evidence=StopEvidence(
             native=StopLayer(group_state="gone" if stopped else "unknown")))
 
 
@@ -203,7 +216,7 @@ class SimulatedExecutor(WorkerRunExecutor):
         root = Path(handle.role_run_control["privateRoot"])
         native_stop = json.loads((root / "native-stopped.json").read_text(encoding="utf-8"))
         stopped = native_stop["eofObserved"] is True and handle.shutdown_confirmed() is True
-        report = AdapterOutcome(status="failed", result={"modelStarted": False,
+        report = AdapterOutcome(status="failed", result={"modelResponded": False,
             "simulatedNativeStop": native_stop,
             "processState": {"shutdownConfirmed": stopped}}, error="model-free fixture",
             exit_code=handle.exit_code, shutdown_confirmed=stopped)
@@ -215,10 +228,51 @@ def execution(startup: Path):
     from hey_my_buddy.buddy.runtime import execution as runtime
     sys.argv = [str(SELF), "--startup", str(startup)]
     executor = SimulatedExecutor()
+    gate = Path(os.environ["HMB_C2_STARTUP_GATE_ROOT"]) if os.environ.get("HMB_C2_STARTUP_GATE_ROOT") else None
+    register = runtime.cc.register
+    credential = runtime.cc.server_credential
+
+    def registered(*args, **kwargs):
+        result = register(*args, **kwargs)
+        if gate is not None and args[0] is runtime.ExecutionLive:
+            (gate / "execution-registered").touch()
+            while not (gate / "namespace-locked").exists():
+                time.sleep(.01)
+        return result
+
+    def server_credential():
+        result = credential()
+        if gate is not None:
+            runtime.fsync_json(gate / "startup-credential.json", {
+                "address": runtime.cc.server_address(), "credential": result.to_json()})
+            if (gate / "pause-registration").exists():
+                (gate / "registration-paused").touch()
+                while not (gate / "namespace-release").exists():
+                    time.sleep(.01)
+        return result
+
     with patch.object(role_seam, "worker_executor", lambda name: executor), \
             patch.object(inline_run, "run_harness", simulated_run), \
-            patch.object(inline_run, "CTwoLiveEndpoint", OneSlowCallEndpoint):
+            patch.object(inline_run, "CTwoLiveEndpoint", OneSlowCallEndpoint), \
+            patch.object(runtime.cc, "register", side_effect=registered), \
+            patch.object(runtime.cc, "server_credential", side_effect=server_credential):
         return runtime.main()
+
+
+def namespace_lock(root):
+    import fcntl
+    release = root / "namespace-release"
+    while not (root / "execution-registered").exists():
+        if release.exists():
+            return
+        time.sleep(.01)
+    gates = list((root / "state/ipc").rglob(".gate"))
+    assert len(gates) == 1, gates
+    with gates[0].open("rb") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        (root / "namespace-locked").touch()
+        while not release.exists():
+            time.sleep(.01)
 
 
 def service(root):
@@ -246,8 +300,7 @@ def service(root):
             command = json.loads(line)
             if command["op"] == "status":
                 handle = handles[0] if handles else None
-                materials = list((root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/execution-live.json"))
-                material = json.loads(materials[0].read_text(encoding="utf-8")) if materials else None
+                material = read_execution_material(root)
                 view = (daemon.store.task_get({"runId": handle.execution_binding["taskId"]})["task"]
                         if handle else None)
                 bound = bool(view and daemon.live_registry.channel_for(view))
@@ -267,6 +320,14 @@ def service(root):
                     for request in (root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json"):
                         request.with_name("finish.request").touch(mode=0o600)
                 emit({"ok": True})
+            elif command["op"] == "submit-command":
+                work = root / "command-work"
+                work.mkdir()
+                reply = daemon.store.task_submit({"requestId": "cancel-startup", "task": "cancel before native start",
+                    "cwd": str(work), "adapter": "command", "expectedSeconds": 30,
+                    "argv": [sys.executable, "-c",
+                             f"from pathlib import Path; Path({str(root / 'command-started')!r}).touch()"]})
+                emit({"runId": reply["task"]["runId"]})
             elif command["op"] == "stop":
                 emit({"ok": True})
                 return
@@ -307,12 +368,15 @@ def service(root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("service", "execution", "native"))
+    parser.add_argument("mode", choices=("service", "execution", "native", "namespace-lock"))
     parser.add_argument("--root", type=Path)
     parser.add_argument("--startup", type=Path)
     args = parser.parse_args()
     if args.mode == "execution":
         raise SystemExit(execution(args.startup))
+    if args.mode == "namespace-lock":
+        namespace_lock(args.root)
+        return
     globals()[args.mode](args.root)
 
 

@@ -6,7 +6,7 @@ from unittest.mock import patch
 from admission import admit_execution
 from support import BoardTestCase, FakeClock, publish_result_receipt
 from blackboard.store.test_interruption_recovery import IDENTITY
-from hey_my_buddy.blackboard.tasks import interruption, reminders
+from hey_my_buddy.blackboard.tasks import interruption, reminders, messages
 from hey_my_buddy.blackboard.service.execution_scheduler import (
     ExecutionScheduler, _ExecutionObservation, _RecoveredExecution,
 )
@@ -131,13 +131,13 @@ class ReceivedReceiptTests(BoardTestCase):
         board.call("execution_result", reference)
         credential = self.receipt_path.parent / "agent-credential.json"
         publish_bytes(credential, b"private fixture")
-        native = {**IDENTITY, "pid": 456, "processGroupId": 456}
+        native = {**IDENTITY, "pid": 456}
         journal = processes.native_process_journal_path(self.receipt_path.parent, IDENTITY)
         fsync_json(journal, {"binding": {"taskId": self.run_id, "attemptId": self.attempt_id, "generation": 1},
                              "pending": [], "identities": [native]})
-        with patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_group") as kill:
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_session") as kill:
             ExecutionScheduler._force_if_required(IDENTITY)
-            kill.assert_called_once_with(IDENTITY)
+            kill.assert_called_once_with(IDENTITY, members=None)
         for observation in ("alive", "unknown"):
             with patch.object(processes, "inspect_process_identity", return_value=observation):
                 self.assertEqual(board.store.recover_executions(self.attempt_id), [])
@@ -203,7 +203,7 @@ class ReceivedReceiptTests(BoardTestCase):
         self.clock.advance(100)
         with patch.object(board.store.db, "write", side_effect=AssertionError("new reminder during finalization")):
             self.assertIsNone(reminders.collect(board.store))
-        self.assertIsNone(reminders.consume(board.store, {"runId": self.run_id, "reminderWaitId": "wait"}))
+        self.assertNotIn('reminder', messages.consume(board.store, {"runId": self.run_id, "reminderWaitId": "wait"}))
         self.assertFalse(board.client().get(runId=self.run_id)["selectedAttempt"]["reminders"]["overdue"])
 
     def test_stop_source_preserves_unknown_and_allows_immediate_wrap_up_escalation(self):

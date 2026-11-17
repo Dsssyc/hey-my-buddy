@@ -56,7 +56,7 @@ class ControllerOperationTests(unittest.TestCase):
         payload = json.loads(completed.stdout)
         self.assertEqual(payload['code'], 'INVALID_ARGUMENT')
         self.assertEqual(payload['message'], 'Unknown native controller operation')
-        self.assertIs(payload['modelStarted'], False)
+        self.assertIs(payload['modelResponded'], False)
         self.assertIs(payload['processState']['shutdownConfirmed'], True)
 
     def test_deadline_disposition_follows_the_registered_operation(self):

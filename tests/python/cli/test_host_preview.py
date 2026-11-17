@@ -25,6 +25,7 @@ import http.client
 import importlib.util
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
+from support import macro_summaries
 
 ROOT = Path(__file__).resolve().parents[3]
 PREVIEW = ROOT / "tests" / "probes" / "macro_task_console_preview.py"
@@ -109,7 +111,7 @@ class PreviewFixtureTest(unittest.TestCase):
             manifest = emit_fixtures(emitted)
             report_path = workspace / "report.json"
             result = subprocess.run(
-                [str(node), str(VITEST), "run", FRONTEND_TEST],
+                [str(node), str(VITEST), "run", FRONTEND_TEST, "--maxWorkers=1"],
                 cwd=str(CONSOLE),
                 env=child_environment({
                     "HMB_PREVIEW_FIXTURES": str(emitted),
@@ -178,7 +180,7 @@ class PreviewFixtureTest(unittest.TestCase):
         normal = outcomes["normal/console.json"]["facts"]
         configuration = normal["configuration"]
         self.assertNotIn("decisionBuddyId", configuration)
-        for key in ("routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget"):
+        for key in ("routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "modelResponseWaitSeconds"):
             self.assertIn(key, configuration)
         # The slim snapshot carries the server's board-wide pending count; the
         # full execution records stay on the paginated tasks read.
@@ -205,9 +207,6 @@ class PreviewFixtureTest(unittest.TestCase):
         workflows = {path: outcome["facts"] for path, outcome in outcomes.items()
                      if outcome["kind"] == "workflow-get" and outcome["accepted"]}
         self.assertTrue(workflows)
-        locked = {facts["buddyLocked"] for facts in workflows.values()}
-        self.assertIn(True, locked, "one micro task must record the user-locked buddy")
-        self.assertIn(False, locked, "one micro task must record a Host-supplied buddy")
         for facts in workflows.values():
             self.assertIn("hostConclusion", facts)
 
@@ -225,8 +224,9 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertTrue(failed_conclusion["failed"])
         self.assertFalse(failed_conclusion["cancelled"])
         fixture = json.loads((fixtures / failed_path).read_text(encoding="utf-8"))
-        self.assertEqual("failed", fixture["task"]["state"])
-        self.assertEqual("failed", fixture["state"])
+        self.assertEqual("concluded", fixture["task"]["state"])
+        self.assertEqual("concluded", fixture["state"])
+        self.assertEqual("failed", fixture["hostConclusion"]["executionStatus"])
         self.assertIsNone(fixture["task"]["acceptedAt"])
         self.assertTrue(any(item["kind"] == "partial-output" and item.get("partial") is True
                             and item.get("verified") is False and item.get("final") is False
@@ -262,7 +262,8 @@ class PreviewFixtureTest(unittest.TestCase):
             for event in recorded["events"]:
                 self.assertFalse({"label", "summary"} & event.keys())
                 self.assertTrue({"decision", "verdict", "state", "strategy", "note"} <= event.keys())
-        self.assertEqual("failed", rows["preview-run-b2"]["state"])
+        self.assertEqual("concluded", rows["preview-run-b2"]["state"])
+        self.assertEqual("failed", rows["preview-run-b2"]["conclusionStatus"])
         self.assertEqual("preview-run-b1", rows["preview-run-b2"]["rootLeadRunId"])
         rejected = next(span for span in timeline["spans"] if span["spanId"] == "execution:att-b9-1")
         self.assertEqual("rejected", rejected["state"])
@@ -297,9 +298,9 @@ class PreviewFixtureTest(unittest.TestCase):
             self.assertLessEqual(dispatch_turn["createdAt"], owned["createdAt"])
             self.assertLessEqual(owned["createdAt"], dispatch_turn["updatedAt"])
             self.assertLess(owned["updatedAt"], turn["createdAt"])
-            self.assertIsNone(owned["hostId"])
-            self.assertIsNone(owned["task"]["lineage"]["sourceHostId"])
-            self.assertIsNone(owned["task"]["lineage"]["currentHostId"])
+            self.assertNotIn("hostId",owned)
+            self.assertNotIn("sourceHostId",owned["task"]["lineage"])
+            self.assertNotIn("currentHostId",owned["task"]["lineage"])
             self.assertIsNone(row["parentRunId"], "Lead-owned work is an independent micro task")
             self.assertEqual(owned["runId"], row["rootRunId"])
             self.assertIsNone(owned["finalAttemptId"])
@@ -312,7 +313,8 @@ class PreviewFixtureTest(unittest.TestCase):
         wait_span = next(span for span in timeline["spans"]
                          if span["runId"] == waiting["runId"] and span["kind"] == "host")
         self.assertEqual(waiting["activeRequest"]["requestId"], wait_span["requestId"])
-        self.assertEqual(waiting["activeRequest"]["summary"], wait_span["summary"])
+        self.assertNotIn("summary", wait_span)
+        self.assertTrue(waiting["activeRequest"]["summary"])
         self.assertEqual(waiting["currentTurn"]["updatedAt"], wait_span["startAt"])
         self.assertIsNone(wait_span["endAt"])
         self.assertEqual("executing", active["state"])
@@ -359,7 +361,7 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertTrue(any(patch["complete"] for patch in patches))
         for path in workflows:
             fixture = json.loads((fixtures / path).read_text(encoding="utf-8"))
-            base = fixture["workspace"]["inputCommit"]
+            base = fixture["workspace"].get("inputCommit")
             for item in fixture["artifacts"]:
                 patch = item.get("cumulativePatch")
                 if patch:
@@ -369,6 +371,46 @@ class PreviewFixtureTest(unittest.TestCase):
         host_paths = [entry for facts in workflows.values() for entry in facts["hostPaths"]]
         self.assertTrue(any(host_paths), "the preview must record one integration with Host paths")
         self.assertTrue(any(not entry for entry in host_paths), "the preview must also keep Host paths empty")
+
+        empty = json.loads((fixtures / "normal/timeline-macro-empty.json").read_text(encoding="utf-8"))
+        self.assertEqual("empty", empty["macroTask"]["state"])
+        self.assertEqual(0, empty["macroTask"]["counts"]["roots"])
+        self.assertEqual(([], [], []), (empty["rows"], empty["spans"], empty["events"]))
+        self.assertTrue(empty["macroTask"]["goal"]["body"])
+        self.assertEqual("folder", empty["macroTask"]["project"]["kind"])
+        folder = json.loads((fixtures / "normal/timeline-macro-folder.json").read_text(encoding="utf-8"))
+        self.assertEqual("folder", folder["macroTask"]["project"]["kind"])
+        self.assertEqual({"preview-run-none-read", "preview-run-none-write"},
+                         {row["runId"] for row in folder["rows"]})
+        for access in ("read", "write"):
+            run_id = f"preview-run-none-{access}"
+            workflow = json.loads((fixtures / f"normal/workflow-{run_id}.json").read_text(encoding="utf-8"))
+            self.assertEqual(("none", access, "folder"),
+                             (workflow["checkout"], workflow["access"], workflow["project"]["kind"]))
+            self.assertEqual("none", workflow["workspace"]["kind"])
+            result = next(item for item in workflow["artifacts"] if item["kind"] == "result")
+            self.assertEqual("result-reference", result["contentForm"])
+            self.assertEqual(f"<state>/attempts/{run_id}/att-none-{access}-1/result-receipt.json",
+                             result["resultFile"]["path"])
+            self.assertFalse({"outputCommit", "diffPath", "cumulativePatch"} & set(result))
+            self.assertEqual(access == "write", workflow.get("unsealedChanges", False))
+            self.assertEqual("delivered", workflow["state"])
+            self.assertEqual([], workflow["integrations"])
+            self.assertNotIn("hostId", workflow)
+            self.assertNotIn("ownerGeneration", workflow)
+            self.assertNotIn("buddyLocked", workflow)
+            self.assertNotIn("revision", workflow)
+        for source, strategy in (("commits", "three-way"), ("patch", "three-way-adjusted")):
+            workflow = json.loads((fixtures / f"normal/workflow-preview-run-git-{source}.json").read_text(encoding="utf-8"))
+            delivered = next(item for item in workflow["artifacts"] if item["kind"] == "output")
+            self.assertEqual(source, delivered["integrationSource"]["kind"])
+            self.assertTrue(delivered["sealedEvidence"]["snapshotSha256"])
+            integration = workflow["integrations"][0]
+            self.assertEqual(strategy, integration["strategy"])
+            verification = integration["verification"]
+            self.assertEqual(2, verification["version"])
+            self.assertEqual(source == "patch", bool(verification["adjustments"]))
+            self.assertEqual(source == "patch", bool(verification["conflictingPaths"]))
 
 
 class SessionFixtureTest(unittest.TestCase):
@@ -557,11 +599,13 @@ class PreviewDeletionTest(unittest.TestCase):
                 self.assertFalse(thread.is_alive(), "the private preview thread must stop")
 
     def call(self, server, path: str, operation: str | None = None, params: dict | None = None,
-             *, csrf: str | None = None) -> tuple[int, dict]:
+             *, csrf: str | None = None, case: str | None = None) -> tuple[int, dict]:
         connection = http.client.HTTPConnection(*server.server_address, timeout=10)
         headers = {"Origin": f"http://127.0.0.1:{server.server_address[1]}",
                    "X-Hey-My-Buddy-CSRF": self.preview.SYNTHETIC_CSRF if csrf is None else csrf,
                    "Content-Type": "application/json"}
+        if case is not None:
+            headers["X-HMB-Preview-Case"] = case
         body = json.dumps({"operation": operation, "params": params or {}}) if operation else None
         try:
             connection.request("POST" if operation else "GET", path, body=body, headers=headers)
@@ -572,24 +616,192 @@ class PreviewDeletionTest(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_refused_body_follows_the_reply_on_a_reused_connection(self) -> None:
+        preview = self.preview
+        accepted = json.dumps({"operation": "macro_task_deletion_preview",
+                               "params": {"macroTaskId": preview.MACRO_C}}).encode()
+        with self.server() as server:
+            host, port = server.server_address
+            for method, status, code in (("POST", 403, "FORBIDDEN"),
+                                         ("PUT", 405, "METHOD_NOT_FOUND"), ("DELETE", 405, "METHOD_NOT_FOUND")):
+                with self.subTest(method=method), socket.create_connection((host, port), timeout=10) as raw:
+                    raw.sendall((f"POST /api/command HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                                 f"X-Hey-My-Buddy-CSRF: {preview.SYNTHETIC_CSRF}\r\n"
+                                 f"Content-Length: {len(accepted)}\r\n\r\n").encode() + accepted)
+                    response = http.client.HTTPResponse(raw)
+                    response.begin()
+                    self.assertEqual(response.status, 200, response.read())
+                    raw.sendall((f"{method} /api/command HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                                 f"Content-Length: {preview.MAX_BODY_BYTES}\r\n\r\n").encode())
+                    response = http.client.HTTPResponse(raw)
+                    response.begin()
+                    self.assertEqual(response.status, status)
+                    self.assertEqual(response.getheader("Connection"), "close")
+                    self.assertEqual(preview.PREVIEW_VALUE, response.getheader(preview.PREVIEW_HEADER))
+                    self.assertEqual(json.loads(response.read())["error"]["code"], code)
+                    raw.sendall(b"x" * preview.MAX_BODY_BYTES)
+                    self.assertEqual(raw.recv(1), b"")
+
+    def test_case_header_isolates_controls_and_default_state(self) -> None:
+        preview = self.preview
+        group = preview.MACRO_B
+        path = "/api/macro-tasks/" + group + "/timeline"
+        with self.server() as server:
+            initial = self.call(server, path)[1]
+            self.assertEqual(initial, self.call(server, path, case="first")[1])
+            params = {"macroTaskId": group, "commandId": "shared-command"}
+            self.assertEqual(self.call(server, "/api/command", "macro_task_pause", params,
+                                       case="first")[1]["result"],
+                             {"macroTaskId": group, "duplicate": False})
+            self.assertIsNotNone(self.call(server, path, case="first")[1]["macroTask"]["paused"])
+            self.assertIsNone(self.call(server, path, case="second")[1]["macroTask"]["paused"])
+            self.assertIsNone(self.call(server, path)[1]["macroTask"]["paused"])
+            duplicate = self.call(server, "/api/command", "macro_task_pause", params,
+                                  case="first")[1]["result"]
+            self.assertEqual(duplicate, {"macroTaskId": group, "duplicate": True})
+            self.assertEqual(self.call(server, "/api/command", "macro_task_end",
+                                       {"macroTaskId": group, "commandId": "end-first"},
+                                       case="first")[1]["result"]["duplicate"], False)
+            ended = self.call(server, path, case="first")[1]
+            self.assertLess(ended["macroTask"]["counts"]["unfinished"],
+                            initial["macroTask"]["counts"]["unfinished"])
+            self.assertEqual(self.call(server, path, case="second")[1], initial)
+            self.assertEqual(self.call(server, path)[1], initial)
+            self.assertEqual(self.call(server, "/api/command", "macro_task_pause", params,
+                                       case="second")[1]["result"]["duplicate"], False)
+            self.assertEqual(self.call(server, "/api/command", "macro_task_pause", params)[1]
+                             ["result"]["duplicate"], False)
+
+    def test_work_control_replies_match_the_current_service_shapes_and_replay(self) -> None:
+        preview = self.preview
+        with self.server() as server:
+            before = self.call(server, "/api/macro-tasks")[1]
+            for action in ("pause", "resume"):
+                for group in (preview.MACRO_A, preview.STANDALONE_GROUP):
+                    with self.subTest(action=action, group=group):
+                        operation = "macro_task_" + action
+                        params = {"macroTaskId": group, "commandId": action + group}
+                        status, envelope = self.call(server, "/api/command", operation, params)
+                        self.assertEqual(status, 200, envelope)
+                        expected = {"macroTaskId": group, "duplicate": False}
+                        self.assertEqual(envelope["result"], expected)
+                        group_view = self.call(server, "/api/macro-tasks/" + group + "/timeline")[1]["macroTask"]
+                        if action == "pause":
+                            self.assertEqual(group_view["paused"]["pausedAt"], preview.OBSERVED_AT)
+                        else:
+                            self.assertIsNone(group_view["paused"])
+                        replay = self.call(server, "/api/command", operation, params)
+                        self.assertEqual(replay, (200, {"ok": True, "result": {**expected, "duplicate": True}}))
+                        changed = self.call(server, "/api/command", operation, {**params, "note": "different"})
+                        self.assertEqual((changed[0], changed[1]["error"]["code"]), (409, "CONFLICT"))
+            status, envelope = self.call(server, "/api/command", "macro_task_end",
+                                        {"macroTaskId": preview.MACRO_C, "commandId": "end-settled"})
+            self.assertEqual(status, 200, envelope)
+            reply = envelope["result"]
+            self.assertEqual(reply, {"macroTaskId": preview.MACRO_C, "duplicate": False})
+            settled = self.call(server, "/api/macro-tasks/" + preview.MACRO_C + "/timeline")[1]
+            self.assertEqual(settled["macroTask"]["counts"]["unfinished"], 0)
+            for row in settled["rows"]:
+                if row["runId"] in {"preview-run-d2", "preview-run-d3", "preview-run-d5-h1", "preview-run-d5-h2"}:
+                    self.assertEqual(row["state"], "concluded")
+                    task = self.call(server, "/api/tasks/" + row["runId"])[1]
+                    self.assertEqual(task["workflow"]["state"], "concluded")
+                    self.assertIn(task["state"], ("completed", "cancelled", "failed"))
+                    work = self.call(server, "/api/command", "workflow_get", {"runId": row["runId"]})[1]["result"]
+                    self.assertEqual(work["hostConclusion"]["reason"], {"code": "macro-task-ended", "params": {}})
+            replay = self.call(server, "/api/command", "macro_task_end",
+                               {"macroTaskId": preview.MACRO_C, "commandId": "end-settled"})
+            self.assertEqual(replay, (200, {"ok": True, "result": {**reply, "duplicate": True}}))
+            status, envelope = self.call(server, "/api/command", "macro_task_end",
+                                        {"macroTaskId": preview.MACRO_A, "commandId": "end-unconfirmed"})
+            self.assertEqual(status, 200, envelope)
+            self.assertEqual(envelope["result"], {"macroTaskId": preview.MACRO_A, "duplicate": False})
+            unconfirmed = self.call(server, "/api/macro-tasks/" + preview.MACRO_A + "/timeline")[1]
+            self.assertGreater(unconfirmed["macroTask"]["counts"]["unfinished"], 0)
+            self.assertTrue(any(row["state"] not in ("accepted", "concluded", "delivered")
+                                and not row["shutdownConfirmed"] for row in unconfirmed["rows"]))
+            status, envelope = self.call(server, "/api/command", "macro_task_end",
+                                        {"macroTaskId": preview.MACRO_B, "commandId": "end-mixed"})
+            self.assertEqual(status, 200, envelope)
+            self.assertEqual(envelope["result"], {"macroTaskId": preview.MACRO_B, "duplicate": False})
+            mixed = {row["runId"]: row for row in
+                     self.call(server, "/api/macro-tasks/" + preview.MACRO_B + "/timeline")[1]["rows"]}
+            for run_id in ("preview-run-b3", "preview-run-b4", "preview-run-b5"):
+                self.assertEqual(mixed[run_id]["state"], "concluded")
+                view = self.call(server, "/api/command", "workflow_get", {"runId": run_id})[1]["result"]
+                self.assertEqual(view["hostConclusion"]["reason"]["code"], "macro-task-ended")
+                self.assertEqual(view["hostConclusion"]["executionStatus"],
+                                 "failed" if preview.FIXTURES["runs"][run_id]["state"] == "failed" else "cancelled")
+            self.assertEqual(mixed["preview-run-b6"]["state"], "delivered")
+            self.assertNotEqual(mixed["preview-run-b7"]["state"], "concluded")
+            self.assertNotEqual(mixed["preview-run-b8"]["state"], "concluded")
+            replay = self.call(server, "/api/command", "macro_task_end",
+                               {"macroTaskId": preview.MACRO_B, "commandId": "end-mixed"})
+            self.assertEqual(replay, (200, {"ok": True, "result": {**envelope["result"], "duplicate": True}}))
+            second = self.call(server, "/api/command", "macro_task_end",
+                               {"macroTaskId": preview.MACRO_B, "commandId": "end-again"})
+            self.assertEqual(second[0], 200)
+            self.assertFalse(second[1]["result"]["duplicate"])
+            after = self.call(server, "/api/macro-tasks")[1]
+            for group in after["groups"]:
+                for item in group["macroTasks"]:
+                    self.assertIn("paused", item)
+                    self.assertIsNone(item["paused"])
+                    self.assertEqual(item["counts"]["unfinished"],
+                                     sum(row["state"] not in ("accepted", "concluded", "delivered")
+                                         for row in self.call(server, "/api/macro-tasks/" + item["macroTaskId"] + "/timeline")[1]["rows"])
+                                     if item["macroTaskId"] in preview.FIXTURES["groups"] else 0)
+                    self.assertTrue({"stoppableRoots", "stoppableHelpers", "awaitingHost"}.isdisjoint(item["counts"]))
+        # Receipts belong to their one synthetic server, independently of another instance.
+        with self.server() as server:
+            status, envelope = self.call(server, "/api/command", "macro_task_pause",
+                                        {"macroTaskId": preview.MACRO_A, "commandId": "pause" + preview.MACRO_A})
+            self.assertEqual(status, 200, envelope)
+            self.assertFalse(envelope["result"]["duplicate"])
+
+    def test_work_controls_validate_inputs_and_discard_receipts_with_the_deleted_unit(self) -> None:
+        preview = self.preview
+        with self.server() as server:
+            for operation in ("macro_task_pause", "macro_task_resume", "macro_task_end"):
+                valid = {"macroTaskId": preview.MACRO_C, "commandId": operation}
+                for changes in ({"macroTaskId": "invalid"}, {"commandId": ""}, {"commandId": "x" * 129},
+                                {"note": 1}, {"note": "字" * 3334}, {"nonsense": True}):
+                    with self.subTest(operation=operation, changes=list(changes)):
+                        status, envelope = self.call(server, "/api/command", operation, {**valid, **changes})
+                        self.assertEqual((status, envelope["error"]["code"]), (400, "INVALID_ARGUMENT"))
+                missing = self.call(server, "/api/command", operation, {**valid, "macroTaskId": "macro-missing"})
+                self.assertEqual((missing[0], missing[1]["error"]["code"]), (404, "NOT_FOUND"))
+                status, envelope = self.call(server, "/api/command", operation, {**valid, "note": "字" * 3333})
+                self.assertEqual(status, 200, envelope)
+            reused = self.call(server, "/api/command", "macro_task_resume",
+                               {"macroTaskId": preview.MACRO_C, "commandId": "macro_task_pause", "note": "字" * 3333})
+            self.assertEqual((reused[0], reused[1]["error"]["code"]), (409, "CONFLICT"))
+            status, envelope = self.call(server, "/api/command", "macro_task_delete",
+                                        {"macroTaskId": preview.MACRO_C, "microTaskCount": 7, "confirm": True})
+            self.assertEqual(status, 200, envelope)
+            deleted = self.call(server, "/api/command", "macro_task_pause",
+                                {"macroTaskId": preview.MACRO_C, "commandId": "macro_task_pause", "note": "字" * 3333})
+            self.assertEqual((deleted[0], deleted[1]["error"]["code"]), (404, "NOT_FOUND"))
+
     def test_macro_task_list_sort_matches_requested_order(self) -> None:
         preview = self.preview
-        expected = {
-            "activity-desc": [preview.MACRO_B, preview.MACRO_A, preview.STANDALONE_GROUP, preview.MACRO_C],
-            "activity-asc": [preview.MACRO_C, preview.STANDALONE_GROUP, preview.MACRO_A, preview.MACRO_B],
-            "created-desc": [preview.MACRO_A, preview.STANDALONE_GROUP, preview.MACRO_B, preview.MACRO_C],
-            "created-asc": [preview.MACRO_C, preview.MACRO_B, preview.STANDALONE_GROUP, preview.MACRO_A],
-        }
         with self.server() as server:
             status, default = self.call(server, "/api/macro-tasks")
             self.assertEqual(200, status)
-            self.assertEqual(expected["activity-desc"], [row["macroTaskId"] for row in default["macroTasks"]])
-            for sort, order in expected.items():
+            self.assertEqual({"firstLimit": 5, "groupLimit": 20}, default["defaults"])
+            self.assertEqual(default, self.call(server, "/api/macro-tasks?sort=activity-desc")[1])
+            self.assertTrue({preview.MACRO_EMPTY, preview.MACRO_FOLDER, preview.MACRO_DELIVERY} <=
+                            {row["macroTaskId"] for row in macro_summaries(default)})
+            for sort in ("activity-desc", "activity-asc", "created-desc", "created-asc"):
                 with self.subTest(sort=sort):
                     status, result = self.call(server, f"/api/macro-tasks?sort={sort}")
                     self.assertEqual(200, status)
-                    self.assertEqual(order, [row["macroTaskId"] for row in result["macroTasks"]])
                     self.assertEqual(default["totals"], result["totals"])
+                    field = "lastActivitySeq" if sort.startswith("activity") else "createdAt"
+                    for group in result["groups"]:
+                        values = [(row[field], row["macroTaskId"]) for row in group["macroTasks"]]
+                        self.assertEqual(sorted(values, reverse=sort.endswith("desc")), values)
+                        self.assertLessEqual(len(values), result["defaults"]["firstLimit"])
             for sort in ("random", "", "created-desc&sort=activity-asc"):
                 status, result = self.call(server, f"/api/macro-tasks?sort={sort}")
                 self.assertEqual((400, "INVALID_ARGUMENT"), (status, result["error"]["code"]))
@@ -659,7 +871,7 @@ class PreviewDeletionTest(unittest.TestCase):
                     self.assertEqual("none", untitled["titleSource"])
                 elif group == self.preview.MACRO_C:
                     self.assertEqual(0, preview["blockerTotal"])
-                    self.assertEqual(1, preview["unconcludedFailureCount"])
+                    self.assertEqual(4, preview["unconcludedFailureCount"])
                     self.assertGreater(scope["artifacts"]["count"], 0)
                     self.assertEqual(16384, scope["artifacts"]["bytes"])
                     self.assertIsNone(scope["sessions"]["bytes"])
@@ -668,7 +880,7 @@ class PreviewDeletionTest(unittest.TestCase):
     def test_deletion_confirmation_and_existing_safety_boundary(self) -> None:
         with self.server() as server:
             target = self.preview.MACRO_C
-            confirmed = {"macroTaskId": target, "microTaskCount": 2, "confirm": True}
+            confirmed = {"macroTaskId": target, "microTaskCount": 7, "confirm": True}
             before = self.call(server, "/api/macro-tasks")
             for patch in ({"confirm": False}, {"confirm": 1}, {"confirm": "true"},
                           {"microTaskCount": True}, {"microTaskCount": -1}, {"microTaskCount": 1.5},
@@ -698,21 +910,20 @@ class PreviewDeletionTest(unittest.TestCase):
             target = self.preview.MACRO_C
             _, before = self.call(server, "/api/macro-tasks")
             _, snapshot_before = self.call(server, "/api/console")
-            confirmed = {"macroTaskId": target, "microTaskCount": 2, "confirm": True}
+            confirmed = {"macroTaskId": target, "microTaskCount": 7, "confirm": True}
             status, response = self.call(server, "/api/command", "macro_task_delete", confirmed)
             self.assertEqual(200, status, response)
             receipt = response["result"]
-            self.assertEqual({"deletionId", "macroTaskId", "microTaskCount", "state", "deletedAt", "duplicate", "skipped"}, set(receipt))
+            self.assertEqual({"deletionId", "macroTaskId", "microTaskCount", "state", "deletedAt", "duplicate"}, set(receipt))
             self.assertEqual("deleted", receipt["state"])
             self.assertFalse(receipt["duplicate"])
-            self.assertEqual([], receipt["skipped"])
             _, after = self.call(server, "/api/macro-tasks")
-            self.assertNotIn(target, [row["macroTaskId"] for row in after["macroTasks"]])
+            self.assertNotIn(target, [row["macroTaskId"] for row in macro_summaries(after)])
             self.assertEqual(before["totals"]["all"] - 1, after["totals"]["all"])
             self.assertEqual(before["cursor"] + 1, after["cursor"])
             _, snapshot_after = self.call(server, "/api/console")
             self.assertEqual(snapshot_before["eventCursor"] + 1, snapshot_after["eventCursor"])
-            self.assertEqual(snapshot_before["tasks"], snapshot_after["tasks"])
+            self.assertEqual(snapshot_before["tasks"]["pendingCount"] - 2, snapshot_after["tasks"]["pendingCount"])
             for run_id in ("preview-run-d1", "preview-run-d2"):
                 self.assertEqual(404, self.call(server, f"/api/tasks/{run_id}")[0])
                 for operation in ("workflow_get", "message_list"):
@@ -732,7 +943,7 @@ class PreviewDeletionTest(unittest.TestCase):
             for operation in ("macro_task_deletion_preview", "macro_task_delete"):
                 params = {"macroTaskId": self.preview.MACRO_C}
                 if operation == "macro_task_delete":
-                    params.update(microTaskCount=2, confirm=True)
+                    params.update(microTaskCount=7, confirm=True)
                 status, response = self.call(server, "/api/command", operation, params)
                 self.assertEqual((503, "SERVICE_UNAVAILABLE"), (status, response["error"]["code"]))
             self.assertEqual(before, self.call(server, "/api/macro-tasks"))

@@ -1,9 +1,14 @@
+import { createElement, type ReactNode } from "react";
+import { render, cleanup } from "@testing-library/react";
+import { afterEach } from "vitest";
+
+function textOf(message: ReactNode) { return render(createElement("div", null, message)).container.textContent!; }
+afterEach(cleanup);
 import { describe, expect, it } from "vitest";
 import {
   makeDraft,
   publication,
   setConcurrencyLimit,
-  setModelServiceNote as setNote,
   setPreference,
 } from "./draft";
 import {
@@ -23,7 +28,7 @@ import type { Buddy, Snapshot } from "./types";
 
 const worker: Buddy = { effortRank: null,
   buddyId: "dsh:deepseek-official:deepseek-flash:off",
-  label: "flash · off",
+  alias: null,
   harness: "dsh",
   provider: "deepseek-official",
   model: "deepseek-flash",
@@ -57,11 +62,11 @@ function snapshot(buddies: Buddy[] = [worker], extra: Partial<Snapshot> = {}): S
     csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: [worker.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [worker.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
     preferences: [],
 
-    modelServiceNotes: [],
+    models: [], modelCorrespondences: [],
     evidence: [],
     decisions: [],
 
@@ -79,8 +84,8 @@ describe("decision capability", () => {
     expect(isFastRouterCandidate(worker)).toBe(false);
     expect(isDecisionCandidate(worker)).toBe(true);
     expect(fastRouterCandidates([fast, { ...fast, enabled: false }, { ...fast, available: false }])).toHaveLength(1);
-    expect(routerRefusal(fast, "review")).toContain("所属 Harness 尚不具备本地只读路由资格");
-    expect(routerRefusal(worker, "fast")).toContain("所属 Harness 尚不支持无工具路由调用");
+    expect(routerRefusal(fast, "review")).toContain("所属 harness 尚不具备本地只读路由资格");
+    expect(routerRefusal(worker, "fast")).toContain("所属 harness 尚不支持无工具路由调用");
     const baseline = makeDraft(snapshot([worker, fast]));
     expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, routerBuddyIds: [fast.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast" } })).toEqual([]);
     expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, defaultRoutingMode: "fast" } })).toEqual([]);
@@ -113,9 +118,9 @@ describe("decision capability", () => {
 
   it("explains why an effort's tag menu cannot make it the Router", () => {
     expect(routerRefusal(worker)).toBeNull();
-    expect(routerRefusal(coder)).toContain("所属 Harness 尚不具备本地只读路由资格");
+    expect(routerRefusal(coder)).toContain("所属 harness 尚不具备本地只读路由资格");
     // The capability is reported first: it is the one reason the user cannot fix.
-    expect(routerRefusal({ ...coder, enabled: false })).toContain("所属 Harness 尚不具备本地只读路由资格");
+    expect(routerRefusal({ ...coder, enabled: false })).toContain("所属 harness 尚不具备本地只读路由资格");
     expect(routerRefusal({ ...worker, available: false })).toContain("不可用");
     expect(routerRefusal(disabled)).toContain("未启用");
   });
@@ -167,31 +172,14 @@ describe("blocking new changes", () => {
     const issues = blockingIssues(baseline, draft);
     expect(issues).toHaveLength(1);
     expect(issues[0].buddyId).toBe(retired.buddyId);
-    expect(issues[0].message).toContain("无法启用");
+    expect(textOf(issues[0].message)).toContain("无法启用");
   });
 
-  it("allows disabling an unavailable buddy and editing its model service note", () => {
-    const enabledRetired = { ...retired, enabled: true };
-    const baseline = makeDraft(snapshot([worker, enabledRetired], {
-      preferences: [{ buddyId: retired.buddyId, mode: "pin", note: "以前固定" }],
-    }));
-    let draft = {
-      ...baseline,
-      buddies: baseline.buddies.map(p => p.buddyId === retired.buddyId ? { ...p, enabled: false } : p),
-    };
-    draft = setNote(draft, retired, "保留经验");
-    expect(blockingIssues(baseline, draft)).toEqual([]);
-    const patch = publication(baseline, draft, "c");
-    expect(patch.buddySettings).toEqual([{ buddyId: retired.buddyId, enabled: false }]);
-    expect(patch.modelServiceNoteChanges).toEqual([
-      { harness: "dsh", provider: "deepseek-official", model: "retired-model", text: "保留经验" },
-    ]);
-  });
 
   it("blocks a new pin for an unavailable buddy but allows prefer or exclude", () => {
     const baseline = makeDraft(snapshot([worker, retired]));
     const pinned = setPreference(baseline, retired.buddyId, "pin");
-    expect(blockingIssues(baseline, pinned)[0].message).toContain("无法固定");
+    expect(textOf(blockingIssues(baseline, pinned)[0].message)).toContain("无法固定");
     expect(blockingIssues(baseline, setPreference(baseline, retired.buddyId, "prefer"))).toEqual([]);
     expect(blockingIssues(baseline, setPreference(baseline, retired.buddyId, "exclude"))).toEqual([]);
   });
@@ -199,11 +187,11 @@ describe("blocking new changes", () => {
   it("blocks a new pin for an available but disabled buddy, matching the board", () => {
     const baseline = makeDraft(snapshot([worker, disabled]));
     const pinned = setPreference(baseline, disabled.buddyId, "pin");
-    expect(blockingIssues(baseline, pinned)[0].message).toContain("停用状态");
+    expect(textOf(blockingIssues(baseline, pinned)[0].message)).toContain("已停用");
     // An existing pin on a disabled buddy is attention, never a blocker.
     const stale = { ...baseline, preferences: [{ buddyId: disabled.buddyId, mode: "pin" as const, note: "以前固定" }] };
     expect(blockingIssues(stale, stale)).toEqual([]);
-    expect(attentionIssues(stale)[0].message).toContain("停用状态");
+    expect(textOf(attentionIssues(stale)[0].message)).toContain("已停用");
   });
 
   it("allows a reason-only edit of an existing unavailable pin", () => {
@@ -219,7 +207,7 @@ describe("blocking new changes", () => {
     ]);
     // The same edit from prefer into pin is a transition and stays blocked.
     const soft = setPreference(baseline, retired.buddyId, "prefer", "旧依据");
-    expect(blockingIssues(soft, setPreference(soft, retired.buddyId, "pin", "旧依据"))[0].message)
+    expect(textOf(blockingIssues(soft, setPreference(soft, retired.buddyId, "pin", "旧依据"))[0].message))
       .toContain("无法固定");
   });
 
@@ -237,13 +225,13 @@ describe("blocking new changes", () => {
       ...baseline,
       configuration: { ...baseline.configuration!, routerBuddyIds: [] },
     })).toEqual([]);
-    expect(blockingIssues(baseline, select("unknown"))[0].message).toContain("已不在当前目录中");
+    expect(textOf(blockingIssues(baseline, select("unknown"))[0].message)).toContain("已不在当前目录中");
   });
 
   it("saves review mode when the first item is fast-only and the next item supports review", () => {
     const first = { ...coder, capabilities: ["routing:fast"] };
-    const baseline = makeDraft(snapshot([first, worker], { configuration: { routerBuddyIds: [first.buddyId, worker.buddyId], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "fast", routingBudget: "standard",
+    const baseline = makeDraft(snapshot([first, worker], { configuration: { explorationEvery: 5, routerBuddyIds: [first.buddyId, worker.buddyId], routerRetryIntervalSeconds: 600,
+      defaultRoutingMode: "fast", modelResponseWaitSeconds: 60, profileBuddyId: null,
     } }));
     const changed = { ...baseline, configuration: { ...baseline.configuration!, defaultRoutingMode: "review" as const } };
     expect(blockingIssues(baseline, changed)).toEqual([]);
@@ -252,22 +240,6 @@ describe("blocking new changes", () => {
 });
 
 describe("stale settings needing attention", () => {
-  it("reports a stale Router with its resolving action without blocking an unrelated note", () => {
-    const baseline = makeDraft(snapshot([worker, retired], {
-      configuration: { routerBuddyIds: [retired.buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    }));
-    const attention = decisionAttention(baseline)!;
-    expect(attention.router).toBe(true);
-    expect(attention.message).toContain("设为 Router");
-    expect(blockingIssues(baseline, baseline)).toEqual([]);
-    const withNote = setNote(baseline, worker, "只改备注");
-    expect(blockingIssues(baseline, withNote)).toEqual([]);
-    const patch = publication(baseline, withNote, "c");
-    expect(patch).not.toHaveProperty("configuration");
-    expect(patch.modelServiceNoteChanges).toEqual([
-      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "只改备注" },
-    ]);
-  });
 
   it("reports a stale buddy pin while leaving other patches untouched", () => {
     const baseline = makeDraft(snapshot([worker, retired], {
@@ -276,8 +248,8 @@ describe("stale settings needing attention", () => {
     const issues = attentionIssues(baseline);
     expect(issues).toHaveLength(1);
     expect(issues[0].buddyId).toBe(retired.buddyId);
-    expect(issues[0].message).toContain("固定选择");
-    expect(issues[0].message).toContain("不设");
+    expect(textOf(issues[0].message)).toContain("固定选择");
+    expect(textOf(issues[0].message)).toContain("不设");
     expect(blockingIssues(baseline, baseline)).toEqual([]);
   });
 
@@ -289,9 +261,9 @@ describe("stale settings needing attention", () => {
 
   it("treats a missing decision buddy as needing attention, not as an error", () => {
     const baseline = makeDraft(snapshot([worker], {
-      configuration: { routerBuddyIds: ["gone:model:off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { explorationEvery: 5, routerBuddyIds: ["gone:model:off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     }));
-    expect(decisionAttention(baseline)?.message).toContain("已不在目录中");
+    expect(textOf(decisionAttention(baseline)?.message)).toContain("已不在目录中");
     expect(blockingIssues(baseline, baseline)).toEqual([]);
   });
 });
@@ -306,7 +278,7 @@ describe("the Router retry interval", () => {
       };
       const issues = blockingIssues(baseline, invalid);
       expect(issues).toHaveLength(1);
-      expect(issues[0].message).toContain("1–2147483647");
+      expect(textOf(issues[0].message)).toContain("1–2147483647");
     }
     const changed = {
       ...baseline,
@@ -327,7 +299,8 @@ describe("model concurrency limits", () => {
       };
       const issues = blockingIssues(baseline, invalid);
       expect(issues).toHaveLength(1);
-      expect(issues[0].message).toContain("正整数");
+      expect(textOf(issues[0].message)).toBe("deepseek-flash 并发上限须为正整数；请修改。");
+      expect(issues[0].label).toBe(worker.model);
       expect(issues[0].buddyId).toBe(worker.buddyId);
     }
     // A limit edit never depends on availability: the retired buddy's

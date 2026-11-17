@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate schema-30 upgrade-base stock using the frozen installed base source.
+"""Generate schema-30 upgrade-floor stock using the frozen released floor source.
 
 No product installation, daemon, native harness or model is started. The base
 named service operations and current store writers run in process; native
@@ -26,15 +26,20 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "4a9fce3e11c48c55975f9b1251c0a8f03a31f707"
-BASE_VERSION = "0.54.0"
-BASE_SCHEMA = 30
+FLOOR_COMMIT = "4de1dd9478980e924a4a86b2c50aaca33e33b79d"
+FLOOR_VERSION = "0.54.1"
+FLOOR_SCHEMA = 30
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
+SCHEMA33_WRITER_COMMIT = "e3459d8a3b03c06d2af192382a788e051ced9a64"
+SCHEMA36_STATISTICS_COMMIT = "de833698f8a59e6ff0cba6b01c4a98ee8bd20594"
+SCHEMA36_STATISTICS_PATH = "src/hey_my_buddy/blackboard/routing/statistics.py"
+SCHEMA36_MAINTENANCE_PATH = "src/hey_my_buddy/blackboard/routing/maintenance_data.py"
 AT = "2026-01-01T00:00:00.000Z"
 PROFILES = ["codex:openai:fixture-alpha:high", "codex:openai:fixture-beta:high"]
 THIRD_CANDIDATE = "codex:openai:fixture-gamma:high"
+FIXTURE_ROOT_TOKEN = "__hmb_fixture_root_6e21f754c8724c12a88250e88a0dd503__"
 
 
 def json_text(value):
@@ -71,7 +76,7 @@ def generate(args):
     # Frozen writers include source paths in IDs, refs and Git commit messages.
     # Generate at one private canonical path, then retain the whole work tree
     # at the caller's fresh destination. Each run still starts from empty stock.
-    work = root / "tmp" / ".upgrade-fixture-generation-active"
+    work = retained.parent / ".upgrade-fixture-generation-active"
     work.mkdir(exist_ok=False)
     try:
         generate_in_canonical_slot(args, root, work)
@@ -86,7 +91,7 @@ def generate_in_canonical_slot(args, root, work):
     source.mkdir()
     archive = work / "base.tar"
     with archive.open("wb") as stream:
-        run(["git", "archive", BASE], cwd=root, stdout=stream)
+        run(["git", "archive", FLOOR_COMMIT], cwd=root, stdout=stream)
     with tarfile.open(archive) as stream:
         stream.extractall(source, filter="data")
     env = private_environment(work)
@@ -113,7 +118,102 @@ def generate_in_canonical_slot(args, root, work):
     interpreter = [str(args.python.absolute())] if args.python else ["uv", "run", "--no-sync", "--project", str(source), "python"]
     run([*interpreter, str(Path(__file__).resolve()),
          "--populate", "--work-dir", str(work), "--output-dir", str(args.output_dir.resolve()),
-         *(["--python", str(args.python.absolute())] if args.python else [])], cwd=root, env=env)
+         *(["--python", str(args.python.absolute())] if args.python else []),
+         *(["--cleanup-stock-for", str(args.cleanup_stock_for.resolve())] if args.cleanup_stock_for else []),
+         *(["--reservation-stock-for", str(args.reservation_stock_for.resolve())] if args.reservation_stock_for else []),
+         *(["--delivered-stock-for", str(args.delivered_stock_for.resolve())] if args.delivered_stock_for else []),
+         *(["--workspace-growth-stock-for", str(args.workspace_growth_stock_for.resolve())]
+           if args.workspace_growth_stock_for else [])], cwd=root, env=env)
+    if args.workspace_growth_stock_for:
+        # The released writer has finished and its base export is closed. Run
+        # only the three frozen historical steps in this private generated board.
+        from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33
+        with sqlite3.connect(work / "state/board.sqlite3") as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=OFF")
+            for step in (schema_30_31.upgrade, schema_31_32.upgrade, schema_32_33.upgrade):
+                step(connection)
+            if connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise ValueError("Generated schema-33 board has broken foreign keys")
+        archived = work / "schema33-source"
+        archived.mkdir()
+        with (work / "schema33.tar").open("wb") as stream:
+            run(["git", "archive", SCHEMA33_WRITER_COMMIT], cwd=root, stdout=stream)
+        with tarfile.open(work / "schema33.tar") as stream:
+            stream.extractall(archived, filter="data")
+        schema33_env = dict(env, PYTHONPATH=str(archived / "src"))
+        run([*interpreter, str(Path(__file__).resolve()), "--populate-schema33",
+             "--work-dir", str(work), "--output-dir", str(args.output_dir.resolve()),
+             "--workspace-growth-stock-for", str(args.workspace_growth_stock_for.resolve())],
+            cwd=root, env=schema33_env)
+
+
+def bind_floor_stock(fixed_sql, written_sql, stock):
+    """Derive supplemental identities from the corresponding fixed floor rows."""
+    with ExitStack() as stack:
+        fixed = sqlite3.connect(':memory:')
+        written = sqlite3.connect(':memory:')
+        stack.callback(fixed.close)
+        stack.callback(written.close)
+        fixed.row_factory = written.row_factory = sqlite3.Row
+        fixed.executescript(fixed_sql)
+        written.executescript(written_sql)
+        bindings = {}
+        def compare(old, new):
+            if isinstance(old, dict) and isinstance(new, dict):
+                for key in old.keys() & new.keys():
+                    compare(old[key], new[key])
+            elif isinstance(old, list) and isinstance(new, list):
+                for before, after in zip(old, new):
+                    compare(before, after)
+            elif isinstance(old, str) and isinstance(new, str) and old != new:
+                if new in bindings and bindings[new] != old:
+                    raise ValueError('Ambiguous floor identity binding')
+                bindings[new] = old
+        for (table,) in fixed.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+            before = list(fixed.execute(f'SELECT rowid,* FROM "{table}" ORDER BY rowid'))
+            after = list(written.execute(f'SELECT rowid,* FROM "{table}" ORDER BY rowid'))
+            if len(before) != len(after):
+                raise ValueError('Floor writer changed stock row counts')
+            for old, new in zip(before, after):
+                for name in old.keys():
+                    left, right = old[name], new[name]
+                    if name.endswith('_json') and isinstance(left, str) and isinstance(right, str):
+                        compare(json.loads(left), json.loads(right))
+                    else:
+                        compare(left, right)
+        def bind(value):
+            if isinstance(value, dict):
+                return {key: bind(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [bind(item) for item in value]
+            if isinstance(value, str):
+                if value in bindings:
+                    return bindings[value]
+                return re.sub(r'ws-[0-9a-f]{32}|[0-9a-f]{64}', lambda match: bindings.get(match[0], match[0]), value)
+            return value
+        return {table: [{name: json_text(bind(json.loads(value)))
+                        if name.endswith('_json') and isinstance(value, str) else bind(value)
+                        for name, value in row.items()} for row in rows]
+                for table, rows in stock.items()}
+
+
+def insert_stock(connection, stock):
+    statements = []
+    for table, rows in stock.items():
+        for row in rows:
+            columns = ','.join('"' + name + '"' for name in row)
+            values = ','.join(connection.execute('SELECT quote(?)', (value,)).fetchone()[0] for value in row.values())
+            statements.append(f'INSERT INTO "{table}"({columns}) VALUES({values});')
+    return '\n'.join(statements) + '\n'
+
+
+def bind_cleanup_stock(fixed_sql, written_sql, journal):
+    stock = bind_floor_stock(fixed_sql, written_sql, {'workspace_cleanup_plans': [journal]})
+    with sqlite3.connect(':memory:') as connection:
+        return ('-- Interrupted journal from the 0.54.1 floor writers; identities rebound to the fixed floor stock.\n'
+                '-- This scenario precedes the independent in-progress macro deletion. Sealed content stays untouched.\n'
+                'DELETE FROM macro_task_deletions;\n' + insert_stock(connection, stock))
 
 
 def populate(args):
@@ -146,7 +246,8 @@ def populate(args):
     from hey_my_buddy.errors import BoardError
 
     assert Path(db_module.__file__).resolve() == source / "src/hey_my_buddy/blackboard/store/db.py"
-    assert db_module.SCHEMA_VERSION == BASE_SCHEMA
+    assert db_module.SCHEMA_VERSION == FLOOR_SCHEMA
+    # Historical source label: keep the released stock bytes unchanged.
     catalog = {"source": "fixture:upgrade-base", "harnessVersion": "fixture-only",
                "providerVersion": "fixture-provider-version",
                "discoveredAt": AT, "discoveries": [{"harness": "codex", "status": "complete", "accountStatus": "confirmed"}],
@@ -178,7 +279,7 @@ def populate(args):
         # synthetic inode while generating stock; load_fixture rebinds every
         # identity to the restored directory's real path and inode.
         directory = Path(path).resolve(strict=True)
-        fixture_path = str(directory).replace(str(work), "<fixture-root>")
+        fixture_path = str(directory).replace(str(work), FIXTURE_ROOT_TOKEN)
         payload = json.dumps([fixture_path, 0], sort_keys=True,
                              separators=(",", ":"), ensure_ascii=True).encode()
         return hashlib.sha256(payload).hexdigest()
@@ -942,6 +1043,44 @@ def populate(args):
                 else:
                     assert turn_row["state"] == "failed"
                     assert stored_result["result"]["partialWorkspaceSeal"] == seal
+        # The floor writer records fixes only after the accepted standalone
+        # delivery exists. Two correction submissions deliberately name the
+        # same accepted target so the next schema can prove it counts that
+        # target once while every workflow_fixes row still comes from submit.
+        fix_stock = {}
+        fix_target = call("workflow_submit", {"requestId": "fixture-fix-target",
+            "hostId": "fixture-host", "submissionToken": "fixture-submission-token-fix-target",
+            "task": "fixture accepted delivery named for correction", "harness": "codex",
+            "provider": "openai", "model": "fixture-alpha", "effort": "high",
+            "cwd": str(work / "workspaces" / "accepted"),
+            "executionWorkspace": {"kind": "existing", "access": "read"}})
+        fix_stock["target"] = fix_target["runId"]
+        fix_claim = admit(nonce, fix_target["runId"])
+        fix_manifest = fix_claim["turn"]["input"]["executionWorkspace"]
+        fix_seal = workspace.seal(work / "state", fix_manifest, fix_target["runId"],
+                                  fix_claim["attempt"]["attemptId"])
+        report(fix_claim, nonce, status="ok", result={"status": "ok",
+            "turn": completed_record(fix_claim, "fix-target"), "workspaceSeal": fix_seal,
+            "processState": {"shutdownConfirmed": True}, "fixture": True})
+        fix_view = call("workflow_get", {"runId": fix_target["runId"]})
+        assert fix_view["state"] == "delivered", fix_view
+        call("workflow_accept", {"runId": fix_target["runId"], "artifactId": fix_view["finalArtifactId"],
+            "note": "fixture accepted target for fix stock",
+            "notRequired": "Read-only fixture has no separate target", "keepCheckout": True,
+            **fix_target["control"]})
+        for label in ("first", "second"):
+            correction = call("workflow_submit", {"requestId": "fixture-fix-" + label,
+                "hostId": "fixture-host", "submissionToken": "fixture-submission-token-fix-" + label,
+                "task": "fixture correction " + label, "harness": "codex", "provider": "openai",
+                "model": "fixture-alpha", "effort": "high",
+                "cwd": str(work / "workspaces" / "accepted"),
+                "executionWorkspace": {"kind": "existing", "access": "read"},
+                "fixes": fix_target["runId"]})
+            fix_stock[label] = correction["runId"]
+            call("workflow_cancel", {"runId": correction["runId"],
+                "commandId": "cancel-fixture-fix-" + label,
+                "note": "Keep the base-writer correction relationship without pending execution",
+                **correction["control"]})
         hashing.close()
         # Base operations created these rows. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -953,35 +1092,37 @@ def populate(args):
             row_counts = {row[1]: connection.execute(f'SELECT COUNT(*) FROM "{row[1]}"').fetchone()[0]
                           for row in source_schema if row[0] == "table" and row[1] != "sqlite_sequence"}
         (work / "raw.sql").write_bytes(raw_sql.encode("utf-8"))
-        redactions = [(str(work), "<fixture-root>")]
+        redactions = [(str(work), FIXTURE_ROOT_TOKEN)]
         sql = raw_sql
         for old, new in redactions:
             sql = sql.replace(old, new)
-        header = f"-- Upgrade base: source {BASE}; {BASE_VERSION} / schema {BASE_SCHEMA}\n-- Generated by packaging/generate-upgrade-fixture.py; native facts/results are synthetic.\n-- Path template: restore with tests/python/blackboard/store/upgrade_fixture.py before use.\n"
+        # Historical SQL header, retained with the original stock and its digest.
+        header = f"-- Upgrade base: source {FLOOR_COMMIT}; {FLOOR_VERSION} / schema {FLOOR_SCHEMA}\n-- Generated by packaging/generate-upgrade-fixture.py; native facts/results are synthetic.\n-- Path template: restore with tests/python/blackboard/store/upgrade_fixture.py before use.\n"
         output = args.output_dir.resolve()
         output.mkdir(parents=True, exist_ok=True)
         sql_path = output / "board.sql"
         sql_path.write_bytes((header + sql).encode("utf-8"))
         (output / "catalog.json").write_bytes((json_text(catalog) + "\n").encode("utf-8"))
-        operations_text = json_text(operations).replace(str(work), "<fixture-root>")
+        operations_text = json_text(operations).replace(str(work), FIXTURE_ROOT_TOKEN)
         (output / "operations.json").write_bytes((operations_text + "\n").encode("utf-8"))
         resources = export_resources(work, workspace, preimages)
         (output / "workspace-resources.json").write_bytes(
             (json.dumps(resources, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-        metadata = {"format": 2, "sourceCommit": BASE, "sourceVersion": BASE_VERSION, "schemaVersion": BASE_SCHEMA,
-            "sourceTree": subprocess.check_output(["git", "rev-parse", BASE + "^{tree}"],
+        metadata = {"format": 2, "sourceCommit": FLOOR_COMMIT, "sourceVersion": FLOOR_VERSION, "schemaVersion": FLOOR_SCHEMA,
+            "sourceTree": subprocess.check_output(["git", "rev-parse", FLOOR_COMMIT + "^{tree}"],
                                                   text=True, encoding="utf-8").strip(),
             "workspaceInputCommit": WORKSPACE_INPUT,
             "generationCommand": "python packaging/generate-upgrade-fixture.py" +
                 (" --python <prepared-python>" if args.python else " --offline" if args.offline else "") +
                 " --work-dir <new-private-tmp-dir>" +
-                " --output-dir tests/fixtures/upgrade-base",
+                " --output-dir tests/fixtures/upgrade-floor",
             "dependencyMode": "prepared-read-only-interpreter" if args.python else "base-frozen-uv-environment",
             "dependencyVersions": {name: importlib.metadata.version(name) for name in ("c-two", "pydantic", "zstandard", "portalocker")},
             "sourceFiles": {str(p.relative_to(source)): digest(p.read_bytes()) for p in
                             [*sorted((source / "src/hey_my_buddy").rglob("*.py")), source / "pyproject.toml",
                              source / "uv.lock", source / "packaging/runtime-assets.json"]},
-            "stableIds": ids, "stockIds": stock_ids, "taskOnlyStock": task_only_stock,
+            "stableIds": ids, "stockIds": stock_ids, "fixStock": fix_stock,
+            "taskOnlyStock": task_only_stock,
             "edgeStock": edge_stock,
             "inquiryStock": inquiry_stock,
             "tableRowCounts": row_counts,
@@ -989,8 +1130,8 @@ def populate(args):
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
             "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All stored rows come from base writers without SQL seeds or historical-form patches. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
             "pythonVersion": sys.version.split()[0],
-            "pythonInterpreter": "<fixture-root>/base/.venv/bin/python" if args.python is None else "<prepared-python>",
-            "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
+            "pythonInterpreter": FIXTURE_ROOT_TOKEN + "/base/.venv/bin/python" if args.python is None else "<prepared-python>",
+            "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {FLOOR_SCHEMA}; baseline only after return",
             "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode("utf-8")),
             "sqlSha256": digest(sql_path.read_bytes()), "operationsSha256": digest((output / "operations.json").read_bytes()),
             "catalogSha256": digest((output / "catalog.json").read_bytes()),
@@ -1000,12 +1141,573 @@ def populate(args):
         metadata["generatorSha256"] = digest(Path(__file__).read_bytes())
         (output / "metadata.json").write_bytes(
             (json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        # Export an interrupted journal through the same released writers,
+        # after the immutable floor stock above has already been captured.
+        # This supplementary scenario precedes the retained deletion mark.
+        # The original exported board still contains that independent stock.
+        with store.db.write() as connection:
+            connection.execute("DELETE FROM macro_task_deletions")
+        future = "2026-01-03T00:00:00.000Z"
+        with patch.object(store.workflow, "now", return_value=future):
+            current_adopted = call("workflow_get", {"runId": adopted["runId"]})
+            started_plan = internal_call("cleanup_plan", {
+                "runId": adopted["runId"], "commandId": "supplement-started-plan",
+                "expectedRevision": current_adopted["revision"], **adopted["control"]})
+            with patch.object(workspace, "cleanup_remove", side_effect=RuntimeError("fixture interrupted before removal")):
+                try:
+                    internal_call("cleanup_apply", {
+                        "runId": adopted["runId"], "commandId": "supplement-started-apply",
+                        "expectedRevision": started_plan["targetRevision"],
+                        "planId": started_plan["plan"]["planId"], "confirmPath": started_plan["plan"]["path"],
+                        **adopted["control"]})
+                except RuntimeError as error:
+                    assert str(error) == "fixture interrupted before removal"
+                else:
+                    raise AssertionError("The floor writer did not enter its interrupted removal")
+        with store.db.read() as connection:
+            journal = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?",
+                                         (started_plan["plan"]["planId"],)).fetchone()
+            assert journal["state"] == "applying"
+            columns = ",".join('"' + name + '"' for name in journal.keys())
+            values = ",".join(connection.execute("SELECT quote(?)", (value,)).fetchone()[0] for value in journal)
+        supplement = ("-- Interrupted cleanup row written by 0.54.1 cleanup_plan and cleanup_apply.\n"
+                      "-- Original floor stock stays unchanged; load this row for 31 -> 32 preservation checks.\n"
+                      "DELETE FROM macro_task_deletions;\n"
+                      f"INSERT INTO workspace_cleanup_plans({columns}) VALUES({values});\n")
+        (output / "schema-31-cleanup-stock.sql").write_text(
+            supplement.replace(str(work), FIXTURE_ROOT_TOKEN), encoding="utf-8", newline="\n")
+        if args.cleanup_stock_for:
+            fixed = args.cleanup_stock_for.resolve()
+            row = {name: value.replace(str(work), FIXTURE_ROOT_TOKEN) if isinstance(value, str) else value
+                   for name, value in dict(journal).items()}
+            stock = bind_cleanup_stock((fixed / "board.sql").read_text(encoding="utf-8"),
+                                       sql_path.read_text(encoding="utf-8"), row)
+            (fixed / "schema-31-cleanup-stock.sql").write_text(stock, encoding="utf-8", newline="\n")
+            fixed_metadata = json.loads((fixed / "metadata.json").read_text(encoding="utf-8"))
+            fixed_metadata["cleanupStockGeneratorSha256"] = digest(Path(__file__).read_bytes())
+            fixed_metadata["cleanupStockSha256"] = digest(stock.encode("utf-8"))
+            fixed_metadata["cleanupStockBaseSha256"] = digest((fixed / "board.sql").read_bytes())
+            fixed_metadata["cleanupStockGenerationCommand"] = (
+                "python packaging/generate-upgrade-fixture.py" +
+                (" --python <prepared-python>" if args.python else " --offline" if args.offline else "") +
+                " --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir>"
+                " --cleanup-stock-for tests/fixtures/upgrade-floor")
+            (fixed / "metadata.json").write_text(
+                json.dumps(fixed_metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        # Keep the frozen base export and its oracle intact. Generate an
+        # independent read-only conclusion with the released buggy writer and
+        # export only its new rows; no existing floor row is patched into shape.
+        with store.db.read() as connection:
+            tables = [row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+            before = {table: {row['rowid']: dict(row) for row in
+                       connection.execute(f'SELECT rowid AS rowid,* FROM "{table}"')}
+                      for table in tables}
+        previous_time = clock[0]
+        clock[0] = "2026-01-04T00:00:00.000Z"
+        # The released submit writer accepts a cwd inside an existing checkout.
+        # Its reservation stored that cwd, while its sealed manifest stored the
+        # checkout root. Keep this distinct row shape in the supplement.
+        reader_cwd = work / "workspaces" / "accepted" / "fixture-subdirectory"
+        reader_cwd.mkdir()
+        reader = call("workflow_submit", {
+            "requestId": "fixture-concluded-reader", "hostId": "fixture-host",
+            "submissionToken": "fixture-submission-token-concluded-reader", "task": "fixture read-only conclusion",
+            "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+            "cwd": str(reader_cwd),
+            "executionWorkspace": {"kind": "existing", "access": "read"},
+            "macroTask": {"title": "Read-only conclusion reservation stock"},
+        })
+        reader_claim = admit(nonce, reader['runId'])
+        report(reader_claim, nonce, status="failed", result={"status": "failed"})
+        clock[0] = "2026-01-04T00:01:00.000Z"
+        ended_reader = call("workflow_conclude", {
+            "runId": reader['runId'], "note": "Fixture Host ends the read-only inspection", **reader['control'],
+        })
+        with store.db.read() as connection:
+            reservation = connection.execute("SELECT state,released_at,path FROM workspace_reservations WHERE holder_task_id=?",
+                                             (reader['runId'],)).fetchone()
+            assert tuple(reservation) == ('held', None, str(reader_cwd)), tuple(reservation)
+            stock = {}
+            for table in tables:
+                rows = [dict(row) for row in connection.execute(f'SELECT rowid AS rowid,* FROM "{table}" ORDER BY rowid')]
+                assert all(row == before[table][row['rowid']] for row in rows if row['rowid'] in before[table]), table
+                added = [row for row in rows if row['rowid'] not in before[table]]
+                if added:
+                    stock[table] = added
+        clock[0] = previous_time
+        stock = {table: [{name: value.replace(str(work), FIXTURE_ROOT_TOKEN) if isinstance(value, str) else value
+                          for name, value in row.items()} for row in rows] for table, rows in stock.items()}
+        if args.reservation_stock_for:
+            fixed = args.reservation_stock_for.resolve()
+            stock = bind_floor_stock((fixed / "board.sql").read_text(encoding="utf-8"),
+                                     sql_path.read_text(encoding="utf-8"), stock)
+        header = ("-- Read-only existing conclusion written by the 0.54.1 floor writers.\n"
+                  "-- The held reservation is the writer defect; load before the upgrade chain.\n")
+        with sqlite3.connect(':memory:') as connection:
+            supplement = header + insert_stock(connection, stock)
+        (output / 'schema-30-reservation-stock.sql').write_text(supplement, encoding='utf-8', newline='\n')
+        if args.reservation_stock_for:
+            (fixed / 'schema-30-reservation-stock.sql').write_text(supplement, encoding='utf-8', newline='\n')
+            fixed_metadata = json.loads((fixed / 'metadata.json').read_text(encoding='utf-8'))
+            fixed_metadata.update(
+                reservationStockGeneratorSha256=digest(Path(__file__).read_bytes()),
+                reservationStockSha256=digest(supplement.encode('utf-8')),
+                reservationStockBaseSha256=digest((fixed / 'board.sql').read_bytes()),
+                reservationStockRunId=reader['runId'],
+                reservationStockConcludedAt=ended_reader['hostConclusion']['createdAt'],
+                reservationStockGenerationCommand=(
+                    "python packaging/generate-upgrade-fixture.py" +
+                    (" --python <prepared-python>" if args.python else " --offline" if args.offline else "") +
+                    " --work-dir <new-private-tmp-dir>"
+                    " --output-dir <new-generated-stock-dir> --reservation-stock-for tests/fixtures/upgrade-floor"),
+            )
+            (fixed / 'metadata.json').write_text(
+                json.dumps(fixed_metadata, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+        if args.delivered_stock_for:
+            # Reopen only the digest observer. The fixture's fixed base export
+            # was already closed, and this independent run gets its own stock.
+            hashing.enter_context(patch.object(hashlib, 'sha256', recorded_sha256))
+            before_resources = export_resources(work, workspace, preimages)
+            with store.db.read() as connection:
+                tables = [row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+                before = {table: {row['rowid']: dict(row) for row in
+                           connection.execute(f'SELECT rowid AS rowid,* FROM "{table}"')}
+                          for table in tables}
+            clock[0] = '2026-01-05T00:00:00.000Z'
+            delivered = call('workflow_submit', {
+                'requestId': 'fixture-schema33-delivered', 'hostId': 'fixture-host',
+                'submissionToken': 'fixture-submission-token-schema33-delivered',
+                'task': 'Inspect the accepted checkout after upgrade',
+                'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                'cwd': str(work / 'workspaces' / 'accepted'),
+                'executionWorkspace': {'kind': 'existing', 'access': 'read'},
+                'macroTask': {'title': 'Schema 33 delivered v3 stock',
+                              'description': '  Goal from the 0.54.1 writer.\nPreserve this line.  '},
+            })
+            delivered_claim = admit(nonce, delivered['runId'])
+            delivered_manifest = delivered_claim['turn']['input']['executionWorkspace']
+            delivered_seal = workspace.seal(work / 'state', delivered_manifest, delivered['runId'],
+                                            delivered_claim['attempt']['attemptId'])
+            report(delivered_claim, nonce, status='ok', result={
+                'status': 'ok', 'turn': completed_record(delivered_claim, 'schema33-delivered'),
+                'workspaceSeal': delivered_seal, 'processState': {'shutdownConfirmed': True}, 'fixture': True,
+            })
+            delivered_view = call('workflow_get', {'runId': delivered['runId']})
+            assert delivered_view['state'] == 'delivered', delivered_view
+            with store.db.read() as connection:
+                stock = {}
+                for table in tables:
+                    rows = [dict(row) for row in connection.execute(f'SELECT rowid AS rowid,* FROM "{table}" ORDER BY rowid')]
+                    assert all(row == before[table][row['rowid']] for row in rows if row['rowid'] in before[table]), table
+                    added = [row for row in rows if row['rowid'] not in before[table]]
+                    if added:
+                        stock[table] = added
+            stock = {table: [{name: value.replace(str(work), FIXTURE_ROOT_TOKEN) if isinstance(value, str) else value
+                              for name, value in row.items()} for row in rows] for table, rows in stock.items()}
+            fixed = args.delivered_stock_for.resolve()
+            stock = bind_floor_stock((fixed / 'board.sql').read_text(encoding='utf-8'),
+                                     sql_path.read_text(encoding='utf-8'), stock)
+            with sqlite3.connect(':memory:') as connection:
+                supplement = ('-- Delivered v3 run from the 0.54.1 floor writers; load with its physical resources.\n'
+                              + insert_stock(connection, stock))
+            after_resources = export_resources(work, workspace, preimages)
+            before_objects = {item['oid'] for item in before_resources['gitObjects']}
+            before_hashes = {item['oldSha256'] for item in before_resources['hashBindings']}
+            assert all(after_resources['files'].get(key) == value
+                       for key, value in before_resources['files'].items())
+            assert all(after_resources['refs'].get(key) == value
+                       for key, value in before_resources['refs'].items())
+            delta = {
+                'format': 1,
+                'gitObjects': [item for item in after_resources['gitObjects'] if item['oid'] not in before_objects],
+                'hashBindings': [item for item in after_resources['hashBindings']
+                                 if item['oldSha256'] not in before_hashes],
+                'files': {key: value for key, value in after_resources['files'].items()
+                          if key not in before_resources['files']},
+                'refs': {key: value for key, value in after_resources['refs'].items()
+                         if key not in before_resources['refs']},
+            }
+            resources_text = json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
+            for target in (output, fixed):
+                (target / 'schema-30-delivered-stock.sql').write_text(supplement, encoding='utf-8', newline='\n')
+                (target / 'schema-30-delivered-resources.json').write_text(resources_text, encoding='utf-8', newline='\n')
+            fixed_metadata = json.loads((fixed / 'metadata.json').read_text(encoding='utf-8'))
+            fixed_metadata.update(
+                deliveredStockGeneratorSha256=digest(Path(__file__).read_bytes()),
+                deliveredStockBaseSha256=digest((fixed / 'board.sql').read_bytes()),
+                deliveredStockSqlSha256=digest(supplement.encode('utf-8')),
+                deliveredStockResourcesSha256=digest(resources_text.encode('utf-8')),
+                deliveredStockRunId=delivered['runId'],
+                deliveredStockControl=delivered['control'],
+                deliveredStockArtifactId=delivered_view['finalArtifactId'],
+                deliveredStockGenerationCommand=(
+                    'python packaging/generate-upgrade-fixture.py'
+                    + (' --python <prepared-python>' if args.python else ' --offline' if args.offline else '')
+                    + ' --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir>'
+                    + ' --delivered-stock-for tests/fixtures/upgrade-floor'),
+            )
+            (fixed / 'metadata.json').write_text(
+                json.dumps(fixed_metadata, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+            hashing.close()
+        if args.workspace_growth_stock_for:
+            # This pending continuation is produced entirely by released
+            # submit/result/continue writers, after the frozen base export.
+            hashing.enter_context(patch.object(hashlib, 'sha256', recorded_sha256))
+            before_resources = export_resources(work, workspace, preimages)
+            with store.db.read() as connection:
+                tables = [row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+                before = {table: {row['rowid']: dict(row) for row in connection.execute(
+                    f'SELECT rowid AS rowid,* FROM "{table}"')} for table in tables}
+            clock[0] = '2026-01-05T01:00:00.000Z'
+            pending = call('workflow_submit', {
+                'requestId': 'fixture-growth-floor-pending', 'hostId': 'fixture-host',
+                'submissionToken': 'fixture-growth-floor-token',
+                'task': 'Continue a released-writer workspace',
+                'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                'requiredCapabilities': ['workspace'],
+                'exclusiveResources': ['fixture:exclusive'],
+                'cwd': str(work / 'workspaces/accepted'),
+                'executionWorkspace': {'kind': 'existing', 'access': 'read',
+                                       'base': {'kind': 'commit', 'ref': WORKSPACE_INPUT},
+                                       'targetRef': 'refs/heads/fixture-recorded-target'},
+                'macroTask': {'title': 'Released floor continuation stock'},
+            })
+            pending_claim = admit(nonce, pending['runId'])
+            pending_manifest = pending_claim['turn']['input']['executionWorkspace']
+            pending_seal = workspace.seal(work / 'state', pending_manifest, pending['runId'],
+                                          pending_claim['attempt']['attemptId'])
+            report(pending_claim, nonce, status='ok', result={
+                'status': 'ok', 'turn': completed_record(pending_claim, 'growth-floor-pending'),
+                'workspaceSeal': pending_seal, 'processState': {'shutdownConfirmed': True},
+            })
+            pending_view = call('workflow_get', {'runId': pending['runId']})
+            assert pending_view['state'] == 'delivered'
+            call('workflow_continue', {
+                'runId': pending['runId'], 'commandId': 'fixture-growth-floor-continue',
+                'expectedRevision': pending_view['revision'], 'input': 'Prepared later by the upgraded writer',
+                **pending['control'],
+            })
+            abandoned = call('workflow_submit', {
+                'requestId': 'fixture-growth-floor-abandoned', 'hostId': 'fixture-host',
+                'submissionToken': 'fixture-growth-floor-abandoned-token',
+                'task': 'Preserve an abandoned out-of-scope site',
+                'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                'cwd': str(work / 'workspaces/failed'),
+                'executionWorkspace': {'kind': 'existing', 'access': 'full',
+                                       'accessNote': 'Fixture abandoned site',
+                                       'writeScope': ['fixture.txt']},
+                'macroTask': {'title': 'Released abandoned-site stock'},
+            })
+            abandoned_claim = admit(nonce, abandoned['runId'])
+            abandoned_path = work / 'workspaces/failed/abandoned-edge.txt'
+            abandoned_path.write_bytes(b'fixture abandoned site\n')
+            try:
+                workspace.seal(work / 'state', abandoned_claim['turn']['input']['executionWorkspace'],
+                               abandoned['runId'], abandoned_claim['attempt']['attemptId'])
+            except BoardError as error:
+                assert error.code == 'WORKSPACE_SCOPE_VIOLATION', error
+            else:
+                raise AssertionError('Expected a scope conflict for abandoned-site stock')
+            report(abandoned_claim, nonce, status='failed', result={
+                'status': 'failed', 'workspaceSealError': seal_error,
+                'processState': {'shutdownConfirmed': True},
+            })
+            abandoned_view = call('workflow_get', {'runId': abandoned['runId']})
+            conflict = abandoned_view['workspaceConflicts'][0]
+            call('workflow_workspace_resolve', {
+                'runId': abandoned['runId'], 'commandId': 'fixture-growth-floor-abandon',
+                'expectedRevision': abandoned_view['revision'], 'conflictId': conflict['conflictId'],
+                'observedFingerprint': conflict['observedFingerprint'], 'action': 'abandon',
+                'note': 'Preserve the full out-of-scope site as fixture evidence',
+                **abandoned['control'],
+            })
+            # An actual private Git stash makes the released shared-refs writer
+            # retain a nonempty observation and a recoverable refs/stash object.
+            stash_path = work / 'workspaces/delivered/stash-marker.txt'
+            stash_path.write_bytes(b'fixture shared stash stock\n')
+            run(['git', '-C', str(work / 'workspaces/delivered'), 'stash', 'push', '-u',
+                 '-m', 'fixture-growth-stash', '--', 'stash-marker.txt'])
+            stash_ids = {}
+            for label in ('observed', 'unknown'):
+                submitted = call('workflow_submit', {
+                    'requestId': 'fixture-growth-floor-stash-' + label, 'hostId': 'fixture-host',
+                    'submissionToken': 'fixture-growth-floor-stash-token-' + label,
+                    'task': 'Inspect shared stash ' + label,
+                    'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                    'cwd': str(work / 'workspaces/accepted'),
+                    'executionWorkspace': {'kind': 'existing', 'access': 'read'},
+                    'macroTask': {'title': 'Released shared-stash ' + label + ' stock'},
+                })
+                stash_ids[label] = submitted['runId']
+                observation = (patch.object(workspace, 'shared_stash_inventory',
+                                            side_effect=BoardError('FIXTURE_STASH_UNKNOWN', 'Synthetic Git read failure'))
+                               if label == 'unknown' else ExitStack())
+                with observation:
+                    claimed = admit(nonce, submitted['runId'])
+                    report(claimed, nonce, status='failed', result={
+                        'status': 'failed', 'processState': {'shutdownConfirmed': True},
+                    })
+            # The released standalone writer freezes the repository path in
+            # its first input. Use a nested cwd so the later project-path
+            # conversion cannot accidentally reuse the submitted cwd.
+            standalone = call('workflow_submit', {
+                'requestId': 'fixture-growth-floor-standalone', 'hostId': 'fixture-host',
+                'submissionToken': 'fixture-growth-floor-standalone-token',
+                'task': 'Inspect the repository from a nested checkout directory',
+                'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                'cwd': str(reader_cwd),
+                'executionWorkspace': {'kind': 'existing', 'access': 'read'},
+            })
+            standalone_claim = admit(nonce, standalone['runId'])
+            report(standalone_claim, nonce, status='failed', result={
+                'status': 'failed', 'processState': {'shutdownConfirmed': True},
+            })
+            # Declining assistance with autoContinue writes a helper
+            # continuation even though no child was admitted.
+            declined = call('workflow_submit', {
+                'requestId': 'fixture-growth-floor-declined', 'hostId': 'fixture-host',
+                'submissionToken': 'fixture-growth-floor-declined-token',
+                'task': 'Ask for assistance and continue after a decline',
+                'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                'cwd': str(work / 'workspaces/cancelled'),
+                'executionWorkspace': {'kind': 'existing', 'access': 'read'},
+                'macroTask': {'title': 'Released declined-assistance stock'},
+            })
+            declined_claim = admit(nonce, declined['runId'])
+            declined_manifest = declined_claim['turn']['input']['executionWorkspace']
+            declined_seal = workspace.seal(work / 'state', declined_manifest, declined['runId'],
+                                           declined_claim['attempt']['attemptId'])
+            declined_record = completed_record(declined_claim, 'growth-floor-declined')
+            declined_record['outcome'] = {
+                'disposition': 'assistance', 'summary': 'Request optional assistance',
+                'remaining': [], 'decisions': [], 'artifacts': [],
+                'request': {'summary': 'Optional fixture assistance', 'attempted': 'Inspected the input',
+                            'neededWork': ['One review'], 'expectedArtifacts': ['One review'],
+                            'acceptance': 'Record the Host decision'},
+            }
+            report(declined_claim, nonce, status='ok', result={
+                'status': 'ok', 'turn': declined_record, 'workspaceSeal': declined_seal,
+                'processState': {'shutdownConfirmed': True},
+            })
+            declined_view = call('workflow_get', {'runId': declined['runId']})
+            assert declined_view['state'] == 'awaiting-host' and declined_view['activeRequest']
+            call('workflow_decide', {
+                'runId': declined['runId'], 'requestId': declined_view['activeRequest']['requestId'],
+                'commandId': 'fixture-growth-floor-decline', 'expectedRevision': declined_view['revision'],
+                'decision': 'decline', 'autoContinue': True, 'note': 'Continue without a helper',
+                **declined['control'],
+            })
+            # Retired command receipts must come from the released floor's own
+            # writers. This plain task has no workflow governance and no process
+            # is launched; its result uses the same synthetic receipt path above.
+            plain_cwd = work / 'plain-command'
+            plain_cwd.mkdir()
+            plain = store.task_submit({
+                'requestId': 'fixture-retired-command-receipts', 'adapter': 'command',
+                'argv': ['fixture-never-executed'], 'cwd': str(plain_cwd),
+                'task': 'Retained receipts of retired task operations', 'expectedSeconds': 60,
+            })['task']
+            store.task_cancel({'runId': plain['runId'], 'note': 'Prepare stopped retry stock'})
+            store.task_retry({'runId': plain['runId'], 'note': 'Released retry receipt'},
+                             command_id='fixture-retired-task-retry')
+            plain_claim = admit(nonce, plain['runId'])
+            report(plain_claim, nonce, status='ok', result={'status': 'ok'})
+            store.task_acknowledge({'runId': plain['runId'], 'note': 'Released acknowledgement receipt'},
+                                   command_id='fixture-retired-task-acknowledge')
+            with store.db.read() as connection:
+                stock = {}
+                for table in tables:
+                    rows = [dict(row) for row in connection.execute(f'SELECT rowid AS rowid,* FROM "{table}" ORDER BY rowid')]
+                    if any(row != before[table][row['rowid']] for row in rows if row['rowid'] in before[table]):
+                        raise ValueError(f'Released growth stock changed an existing {table} row')
+                    added = [row for row in rows if row['rowid'] not in before[table]]
+                    if added:
+                        stock[table] = added
+            stock = {table: [{name: value.replace(str(work), FIXTURE_ROOT_TOKEN)
+                              if isinstance(value, str) else value for name, value in row.items()}
+                             for row in rows] for table, rows in stock.items()}
+            fixed = args.workspace_growth_stock_for.resolve()
+            stock = bind_floor_stock((fixed / 'board.sql').read_text(encoding='utf-8'),
+                                     sql_path.read_text(encoding='utf-8'), stock)
+            with sqlite3.connect(':memory:') as connection:
+                sql = ('-- Pending continuation from released 0.54.1 writers.\n'
+                       + insert_stock(connection, stock))
+            after_resources = export_resources(work, workspace, preimages)
+            if any(after_resources['files'].get(key) != value
+                   for key, value in before_resources['files'].items()):
+                raise ValueError('Released growth stock changed an existing physical file')
+            before_objects = {item['oid'] for item in before_resources['gitObjects']}
+            before_hashes = {item['oldSha256'] for item in before_resources['hashBindings']}
+            delta = {'format': 1,
+                     'gitObjects': [item for item in after_resources['gitObjects'] if item['oid'] not in before_objects],
+                     'hashBindings': [item for item in after_resources['hashBindings']
+                                      if item['oldSha256'] not in before_hashes],
+                     'files': {key: value for key, value in after_resources['files'].items()
+                               if key not in before_resources['files']},
+                     'refs': {key: value for key, value in after_resources['refs'].items()
+                              if key not in before_resources['refs']}}
+            resources = json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
+            for target in (output, fixed):
+                (target / 'schema-30-workspace-growth-stock.sql').write_text(sql, encoding='utf-8', newline='\n')
+                (target / 'schema-30-workspace-growth-resources.json').write_text(resources, encoding='utf-8', newline='\n')
+            fixed_metadata = json.loads((fixed / 'metadata.json').read_text(encoding='utf-8'))
+            fixed_metadata.update(growth30WriterCommit=FLOOR_COMMIT,
+                                  growth30BaseSha256=digest((fixed / 'board.sql').read_bytes()),
+                                  growth30SqlSha256=digest(sql.encode()),
+                                  growth30ResourcesSha256=digest(resources.encode()),
+                                  growth30GeneratorSha256=digest(Path(__file__).read_bytes()),
+                                  growth30RunId=pending['runId'],
+                                  growth30StandaloneRunId=standalone['runId'],
+                                  growth30DeclinedRunId=declined['runId'],
+                                  growth30AbandonedRunId=abandoned['runId'],
+                                  growth30StashRunIds=stash_ids)
+            (fixed / 'metadata.json').write_text(
+                json.dumps(fixed_metadata, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+            hashing.close()
     print(json.dumps(verify(output, work / "restored.sqlite3"), ensure_ascii=False))
+
+
+def populate_schema33(args):
+    """Append only schema-33 writer facts after the frozen floor upgrade chain."""
+    from unittest.mock import patch
+    from hey_my_buddy.blackboard.service.service import BoardService, call_operation
+    from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
+    from hey_my_buddy.blackboard.store.store import BoardStore
+    from hey_my_buddy.blackboard.tasks import workspace
+
+    work = args.work_dir.resolve()
+    source = work / "schema33-source"
+    import hey_my_buddy
+    if Path(hey_my_buddy.__file__).resolve() != source / "src/hey_my_buddy/__init__.py":
+        raise ValueError("Schema-33 stock must run from its archived source")
+    with sqlite3.connect(work / "state/board.sqlite3") as connection:
+        if connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] != "33":
+            raise ValueError("Schema-33 writer requires the privately upgraded floor")
+
+    preimages = {}
+    native_sha256 = hashlib.sha256
+
+    def recorded_sha256(data=b"", **kwargs):
+        result = native_sha256(data, **kwargs)
+        caller = sys._getframe(1)
+        ascii_json = caller.f_globals.get("__name__") in {
+            "hey_my_buddy.blackboard.tasks.workspace", "hey_my_buddy.blackboard.tasks.workspace_identity"}
+        preimages[result.hexdigest()] = (bytes(data).decode("utf-8"), ascii_json)
+        return result
+
+    def rows(connection):
+        return {table: {row["rowid"]: dict(row) for row in connection.execute(
+                    f'SELECT rowid AS rowid,* FROM "{table}"')}
+                for (table,) in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")}
+
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(hashlib, "sha256", recorded_sha256))
+        stack.enter_context(patch("uuid.uuid4", side_effect=(uuid.UUID(int=n) for n in itertools.count(10000))))
+        before_resources = export_resources(work, workspace, preimages)
+        with sqlite3.connect(work / "state/board.sqlite3") as connection:
+            connection.row_factory = sqlite3.Row
+            before = rows(connection)
+        store = BoardStore(work / "state", clock=lambda: "2026-01-06T00:00:00.000Z")
+        service = BoardService(store, token="fixture-service-token", control={},
+                               on_stop=lambda p: p, on_restart=lambda p: p, live_registry=LiveRegistry())
+        requests = (
+            ("macro", {"macroTask": {"title": "Schema 33 workspace reference stock",
+                                      "goal": "Inspect the archived schema 33 workspace manifest."}}),
+            ("standalone", {}),
+        )
+        produced = {}
+        cleanup_plans = {}
+        for label, presentation in requests:
+            result = call_operation(service, "workflow_submit", {
+                "requestId": "fixture-growth-33-" + label,
+                "hostId": "fixture-host",
+                "submissionToken": "fixture-growth-33-token-" + label,
+                "task": "Inspect a schema 33 workspace manifest",
+                "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+                "cwd": str(work / "workspaces/delivered"),
+                "executionWorkspace": {"kind": "existing", "access": "read"},
+                **presentation,
+            })
+            produced[label] = result["runId"]
+            if label == "standalone":
+                # The schema-33 writers copy the conclusion's retired control
+                # facts into cleanup evidence. Read-only queued work can be
+                # cancelled and concluded without a native execution or seal.
+                call_operation(service, "workflow_cancel", {
+                    "runId": result["runId"], **result["control"],
+                    "commandId": "fixture-growth-33-cancel", "note": "Fixture cleanup conclusion",
+                })
+                call_operation(service, "workflow_conclude", {
+                    "runId": result["runId"], **result["control"],
+                    "note": "Fixture cleanup conclusion",
+                })
+            plan = store.workflow.cleanup_plan({"runId": result["runId"]})["plan"]
+            assert plan["state"] == "blocked" and plan["evidence"]["ownerGeneration"] == 1
+            conclusion = plan["evidence"]["hostConclusion"]
+            if label == "standalone":
+                assert conclusion["ownerGeneration"] == 1 and conclusion["runRevision"] > 0
+            else:
+                assert conclusion is None
+            cleanup_plans[label] = plan["planId"]
+        with sqlite3.connect(work / "state/board.sqlite3") as connection:
+            connection.row_factory = sqlite3.Row
+            after = rows(connection)
+        stock = {}
+        for table, current in after.items():
+            if any(row != before[table][rowid] for rowid, row in current.items() if rowid in before[table]):
+                raise ValueError(f"Schema-33 stock unexpectedly changed existing {table} rows")
+            added = [row for rowid, row in sorted(current.items()) if rowid not in before[table]]
+            if added:
+                stock[table] = added
+        stock = {table: [{name: value.replace(str(work), FIXTURE_ROOT_TOKEN)
+                          if isinstance(value, str) else value for name, value in row.items()}
+                         for row in table_rows] for table, table_rows in stock.items()}
+        fixed = args.workspace_growth_stock_for.resolve()
+        stock = bind_floor_stock((fixed / "board.sql").read_text(encoding="utf-8"),
+                                 (args.output_dir / "board.sql").read_text(encoding="utf-8"), stock)
+        with sqlite3.connect(":memory:") as connection:
+            sql = ("-- Schema-33 rows from archived e3459d8 after the frozen floor upgrade chain.\n"
+                   + insert_stock(connection, stock))
+        after_resources = export_resources(work, workspace, preimages)
+        before_objects = {item["oid"] for item in before_resources["gitObjects"]}
+        before_hashes = {item["oldSha256"] for item in before_resources["hashBindings"]}
+        for field in ("files", "refs"):
+            if any(after_resources[field].get(key) != value
+                   for key, value in before_resources[field].items()):
+                raise ValueError(f"Schema-33 stock changed a pre-existing {field} entry")
+        delta = {"format": 1,
+                 "gitObjects": [item for item in after_resources["gitObjects"] if item["oid"] not in before_objects],
+                 "hashBindings": [item for item in after_resources["hashBindings"]
+                                  if item["oldSha256"] not in before_hashes],
+                 "files": {key: value for key, value in after_resources["files"].items()
+                           if key not in before_resources["files"]},
+                 "refs": {key: value for key, value in after_resources["refs"].items()
+                          if key not in before_resources["refs"]}}
+        resources = json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        sql_name = "schema-33-workspace-growth-stock.sql"
+        resource_name = "schema-33-workspace-growth-resources.json"
+        for target in (args.output_dir, fixed):
+            (target / sql_name).write_text(sql, encoding="utf-8", newline="\n")
+            (target / resource_name).write_text(resources, encoding="utf-8", newline="\n")
+        metadata = json.loads((fixed / "metadata.json").read_text(encoding="utf-8"))
+        metadata.update(growth33WriterCommit=SCHEMA33_WRITER_COMMIT,
+                        growth33BaseSha256=digest((fixed / "board.sql").read_bytes()),
+                        growth33SqlSha256=digest(sql.encode()),
+                        growth33ResourcesSha256=digest(resources.encode()),
+                        growth33GeneratorSha256=digest(Path(__file__).read_bytes()),
+                        growth33RunIds=produced,
+                        growth33CleanupPlans=cleanup_plans)
+        (fixed / "metadata.json").write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def export_resources(work, workspace, preimages):
     def template(text):
-        return text.replace(str(work), "<fixture-root>")
+        return text.replace(str(work), FIXTURE_ROOT_TOKEN)
 
     identities, checkouts = {}, {}
     for label in ("delivered", "accepted", "failed", "cancelled", "adopted",
@@ -1020,11 +1722,13 @@ def export_resources(work, workspace, preimages):
         actual = workspace.inspect(str(checkout))
         checkouts[label] = template(actual["checkoutRoot"])
         for role, path in (("checkoutId", actual["gitDir"]), ("repositoryId", actual["repositoryPath"])):
-            identities[actual[role]] = template(path)
+            if role in actual:
+                identities[actual[role]] = template(path)
     repository = work / "repository"
     # Git refs, object IDs and types here use ASCII syntax, within UTF-8.
     refs = dict(line.split(" ") for line in subprocess.check_output(
-        ["git", "-C", str(repository), "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/"],
+        ["git", "-C", str(repository), "for-each-ref", "--format=%(refname) %(objectname)",
+         "refs/hey-my-buddy/", "refs/stash"],
         text=True, encoding="utf-8").splitlines())
     # The fixed input is a root commit: its complete reachable object closure is
     # tiny. Export raw object bytes as hex so no generating repository is needed.
@@ -1090,7 +1794,7 @@ def verify(output, restored):
         connection.execute("PRAGMA foreign_keys=ON")
         assert connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert dict(connection.execute("SELECT key,value FROM meta"))["schema_version"] == str(BASE_SCHEMA)
+        assert dict(connection.execute("SELECT key,value FROM meta"))["schema_version"] == str(FLOOR_SCHEMA)
         assert connection.execute("SELECT COUNT(*) FROM events WHERE kind='attempt.activity'").fetchone()[0] > 0
         assert connection.execute("SELECT COUNT(*) FROM events WHERE kind='router.claimed'").fetchone()[0] > 0
         retry = connection.execute("SELECT decision_id,task_id,requested_json FROM decision_requests "
@@ -1197,38 +1901,711 @@ def verify(output, restored):
         assert states == {**{metadata["stableIds"][key]: value for key, value in
                             (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))},
                           **{metadata["stockIds"][key]: "accepted" for key in ("adopted", "verified", "helper", "lead")},
+                          metadata["fixStock"]["target"]: "accepted",
+                          **{metadata["fixStock"][key]: "cancelled" for key in ("first", "second")},
                           metadata["stockIds"]["helperParent"]: "concluded",
                           metadata["stockIds"]["leadOwned"]: "concluded",
                           **{metadata["stockIds"][key]: "cancelled" for key in ("scopeParent", "scopeHelper")},
                           **{metadata["edgeStock"][key]["runId"]: "failed" for key in
                              ("partial-failed", "partial-interrupted", "rejected-turn", "rejected-seal")}}
+        fixes = connection.execute("SELECT run_id,fixed_run_id FROM workflow_fixes ORDER BY rowid").fetchall()
+        assert [row[0] for row in fixes] == [metadata["fixStock"]["first"], metadata["fixStock"]["second"]]
+        assert {row[1] for row in fixes} == {metadata["fixStock"]["target"]}
         schema = [list(row) for row in connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]
         assert digest(json_text(schema).encode("utf-8")) == metadata["schemaSha256"]
-        assert "<fixture-root>" in (output / "board.sql").read_text(encoding="utf-8")
+        assert FIXTURE_ROOT_TOKEN in (output / "board.sql").read_text(encoding="utf-8")
         assert "/Users/" not in (output / "board.sql").read_text(encoding="utf-8")
-        return {"integrity": "ok", "foreignKeyViolations": 0, "schema": BASE_SCHEMA, "states": states,
+        return {"integrity": "ok", "foreignKeyViolations": 0, "schema": FLOOR_SCHEMA, "states": states,
                 "tables": sum(row[0] == "table" and row[1] != "sqlite_sequence" for row in schema),
                 "events": connection.execute("SELECT COUNT(*) FROM events").fetchone()[0],
                 "sourceSchemaMatches": True}
 
 
+
+def derive_legacy_stock(args):
+    """Derive independent old-form fixture copies from the frozen floor rows.
+
+    This is fixture preparation, not an upgrade or an historical writer run.
+    Preserve the base export; rebind the selected input and all dependent seals
+    in separate v1/v2 profiles before tests take their preservation baseline.
+    """
+    root = Path(__file__).resolve().parents[1]
+    work, output, fixed = args.work_dir.resolve(), args.output_dir.resolve(), args.legacy_stock_for.resolve()
+    if not work.is_relative_to(root / 'tmp') or not output.is_relative_to(root / 'tmp'):
+        raise ValueError('Legacy derivation work and output must be under this checkout\'s tmp/')
+    work.mkdir(parents=True, exist_ok=False)
+    output.mkdir(parents=True, exist_ok=False)
+    base_sql = (fixed / 'board.sql').read_bytes()
+    base_resources = json.loads((fixed / 'workspace-resources.json').read_text())
+    metadata = json.loads((fixed / 'metadata.json').read_text())
+    if digest(base_sql) != metadata['sqlSha256']:
+        raise ValueError('Legacy derivation requires the unchanged floor export')
+    run_id = metadata['stockIds']['helperParent']
+    history = {
+        'manifest1To2': 'e87ac40ef5475e7fb0768a2b5b47ccd5095292f8',
+        'manifest2To3': '8810d564b9b652c02d75b8fa75a50ab1349def51',
+        'turnInput1To2': 'd560e1f2b11556beeb555b993ea2f726220794dc',
+        'turnInput2To3': '8dc9834a1ab24355694e79b8592f03b039461814',
+    }
+    with sqlite3.connect(':memory:') as connection:
+        connection.row_factory = sqlite3.Row
+        connection.executescript(base_sql.decode())
+        source_rows = {name: [dict(row) for row in connection.execute(f'SELECT rowid AS rowid,* FROM "{name}" ORDER BY rowid')]
+                       for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+    run = next(row for row in source_rows['workflow_runs'] if row['run_id'] == run_id)
+    if run['state'] != 'concluded':
+        raise ValueError('Legacy source must be concluded and have no future physical action')
+    source_manifests = [json.loads(row['manifest_json']) for row in source_rows['workflow_artifacts']
+                        if row['run_id'] == run_id and row['kind'] == 'input']
+    source_manifests += [json.loads(row['workspace_manifest_json']) for row in source_rows['workflow_continuations']
+                         if row['run_id'] == run_id and row['workspace_manifest_json'] is not None]
+    workspace_ids = {value['workspaceId'] for value in source_manifests}
+    if len(workspace_ids) != 2 or any(value['access'] != 'read' or value['version'] != 3 for value in source_manifests):
+        raise ValueError('The fixed read-only initial and continuation manifests changed')
+    task = next(row for row in source_rows['tasks'] if row['task_id'] == run_id)
+    task_text = json.loads(task['spec_json'])['task']
+    results = {}
+    for version in (1, 2):
+        substitutions = {}
+        recipes = []
+
+        def transform(value):
+            if isinstance(value, list):
+                return [transform(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            updated = {key: transform(item) for key, item in value.items()}
+            if (updated.get('workspaceId') in workspace_ids and updated.get('version') == 3
+                    and 'checkoutRoot' in updated and 'repositoryId' in updated):
+                updated['version'] = version
+                if version == 1:
+                    updated['integrator'] = updated['integrator']['id']
+            if (updated.get('taskId') == run_id and 'executionWorkspace' in updated
+                    and 'context' in updated and 'resumeMode' in updated):
+                updated['version'] = version
+                context = updated['context']
+                context.update(task=task_text[:8000], taskTruncated=len(task_text) > 8000)
+                if context.get('helperOutcomes'):
+                    if len(context['helperOutcomes']) > 8:
+                        raise ValueError('Legacy source exceeds the historical helper limit')
+                    context['helperOutcomeTotal'] = len(context['helperOutcomes'])
+                if context.get('artifacts'):
+                    if len(context['artifacts']) > 8:
+                        raise ValueError('Legacy source exceeds the historical artifact limit')
+                    context['artifactTotal'] = len(context['artifacts'])
+                if len(json_text(context).encode()) > 64 * 1024:
+                    raise ValueError('Legacy source would enter the historical context truncation path')
+            return updated
+
+        def replace_hashes(text):
+            return re.sub(r'[0-9a-f]{64}', lambda match: substitutions.get(match[0], match[0]), text)
+
+        def rewrite(text):
+            try:
+                value = json.loads(text)
+            except (ValueError, TypeError):
+                return replace_hashes(text)
+            changed = transform(value)
+            if changed != value:
+                # Preserve the actual serializer of every preimage, including
+                # fsync_json's spaced, insertion-ordered receipt envelope.
+                for ascii_json in (False, True):
+                    for sorted_keys in (True, False):
+                        for separators in ((',', ':'), (', ', ': ')):
+                            options = dict(ensure_ascii=ascii_json, sort_keys=sorted_keys, separators=separators)
+                            if json.dumps(value, **options) == text:
+                                return replace_hashes(json.dumps(changed, **options))
+                raise ValueError('Unrecognized historical JSON serializer in derived stock')
+            return replace_hashes(text)
+
+        # The floor export already orders all path-dependent preimages by
+        # dependency. Legacy fields add no new edge, so reuse that order.
+        for recipe in base_resources['hashBindings']:
+            payload = rewrite(recipe['template'])
+            if payload != recipe['template']:
+                derived_sha = digest(payload.encode())
+                substitutions[recipe['oldSha256']] = derived_sha
+                recipes.append({**recipe, 'sourceSha256': recipe['oldSha256'],
+                                'oldSha256': derived_sha, 'template': payload})
+        updates, provenance = [], []
+        with sqlite3.connect(':memory:') as quoting:
+            def literal(value):
+                return quoting.execute('SELECT quote(?)', (value,)).fetchone()[0]
+            for table, rows in source_rows.items():
+                for row in rows:
+                    changed = {}
+                    for key, value in row.items():
+                        if isinstance(value, str):
+                            updated = rewrite(value)
+                            if updated != value:
+                                changed[key] = updated
+                    if changed:
+                        updates.append(f'UPDATE "{table}" SET ' + ','.join(f'"{key}"={literal(value)}' for key, value in changed.items())
+                                       + f' WHERE rowid={row["rowid"]};')
+                        provenance.append({'table': table, 'sourceRowid': row['rowid'], 'columns': sorted(changed)})
+        files = {}
+        for name, content in base_resources['files'].items():
+            updated = rewrite(content)
+            if updated != content:
+                files[name] = updated
+        operation_updates = []
+        for index, operation in enumerate(json.loads((fixed / 'operations.json').read_text())):
+            updated = json.loads(replace_hashes(json_text(transform(operation))))
+            if updated != operation:
+                operation_updates.append({'sourceIndex': index, 'value': updated})
+        resources = {'format': 1, 'hashBindings': recipes, 'files': files,
+                     'sourceRunId': run_id, 'sourceRows': provenance, 'history': history,
+                     'operationUpdates': operation_updates,
+                     'sourceManifestPairs': [{'workspaceId': value['workspaceId'], 'manifestSha256': value['manifestSha256']}
+                                             for value in source_manifests]}
+        stem = f'schema-30-legacy-v{version}'
+        sql = f'-- Derived retained-form profile v{version}; apply only to a private floor fixture before its baseline.\n' + '\n'.join(updates) + '\n'
+        resource_text = json.dumps(resources, ensure_ascii=False, sort_keys=True, indent=2) + '\n'
+        for destination in (output, fixed):
+            (destination / (stem + '-stock.sql')).write_text(sql, encoding='utf-8', newline='\n')
+            (destination / (stem + '-resources.json')).write_text(resource_text, encoding='utf-8', newline='\n')
+        results[str(version)] = {'sqlSha256': digest(sql.encode()), 'resourcesSha256': digest(resource_text.encode()),
+                                 'updatedRows': len(provenance), 'derivedFiles': len(files), 'derivedHashes': len(recipes)}
+    metadata['legacyStock'] = {'baseSha256': digest(base_sql), 'sourceResourcesSha256': metadata['resourcesSha256'],
+                               'sourceOperationsSha256': metadata['operationsSha256'],
+                               'generatorSha256': digest(Path(__file__).read_bytes()), 'sourceRunId': run_id,
+                               'history': history, 'profiles': results,
+                               'generationCommand': 'uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/w3/<new-private-dir> --output-dir tmp/w3/<new-output-dir> --legacy-stock-for tests/fixtures/upgrade-floor'}
+    (fixed / 'metadata.json').write_text(json.dumps(metadata, ensure_ascii=False, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+    (work / 'derivation.json').write_text(json.dumps(results, indent=2) + '\n', encoding='utf-8')
+    print(json_text({'legacyStock': results, 'sourceRunId': run_id}))
+
+
+def issue_stock_main():
+    """Append only issue stock through the floor writers; keep base exports intact."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--issue-stock-for', type=Path, required=True)
+    parser.add_argument('--work-dir', type=Path, required=True)
+    parser.add_argument('--populate-issues', action='store_true')
+    args = parser.parse_args()
+    work, fixed = args.work_dir.resolve(), args.issue_stock_for.resolve()
+    root = Path(__file__).resolve().parents[1]
+    if args.populate_issues:
+        from hey_my_buddy.blackboard.store.store import BoardStore
+        from hey_my_buddy.errors import BoardError
+        store = BoardStore(work / 'state', clock=lambda: AT)
+        with store.db.read() as connection:
+            attempt = connection.execute("SELECT selected_attempt_id FROM tasks WHERE task_id=?",
+                                         (json.loads((fixed / 'metadata.json').read_text())['stableIds']['failed'],)).fetchone()[0]
+            before = connection.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
+        for kind in ('execution', 'service'):
+            def record(text):
+                failure = BoardError('FIXTURE_ISSUE', text)
+                if kind == 'execution':
+                    store.record_execution_issue(attempt, 'upgrade-stock', failure)
+                else:
+                    store.record_service_issue('upgrade-stock', failure)
+            record('previous occurrence')
+            record('previous occurrence updated')
+            if kind == 'execution':
+                store.clear_execution_issue(attempt, 'upgrade-stock')
+            else:
+                store.clear_service_issue('upgrade-stock')
+            record('current occurrence')
+            record('current occurrence updated')
+        # Derive the historical leftover from a floor-written row and report.
+        # A shutdown confirmation clears connection issues in current writers;
+        # leave the row behind to reproduce stock from before that deletion.
+        with store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO execution_issues SELECT attempt_id,'connection',code,message,observed_at"
+                " FROM execution_issues WHERE attempt_id=? AND stage='upgrade-stock'", (attempt,))
+            connection.execute(
+                "INSERT INTO events(task_id,attempt_id,revision,kind,payload_json,actor_role,actor_id,created_at)"
+                " SELECT task_id,attempt_id,revision,kind,json_set(payload_json,'$.stage','connection'),"
+                " actor_role,actor_id,created_at FROM events WHERE attempt_id=? AND kind='execution.issue'"
+                " ORDER BY seq DESC LIMIT 1", (attempt,))
+            connection.execute(
+                "INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at)"
+                " SELECT task_id,attempt_id,'execution.shutdown_confirmed','{}',created_at"
+                " FROM events WHERE attempt_id=? AND kind='execution.issue' ORDER BY seq DESC LIMIT 1", (attempt,))
+        statements = ['-- Issue stock from the released schema-30 writers; event ids rebased by 9000000.']
+        with store.db.read() as connection:
+            for table in ('events', 'execution_issues', 'service_issues'):
+                rows = connection.execute('SELECT * FROM ' + table + (' WHERE seq>?' if table == 'events' else ''),
+                                          (before,) if table == 'events' else ()).fetchall()
+                for row in rows:
+                    values = dict(row)
+                    if table == 'events':
+                        values['seq'] += 9000000
+                    columns = ','.join('"' + column + '"' for column in values)
+                    quoted = ','.join(connection.execute('SELECT quote(?)', (value,)).fetchone()[0] for value in values.values())
+                    statements.append(f'INSERT INTO "{table}"({columns}) VALUES({quoted});')
+        store.db.close()
+        (work / 'issue-stock.sql').write_text('\n'.join(statements) + '\n', encoding='utf-8')
+        return
+    if not work.is_relative_to(root / 'tmp'):
+        raise ValueError('issue work-dir must be a new checkout-private tmp/ directory')
+    work.mkdir(parents=True, exist_ok=False)
+    (work / 'scratch').mkdir()
+    (work / 'home').mkdir(mode=0o700)
+    source = work / 'source'
+    source.mkdir()
+    archive = work / 'floor.tar'
+    with archive.open('wb') as stream:
+        run(['git', 'archive', FLOOR_COMMIT], cwd=root, stdout=stream)
+    with tarfile.open(archive) as stream:
+        stream.extractall(source, filter='data')
+    env = private_environment(work)
+    env.update(HOME=str(work / 'home'), CODEX_HOME=str(work / 'home/codex'),
+               CLAUDE_CONFIG_DIR=str(work / 'home/claude'), DSH_HOME=str(work / 'home/dsh'),
+               ZCODE_DATA_BASE_DIR=str(work / 'home/zcode'), XDG_CONFIG_HOME=str(work / 'home/config'),
+               XDG_DATA_HOME=str(work / 'home/data'), XDG_CACHE_HOME=str(work / 'home/cache'))
+    run(['uv', 'sync', '--frozen', '--no-install-project', '--link-mode', 'copy', '--project', str(source)], cwd=root, env=env)
+    import runpy
+    loader = runpy.run_path(str(root / 'tests/python/blackboard/store/upgrade_fixture.py'))
+    loader['load_fixture'](work / 'state')
+    env['PYTHONPATH'] = str(source / 'src')
+    run(['uv', 'run', '--no-sync', '--project', str(source), 'python', str(Path(__file__).resolve()),
+         '--issue-stock-for', str(fixed), '--work-dir', str(work), '--populate-issues'], cwd=root, env=env)
+    stock = (work / 'issue-stock.sql').read_bytes()
+    (fixed / 'schema-30-issue-stock.sql').write_bytes(stock)
+    metadata_path = fixed / 'metadata.json'
+    metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+    metadata['issueStock'] = {'writerCommit': FLOOR_COMMIT, 'schemaVersion': FLOOR_SCHEMA,
+                             'generatorSha256': digest(Path(__file__).read_bytes()),
+                             'baseSha256': digest((fixed / 'board.sql').read_bytes()), 'sha256': digest(stock),
+                             'baseGeneratorSha256': metadata['generatorSha256'],
+                             'generationCommand': 'uv run --frozen python packaging/generate-upgrade-fixture.py'
+                                                  ' --issue-stock-for tests/fixtures/upgrade-floor --work-dir tmp/<new-issue-stock-dir>',
+                             'derivation': 'Floor issue writers record, update, clear, reopen and update each kind at one timestamp;'
+                                           ' a connection issue and report are copied from the floor-written execution issue,'
+                                           ' followed by a shutdown confirmation without deleting the copied row;'
+                                           ' event identities are shifted by 9000000 to avoid the independent supplements.'}
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+
+
+def populate_model_floor(args):
+    """Run the released catalog and policy writers on a restored private floor."""
+    from copy import deepcopy
+    from hey_my_buddy.blackboard.catalog import catalog_store
+    from hey_my_buddy.blackboard.evaluation import user_policy
+    from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
+    from hey_my_buddy.blackboard.store.store import BoardStore
+
+    work, fixed = args.work_dir.resolve(), args.model_stock_for.resolve()
+    board = BoardStore(work / "state", clock=lambda: AT)
+    evaluation = EvaluationStore(board, clock=lambda: AT)
+    with board.db.read() as connection:
+        previous = {row[0] for row in connection.execute("SELECT buddy_id FROM buddies")}
+        catalog = json.loads(connection.execute(
+            "SELECT payload_json FROM evaluation_catalog ORDER BY rowid LIMIT 1").fetchone()[0])
+        floor_note = connection.execute(
+            "SELECT text FROM model_service_notes WHERE harness='codex' AND provider='openai' "
+            "AND model='fixture-alpha'").fetchone()[0]
+    original = next(provider for provider in catalog["providers"] if provider["provider"] == "openai")
+    for provider_name, model_name in (("mirror", "fixture-alpha"),
+                                      ("alternate", "fixture-beta")):
+        provider = deepcopy(original)
+        provider["provider"] = provider["displayName"] = provider_name
+        provider["models"] = [model for model in provider["models"] if model["id"] == model_name]
+        catalog["providers"].append(provider)
+    observation = catalog_store.begin(evaluation, "schema36-model-floor")
+    recorded = catalog_store.record(evaluation, catalog, observation["observationId"])
+    assert recorded["appliedHarnesses"] == ["codex"], recorded
+    changes = [
+        {"harness": "codex", "provider": "mirror", "model": "fixture-alpha", "text": floor_note},
+        {"harness": "codex", "provider": "openai", "model": "fixture-beta",
+         "text": "提供方 openai 的备注。"},
+        {"harness": "codex", "provider": "alternate", "model": "fixture-beta",
+         "text": "提供方 alternate 的备注。"},
+    ]
+    with board.db.write() as connection:
+        user_policy.publish(evaluation, connection, now=AT,
+                            params={"modelServiceNoteChanges": changes})
+    with board.db.read() as connection:
+        rows = {
+            "evaluation_catalog": [dict(connection.execute(
+                "SELECT * FROM evaluation_catalog WHERE discovery_id=?",
+                (recorded["discoveryId"],)).fetchone())],
+            "buddies": [dict(row) for row in connection.execute("SELECT * FROM buddies ORDER BY rowid")
+                        if row["buddy_id"] not in previous],
+            "model_service_notes": [dict(row) for row in connection.execute(
+                "SELECT * FROM model_service_notes ORDER BY rowid")
+                if (row["provider"], row["model"]) in
+                   {("mirror", "fixture-alpha"), ("openai", "fixture-beta"),
+                    ("alternate", "fixture-beta")}],
+        }
+    assert len(rows["evaluation_catalog"]) == 1 and len(rows["buddies"]) == 2 \
+        and len(rows["model_service_notes"]) == 3, rows
+    (work / "model-floor-writer.json").write_text(
+        json.dumps({"catalog": catalog, "noteChanges": changes, "rows": rows},
+                   ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+
+def populate_model_maintenance(args):
+    """Run the pinned schema-36 maintenance writer on the upgraded private board."""
+    from hey_my_buddy.blackboard.routing import maintenance_data
+
+    work = args.work_dir.resolve()
+    with sqlite3.connect(work / "state/board.sqlite3") as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        packet = maintenance_data.build_packet(connection)
+        target = "00000000-0000-0000-0000-000000000044"
+        kind = next(item for item in packet["kinds"] if item["harness"] == "codex"
+                    and item["model"] == "fixture-alpha" and item["effort"] == "high"
+                    and target in item["unreadRunIds"])
+        packet["microTasks"] = [item for item in packet["microTasks"] if item["runId"] == target]
+        packet["classificationRunIds"] = [target]
+        kind["unreadRunIds"] = [target]
+        kind["citationRunIds"] = [target]
+        packet["kinds"] = [kind]
+        answer = {"newNodes": [{"id": "schema36-model-domain", "name": "Fixture model domain",
+                                "definition": "Classification for the accepted floor run", "parentId": None}],
+                  "merges": [],
+                  "classifications": [{"runId": target, "domainNodeId": "schema36-model-domain",
+                                       "taskType": "change"}],
+                  "summaries": {kind["kindId"]: {"text": "Fixture summary for the accepted floor kind.",
+                                                 "citations": [target]}}}
+        tables = ("domain_nodes", "micro_task_classifications", "kind_summaries",
+                  "kind_summary_evidence", "kind_cell_statistics",
+                  "kind_cell_statistics_buckets")
+        before = {table: {row[0] for row in connection.execute(f'SELECT rowid FROM "{table}"')}
+                  for table in tables}
+        result = maintenance_data.apply_answer(connection, packet=packet, answer=answer,
+                                               maintenance_run_id="maint-schema31-stock")
+        assert not result["errors"] and all(result["written"][key] == 1 for key in
+            ("nodes", "classifications", "summaries")), result
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        rows = {table: [{key: value for key, value in dict(row).items() if key != "_source_rowid"}
+                        for row in connection.execute(
+                            f'SELECT rowid AS _source_rowid,* FROM "{table}" ORDER BY rowid')
+                        if row["_source_rowid"] not in before[table]]
+                for table in tables}
+        assert all(rows.values()), {table: len(items) for table, items in rows.items()}
+    (work / "model-maintenance-writer.json").write_text(
+        json.dumps({"packet": packet, "answer": answer, "result": result, "rows": rows},
+                   ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+
+def derive_schema36_model_stock(args):
+    """Regenerate name-keyed stock through the floor and schema-36 writers."""
+    from hey_my_buddy.blackboard.store import (
+        schema_30_31, schema_31_32, schema_32_33, schema_33_34,
+        schema_34_35, schema_35_36,
+    )
+
+    fixed = args.model_stock_for.resolve()
+    metadata_path = fixed / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    base = (fixed / "board.sql").read_bytes()
+    if digest(base) != metadata["sqlSha256"]:
+        raise ValueError("Fixed floor SQL digest changed")
+    import runpy
+    root = Path(__file__).resolve().parents[1]
+    loader = runpy.run_path(str(root / "tests/python/blackboard/store/upgrade_fixture.py"))
+    scratch = args.work_dir.resolve()
+    if not scratch.is_relative_to(root / "tmp"):
+        raise ValueError("work-dir must be a new directory inside this checkout's ignored tmp/")
+    scratch.mkdir(parents=True, exist_ok=False)
+    (scratch / "scratch").mkdir()
+    (scratch / "home").mkdir(mode=0o700)
+    fixture = loader["load_fixture"](scratch / "state")
+    env = private_environment(scratch)
+    env.update(HOME=str(scratch / "home"), CODEX_HOME=str(scratch / "home/codex"),
+               CLAUDE_CONFIG_DIR=str(scratch / "home/claude"),
+               XDG_CONFIG_HOME=str(scratch / "home/config"),
+               XDG_DATA_HOME=str(scratch / "home/data"),
+               XDG_CACHE_HOME=str(scratch / "home/cache"))
+
+    def archived_source(commit, label):
+        source = scratch / label
+        source.mkdir()
+        archive = scratch / f"{label}.tar"
+        with archive.open("wb") as stream:
+            run(["git", "archive", commit], cwd=root, stdout=stream)
+        with tarfile.open(archive) as stream:
+            stream.extractall(source, filter="data")
+        run(["uv", "sync", "--frozen", "--no-install-project", "--link-mode", "copy",
+             "--project", str(source)], cwd=root, env=env)
+        return source
+
+    floor_source = archived_source(FLOOR_COMMIT, "floor-source")
+    floor_env = dict(env, PYTHONPATH=str(floor_source / "src"))
+    run(["uv", "run", "--no-sync", "--project", str(floor_source), "python",
+         str(Path(__file__).resolve()), "--populate-model-floor", "--work-dir", str(scratch),
+         "--model-stock-for", str(fixed)], cwd=root, env=floor_env)
+    floor_record = json.loads((scratch / "model-floor-writer.json").read_text(encoding="utf-8"))
+    with sqlite3.connect(fixture["state"] / "board.sqlite3") as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=OFF")
+        for step in (schema_30_31, schema_31_32, schema_32_33,
+                     schema_33_34, schema_34_35, schema_35_36):
+            step.upgrade(connection)
+            if step is schema_30_31:
+                connection.executescript((fixed / "schema-31-stock.sql").read_text(encoding="utf-8"))
+        if connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] != "36":
+            raise ValueError("Model stock requires schema 36")
+        if connection.execute("PRAGMA foreign_key_check").fetchall():
+            raise ValueError("Private schema-36 board has broken foreign keys")
+    maintenance_source = archived_source(SCHEMA36_STATISTICS_COMMIT, "schema36-source")
+    maintenance_env = dict(env, PYTHONPATH=str(maintenance_source / "src"))
+    run(["uv", "run", "--no-sync", "--project", str(maintenance_source), "python",
+         str(Path(__file__).resolve()), "--populate-model-maintenance", "--work-dir", str(scratch),
+         "--model-stock-for", str(fixed)], cwd=root, env=maintenance_env)
+    maintenance_record = json.loads((scratch / "model-maintenance-writer.json").read_text(encoding="utf-8"))
+    with sqlite3.connect(":memory:") as connection:
+        floor_sql = insert_stock(connection, floor_record["rows"])
+        maintenance_sql = insert_stock(connection, maintenance_record["rows"])
+    stock = ("-- Schema-30 buddy and note rows from the released catalog and policy writers.\n"
+             + floor_sql + "-- Schema-36 domain, classification, summary and cell rows from the pinned maintenance writer.\n"
+             + maintenance_sql)
+    target = fixed / "schema-36-model-stock.sql"
+    target.write_text(stock, encoding="utf-8")
+    floor_sources = (
+        "src/hey_my_buddy/blackboard/catalog/catalog_store.py",
+        "src/hey_my_buddy/blackboard/evaluation/user_policy.py",
+    )
+    metadata["modelStock"] = {
+        "baseSha256": digest(base),
+        "schema31StockSha256": digest((fixed / "schema-31-stock.sql").read_bytes()),
+        "generatorSha256": digest(Path(__file__).read_bytes()),
+        "floorWriterCommit": FLOOR_COMMIT,
+        "floorWriterSources": {name: digest((floor_source / name).read_bytes()) for name in floor_sources},
+        "floorWriterRecordSha256": digest((scratch / "model-floor-writer.json").read_bytes()),
+        "floorStockSha256": digest(floor_sql.encode("utf-8")),
+        "writerCommit": SCHEMA36_STATISTICS_COMMIT,
+        "writerPath": SCHEMA36_MAINTENANCE_PATH,
+        "writerSha256": digest((maintenance_source / SCHEMA36_MAINTENANCE_PATH).read_bytes()),
+        "statisticsWriterPath": SCHEMA36_STATISTICS_PATH,
+        "statisticsWriterSha256": digest((maintenance_source / SCHEMA36_STATISTICS_PATH).read_bytes()),
+        "maintenanceWriterRecordSha256": digest((scratch / "model-maintenance-writer.json").read_bytes()),
+        "maintenanceStockSha256": digest(maintenance_sql.encode("utf-8")),
+        "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/<new-private-dir> --model-stock-for tests/fixtures/upgrade-floor",
+        "sha256": digest(stock.encode("utf-8")),
+    }
+    metadata.pop("modelStockSha256", None)
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                             encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--work-dir", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, default=Path("tests/fixtures/upgrade-base"))
+    parser.add_argument("--work-dir", type=Path)
+    parser.add_argument("--output-dir", type=Path, help="Full generated stock destination; supplement mode defaults to a work-dir sibling")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--python", type=Path, help="Use an already prepared read-only dependency interpreter")
+    parser.add_argument("--cleanup-stock-for", type=Path, help="Derive and update the interrupted journal for this fixed floor; preserve its base stock")
+    parser.add_argument("--reservation-stock-for", type=Path, help="Derive a read-only concluded reservation for this fixed floor; preserve its base stock")
+    parser.add_argument("--delivered-stock-for", type=Path, help="Derive a delivered v3 run and its physical resources from the floor writers")
+    parser.add_argument("--workspace-growth-stock-for", type=Path, help="Generate schema-33 workspace reference stock on an upgraded private floor")
+    parser.add_argument("--legacy-stock-for", type=Path, help="Derive retained v1/v2 profiles from the fixed floor; never rewrite the base")
+    parser.add_argument("--model-stock-for", type=Path, help="Generate schema-36 model stock through historical catalog, policy and maintenance writers")
+    parser.add_argument("--alias-stock-for", type=Path, help="Derive schema-39 alias migration cases from the fixed floor stock")
+    parser.add_argument("--populate-model-floor", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--populate-model-maintenance", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--populate-schema33", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--populate", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--verify", action="store_true", help="Only restore and validate; no old-source imports")
     args = parser.parse_args()
-    if args.verify:
+    if args.work_dir is None:
+        parser.error("--work-dir is required for this mode")
+    if args.output_dir is None:
+        args.output_dir = (args.work_dir.with_name(args.work_dir.name + "-generated")
+                           if (args.cleanup_stock_for or args.reservation_stock_for or args.delivered_stock_for or args.workspace_growth_stock_for or args.legacy_stock_for or args.alias_stock_for) and not args.verify else Path("tests/fixtures/upgrade-floor"))
+    if any(fixed and args.output_dir.resolve() == fixed.resolve()
+           for fixed in (args.cleanup_stock_for, args.reservation_stock_for, args.delivered_stock_for, args.workspace_growth_stock_for, args.legacy_stock_for, args.alias_stock_for)):
+        parser.error("supplements require a separate output-dir to preserve the fixed floor payloads")
+    if args.populate_model_floor:
+        populate_model_floor(args)
+    elif args.populate_model_maintenance:
+        populate_model_maintenance(args)
+    elif args.model_stock_for:
+        derive_schema36_model_stock(args)
+    elif args.alias_stock_for:
+        floor = args.alias_stock_for
+        with sqlite3.connect(':memory:') as connection:
+            connection.executescript((floor / 'board.sql').read_text(encoding='utf-8'))
+            assert connection.execute('SELECT COUNT(*) FROM buddies WHERE label IS NOT NULL').fetchone()[0] >= 3
+            assert connection.execute("SELECT COUNT(*) FROM evaluation_catalog WHERE discovery_id='cat-89b5b236ee44be1428bb5c86'").fetchone()[0] == 1
+        sql = """-- Derived on a private schema-39 copy from the three floor-written buddy rows.
+-- Alpha retains its proven synthetic description. Beta gets a recorded native
+-- description; Gamma loses its current catalog provenance but remains proven
+-- by an older payload. An orphan derived from Gamma has no catalog model.
+INSERT INTO evaluation_catalog(discovery_id,payload_json)
+SELECT 'fixture-native-beta',
+       json_set(payload_json, '$.providers[0].models[1].description', 'Native beta description')
+FROM evaluation_catalog WHERE discovery_id='cat-89b5b236ee44be1428bb5c86';
+UPDATE buddies SET source='catalog:fixture-native-beta',
+                   description='Native beta description'
+WHERE buddy_id='codex:openai:fixture-beta:high';
+UPDATE buddies SET source='catalog:fixture-missing-gamma'
+WHERE buddy_id='codex:openai:fixture-gamma:high';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,
+                    enabled,capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:fixture-orphan:high','fixture-orphan · high',harness,
+       provider,'fixture-orphan',effort,available,enabled,capabilities_json,
+       context_window,'fixture-orphan via openai','catalog:fixture-missing-orphan',
+       unavailable_code,unavailable_params_json,unavailable_content
+FROM buddies WHERE buddy_id='codex:openai:fixture-gamma:high';
+-- The next two efforts derive from Alpha's floor-written identity and columns;
+-- the native-unavailable and confirmed-absent models below derive from Gamma.
+-- The original floor writer supplied the catalog payload and buddy rows;
+-- schema-39 status writers could later overwrite their availability columns.
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,
+                    enabled,capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:fixture-alpha:medium','fixture-alpha · medium',harness,
+       provider,'fixture-alpha','medium',0,enabled,
+       '["execution:codex","effort:medium","input:text"]',context_window,
+       description,source,'catalog.effort-retired','{}',NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+UPDATE buddies SET description='Stale alternate detail',context_window=4096,
+                   capabilities_json='["execution:codex","effort:medium","input:image"]',
+                   source='catalog:cat-89b5b236ee44be1428bb5c86'
+WHERE buddy_id='codex:openai:fixture-alpha:medium';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,
+                    enabled,capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:fixture-alpha:low','fixture-alpha · low',harness,
+       provider,'fixture-alpha','low',0,enabled,
+       '["execution:codex","effort:low","input:text"]',context_window,
+       description,source,'harness.unhealthy','{}',NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,
+                    enabled,capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:fixture-native:high','fixture-native · high',harness,
+       provider,'fixture-native',effort,0,enabled,capabilities_json,context_window,
+       'Native model detail',source,'catalog.native-unavailable','{"detail":"native"}',
+       'Native diagnostic'
+FROM buddies WHERE buddy_id='codex:openai:fixture-gamma:high';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,
+                    enabled,capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:fixture-absent:high','fixture-absent · high',harness,
+       provider,'fixture-absent',effort,0,enabled,capabilities_json,context_window,
+       'Remembered absent model',source,'catalog.model-absent','{}',NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-gamma:high';
+INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)
+VALUES('codex','openai','fixture-native',5);
+"""
+        args.output_dir.mkdir(parents=True, exist_ok=False)
+        (args.output_dir / 'schema-39-alias-stock.sql').write_text(sql, encoding='utf-8')
+        catalog_sql = """-- Multi-effort catalog stock derived from the floor-written alpha row.
+-- The payload copies replace only model metadata in a retained floor payload.
+-- Later statements follow the old writers: retirement/health changes a cause;
+-- disappearance confirmation changes only rows that are still available.
+INSERT INTO evaluation_catalog(discovery_id,payload_json)
+SELECT 'catalog-stock-active',json_set(payload_json,'$.providers[0].efforts',json('["high","xhigh"]'),'$.providers[0].models',json('[{"id":"stock-absent-retired","name":"stock-absent-retired","description":"Confirmed model detail","contextWindow":65536,"inputModalities":["text"],"efforts":["high"],"available":true,"unavailableReason":null,"unavailableContent":null},{"id":"stock-pending-retired","name":"stock-pending-retired","description":"Current pending detail","contextWindow":32768,"inputModalities":["text","image"],"efforts":["high"],"available":true,"unavailableReason":null,"unavailableContent":null},{"id":"stock-confirmed-health","name":"stock-confirmed-health","description":"Confirmed health detail","contextWindow":8192,"inputModalities":["text"],"efforts":["high","xhigh"],"available":true,"unavailableReason":null,"unavailableContent":null},{"id":"stock-health-only","name":"stock-health-only","description":"Health masked detail","contextWindow":16384,"inputModalities":["text"],"efforts":["high"],"available":true,"unavailableReason":null,"unavailableContent":null},{"id":"stock-all-retired","name":"stock-all-retired","description":"Old retired detail","contextWindow":2048,"inputModalities":["text"],"efforts":["high","xhigh"],"available":true,"unavailableReason":null,"unavailableContent":null}]'))
+FROM evaluation_catalog WHERE discovery_id='cat-89b5b236ee44be1428bb5c86';
+INSERT INTO evaluation_catalog(discovery_id,payload_json)
+SELECT 'catalog-stock-stale',json_set(payload_json,'$.providers[0].efforts',json('["high","xhigh"]'),'$.providers[0].models',json('[{"id":"stock-absent-retired","name":"stock-absent-retired","description":"Stale retired detail","contextWindow":4096,"inputModalities":["audio"],"efforts":["high","xhigh"],"available":true,"unavailableReason":null,"unavailableContent":null},{"id":"stock-pending-retired","name":"stock-pending-retired","description":"Stale retired detail","contextWindow":4096,"inputModalities":["audio"],"efforts":["high","xhigh"],"available":false,"unavailableReason":{"code":"catalog.native-unavailable","params":{}},"unavailableContent":"Stale native limitation"},{"id":"stock-confirmed-health","name":"stock-confirmed-health","description":"Stale retired detail","contextWindow":4096,"inputModalities":["audio"],"efforts":["high","xhigh"],"available":false,"unavailableReason":{"code":"catalog.native-unavailable","params":{}},"unavailableContent":"Stale native limitation"},{"id":"stock-health-only","name":"stock-health-only","description":"Stale retired detail","contextWindow":4096,"inputModalities":["audio"],"efforts":["high","xhigh"],"available":false,"unavailableReason":{"code":"catalog.native-unavailable","params":{}},"unavailableContent":"Stale native limitation"},{"id":"stock-all-retired","name":"stock-all-retired","description":"Stale retired detail","contextWindow":4096,"inputModalities":["audio"],"efforts":["high","xhigh"],"available":false,"unavailableReason":{"code":"catalog.native-unavailable","params":{}},"unavailableContent":"Stale native limitation"}]'))
+FROM evaluation_catalog WHERE discovery_id='cat-89b5b236ee44be1428bb5c86';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,
+                    capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:stock-absent-retired:high','stock-absent-retired · high','codex',provider,
+       'stock-absent-retired','high',1,enabled,'["execution:codex","effort:high","input:text"]',65536,'Confirmed model detail',
+       'catalog:catalog-stock-active',NULL,NULL,NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,
+                    capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:stock-absent-retired:xhigh','stock-absent-retired · xhigh','codex',provider,
+       'stock-absent-retired','xhigh',0,enabled,'["execution:codex","effort:xhigh","input:audio"]',4096,'Stale retired detail',
+       'catalog:catalog-stock-stale','catalog.effort-retired','{}',NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+UPDATE buddies SET available=0,unavailable_code='catalog.model-absent',
+                   unavailable_params_json='{}',unavailable_content=NULL
+WHERE harness='codex' AND provider='openai' AND model='stock-absent-retired' AND available=1;
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,
+                    capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:stock-pending-retired:high','stock-pending-retired · high','codex',provider,
+       'stock-pending-retired','high',1,enabled,'["execution:codex","effort:high","input:text","input:image"]',32768,'Current pending detail',
+       'catalog:catalog-stock-active',NULL,NULL,NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,
+                    capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:stock-pending-retired:xhigh','stock-pending-retired · xhigh','codex',provider,
+       'stock-pending-retired','xhigh',0,enabled,'["execution:codex","effort:xhigh","input:audio"]',4096,'Stale retired detail',
+       'catalog:catalog-stock-stale','catalog.effort-retired','{}',NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,
+                    capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:stock-confirmed-health:high','stock-confirmed-health · high','codex',provider,
+       'stock-confirmed-health','high',1,enabled,'["execution:codex","effort:high","input:text"]',8192,'Confirmed health detail',
+       'catalog:catalog-stock-active',NULL,NULL,NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,
+                    capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:stock-confirmed-health:xhigh','stock-confirmed-health · xhigh','codex',provider,
+       'stock-confirmed-health','xhigh',0,enabled,'["execution:codex","effort:xhigh","input:audio"]',4096,'Stale retired detail',
+       'catalog:catalog-stock-stale','harness.probe-failed','{"operation":"probe"}',NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+UPDATE buddies SET available=0,unavailable_code='catalog.model-absent',
+                   unavailable_params_json='{}',unavailable_content=NULL
+WHERE harness='codex' AND provider='openai' AND model='stock-confirmed-health' AND available=1;
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,
+                    capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:stock-health-only:high','stock-health-only · high','codex',provider,
+       'stock-health-only','high',0,enabled,'["execution:codex","effort:high","input:text"]',16384,'Health masked detail',
+       'catalog:catalog-stock-active','harness.probe-failed','{"operation":"probe"}',NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,
+                    capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:stock-all-retired:high','stock-all-retired · high','codex',provider,
+       'stock-all-retired','high',0,enabled,'["execution:codex","effort:high","input:text"]',2048,'Old retired detail',
+       'catalog:catalog-stock-active','catalog.effort-retired','{}',NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,
+                    capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'codex:openai:stock-all-retired:xhigh','stock-all-retired · xhigh','codex',provider,
+       'stock-all-retired','xhigh',0,enabled,'["execution:codex","effort:xhigh","input:audio"]',1024,'Last retired detail',
+       'catalog:catalog-stock-stale','catalog.effort-retired','{}',NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+INSERT INTO catalog_pending(harness,provider,model,since,efforts_json)
+VALUES('codex','openai','stock-pending-retired','2026-01-01T00:02:00.000Z','["high"]');
+INSERT INTO events(kind,payload_json,created_at)
+VALUES('catalog.model_unavailable',
+       '{"harness":"codex","provider":"openai","model":"stock-absent-retired","pendingSince":"2025-12-31T23:01:30.000Z","confirmedAt":"2026-01-01T00:01:30.000Z"}',
+       '2026-01-01T00:01:30.000Z');
+-- A confirmed cause survives even when its current reading and event are gone.
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,
+                    capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'claude:openai:stock-no-time:high','stock-no-time · high','claude',provider,
+       'stock-no-time','high',0,enabled,'["execution:claude","effort:high","input:text"]',8192,'No-time confirmed detail',
+       'catalog:catalog-stock-active','catalog.model-absent','{}',NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,
+                    capabilities_json,context_window,description,source,
+                    unavailable_code,unavailable_params_json,unavailable_content)
+SELECT 'claude:openai:stock-no-time:xhigh','stock-no-time · xhigh','claude',provider,
+       'stock-no-time','xhigh',0,enabled,'["execution:claude","effort:xhigh","input:audio"]',4096,'Stale no-time detail',
+       'catalog:catalog-stock-active','catalog.effort-retired','{}',NULL
+FROM buddies WHERE buddy_id='codex:openai:fixture-alpha:high';
+"""
+        (args.output_dir / 'schema-39-catalog-stock.sql').write_text(catalog_sql, encoding='utf-8')
+    elif args.legacy_stock_for:
+        derive_legacy_stock(args)
+    elif args.verify:
         args.work_dir.mkdir(parents=True, exist_ok=False)
         print(json.dumps(verify(args.output_dir, args.work_dir / "restored.sqlite3"), ensure_ascii=False))
     elif args.populate:
         populate(args)
+    elif args.populate_schema33:
+        populate_schema33(args)
     else:
         generate(args)
 
 
 if __name__ == "__main__":
-    main()
+    if "--issue-stock-for" in sys.argv:
+        issue_stock_main()
+    else:
+        main()

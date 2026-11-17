@@ -1,9 +1,12 @@
+import { BuddyNamesProvider } from "./components/AliasTag";
 import i18n from "i18next";
 import { cn } from "cn";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
+import { UnderlineNav } from "./components/UnderlineNav";
 import { StateMark } from "@/components/ui/state-mark";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { buddyAttention } from "./buddies/attention";
@@ -14,6 +17,7 @@ import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import { useConsole } from "./use-console";
 import { useEditor } from "./use-editor";
+import { NOTICE_FADE_MS } from "./use-editor";
 import type { Editor } from "./use-editor";
 import { useTheme } from "./theme";
 import { getLanguageChoice, setLanguageChoice } from "./i18n";
@@ -58,7 +62,7 @@ function ConsoleApp({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
   const { t } = useTranslation(["shell", "common"]);
   const [api] = useState(() => suppliedApi || createApi(window.location.pathname));
   const state = useConsole(api);
-  return state.snapshot ? <Connected api={api} snapshot={state.snapshot} refresh={state.refresh} connectionError={state.error} /> :
+  return state.snapshot ? <Connected api={api} snapshot={state.snapshot} verifiedAt={state.verifiedAtMs} refresh={state.refresh} connectionError={state.error} runtimeUpdated={state.runtimeUpdated} /> :
     <main className="flex min-h-dvh flex-col items-center justify-center gap-5 p-6 text-center">
       <img src={buddyIcon} alt="" width="32" height="32" className="size-8" />
       <h1 className="text-lg font-semibold">{state.error ? t("startup.failed") : t("startup.connecting")}</h1>
@@ -77,30 +81,36 @@ function SaveBar({ editor, mutationsAvailable, describedBy }: {
   editor: Editor; mutationsAvailable: boolean; describedBy?: string;
 }) {
   const { t } = useTranslation(["shell", "common"]);
-  const label = editor.busy ? t("draft.saving")
-    : editor.confirming ? t("draft.retry") : t("draft.save");
+  const lastDraft = useRef({ dirty: editor.dirty, changeCount: editor.changeCount, busy: editor.busy, confirming: editor.confirming });
+  if (editor.mode !== null) lastDraft.current = { dirty: editor.dirty, changeCount: editor.changeCount, busy: editor.busy, confirming: editor.confirming };
+  const draft = lastDraft.current;
+  const label = draft.busy ? t("draft.saving")
+    : draft.confirming ? t("draft.retry") : t("draft.save");
   return <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-2 border-t bg-card px-3 py-2.5 sm:px-6" role="region" aria-label={t("draft.label")}>
-    <span className="mr-auto flex items-center gap-2 text-hand" role="status"><StateMark kind="hand" />{editor.dirty
-      ? t("draft.unsaved", { n: editor.changeCount })
+    <span className="mr-auto flex items-center gap-2 text-hand" role="status"><StateMark kind="hand" />{draft.dirty
+      ? t("draft.unsaved", { n: draft.changeCount })
       : t("draft.unresolved")}</span>
-    <Button variant="outline" aria-disabled={editor.busy || editor.confirming || undefined}
+    <Button variant="outline" aria-disabled={draft.busy || draft.confirming || undefined}
       onClick={() => void editor.discard()}>{t("draft.discard")}</Button>
-    <Button aria-disabled={!mutationsAvailable || editor.busy || undefined}
+    <Button aria-disabled={!mutationsAvailable || draft.busy || undefined}
       aria-describedby={describedBy} onClick={() => void editor.save()}>{label}</Button>
   </div>;
 }
 
 /** One line said above a page; its mark and colour tell a failure from something that waits for the user. */
-function Notice({ tone, role, children }: { tone: "fail" | "hand" | "plain"; role: "alert" | "status"; children: ReactNode }) {
-  return <div role={role} className={cn("flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b px-3 py-2 sm:px-6",
-    tone === "fail" ? "bg-fail-wash text-fail" : tone === "hand" ? "bg-hand-wash text-hand" : "bg-card text-ink2")}>
-    {tone !== "plain" && <StateMark kind={tone} />}
-    {children}
+function Notice({ tone, role, fading = false, children }: { tone: "fail" | "hand" | "plain"; role: "alert" | "status"; fading?: boolean; children: ReactNode }) {
+  return <div role={role} className="notice-collapse shrink-0" data-fading={fading || undefined}
+    style={fading ? { transitionDuration: `${NOTICE_FADE_MS}ms` } : undefined}>
+    <div><div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b px-3 py-2 sm:px-6",
+      tone === "fail" ? "bg-fail-wash text-fail" : tone === "hand" ? "bg-hand-wash text-hand" : "bg-card text-ink2")}>
+      {tone !== "plain" && <StateMark kind={tone} />}
+      {children}
+    </div></div>
   </div>;
 }
 
-function Connected({ api, snapshot, refresh, connectionError }: {
-  api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; connectionError: string;
+function Connected({ api, snapshot, refresh, connectionError, verifiedAt, runtimeUpdated }: {
+  api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; connectionError: string; verifiedAt: number | null; runtimeUpdated: boolean;
 }) {
   const { t } = useTranslation(["shell", "common"]);
   const [tab, setTab] = useState<Tab>(currentTab);
@@ -135,7 +145,6 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const saveRefusal = editor.saveBlockedReason;
   // Draft banners belong to the Buddy settings page.
   const draftTab = tab === "buddies";
-  const verifiedAt = api.readVerifiedAt?.(snapshot) ?? null;
   // What a mark on a tab means; the tab shows it on hover and on focus.
   const buddies = useTranslation("buddies");
   const waiting = attentionHints(buddyAttention(editor.view, snapshot), buddies.t);
@@ -143,28 +152,28 @@ function Connected({ api, snapshot, refresh, connectionError }: {
     tasks: pending > 0 ? t("nav.pendingHost") : undefined,
     buddies: editor.dirty ? t("nav.unsaved") : waiting.roles,
   };
-  return <TooltipProvider><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
+  return <BuddyNamesProvider buddies={snapshot.buddies}><TooltipProvider><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
     <a className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"
       href="#main" onClick={event => { event.preventDefault(); document.getElementById("main")?.focus(); }}>{t("skipToContent")}</a>
-    <header className="flex h-11 shrink-0 items-center gap-2 bg-bar px-3 text-bar-ink sm:gap-7 sm:px-4">
+    <header className="flex h-9 shrink-0 items-center gap-2 bg-bar px-3 text-bar-ink sm:gap-7 sm:px-4">
       <a className="flex shrink-0 items-center gap-2 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-bar-ink/60"
         href={tasksAddress} aria-label="Hey my buddy" onClick={() => select("tasks")}>
         <BrandMark />
         <span className="font-semibold tracking-tight max-sm:hidden">Hey my buddy</span>
       </a>
-      <nav className="flex h-full" aria-label={t("nav.label")}>
+      <UnderlineNav className="flex h-full" aria-label={t("nav.label")}>
         {tabs.map(key => {
           const hint = tabHints[key];
           const link = <a key={key} href={key === "tasks" ? tasksAddress : "#" + key} onClick={() => select(key)} aria-current={tab === key ? "page" : undefined}
             className="relative flex items-center gap-[7px] px-3.5 whitespace-nowrap text-bar-ink2 outline-none transition-colors duration-150 hover:text-bar-ink focus-visible:bg-bar-ink/10 motion-reduce:transition-none aria-[current=page]:font-medium aria-[current=page]:text-bar-ink aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3.5 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-bar-ink">
             {t(`nav.${key}`)}
-            {key === "tasks" && pending > 0 && <span className="min-w-[18px] rounded-sm bg-bar-hand px-[5px] text-center text-xs leading-[18px] font-semibold text-bar tabular-nums">{pending}</span>}
+            {key === "tasks" && pending > 0 && <span className="min-w-[18px] rounded-sm border border-bar-hand/60 px-[5px] text-center text-xs leading-4 font-medium text-bar-hand tabular-nums">{pending}</span>}
             {key === "buddies" && hint && <span className="size-1.5 rounded-full bg-bar-hand" aria-hidden="true" />}
             {hint && <span className="sr-only">{hint}</span>}
           </a>;
           return hint ? <Tooltip key={key}><TooltipTrigger asChild>{link}</TooltipTrigger><TooltipContent>{hint}</TooltipContent></Tooltip> : link;
         })}
-      </nav>
+      </UnderlineNav>
       <div className="ml-auto flex min-w-0 items-center gap-3 text-xs text-bar-ink2">
         {/* The bar shows the time alone; what it is the time of is said on hover and to a screen reader. */}
         <p className={connectionError && tab !== "tasks" ? "truncate text-bar-fail" : "truncate"}>
@@ -182,6 +191,10 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       <h1 className="sr-only">{t(`nav.${tab}`)}</h1>
       {/* What is said above a page: the lost connection and the state of a draft. */}
       <div className="flex shrink-0 flex-col empty:hidden">
+        {runtimeUpdated && <Notice tone="hand" role="status">
+          <span>{t("runtimeUpdated.message")}</span>
+          <Button variant="outline" size="sm" onClick={() => window.location.reload()}>{t("runtimeUpdated.refresh")}</Button>
+        </Notice>}
         {connectionError && tab !== "tasks" && <Notice tone="fail" role="alert">
           <span className="min-w-0 wrap-anywhere">{connectionError}</span>
           <Button variant="outline" size="sm" onClick={() => void refresh()}>{t("connection.retry")}</Button>
@@ -195,13 +208,13 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         </Notice>}
         {draftTab && editor.blocked && <Notice tone="plain" role="status">{editor.blocked}</Notice>}
         {draftTab && editor.error && !editor.confirming && <Notice tone="fail" role="alert">{editor.error}</Notice>}
-        {draftTab && editor.notice && <Notice tone="plain" role="status">{editor.notice}</Notice>}
+        {draftTab && editor.notice && <Notice tone="plain" role="status" fading={editor.notice.fading}>{editor.notice.text}</Notice>}
       </div>
       {saveRefusal && <p id="editor-save-reason" className="sr-only">{saveRefusal}</p>}
       {/* Stable positions preserve page selections, drafts and scroll offsets.
           https://react.dev/learn/preserving-and-resetting-state */}
       {tabs.map(key => visited.has(key) && <section key={key} hidden={tab !== key}
-        className="min-h-0 min-w-0 flex-1 overflow-hidden" aria-label={t(`nav.${key}`)}>
+        className="view-presence min-h-0 min-w-0 flex-1 overflow-hidden" aria-label={t(`nav.${key}`)}>
         {key === "tasks" ? <MacroTasks snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
           authority={authority} writesAvailable={writesAvailable} onAddress={setTasksAddress} connectionError={connectionError} verifiedAtMs={verifiedAt} /> :
           key === "buddies" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
@@ -210,8 +223,10 @@ function Connected({ api, snapshot, refresh, connectionError }: {
               active={tab === "settings"}
               theme={theme.choice} onTheme={theme.setChoice} language={getLanguageChoice()} onLanguage={setLanguageChoice} />}
       </section>)}
-      {draftTab && editor.mode && <SaveBar editor={editor} mutationsAvailable={mutationsAvailable}
-        describedBy={saveRefusal ? "editor-save-reason" : undefined} />}
+      {draftTab && <Collapsible open={Boolean(editor.mode)} className="shrink-0"><CollapsibleContent>
+        <SaveBar editor={editor} mutationsAvailable={mutationsAvailable}
+          describedBy={saveRefusal ? "editor-save-reason" : undefined} />
+      </CollapsibleContent></Collapsible>}
     </main>
-  </div></TooltipProvider>;
+  </div></TooltipProvider></BuddyNamesProvider>;
 }

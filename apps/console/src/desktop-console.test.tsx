@@ -6,8 +6,9 @@ import type { ConsoleApi } from "./api";
 import { formatDateTime } from "./i18n/format";
 import type { Buddy, Snapshot, Task } from "./types";
 import { timelineOfRecords } from "./task-detail/task-detail.fixtures";
-import { macroTaskSummary } from "./macro-task-fixtures";
-import { catalogue, effortCell, levelSwitch, listed, modelButton, note, pane, selectModel } from "./buddies/page.testing";
+import { macroTaskGroups, macroTaskSummary } from "./macro-task-fixtures";
+import { modelFacts } from "./buddies/model-fixtures";
+import { catalogue, effortCell, levelSwitch, listed, modelButton, pane, selectModel } from "./buddies/page.testing";
 
 const dsh = (model: string) => `dsh / deepseek-official / ${model}`;
 const GLM = "zcode / bigmodel-api / GLM-5.3";
@@ -21,22 +22,22 @@ function catalog(): Buddy[] {
       .flatMap(model => ["off", "low", "high", "max"].map((effort, effortRank) => ({ harness: "dsh", provider: "deepseek-official", model, effort, effortRank }))),
     ...["GLM-5.3", "GLM-5.3-Flash"].flatMap(model => ["low", "high", "max"]
       .map((effort, effortRank) => ({ harness: "zcode", provider: "bigmodel-api", model, effort, effortRank }))),
-  ].map(p => ({ ...p, buddyId: [p.harness, p.provider, p.model, p.effort].join(":"), label: `${p.model} · ${p.effort}`,
+  ].map(p => ({ ...p, buddyId: [p.harness, p.provider, p.model, p.effort].join(":"), alias: null,
     available: true, enabled: enabled.has([p.harness, p.model, p.effort].join(":")), capabilities: [],
     contextWindow: null, source: "catalog:fixture", description: "" }));
 }
-function microTask(runId: string, sourceHostId = "codex-source", projectId = "source-project"): Task {
+function microTask(runId: string, projectId = "source-project"): Task {
   return { runId, task: `目标 ${runId}`, state: "queued", owner: "worker:unrelated-label", cwd: `/runtime/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-24T10:00:00Z", updatedAt: "2026-09-24T10:00:00Z", acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
-    workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
-    lineage: { kind: "micro-task", sourceHostId, currentHostId: "current-host", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
-      project: { id: projectId, label: projectId, path: `/source/${projectId}` },
+    workflow: { checkout: "worktree", projectKind: "git", state: "executing", awaitingHost: false, revision: 1 },
+    lineage: { kind: "micro-task", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
+      project: { kind: "git" as const, id: projectId, label: projectId, path: `/source/${projectId}` },
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } } };
 }
 /** The compact collaboration record of a micro task, as `workflow_get` sends it. */
 type Workflow = Record<string, unknown>;
 function workflow(task: Task): Workflow {
-  return { runId: task.runId, hostId: "current-host", revision: 1, state: "awaiting-host", buddy: null, buddyLocked: false, delegationAuthority: false,
+  return { checkout: "worktree", project: { kind: "git" }, runId: task.runId, revision: 1, state: "awaiting-host", buddy: null, delegationAuthority: false,
     routing: null, turns: [], currentTurn: null, requests: [], counts: { turns: 0, openRequests: 1 }, children: [], artifacts: [], integrations: [],
     finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
     activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open", createdAt: "2026-09-24T10:00:00Z", decidedAt: null, childTaskId: null, routing: false,
@@ -49,12 +50,12 @@ function fixture(records: Task[] = []) {
   // fixture computes it with the server's own dedup semantics.
   const pendingCount = new Set(records.filter(t => t.workflow?.awaitingHost)
     .map(t => t.lineage?.rootRunId || t.runId)).size;
-  const snapshot: Snapshot = { csrfToken: "csrf", eventCursor: 0,
+  const snapshot: Snapshot = { csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: [buddies[0].buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [buddies[0].buddyId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
-    preferences: [], modelServiceNotes: [], decisions: [],
+    preferences: [], ...modelFacts(buddies), decisions: [],
     modelServiceConcurrency: [],
     tasks: { pendingCount },
     capabilities: { selection: false } };
@@ -75,8 +76,8 @@ function fixture(records: Task[] = []) {
   const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(snapshot)), command,
     task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
-    macroTasks: vi.fn(async () => ({ macroTasks: roots.map(t => macroTaskSummary({ macroTaskId: `run:${t.runId}`, title: t.task, titleSource: "task", project: t.lineage?.project ?? null })),
-      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(roots.map(t => macroTaskSummary({ macroTaskId: `run:${t.runId}`, kind: "standalone", title: t.task, titleSource: "task", project: t.lineage?.project ?? null }))),
+      totals: { all: roots.length, active: roots.length, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
     macroTaskTimeline: vi.fn(async (macroTaskId: string) => ({ timeline: timelineOfRecords(macroTaskId, records), verifiedAtMs: null })) } as unknown as ConsoleApi;
   return { snapshot, records, api, command, workflows };
 }
@@ -88,7 +89,7 @@ describe("desktop console", () => {
     const f = fixture();
     f.api.readVerifiedAt = () => Date.parse("2026-01-02T03:04:05Z");
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "还没有宏任务" });
+    await screen.findByRole("heading", { name: "暂无宏任务" });
     expect(screen.queryByRole("button", { name: "刷新工作台" })).toBeNull();
     // A read from an earlier day is written with its date; the top bar holds the only copy.
     const read = within(screen.getByRole("banner")).getByText(formatDateTime(Date.parse("2026-01-02T03:04:05Z")));
@@ -123,7 +124,7 @@ describe("desktop console", () => {
     // The count comes from the slim snapshot's server-side field.
     f.snapshot.tasks.pendingCount = 5;
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "还没有宏任务" });
+    await screen.findByRole("heading", { name: "暂无宏任务" });
     // The count and what it counts are both part of the tab's name.
     expect(screen.getByRole("link", { name: /^任务\s*5\s*等待 Host 决定的微任务$/ })).toBeTruthy();
     f.snapshot.tasks.pendingCount = 0;
@@ -150,39 +151,12 @@ describe("desktop console", () => {
     expect(levelSwitch("off")).toBeTruthy();
     await user.click(effortCell("low"));
     expect(levelSwitch("low")).toBeTruthy();
-    expect(within(detail).queryByRole("switch", { name: "启用 off" })).toBeNull();
+    expect(within(detail.querySelector<HTMLElement>("[data-slot=buddy-panel]")!).queryByRole("switch")).toBeNull();
+    expect(within(detail).getByRole("switch", { name: "启用 off" })).toBeTruthy();
     expect(within(detail).queryByRole("checkbox")).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
 
-  it("keeps one note draft per model across rows and main pages without a lease", async () => {
-    const f = fixture();
-    window.location.hash = "#buddies";
-    const user = userEvent.setup();
-    render(<App suppliedApi={f.api} />);
-    await listed(4, 22);
-    await selectModel(user, dsh("deepseek-flash"), "DSH");
-    await user.type(note(), "flash 的备注");
-    await user.click(modelButton(dsh("deepseek-v4-pro")));
-    expect(note()).toHaveProperty("value", "");
-    await user.type(note(), "pro 的备注");
-    await user.click(modelButton(GLM));
-    expect(note()).toHaveProperty("value", "");
-    await user.type(note(), "ZCode 的备注");
-    await user.click(screen.getByRole("link", { name: "设置" }));
-    expect(screen.queryByRole("textbox", { name: "备注" })).toBeNull();
-    await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /Buddy/ }));
-    expect(note()).toHaveProperty("value", "ZCode 的备注");
-    await user.click(modelButton(dsh("deepseek-flash")));
-    expect(note()).toHaveProperty("value", "flash 的备注");
-    await user.click(modelButton(dsh("deepseek-v4-pro")));
-    expect(note()).toHaveProperty("value", "pro 的备注");
-    // Snapshot polling keeps the draft without publishing it.
-    await waitFor(() => expect((f.api.snapshot as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1), { timeout: 4500 });
-    expect(note()).toHaveProperty("value", "pro 的备注");
-    await user.click(await screen.findByRole("button", { name: "放弃" }));
-    expect(f.command).not.toHaveBeenCalled();
-  });
 
   it("opens a micro task from its macro task and keeps its detail read-only across pages", async () => {
     const record = microTask("one");
@@ -190,12 +164,13 @@ describe("desktop console", () => {
     const f = fixture([record]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: /独立微任务/ }));
     await user.click(await screen.findByRole("button", { name: /目标 one/ }));
     await waitFor(() => expect(window.location.hash).toBe("#tasks/run%3Aone"));
     await waitFor(() => expect(document.querySelector('[data-key="row:one"]')).toBeTruthy());
     await user.dblClick(document.querySelector('[data-key="row:one"]') as HTMLElement);
     const detail = await screen.findByRole("region", { name: "微任务详情" });
-    await screen.findByRole("group", { name: "这个微任务的各步" });
+    await screen.findByRole("group", { name: "微任务步骤" });
     expect(within(detail).getByRole("heading", { name: /目标 one/ })).toBeTruthy();
     expect(detail.querySelectorAll("input, textarea, select, form")).toHaveLength(0);
     expect(screen.queryByRole("button", { name: "批准所列协助" })).toBeNull();

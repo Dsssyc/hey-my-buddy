@@ -8,7 +8,7 @@ Host 提交微任务可携带布尔字段 `delegationAuthority`，省略或 `fal
 
 控制台只在现有微任务详情的担任者位置显示“带委派权”及完整 buddy，不增添入口或样式；打包资产随构建更新。
 
-Python 验证只使用 `PYTHONPATH=src <Host 指定解释器> -m hey_my_buddy.cli.checks`，保持默认进程数，未运行完整检查。受影响的 `blackboard/store/`、`blackboard/tasks/`、`blackboard/routing/`、`buddy/roles/` 与相关 CLI、控制台、协议、服务、目录、评价、升级测试共 116 个文件；其中 115 个文件的 1,647 项测试通过，旧的列表字段断言补上 `delegationAuthority` 后，剩余文件单独复跑的 58 项测试通过。另 11 个受影响的 harness 与运行时测试文件的 363 项测试通过；最终覆盖 127 个 Python 文件、2,068 项测试，无跳过，每次检查的私有根都已由运行器清除。新增测试覆盖完整 buddy 的逐项缺失及空值、布尔类型、放开档位、协助任务拒绝授予、启用与可用性、授予的事务记录及读取、执行输入与四个 harness 的角色组装、幂等重放、执行凭据不能提交、续接换手与约束；基点升级测试证明存量授予均为 `0`，升级后结构与新建看板一致。
+Python 验证只使用 `PYTHONPATH=src <Host 指定解释器> -m hey_my_buddy.cli.checks`，保持默认进程数，未运行完整检查。受影响的 `blackboard/store/`、`blackboard/tasks/`、`blackboard/routing/`、`buddy/roles/` 与相关 CLI、控制台、协议、服务、目录、评价、升级测试共 116 个文件；其中 115 个文件的 1,647 项测试通过，旧的列表字段断言补上 `delegationAuthority` 后，剩余文件单独复跑的 58 项测试通过。另 11 个受影响的 harness 与运行时测试文件的 363 项测试通过；最终覆盖 127 个 Python 文件、2,068 项测试，无跳过，每次检查的私有根都已由运行器清除。新增测试覆盖完整 buddy 的逐项缺失及空值、布尔类型、放开档位、协助任务拒绝授予、启用与可用性、授予的事务记录及读取、执行输入与四个 harness 的角色组装、幂等重放、执行凭据不能提交、续接换手与约束；基点升级测试证明存量授予均为 `0`，升级后结构与新建黑板一致。
 
 已先运行 `npm --prefix apps/console ci`，因此 Python 的 `tests/python/cli/test_host_preview.py` 使用真实前端解析器并通过。控制台最终源码通过 `npm --prefix apps/console test` 的 78 个文件、1,092 项测试，以及 `npm --prefix apps/console run test:browser` 的 96 项浏览器检查，最终验证把前端与浏览器并发分别限制为 2；类型检查与 Vite 构建成功，打包资产已更新。早先高并发运行出现的前端及浏览器超时，在限制并发后全部通过；没有修改项目的测试阈值或配置。最终 `git diff --check` 通过，独立只读源码审查未发现本次范围内的实质缺陷；这次审查没有执行测试，也不表示 Host 已验收。
 

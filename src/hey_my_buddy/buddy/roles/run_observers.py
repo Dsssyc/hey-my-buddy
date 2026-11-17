@@ -14,13 +14,14 @@ while the Worker turn keeps working and retains refused interactions for Host
 attention. Both keep unknown events as facts. The correction rule preserves
 the fast call's existing loop: at most one correction, never for an enum violation,
 with the same bounded correction text appended to the same base prompt, on
-the same native process and total deadline.
+the same native session.
 """
 from __future__ import annotations
 
 from typing import Mapping
 
 from .structured_call import correction_code
+from .turn_io import canonical_json
 from ..harnesses.run_contract import FEEDBACK_CONTINUE, FEEDBACK_STOP, RunFeedback
 
 #: The correction suffix of the fast structured call, verbatim: the correction
@@ -79,22 +80,14 @@ class FastCorrection:
 
 
 class ReviewObserver:
-    """Count actual calls against the frozen review budget; optionally correct once."""
+    """Optionally correct a settled review answer once."""
 
-    def __init__(self, tool_budget: int, output_schema: dict, prompt: str, *, can_correct: bool):
-        self.tool_budget = tool_budget
+    def __init__(self, output_schema: dict, prompt: str, *, can_correct: bool):
         self.correction = FastCorrection(
             output_schema, prompt,
             suffix=". Return exactly the supplied JSON Schema; do not repeat exploration.") if can_correct else None
-        self.stop_reason: str | None = None
 
     def observer(self, facts: Mapping) -> RunFeedback:
-        # A budget of N permits N calls. Unknown events and denied native
-        # interactions were not early-stop rules in the existing review role.
-        calls = facts.get("toolCalls")
-        if type(calls) is int and calls > self.tool_budget:
-            self.stop_reason = "readonly-budget-exhausted"
-            return FEEDBACK_STOP
         if self.correction is not None and facts.get("settled"):
             # Only reuse the format-correction rule, not the fast role's
             # prohibition on tools. It sees the settled answer alone.
@@ -102,4 +95,31 @@ class ReviewObserver:
         return FEEDBACK_CONTINUE
 
 
-__all__ = ["CORRECTION_SUFFIX", "FastCorrection", "ReviewObserver", "worker_observer"]
+class MaintenanceCorrection(FastCorrection):
+    """Publish valid entries at each settled answer, correcting rejected ones twice.
+
+    The publisher belongs to the execution process, never the native harness.
+    It sends a private file reference to the service, where semantic validation
+    and every write occur. Corrections stay in the same native session.
+    """
+
+    def __init__(self, output_schema, base_prompt, publisher):
+        super().__init__(output_schema, base_prompt)
+        self.publisher = publisher
+
+    def observer(self, facts):
+        feedback = super().observer({**facts, "settled": False})
+        if feedback.action == "stop" or not facts.get("settled"):
+            return feedback
+        checked = self.publisher(facts.get("rawAnswer"), self.correction_count, {
+            key: int(facts.get(key) or 0) for key in ("toolCalls", "toolMarkerFrames", "deniedInteractions")})
+        if checked["errors"] and self.correction_count < 2:
+            self.correction_count += 1
+            return RunFeedback(action="correct", input_text=self.base_prompt +
+                "\n\nMaintenance correction: valid entries have already been saved. "
+                "Correct the rejected entries described below; preserve accepted classifications and summaries.\n" +
+                canonical_json(checked))
+        return FEEDBACK_CONTINUE
+
+
+__all__ = ["CORRECTION_SUFFIX", "FastCorrection", "MaintenanceCorrection", "ReviewObserver", "worker_observer"]

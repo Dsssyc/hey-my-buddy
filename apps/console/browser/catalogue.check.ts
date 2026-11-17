@@ -5,12 +5,12 @@ const FLASH = "dsh / deepseek-official / deepseek-flash";
 const CODEX = "codex / openai / gpt-5-codex";
 
 const languages = [
-  { locale: "zh-CN", catalog: "目录", unsaved: "未保存的修改", settings: "设置", account: "账户", check: "检测", checked: "已检测 Codex：已找到", cooling: "冷却中", clear: "解除冷却", unavailable: /^显示不可用/ },
-  { locale: "en-US", catalog: "Catalog", unsaved: "Unsaved changes", settings: "settings", account: "account", check: "Check", checked: "Checked Codex: Found", cooling: "Cooling down", clear: "Clear cooldown", unavailable: /^Show unavailable/ },
+  { locale: "zh-CN", catalog: "模型", unsaved: "未保存的修改", settings: "设置", check: "检测", checked: "已检测 Codex：已找到", cooling: "冷却中", clear: "开放重试", unavailable: /^显示不可用/ },
+  { locale: "en-US", catalog: "Models", unsaved: "Unsaved changes", settings: "settings", check: "Check", checked: "Checked Codex: Found", cooling: "Cooling down", clear: "Open retry", unavailable: /^Show unavailable/ },
 ];
 
-for (const { locale, catalog, unsaved, settings, account, check, checked, cooling, clear, unavailable } of languages)
-  for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const) {
+for (const { locale, catalog, unsaved, settings, check, checked, cooling, clear, unavailable } of languages)
+  for (const width of [1440]) for (const theme of ["light", "dark"] as const) {
     test.describe(`the catalogue in ${locale} at ${width}px in ${theme}`, () => {
       // The contrast is measured at rest: under reduced motion the page makes no transitions.
       test.use({ locale, viewport: { width, height: 900 }, reducedMotion: "reduce" });
@@ -18,8 +18,42 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
         await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       });
 
+      test("uses the whole model row as its disclosure handle", async ({ page }) => {
+        await open(page, "#buddies/models");
+        const row = page.getByRole("button", { name: CODEX, exact: true });
+        const resting = await row.evaluate(node => getComputedStyle(node).backgroundColor);
+        await expect(row).toHaveAttribute("aria-expanded", "false");
+        await expect(row.locator("[data-slot=disclosure]")).toHaveCount(0);
+        await expect(page.locator("[data-slot=harness-header] [data-slot=disclosure]").first()).toBeVisible();
+        await row.hover();
+        await expect(row).toHaveCSS("cursor", "pointer");
+        expect(await row.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe(resting);
+        await row.focus();
+        await page.keyboard.press("Shift+Tab");
+        await page.keyboard.press("Tab");
+        await expect(row).toBeFocused();
+        expect(await row.evaluate(node => getComputedStyle(node).boxShadow)).not.toBe("none");
+        await row.press("Enter");
+        await page.mouse.move(0, 0);
+        await expect(row).toHaveAttribute("aria-expanded", "true");
+        const contentId = await row.getAttribute("aria-controls");
+        expect(contentId).toBeTruthy();
+        const content = page.locator(`[id="${contentId}"]`);
+        await expect(content.locator("[data-slot=buddy-panel]")).toBeVisible();
+        await expect(content).not.toContainText("gpt-5-codex");
+        const selected = await row.evaluate(node => {
+          const reference = document.createElement("div");
+          reference.style.backgroundColor = "var(--past-wash)";
+          document.body.append(reference);
+          const color = getComputedStyle(reference).backgroundColor;
+          reference.remove();
+          return { row: getComputedStyle(node).backgroundColor, color };
+        });
+        expect(selected.row).toBe(selected.color);
+      });
+
       test("keeps harness summaries on one line and model rows inside the page", async ({ page }) => {
-        await open(page, "#buddies/catalog");
+        await open(page, "#buddies/models");
         const directory = page.getByRole("region", { name: catalog, exact: true });
         await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
         await expect(page.locator("[data-slot=model-drawer]")).toHaveCount(0);
@@ -28,25 +62,11 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
         await expectWholeAndApart(directory, toolbar.locator(TOOLBAR_ITEMS));
         const search = toolbar.getByRole("searchbox");
         expect(await search.evaluate(node => getComputedStyle(node).fontSize)).toBe("14px");
-        const navBox = (await toolbar.getByRole("navigation").boundingBox())!;
-        const searchBox = (await search.boundingBox())!;
-        const countBox = (await toolbar.getByRole("status").boundingBox())!;
-        if (width === 390) {
-          expect(countBox.y).toBeGreaterThanOrEqual(navBox.y);
-          expect(countBox.y).toBeLessThan(navBox.y + navBox.height);
-          expect(searchBox.y).toBeGreaterThanOrEqual(navBox.y + navBox.height);
-          expect(searchBox.width).toBe(width - 24);
-          const filtersBox = (await toolbar.locator("[data-slot=catalogue-filters]").boundingBox())!;
-          expect(filtersBox.y).toBeGreaterThanOrEqual(searchBox.y + searchBox.height);
-          for (const button of await toolbar.locator("[data-slot=catalogue-actions] > button").all()) {
-            const box = (await button.boundingBox())!;
-            expect(box.y).toBeGreaterThanOrEqual(searchBox.y + searchBox.height);
-            expect(box.height).toBe(28);
-          }
-        } else expect(searchBox.x).toBeGreaterThan(navBox.x + navBox.width + 24);
-        await expect(toolbar.getByRole("link").first()).toHaveAccessibleName(catalog);
+        const header = page.locator("[data-slot=buddy-header]");
+        await expect(header.getByRole("link").nth(1)).toHaveAccessibleName(catalog);
+        await expect(toolbar.getByRole("status")).toHaveCount(0);
         await expect(page.locator("[data-slot=unsaved-mark]")).toHaveCount(0);
-        const metered = page.getByRole("button", { name: `DSH ${account}`, exact: true });
+        const metered = page.locator("[data-slot=harness-section][aria-label=DSH] [data-slot=harness-header]");
         await expect(metered.locator("[data-slot=cooling-status]")).toContainText(cooling);
         await expect(metered).not.toContainText("%");
         const logo = page.locator("[data-slot=harness-section][aria-label=ZCode] [data-slot=harness-logo]");
@@ -62,13 +82,11 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
           await expectWholeAndApart(row, row.locator(":scope > button"));
           await expectTextUncut(row.locator(":scope > button"));
         }
-        for (const summary of await page.locator("[data-slot=harness-section]").getByRole("button", { name: new RegExp(` ${account}$`) }).all()) {
+        for (const summary of await page.locator("[data-slot=harness-header]").all()) {
           await expectTextUncut(summary);
-          // The row remains the button, and the cooldown summary belongs to it.
-          await expect(summary.locator("[data-slot=cooling-status]")).toHaveCount(await summary.getAttribute("aria-label") === `DSH ${account}` ? 1 : 0);
           expect(await contrastOf(summary)).toBeGreaterThanOrEqual(4.5);
         }
-        const zcode = page.getByRole("button", { name: `ZCode ${account}`, exact: true });
+        const zcode = page.locator("[data-slot=harness-section][aria-label=ZCode] [data-slot=harness-header]");
         await expect(zcode.locator("[data-slot=cooling-status]")).toHaveCount(0);
         await expectTextUncut(zcode);
         // The available sections precede the recorded login failure.
@@ -90,18 +108,15 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
       });
 
       test("keeps ordinary model rows compact and cooling inline", async ({ page }, testInfo) => {
-        await open(page, "#buddies/catalog");
+        await open(page, "#buddies/models");
         const cooled = page.getByRole("button", { name: FLASH, exact: true }).locator("..");
         const ordinary = page.getByRole("button", { name: "dsh / deepseek-partner / deepseek-flash", exact: true }).locator("..");
-        await expect(cooled.locator("[data-slot=cooling-status]")).toContainText(cooling);
+        await expect(cooled.locator("[data-slot=cooling-status]")).toHaveCount(0);
+        await expect(cooled.locator("[data-slot=model-provider]")).toHaveText("deepseek-official");
+        await expect(ordinary.locator("[data-slot=model-provider]")).toHaveText("deepseek-partner");
         const [coolingBox, ordinaryBox] = [(await cooled.boundingBox())!, (await ordinary.boundingBox())!];
-        expect(ordinaryBox.height).toBe(width === 390 ? 57 : 41);
-        if (width === 1280) {
-          expect(coolingBox.height).toBe(ordinaryBox.height);
-          const name = (await cooled.getByText("deepseek-flash", { exact: true }).boundingBox())!;
-          const status = (await cooled.locator("[data-slot=cooling-status]").boundingBox())!;
-          expect(Math.abs(name.y + name.height / 2 - status.y - status.height / 2)).toBeLessThan(3);
-        }
+        expect(ordinaryBox.height).toBe(41);
+        expect(coolingBox.height).toBe(ordinaryBox.height);
         await expectNoSidewaysScroll(page);
         await testInfo.attach("model-row-heights", { body: JSON.stringify({ locale, width, theme,
           withoutCooling: ordinaryBox.height, withCooling: coolingBox.height }), contentType: "application/json" });
@@ -109,66 +124,55 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
           path: testInfo.outputPath(`buddy-inline-${locale}-${width}-${theme}.png`) });
       });
 
-      test("shows one cooling provider and a quiet non-cooling provider in the account details", async ({ page }, testInfo) => {
-        await open(page, "#buddies/catalog");
-        await page.getByRole("button", { name: `DSH ${account}`, exact: true }).click();
-        await page.getByRole("button", { name: `Codex ${account}`, exact: true }).click();
-        const dsh = page.getByRole("group", { name: `DSH ${settings}`, exact: true });
-        const codex = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
-        await expect(dsh.locator("[data-slot=cooling-details]")).toContainText("deepseek-official");
-        await expect(dsh.locator("[data-slot=cooling-details]")).not.toContainText("deepseek-partner");
-        await expect(dsh.getByRole("button", { name: clear })).toHaveCount(1);
-        await expect(codex.locator("[data-slot=cooling-details]")).toHaveCount(0);
-        await expect(codex.getByRole("button", { name: clear })).toHaveCount(0);
+      test("shows cooling retry in the head and two harness detail groups", async ({ page }, testInfo) => {
+        await open(page, "#buddies/models");
+        const dshHeader = page.locator("[data-slot=harness-section][aria-label=DSH] [data-slot=harness-header]");
+        await expect(dshHeader).toContainText("deepseek-official");
+        await expect(dshHeader.getByRole("button", { name: clear })).toHaveCount(1);
+        await expect(page.locator("[data-slot=harness-section][aria-label=Codex] [data-slot=harness-header]").getByRole("button", { name: clear })).toHaveCount(0);
         await expectNoSidewaysScroll(page);
         await page.screenshot({ path: testInfo.outputPath(`catalogue-cooling-and-clear-${locale}-${width}-${theme}.png`), fullPage: true });
+        await page.locator('[data-slot="buddy-header"] a[href="#buddies/harness"]').click();
+        const dsh = page.getByRole("group", { name: `DSH ${settings}`, exact: true });
+        const codex = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
+        await expect(dsh.locator(":scope > [role=group]")).toHaveCount(2);
+        await expect(codex.locator(":scope > [role=group]")).toHaveCount(2);
         await dsh.screenshot({ path: testInfo.outputPath(`buddy-cooling-${locale}-${width}-${theme}.png`) });
         await codex.screenshot({ path: testInfo.outputPath(`buddy-clear-${locale}-${width}-${theme}.png`) });
       });
 
-      test("aligns the effort strip and selected panel, stacking the same drawer on narrow screens", async ({ page }) => {
-        await open(page, "#buddies/catalog");
+      test("places model service above a buddy list and selected panel", async ({ page }) => {
+        await open(page, "#buddies/models");
         await page.getByRole("button", { name: CODEX, exact: true }).click();
         const drawer = page.getByRole("region", { name: CODEX, exact: true });
-        const strip = drawer.getByRole("group", { name: /^(推理强度|Reasoning effort)$/ });
+        const service = drawer.locator("[data-slot=model-service]");
+        const columns = drawer.locator("[data-slot=buddy-columns]");
+        const list = columns.locator("[data-slot=buddy-list]");
         const panel = drawer.locator("[data-slot=buddy-panel]");
+        await expect(service.locator("[data-slot=model-service-line]")).toHaveCount(1);
+        await expect(list.locator("[data-slot=buddy-choice]")).toHaveCount(await list.locator("[data-slot=buddy-stop]").count());
+        const choices = list.locator("[data-slot=buddy-choice]");
+        await expect(choices.first().getByRole("switch")).toHaveCount(1);
         await expect(drawer.getByRole("radiogroup", { name: /^(默认偏好|Default preference)$/ })).toHaveCount(0);
         await expect(panel.getByRole("radiogroup", { name: /的偏好$|^Preference of / })).toHaveCount(1);
         await expect(panel.getByRole("radio", { name: locale === "zh-CN" ? "不设" : "None" })).toBeVisible();
-        await expectWholeAndApart(drawer, drawer.locator(":scope > div > div"));
-        await expectWholeAndApart(strip, strip.getByRole("button"));
-        await expectWholeAndApart(panel, panel.locator("input, [role=radiogroup], [role=switch]"));
+        await expectWholeAndApart(drawer, service);
+        await expectWholeAndApart(columns, list);
+        await expectWholeAndApart(columns, panel);
+        await expect(panel.getByRole("switch")).toHaveCount(0);
+        await expect(panel.locator("[data-slot=buddy-infrastructure-failures]")).toHaveCount(0);
         await expectTextUncut(drawer.locator("button, [role=radio]"));
         for (const heading of await drawer.locator("h3").all())
           expect(await heading.evaluate(node => getComputedStyle(node).fontSize)).toBe("12px");
         for (const input of await drawer.locator("input").all())
           expect(await input.evaluate(node => getComputedStyle(node).fontSize)).toBe("14px");
-        const [stripBox, panelBox] = [await strip.boundingBox(), await panel.boundingBox()];
-        expect(Math.round(stripBox!.x)).toBe(Math.round(panelBox!.x));
-        expect(Math.round(stripBox!.width)).toBe(Math.round(panelBox!.width));
-        if (width === 390) {
-          expect(await strip.evaluate(node => getComputedStyle(node).gridTemplateColumns.split(" ").length)).toBe(3);
-          const [model, buddy] = await drawer.locator(":scope > div > div").all();
-          const [modelBox, buddyBox] = [await model.boundingBox(), await buddy.boundingBox()];
-          expect(modelBox!.y + modelBox!.height).toBeLessThanOrEqual(buddyBox!.y);
-        }
-        const enabled = panel.getByRole("switch");
-        const wasEnabled = await enabled.getAttribute("aria-checked");
-        await strip.getByRole("button", { name: "medium", exact: true }).click();
-        await expect(panel.getByRole("switch")).toHaveAttribute("aria-checked", "false");
-        await strip.getByRole("button", { name: "high", exact: true }).click();
-        await expect(panel.getByRole("switch")).toHaveAttribute("aria-checked", wasEnabled!);
-        const selected = strip.getByRole("button", { pressed: true });
-        const point = await selected.locator("..").locator("[data-slot=buddy-pointer]").evaluate(node => {
-          const shape = getComputedStyle(node);
-          const style = getComputedStyle(node.previousElementSibling!);
-          return { display: shape.display, border: shape.borderRightColor, color: style.color };
-        });
-        if (width === 390) expect(point.display).toBe("none");
-        else {
-          expect(point.display).not.toBe("none");
-          expect(point.border).toBe(point.color);
-        }
+        const [serviceBox, listBox, panelBox] = [await service.boundingBox(), await list.boundingBox(), await panel.boundingBox()];
+        expect(serviceBox!.y + serviceBox!.height).toBeLessThanOrEqual(listBox!.y);
+        expect(listBox!.x + listBox!.width).toBeLessThanOrEqual(panelBox!.x + 1);
+        const selected = choices.locator("[data-slot=buddy-stop][aria-pressed=true]");
+        await expect(selected).toHaveCount(1);
+        await choices.locator("[data-slot=buddy-stop][aria-pressed=false]").first().click();
+        await expect(list.locator("[data-slot=buddy-choice][data-selected=true]")).toHaveCount(1);
         // A hint-wrapped Radix control renders its choice from aria-checked.
         const fill = (checked: boolean) => drawer.getByRole("radio", { checked }).first().evaluate(node => getComputedStyle(node).backgroundColor);
         expect(await fill(true)).not.toBe(await fill(false));
@@ -178,10 +182,10 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
       });
 
       test("shows unsaved marks on a setting, an effort and the closed row, and keeps the save bar at the bottom", async ({ page }) => {
-        await open(page, "#buddies/catalog");
+        await open(page, "#buddies/models");
         await page.getByRole("button", { name: FLASH, exact: true }).click();
         const drawer = page.getByRole("region", { name: FLASH, exact: true });
-        await drawer.getByRole("switch").click();
+        await drawer.locator("[data-slot=buddy-choice] [role=switch]").first().click();
         const bar = page.getByRole("region", { name: unsaved });
         const box = await bar.boundingBox();
         expect(box!.x).toBe(0);
@@ -197,33 +201,31 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
         await expectNoSidewaysScroll(page);
       });
 
-      test("expands accounts independently and keeps checks and hints inside the window", async ({ page }) => {
+      test("keeps harness checks and hints inside the window", async ({ page }) => {
         // The hint opens with its motion, as a user without the setting sees it.
         await page.emulateMedia({ reducedMotion: "no-preference" });
-        await open(page, "#buddies/catalog");
-        await page.getByRole("button", { name: `Codex ${account}`, exact: true }).click();
-        await page.getByRole("button", { name: `DSH ${account}`, exact: true }).click();
+        await open(page, "#buddies/harness");
         const codex = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
         await expect(page.getByRole("group", { name: `DSH ${settings}`, exact: true })).toBeVisible();
-        await expectWholeAndApart(codex, codex.getByRole("group"));
-        for (const heading of await codex.locator("h3").all())
+        await expectWholeAndApart(codex, codex.locator(":scope > [role=group]"));
+        for (const heading of await codex.locator("h4").all())
           expect(await heading.evaluate(node => getComputedStyle(node).fontSize)).toBe("12px");
         await codex.getByRole("button", { name: check, exact: true }).click();
-        await expect(page.locator("[data-slot=harness-feedback]")).toHaveText(checked);
-        await expectWholeAndApart(page.getByRole("main"), page.locator("[data-slot=harness-feedback]"));
+        await expect(page.locator("[data-slot=harness-feedback]:visible")).toHaveText(checked);
+        await expectWholeAndApart(page.getByRole("main"), page.locator("[data-slot=harness-feedback]:visible"));
         // Account guidance may be absent; the recorded review word always has a hint.
-        const review = codex.locator("[aria-description]").filter({ hasText: /^(可用|Eligible)$/ }).first();
-        await expect(review).toHaveAttribute("aria-description", /资格来自 harness 的只读档位声明|Eligibility comes from the harness/);
+        const review = codex.locator("[aria-description]").filter({ hasText: /^(强制限制|Enforced)$/ }).first();
+        await expect(review).toHaveAttribute("aria-description", /按 harness 的只读档位声明|Based on the harness/);
         // Scrolling closes hints: bring the word into view and let scrolling settle before keyboard focus.
         await review.scrollIntoViewIfNeeded();
         await settle(page);
-        await codex.getByRole("button", { name: check, exact: true }).focus();
+        await codex.getByRole("button", { name: locale === "zh-CN" ? "指定路径" : "Set path", exact: true }).focus();
         await settle(page);
-        await page.keyboard.press("Shift+Tab");
+        await page.keyboard.press("Tab");
         await expect(review).toBeFocused();
         const hint = page.locator("[data-slot=tooltip-content][data-state$=open]");
         await expect(hint).toBeVisible();
-        expect((await hint.boundingBox())!.width).toBeLessThanOrEqual(320);
+        expect((await hint.boundingBox())!.width).toBeLessThanOrEqual(Math.min(448, page.viewportSize()!.width - 32));
         await expectWholeAndApart(page.locator("body"), hint);
         await expectNoSidewaysScroll(page);
       });

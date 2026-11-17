@@ -12,7 +12,7 @@ import { useTaskDetail } from "../task-detail/use-task-detail";
 import type { Snapshot } from "../types";
 import { useConsole } from "../use-console";
 import { macroTaskSummary } from "../macro-task-fixtures";
-import { stopStatus, useMacroTaskStop } from "../macro-task-stop";
+import { workFeedback, useMacroTaskControl } from "../macro-task-control";
 import { setLanguageChoice } from "./index";
 import { useCopyState } from "./use-copy-state";
 
@@ -65,7 +65,7 @@ it("updates a malformed save error while preserving the reminder draft and input
 
 it("updates a retained task-detail parser error without starting another read", async () => {
   const reads = client();
-  vi.spyOn(reads, "task").mockImplementation(async () => ({ value: parseTask({}, "m1"), verifiedAtMs: null }));
+  vi.spyOn(reads, "task").mockImplementation(async () => ({ value: parseTask({}, "m1") }));
   const { result } = renderHook(() => useTaskDetail(reads, "m1", true, []));
   await waitFor(() => expect(result.current.error).not.toBe(""));
   const chinese = result.current.error;
@@ -102,18 +102,18 @@ it("keeps literal errors literal and translates standard refusal codes after dis
   expect(result.current[0]).toBe("原始消息");
 });
 
-it("updates an already refused stop while preserving its request identity", async () => {
+it("updates an already refused pause while preserving its request identity", async () => {
   const command = vi.fn().mockRejectedValue(new ApiError("REVISION_CONFLICT", "Server detail"));
   const api = { command } as unknown as ConsoleApi;
   const snapshot = { csrfToken: "csrf", consoleSession: { id: "session" } } as Snapshot;
   const summary = macroTaskSummary();
-  const { result } = renderHook(() => useMacroTaskStop(api, snapshot, true, undefined, async () => {}));
-  await act(async () => result.current.confirmStop(summary));
-  const retained = result.current.entries.get(summary.macroTaskId)!;
+  const { result } = renderHook(() => useMacroTaskControl(api, snapshot, true, undefined, async () => {}));
+  await act(async () => result.current.run(summary, "pause"));
+  const retained = result.current.entries.get(summary.macroTaskId)!.pause!;
   expect(retained.phase).toBe("refused");
   act(() => setLanguageChoice("en"));
-  expect(stopStatus(result.current.entries.get(summary.macroTaskId), null)?.detail)
+  expect(workFeedback(result.current.entries.get(summary.macroTaskId)!.pause!))
     .toBe("The record was updated; refresh, check it and try again.");
-  expect(result.current.entries.get(summary.macroTaskId)?.commandId).toBe(retained.commandId);
+  expect(result.current.entries.get(summary.macroTaskId)?.pause?.commandId).toBe(retained.commandId);
   expect(command).toHaveBeenCalledTimes(1);
 });

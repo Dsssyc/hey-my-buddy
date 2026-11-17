@@ -258,7 +258,7 @@ class ResumeTurnTests(NativeResumeCase):
         self.assertTrue(native_path(self.root / "storages/session_projcache/sessions" / f"{previous}.json").is_file())
         self.assertEqual([row["id"] for row in rows[1:]],
                          ["storage-json"])
-        rollout = list(native_path(self.root / "sessions").glob(f"{previous}.v3.jsonl*"))
+        rollout = list(native_path(self.root / "sessions").glob(f"*/{previous}/session.v4.jsonl*"))
         self.assertEqual(len(rollout), 1, "the resumed rollout lives in the shared root")
         self.assertFalse((self.root / "dsh-home").exists())
         # The model and effort were selected and read back on the resumed
@@ -284,7 +284,7 @@ class ResumeFailureTests(NativeResumeCase):
         # No process was ever spawned and no session was silently rebuilt.
         self.assertEqual(self.agent_log(), [])
         self.assertIsNone(result.native_identity)
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(result.stop_evidence.native.group_state, "gone",
                          "the spawn never happened; gone is the honest fact")
         self.assertIsNone(result.continuation)
@@ -338,7 +338,7 @@ class ResumeFailureTests(NativeResumeCase):
         native_path(binding_path).write_text(json.dumps(binding), encoding="utf-8", newline="\n")
         _, _, _, refused = self.resumed_turn(previous)
         self.assertEqual(refused.end.reason_code, "native-resume-unavailable")
-        self.assertIsNone(refused.model_started)
+        self.assertIs(refused.model_responded, False)
 
     def test_a_foreign_session_id_echoed_by_the_resume_answer_fails(self):
         _request1, _bound1, _mount1, result1 = self.first_turn()

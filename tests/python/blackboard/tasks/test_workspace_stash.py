@@ -9,6 +9,7 @@ interact with prepare/seal/verify. Every repository is a private fixture created
 by the test; no shared or daily board is touched.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from admission import admit_board, admit_store
 
 import json
@@ -318,7 +319,6 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.controls: dict[str, dict] = {}
         self.worker = "w-stash"
         from hey_my_buddy.blackboard.tasks import workflow as workflow_module
         self._previous_workspace = workflow_module._workspace_module
@@ -343,14 +343,8 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
         board = self.board()
         self.register(board)
         queued_only = self.stash("queued only")
-        submitted = board.call("workflow_submit", {
-            "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off",
-            "requestId": "req-real-stash", "hostId": "host-1", "task": "real shared stash facts",
-            "cwd": str(self.repo), "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
-        })
+        submitted = self.submit(board, request_id="req-real-stash", kind="worktree")
         run_id = submitted["runId"]
-        self.controls[run_id] = submitted["control"]
         # The user drops their stash while the task merely sits queued: the turn
         # that eventually starts must freeze its own starting state.
         self.git("stash", "drop", "stash@{0}")
@@ -363,7 +357,7 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
         self.git("stash", "drop", "stash@{1}")
         claimed = admit_board(board, {'workerId': self.worker, 'claimRequestId': 'claim-real-stash', 'nonce': 'n' * 16, 'runId': run_id})
         claim = claimed["claim"]
-        manifest = claim["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claim["turn"]["input"])
         frozen = claim["turn"]["input"]["context"]["sharedStash"]
         self.assertEqual(frozen["start"]["state"], "observed")
         self.assertEqual(frozen["repositoryPath"], manifest["snapshot"]["repositoryPath"])
@@ -378,7 +372,7 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
         seal = workspace.seal(self.directory, manifest, run_id, claim["attempt"]["attemptId"])
         result = {
             "status": "ok", "processState": {"shutdownConfirmed": True},
-            "turn": self.turn_record(claim), "turnResultPath": "/tmp/turn.json", "workspaceSeal": seal,
+            "turn": self.turn_record(claim), "turnResultPath": "/tmp/turn.json", "workspaceSeal": record_reference(self.directory, seal),
         }
         board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
         view = board.call("workflow_get", {"runId": run_id})

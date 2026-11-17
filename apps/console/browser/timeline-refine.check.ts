@@ -96,7 +96,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`timeline refineme
       });
       const waits = [...track.querySelectorAll<SVGLineElement>('[data-slot=host-wait], [data-slot=acceptance-wait]')].map(wait => ({
         dashed: wait.hasAttribute('stroke-dasharray'),
-        diamond: [...track.querySelectorAll<SVGPathElement>('[data-slot=waiting-diamond]')].some(diamond => Math.abs(diamond.getBBox().x + diamond.getBBox().width / 2 - wait.x1.baseVal.value) < 0.01),
+        diamond: [...track.querySelectorAll<SVGPathElement>('[data-slot=waiting-diamond]')].some(diamond => Math.abs(Math.min(diamond.getBBox().x + diamond.getBBox().width / 2 + (diamond.getAttribute("data-kind") === "review" ? 6 : 0), wait.x2.baseVal.value) - wait.x1.baseVal.value) < 0.01),
       }));
       return { marks, crosses, waits };
     }));
@@ -111,7 +111,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`timeline refineme
     expect(breaks.length).toBeGreaterThan(0);
     for (const width of breaks) expect(width).toBeCloseTo(54);
     const legend = await openLegend(page);
-    await expect(legend.locator('[data-kind=waiting]')).toContainText("菱形标出工作交给 Host 或 Lead 的地方，虚线表示仍在等");
+    await expect(legend.locator('[data-kind=waiting]')).toContainText("菱形标记工作交给 Host 或 Lead 的时刻，虚线表示仍在等待");
     const patterns = await page.locator('[data-slot=idle-pattern]').evaluateAll(elements => elements.map(pattern => ({
       width: pattern.getAttribute("width"), height: pattern.getAttribute("height"),
       path: pattern.querySelector("path")!.getAttribute("d"), stroke: getComputedStyle(pattern.querySelector("path")!).stroke,
@@ -120,8 +120,13 @@ for (const theme of ["dark", "light"] as const) test.describe(`timeline refineme
     expect(patterns.length).toBeGreaterThan(1);
     expect(new Set(patterns.map(pattern => JSON.stringify(pattern))).size).toBe(1);
     expect(patterns[0]!.width).toBe("14"); expect(Number(patterns[0]!.opacity)).toBe(0.4);
-    const diamonds = await page.locator('[data-slot=waiting-diamond]').evaluateAll(elements => elements.map(diamond => ({ fill: getComputedStyle(diamond).fill, width: (diamond as SVGPathElement).getBBox().width })));
-    expect(new Set(diamonds.map(diamond => JSON.stringify(diamond))).size).toBe(1);
+    const diamonds = await page.locator('[data-slot=waiting-diamond]').evaluateAll(elements => elements.map(diamond => ({
+      kind: diamond.getAttribute("data-kind"), fill: getComputedStyle(diamond).fill,
+      stroke: getComputedStyle(diamond).stroke, width: (diamond as SVGPathElement).getBBox().width,
+    })));
+    expect(new Set(diamonds.map(diamond => diamond.width)).size).toBe(1);
+    expect(diamonds.some(diamond => diamond.kind === "hand" && diamond.fill !== "none")).toBe(true);
+    expect(diamonds.some(diamond => diamond.kind === "review" && diamond.fill === "none" && diamond.stroke !== "none")).toBe(true);
     await page.keyboard.press("Escape");
     await page.locator('[data-key="span:execution:att-a1-2"]').click();
     const strip = page.locator('[data-slot=detail-strip]');

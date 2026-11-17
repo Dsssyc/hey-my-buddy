@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 import json
-from temporary import TemporaryDirectory
+import tempfile
 from pathlib import Path
 
 from hey_my_buddy.protocol import tool_evidence
@@ -18,7 +18,7 @@ ROOT = {"sessionId": "session", "turnId": "turn"}
 
 class NativeProjectionTests(unittest.TestCase):
     def setUp(self):
-        self.private = TemporaryDirectory()
+        self.private = tempfile.TemporaryDirectory()
         self.addCleanup(self.private.cleanup)
         self.state_dir = Path(self.private.name) / "state"
         self.facts = ZcodeToolFacts(BINDING, state_dir=self.state_dir)
@@ -90,6 +90,25 @@ class NativeProjectionTests(unittest.TestCase):
         self.assertIsNotNone(self.judge())
         self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True), state_dir=self.state_dir))[0]["phases"],
                          ["start"])
+
+    def test_conflicting_metadata_and_canonical_outcomes_stay_unknown(self):
+        self.scheduled()
+        self.metadata("failed")
+        self.canonical("tool.updated", {"kind": "result", "toolCallId": "read", "result": {"success": True}})
+        package = self.facts.finish(True)
+        self.assertEqual(package["toolSummary"], [
+            {"toolName": "Read", "calls": 1, "failed": 0, "unknown": 1}])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))[0]["outcome"], "unknown")
+        self.assertIsNotNone(self.judge())
+
+    def test_disagreeing_repeated_terminal_facts_stay_unknown(self):
+        self.scheduled()
+        self.canonical("tool.updated", {"kind": "result", "toolCallId": "read", "result": {"success": True}})
+        self.canonical("tool.updated", {"kind": "result", "toolCallId": "read"})
+        package = self.facts.finish(True)
+        self.assertEqual(package["toolSummary"], [
+            {"toolName": "Read", "calls": 1, "failed": 0, "unknown": 1}])
+        self.assertIsNotNone(self.judge())
 
     def test_metadata_start_without_canonical_start_stays_incomplete(self):
         self.operation("scheduled")
@@ -222,7 +241,7 @@ class NativeDenialTests(unittest.TestCase):
         self.assertEqual(calls[0]['phases'], ['end', 'start'])
 
     def setUp(self):
-        self.private = TemporaryDirectory()
+        self.private = tempfile.TemporaryDirectory()
         self.addCleanup(self.private.cleanup)
         self.log_dir = Path(self.private.name)
         self.state_dir = self.log_dir / "state"

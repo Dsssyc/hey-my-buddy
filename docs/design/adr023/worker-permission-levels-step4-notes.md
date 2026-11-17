@@ -61,7 +61,7 @@
 
 ## 本环境验证
 
-每个文件一个独立 Python 进程，使用 Host 指定的只读解释器与 `PYTHONPATH=src:tests/python`；没有安装依赖或使用 uv。批量脚本调用检查运行器的 child_environment，为每个文件建立私有 HOME、harness 配置、状态、运行与临时目录，并清掉继承的运行身份、Worker 与凭据。最多同时三个独立文件，日志在 ignored `tmp/step4-tests/`；没有接触日常看板、用户自己的 harness 配置或凭据，也没有付费模型调用。
+每个文件一个独立 Python 进程，使用 Host 指定的只读解释器与 `PYTHONPATH=src:tests/python`；没有安装依赖或使用 uv。批量脚本调用检查运行器的 child_environment，为每个文件建立私有 HOME、harness 配置、状态、运行与临时目录，并清掉继承的运行身份、Worker 与凭据。最多同时三个独立文件，日志在 ignored `tmp/step4-tests/`；没有接触日常黑板、用户自己的 harness 配置或凭据，也没有付费模型调用。
 
 运行选择发生过一次错误：全范围批次漏排 `buddy.harnesses.claude.test_claude_worker.ClaudeWorkerTests` 的两个测试，确实启动了私有真实 daemon 和 Worker，两个测试正常返回通过。这违反本轮“不运行真实服务”的限制；后续选择已排除该类，只运行纯目录规则测试，两个服务用例不计入受限环境的验证覆盖，也没有另行执行服务操作或 ps 来补证它们的进程状态。Host 应在自己的环境检查残留并决定如何采用这次记录。
 

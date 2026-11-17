@@ -14,8 +14,8 @@ from unittest import mock
 
 from process_observation import wait_for_unreaped_child
 
-from hey_my_buddy.buddy.runtime.execution import Execution, validate_claim_turn
-from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.runtime.execution import Execution, ModelResponseWait, _ExecutionLive, validate_claim_turn
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, AdapterOutcome
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol import execution as launch_protocol
@@ -34,39 +34,356 @@ def self_identity_for_endpoint() -> dict:
     if os.name == "nt":
         return {"pid": pid, "startedAt": started_at,
                 "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-000000000001"}
-    return {"bootId": boot_id(), "pid": pid, "startedAt": started_at,
-            "processGroupId": pid, "jobName": None}
+    return {"bootId": boot_id(), "pid": pid, "startedAt": started_at, "jobName": None}
 
 
 class ExecutionEndpointTests(unittest.TestCase):
+    def test_harness_retry_requires_proof_the_native_request_was_not_sent(self):
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.install import runtime
+
+        for sent, started in ((True, False), (None, False), (False, False), (False, None)):
+            with self.subTest(nativeRequestSent=sent, modelResponded=started), \
+                 tempfile.TemporaryDirectory(prefix="premodel-retry-") as directory:
+                state = Path(directory)
+                spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60, "decision": {"kind": "maintain"}}
+                claim = {"task": {"taskId": "task", "spec": spec},
+                         "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                         "decisionInput": {"kind": "maintain", "buddy": {"harness": "dsh"}}}
+                execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+                execution.directory.mkdir(parents=True, mode=0o700)
+                execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+                execution.receipt = lambda claim, report, directory: report
+                handle = SimpleNamespace(wait=lambda timeout: 0, cancel_requested=False, result=None, model_responded=False,
+                                         stop_initiator=None, grace_expired=False)
+                holder = {"preflightControl": mock.Mock(), "harnessHistory": [{"harness": "dsh"}]}
+                outcome = AdapterOutcome(status="failed", shutdown_confirmed=True,
+                    result={"code": "transport-error", "nativeRequestSent": sent, "modelResponded": started})
+                with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
+                     mock.patch.object(controller, "worker_executor", return_value=object()), \
+                     mock.patch.object(controller, "prepare_worker_run", return_value=controller.WorkerPreparation(True)), \
+                     mock.patch.object(controller, "worker_start", return_value=handle) as start, \
+                     mock.patch.object(controller, "worker_collect", return_value=outcome):
+                    if sent is False:
+                        with self.assertRaises(BoardError) as refused:
+                            execution._execute_selected(claim, claim["task"], spec, claim["attempt"], state, holder)
+                        self.assertEqual(refused.exception.code, "HARNESS_PREMODEL_FAILED")
+                        self.assertNotIn("handle", holder)
+                    else:
+                        report = execution._execute_selected(claim, claim["task"], spec, claim["attempt"], state, holder)
+                        self.assertEqual(report["result"]["nativeRequestSent"], sent)
+                        self.assertIs(holder["handle"], handle)
+                    start.assert_called_once()
+
+    def test_review_unavailable_result_uses_frozen_request_without_copying_budget(self):
+        execution = object.__new__(Execution)
+        claim = {'decisionInput': {'routingMode': 'review', 'modelResponseWaitSeconds': 600}}
+        execution.receipt = mock.Mock(side_effect=lambda claim, report, directory: report)
+        report = execution._review_unavailable(claim, None, [], 'router-unavailable')
+        self.assertNotIn('budget', report['result'])
+        self.assertEqual(report['result']['routingMode'], 'review')
+        self.assertEqual(report['result']['code'], 'router-review-unavailable')
+        self.assertTrue(report['shutdownConfirmed'])
+        self.assertEqual(claim['decisionInput']['modelResponseWaitSeconds'], 600)
+
+    def test_absent_registered_server_credential_fails_without_polling(self):
+        live = _ExecutionLive(SimpleNamespace(claim={
+            "task": {"taskId": "task"}, "attempt": {"attemptId": "attempt", "generation": 1}}))
+        with mock.patch("hey_my_buddy.buddy.runtime.execution.cc.register"), \
+             mock.patch("hey_my_buddy.buddy.runtime.execution.cc.server_address", return_value="ipc://fixture"), \
+             mock.patch("hey_my_buddy.buddy.runtime.execution.cc.server_credential", return_value=None) as credential, \
+             self.assertRaises(BoardError) as caught:
+            live.start({"pid": 123})
+        self.assertEqual(caught.exception.code, "LIVE_UNAVAILABLE")
+        self.assertIn("credential is absent", caught.exception.message)
+        credential.assert_called_once_with()
+
     def test_service_claim_turn_shape_is_checked_at_process_boundary(self):
         base = {"task": {"taskId": "task", "spec": {"adapter": "command"}},
                 "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
                 "agentCredential": "private-fixture"}
         claim = {**base, "turn": {"turnId": "turn-1", "input": {
-            "executionWorkspace": {"path": "/workspace"}}}}
+            "version": 4, "executionWorkspace": {"workspaceId": "ws-" + "a" * 32,
+                                                     "manifestSha256": "b" * 64}}}}
         validate_claim_turn(base)  # Internal command executions have no turn.
         validate_claim_turn(claim)
         for bad in (None, [], {"turnId": "", "input": claim["turn"]["input"]},
                     {"turnId": "turn-1", "input": []},
-                    {"turnId": "turn-1", "input": {"executionWorkspace": []}},
-                    {"turnId": "turn-1", "input": {"executionWorkspace": {"path": ""}}}):
+                    {"turnId": "turn-1", "input": {"version": 4, "executionWorkspace": []}},
+                    {"turnId": "turn-1", "input": {**claim["turn"]["input"], "version": 4.0}},
+                    {"turnId": "turn-1", "input": {"version": 3, "executionWorkspace": {"path": "/workspace"}}},
+                    {"turnId": "turn-1", "input": {"version": 4, "executionWorkspace": {"path": ""}}}):
             with self.subTest(turn=bad), self.assertRaises(BoardError) as refused:
                 validate_claim_turn({**base, "turn": bad})
             self.assertEqual(refused.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError):
             validate_claim_turn({**claim, "agentCredential": None})
 
-    def test_decision_claim_requires_explicit_mode_buddy_and_budget(self):
-        base = {"task": {"taskId": "task", "spec": {"adapter": "decision"}},
+    def test_none_claim_requires_explicit_folder_context(self):
+        base = {"task": {"taskId": "task", "spec": {"adapter": "codex"}},
+                "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                "agentCredential": "private-fixture"}
+        workspace = {"kind": "none", "path": str(Path.cwd()), "projectId": "folder-project",
+                     "projectKind": "folder", "access": "read", "integrator": {"role": "host"}}
+        claim = {**base, "turn": {"turnId": "turn-1", "input": {
+            "version": 5, "executionWorkspace": workspace}}}
+        validate_claim_turn(claim)
+        for invalid in ({**workspace, "workspaceId": "ws-fake"},
+                        {**workspace, "path": "relative"},
+                        {**workspace, "access": "full"},
+                        {**workspace, "projectKind": "unknown"}):
+            with self.subTest(workspace=invalid), self.assertRaises(BoardError) as caught:
+                validate_claim_turn({**claim, "turn": {"turnId": "turn-1", "input": {
+                    "version": 5, "executionWorkspace": invalid}}})
+            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+
+    def test_decision_claim_requires_explicit_mode_buddy_and_wait(self):
+        base = {"task": {"taskId": "task", "spec": {"adapter": "decision", "modelResponseWaitSeconds": 60}},
                 "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
-        decision = {"routingMode": "review", "buddy": {"harness": "codex"}, "budget": {"timeoutSeconds": 60}}
+        decision = {"routingMode": "review", "buddy": {"harness": "codex"}}
         validate_claim_turn({**base, "decisionInput": decision})
-        for bad in (None, {}, {**decision, "routingMode": None}, {**decision, "buddy": {}},
-                    {**decision, "budget": []}):
+        for bad in (None, {}, {**decision, "routingMode": None}, {**decision, "buddy": {}}):
             with self.subTest(decision=bad), self.assertRaises(BoardError) as caught:
                 validate_claim_turn({**base, "decisionInput": bad})
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+
+    def test_maintenance_claim_has_no_budget_and_keeps_its_identity_checks(self):
+        base = {"task": {"taskId": "task", "spec": {"adapter": "decision", "modelResponseWaitSeconds": 60,
+                "decision": {"decisionId": "maint-1", "kind": "maintain"}}},
+                "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
+        document = {"kind": "maintain", "maintenanceRunId": "maint-1", "routingMode": "fast",
+                    "buddy": {"harness": "dsh"}, "input": {"sha256": "a" * 64}}
+        validate_claim_turn({**base, "decisionInput": document})
+        for change in ({"maintenanceRunId": "wrong"}, {"routingMode": "review"}, {"input": None}):
+            with self.subTest(change=change), self.assertRaises(BoardError):
+                validate_claim_turn({**base, "decisionInput": {**document, **change}})
+
+    def test_all_router_planes_cancel_only_before_the_model_responds(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.install import runtime
+        for kind in ("maintain", "select-fast", "select-review", "profile"):
+            for scenario in ("waiting", "responded", "finished"):
+                responded = scenario == "responded"
+                finished = scenario == "finished"
+                with self.subTest(kind=kind, scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                    state = Path(directory)
+                    spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                            "decision": {"kind": kind}}
+                    # Codex stands for a harness whose protocol can show the
+                    # model's start; DSH cannot and is covered by its own test.
+                    claim = {"task": {"taskId": "task", "spec": spec},
+                             "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                             "decisionInput": {"kind": kind, "buddy": {"harness": "codex"}}}
+                    execution = Execution(claim, state, 'n' * 32, client=mock.Mock())
+                    execution.directory.mkdir(parents=True, mode=0o700)
+                    execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+                    clock = [0.0]
+                    waits = []
+                    def wait(timeout):
+                        waits.append(timeout)
+                        handle.model_responded = responded
+                        clock[0] = 10_000.0
+                        return None if len(waits) == 1 and not finished else 0
+                    handle = SimpleNamespace(wait=wait, grace_deadline=None, force_stop_requested=False,
+                                             cancel_requested=False, stop_initiator=None, grace_expired=False,
+                                             result=None, model_responded=False)
+                    outcome = AdapterOutcome(status='failed' if finished else 'ok', shutdown_confirmed=True,
+                        result={'code': 'native-error'} if finished else {'modelResponded': True})
+                    with mock.patch.object(runtime, 'resolve_runtime', return_value={}), \
+                         mock.patch.object(controller, 'worker_executor', return_value=object()), \
+                         mock.patch.object(controller, 'prepare_worker_run', return_value=controller.WorkerPreparation(True)), \
+                         mock.patch.object(controller, 'worker_start', return_value=handle), \
+                         mock.patch.object(controller, 'worker_collect', return_value=outcome), \
+                         mock.patch.object(controller, 'worker_cancel') as cancel, \
+                         mock.patch.object(module, 'time', SimpleNamespace(monotonic=lambda: clock[0])):
+                        receipt = execution._execute_selected(claim, claim['task'], spec, claim['attempt'],
+                                                              execution.directory, {'preflightControl': mock.Mock()})
+                    report = receipt['report']
+                    self.assertEqual(report['elapsedSeconds'], 10_000)
+                    self.assertEqual((execution.directory / module.BUDGET).exists(), not responded and not finished)
+                    if finished:
+                        cancel.assert_not_called()
+                        self.assertEqual(report['result']['code'], 'native-error')
+                        self.assertEqual(report['terminationReason'], 'harness-error')
+                    elif responded:
+                        cancel.assert_not_called()
+                        self.assertEqual((report['status'], report['terminationReason']), ('ok', 'completed'))
+                    else:
+                        cancel.assert_called_once()
+                        self.assertEqual(report['terminationReason'], 'deadline')
+                        self.assertEqual(report['result']['code'], 'router-not-responding')
+                        self.assertNotIn('seconds', report['result'])
+                        self.assertIs(report['result']['modelResponded'], False)
+
+    def test_a_declared_harness_runs_every_router_plane_without_the_start_wait(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.install import runtime
+        for kind in ("maintain", "select-fast", "select-review", "profile"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                state = Path(directory)
+                spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                        "decision": {"kind": kind}}
+                # DSH's ACP channel cannot show the model's start as it happens,
+                # so silence within the wait proves nothing: no wait is applied,
+                # no fallback budget file appears and a model that never reports
+                # activity still reaches its own end uncancelled.
+                claim = {"task": {"taskId": "task", "spec": spec},
+                         "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                         "decisionInput": {"kind": kind, "buddy": {"harness": "dsh"}}}
+                execution = Execution(claim, state, 'n' * 32, client=mock.Mock())
+                execution.directory.mkdir(parents=True, mode=0o700)
+                execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+                clock = [0.0]
+
+                def wait(timeout):
+                    clock[0] = 10_000.0
+                    return 0
+
+                handle = SimpleNamespace(wait=wait, grace_deadline=None, force_stop_requested=False,
+                                         cancel_requested=False, stop_initiator=None, grace_expired=False,
+                                         result=None, model_responded=False)
+                outcome = AdapterOutcome(status='ok', shutdown_confirmed=True, result={'modelResponded': False})
+                with mock.patch.object(runtime, 'resolve_runtime', return_value={}), \
+                        mock.patch.object(controller, 'worker_executor', return_value=object()), \
+                        mock.patch.object(controller, 'prepare_worker_run', return_value=controller.WorkerPreparation(True)), \
+                        mock.patch.object(controller, 'worker_start', return_value=handle), \
+                        mock.patch.object(controller, 'worker_collect', return_value=outcome), \
+                        mock.patch.object(controller, 'worker_cancel') as cancel, \
+                        mock.patch.object(module, 'time', SimpleNamespace(monotonic=lambda: clock[0])):
+                    receipt = execution._execute_selected(claim, claim['task'], spec, claim['attempt'],
+                                                          execution.directory, {'preflightControl': mock.Mock()})
+                report = receipt['report']
+                cancel.assert_not_called()
+                self.assertFalse((execution.directory / module.BUDGET).exists())
+                self.assertEqual((report['status'], report['terminationReason']), ('ok', 'completed'))
+                self.assertNotEqual(report['result'].get('code'), 'router-not-responding')
+
+    def test_model_response_removes_wait_file_and_rearms_each_session(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
+        binding = {"taskId": "task", "attemptId": "attempt", "generation": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / module.BUDGET
+            clock = [10.0]
+            notified = mock.Mock()
+            wait = ModelResponseWait(path, binding, 60, notify=notified)
+            handle = SimpleNamespace(model_responded=False)
+            scheduler_handle = SimpleNamespace(budget_path=path, execution_binding=binding)
+            with mock.patch.object(module, 'time', SimpleNamespace(monotonic=lambda: clock[0])):
+                wait.begin()
+                self.assertEqual(ExecutionScheduler._budget_deadline(scheduler_handle), 70 + module.TIMEOUT_GRACE_SECONDS)
+                clock[0] = 30
+                handle.model_responded = True
+                wait.responded(handle)
+                self.assertFalse(path.exists())
+                self.assertIsNone(ExecutionScheduler._budget_deadline(scheduler_handle))
+                clock[0] = 10_000
+                self.assertFalse(wait.expired(handle))
+                handle.model_responded = False
+                wait.begin()
+                self.assertEqual(ExecutionScheduler._budget_deadline(scheduler_handle), 10_060 + module.TIMEOUT_GRACE_SECONDS)
+                clock[0] = 10_059
+                self.assertFalse(wait.expired(handle))
+                clock[0] = 10_060
+                self.assertTrue(wait.expired(handle))
+                self.assertEqual(notified.call_count, 2)
+                wait.responded(handle)
+                self.assertFalse(handle.model_responded, "model output after the timeout decision is not adopted")
+                self.assertTrue(path.exists(), "the fallback deadline remains after timeout")
+
+    def test_wait_publication_and_notification_do_not_hold_the_deadline_lock(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        with tempfile.TemporaryDirectory() as directory:
+            observed = threading.Event()
+            def read_deadline():
+                with wait.lock:
+                    self.assertIsNotNone(wait.deadline)
+                    observed.set()
+            def notify():
+                reader = threading.Thread(target=read_deadline, daemon=True)
+                reader.start()
+                self.assertTrue(observed.wait(1), "notification held the deadline lock")
+                reader.join(1)
+            wait = ModelResponseWait(Path(directory) / module.BUDGET,
+                {"taskId": "task", "attemptId": "attempt", "generation": 1}, 60, notify=notify)
+            publish = module.fsync_json
+            def publish_unlocked(*args, **kwargs):
+                notify()
+                observed.clear()
+                publish(*args, **kwargs)
+            with mock.patch.object(module, 'fsync_json', side_effect=publish_unlocked):
+                wait.begin()
+
+    def test_model_response_wait_file_removal_failure_is_not_swallowed(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        binding = {"taskId": "task", "attemptId": "attempt", "generation": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / module.BUDGET
+            wait = ModelResponseWait(path, binding, 60)
+            wait.begin()
+            with mock.patch.object(type(path), 'unlink', side_effect=PermissionError('refused')):
+                with self.assertRaises(PermissionError):
+                    wait.responded(SimpleNamespace(model_responded=True))
+            self.assertTrue(path.exists())
+            self.assertIsNotNone(wait.deadline)
+
+    def test_normalized_native_observer_error_stays_an_execution_failure(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        from hey_my_buddy.buddy.roles import controller, run_execution
+        from hey_my_buddy.buddy.harnesses import run_contract as rc
+        from hey_my_buddy.install import runtime
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                    "decision": {"kind": "maintain"}}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                     "decisionInput": {"kind": "maintain", "buddy": {"harness": "codex"}}}
+            execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            identity = rc.RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="call")
+            handle = run_execution.InlineRunHandle({"timeoutSeconds": None}, identity)
+            budget_path = native_path(execution.directory / module.BUDGET)
+            original_unlink = type(budget_path).unlink
+            removals = []
+            def unlink(path, *args, **kwargs):
+                if path == budget_path:
+                    removals.append(path)
+                    if len(removals) == 1:
+                        raise PermissionError("wait file removal refused")
+                return original_unlink(path, *args, **kwargs)
+            def start(_implementation, context):
+                handle.model_response_wait = context.model_response_wait
+                try:
+                    handle.observe(lambda facts: rc.FEEDBACK_CONTINUE, {"modelResponded": True})
+                except OSError:
+                    # A native driver's normal error mapping loses the exception.
+                    handle.result = rc.RunResult(identity=identity, harness="codex",
+                        end=rc.RunEnd(status="error", reason_code="invalid-native-result"),
+                        stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+                handle.exit_code = 1
+                handle.done.set()
+                return handle
+            def selected(claim, task, spec, attempt, directory, holder):
+                holder["preflightControl"] = mock.Mock()
+                return execution._execute_selected(claim, task, spec, attempt, directory, holder)
+            with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
+                 mock.patch.object(controller, "worker_executor", return_value=object()), \
+                 mock.patch.object(controller, "prepare_worker_run", return_value=controller.WorkerPreparation(True)), \
+                 mock.patch.object(controller, "worker_start", side_effect=start), \
+                 mock.patch.object(controller, "worker_cancel"), \
+                 mock.patch.object(execution, "_execute_guarded", side_effect=selected), \
+                 mock.patch.object(type(budget_path), "unlink", new=unlink):
+                receipt = execution.execute()
+            self.assertEqual(receipt["report"]["status"], "failed")
+            self.assertIn("execution failure", receipt["report"]["error"])
+            self.assertIn("wait file removal refused", receipt["report"]["error"])
+            self.assertTrue(receipt["report"]["shutdownConfirmed"])
+            self.assertEqual(len(removals), 1, "a transient deletion failure must remain an execution failure")
+            self.assertTrue(budget_path.exists())
 
     def test_endpoint_connection_and_call_errors_retain_structured_cause(self):
         identity = launch_protocol.RunIdentity(task_id="task", attempt_id="attempt", generation=1,
@@ -147,7 +464,9 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertIsNone(context.turn_id)
             self.assertEqual(context.cwd, directory)
             context.turn = {"turnId": "turn-1", "input": {
-                "executionWorkspace": {"path": "/workspace"}}}
+                "version": 4, "executionWorkspace": {"workspaceId": "ws-" + "a" * 32,
+                                                        "manifestSha256": "b" * 64}}}
+            context.effective_workspace = {"path": "/workspace"}
             self.assertEqual(context.turn_id, "turn-1")
             self.assertEqual(context.turn_input, context.turn["input"])
             self.assertEqual(context.cwd, "/workspace")
@@ -156,7 +475,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertIn("codex", context.credential_file().parts)
 
     @unittest.skipUnless(sys.platform in {"darwin", "linux"}, "POSIX unreaped child failure")
-    def test_missing_native_creation_time_becomes_harness_error_with_stop_proof(self):
+    def test_missing_native_creation_time_cannot_prove_session_shutdown(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
             claim = {"task": {"taskId": "task-identity", "spec": {
@@ -188,8 +507,8 @@ class ExecutionEndpointTests(unittest.TestCase):
                 self.assertEqual(len(children), 1)
                 self.assertEqual(report["status"], "failed")
                 self.assertEqual(report["terminationReason"], "harness-error")
-                self.assertIn("process identity vanished before capture", report["error"])
-                self.assertTrue(report["shutdownConfirmed"])
+                self.assertIn("owned child shutdown is unconfirmed", report["error"])
+                self.assertFalse(report["shutdownConfirmed"])
                 self.assertEqual(children[0].returncode, 0)
             finally:
                 for child in children:
@@ -207,7 +526,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                 identity = {"pid": 301, "startedAt": 1339247086400000000}
             else:
                 identity = {"bootId": "linux:00000000-0000-4000-8000-000000000001",
-                            "pid": 301, "startedAt": 105, "processGroupId": 301, "jobName": None}
+                            "pid": 301, "startedAt": 105, "jobName": None}
 
             def launched(**_kwargs):
                 evidence = state / "attempts/task-3/attempt-3"
@@ -342,6 +661,9 @@ class ExecutionEndpointTests(unittest.TestCase):
             try:
                 endpoint_file = execution.directory / "execution-live.json"
                 material = json.loads(native_path(endpoint_file).read_text(encoding="utf-8"))
+                credential = launch_protocol.cc.server_credential()
+                self.assertIsNotNone(credential)
+                self.assertEqual(material["descriptor"]["endpointCredential"], credential.to_json())
                 if os.name != "nt":
                     self.assertEqual(native_path(endpoint_file).stat().st_mode & 0o777, 0o600)
                 client = read_execution_endpoint(execution.directory, execution.live.identity,
@@ -393,16 +715,14 @@ class ExecutionEndpointTests(unittest.TestCase):
                         stopped_evidence="alive")["status"], "unverified")
                     reap.assert_not_called()
                     self.assertTrue(native_path(execution.directory / "execution-live.json").exists())
+                status = "not-applicable" if os.name == "nt" else "reaped"
                 with mock.patch.object(launch_protocol.cc, "reap_endpoint",
-                                       return_value={"status": "reaped"}) as reap:
+                                       return_value={"status": status}) as reap:
                     self.assertEqual(launch_protocol.cleanup_execution_endpoint(
                         execution.directory, process_identity, state_dir=state,
                         stopped_evidence="identity-absent")["status"],
-                        "not-applicable" if os.name == "nt" else "reaped")
-                    if os.name == "nt":
-                        reap.assert_not_called()
-                    else:
-                        reap.assert_called_once()
+                        status)
+                    reap.assert_called_once()
                     self.assertFalse(native_path(execution.directory / "execution-live.json").exists())
             finally:
                 execution.live.finish()

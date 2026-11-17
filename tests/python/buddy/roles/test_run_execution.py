@@ -38,10 +38,11 @@ class InlineRunErrorTests(unittest.TestCase):
         error = RuntimeError("the inline driver failed")
         identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="invocation")
         with tempfile.TemporaryDirectory() as directory:
-            control = {"privateRoot": directory, "timeoutSeconds": None}
+            control = {"privateRoot": directory}
             with mock.patch("hey_my_buddy.buddy.roles.inline_run.execute", side_effect=error):
                 handle = run_execution._launch(
-                    control, None, environment={"HMB_STATE_DIR": os.environ["HMB_STATE_DIR"]},
+                    control, SimpleNamespace(model_response_wait=None),
+                    environment={"HMB_STATE_DIR": os.environ["HMB_STATE_DIR"]},
                     identity=identity)
                 self.assertEqual(handle.wait(10), 1)
             self.assertFalse(handle.shutdown_confirmed())

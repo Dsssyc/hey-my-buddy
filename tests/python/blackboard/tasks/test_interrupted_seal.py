@@ -1,5 +1,6 @@
 """A stopped orphan's deterministic seal failure follows the ordinary failed-turn path."""
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, artifact_manifest
 from admission import admit_board, admit_store
 
 import json
@@ -17,7 +18,7 @@ from hey_my_buddy.private_dirs import attempt_root
 
 
 IDENTITY = {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 123,
-            "startedAt": 123250000, "processGroupId": 123, "jobName": None}
+            "startedAt": 123250000, "jobName": None}
 
 
 class InterruptedSealTests(RealWorkspaceTestCase):
@@ -27,12 +28,13 @@ class InterruptedSealTests(RealWorkspaceTestCase):
 
     def claimed(self, *, access="write", scope=None):
         board = self.board()
+        title = f"interrupted-seal-{access}"
+        task = "recover stopped workspace"
         submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": f"interrupted-seal-{access}", "hostId": "host-1",
-            "task": "recover stopped workspace", "cwd": str(self.repo),
-            "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "existing", "access": access,
-                                   **({"writeScope": scope} if scope is not None else {})},
+            "cwd": str(self.repo), "macroTaskId": "standalone", "title": title, "task": task,
+            "buddy": " / ".join(BUDDY.values()), "checkout": "existing", "access": access,
+            "inputs": [], "expectedSeconds": 1800,
+            **({"writeScope": scope or ["."]} if access != "read" else {}),
         })
         claim = admit_board(board, {'workerId': 'orphan-worker', 'claimRequestId': 'claim-orphan', 'nonce': 'n' * 16, 'runId': submitted['runId']})["claim"]
         attempt_id = claim["attempt"]["attemptId"]
@@ -46,7 +48,7 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         journal_path = Path(journal["path"])
         native_path(journal_path.parent).mkdir(parents=True, exist_ok=True)
         processes.NativeProcessJournal(journal_path, journal["binding"])
-        return board, submitted, claim, Path(claim["turn"]["input"]["executionWorkspace"]["path"])
+        return board, submitted, claim, Path(turn_manifest(self.directory, claim["turn"]["input"])["path"])
 
     def recover(self, board):
         with patch.object(interruption.processes, "inspect_process_identity", return_value="identity-absent"):
@@ -79,14 +81,14 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         self.assertEqual(view["activeRequest"]["kind"], "attention")
         conflict = view["workspaceConflicts"][0]
         self.assertEqual(conflict["blockingPaths"], ["tracked.txt"])
-        resolved = board.call("workflow_workspace_resolve", {
-            "runId": submitted["runId"], "commandId": "restore-orphan", "expectedRevision": view["revision"],
-            "conflictId": conflict["conflictId"], "action": "restore", "paths": ["tracked.txt"],
+        resolved = board.call("workflow_continue", {
+            "runId": submitted["runId"], "requestId": view["activeRequest"]["requestId"],
+            "resolution": "restore", "paths": ["tracked.txt"],
             "observedFingerprint": conflict["observedFingerprint"], 'note': "restore outside change",
-            **submitted["control"],
         })
-        self.assertTrue(resolved["resolved"])
         self.assertEqual(resolved["resolutionState"], "restored")
+        self.assertEqual(board.call("workflow_get", {"runId": submitted["runId"]})["workspaceConflicts"][0]["state"],
+                         "restored")
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
         self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 2\n")
 
@@ -140,11 +142,11 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         self.assertEqual(self.recover(board)['interrupted'], 1)
         with board.store.db.read() as db:
             final = json.loads(board.store._attempt_row(db, attempt_id)['result_json'])
-            partial = db.execute("SELECT manifest_json FROM workflow_artifacts WHERE attempt_id=? AND kind='partial-output'",
+            partial = db.execute("SELECT * FROM workflow_artifacts WHERE attempt_id=? AND kind='partial-output'",
                                  (attempt_id,)).fetchall()
         self.assertEqual(final, {**original, 'shutdownConfirmed': True})
         self.assertEqual(len(partial), 1)
-        self.assertEqual(json.loads(partial[0][0])['attemptId'], attempt_id)
+        self.assertEqual(artifact_manifest(board.directory, partial[0])['attemptId'], attempt_id)
         self.assertEqual(board.store.resource_claims(), [])
         with patch.object(interruption.processes, 'inspect_process_identity', return_value='identity-absent'):
             self.assertEqual(board.store.recover_executions(), [])
@@ -152,8 +154,7 @@ class InterruptedSealTests(RealWorkspaceTestCase):
 
 class CommandJournalTests(BoardTestCase):
     def test_stopped_command_controller_waits_for_its_recorded_child(self):
-        native = {**IDENTITY, "pid": 124, "startedAt": 123260000,
-                  "processGroupId": 124}
+        native = {**IDENTITY, "pid": 124, "startedAt": 123260000}
         attempt = {"adapter": "command", "model_harness": None, "task_id": "task-command",
                    "attempt_id": "attempt-command", "generation": 1, "identity_confirmed_at": "acknowledged"}
         board = SimpleNamespace(directory=self.directory)

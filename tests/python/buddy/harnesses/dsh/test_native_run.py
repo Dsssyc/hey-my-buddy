@@ -21,7 +21,6 @@ import math
 import os
 import sys
 import tempfile
-from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -31,6 +30,7 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses import run_contract
 from hey_my_buddy.buddy.harnesses.run_contract import (
+    FEEDBACK_CONTINUE,
     MAX_SCHEMA_BYTES,
     PrivateStatePaths,
     RunBudget,
@@ -58,14 +58,12 @@ from buddy.harnesses.dsh.acp.support import FAKE_AGENT
 #: through the same ``worker_services`` the real carrier frames.
 CARRIER_MODULE = "hey_my_buddy.buddy.roles.session_mcp"
 
-#: The Host-confirmed tool-providing rows the none scope disables, as recorded
-#: in the acceptance document; the shipped constant must stay this list.
-CONFIRMED_NONE_ROWS = (
-    "tool-bash", "tool-pwsh", "tool-jobs", "tool-fs", "tool-fs-search",
-    "tool-skill", "tool-subagent-control", "tool-subagent-list-agents",
-    "tool-subagent", "tool-subagent-fork", "tool-workflow", "tool-todo",
-    "tool-goal", "tool-ralph", "tool-web",
-)
+from buddy.harnesses.dsh.acp.fake_agent import TOOL_ROWS
+
+#: Every tool row the fake agent's ACP profile dump confirms, executor row
+#: included; the scope tests expect each level to disable all of these except
+#: the rows that level keeps.
+CONFIRMED_TOOL_ROWS = TOOL_ROWS
 
 SCHEMA = {"type": "object", "properties": {"choice": {"type": "string", "enum": ["a"]}},
           "required": ["choice"], "additionalProperties": False}
@@ -77,7 +75,7 @@ class NativeRunCase(unittest.TestCase):
     """One private per-test root; the fake agent launched like the native one."""
 
     def setUp(self):
-        container = TemporaryDirectory(prefix="dsh-native-",
+        container = tempfile.TemporaryDirectory(prefix="dsh-native-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(container.cleanup)
         self.base = Path(container.name).resolve()
@@ -207,6 +205,19 @@ class NativeRunCase(unittest.TestCase):
 
 
 class FastSeamTests(NativeRunCase):
+    def test_initial_native_input_refusal_keeps_structured_admission_facts(self):
+        self.extra_agent_args += ["--error-data-on", "session/prompt"]
+        result = run(self.fast_request("fixture prompt"),
+                     observer=FastCorrection(SCHEMA, "fixture prompt").observer,
+                     services=None, cancelled=lambda: False)
+        self.assertIs(result.native_request_sent, True)
+        self.assertIs(result.model_responded, False)
+        self.assertEqual(result.native_admission_error.value, {
+            "nativeMethod": "session/prompt", "nativeCode": -32602,
+            "message": "fixture admission refusal", "input_error_code": "input_too_large",
+            "max_chars": 9, "actual_chars": 10})
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     """The final-message carrier over the none/read/write launch configurations."""
 
     def test_fast_and_review_runs_retain_stderr_in_their_invocation(self):
@@ -259,7 +270,11 @@ class FastSeamTests(NativeRunCase):
         # The observer's own cumulative statistics carry the unknown-event
         # count; a clean run saw none.
         self.assertTrue(all(facts["unknownEvents"]["total"] == 0 for facts in seen))
-        self.assertEqual(result.model_started, True)
+        self.assertEqual(result.model_responded, True)
+        self.assertIs(seen[0]["modelResponded"], False)
+        self.assertTrue(any(facts["modelResponded"] and not facts["settled"] for facts in seen))
+        self.assertEqual([facts["modelResponded"] for facts in seen],
+                         sorted(facts["modelResponded"] for facts in seen))
         self.assertIsNotNone(result.native_identity.session_id)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertEqual(result.end.native_exit_code, 0)
@@ -272,9 +287,51 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(package["nativeIdentity"][0].get("sessionId"),
                          result.native_identity.session_id)
 
+    def test_foreign_chunk_and_successful_end_without_root_output_do_not_start_model(self):
+        self.extra_agent_args = ["--prompt-mode", "final", "--emit-foreign-chunk",
+                                 "--no-answer-chunk", "--bare-final"]
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return FEEDBACK_CONTINUE
+
+        result = run(self.fast_request("prompt"), observer=observer,
+                     services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIs(result.model_responded, False)
+        self.assertTrue(seen)
+        self.assertTrue(all(facts["modelResponded"] is False for facts in seen))
+
+    def test_positive_root_output_tokens_start_model_without_message_chunk(self):
+        fixture = self.base / "output-tokens.json"
+        fixture.write_text(json.dumps({"updates": [{"sessionUpdate": "usage_update",
+                                                    "outputTokens": 1}]}), encoding="utf-8")
+        self.extra_agent_args = ["--prompt-mode", "final", "--no-answer-chunk", "--bare-final",
+                                 "--session-updates-fixture", str(fixture)]
+        seen = []
+
+        def observer(facts):
+            seen.append(dict(facts))
+            return FEEDBACK_CONTINUE
+
+        result = run(self.fast_request("prompt"), observer=observer,
+                     services=None, cancelled=lambda: False)
+        self.assertIs(result.model_responded, True)
+        self.assertIs(seen[0]["modelResponded"], False)
+        self.assertTrue(any(facts["modelResponded"] and not facts["settled"] for facts in seen))
+
+    def test_plan_and_input_usage_are_not_model_output(self):
+        self.assertFalse(native_run._root_model_activity(
+            {"sessionUpdate": "plan", "entries": [{"content": "work"}]}))
+        self.assertFalse(native_run._root_model_activity(
+            {"sessionUpdate": "usage_update", "used": 100, "size": 1000000}))
+        self.assertTrue(native_run._root_model_activity(
+            {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " "}}))
+
     def test_usage_comes_from_the_private_session_record(self):
         # The optional record source: the fake agent writes one synthetic
-        # session.v3 rollout (a fixture, not a native record) and the driver's
+        # session.v4 rollout (a fixture, not a native record) and the driver's
         # bounded reader turns it into the shared usage facts — the old Node
         # usage expectations (per-field sums, cache derived once, complete only
         # with a seen completed turn end) on the record path.
@@ -493,9 +550,12 @@ class FastSeamTests(NativeRunCase):
         observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
         self.assertIsNone(observed["permissionMode"])
         rows = json.loads(native_path(patch_path).read_text(encoding="utf-8"))
-        # The storage roots precede the disabled tool rows and plan-mode.
+        # The storage roots precede the disabled tool rows. The none scope keeps
+        # only the executor row DSH needs to open a turn; every other tool row
+        # and plan-mode are disabled, so the model receives no tool.
         self.assertEqual([row["id"] for row in rows],
-                         ["session-persistence-jsonl", "storage-json", *CONFIRMED_NONE_ROWS,
+                         ["session-persistence-jsonl", "storage-json",
+                          *(row for row in CONFIRMED_TOOL_ROWS if row != "tool-executor-native"),
                           native_run.PLAN_MODE_ROW])
         pin = rows[0]
         self.assertTrue(pin["config"]["root"].startswith(str(self.root)))
@@ -504,9 +564,78 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(policy.requested.value["disabledRows"],
                          [row["id"] for row in rows[2:]])
 
-    def test_the_shipped_none_scope_rows_are_the_confirmed_inventory(self):
-        self.assertEqual(native_run.NONE_SCOPE_DISABLED_ROWS, CONFIRMED_NONE_ROWS,
-                         "the shipped list must stay the Host-confirmed inventory")
+    def test_web_scope_retains_the_web_and_executor_rows_only(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
+        request = self.fast_request("prompt", scope="web")
+        with mock.patch.dict(os.environ, {"DSH_PERMISSION_MODE": "inherited-mode"}):
+            result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                         services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.raw, '{"choice":"a"}')
+        rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
+        disabled = [row["id"] for row in rows[2:]]
+        self.assertEqual(disabled, [*(row for row in CONFIRMED_TOOL_ROWS if row not in {"tool-web", "tool-executor-native"}),
+                                    native_run.PLAN_MODE_ROW])
+        self.assertTrue(all(row["disabled"] is True for row in rows[2:]))
+        self.assertEqual(result.effective_policy.tools.requested.value, {"disabledRows": disabled})
+        observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
+        self.assertIsNone(observed["permissionMode"])
+
+    def test_unknown_tool_row_is_disabled_and_each_scope_keeps_only_its_allowlist(self):
+        inventory = (*TOOL_ROWS, "tool-new-plugin")
+        for scope, retained in (("web", {"tool-web", "tool-executor-native"}),
+                                ("none", {"tool-executor-native"})):
+            with self.subTest(scope=scope):
+                self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
+                                         "--inventory-output", "\n".join("- id: " + row for row in inventory)]
+                request = self.fast_request("prompt", scope=scope)
+                result = run(request, observer=lambda _f: FEEDBACK_CONTINUE,
+                             services=None, cancelled=lambda: False)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                patch = json.loads(native_path(Path(request.private_state.invocation_root) /
+                                               "dsh-launch-patch.json").read_text())
+                disabled = {row["id"] for row in patch if row.get("disabled")}
+                self.assertEqual(disabled, set(inventory) - retained | {"plan-mode"})
+                self.assertTrue(all(row["disabled"] is True for row in patch[2:]))
+
+    def test_inventory_failure_blocks_web_but_none_runs_with_a_versioned_reason_and_no_dump_leak(self):
+        for arguments, reason in ((["--inventory-failure"], "dsh-tool-inventory-unreadable"),
+                                   (["--inventory-output", "private: synthetic-private-secret"],
+                                    "dsh-tool-inventory-format-unrecognized"),
+                                   (["--inventory-output", "- id: tool-web\n  config: [synthetic-private-secret"],
+                                    "dsh-tool-inventory-format-unrecognized")):
+            for scope in ("web", "none"):
+                with self.subTest(arguments=arguments, scope=scope):
+                    self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
+                                             *arguments]
+                    request = self.fast_request("prompt", scope=scope)
+                    with mock.patch.object(native_run, "selected", return_value={"version": "0.2.2-rc.1"}):
+                        with mock.patch.object(native_run, "_launch_agent", wraps=native_run._launch_agent) as launch:
+                            result = run(request, observer=lambda _f: FEEDBACK_CONTINUE,
+                                         services=None, cancelled=lambda: False)
+                    if scope == "web":
+                        launch.assert_not_called()
+                        self.assertEqual(result.end.reason_code, reason)
+                        self.assertIn("0.2.2-rc.1", result.end.message)
+                        self.assertIn("could not be read" if "unreadable" in reason else "unrecognized YAML",
+                                      result.end.message)
+                        self.assertFalse(result.native_request_sent)
+                        self.assertEqual(result.harness_version, "0.2.2-rc.1")
+                    else:
+                        launch.assert_called_once()
+                        self.assertEqual(result.end.status, "ok", result.end.message)
+                        self.assertEqual(result.effective_policy.tools.requested.value,
+                                         {"disabledRows": ["plan-mode"]})
+                    facts = next(ref for ref in result.evidence_refs if ref.kind == "dsh-native-facts")
+                    payload = json.loads(native_path(Path(facts.location)).read_text())
+                    self.assertEqual(payload["toolInventory"],
+                                     {"code": reason, "params": {"version": "0.2.2-rc.1"}})
+                    self.assertNotIn("synthetic-private-secret", json.dumps(result.to_payload()))
+                    paths = [Path(ref.location) for ref in result.evidence_refs]
+                    paths.append(self.agent_log_path)
+                    for path in paths:
+                        self.assertNotIn(b"synthetic-private-secret", native_path(path).read_bytes())
 
     def test_a_spawn_failure_reports_an_unavailable_agent_and_no_started_model(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -517,7 +646,7 @@ class FastSeamTests(NativeRunCase):
                          services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "harness-unavailable")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         self.assertIsNone(result.end.native_exit_code)
         self.assertIsNone(result.harness_version)
         self.assertIsNone(result.activity, "a failed spawn supplies no native activity")
@@ -533,7 +662,7 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "transport-error")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         stop = result.stop_evidence.native
         # The process was held, so the run started one: the held connection's
         # own facts are retained, and the leader's real exit is the end's code.
@@ -559,7 +688,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "transport-error")
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown", "an unobservable group is never gone")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
 
     def test_launch_bookkeeping_failure_keeps_the_wrapper_stop_evidence(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -576,7 +705,7 @@ class FastSeamTests(NativeRunCase):
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown",
                          "the wrapper's own finalize evidence rules, not the session count")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
 
     def test_a_late_tool_fact_reaches_the_role_and_stops_the_run(self):
         # A same-root tool fact emitted while the client drains at EOF still
@@ -707,7 +836,7 @@ class FastSeamTests(NativeRunCase):
         self.assertIn("max_tokens", result.end.message)
         self.assertIsNone(result.value, "a non-end turn owes no answer value")
         self.assertIsNone(result.completion_evidence)
-        self.assertEqual(result.model_started, True)
+        self.assertEqual(result.model_responded, True)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertEqual(result.end.native_exit_code, 0)
 
@@ -764,6 +893,9 @@ class MountTests(NativeRunCase):
         self.assertTrue(bridge["key"])
         self.assertEqual(request.session_services[0].tool_names,
                          tuple(f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools))
+        self.assertCountEqual(mount.bare_tools, ["hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry",
+                                                "hey_my_buddy_finish_turn"])
+        self.assertIn("hey_my_buddy_checkpoint", mount.bare_tools)
         self.assertEqual(bound.completion_tool, mount.finish_tool)
 
     def test_the_mount_names_the_shared_roles_carrier_in_its_command(self):
@@ -785,6 +917,20 @@ class MountTests(NativeRunCase):
 
 
 class WorkerSeamTests(NativeRunCase):
+    def test_web_scope_uses_the_same_patch_with_bound_carrier(self):
+        request, bound, mount = self.worker_request(level="web")
+        self.micro_task_agent_args(mount)
+        result = run(request, observer=worker_observer, services=bound.services,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.parsed.value["disposition"], "completed")
+        rows = json.loads(native_path(Path(request.private_state.invocation_root) / "dsh-launch-patch.json").read_text(encoding="utf-8"))
+        self.assertEqual([row["id"] for row in rows[2:]],
+                         [*(row for row in CONFIRMED_TOOL_ROWS if row not in {"tool-web", "tool-executor-native"}),
+                          native_run.PLAN_MODE_ROW])
+        self.assertEqual(result.effective_policy.tools.requested.value,
+                         {"disabledRows": [row["id"] for row in rows[2:]]})
+
     def test_large_utf8_worker_prompt_reaches_native_acp_peer_complete(self):
         capture = self.base / "native-prompt.ndjson"
         task_text = "核对文件🙂，正文只出现一次-97ba54"
@@ -858,10 +1004,10 @@ class WorkerSeamTests(NativeRunCase):
         observed = []
         request_call = AcpConnection.request
 
-        def record_request(connection, method, params, timeout):
+        def record_request(connection, method, params, timeout, *, on_sent=None):
             if method in ("initialize", "session/new", "session/set_config_option"):
                 observed.append((method, timeout))
-            return request_call(connection, method, params, timeout)
+            return request_call(connection, method, params, timeout, on_sent=on_sent)
 
         with mock.patch.object(AcpConnection, "request", record_request):
             result = run(request, observer=worker_observer, services=bound.services,
@@ -881,7 +1027,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(result.value.schema_status, "valid")
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
         self.assertTrue(result.completion_evidence.stream_end)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])
@@ -1011,6 +1157,33 @@ class WorkerSeamTests(NativeRunCase):
         calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
         self.assertEqual([call["callId"] for call in calls], ["call_finish_1"])
         self.assertTrue(calls[0]["belongsToRoot"])
+
+    def test_a_second_finish_after_acceptance_keeps_the_first_receipt(self):
+        # The accepted receipt stays the turn's answer; the repeat is a
+        # retained fact, stays a task-tool fact, and the finish tool tells the
+        # model the truth — this turn has already ended.
+        request, bound, mount = self.worker_request()
+        self.micro_task_agent_args(mount, finish_again=True)
+        result = run(request, observer=worker_observer, services=bound.services,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.schema_status, "valid")
+        self.assertEqual(result.value.parsed.value["disposition"], "completed")
+        provenance = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "turn-provenance"))).read_bytes())
+        self.assertEqual(provenance["toolCallId"], "call_finish_1")
+        self.assertEqual(provenance["postFinishToolCalls"],
+                         {"count": 1, "records": [{"toolName": mount.finish_tool, "toolCallId": "call_finish_2"}]})
+        package = result.tool_evidence.value
+        self.assertEqual(package["toolCalls"], 1,
+                         "the repeated finish call stays a task-tool fact; the accepted call is the delivery evidence")
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
+        self.assertEqual([call["callId"] for call in calls], ["call_finish_2"])
+        again = next(entry for entry in self.agent_log() if entry.get("event") == "finish-again")
+        self.assertTrue(again["refused"])
+        envelope = json.loads(again["answer"])
+        self.assertEqual(envelope["reason"], "turn-ended")
+        self.assertIn("already ended", envelope["detail"])
 
     def test_a_completed_turn_without_a_finish_tool_fails(self):
         request, bound, mount = self.worker_request()
@@ -1228,7 +1401,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
                              "a bound record decides without a discovery scan")
 
     def test_session_facts_report_private_storage_and_the_real_binding_presence(self):
-        with TemporaryDirectory(prefix="dsh-session-facts-") as container:
+        with tempfile.TemporaryDirectory(prefix="dsh-session-facts-") as container:
             root = Path(container) / "native-root"
             root.mkdir(mode=0o700)
             facts = native_run.session_facts(root, "session-1")
@@ -1510,6 +1683,41 @@ class DiscoveryTests(NativeRunCase):
             cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
             native_root=self.root, timeout_seconds=FAST_TIMEOUT, cancelled=lambda: False, **kwargs)
 
+    def test_a_recorded_acp_reply_reaches_the_official_providers_billing_label(self):
+        """One recorded native reply, through real discovery, catalog and health.
+
+        The guarded boundary is the agreement between the two ends: the provider
+        identity the ACP session's model selector reports — the group key and
+        each option value's first element — is exactly what the blackboard's
+        billing rule reads, so a discovery-format change that loses it, or a
+        billing rule that stops reading it, fails here. This does not guard
+        DSH's future output: when the installed agent changes its reply, the
+        recorded fixture changes with it.
+        """
+        fixture = Path(__file__).with_name('fixtures') / 'session-config-dsh-cli-0.2.1-rc.2.json'
+        self.extra_agent_args = ["--prompt-mode", "final", "--config-options-fixture", str(fixture)]
+        receipt = self.discover()
+        self.assertEqual([entry["provider"] for entry in receipt["providers"]], ["deepseek-official"])
+        self.assertEqual([model["id"] for model in receipt["providers"][0]["models"]], ["deepseek-v4-flash"])
+        from hey_my_buddy.blackboard.catalog import catalog
+        from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
+        from hey_my_buddy.blackboard.service.harness_health import read_health
+        from hey_my_buddy.blackboard.store.store import BoardStore
+        board = BoardStore(self.base / "board")
+        self.addCleanup(board.db.close)
+        board.initialize()
+        board.evaluation = EvaluationStore(board)
+        with board.db.write() as db:
+            db.execute("INSERT OR IGNORE INTO harness_health(harness,status,record_json) VALUES('dsh','ready',?)",
+                       (json.dumps({"reason": None}),))
+        board.evaluation.record_catalog(catalog.discovery_payload(receipt, harness="dsh"))
+        with board.db.read() as db:
+            updated_at = db.execute("SELECT updated_at FROM catalog_current WHERE harness='dsh'").fetchone()[0]
+            billing = read_health(db, "dsh")["billingByProvider"]
+        self.assertEqual(billing, {"deepseek-official": {"kind": "metered",
+                                                         "source": "dsh/provider-identity",
+                                                         "observedAt": updated_at}})
+
     def test_a_discovery_failure_carries_its_own_unconfirmed_stop_fact(self):
         # The error carries this operation's own stop fact for the outer layers:
         # an unobservable group stays False instead of being guessed from the
@@ -1588,7 +1796,9 @@ class NativeConfigurationTests(NativeRunCase):
                                   Path(request.private_state.invocation_root))
                     rows = json.loads(native_path(patch_root / "dsh-launch-patch.json").read_text(encoding="utf-8"))
                     expected = (["session-persistence-jsonl", "storage-json"]
-                                + ([*CONFIRMED_NONE_ROWS, "plan-mode"] if carrier == "fast" else []))
+                                + ([*(row for row in CONFIRMED_TOOL_ROWS
+                                      if row != "tool-executor-native"), "plan-mode"]
+                                   if carrier == "fast" else []))
                     self.assertEqual([row["id"] for row in rows], expected)
                     self.assertEqual({path: path.read_bytes() for path in materials}, before)
         self.assertFalse((source / "sessions").exists(), "native records remain private")

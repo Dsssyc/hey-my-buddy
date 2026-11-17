@@ -1,0 +1,275 @@
+{
+  "comment": "Recorded Claude Code CLI 2.1.299 (exact --version: 2.1.299 (Claude Code)), 2026-10-27, tests/probes/claude_session_content.py against a sandboxed loopback Messages fixture with product execution_args and --no-session-persistence. Complete stream-json assistant frames carry one block each, sharing message.id but carrying distinct frame UUIDs. Only paths, session identity and unrelated init/result metadata were removed or replaced. No native persisted session is enabled. TodoWrite was requested by product --tools but absent from both init and provider tools; no plan event was observed, so plans remain unverified.",
+  "version": "Claude Code CLI 2.1.299",
+  "source": "tests/probes/claude_session_content.py",
+  "sessionId": "probe-session",
+  "events": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "session_id": "probe-session",
+      "tools": [
+        "Task",
+        "Bash",
+        "Edit",
+        "Glob",
+        "Grep",
+        "NotebookEdit",
+        "Read",
+        "Skill",
+        "StructuredOutput",
+        "Write"
+      ],
+      "model": "claude-sonnet-4-6",
+      "claude_code_version": "2.1.299"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_probe_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "probe reasoning before tools",
+            "signature": "fixture-signature-not-secret"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 0
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "probe-session",
+      "uuid": "1026be95-eddb-4770-b5d0-0c90fdcf5319",
+      "thinking_duration_ms": 1,
+      "thinking_display": "updates"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_probe_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "probe body before tools"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 0
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "probe-session",
+      "uuid": "e70036fe-fab3-4394-b864-6b2be360c461"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_probe_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_probe_read",
+            "name": "Read",
+            "input": {
+              "file_path": "<probe-root>/cwd/probe.txt"
+            }
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 0
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "probe-session",
+      "uuid": "bcc59e6c-a641-4c7e-85f0-55e01aafc1bd"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_probe_read",
+            "type": "tool_result",
+            "content": "1\tloopback fixture tool output\n2\t"
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "probe-session",
+      "uuid": "b938c1c5-b996-4588-8a49-3560463c73b6"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_probe_2",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "probe body between tools"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 0
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "probe-session",
+      "uuid": "6c557c45-6357-42b7-95e5-31ecac32ea39"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_probe_2",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_probe_second",
+            "name": "Read",
+            "input": {
+              "file_path": "<probe-root>/cwd/probe.txt"
+            }
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 0
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "probe-session",
+      "uuid": "80085c2a-b9a6-4f51-bed4-14ba3f2bae00"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_probe_second",
+            "type": "tool_result",
+            "content": "Wasted call — file unchanged since your last Read. Refer to that earlier tool_result instead."
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "probe-session",
+      "uuid": "d7389c28-8104-4eaa-aaab-8fe7af0e6488"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_probe_3",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "probe body after tools"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 0
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "probe-session",
+      "uuid": "20e3bdd1-eb9b-4d8b-a409-4328c953111f"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_probe_3",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_probe_result",
+            "name": "StructuredOutput",
+            "input": {
+              "summary": "loopback fixture completed"
+            }
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "stop_reason": null,
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 0
+        },
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "probe-session",
+      "uuid": "af29cd30-c60a-43ff-9c28-dab677435277"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_probe_result",
+            "type": "tool_result",
+            "content": "Structured output provided successfully"
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "probe-session",
+      "uuid": "7430b9f4-abde-4079-b155-55353d47067b"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "session_id": "probe-session",
+      "result": "{\"summary\":\"loopback fixture completed\"}",
+      "structured_output": {
+        "summary": "loopback fixture completed"
+      },
+      "is_error": false
+    }
+  ]
+}

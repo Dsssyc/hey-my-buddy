@@ -1,11 +1,8 @@
 import { expect } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
-import { open, test } from "./preview";
+import { open, screenshots, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const captures = fileURLToPath(new URL("../../../tmp/readability-r13", import.meta.url));
 test.use({ locale: "en-US", timezoneId: "America/New_York", reducedMotion: "reduce" });
 test("starts time statistics with both dated local record instants, including last activity while running", async ({ page }) => {
   await open(page, `#tasks/${macro}`);
@@ -20,9 +17,27 @@ test("starts time statistics with both dated local record instants, including la
       localStorage.setItem("hey-my-buddy.language", language);
     }, { theme, language });
     await page.setViewportSize({ width, height: 1000 });
-    const read = page.waitForResponse(response => new URL(response.url()).pathname === `/api/macro-tasks/${macro}/timeline` && response.ok());
-    await page.reload();
-    const timeline = await (await read).json() as MacroTaskTimeline;
+    let navigated = false;
+    const afterCommit = new WeakSet<object>();
+    const onNavigated = (frame: ReturnType<typeof page.mainFrame>) => {
+      if (frame === page.mainFrame()) navigated = true;
+    };
+    const onRequest = (request: { frame(): ReturnType<typeof page.mainFrame> }) => {
+      if (navigated && request.frame() === page.mainFrame()) afterCommit.add(request);
+    };
+    page.on("framenavigated", onNavigated);
+    page.on("request", onRequest);
+    const read = page.waitForResponse(response => afterCommit.has(response.request())
+      && new URL(response.url()).pathname === `/api/macro-tasks/${macro}/timeline` && response.ok())
+      .then(response => response.json() as Promise<MacroTaskTimeline>);
+    let timeline: MacroTaskTimeline;
+    try {
+      await page.reload();
+      timeline = await read;
+    } finally {
+      page.off("framenavigated", onNavigated);
+      page.off("request", onRequest);
+    }
     expect(timeline.macroTask.counts.active).toBeGreaterThan(0);
     const recorded = [timeline.macroTask.createdAt!, timeline.macroTask.lastActivityAt!];
     const expected = await page.evaluate(({ language, recorded }) => {
@@ -43,8 +58,7 @@ test("starts time statistics with both dated local record instants, including la
     }
     const card = (await dialog.boundingBox())!;
     expect(card.x).toBeGreaterThanOrEqual(0); expect(card.x + card.width).toBeLessThanOrEqual(width);
-    await mkdir(captures, { recursive: true });
-    await page.screenshot({ path: `${captures}/stats-${theme}-${width}.png` });
+    await page.screenshot({ path: `${screenshots}/stats-${theme}-${width}.png` });
     await page.keyboard.press("Escape");
   }
 });

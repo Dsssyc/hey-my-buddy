@@ -155,7 +155,7 @@
 | 149 | `draft.ts:610` | 两种冲突分别精简为“尚待读取最新版本；草稿已保留”与“已在 V{…} 更改；请重新加载核对” |
 | 150 | `Settings.tsx:23` | 删除主题选择说明 |
 | 151 | `StoragePanel.tsx:207` | 删除存储标题下说明 |
-| 152 | `StoragePanel.tsx:245` | 精简悬浮提示为“看板、记录及当前备份受保护” |
+| 152 | `StoragePanel.tsx:245` | 精简悬浮提示为“黑板、记录及当前备份受保护” |
 | 153 | `StoragePanel.tsx:222` | 精简为“已过期 · 请重新检查”“计划已过期 · 请重新检查”或检查时间 |
 | 154 | `StoragePanel.tsx:231` | 精简为“清理结果未知；请先重试同一请求” |
 | 155 | `StoragePanel.tsx:270` | 删除“为何保留”内重复标题 |
@@ -236,7 +236,7 @@
 
 在 Node 24.21.0 下，`npm --prefix apps/console ci`、`npm --prefix apps/console run typecheck`、`npm --prefix apps/console run build` 均退出 0。使用私有 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT` 并清除继承的运行时、Worker、Agent 和 Python 环境变量后，前端全量测试为 589/589 通过；最后删除两处交互提示后，受影响的 `objective-timeline.test.tsx` 为 39/39 通过，构建再次退出 0。Vite 提示单个打包块超过 500 kB，这是非阻塞的体积提示。
 
-真实应用浏览器访问 `tests/probes/objective_console_preview.py` 的私有合成服务；`/api/console` 返回 `X-Buddy-Preview: synthetic-fixture-data`。在工作目标、Buddy 配置和设置页核对短文案；展开路由详情后，默认模式旁的“路由数据流向 ?”显示发送任务描述及读取冻结仓库副本的边界，预算帮助显示当前 300 秒、24 次工具调用。浏览器警告与错误为零。预览不连接日常看板、不启动 Harness；检查后已关闭浏览器标签与预览服务。
+真实应用浏览器访问 `tests/probes/objective_console_preview.py` 的私有合成服务；`/api/console` 返回 `X-Buddy-Preview: synthetic-fixture-data`。在工作目标、Buddy 配置和设置页核对短文案；展开路由详情后，默认模式旁的“路由数据流向 ?”显示发送任务描述及读取冻结仓库副本的边界，预算帮助显示当前 300 秒、24 次工具调用。浏览器警告与错误为零。预览不连接日常黑板、不启动 Harness；检查后已关闭浏览器标签与预览服务。
 
 本提交只包含 `apps/console` 源码、受影响断言和本记录。构建出的 `src/buddy/console_assets` 已还原；合并后须从最终组合树重新构建资源。完整 `uv run --frozen python -m buddy.checks` 由 Host 在整合树执行。本记录不声称日常服务已安装或实际账户能力已验证。
 

@@ -8,7 +8,8 @@ from __future__ import annotations
 from typing import Callable
 
 from ...errors import BoardError
-from ...protocol.capabilities import PERMISSION_LEVELS
+from ...protocol.capabilities import PERMISSION_LEVELS, PERMISSIONS_VERIFIED_VERSIONS, declared_input_limit
+from ...protocol.session_coverage import SessionCoverage
 from .base import Adapter, AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle
 from .run_contract import HARNESS_NAMES, HarnessRun
 from ..runtime.command import CommandAdapter
@@ -25,18 +26,18 @@ from .codex.session_content import CodexSessionProjector
 from .claude.session_content import ClaudeSessionProjector
 from .dsh.session_content import DshSessionProjector
 from .zcode.session_content import ZcodeSessionProjector
-from .codex.session_omitted import OMITTED as CODEX_SESSION_OMITTED
-from .claude.session_omitted import OMITTED as CLAUDE_SESSION_OMITTED
-from .dsh.session_omitted import OMITTED as DSH_SESSION_OMITTED
-from .zcode.session_omitted import OMITTED as ZCODE_SESSION_OMITTED
+from .codex.session_coverage import COVERAGE as CODEX_SESSION_COVERAGE
+from .claude.session_coverage import COVERAGE as CLAUDE_SESSION_COVERAGE
+from .dsh.session_coverage import COVERAGE as DSH_SESSION_COVERAGE
+from .zcode.session_coverage import COVERAGE as ZCODE_SESSION_COVERAGE
 
 BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter, ZcodeAdapter, CodexAdapter, ClaudeAdapter)
 
 SESSION_PROJECTORS = {'codex': CodexSessionProjector, 'dsh': DshSessionProjector, 'zcode': ZcodeSessionProjector,
                       'claude': ClaudeSessionProjector}
-SESSION_OMITTED = {
-    'codex': CODEX_SESSION_OMITTED, 'claude': CLAUDE_SESSION_OMITTED,
-    'dsh': DSH_SESSION_OMITTED, 'zcode': ZCODE_SESSION_OMITTED,
+SESSION_COVERAGE = {
+    'codex': CODEX_SESSION_COVERAGE, 'claude': CLAUDE_SESSION_COVERAGE,
+    'dsh': DSH_SESSION_COVERAGE, 'zcode': ZCODE_SESSION_COVERAGE,
 }
 
 
@@ -44,8 +45,8 @@ def session_projector(harness: str):
     return SESSION_PROJECTORS.get(harness)
 
 
-def session_omitted(harness: str) -> tuple[dict, ...]:
-    return SESSION_OMITTED[harness]
+def session_coverage(harness: str) -> SessionCoverage:
+    return SESSION_COVERAGE[harness]
 
 RUN_SEAMS: dict[str, HarnessRun] = {
     "zcode": zcode_run,
@@ -142,12 +143,15 @@ def capability_report() -> dict:
         record = selected(name)
         cause = (record['reason'] if record is not None else
                  make_reason('harness.not-checked', operation='probe') if name in HARNESS_NAMES else None)
+        limit = declared_input_limit(name)
         report[name] = {
             "adapter": name,
             "available": usable,
             "reason": cause,
             "capabilities": list(instance.capabilities),
             "permissionLevels": dict(PERMISSION_LEVELS.get(name, {})),
+            "permissionsVerifiedVersion": PERMISSIONS_VERIFIED_VERSIONS.get(name),
+            "inputLimit": limit.to_payload() if limit is not None else None,
         }
     return report
 

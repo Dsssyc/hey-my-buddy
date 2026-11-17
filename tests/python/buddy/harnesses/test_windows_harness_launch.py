@@ -144,7 +144,7 @@ class HarnessLaunchChainTests(unittest.TestCase):
         process = owned_popen([record['command'][0], '--capture-argv-stdin', *edge_args],
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, start_new_session=True)
-        handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+        handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
         try:
             output, errors = process.communicate(payload, timeout=10)
         finally:

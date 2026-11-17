@@ -91,7 +91,7 @@ Python 命令为 `uv run --frozen python -m hey_my_buddy.cli.checks tests/python
 
 `docs/reference/macro-tasks.md` 需要更新 DTO：每行必有 delegationAuthority；title/fixesTitle 的 null 与 titleSource；事件的 decision/verdict/state/strategy/note；执行 releaseReason；删除 scope 与 blocker title/titleSource 的明确契约及统计边界。参考文档没有在本任务范围内写入。静态稿已经开发者认可，现保留供 Host 对照；按目录 README 的既定规则，Host 最终验收对应实现后再删除稿。
 
-没有遗留的本批次实现阻塞。未进行安装、日常服务重启、日常看板写入、真实账户或原生会话删除探针；测试只用私有状态和编造数据，模型调用仅来自名下经黑板路由的微任务。原生会话/Git 共享内容的字节未知是明确的事实边界，不是假数字或遗漏的扫描；本批次没有扩大物理删除判断。
+没有遗留的本批次实现阻塞。未进行安装、日常服务重启、日常黑板写入、真实账户或原生会话删除探针；测试只用私有状态和编造数据，模型调用仅来自名下经黑板路由的微任务。原生会话/Git 共享内容的字节未知是明确的事实边界，不是假数字或遗漏的扫描；本批次没有扩大物理删除判断。
 
 ## Lead 的体会
 

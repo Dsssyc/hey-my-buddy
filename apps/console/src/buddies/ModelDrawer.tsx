@@ -1,8 +1,13 @@
+import { AliasTag, useNamedBuddy } from "../components/AliasTag";
+import { reasonText } from "../i18n/reason";
+import { ReasonMessage, ReasonMessages } from "../i18n/ReasonMessage";
+import { Joined } from "../i18n/Message";
 import { cn } from "cn";
-import { useId } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Segmented, SegmentedItem } from "@/components/ui/segmented";
 import { StateMark, UnsavedMark } from "@/components/ui/state-mark";
 import { Switch } from "@/components/ui/switch";
@@ -13,26 +18,27 @@ import {
   concurrencyEntryFor,
   concurrencyLimit,
 } from "../console-data";
-import { modelServiceNoteText, setConcurrencyLimit, setModelServiceNote, setPreference } from "../draft";
+import { setConcurrencyLimit, setPreference } from "../draft";
 import { formatDateTime } from "../i18n/format";
 import type { ConsoleView, PreferenceMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
-import { CoolingStatus } from "./cooling";
+import { modelServiceKey } from "../console-data";
+import { buddyHash } from "./navigation";
+import type { BuddyLocation } from "./navigation";
 import { ConcurrencyNotice } from "./ConcurrencyNotice";
-import { modelIdentity, reasonTexts } from "./models";
+import { modelIdentity, reasonTexts, pendingHint } from "./models";
 import type { BuddyChip, ModelRow } from "./models";
 
 const MODES = ["prefer", "pin", "exclude"] as const satisfies readonly PreferenceMode[];
-const field = "h-8 rounded-md border border-input bg-card px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-disabled:opacity-50 aria-invalid:border-destructive";
 const choice = "h-8 px-2 text-xs";
 
-/** The addressable panel for the selected buddy, below its reasoning-effort strip. */
+/** The addressable panel for the selected buddy, beside its reasoning-effort list. */
 export function buddyRowId(buddyId: string): string {
   return `buddy-${buddyId}`;
 }
 
-function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
-  chip: BuddyChip; data: ConsoleView; recorded: Snapshot; editor: Editor; modelAvailable: boolean;
+function BuddySettings({ chip, data, recorded, editor, modelAvailable, onNavigate }: {
+  chip: BuddyChip; data: ConsoleView; recorded: Snapshot; editor: Editor; modelAvailable: boolean; onNavigate: (location: BuddyLocation) => void;
 }) {
   const { t } = useTranslation("buddies");
   const editing = editor.editing;
@@ -43,15 +49,15 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
   const baselineMode = (editor.baseline ?? recorded).preferences.find(entry => entry.buddyId === buddy.buddyId)?.mode;
   const pinLocked = baselineMode !== "pin" && (!buddy.available || !buddy.enabled);
   const editingLock = !editor.sessionWritable ? t("pane.locked.session") : !editing ? t("pane.locked.saving") : undefined;
-  // A retired buddy can be switched off, but cannot be switched on again.
-  const canToggle = editing && (buddy.available || buddy.enabled);
-  const enableLock = editingLock ?? (!canToggle ? t("pane.locked.retired") : undefined);
-  const enableUnsaved = recorded.buddies.find(entry => entry.buddyId === buddy.buddyId)?.enabled !== buddy.enabled;
   const preferenceUnsaved = preference?.mode !== published?.mode;
+  const aliasUnsaved = buddy.alias !== recorded.buddies.find(entry => entry.buddyId === buddy.buddyId)?.alias;
+  const aliasError = editor.aliasRefusal?.buddyId === buddy.buddyId ? editor.aliasRefusal.reason : null;
   const noteUnsaved = (preference?.note ?? "") !== (published?.note ?? "");
-  const unavailableReason = reasonTexts(buddy.unavailableReason ? [buddy.unavailableReason] : [], t).join(" · ");
+  const modelId = data.modelCorrespondences.find(entry => modelServiceKey(entry) === modelServiceKey(buddy))?.modelId;
+  const evaluation = data.kindEvaluations?.find(entry => entry.harness === buddy.harness && entry.modelId === modelId && entry.effort === buddy.effort);
+  const unavailableReason = buddy.unavailableReason ? <ReasonMessage reason={buddy.unavailableReason} /> : null;
   const name = (text: string, unsaved: boolean, target: { id: string } | { htmlFor: string }) =>
-    <span className="flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
+    <span className="col-start-1 flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
       <label {...target}>{text}</label>{unsaved && <UnsavedMark label={t("unsaved")} />}
     </span>;
 
@@ -62,37 +68,37 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
   }
 
   return <div id={buddyRowId(buddy.buddyId)} role="group" aria-label={effort} tabIndex={-1} data-slot="buddy-panel"
-    className="mt-4 flex-1 border border-line bg-card p-3 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
-    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2 text-xs">
-      <span className="min-w-0 font-mono wrap-anywhere text-ink2">
-        {buddy.harness} / {buddy.provider} / {buddy.model} / <strong className="font-semibold text-foreground">{effort}</strong>
-      </span>
-      <CoolingStatus providers={buddy.providerCooling ? [buddy.providerCooling] : []} />
-      {modelAvailable && !buddy.available && <Hint text={unavailableReason}><span className="text-ink3">{t("pane.unavailable")}</span></Hint>}
-    </div>
-    <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3 max-[600px]:flex-col max-[600px]:items-stretch">
-      <div className="flex items-center gap-2.5 max-[600px]:justify-between">
-        {name(t("models.enabled"), enableUnsaved, { htmlFor: `${id}-enabled` })}
-        <Hint text={enableLock}><Switch id={`${id}-enabled`} checked={buddy.enabled} aria-label={t("pane.enable", { effort })}
-          className="h-8 w-[34px] bg-transparent px-0.5 before:inset-x-0 before:inset-y-0 after:absolute after:inset-x-0.5 after:inset-y-2 after:rounded-full after:bg-line2 after:transition-colors after:duration-150 after:motion-reduce:transition-none aria-checked:bg-transparent aria-checked:after:bg-foreground [&_[data-slot=switch-thumb]]:relative [&_[data-slot=switch-thumb]]:z-10"
-          aria-disabled={!canToggle || undefined} onCheckedChange={enabled => {
-            if (canToggle) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId ? { ...entry, enabled } : entry) }));
-          }} /></Hint>
-      </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-2.5 max-[600px]:justify-between">
+    className="min-w-0 border-t border-line pt-3 min-[900px]:border-t-0 min-[900px]:border-l min-[900px]:pt-0 min-[900px]:pl-7 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+    <div className="grid grid-cols-[max-content_minmax(0,max-content)_minmax(0,1fr)] items-center gap-x-4 gap-y-3">
+      <span className="flex h-5 items-center text-xs text-ink3">{t("pane.samples")}</span><span className="col-span-2 flex min-h-5 flex-wrap items-center gap-3 text-sm"><span data-slot="buddy-samples" className="tabular-nums">{modelId ? <a className="underline decoration-line2 underline-offset-4 hover:decoration-foreground" href={buddyHash({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } })} onClick={event => { event.preventDefault(); onNavigate({ view: "evaluation", evaluation: { harness: buddy.harness, modelId, effort: buddy.effort } }); }}>{t("pane.sampleCount", { n: evaluation ? evaluation.statistics.overall.samples : 0 })}</a> : "—"}</span>
+        {modelAvailable && !buddy.available && <Hint text={unavailableReason} description={buddy.unavailableReason ? reasonText(buddy.unavailableReason) : undefined}><span className="text-xs text-ink3">{t("pane.unavailable")}</span></Hint>}</span>
+      <div className="contents">
         {name(t("pane.preference"), preferenceUnsaved, { id: `${id}-preference` })}
         <Segmented value={preference?.mode ?? ""} aria-label={t("pane.buddyPreference", { effort })} onValueChange={setBuddyPreference}
-          className="flex-wrap bg-card max-[600px]:max-w-full">
+          className="w-fit flex-wrap bg-card">
           <Hint text={editingLock}><SegmentedItem value="" aria-disabled={!editing || undefined} className={choice}>{t("preference.unset")}</SegmentedItem></Hint>
-          {MODES.map(mode => <Hint key={mode} text={editingLock ?? (mode === "pin" && pinLocked ? t("pane.locked.pinBuddy") : t(`preferenceHint.${mode}`))}>
+          {MODES.map(mode => <Hint key={mode} text={editingLock ?? (mode === "pin" && pinLocked ? t("pane.locked.pinBuddy") : undefined)}>
             <SegmentedItem value={mode} aria-disabled={!editing || mode === "pin" && pinLocked || undefined} className={choice}>{t(`preference.${mode}`)}</SegmentedItem>
           </Hint>)}
         </Segmented>
       </div>
-      <div className="flex min-w-40 flex-1 items-center gap-2.5 max-[600px]:min-w-0">
+      <div className="contents">
+        <div className="col-start-1 self-start pt-2">{name(t("pane.alias"), aliasUnsaved, { htmlFor: `${id}-alias` })}</div>
+        <div className="w-0 min-w-full" data-slot="buddy-alias">
+          <Hint text={editingLock}><Input id={`${id}-alias`} className="h-8 w-full min-w-0 bg-card text-sm shadow-none"
+            value={buddy.alias ?? ""} readOnly={!editing} aria-disabled={!editing || undefined}
+            aria-invalid={!!aliasError || undefined} aria-describedby={aliasError ? `${id}-alias-error` : undefined}
+            onChange={event => {
+              if (editing) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId
+                ? { ...entry, alias: event.target.value === "" ? null : event.target.value } : entry) }));
+            }} /></Hint>
+        </div>
+        {aliasError && <p id={`${id}-alias-error`} data-slot="alias-error" className="col-span-2 col-start-2 -mt-2 w-full max-w-[28rem] text-xs text-fail break-normal [overflow-wrap:normal]" role="alert"><ReasonMessage reason={aliasError} /></p>}
+      </div>
+      <div className="contents">
         {name(t("pane.note"), noteUnsaved, { htmlFor: `${id}-note` })}
         <Hint text={editingLock ?? (!preference ? t("pane.noteNone") : undefined)}>
-          <Input id={`${id}-note`} className="h-8 min-w-0 flex-1 bg-card text-sm shadow-none"
+          <Input id={`${id}-note`} className="col-span-2 h-8 w-full max-w-[28rem] min-w-0 bg-card text-sm shadow-none"
             aria-label={t("pane.buddyNote", { effort })} value={preference?.note ?? ""} readOnly={!editing || !preference}
             aria-disabled={!editing || !preference || undefined}
             onChange={event => {
@@ -104,26 +110,67 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
   </div>;
 }
 
+function EffortRow({ chip, selected, onSelect, editor }: {
+  chip: BuddyChip; selected: boolean; onSelect: () => void; editor: Editor;
+}) {
+  const { t } = useTranslation("buddies");
+  const { buddy, effort } = chip;
+  const named = useNamedBuddy()(buddy);
+  const editing = editor.editing;
+  const editingLock = !editor.sessionWritable ? t("pane.locked.session") : !editing ? t("pane.locked.saving") : undefined;
+  // A retired buddy can be switched off, but cannot be switched on again.
+  const canToggle = editing && (buddy.available || buddy.enabled);
+  const enableLock = editingLock ?? (!canToggle ? t("pane.locked.retired") : undefined);
+  return <div data-slot="buddy-choice" data-selected={selected}
+    className={cn("relative transition-colors duration-150 motion-reduce:transition-none", selected ? "bg-past-wash" : "hover:bg-foreground/5")}>
+    <Hint text={enableLock}><Switch checked={buddy.enabled} aria-label={t("pane.enable", { effort })}
+      className="absolute top-1.5 left-2 z-10"
+      aria-disabled={!canToggle || undefined} onCheckedChange={enabled => {
+        if (canToggle) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId ? { ...entry, enabled } : entry) }));
+      }} /></Hint>
+    <button type="button" aria-pressed={selected} data-slot="buddy-stop" aria-label={effort} onClick={onSelect}
+      className="flex h-10 w-full items-center gap-2 pr-8 pl-12 text-left text-sm whitespace-nowrap outline-none transition-[color,background-color,box-shadow] duration-150 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none">
+      <span className={cn("inline-flex min-w-0 items-center [&_[data-slot=alias-tag]]:min-w-0", buddy.enabled ? "text-foreground" : "text-ink3", selected && "font-medium")}><span className="shrink-0">{effort}</span><AliasTag alias={named?.alias} /></span>
+      {chip.preference && <span className="shrink-0 text-xs text-ink2">{t(`preference.${chip.preference}`)}</span>}
+      {chip.unsaved && <UnsavedMark label={t("unsaved")} />}
+    </button>
+  </div>;
+}
+
 /** A model's shared settings and one selected buddy, unfolded below its row. */
-export function ModelDrawer({ row, harnessState, data, recorded, editor, selectedBuddyId, onSelectBuddy }: {
+export function ModelDrawer({ row, harnessState, data, recorded, editor, selectedBuddyId, onSelectBuddy, onNavigate }: {
   row: ModelRow; harnessState?: string; data: ConsoleView; recorded: Snapshot; editor: Editor;
   selectedBuddyId: string; onSelectBuddy: (id: string) => void;
+  onNavigate: (location: BuddyLocation) => void;
 }) {
   const { t } = useTranslation("buddies");
   const editing = editor.editing;
   const id = useId();
+  const listViewport = useRef<HTMLDivElement>(null);
+  const [panel, setPanel] = useState({ buddyId: selectedBuddyId, switched: false });
+  if (panel.buddyId !== selectedBuddyId) setPanel({ buddyId: selectedBuddyId, switched: true });
+  useLayoutEffect(() => {
+    const viewport = listViewport.current!;
+    if (getComputedStyle(viewport).overflowY === "visible") return;
+    const selected = viewport.querySelector<HTMLElement>('[data-slot="buddy-stop"][aria-pressed="true"]')!;
+    const item = selected.getBoundingClientRect(), frame = viewport.getBoundingClientRect();
+    if (item.top < frame.top) viewport.scrollTop -= frame.top - item.top;
+    else if (item.bottom > frame.bottom) viewport.scrollTop += item.bottom - frame.bottom;
+  }, [selectedBuddyId]);
   const { modelService, key } = row;
   const member = modelService.buddies[0];
   const selected = row.chips.find(chip => chip.buddy.buddyId === selectedBuddyId)!;
-  const note = modelServiceNoteText(data, member);
   const publishedLimit = concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT;
+  const raised = row.limit > publishedLimit;
   const limitInvalid = concurrencyLimit(row.limit) === null;
   const buddyIds = new Set(modelService.buddies.map(buddy => buddy.buddyId));
   const mine = (issue: { modelService?: string; buddyId: string }) => issue.modelService === key || (!issue.modelService && buddyIds.has(issue.buddyId));
   const blocking = editor.blocking.filter(issue => mine(issue) && !(limitInvalid && issue.modelService === key));
   const attention = editor.attention.filter(issue => !issue.router && mine(issue));
   const state = !row.available ? "unavailable" : row.pending ? "pending" : "available";
-  const reasons = [harnessState, ...reasonTexts(row.reasons, t, !!harnessState)].filter(Boolean).join(" · ");
+  const visibleReasons = row.reasons.filter(reason => !harnessState || !reason.code.startsWith("harness."));
+  const reasons = harnessState || visibleReasons.length
+    ? <Joined items={[...(harnessState ? [harnessState] : []), ...(visibleReasons.length ? [<ReasonMessages reasons={visibleReasons} />] : [])]} /> : undefined;
   const editingLock = !editor.sessionWritable ? t("pane.locked.session") : !editing ? t("pane.locked.saving") : undefined;
   const name = (text: string, unsaved: boolean, target: { id: string } | { htmlFor: string }) =>
     <div className="flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
@@ -131,66 +178,59 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
     </div>;
 
   return <section role="region" aria-label={modelIdentity(modelService)} data-slot="model-drawer"
-    className="border-t border-l-2 border-t-line border-l-foreground bg-sunk p-4 min-[900px]:pl-14">
-    {blocking.length > 0 && <p className="mb-3 border-l-2 border-fail pl-3 text-xs text-fail" role="alert">{blocking.map(issue => issue.message).join(" ")}</p>}
-    {attention.length > 0 && <p className="mb-3 border-l-2 border-hand-mark pl-3 text-xs text-hand" role="status">{attention.map(issue => issue.message).join(" ")}</p>}
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-y-4 min-[900px]:grid-cols-[minmax(0,0.8fr)_minmax(0,1.7fr)]">
-      <div className="flex min-w-0 flex-col min-[900px]:pr-7">
-        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2 text-xs text-ink2">
-          <h3 className="text-xs font-medium text-ink2">{t("pane.model")}</h3>
-          <Hint text={!row.available ? reasons : undefined}><span className="flex flex-wrap items-center gap-1.5">
-            <StateMark kind={row.available ? "live" : "idle"} className="!animate-none" />{t(`pane.${state}`)}
-            {row.pending && row.pendingSince && <time dateTime={row.pendingSince}>{formatDateTime(Date.parse(row.pendingSince))}</time>}
+    className="border-t border-l-2 border-t-line border-l-foreground bg-sunk px-4 py-3 min-[900px]:pl-14">
+    {blocking.length > 0 && <p className="mb-3 border-l-2 border-fail pl-3 text-xs text-fail" role="alert"><Joined items={blocking.map(issue => issue.message)} separator=" " /></p>}
+    {attention.length > 0 && <p className="mb-3 border-l-2 border-hand-mark pl-3 text-xs text-hand" role="status"><Joined items={attention.map(issue => issue.message)} separator=" " /></p>}
+    <div data-slot="model-service" className="border-b border-line pb-3">
+      <div data-slot="model-service-line" className="flex flex-wrap items-center gap-x-8 gap-y-3">
+        <h3 className="text-xs font-medium text-ink2">{t("pane.model")}</h3>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-ink3">{t("pane.status")}</span>
+          <Hint text={row.pending ? pendingHint(row, t) : !row.available ? reasons : undefined} description={row.pending ? pendingHint(row, t) : !row.available ? [harnessState, ...reasonTexts(row.reasons, t, !!harnessState)].filter(Boolean).join(" · ") : undefined}><span className="flex items-center gap-1.5 text-sm">
+            <StateMark kind={row.available && !row.pending ? "live" : "idle"} className="!animate-none" />{t(`pane.${state}`)}
           </span></Hint>
         </div>
-        <div className="grid flex-1 grid-cols-[max-content_minmax(0,1fr)] grid-rows-[auto_auto_minmax(64px,1fr)] items-center gap-x-3 gap-y-2.5">
+        {row.pending && row.pendingSince && <div className="flex items-center gap-3"><span className="text-xs text-ink3">{t("pane.firstMissing")}</span><time className="text-sm tabular-nums" dateTime={row.pendingSince}>{formatDateTime(Date.parse(row.pendingSince))}</time></div>}
+        <div className="flex flex-wrap items-center gap-3">
           {name(t("pane.concurrency"), !Object.is(row.limit, publishedLimit), { htmlFor: `${id}-limit` })}
           <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-            <Hint text={editingLock}><Input id={`${id}-limit`} type="number" inputMode="numeric" className="h-8 w-48 max-w-full bg-card px-2.5 text-sm tabular-nums shadow-none"
+            <span data-slot="concurrency-meter" role="meter" aria-label={t("pane.concurrency")}
+              aria-valuemin={0} aria-valuemax={!limitInvalid ? row.limit : undefined} aria-valuenow={row.occupancy ?? undefined}
+              aria-valuetext={row.occupancy === null ? t("models.occupancyUnknown") : t("models.occupancy", { active: row.occupancy, limit: row.limit })}
+              className="h-2 w-[120px] bg-line">
+              {row.occupancy !== null && !limitInvalid && <span className="block h-full bg-ink2 transition-[width] duration-150 motion-reduce:transition-none" style={{ width: `${Math.min(100, row.occupancy / row.limit * 100)}%` }} />}
+            </span>
+            <span id={`${id}-occupancy`} className="text-sm tabular-nums" aria-label={row.occupancy === null ? t("models.occupancyUnknown") : t("pane.occupancy", { n: row.occupancy })}>{row.occupancy ?? "—"} /</span>
+            <Hint text={editingLock}><Input id={`${id}-limit`} type="number" inputMode="numeric" className="h-8 w-16 bg-card px-2 text-sm tabular-nums shadow-none"
               min={MODEL_SERVICE_CONCURRENCY_MIN} max={MODEL_SERVICE_CONCURRENCY_MAX} step={1} value={Number.isNaN(row.limit) ? "" : row.limit}
               readOnly={!editing} aria-disabled={!editing || undefined} aria-label={t("pane.concurrencyLimit")}
-              aria-invalid={limitInvalid || undefined} aria-describedby={`${id}-occupancy ${id}-concurrency-notice`} onChange={event => {
+              aria-invalid={limitInvalid || undefined} aria-describedby={`${id}-occupancy${raised ? ` ${id}-concurrency-notice` : ""}${limitInvalid ? ` ${id}-range` : ""}`} onChange={event => {
                 if (!editing) return;
-                // Keep the typed draft value, including an empty or invalid limit.
                 const value = event.target.value === "" ? NaN : Number(event.target.value);
                 editor.update(draft => setConcurrencyLimit(draft, member, value));
               }} /></Hint>
-            <span id={`${id}-occupancy`} className="grid shrink-0 grid-rows-[1rem_1rem] text-xs leading-4 text-ink3 tabular-nums">
-              <span>{row.occupancy === null ? t("pane.occupancyUnknown") : t("pane.occupancy", { n: row.occupancy })}</span>
-              <span className={cn("whitespace-nowrap text-fail", !limitInvalid && "invisible")} aria-hidden={!limitInvalid} role={limitInvalid ? "alert" : undefined}>{t("pane.range")}</span>
-            </span>
           </div>
-          <ConcurrencyNotice id={`${id}-concurrency-notice`} />
-          <div className="self-start pt-1.5">{name(t("pane.note"), note !== modelServiceNoteText(recorded, member), { htmlFor: `${id}-note` })}</div>
-          <Hint text={editingLock}><textarea id={`${id}-note`} rows={3} maxLength={4000} value={note}
-            readOnly={!editing} aria-disabled={!editing || undefined} className={cn(field, "h-full min-h-16 w-full resize-y self-stretch py-1.5")}
-            onChange={event => {
-              if (editing) editor.update(draft => setModelServiceNote(draft, member, event.target.value));
-            }} /></Hint>
         </div>
       </div>
-      <div className="flex min-w-0 flex-col border-t border-line pt-4 min-[900px]:border-t-0 min-[900px]:border-l min-[900px]:pt-0 min-[900px]:pl-7">
-        <div className="mb-3 flex flex-wrap items-baseline gap-3 text-xs">
+      {limitInvalid && <p id={`${id}-range`} className="mt-2 text-xs text-fail" role="alert">{t("pane.range")}</p>}
+      {raised && <div className="mt-3 max-w-2xl"><ConcurrencyNotice id={`${id}-concurrency-notice`} /></div>}
+    </div>
+    <div data-slot="buddy-columns" className="grid grid-cols-[minmax(0,1fr)] gap-y-4 pt-3 min-[900px]:grid-cols-[18rem_minmax(0,1fr)]">
+      <div data-slot="buddy-list" className="flex min-h-0 min-w-0 flex-col min-[900px]:h-0 min-[900px]:min-h-full">
+        <div className="mb-3 flex h-5 shrink-0 items-center gap-3 pr-10 text-xs whitespace-nowrap">
           <h3 className="text-xs font-medium text-ink2">{t("models.columns.buddy")}</h3>
           <span className="text-ink3 tabular-nums">{row.chips.length} · {t("models.enabled")} {row.chips.filter(chip => chip.buddy.enabled).length}</span>
         </div>
-        <div role="group" aria-label={t("models.columns.effort")}
-          className="grid auto-cols-[minmax(0,1fr)] grid-flow-col border border-line2 bg-sunk max-[600px]:grid-flow-row max-[600px]:grid-cols-3">
-          {row.chips.map(chip => <div key={chip.buddy.buddyId}
-            className="relative h-12 min-w-0 border-l border-line first:border-l-0 max-[600px]:border-t max-[600px]:nth-[-n+3]:border-t-0 max-[600px]:nth-[3n+1]:border-l-0">
-            <button type="button" aria-pressed={chip.buddy.buddyId === selectedBuddyId} data-slot="buddy-stop"
-            aria-label={chip.effort} onClick={() => onSelectBuddy(chip.buddy.buddyId)}
-            className={cn("peer relative flex h-full w-full min-w-0 flex-col justify-center gap-0.5 px-3 text-left text-xs text-ink3 outline-none transition-[color,background-color,box-shadow] duration-150 hover:bg-foreground/5 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none aria-pressed:z-10 aria-pressed:ring-[1.5px] aria-pressed:ring-foreground aria-pressed:ring-inset",
-              chip.buddy.enabled && "bg-card font-medium text-foreground before:absolute before:-top-px before:right-0 before:left-0 before:h-[3px] before:bg-foreground")}>
-            <span>{chip.effort}</span>
-            <span className="min-h-4 font-normal text-ink2">{chip.buddy.enabled ? chip.preference ? t(`preference.${chip.preference}`) : t("models.enabled") : ""}</span>
-            {chip.unsaved && <UnsavedMark label={t("unsaved")} className="absolute top-1.5 right-1.5" />}
-            </button>
-            <span aria-hidden="true" data-slot="buddy-pointer"
-              className="pointer-events-none absolute -bottom-1.5 left-1/2 z-10 size-2.5 -translate-x-1/2 rotate-45 border-r border-b border-foreground bg-card opacity-0 transition-opacity duration-150 peer-aria-pressed:opacity-100 motion-reduce:transition-none max-[600px]:hidden" />
-          </div>)}
-        </div>
-        <BuddySettings chip={selected} data={data} recorded={recorded} editor={editor} modelAvailable={row.available} />
+        <ScrollArea type="always" className="min-[900px]:min-h-0 min-[900px]:flex-1 [&>[data-slot=scroll-area-scrollbar]]:pointer-events-auto [&>[data-slot=scroll-area-scrollbar]]:opacity-100 max-[900px]:overflow-visible! max-[900px]:[&>[data-slot=scroll-area-scrollbar]]:hidden"
+          viewportProps={{ ref: listViewport, "data-slot": "buddy-list-viewport", className: "[&>div]:block! max-[900px]:h-auto max-[900px]:overflow-visible!" }}>
+          <div role="group" aria-label={t("models.columns.effort")}>
+            {row.chips.map(chip => <EffortRow key={chip.buddy.buddyId} chip={chip} selected={chip.buddy.buddyId === selectedBuddyId}
+              editor={editor} onSelect={() => onSelectBuddy(chip.buddy.buddyId)} />)}
+          </div>
+        </ScrollArea>
+      </div>
+      <div key={selectedBuddyId} className={panel.switched ? "panel-enter min-w-0" : "min-w-0"}>
+        <BuddySettings chip={selected} data={data} recorded={recorded} editor={editor} modelAvailable={row.available} onNavigate={onNavigate} />
       </div>
     </div>
   </section>;

@@ -9,7 +9,7 @@ def for_run(connection, run_id: str) -> dict | None:
     # A helper cancelled by its owner has its own event. Never borrow a later
     # cancellation from an ancestor or a subsequent explicit cancel command.
     row = connection.execute(
-        "SELECT payload_json,actor_role,actor_id FROM events WHERE task_id=?"
+        "SELECT seq,payload_json,actor_role,actor_id FROM events WHERE task_id=?"
         " AND kind IN ('workflow.cancelled','workflow.helper_cancelled','workflow.lead_task_cancelled')"
         " AND seq > COALESCE((SELECT MAX(seq) FROM events WHERE task_id=?"
         " AND kind IN ('workflow.continued','workflow.helper_resumed','workflow.auto_continued')),0)"
@@ -19,5 +19,5 @@ def for_run(connection, run_id: str) -> dict | None:
         return None
     payload = json.loads(row["payload_json"])
 
-    actor = {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None
-    return {"actor": actor, "note": payload.get("note")}
+    actor = {"role": row["actor_role"], **({"id": row["actor_id"]} if row["actor_id"] is not None else {})} if row["actor_role"] else None
+    return {"eventId": row["seq"], "actor": actor, "note": payload.get("note")}

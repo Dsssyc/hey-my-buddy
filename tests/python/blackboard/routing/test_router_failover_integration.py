@@ -13,6 +13,7 @@ from dataclasses import replace
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence, decision
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.buddy.runtime.command import CommandAdapter
 from hey_my_buddy.buddy.runtime.execution import Execution
 from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
@@ -46,7 +47,7 @@ class FailoverTests(RouterDispatchTestCase):
         with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             if required_capabilities:
                 with self.board_.store.db.write() as db:
-                    db.execute("UPDATE buddies SET capabilities_json=?", (json.dumps(list(required_capabilities)),))
+                    db.execute("UPDATE model_services SET input_modalities_json='[\"text\",\"image\"]'")
             request = (dispatch_fixtures.WorkflowWiringTests.route_micro_task(self, required_capabilities=required_capabilities) if micro_task else self.request())
             if micro_task:
                 dispatch_fixtures.WorkflowWiringTests.attach_pending_link(self, request["decisionId"])
@@ -57,11 +58,11 @@ class FailoverTests(RouterDispatchTestCase):
     def answer(self, claim, *, buddy_id=B, tools=0, **receipt_options):
         doc = claim["decisionInput"]
         return {**claim_tool_receipt(claim, tools, state_dir=self.board_.directory, **receipt_options), "status": "ok", "operation": "select",
-                "usage": {"elapsedMs": 100, "toolCalls": tools, "bytesRead": None},
+                "usage": {"elapsedMs": 100, "toolCalls": tools},
                 "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                 "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
                                       "manifestSha256": (doc.get("executionWorkspace") or {}).get("manifestSha256")},
-                "decision": {"buddyId": buddy_id, "note": "The frozen legal choice", "evidence": []}}
+                "decision": {"domainNodeId": None, "taskType": "change", "buddyId": buddy_id, "note": "The frozen legal choice", "evidence": []}}
 
     def failure(self, claim, code="timeout"):
         return {**self.answer(claim), "status": "error", "code": code, "decision": None}
@@ -117,13 +118,13 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertEqual(self.outcomes(), [])
         return response
 
-    def test_worker_stops_router_at_its_budget_and_dispatches_the_next_router(self):
-        self._router_budget_stop(stop_delay=0)
+    def test_worker_stops_router_before_model_response_and_dispatches_next_router(self):
+        self._router_response_wait_stop(stop_delay=0)
 
     def test_execution_waits_for_native_cleanup_beyond_ten_seconds(self):
-        self._router_budget_stop(stop_delay=11)
+        self._router_response_wait_stop(stop_delay=11)
 
-    def _router_budget_stop(self, *, stop_delay):
+    def _router_response_wait_stop(self, *, stop_delay):
         stopped = self.directory / f"native-stop-{stop_delay}"
 
         class SleepingRouter(CommandAdapter):
@@ -148,10 +149,12 @@ class FailoverTests(RouterDispatchTestCase):
             def start(self, context):
                 from hey_my_buddy.protocol.process_controller import launch_controller
                 self.prepare(context)
-                return launch_controller(
+                handle = launch_controller(
                     prepare=lambda: (self.argv(), context.cwd, context.environment),
-                    log_paths=context.log_paths(), timeout_seconds=context.timeout_seconds,
+                    log_paths=context.log_paths(), timeout_seconds=None,
                     stop_channel="stdin")
+                handle.model_responded = False
+                return handle
 
             def cancel(self, handle):
                 # This fixture's native driver needs eleven seconds to finish its
@@ -160,16 +163,16 @@ class FailoverTests(RouterDispatchTestCase):
 
             def collect(self, handle, context):
                 outcome = super().collect(handle, context)
-                outcome.result = {"status": "error", "operation": "select", "code": "router-budget-exhausted",
+                outcome.result = {"status": "error", "operation": "select", "code": "router-not-responding",
                                   "stopEvidence": {"shutdownConfirmed": outcome.shutdown_confirmed,
                                                    "native": {"shutdownConfirmed": outcome.shutdown_confirmed}}}
                 return outcome
 
-        with patch.dict(router.BUDGETS["standard"], {"timeoutSeconds": 1}), \
-             patch.object(decision, "TIMEOUT_GRACE_SECONDS", 0):
+        self.set_settings(wait=1)
+        with self.subTest(stop_delay=stop_delay):
             request, first = self.start(review=True)
             spec = first["task"]["spec"]
-            self.assertEqual(spec["routerBudgetSeconds"], 1)
+            self.assertEqual(spec["modelResponseWaitSeconds"], 1)
             self.assertNotIn("expectedSeconds", spec)
             execution = Execution(first, self.directory, first["nonce"], client=self.client)
             directory = execution.directory
@@ -179,7 +182,12 @@ class FailoverTests(RouterDispatchTestCase):
             self.addCleanup(execution.control.join, 5)
             self.addCleanup(execution.control.stop)
             started = time.monotonic()
-            with patch("hey_my_buddy.buddy.roles.controller.worker_executor", return_value=SleepingRouter()):
+            # This fixture's dsh Router stands for a harness whose protocol can
+            # show the model's start; the real DSH cannot (ADR-023 declaration)
+            # and never faces the start wait, so the wait-cancel machinery is
+            # pinned here with the declaration cleared.
+            with patch("hey_my_buddy.buddy.roles.controller.worker_executor", return_value=SleepingRouter()), \
+                    patch.dict('hey_my_buddy.protocol.capabilities.MODEL_START_UNSEEN', clear=True):
                 receipt = execution._execute_selected(first, first["task"], spec, first["attempt"], directory, holder)
             elapsed = time.monotonic() - started
             self.assertTrue(stopped.exists(), "the native input stop was not delivered")
@@ -188,31 +196,33 @@ class FailoverTests(RouterDispatchTestCase):
                 self.assertGreater(elapsed, 11)
             self.assertEqual(receipt["report"]["terminationReason"], "deadline")
             self.assertTrue(receipt["report"]["shutdownConfirmed"])
-            self.assertFalse(holder["handle"].group_alive())
+            self.assertFalse(holder["handle"].session_alive())
             self.assertTrue(deliver_receipt(self.client, receipt, directory, nonce=execution.nonce))
             next_task = self.current_task(request["decisionId"])
             self.assertNotEqual(next_task, request["runId"])
             self.assertEqual(self.dispatch_of(next_task)["buddyId"], B)
             second = self.next_claim(request)
             self.assertEqual(second["decisionInput"]["routerBuddyId"], B)
-            self.assertEqual(self.outcomes()[0][1]["code"], "router-budget-exhausted")
+            self.assertEqual(self.outcomes()[0][1]["code"], "router-not-responding")
 
-    def test_unknown_input_preparation_retries_the_same_router_before_its_budget_starts(self):
+    def test_unknown_input_preparation_retries_before_model_response_wait_starts(self):
         class PreparingRouter(CommandAdapter):
             def __init__(self):
                 self.calls = 0
-                self.budgets = []
+                self.waits = []
             def available(self):
                 return True, None
             def prepare(self, context):
                 self.calls += 1
-                self.budgets.append(context.timeout_seconds)
+                self.waits.append(context.spec['modelResponseWaitSeconds'])
                 if self.calls == 1:
                     raise BoardError('router-input-unknown', 'frozen input is still being observed')
                 from pathlib import Path
                 Path(context.cwd).mkdir(parents=True, exist_ok=True)
             def start(self, context):
-                return CommandAdapter().start(replace(context, spec={**context.spec, 'argv': [sys.executable, '-c', 'print("done")']}))
+                handle = CommandAdapter().start(replace(context, spec={**context.spec, 'argv': [sys.executable, '-c', 'print("done")']}))
+                handle.model_responded = True
+                return handle
         request, first = self.start(review=True)
         execution = Execution(first, self.directory, first['nonce'], client=self.client)
         native_path(execution.directory).mkdir(parents=True)
@@ -225,7 +235,7 @@ class FailoverTests(RouterDispatchTestCase):
             receipt = execution._execute_selected(first, first['task'], first['task']['spec'], first['attempt'],
                                                   execution.directory, {'preflightControl': execution.control})
         wait.assert_called_once_with(15)
-        self.assertEqual(executor.budgets, [first['task']['spec']['routerBudgetSeconds']] * 2)
+        self.assertEqual(executor.waits, [first['task']['spec']['modelResponseWaitSeconds']] * 2)
         self.assertEqual(receipt['report']['status'], 'ok')
         self.assertTrue(receipt['report']['shutdownConfirmed'])
         self.assertEqual(self.current_task(request['decisionId']), request['runId'])
@@ -241,7 +251,6 @@ class FailoverTests(RouterDispatchTestCase):
         result = self.report(second, self.failure(second, "provider-error"), status="failed")
         self.assertEqual(result["decision"]["status"], "needs-host")
         self.assertEqual(len(self.tasks()), 2)
-
         self.assertEqual([e[1]["buddyId"] for e in self.outcomes()], [A, B])
         self.assertEqual(self.snapshot_of(request["decisionId"]), frozen)
         self.assertEqual(self.dispatch_of(request["runId"]), before)
@@ -256,6 +265,18 @@ class FailoverTests(RouterDispatchTestCase):
                 self.assertEqual(payload["result"], expected)
         self.assertIsNone(self.claim("after-final")["claim"])
         self.assertEqual(len(self.tasks()), 2)
+
+    def test_recent_failure_names_the_routed_micro_task(self):
+        request, first = self.start(micro_task=True)
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE workflow_runs SET title=? WHERE run_id='run-1'", ("Fix parser boundary",))
+        self.assert_switch(request, first, self.failure(first))
+        second = self.next_claim(request)
+        self.report(second, self.failure(second, "provider-error"), status="failed")
+        failure = self.board_.store.decisions.health_summary()["recentFailures"][0]
+        self.assertEqual(failure["runId"], "run-1")
+        self.assertEqual(failure["macroTaskId"], "run:run-1")
+        self.assertEqual(failure["title"], "Fix parser boundary")
 
     def test_del_in_native_error_code_is_normalized_without_losing_failover(self):
         request, first = self.start()
@@ -277,7 +298,7 @@ class FailoverTests(RouterDispatchTestCase):
             self.assertEqual(db.execute("SELECT adapter,queue_reason FROM tasks WHERE task_id='run-1'").fetchone()[0], "unresolved")
         second = self.next_claim(request)
         output = self.answer(second, buddy_id=C)
-        output["decision"]["evidence"] = [{"kind": "annotation", "ref": "unknown-model-note"}]
+        output["decision"]["evidence"] = [{"kind": "preference", "ref": "unsupplied-preference"}]
         output["policyCheck"] = {"modelEcho": "ignored"}
         done = self.report(second, output)
         self.assertEqual(done["decision"]["status"], "completed")
@@ -306,11 +327,40 @@ class FailoverTests(RouterDispatchTestCase):
     def test_cached_router_health_loss_does_not_veto_valid_other_candidate(self):
         request, first = self.start()
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
+            db.execute("UPDATE harness_health SET status='unhealthy',record_json=json_set(record_json,'$.reason',json(?)) WHERE harness='dsh'",
+                       ('{"code":"harness.probe-failed","params":{"operation":"probe"}}',))
         result = self.report(first, self.answer(first, buddy_id=B))
         self.assertEqual(result["decision"]["status"], "completed")
         self.assertEqual(self.outcomes()[0][0], "router.answered")
         self.assertEqual(len(self.tasks()), 1)
+
+    def test_answered_routing_usage_lands_normalized_in_the_immutable_receipt(self):
+        request, first = self.start()
+        output = self.answer(first, buddy_id=B)
+        output["tokenUsage"] = {"inputTokens": 10, "outputTokens": 2}
+        done = self.report(first, output)
+        self.assertEqual(done["decision"]["status"], "completed")
+        with self.board_.store.db.read() as db:
+            receipt = json.loads(db.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                            (first["attempt"]["attemptId"],)).fetchone()[0])
+        self.assertEqual(receipt["result"]["tokenUsage"], {
+            "version": 1, "inputTokens": 10, "cachedInputTokens": None, "outputTokens": 2,
+            "inputBasis": "includes-cached", "source": "unknown", "scope": "attempt",
+            "completeness": "unknown", "nativeRecords": 1})
+        self.assertEqual({**output, "tokenUsage": receipt["result"]["tokenUsage"]}, receipt["result"])
+
+    def test_coherent_review_evidence_can_exceed_former_elapsed_and_call_caps(self):
+        request, first = self.start(review=True)
+        output = self.answer(first, buddy_id=B, tools=65)
+        output["usage"]["elapsedMs"] = 600000
+        done = self.report(first, output)
+        self.assertEqual(done["decision"]["status"], "completed")
+        self.assertEqual(self.outcomes()[0][0], "router.answered")
+        self.assertEqual(len(self.tasks()), 1)
+        with self.board_.store.db.read() as db:
+            receipt = json.loads(db.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                            (first["attempt"]["attemptId"],)).fetchone()[0])
+        self.assertEqual(receipt["result"]["usage"], {"elapsedMs": 600000, "toolCalls": 65})
 
     def test_invalid_null_buddy_does_not_count_as_abstention(self):
         request, first = self.start()
@@ -440,7 +490,9 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_next_dispatch_has_no_whole_input_ceiling(self):
         with self.board_.store.db.write() as db:
+            db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','fixture',?)", ("b" * 80,))
             db.execute("UPDATE buddies SET model=? WHERE buddy_id=?", ("b" * 80, B))
+            ensure_model_service(db, "dsh", "fixture", "b" * 80, self.board_.store.now())
         request, first = self.start(three=True)
         result = self.report(first, self.failure(first))
         self.assertEqual(result["decision"]["status"], "queued")
@@ -468,7 +520,7 @@ class FailoverTests(RouterDispatchTestCase):
                 self.assert_full_prompt(native_request.input_text)
                 return RunResult(identity=native_request.identity, harness=native_request.harness,
                                  end=RunEnd(status="error", reason_code="native-prompt-too-large",
-                                            message="native prompt limit"), model_started=False,
+                                            message="native prompt limit"), model_responded=False,
                                  buddy=ResultBuddy(requested=native_request.buddy),
                                  stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
 
@@ -579,12 +631,11 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertEqual(result["decision"]["outcome"], "answered")
         with self.board_.store.db.read() as db:
             row = self.board_.store.decisions._row(db, request["decisionId"])
-            self.assertIsNone(json.loads(row["output_json"])["usage"]["bytesRead"])
         self.assertEqual(len(self.tasks()), 1)
 
     def test_model_started_false_does_not_substitute_for_spawn_or_native_stop_proof(self):
         request, first = self.start()
-        output = {"status": "error", "code": "router-no-answer", "modelStarted": False}
+        output = {"status": "error", "code": "router-no-answer", "modelResponded": False}
         self.assert_boundary(request, first, output, outcome="stop-unconfirmed", status="failed")
 
     def test_release_cancelled_parent_never_advances_despite_never_spawned_proof(self):
@@ -616,9 +667,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def busy_attempt(self, db, number, *, provider="busy", model="busy", buddy_id=None):
         task_id, attempt_id = f"busy-{number}", f"busy-attempt-{number}"
-        db.execute("INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
-                   "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
-                   " VALUES(?,?,'host','{}','digest',1,'dsh','/work',60,'running',1,?,?)", (task_id, task_id, T0, T0))
+        db.execute("INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set('{}','$.expectedSeconds',60),'digest',1,'dsh','/work','running',1,?,?)", (task_id, task_id, T0, T0))
         db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES(?,?,1,'verifier','executing','dsh','dsh',?,?,?,?,?)", (attempt_id, task_id, provider, model, T0, T0, T0))
         if buddy_id:
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES(?,'running',?)", (task_id, T0))
@@ -692,7 +741,7 @@ def install_no_answer_case(name, mutate, code, *, review=False, outer="ok"):
 
 
 for name, code in (("timeout", "timeout"), ("provider", "provider-error"), ("native", "native-error"),
-                   ("empty", "answer-empty"), ("bad_json", "answer-invalid-json"), ("budget_runtime", "router-budget-exhausted")):
+                   ("empty", "answer-empty"), ("bad_json", "answer-invalid-json"), ("budget_runtime", "router-not-responding")):
     install_no_answer_case(name, lambda self, claim, output, code=code: self.failure(claim, code), code, outer="failed")
 install_no_answer_case("no_choice", lambda self, claim, o: {**o, "decision": None}, "answer-shape")
 install_no_answer_case("json_string", lambda self, claim, o: {**o, "decision": "{bad"}, "answer-invalid-json")
@@ -701,7 +750,6 @@ install_no_answer_case("wrong_enum", lambda self, claim, o: {**o, "decision": {*
 install_no_answer_case("outside_id", lambda self, claim, o: {**o, "decision": {**o["decision"], "buddyId": "outside"}}, "router-out-of-bounds")
 install_no_answer_case("illegal_evidence", lambda self, claim, o: {**o, "decision": {**o["decision"], "evidence": [{"kind": "file", "ref": "../secret"}]}}, "answer-shape", review=True)
 install_no_answer_case("fast_file_evidence", lambda self, claim, o: {**o, "decision": {**o["decision"], "evidence": [{"kind": "file", "ref": "src/foo"}]}}, "router-evidence-out-of-bounds")
-install_no_answer_case("elapsed_budget", lambda self, claim, o: {**o, "usage": {"elapsedMs": 60001, "toolCalls": 0}}, "router-budget-exhausted")
 install_no_answer_case("missing_counter", lambda self, claim, o: {**o, "usage": {"elapsedMs": 100}}, "router-tool-evidence-unverified")
 install_no_answer_case("missing_evidence", lambda self, claim, o: {**o, "toolEvidence": None}, "router-tool-evidence-unverified")
 install_no_answer_case("incomplete", lambda self, claim, o: self.answer(claim, stream_complete=False), "router-tool-evidence-unverified")
@@ -723,10 +771,6 @@ install_no_answer_case("foreign_binding", lambda self, claim, o: {**o, "toolEvid
                       "binding": {**o["toolEvidence"]["binding"], "attemptId": "foreign-attempt"}}}, "router-tool-evidence-unverified")
 install_no_answer_case("root_mismatch", lambda self, claim, o: {**o, "nativeIdentity": {"sessionId": "foreign-root"}}, "router-tool-evidence-unverified")
 install_no_answer_case("counter_mismatch", lambda self, claim, o: {**o, "usage": {"elapsedMs": 100, "toolCalls": 1}}, "router-tool-evidence-unverified")
-install_no_answer_case("review_tool_budget", lambda self, claim, o: self.answer(claim, tools=claim["decisionInput"]["budget"]["toolCalls"] + 1),
-                      "router-budget-exhausted", review=True)
-install_no_answer_case("review_time_budget", lambda self, claim, o: {**o, "usage": {"elapsedMs": claim["decisionInput"]["budget"]["timeoutSeconds"] * 1000 + 1, "toolCalls": 0}},
-                      "router-budget-exhausted", review=True)
 
 
 def install_change_case(name, mutate, *, review=False, micro_task=False, outcome="changed"):
@@ -754,15 +798,21 @@ def install_unfenced_edit_case(name, mutate):
 
 
 for name, kwargs in (("list", {"ids": [B, A]}), ("mode", {"mode": "review"}),
-                     ("preset", {"budget": "brief"}), ("interval", {"interval": 30})):
+                     ("response_wait", {"wait": 30}), ("interval", {"interval": 30})):
     install_unfenced_edit_case(name, lambda self, request, claim, output, kwargs=kwargs: self.set_settings(**kwargs))
-install_unfenced_edit_case("identity", execute_change("UPDATE buddies SET model='replacement' WHERE buddy_id=?", (A,)))
+def replace_model_identity(self, request, claim, output):
+    with self.board_.store.db.write() as db:
+        db.execute("INSERT OR IGNORE INTO model_services(harness,provider,model) VALUES('dsh','fixture','replacement')")
+        db.execute("UPDATE buddies SET model='replacement' WHERE buddy_id=?", (A,))
+        ensure_model_service(db, 'dsh', 'fixture', 'replacement', self.board_.store.now())
 
 
-install_change_case("owner", execute_change("UPDATE workflow_runs SET owner_generation=2"), micro_task=True)
+install_unfenced_edit_case("identity", replace_model_identity)
+
+
 install_change_case("route", execute_change("UPDATE workflow_routes SET state='fenced'"), micro_task=True)
 install_change_case("parent_cancel", execute_change("UPDATE workflow_runs SET state='cancelled'"), micro_task=True, outcome="cancelled")
-install_change_case("task_cancel_race", execute_change("UPDATE tasks SET state='cancelling' WHERE owner='decision'"), outcome="cancelled")
+install_change_case("task_cancel_race", execute_change("UPDATE tasks SET state='cancelling' WHERE adapter='decision'"), outcome="cancelled")
 install_change_case("attempt_cancel_race", execute_change("UPDATE attempts SET cancel_requested_at=?", (T0,)), outcome="cancelled")
 install_change_case("copy", lambda self, request, claim, output: output["inputVerification"].update(unchanged=False), review=True)
 install_change_case("manifest", lambda self, request, claim, output: output["inputVerification"].update(manifestSha256="changed"), review=True)

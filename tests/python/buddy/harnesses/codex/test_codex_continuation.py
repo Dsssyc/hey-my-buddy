@@ -63,12 +63,15 @@ class CodexContinuationTests(WorkflowTestCase):
         self.assertEqual(resumed_result.status, "ok", resumed_result.to_report())
         self.assertEqual(resumed_result.result["sessionId"], failed_result.result["sessionId"])
         self.assertEqual(resumed_result.result["nativeTurnId"], "native-turn-2")
-        self.finish_turn(board, second, seal=False,
-                         result_mutator=lambda payload: (payload.clear(), payload.update(resumed_result.result)))
+        def completed_result(payload):
+            seal_ref = payload["workspaceSeal"]
+            payload.update(resumed_result.result)
+            payload["workspaceSeal"] = seal_ref
+        self.finish_turn(board, second, result_mutator=completed_result)
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(delivered["state"], "delivered")
         self.assertEqual(delivered["currentTurn"]["state"], "returned")
-        self.continue_run(board, delivered, command_id="continue-returned")
+        self.continue_run(board, delivered)
         document = self.claim(board, claim_request_id="c3")["claim"]["turn"]["input"]
         self.assertTrue(document["context"]["lastAssistantMessage"]["validatedOutcome"])
 
@@ -164,7 +167,7 @@ class CodexContinuationTests(WorkflowTestCase):
 
         def refusal(result):
             result.pop("turn")
-            result.update(code="native-resume-unavailable", modelStarted=False)
+            result.update(code="native-resume-unavailable", modelResponded=False)
 
         self.finish_turn(board, second, runner_status="failed", exit_code=1, seal=False, result_mutator=refusal)
         failed = board.call("workflow_get", {"runId": failed["runId"]})

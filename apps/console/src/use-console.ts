@@ -1,3 +1,4 @@
+import { retainEqual } from "./retain-equal";
 import { useCopyState } from "./i18n/use-copy-state";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
@@ -8,18 +9,27 @@ import type { Snapshot } from "./types";
 export function useConsole(api: ConsoleApi) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useCopyState();
+  const [verifiedAtMs, setVerifiedAtMs] = useState<number | null>(null);
+  const pending = useRef<number | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const mounted = useRef(false),
     sequence = useRef(0);
   const initialRead = useRef(true);
+  const initialRuntimeIdentity = useRef<string | null>(null);
+  const [runtimeUpdated, setRuntimeUpdated] = useState(false);
   const visible = useDocumentVisible();
   const refresh = useCallback(
-    async (signal?: AbortSignal, strict = false) => {
+    async (signal?: AbortSignal, strict = false, background = false) => {
+      if (background && pending.current !== null) return null;
       const request = ++sequence.current;
+      pending.current = request;
       try {
         const next = await api.snapshot(signal);
         if (mounted.current && request === sequence.current) {
-          setSnapshot(next);
+          if (initialRuntimeIdentity.current === null) initialRuntimeIdentity.current = next.runtimeIdentity;
+          else setRuntimeUpdated(next.runtimeIdentity !== initialRuntimeIdentity.current);
+          setSnapshot(previous => previous ? retainEqual(previous, next) : next);
+          setVerifiedAtMs(api.readVerifiedAt?.(next) ?? null);
           setError("");
           setUpdatedAt(Date.now());
         }
@@ -33,6 +43,8 @@ export function useConsole(api: ConsoleApi) {
           setError(() => errorText(failure));
         if (strict && !isAbortError(failure)) throw failure;
         return null;
+      } finally {
+        if (pending.current === request) pending.current = null;
       }
     },
     [api],
@@ -61,15 +73,16 @@ export function useConsole(api: ConsoleApi) {
     let timer: ReturnType<typeof setTimeout>;
     const poll = async (bootstrap = false) => {
       if (!bootstrap && !documentVisibleNow()) return;
-      await refresh(controller.signal);
+      await refresh(controller.signal, false, true);
       if (!controller.signal.aborted && documentVisibleNow()) timer = setTimeout(poll, 3000);
     };
     void poll(first);
     return () => {
       ++sequence.current;
+      pending.current = null;
       controller.abort();
       clearTimeout(timer);
     };
   }, [refresh, visible]);
-  return { snapshot, error, updatedAt, refresh };
+  return { snapshot, error, updatedAt, verifiedAtMs, runtimeUpdated, refresh };
 }

@@ -16,8 +16,10 @@ import time
 import uuid
 
 from hey_my_buddy.blackboard.routing import router, selection_policy
+from hey_my_buddy.blackboard.routing.evidence import _empty_statistics, _statistics_fact
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
+from hey_my_buddy.buddy.runtime.execution import BUDGET, ModelResponseWait
 from hey_my_buddy.buddy.roles.turn_io import private_json
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from hey_my_buddy.private_dirs import directory_mode
@@ -35,7 +37,12 @@ def parser():
 
 
 def packet(args):
-    buddies = [{**buddy, 'buddyId': ':'.join(buddy.values()), 'enabled': True, 'available': True}
+    # This board-free probe has synthetic empty statistics and an empty queue.
+    buddies = [{**buddy, 'buddyId': ':'.join(buddy.values()), 'enabled': True, 'available': True,
+                'statistics': {'overall': _statistics_fact(_empty_statistics()),
+                               'byDomain': {}, 'byDomainTaskType': {}},
+                'load': {'active': 0, 'limit': 2, 'queued': 0,
+                         'wait': {'seconds': 0, 'atLeast': False, 'overdue': 0}}}
                 for buddy in (
                     {'harness': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash', 'effort': 'off'},
                     {'harness': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol', 'effort': 'high'})]
@@ -44,11 +51,11 @@ def packet(args):
         'task': '极小任务：将 README 中一句中文句末的英文句点改成中文句号。只选择执行配置，不执行修改。',
         'routingMode': 'fast', 'requestedRoutingMode': 'fast', 'fallback': None,
         'captureEvidence': True,
-        'buddies': buddies, 'preferences': [], 'annotations': [],
+        'buddies': buddies, 'preferences': [],
         'policyFacts': selection_policy.policy_facts(buddies=buddies,
                                                     prefer_buddy_ids=[], hard_constraints={}),
         'requestId': 'native-fast-check',
-        'budget': dict(router.FAST_BUDGET),
+        'modelResponseWaitSeconds': 60,
         'outputSchema': router.answer_schema([p['buddyId'] for p in buddies], 'fast'),
     }
 
@@ -79,7 +86,7 @@ def run(args):
     environment.update(HMB_DEV_SOURCE='1', HMB_STATE_DIR=str(root / 'state'),
                        HMB_RUNTIME_ROOT=str(root / 'runtime'))
     context = ExecutionContext(task_id=str(uuid.uuid4()), attempt_id=str(uuid.uuid4()), generation=1,
-        spec={'adapter': 'decision', 'cwd': str(root), 'routerBudgetSeconds': 70},
+        spec={'adapter': 'decision', 'cwd': str(root), 'modelResponseWaitSeconds': document['modelResponseWaitSeconds']},
         directory=root / 'attempt', runtime={'identity': 'source:fast-probe'},
         environment=environment, decision_input=document, session_record_path=None)
     implementation = DecisionAdapter()
@@ -88,13 +95,32 @@ def run(args):
     report = {'status': 'failed', 'inputSha256': digest, 'routingBuddy': document['buddy'],
               'startedAt': datetime.now(timezone.utc).isoformat(), 'privateRoot': str(root)}
     try:
+        context.directory.mkdir(mode=directory_mode(), exist_ok=True)
+        binding = {'taskId': context.task_id, 'attemptId': context.attempt_id, 'generation': context.generation}
+        model_wait = ModelResponseWait(context.directory / BUDGET, binding, document['modelResponseWaitSeconds'])
+        context.model_response_wait = model_wait
+        implementation.prepare(context)
+        model_wait.begin()
         handle = implementation.start(context)
-        if handle.wait(timeout=70) is None:
-            implementation.cancel(handle)
-            handle.wait(timeout=15)
+        no_response = False
+        while True:
+            finished = handle.wait(timeout=0.25) is not None
+            if finished:
+                model_wait.finished()
+                break
+            if model_wait.expired(handle):
+                no_response = True
+                implementation.cancel(handle)
+                handle.wait(timeout=None)
+                break
         outcome = implementation.collect(handle, context)
+        if no_response:
+            outcome.result["modelResponded"] = False
         report.update(status='passed' if outcome.status == 'ok' and outcome.shutdown_confirmed else 'failed',
                       result=outcome.result, shutdownConfirmed=outcome.shutdown_confirmed, error=outcome.error)
+        if no_response:
+            report.update(status='failed', reason={'code': 'router-not-responding',
+                                                    'params': {'seconds': document['modelResponseWaitSeconds']}})
     finally:
         if handle and not handle.shutdown_confirmed():
             implementation.cancel(handle)

@@ -5,7 +5,7 @@ import type userEvent from "@testing-library/user-event";
 type User = ReturnType<typeof userEvent.setup>;
 
 /** The inline catalogue: identities belong to rows, efforts to the scale. */
-export const catalogue = () => screen.getByRole("region", { name: "目录" });
+export const catalogue = () => screen.getByRole("region", { name: "模型" });
 export const modelButton = (identity: string) => within(catalogue()).getByRole("button", { name: identity });
 export const queryModel = (identity: string) => within(catalogue()).queryByRole("button", { name: identity });
 export const modelRow = (identity: string) => modelButton(identity).closest<HTMLElement>("[data-slot=model-row]")!;
@@ -13,7 +13,14 @@ export const chip = (identity: string, effort: string) => within(modelRow(identi
 export const foldHandle = (name: string) => within(catalogue()).getByRole("button", { name: new RegExp(`^(展开|收起) ${name}$`) });
 export const queryFoldHandle = (name: string) => within(catalogue()).queryByRole("button", { name: new RegExp(`^(展开|收起) ${name}$`) });
 export const listed = (enabled: number, total: number) => waitFor(() => {
-  expect(screen.getAllByRole("status").map(item => item.textContent)).toContain(`启用 ${enabled} / ${total}`);
+  // The header now counts the whole loaded directory, including rows hidden by
+  // filters. Local expectations are lower bounds; row visibility is checked by
+  // the individual scenarios, and header totals have dedicated shell coverage.
+  const summary = document.querySelector('[data-slot="buddy-header"] [role="status"]')!;
+  expect(summary).toBeTruthy();
+  const counts = summary.textContent!.match(/启用 (\d+) \/ (\d+)/)!;
+  expect(Number(counts[1])).toBeGreaterThanOrEqual(enabled);
+  expect(Number(counts[2])).toBeGreaterThanOrEqual(total);
 });
 export const search = () => screen.getByRole("searchbox", { name: "搜索 buddy" });
 export const pane = (identity?: string) => identity
@@ -23,7 +30,6 @@ export const level = (effort: string) => within(pane()).getByRole("group", { nam
 export const effortCell = (effort: string) => within(pane()).getByRole("button", { name: effort });
 export const levelSwitch = (effort: string) => within(pane()).getByRole("switch", { name: `启用 ${effort}` });
 export const levelPreference = (effort: string) => within(pane()).getByRole("radiogroup", { name: `${effort} 的偏好` });
-export const note = () => within(pane()).getByRole("textbox", { name: "备注" });
 
 export async function selectModel(user: User, identity: string, harness: string) {
   if (!queryModel(identity)) await user.click(foldHandle(harness));

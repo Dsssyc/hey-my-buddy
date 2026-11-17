@@ -1,9 +1,9 @@
 """Router answer boundary checks without any native model calls."""
 import unittest
 import json
-import time
 from types import SimpleNamespace
 
+from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.errors import BoardError
@@ -12,27 +12,41 @@ from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 
 class RouterContractTests(unittest.TestCase):
     def test_independent_references_and_alternative_are_advisory(self):
-        answer = {"buddyId": "legal-alternative", "note": "Better fit after reading the code",
-                  "evidence": [{"kind": "annotation", "ref": "model-note"},
+        answer = {"domainNodeId": None, "taskType": "change", "buddyId": "legal-alternative", "note": "Better fit after reading the code",
+                  "evidence": [{"kind": "preference", "ref": "preferred buddy"},
                                {"kind": "file", "ref": "src/worker.py"}]}
         self.assertEqual(router.validate_answer(answer, ["preferred", "legal-alternative"]), answer)
 
     def test_candidate_escape_has_noncorrectable_code(self):
         with self.assertRaises(BoardError) as caught:
-            router.validate_answer({"buddyId": "foreign", "note": "x", "evidence": []}, ["legal"])
+            router.validate_answer({"domainNodeId": None, "taskType": "change", "buddyId": "foreign", "note": "x", "evidence": []}, ["legal"])
+        self.assertEqual(caught.exception.code, "router-out-of-bounds")
+        self.assertEqual(caught.exception.details, {"bound": "not-a-candidate"})
+
+    def test_statistics_reference_is_an_advisory_summary_and_buddy_id_stays_bounded(self):
+        answer = {"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "Past delivery supports this choice",
+                  "evidence": [{"kind": "statistics",
+                                "ref": "legal — samples 266, successes 259, failureRate 0.0263"}]}
+        for mode in ("fast", "review"):
+            with self.subTest(mode=mode):
+                self.assertEqual(router.validate_answer(answer, ["legal", "alternative"], mode), answer)
+                self.assertIn("statistics", router.answer_schema(["legal", "alternative"], mode)
+                              ["properties"]["evidence"]["items"]["properties"]["kind"]["enum"])
+        with self.assertRaises(BoardError) as caught:
+            router.validate_answer({**answer, "buddyId": "outsider"}, ["legal", "alternative"])
         self.assertEqual(caught.exception.code, "router-out-of-bounds")
         self.assertEqual(caught.exception.details, {"bound": "not-a-candidate"})
 
     def test_file_references_cannot_escape_or_embed_lines(self):
         for ref in ("../secret", "/tmp/other-run", "src/../../secret", "C:\\secret", "file\ncontents"):
             with self.subTest(ref=ref), self.assertRaises(BoardError):
-                router.validate_answer({"buddyId": "legal", "note": "x",
+                router.validate_answer({"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "x",
                                         "evidence": [{"kind": "file", "ref": ref}]}, ["legal"])
 
     def test_abstention_and_malformed_results(self):
-        self.assertIsNone(router.validate_answer('{"buddyId":null,"note":"Insufficient evidence","evidence":[]}', [])['buddyId'])
-        for value in ("invalid", {}, {"buddyId": None, "note": " ", "evidence": []},
-                      {"buddyId": None, "note": "x", "evidence": [], "request": {}}):
+        self.assertIsNone(router.validate_answer('{"buddyId":null,"note":"Insufficient evidence","evidence":[],"domainNodeId":null,"taskType":"change"}', [])['buddyId'])
+        for value in ("invalid", {}, {"domainNodeId": None, "taskType": "change", "buddyId": None, "note": "", "evidence": []},
+                      {"domainNodeId": None, "taskType": "change", "buddyId": None, "note": "x", "evidence": [], "request": {}}):
             with self.subTest(value=value), self.assertRaises(BoardError):
                 router.validate_answer(value, [])
 
@@ -56,7 +70,7 @@ class RouterContractTests(unittest.TestCase):
                 'cwd': str(root), 'timeoutSeconds': 10, 'canCorrect': False,
                 'spec': {'provider': 'fixture', 'model': 'fixture', 'effort': 'off'},
                 'readOnlyRequest': {
-                    'prompt': 'fixture', 'budget': {'toolCalls': 1},
+                    'prompt': 'fixture',
                     'outputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False},
                 },
             }
@@ -64,7 +78,7 @@ class RouterContractTests(unittest.TestCase):
             native = RunResult(identity=request.identity, harness='dsh',
                                end=RunEnd(status='cancelled'),
                                stop_evidence=StopEvidence(native=StopLayer(group_state='unknown')))
-            handle = InlineRunHandle(control, request.identity, grace_seconds=0)
+            handle = InlineRunHandle(control, request.identity)
             handle.request = request
             handle.result = native
             handle.verdict = {'stopReason': None, 'elapsedMs': 0}
@@ -75,12 +89,43 @@ class RouterContractTests(unittest.TestCase):
         self.assertFalse(result.shutdown_confirmed)
 
     def test_prompt_prefix_stays_stable_and_excludes_display_metadata(self):
-        doc = {"buddies": [{"buddyId": "legal"}], "task": "first", "title": "display-only"}
+        stats = {"samples": 0, "firstPasses": 0, "failures": 0, "medianDeliverySeconds": None}
+        doc = {"buddies": [{"buddyId": "legal", "load": {"wait": {"seconds": 0, "atLeast": False}},
+                            "statistics": {"overall": stats, "byDomain": {}, "byDomainTaskType": {}}}],
+               "task": "first", "title": "display-only"}
         first = router.render_prompt(doc)
         second = router.render_prompt({**doc, "task": "second", "macroTask": "private display label"})
         self.assertEqual(first.split('\n\n')[:2], second.split('\n\n')[:2])
         self.assertNotIn("display-only", first)
         self.assertNotIn("private display label", second)
+
+    def test_prompt_renders_frozen_candidate_facts_and_expected_duration(self):
+        facts = {"billing": {"kind": "subscription", "source": "native", "observedAt": "now"},
+                 "load": {"active": 2, "limit": 2, "queued": 1,
+                          "wait": {"seconds": 300, "atLeast": True, "overdue": 1}},
+                 "statistics": {"overall": {"samples": 4, "successes": 3, "failures": 1,
+                                "firstPasses": 2, "firstPassRate": 0.5, "failureRate": 0.25,
+                                "reworkRounds": 1, "medianDeliverySeconds": 120,
+                                "usage": {"samples": 2, "medianInputTokens": 100,
+                                          "medianCachedInputTokens": 40, "medianOutputTokens": 10}},
+                                "byDomain": {}, "byDomainTaskType": {}},
+                 "infrastructureFailures": {"count": 1, "lastAt": "now"}}
+        prompt = router.render_prompt({"routingMode": "fast", "task": "fix parser",
+                                       "expectedSeconds": 600, "buddies": [{"buddyId": "legal", **facts}]})
+        self.assertIn('"expectedSeconds":600', prompt)
+        for key in facts:
+            self.assertIn('"' + key + '":', prompt)
+        self.assertIn('"usage":', prompt)
+        self.assertIn("Router protocol version 19", prompt)
+
+    def test_both_instruction_modes_name_usage_cost_and_effort_cost(self):
+        for mode in ("fast", "review"):
+            with self.subTest(mode=mode):
+                prompt = router.render_prompt({"routingMode": mode, "task": "fix parser", "buddies": []})
+                text = " ".join(prompt.split())
+                self.assertIn("Router protocol version 19", text)
+                self.assertIn("Token usage statistics are cost evidence.", text)
+                self.assertIn("Higher reasoning effort spends more quota and is slower;", text)
 
 
 from unittest.mock import patch
@@ -98,12 +143,30 @@ class RouterPublicationTests(WorkflowTestCase):
         mock_readonly.install(self)
         self.enterContext(patch('hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available', return_value=(True, None)))
 
-    def settle(self, buddy, *, code=None, preferences=None, result_status=None):
+    def test_frozen_router_packet_contains_accepted_lifecycle_statistics(self):
+        board = self.board()
+        self.seed(board)
+        submitted = self.submit(board, request_id='accepted-sample')
+        self.finish_turn(board, self.claim(board, run_id=submitted['runId']))
+        delivered = board.call('workflow_get', {'runId': submitted['runId']})
+        self.accept_run(board, delivered)
+        request = board.store.decisions.request_select({'requestId': 'route-after-sample',
+                                                   'task': 'choose a capable buddy'})
+        decision = board.call('selection_get', {'decisionId': request['decisionId'],
+                                                'includeAudit': True})['decision']
+        candidate = next(item for item in decision['input']['buddies'] if item['buddyId'] == BUDDY_ID)
+        self.assertEqual(candidate['statistics']['overall']['samples'], 1)
+        self.assertEqual(candidate['statistics']['overall']['successes'], 1)
+        self.assertEqual(candidate['statistics']['overall']['firstPasses'], 1)
+        self.assertEqual(candidate['billing']['kind'], 'metered')
+        self.assertIn('wait', candidate['load'])
+
+    def settle(self, buddy, *, code=None, preferences=None, result_status=None, evidence=None):
         from support import InProcessBoard
-        board = InProcessBoard(self.directory / (code or "publication"))
+        board = InProcessBoard(self.directory / (code or f"publication-{len(self._stack)}"))
         self._stack.append(board)
         self.seed(board, preferences=preferences)
-        request = board.call('selection_request', {'requestId': 'route', 'task': 'choose'})
+        request = board.store.decisions.request_select({'requestId': 'route', 'task': 'choose'})
         pass  # Admission is owned by the service.
         claim = self.claim(board, 'router', run_id=request['runId'])['claim']
         result = {**claim_tool_receipt(claim, state_dir=board.directory), 'status': 'error' if code else 'ok', 'operation': 'select',
@@ -111,8 +174,8 @@ class RouterPublicationTests(WorkflowTestCase):
                   'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
                   'usage': {'elapsedMs': 100, 'toolCalls': 0},
                   'inputVerification': {'unchanged': True, 'manifestSha256': None, 'snapshotSha256': 'fixture-digest'},
-                  'decision': {'buddyId': buddy, 'note': 'Read the frozen input',
-                               'evidence': [{'kind': 'annotation', 'ref': 'not-supplied'}]}}
+                  'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': buddy, 'note': 'Read the frozen input',
+                               'evidence': evidence if evidence is not None else [{'kind': 'preference', 'ref': 'not-supplied'}]}}
         if code:
             result['code'] = code
         board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': result_status or ('failed' if code else 'ok'), 'shutdownConfirmed': True, 'result': result})
@@ -122,29 +185,28 @@ class RouterPublicationTests(WorkflowTestCase):
         board, decision = self.settle(SECOND_BUDDY_ID, preferences=[{'buddyId': BUDDY_ID, 'mode': 'prefer'}])
         self.assertEqual(decision['status'], 'completed')
         self.assertEqual(decision['policyCheck']['userPreference'], 'alternative')
-        self.assertEqual(decision['evidence'], [{'kind': 'annotation', 'ref': 'not-supplied'}])
+        self.assertEqual(decision['evidence'], [{'kind': 'preference', 'ref': 'not-supplied'}])
 
     def test_boundary_and_budget_counters_are_separate(self):
-        for code, counter in [('router-budget-exhausted', 'budgetExhaustedCount'),
+        for code, counter in [('router-not-responding', 'notRespondingCount'),
                               ('router-input-changed', 'inputChangedCount')]:
             with self.subTest(code=code):
                 board, decision = self.settle(None, code=code)
                 self.assertEqual(decision['status'], 'needs-host')
                 health = board.store.decisions.health_summary()
                 self.assertEqual(health[counter], 1)
-                self.assertEqual(health['failureCount'], 1 if code == 'router-budget-exhausted' else 0)
+                self.assertEqual(health['failureCount'], 1 if code == 'router-not-responding' else 0)
                 board.close()
                 self._stack.remove(board)
 
     def test_reroute_waits_for_new_continuation_manifest(self):
         board = self.board()
         self.seed(board, decision_buddy=None)
-        submitted = board.call('workflow_submit', {
-            'requestId': 'frozen-reroute', 'hostId': 'host', 'task': 'Original task ' + 'T' * 130000,
-            'cwd': str(self.workdir()), 'executionWorkspace': {'kind': 'existing', 'access': 'write'}})
-        self.controls[submitted['runId']] = submitted['control']
+        submitted = self.submit(board, request_id='frozen-reroute',
+            task='Original task ' + 'T' * 130000, cwd=str(self.workdir()),
+            kind='existing', access='write', buddy='route')
         continuation_text = 'Changed continuation task ' + 'C' * 50000
-        continued = self.continue_run(board, submitted, reroute=True, input=continuation_text)
+        continued = self.continue_run(board, submitted, buddy='route', input=continuation_text)
         self.assertEqual(continued['routing']['status'], 'queued')
         self.assertIsNone(continued['routing']['source'])
         helper_text = 'H' * 12000
@@ -154,7 +216,8 @@ class RouterPublicationTests(WorkflowTestCase):
                                (json.dumps([{"result": helper_text}]), submitted['runId']))
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_routes').fetchone()[0], 1)
-            self.assertIsNone(connection.execute('SELECT workspace_manifest_json FROM workflow_continuations').fetchone()[0])
+            pending = connection.execute('SELECT workspace_id,workspace_manifest_sha256,workspace_facts_role FROM workflow_continuations').fetchone()
+            self.assertEqual(tuple(pending), (None, None, 'pending'))
         board.console_call('user_policy_publish', {
             'commandId': 'enable-router-for-continuation',
             'configuration': {'routerBuddyIds': [BUDDY_ID]},
@@ -162,10 +225,13 @@ class RouterPublicationTests(WorkflowTestCase):
         board.store.workflow.prepare_continuation_workspace({'runId': submitted['runId']})
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_routes').fetchone()[0], 2)
-            continuation = connection.execute('SELECT workspace_manifest_json FROM workflow_continuations').fetchone()[0]
-            self.assertIsNotNone(continuation)
+            continuation = connection.execute('SELECT workspace_id,workspace_manifest_sha256,workspace_facts_role FROM workflow_continuations').fetchone()
+            self.assertIn(continuation['workspace_facts_role'], ('owner', 'reference'))
             frozen = json.loads(connection.execute('SELECT requested_json FROM decision_requests ORDER BY rowid DESC LIMIT 1').fetchone()[0])
-            self.assertEqual(frozen['executionWorkspace'], json.loads(continuation))
+            self.assertEqual(frozen['executionWorkspace'], {
+                'workspaceId': continuation['workspace_id'],
+                'manifestSha256': continuation['workspace_manifest_sha256'],
+            })
             self.assertIn(continuation_text, frozen['task'])
             self.assertIn(helper_text, frozen['task'])
             self.assertGreater(len(frozen['task'].encode()), 128 * 1024)
@@ -174,51 +240,51 @@ class RouterPublicationTests(WorkflowTestCase):
         self.assertIsNotNone(claimed)
         self.assertEqual(claimed['decisionInput']['task'], frozen['task'])
 
-    def test_budget_publication_preserves_model_and_schema(self):
+    def test_response_wait_publication_preserves_model_and_schema(self):
         from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
         board = self.board()
         self.seed(board)
         board.console_call('user_policy_publish', {
-            'commandId': 'budget-change',
-            'configuration': {'routingBudget': 'deep'}})
-        configured = board.call('console_snapshot', {})['configuration']
-        self.assertEqual(configured['routingBudget'], 'deep')
+            'commandId': 'response-wait-change',
+            'configuration': {'modelResponseWaitSeconds': 90}})
+        configured = console_snapshot_projection(board.service)[0]['configuration']
+        self.assertEqual(configured['modelResponseWaitSeconds'], 90)
         self.assertEqual(configured['routerBuddyIds'], [BUDDY_ID])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
 
-    def test_budget_update_does_not_change_selection_request_replay(self):
+    def test_response_wait_update_does_not_change_direct_selection_replay(self):
         board = self.board()
         self.seed(board)
-        params = {'requestId': 'stable-budget-request', 'task': 'choose'}
-        original = board.call('selection_request', params)
+        params = {'requestId': 'stable-response-wait-request', 'task': 'choose'}
+        original = board.store.decisions.request_select(params)
         with board.store.db.write() as connection:
-            connection.execute("UPDATE router_settings SET budget_preset='deep' WHERE id=1")
-        replay = board.call('selection_request', params)
+            connection.execute("UPDATE router_settings SET model_response_wait_seconds=90 WHERE id=1")
+        replay = board.store.decisions.request_select(params)
         self.assertTrue(replay['duplicate'])
         self.assertEqual(replay['decisionId'], original['decisionId'])
         view = board.call('selection_get', {'decisionId': original['decisionId']})['decision']
-        self.assertEqual(view['budget']['preset'], 'standard')
+        self.assertEqual(view['modelResponseWaitSeconds'], 60)
 
     def test_cancellation_keeps_budget_code_out_of_budget_count(self):
-        board, decision = self.settle(None, code='router-budget-exhausted', result_status='cancelled')
+        board, decision = self.settle(None, code='router-not-responding', result_status='cancelled')
         health = board.store.decisions.health_summary()
         self.assertEqual(decision['status'], 'cancelled')
         self.assertEqual(health['cancelledCount'], 1)
-        self.assertEqual(health['budgetExhaustedCount'], 0)
+        self.assertEqual(health['notRespondingCount'], 0)
 
     def test_review_capability_is_derived_from_the_current_declaration(self):
         board = self.board()
         self.seed(board)
         with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
-            snapshot = board.call('console_snapshot', {})
+            snapshot = console_snapshot_projection(board.service)[0]
         buddy = next(p for p in snapshot['buddies'] if p['buddyId'] == BUDDY_ID)
         self.assertNotIn('decision', buddy['capabilities'])
         with board.store.db.read() as connection:
-            recorded = json.loads(connection.execute('SELECT capabilities_json FROM buddies WHERE buddy_id=?', (BUDDY_ID,)).fetchone()[0])
+            recorded = json.loads(connection.execute('SELECT input_modalities_json FROM model_services WHERE (harness,provider,model)=(SELECT harness,provider,model FROM buddies WHERE buddy_id=?)', (BUDDY_ID,)).fetchone()[0])
         self.assertNotIn('decision', recorded)
         self.assertFalse(hasattr(DshAdapter, 'read_only_structured_verified'))
-        eligible = board.call('console_snapshot', {})
+        eligible = console_snapshot_projection(board.service)[0]
         self.assertIn('decision', next(p for p in eligible['buddies'] if p['buddyId'] == BUDDY_ID)['capabilities'])
 
     def test_outside_choice_is_rejected_and_not_abstention(self):
@@ -248,21 +314,35 @@ class RouterInputTests(unittest.TestCase):
         manifest = self.prepare(kind='existing')
         attempt = self.root / 'attempt'
         attempt.mkdir()
-        mirror, fingerprint = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
+        mirror, fingerprint = router_input.prepare(manifest, attempt, state_dir=self.state)
         self.assertNotEqual(mirror, self.repo)
         self.assertEqual((mirror / 'src/file.txt').read_text(encoding="utf-8"), 'dirty frozen input')
         self.assertFalse((mirror / 'secret-cache').exists())
         self.assertFalse((mirror / '.git').exists())
-        self.assertTrue(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120, state_dir=self.state)['unchanged'])
+        self.assertTrue(router_input.verify(manifest, mirror, fingerprint, state_dir=self.state)['unchanged'])
         (self.repo / 'src/file.txt').write_text('Host changed after Router start', encoding="utf-8", newline="\n")
         self.assertEqual((mirror / 'src/file.txt').read_text(encoding="utf-8"), 'dirty frozen input')
-        self.assertEqual(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120, state_dir=self.state)['code'], 'router-input-changed')
+        self.assertEqual(router_input.verify(manifest, mirror, fingerprint, state_dir=self.state)['code'], 'router-input-changed')
         next_attempt = self.root / 'next-attempt'
         next_attempt.mkdir()
         with self.assertRaises(BoardError) as changed:
-            router_input.prepare(manifest, next_attempt, deadline=time.monotonic() + 120, state_dir=self.state)
+            router_input.prepare(manifest, next_attempt, state_dir=self.state)
         self.assertEqual(changed.exception.code, 'router-input-changed')
         self.assertFalse((next_attempt / 'frozen-input').exists())
+
+    def test_router_frozen_input_ignores_project_marker_but_workspace_verify_requires_it(self):
+        from hey_my_buddy.buddy.roles import router_input
+        manifest = self.prepare(kind='existing')
+        self.git('update-ref', '-d', 'refs/hey-my-buddy/project')
+        with self.assertRaises(BoardError) as refused:
+            router_input.workspace.verify(manifest, state_dir=self.state)
+        self.assertEqual(refused.exception.code, 'WORKSPACE_CHANGED')
+        attempt = self.root / 'no-project-marker'
+        attempt.mkdir()
+        mirror, fingerprint = router_input.prepare(
+            manifest, attempt, state_dir=self.state)
+        self.assertTrue(router_input.verify(
+            manifest, mirror, fingerprint, state_dir=self.state)['unchanged'])
 
     def test_many_files_are_read_through_one_batch_process_and_failures_leave_no_copy(self):
         from unittest import mock
@@ -276,7 +356,7 @@ class RouterInputTests(unittest.TestCase):
         real_popen, real_run = router_input.subprocess.Popen, router_input.subprocess.run
         with mock.patch.object(router_input.subprocess, 'Popen', wraps=real_popen) as popen, \
                 mock.patch.object(router_input.subprocess, 'run', wraps=real_run) as run:
-            mirror, _ = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
+            mirror, _ = router_input.prepare(manifest, attempt, state_dir=self.state)
         # subprocess.run is built on Popen, so count only the blob readers.
         readers = [call for call in popen.call_args_list if 'cat-file' in call.args[0]]
         self.assertEqual(len(readers), 1)
@@ -287,8 +367,8 @@ class RouterInputTests(unittest.TestCase):
         broken = dict(manifest, inputTree='0' * 40)
         attempt = self.root / 'broken-attempt'
         attempt.mkdir()
-        with mock.patch.object(router_input.workspace, 'verify'), self.assertRaises(BoardError):
-            router_input.prepare(broken, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
+        with mock.patch.object(router_input.workspace, 'verify_frozen_input'), self.assertRaises(BoardError):
+            router_input.prepare(broken, attempt, state_dir=self.state)
         self.assertFalse((attempt / 'frozen-input').exists())
 
     def test_git_replace_cannot_substitute_frozen_blob_contents(self):
@@ -299,7 +379,7 @@ class RouterInputTests(unittest.TestCase):
         manifest = self.prepare(kind='existing')
         attempt = self.root / 'replace-attempt'
         attempt.mkdir()
-        mirror, _ = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
+        mirror, _ = router_input.prepare(manifest, attempt, state_dir=self.state)
         self.assertEqual((mirror / 'src/file.txt').read_bytes(), b'base\n')
 
     def test_frozen_symlink_cycle_has_a_bounded_input_error(self):
@@ -311,7 +391,7 @@ class RouterInputTests(unittest.TestCase):
         attempt = self.root / 'loop-attempt'
         attempt.mkdir()
         with self.assertRaises(BoardError) as caught:
-            router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
+            router_input.prepare(manifest, attempt, state_dir=self.state)
         self.assertEqual(caught.exception.code, 'router-input-unavailable')
 
     def test_changed_router_copy_and_escaping_link_are_rejected(self):
@@ -319,17 +399,83 @@ class RouterInputTests(unittest.TestCase):
         manifest = self.prepare(kind='existing')
         attempt = self.root / 'attempt'
         attempt.mkdir()
-        mirror, fingerprint = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
+        mirror, fingerprint = router_input.prepare(manifest, attempt, state_dir=self.state)
         (mirror / 'src/file.txt').chmod(0o644)
         (mirror / 'src/file.txt').write_text('unexpected native write', encoding="utf-8", newline="\n")
-        self.assertFalse(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120, state_dir=self.state)['unchanged'])
+        self.assertFalse(router_input.verify(manifest, mirror, fingerprint, state_dir=self.state)['unchanged'])
         (self.repo / 'src/escape').symlink_to(self.root / 'outside')
         self.git('add', 'src/escape')
         manifest = self.prepare(request='escape', kind='existing')
         attempt = self.root / 'escape-attempt'
         attempt.mkdir()
         with self.assertRaises(BoardError):
-            router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
+            router_input.prepare(manifest, attempt, state_dir=self.state)
+
+
+
+
+class RouterSchemaAgreementTests(unittest.TestCase):
+    def test_schema_allowed_answers_pass_validation_in_both_modes(self):
+        from itertools import product
+        from hey_my_buddy.protocol.structured_schema import schema_errors
+        from hey_my_buddy.protocol.task_types import TASK_TYPES
+        candidates = ["legal", "alternative"]
+        domains = ["systems", "ipc"]
+        notes = ["x", " ", "\n\x00\x7f", "解释 🧭", "x" * router.MAX_NOTE]
+        refs = ["legal — samples 266, successes 259, failureRate 0.0263", " ",
+                "legal\nqualitative summary", "\x00\x7f", "界" * 1024]
+        for mode in ("fast", "review"):
+            schema = router.answer_schema(candidates, mode, domain_node_ids=domains)
+            evidence_options = [[]]
+            for kind in schema["properties"]["evidence"]["items"]["properties"]["kind"]["enum"]:
+                evidence_options.extend([[{"kind": kind, "ref": ref}]
+                                         for ref in (["src/module.py"] if kind == "file" else refs)])
+            evidence_options.append([{"kind": "statistics", "ref": refs[0]}] * router.MAX_REFERENCES)
+            for buddy, domain, task_type, note, evidence in product(
+                    [*candidates, None], [*domains, None], TASK_TYPES, notes, evidence_options):
+                answer = {"buddyId": buddy, "domainNodeId": domain, "taskType": task_type,
+                          "note": note, "evidence": evidence}
+                with self.subTest(mode=mode, buddy=buddy, domain=domain, taskType=task_type):
+                    self.assertEqual(schema_errors(answer, schema), [])
+                    self.assertEqual(router.validate_answer(answer, candidates, mode,
+                                                           domain_node_ids=domains), answer)
+
+    def test_schema_and_validator_reject_the_same_field_violations(self):
+        from hey_my_buddy.protocol.structured_schema import schema_errors
+        base = {"buddyId": "legal", "domainNodeId": None, "taskType": "change",
+                "note": "ok", "evidence": []}
+        for mode in ("fast", "review"):
+            schema = router.answer_schema(["legal"], mode, domain_node_ids=["systems"])
+            invalid = [None, [], {**base, "extra": None}]
+            invalid.extend({key: value for key, value in base.items() if key != missing} for missing in base)
+            for field, values in {
+                "buddyId": [False, 1, {}, [], "foreign"],
+                "domainNodeId": [False, 1, {}, [], "merged", ""],
+                "taskType": [False, 1, {}, [], None, "", "coding"],
+                "note": [False, 1, {}, [], None, "", "x" * (router.MAX_NOTE + 1)],
+                "evidence": [False, 1, {}, None, "", [None], [{}],
+                             [{"kind": "unknown", "ref": "x"}],
+                             [{"kind": "statistics", "ref": ""}],
+                             [{"kind": "statistics", "ref": "x" * 1025}],
+                             [{"kind": "statistics", "ref": "x", "extra": None}],
+                             [{"kind": "statistics", "ref": "x"}] * (router.MAX_REFERENCES + 1)],
+            }.items():
+                invalid.extend({**base, field: value} for value in values)
+            if mode == "fast":
+                invalid.append({**base, "evidence": [{"kind": "file", "ref": "src/a.py"}]})
+            for answer in invalid:
+                with self.subTest(mode=mode, answer=answer):
+                    self.assertTrue(schema_errors(answer, schema))
+                    with self.assertRaises(BoardError):
+                        router.validate_answer(answer, ["legal"], mode, domain_node_ids=["systems"])
+
+    def test_empty_tree_only_allows_unclassified(self):
+        from hey_my_buddy.protocol.structured_schema import schema_errors
+        answer = {"buddyId": None, "domainNodeId": None, "taskType": "research", "note": "x", "evidence": []}
+        schema = router.answer_schema([])
+        self.assertEqual(schema["properties"]["domainNodeId"]["enum"], [None])
+        self.assertEqual(schema_errors(answer, schema), [])
+        self.assertEqual(router.validate_answer(json.dumps(answer), []), answer)
 
 
 if __name__ == '__main__':

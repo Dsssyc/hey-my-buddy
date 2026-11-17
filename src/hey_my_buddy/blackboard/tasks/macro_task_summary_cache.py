@@ -4,7 +4,7 @@ The list still discovers membership, matching and ordering on every changed
 read. Only _summary is reused. Markers contain derived scalar facts, receipt
 presence/stop facts and bounded presentation fields, never execution results,
 turn inputs, request bodies or manifests. Events are not a substitute for SQL
-facts: correcting an existing description event also invalidates its group.
+facts: presentation corrections also invalidate their group.
 """
 from __future__ import annotations
 
@@ -26,7 +26,8 @@ _CREATION_LOCK = threading.Lock()
 # rules. Drop t.* before materializing: spec/input/result JSON does not belong
 # in a list's change marker. Query-only columns remain inside SQLite, evaluated
 # before the bounded scalar projection is materialized.
-THIN_HISTORY_SQL = micro_task.TASK_HISTORY_SQL.replace(
+THIN_HISTORY_SQL = micro_task.replace_sql_once(
+    micro_task.TASK_HISTORY_SQL,
     "t.*,",
     "t.rowid AS task_rowid, t.task_id, t.adapter, t.state, t.selected_attempt_id, t.active_attempt_id,"
     " t.created_at, t.accepted_at, t.revision, t.updated_at,",
@@ -35,8 +36,7 @@ MEMBER_COLUMNS = (
     "task_id", "task_rowid", "adapter", "state", "selected_attempt_id", "active_attempt_id",
     "created_at", "accepted_at", "revision", "updated_at", "micro_task_run_id",
     "run_state", "child_parent_run_id", "delegated_parent_run_id", "decision_id",
-    "route_run_id", "root_run_id", "root_host_id", "root_owner_generation",
-    "source_host_id", "current_host_id", "project_path", "project_id",
+    "route_run_id", "root_run_id", "root_lead_run_id", "project_path", "project_id",
     "project_repository_path", "review_ready",
 )
 
@@ -66,16 +66,25 @@ class SummaryCache:
         self.entries = OrderedDict()
         self.bytes = 0
 
-    def get(self, key, marker, compute, *, reusable=True):
-        now = self.clock()
+    def lookup(self, key, marker, *, reusable=True):
+        """Probe before batching derivation for the groups that actually miss."""
         with self.lock:
+            previous = self.entries.get(key)
+            if (previous is not None and reusable and previous[0] == marker
+                    and self.clock() - previous[2] < MAX_AGE_SECONDS):
+                self.entries.move_to_end(key)
+                return copy.deepcopy(previous[1])
+            return None
+
+    def get(self, key, marker, compute, *, reusable=True):
+        with self.lock:
+            cached = self.lookup(key, marker, reusable=reusable)
+            if cached is not None:
+                return cached
             previous = self.entries.pop(key, None)
             if previous is not None:
                 self.bytes -= previous[3]
-                if reusable and previous[0] == marker and now - previous[2] < MAX_AGE_SECONDS:
-                    self.entries[key] = previous
-                    self.bytes += previous[3]
-                    return copy.deepcopy(previous[1])
+            now = self.clock()
             value = compute()
             # Byte accounting covers the marker as well as the cached summary.
             size = len(json.dumps([key, marker, value], ensure_ascii=False).encode())
@@ -103,11 +112,12 @@ def dependencies(connection, members):
     conservative; their large documents never cross this query boundary.
     """
     groups = {group: [tuple(row[column] for column in (*MEMBER_COLUMNS, "matching"))
-                      for row in rows] for group, rows in members.items()}
+                      for row in rows if row["task_id"] is not None] for group, rows in members.items()}
     owners = {}
     for group, rows in members.items():
         for row in rows:
-            owners.setdefault(row["task_id"], set()).add(group)
+            if row["task_id"] is not None:
+                owners.setdefault(row["task_id"], set()).add(group)
     identifiers = sorted(owners)
     for start in range(0, len(identifiers), 400):
         batch = identifiers[start:start + 400]
@@ -115,8 +125,8 @@ def dependencies(connection, members):
         statements = (
             ("attempt", "SELECT task_id,attempt_id,generation,execution_state,shutdown_confirmed,"
              " result_json IS NOT NULL FROM attempts WHERE task_id IN ({}) ORDER BY task_id,generation"),
-            ("run", "SELECT run_id,macro_task_id,state,host_id,owner_generation,active_request_id,current_turn_id,"
-             " current_attempt_id,final_artifact_id,final_attempt_id,revision,created_at,activity_seq,activity_at"
+            ("run", "SELECT run_id,macro_task_id,state,active_request_id,current_turn_id,"
+             " current_attempt_id,final_artifact_id,final_attempt_id,created_at,activity_seq,activity_at"
              " FROM workflow_runs WHERE run_id IN ({}) ORDER BY run_id"),
             ("turn", "SELECT t.run_id,t.turn_id,t.turn_index,t.state,t.attempt_id,t.generation,"
              " CASE WHEN t.state='returned' THEN json_extract(a.result_json,'$.result.turn.outcome.disposition') END"
@@ -124,11 +134,11 @@ def dependencies(connection, members):
              " WHERE t.run_id IN ({}) ORDER BY t.run_id,t.turn_index"),
             ("conclusion", "SELECT run_id,conclusion_id,execution_status"
              " FROM workflow_host_conclusions WHERE run_id IN ({}) ORDER BY run_id"),
-            ("request", "SELECT run_id,request_id,turn_id,attempt_id,child_task_id,kind,state,expected_revision,decided_at"
+            ("request", "SELECT run_id,request_id,turn_id,attempt_id,child_task_id,kind,state,response_kind,response_id,decided_at"
              " FROM workflow_requests WHERE run_id IN ({}) ORDER BY run_id,request_id"),
-            ("child", "SELECT child_task_id,parent_run_id,request_id,state,role"
+            ("child", "SELECT child_task_id,parent_run_id,request_id,state"
              " FROM workflow_children WHERE child_task_id IN ({}) ORDER BY child_task_id"),
-            ("route", "SELECT route.run_id,route.decision_id,decision.task_id,route.state,route.owner_generation"
+            ("route", "SELECT route.run_id,route.decision_id,decision.task_id,route.state"
              " FROM workflow_routes route JOIN decision_requests decision USING(decision_id)"
              " WHERE route.run_id IN ({}) ORDER BY route.run_id,route.decision_id"),
         )
@@ -137,40 +147,46 @@ def dependencies(connection, members):
                 for group in owners[row[0]]:
                     groups[group].append((kind, *tuple(row)))
     reusable = dict.fromkeys(groups, True)
+    from .work_pauses import TASK_UNITS_SQL
     for group in groups:
         if group.startswith("macro-"):
+            pause = connection.execute(
+                "SELECT paused_at FROM work_pauses WHERE macro_task_id=?", (group,),
+            ).fetchone()
+        else:
+            pause = connection.execute(
+                "SELECT paused_at FROM work_pauses WHERE run_id=?", (group[4:],),
+            ).fetchone()
+        groups[group].append(("pause", pause["paused_at"] if pause else None))
+        if pause is not None:
+            # Match paused()'s full work-unit scope, including Router tasks and
+            # every attempt. The shared predicate supplies the stop proof.
+            for row in connection.execute(
+                f"SELECT unit.task_id,task.state,task.active_attempt_id,task.selected_attempt_id,"
+                " attempt.attempt_id,attempt.generation,attempt.execution_state,"
+                " attempt.shutdown_confirmed,unconfirmed.task_id IS NOT NULL"
+                f" FROM ({TASK_UNITS_SQL}) unit JOIN tasks task ON task.task_id=unit.task_id"
+                " LEFT JOIN attempts attempt ON attempt.task_id=unit.task_id"
+                f" LEFT JOIN ({micro_task.UNCONFIRMED_STOPS_SQL}) unconfirmed"
+                " ON unconfirmed.task_id=unit.task_id"
+                " WHERE unit.group_id=? ORDER BY unit.task_id,attempt.generation", (group,),
+            ):
+                groups[group].append(("pause-unit", *tuple(row)))
+        if group.startswith("macro-"):
             row = connection.execute(
-                "SELECT macro_task_id,title,project_id,project_path,source_host_id,created_at,activity_seq,activity_at"
+                "SELECT macro_task_id,title,project_id,project_cwd,repository_path,created_at,activity_seq,activity_at"
                 " FROM macro_tasks WHERE macro_task_id=?", (group,),
             ).fetchone()
             groups[group].append(("macro-task", *tuple(row)))
-            # The first run follows the same created_at/rowid ordering as _summary.
-            # The original event's description is part of the summary marker.
-            event = connection.execute(
-                "SELECT e.seq," + _bounded("json_extract(e.payload_json,'$.macroTaskId')",
-                                           kind="json_type(e.payload_json,'$.macroTaskId')") + ","
-                + _bounded("json_extract(e.payload_json,'$.description')",
-                           kind="json_type(e.payload_json,'$.description')") +
-                " FROM events e WHERE e.kind='workflow.macro_task_created' AND e.task_id=("
-                " SELECT run_id FROM workflow_runs WHERE macro_task_id=? ORDER BY created_at,rowid LIMIT 1)"
-                " ORDER BY e.seq LIMIT 1", (group,),
-            ).fetchone()
-            if event is not None:
-                groups[group].append(("description", *tuple(event)))
-                reusable[group] = all(
-                    length is None or length <= TEXT_BOUND for length in (event[2], event[5])
-                )
+            from .macro_tasks import project
+            groups[group].append(("project", *project(connection, group).values()))
 
         else:
             row = connection.execute(
                 "SELECT " + _bounded("r.title") + "," + _bounded("json_extract(t.spec_json,'$.task')",
-                    kind="json_type(t.spec_json,'$.task')") + ","
-                + _bounded("(SELECT CASE WHEN json_type(a.result_json,'$.result.turn.outcome.summary')='text'"
-                           " THEN json_extract(a.result_json,'$.result.turn.outcome.summary') END FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
-                           " WHERE t.run_id=r.run_id AND t.state='returned'"
-                           " ORDER BY t.turn_index DESC LIMIT 1)") +
+                    kind="json_type(t.spec_json,'$.task')") +
                 " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id WHERE r.run_id=?", (group[4:],),
             ).fetchone()
             groups[group].append(("presentation", *tuple(row)))
-            reusable[group] = all(length is None or length <= TEXT_BOUND for length in (row[1], row[4], row[7]))
+            reusable[group] = all(length is None or length <= TEXT_BOUND for length in (row[1], row[4]))
     return groups, reusable

@@ -1,8 +1,10 @@
+import { BuddyName } from "../components/AliasTag";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Section } from "@/components/section";
+import { Section } from "./parts";
 import { actorText, stopActorText } from "../actor";
 import { eventDetails, eventName } from "../macro-task-display";
-import { Facts, Moment, Pane, PaneTitle } from "./parts";
+import { Facts, Fold, Moment, Pane, PaneTitle } from "./parts";
 import { quad } from "./names";
 import type { Step } from "./steps";
 import type { Context } from "./types";
@@ -18,16 +20,15 @@ export function EventPane({ step, ctx }: { step: Step; ctx: Context }) {
   const unrecorded = t("unrecorded");
   const stopped = event?.kind === "cancel" ? event.actor?.role ?? null : null;
   const note = event ? eventDetails(event) : null;
-  return <Pane>
-    <PaneTitle title={step.kind === "cancel" ? eventName(event!) : t(`step.${step.kind}`)}><Moment at={step.at} /></PaneTitle>
-    <Section name={t("event.facts")} className="border-t">
+  const title = step.kind === "cancel" ? eventName(event!) : t(`step.${step.kind}`);
+  return <Pane title={
+    <PaneTitle title={title}>{event?.actor && <span>{actorText(event.actor)}</span>}<Moment at={step.at} itemKey={step.key} label={title} /></PaneTitle>}>
+    <Section name={t("event.facts")}>
       {step.kind === "handoff"
-        ? <Facts items={[[t("event.from"), quad(step.from) ?? unrecorded, true], [t("event.to"), quad(step.to) ?? unrecorded, true]]} />
+        ? <Facts items={[[t("event.from"), <BuddyName buddy={step.from}>{quad(step.from) ?? unrecorded}</BuddyName>, true], [t("event.to"), <BuddyName buddy={step.to}>{quad(step.to) ?? unrecorded}</BuddyName>, true]]} />
         : <Facts items={[
-          [t("decision.who"), event?.actor ? actorText(event.actor) : unrecorded],
-          [t("decision.when"), <Moment key="when" at={step.at} />],
           ...(stopped ? [[t("event.stoppedBy"), stopActorText(stopped)] as [string, string]] : []),
-          ...(note ? [[t("event.details"), note] as [string, string]] : []),
+          ...(note ? [[t("event.details"), <Fold key="note" text={note} />] as [string, ReactNode]] : []),
         ]} />}
     </Section>
   </Pane>;

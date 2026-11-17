@@ -60,13 +60,13 @@ class StopSequenceTests(unittest.TestCase):
             process._buddy_job = SimpleNamespace(terminate=force, active=active,
                                                 close=lambda **kw: note("job.close"))
         with patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel=channel)
+            handle = ProcessHandle(process, log_paths={}, stop_channel=channel)
         if not windows:
-            handle.group_alive = lambda: state["alive"]
+            handle.observe = lambda: (state["exit"], "alive" if state["alive"] else "gone")
         clock_api = SimpleNamespace(monotonic=lambda: clock[0],
                                     sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds))
         with patch("hey_my_buddy.protocol.process_handle.time", clock_api), \
-             patch.object(handle, "_signal_group", side_effect=send):
+             patch.object(handle, "_signal_session", side_effect=send):
             result = handle.terminate(grace_seconds=3, settle_seconds=0.1)
         process.send_signal.assert_not_called()
         process.kill.assert_not_called()
@@ -117,18 +117,40 @@ class StopSequenceTests(unittest.TestCase):
 
 
 class RealStdioStopTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX session observation")
+    def test_quick_child_exit_observes_only_alive_and_gone(self):
+        child = owned_popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+                            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+        handle = ProcessHandle(child, log_paths={}, stop_channel="stdin")
+        try:
+            self.assertEqual(handle.observe(), (None, "alive"))
+            child.stdin.close()
+            deadline = time.monotonic() + 5
+            while True:
+                code, state = handle.observe()
+                self.assertIn(state, {"alive", "gone"})
+                if code is not None and state == "gone":
+                    break
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+            self.assertEqual(code, 0)
+            self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
+        finally:
+            handle.terminate(grace_seconds=0)
+
     def test_stdin_channel_without_pipe_stops_child_before_rejecting_ownership(self):
         child = owned_popen([sys.executable, "-c", "import time; time.sleep(30)"],
                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True)
         try:
             with self.assertRaisesRegex(ValueError, "stdin stop channel requires a pipe") as caught:
-                ProcessHandle(child, own_group=True, log_paths={}, stop_channel="stdin")
+                ProcessHandle(child, log_paths={}, stop_channel="stdin")
             self.assertTrue(caught.exception.owned_popen_evidence.shutdown_confirmed)
             self.assertTrue(caught.exception.execution_handle.shutdown_confirmed(settle_seconds=0))
         finally:
             if child.poll() is None:
-                ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal").terminate(grace_seconds=0)
+                ProcessHandle(child, log_paths={}, stop_channel="signal").terminate(grace_seconds=0)
 
     def test_owned_windowless_child_exits_on_input_eof(self):
         with tempfile.TemporaryDirectory() as name:
@@ -138,7 +160,7 @@ class RealStdioStopTests(unittest.TestCase):
                 f"Path({str(ready)!r}).touch(); sys.stdin.buffer.read()"],
                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True)
-            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="stdin")
+            handle = ProcessHandle(child, log_paths={}, stop_channel="stdin")
             try:
                 deadline = time.monotonic() + 5
                 while not ready.exists():

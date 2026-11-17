@@ -4,15 +4,16 @@ import {
   ApiError, createApi, parseConsoleAccess, parsePermissionLevels, parseReminderSettings,
   parseRoutingHealth, parseRuntimeVersion, snapshotHarnesses, validPreferences, validRoutingConfiguration,
 } from "./api";
-import { macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { kindEvaluationSchema } from "./types";
 import type { Snapshot } from "./types";
 
 const unsafe = Number.MAX_SAFE_INTEGER + 1;
 const date = "Fri, 09 Oct 2026 18:05:00 GMT"; // Date.parse, rather than ISO-only validation.
-const configuration = { routerBuddyIds: [" head ", "head"], routerRetryIntervalSeconds: 1,
-  defaultRoutingMode: "fast", routingBudget: "brief" };
-const snapshot = { csrfToken: "", eventCursor: 0, consoleSession: { id: " session " }, configuration,
-  buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 } };
+const configuration = { explorationEvery: 5, routerBuddyIds: [" head ", "head"], routerRetryIntervalSeconds: 1,
+  defaultRoutingMode: "fast", modelResponseWaitSeconds: 30, profileBuddyId: null };
+const snapshot = { csrfToken: "", runtimeIdentity: "runtime-one", eventCursor: 0, consoleSession: { id: " session " }, configuration,
+  buddies: [], preferences: [], models: [], modelCorrespondences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 } };
 
 // Keep undefined, NaN and unsafe integers intact at the parser boundary.
 function apiFor(value: unknown, command = false) {
@@ -31,14 +32,18 @@ function invalid(parse: () => unknown, key: string) {
 }
 
 describe("authenticated snapshot read boundaries", () => {
-  it("preserves unknown fields and the untrimmed session id", async () => {
+  it("requires a nonblank runtime content ID", async () => {
+    for (const value of [undefined, null, "", " ", 42]) {
+      await expect(apiFor({ ...snapshot, runtimeIdentity: value }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    }
+  });
+  it("preserves unknown snapshot fields and the untrimmed session id", async () => {
     const consoleSession = { id: " session ", extra: { retained: true } };
-    const value = { ...snapshot, consoleSession, extra: true,
-      configuration: { ...configuration, extra: true, routingBudgetLimits: "unchecked" } };
+    const value = { ...snapshot, consoleSession, extra: true };
     const parsed = await apiFor(value).snapshot();
     expect(parsed).toMatchObject(value);
     expect(parsed.consoleSession).toBe(consoleSession);
-    expect(parsed.configuration).toBe(value.configuration);
+    expect(parsed.configuration).toBe(configuration);
   });
   it("distinguishes snapshot, session, access and reminder refusals", async () => {
     for (const consoleSession of [undefined, null, [], {}, { id: "" }, { id: " \n " }, { id: 3 }]) {
@@ -52,7 +57,7 @@ describe("authenticated snapshot read boundaries", () => {
         code: "INVALID_RESPONSE", message: i18n.t(`common:error.${error}`),
       });
     }
-    for (const key of ["eventCursor", "csrfToken", "configuration", "buddies", "preferences", "modelServiceNotes", "modelServiceConcurrency", "tasks"]) {
+    for (const key of ["eventCursor", "csrfToken", "configuration", "buddies", "preferences", "models", "modelCorrespondences", "modelServiceConcurrency", "tasks"]) {
       await expect(apiFor(without(snapshot, key)).snapshot()).rejects.toMatchObject({
         code: "INVALID_RESPONSE", message: i18n.t("common:error.snapshot"),
       });
@@ -69,8 +74,86 @@ describe("authenticated snapshot read boundaries", () => {
         .rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
     const value = { ...snapshot, eventCursor: Number.MAX_SAFE_INTEGER, buddies: [null],
-      modelServiceNotes: [false], modelServiceConcurrency: [entry], tasks: { pendingCount: Number.MAX_SAFE_INTEGER } };
+      modelServiceConcurrency: [entry], tasks: { pendingCount: Number.MAX_SAFE_INTEGER } };
     await expect(apiFor(value).snapshot()).resolves.toMatchObject(value);
+  });
+
+  it("validates model profiles and correspondences before rendering", async () => {
+    const service = { harness: "dsh", provider: "fixture", model: "alpha" };
+    const model = { modelId: "alpha", displayName: "Alpha", names: [service],
+      profile: { positioning: "Fast model", builtAt: "2026-11-01T00:00:00Z", profileRunId: "run",
+        claims: [{ polarity: "strength", claim: "Fast", sourceUrl: "https://example.org/model",
+          sourceDate: "2026-11-01", sourceKind: "vendor" }] }, latestProfileRun: null };
+    const correspondence = { ...service, correspondenceId: "map", modelId: "alpha",
+      createdAt: "2026-11-01T00:00:00Z", source: "profile", evidenceUrl: null,
+      evidenceDate: null, canUndo: true };
+    const value = { ...snapshot, models: [model],
+      modelCorrespondences: [correspondence] };
+    await expect(apiFor(value).snapshot()).resolves.toMatchObject(value);
+    await expect(apiFor({ ...value, models: [{ ...model, profile: { ...model.profile,
+      claims: [{ ...model.profile.claims[0], polarity: "unknown" }] } }] }).snapshot())
+      .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(apiFor({ ...value, models: [{ ...model, profile: { ...model.profile,
+      claims: [{ ...model.profile.claims[0], sourceUrl: "javascript:alert(1)" }] } }] }).snapshot())
+      .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(apiFor({ ...value, modelCorrespondences: [{ ...correspondence, canUndo: "yes" }] }).snapshot())
+      .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(apiFor({ ...value, modelCorrespondences: [{ ...correspondence, source: "guess" }] }).snapshot())
+      .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(apiFor({ ...value, models: [{ ...model, latestProfileRun: {
+      profileRunId: "run", taskId: "task", buddyId: "buddy", buddy: { ...service, effort: "high" },
+      state: "success", reason: null, startedAt: "2026-11-01T00:00:00Z", finishedAt: null,
+      correctionRounds: 0, toolSummary: null, usage: null,
+    } }] }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(apiFor({ ...value, models: [{ ...model, latestProfileRun: {
+      profileRunId: "run", taskId: "task", buddyId: "buddy", buddy: { ...service, effort: "high" },
+      state: "completed", reason: null, startedAt: "2026-11-01T00:00:00Z", finishedAt: null,
+      correctionRounds: 0, toolSummary: null, usage: { attempts: [{ attemptId: "attempt", elapsedMs: 10, toolCalls: 1,
+        tokenUsage: { inputTokens: {}, cachedInputTokens: null, outputTokens: 1, source: "native", scope: "attempt" } }] },
+    } }] }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  });
+});
+
+describe("kind evaluation history boundary", () => {
+  const usage = { samples: 0, medianInputTokens: null, medianCachedInputTokens: null, medianOutputTokens: null };
+  const statistics = { samples: 0, successes: 0, failures: 0, firstPasses: 0, reworkRounds: 0,
+    firstPassRate: null, failureRate: null, medianDeliverySeconds: null, usage };
+  const group = { modelId: "older-group", modelDisplayName: "Earlier Sol",
+    names: [{ harness: "codex", provider: "openai", model: "sol", since: "2026-10-20T10:00:00Z" }] };
+  const evaluation = { harness: "codex", modelId: "current-group", modelDisplayName: "Current Sol",
+    modelNames: [{ harness: "codex", provider: "openai", model: "sol" }], effort: "high",
+    previousGroups: [group], summary: null,
+    statistics: { overall: statistics, byDomain: {}, byDomainTaskType: {}, infrastructureFailures: [] } };
+  it("keeps the earlier group and requires its model identity and connecting names", () => {
+    expect(kindEvaluationSchema.parse(evaluation).previousGroups).toEqual([group]);
+    expect(kindEvaluationSchema.parse({ ...evaluation, previousGroups: [] }).previousGroups).toEqual([]);
+    for (const bad of [undefined, null, {}, [{ ...group, modelId: "" }],
+      [{ ...group, names: [] }], [{ ...group, names: [{ ...group.names[0], since: "not-a-date" }] }],
+      [{ ...group, names: [{ ...group.names[0], provider: "" }] }], [{ ...group, modelDisplayName: null }]]) {
+      expect(kindEvaluationSchema.safeParse({ ...evaluation, previousGroups: bad }).success).toBe(false);
+    }
+  });
+});
+
+describe("profile tool summary boundary", () => {
+  const run = { profileRunId: "run", taskId: "task", buddyId: "buddy",
+    buddy: { harness: "dsh", provider: "fixture", model: "alpha", effort: "high" },
+    state: "completed", reason: null, startedAt: "2026-11-01T00:00:00Z", finishedAt: null,
+    correctionRounds: 0, usage: null };
+  const tool = { toolName: "web_fetch", calls: 2, failed: 2, unknown: 0 };
+  const withSummary = (toolSummary: unknown) => ({ ...snapshot, models: [{ modelId: "alpha",
+    displayName: "Alpha", names: [], profile: null, latestProfileRun: { ...run, toolSummary } }] });
+  it("retains unknown evidence, no calls and named or unnamed tool outcomes", async () => {
+    for (const summary of [null, [], [tool, { ...tool, toolName: null }]]) {
+      const value = withSummary(summary);
+      await expect(apiFor(value).snapshot()).resolves.toMatchObject(value);
+    }
+  });
+  it("rejects missing summaries, malformed names and unsafe outcome counts", async () => {
+    for (const summary of [undefined, {}, [{ ...tool, toolName: 1 }], [{ ...tool, toolName: "" }],
+      ...["calls", "failed", "unknown"].flatMap(field => [-1, 1.5, unsafe, "2", null].map(value => [{ ...tool, [field]: value }]))]) {
+      await expect(apiFor(withSummary(summary)).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    }
   });
 });
 
@@ -96,19 +179,17 @@ describe("access, reminders and policy settings", () => {
       ...[0, 1.5, unsafe, "1", null].map(revision => ({ ...reminders, revision })),
       ...["", "not-a-date", 0, null].map(updatedAt => ({ ...reminders, updatedAt }))]) invalid(() => parseReminderSettings(value), "reminders");
   });
-  it("allows unknown configuration data and distinct whitespace ids, but rejects retired keys even when undefined", () => {
-    expect(validRoutingConfiguration({ ...configuration, extra: true, routingBudgetLimits: null })).toBe(true);
-    for (const key of ["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId"]) {
-      expect(validRoutingConfiguration({ ...configuration, [key]: undefined })).toBe(false);
-    }
+  it("rejects unknown configuration data and accepts only the current response-wait range", () => {
+    expect(validRoutingConfiguration({ ...configuration, extra: true })).toBe(false);
     for (const [key, values] of Object.entries({ routerBuddyIds: [null, undefined, [" "], ["a", "a"], [1]],
       routerRetryIntervalSeconds: [null, undefined, 0, 1.5, 2147483648, "1"],
-      defaultRoutingMode: [null, undefined, "other"], routingBudget: [null, undefined, "quick"] })) {
+      defaultRoutingMode: [null, undefined, "other"],
+      modelResponseWaitSeconds: [null, undefined, 0, -1, 1.5, 86401, "60"] })) {
       for (const value of values) expect(validRoutingConfiguration({ ...configuration, [key]: value })).toBe(false);
     }
-    for (const mode of ["fast", "review"]) for (const budget of ["brief", "standard", "deep"]) {
+    for (const mode of ["fast", "review"]) for (const seconds of [1, 60, 86400]) {
       expect(validRoutingConfiguration({ ...configuration, routerRetryIntervalSeconds: 2147483647,
-        defaultRoutingMode: mode, routingBudget: budget })).toBe(true);
+        defaultRoutingMode: mode, modelResponseWaitSeconds: seconds })).toBe(true);
     }
   });
   it("requires exactly three preference keys, including a present nullable note", () => {
@@ -131,7 +212,7 @@ describe("optional Router observations", () => {
     const value = { ...health, reason: { code: "", params: {}, extra: true }, currentRouterBuddyId: "",
       routers: [{ ...router, identity: { harness: "", provider: "", model: "", effort: "", extra: true },
         code: null, skipUntil: "not-a-date", lastError: { at: "not-a-date", code: null } }],
-      recentFailures: [{ decisionId: "", runId: null, at: "not-a-date", code: "", extra: true }],
+      recentFailures: [{ decisionId: "", runId: null, macroTaskId: null, title: "A micro task", at: "not-a-date", code: "", extra: true }],
       unattributed: [{ decisionId: "", at: "", outcome: "", code: null, extra: true }] };
     expect(parseRoutingHealth(value)).toBe(value);
     expect(parseRoutingHealth({ ...health, routers: [{ ...router, identity: null, lastError: null }] })).toBeDefined();
@@ -140,13 +221,15 @@ describe("optional Router observations", () => {
     const broken: unknown[] = [null, [], ...["lastSuccessAt", "lastSuccessDecisionId", "recentFailures"].map(k => without(health, k)),
       { ...health, reason: { code: "x", params: [] } }, { ...health, available: null }, { ...health, routers: null },
       { ...health, recentFailures: [{ decisionId: "d", at: "", code: "c" }] },
+      { ...health, recentFailures: [{ decisionId: "d", runId: "r", title: "A task", at: "", code: "c" }] },
+      { ...health, recentFailures: [{ decisionId: "d", runId: "r", macroTaskId: "run:r", title: 42, at: "", code: "c" }] },
       { ...health, unattributed: [{ decisionId: "d", at: "", outcome: "x" }] }];
     for (const key of ["windowSize", "sampleCount", "failureCount", "consecutiveFailures", "abstentionCount", "cancelledCount",
-      "budgetExhaustedCount", "boundsRejectedCount", "inputChangedCount", "attemptCount", "unattributedCount"]) {
+      "notRespondingCount", "boundsRejectedCount", "inputChangedCount", "attemptCount", "unattributedCount"]) {
       for (const count of [null, -1, 0.5, unsafe, "0"]) broken.push({ ...health, [key]: count });
     }
     for (const key of ["index", "consecutiveNoAnswers", "answeredCount", "noAnswerCount", "windowSize", "windowEntries",
-      "windowAnsweredCount", "windowFailureCount", "windowBudgetExhaustedCount", "windowBoundsRejectedCount", "windowAttemptCount"]) {
+      "windowAnsweredCount", "windowFailureCount", "windowNotRespondingCount", "windowBoundsRejectedCount", "windowAttemptCount"]) {
       for (const count of [null, -1, unsafe, 0.5]) broken.push({ ...health, routers: [{ ...router, [key]: count }] });
     }
     for (const extra of [{ buddyId: " " }, { eligible: null }, { identity: [] }, { identity: {} },
@@ -161,7 +244,7 @@ describe("optional Router observations", () => {
 });
 
 describe("harness read normalization and optional observations", () => {
-  const row = { harness: " codex ", status: "ready", revision: 0, extra: { retained: true } };
+  const row = { harness: " codex ", status: "ready", revision: 0, permissionsVerifiedVersion: null, extra: { retained: true } };
   const provider = { provider: " provider ", coolingUntil: date, consecutiveRejections: unsafe, extra: true };
   const rows = (value: unknown) => snapshotHarnesses({ harnesses: value } as Snapshot);
   it("normalizes only harness and manualPath, retaining nullable fields and unchecked facts", () => {
@@ -173,6 +256,11 @@ describe("harness read normalization and optional observations", () => {
     expect(rows([{ ...row, harness: "other" }, row, { ...row, harness: "dsh" }, { ...row, harness: "claude" },
       { ...row, harness: "zcode" }, { ...row, harness: "unknown" }]).map(x => x.harness))
       .toEqual(["dsh", "zcode", "codex", "claude", "other", "unknown"]);
+  });
+  it("keeps the version whose native permissions were verified", () => {
+    expect(rows([{ ...row, permissionsVerifiedVersion: "0.2.2-rc.1" }])[0].permissionsVerifiedVersion).toBe("0.2.2-rc.1");
+    expect(rows([without(row, "permissionsVerifiedVersion")])).toEqual([]);
+    expect(rows([{ ...row, permissionsVerifiedVersion: 2 }])).toEqual([]);
   });
   it("discards providers or permissions independently without losing a valid row", () => {
     for (const providers of [undefined, null, {}, [{ ...provider, consecutiveRejections: 0 }],
@@ -233,11 +321,11 @@ describe("storage, macro task and version response boundaries", () => {
   });
   it("keeps permissive timeline projections and integer cursors while checking summary safe counts", async () => {
     const macroTask = { ...macroTaskSummary(), createdAt: "bad", lastActivityAt: "bad", extra: true };
-    const page = { macroTasks: [macroTask], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: "", cursor: -unsafe, changed: false, extra: true };
+    const page = { groups: [{ ...macroTaskGroups([macroTask])[0], nextCursor: "" }], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: -unsafe, changed: false, extra: true };
     await expect(apiFor(page).macroTasks({})).resolves.toMatchObject(page);
-    for (const value of [{ ...page, macroTasks: [{ ...macroTask, lastActivitySeq: unsafe }] },
-      { ...page, macroTasks: [{ ...macroTask, counts: { ...macroTask.counts, roots: -1 } }] },
-      { ...page, macroTasks: [{ ...macroTask, matchingRuns: unsafe }] }, { ...page, totals: { ...page.totals, all: unsafe } }]) {
+    for (const value of [{ ...page, groups: [{ ...page.groups[0], macroTasks: [{ ...macroTask, lastActivitySeq: unsafe }] }] },
+      { ...page, groups: [{ ...page.groups[0], macroTasks: [{ ...macroTask, counts: { ...macroTask.counts, roots: -1 } }] }] },
+      { ...page, groups: [{ ...page.groups[0], macroTasks: [{ ...macroTask, matchingRuns: unsafe }] }] }, { ...page, totals: { ...page.totals, all: unsafe } }]) {
       await expect(apiFor(value).macroTasks({})).rejects.toMatchObject({ code: "INVALID_RESPONSE", message: i18n.t("common:error.macroTasks") });
     }
     const timeline = { ...macroTaskTimelineFixture(), observedAt: "bad", cursor: -unsafe,
@@ -252,8 +340,8 @@ describe("storage, macro task and version response boundaries", () => {
   });
   it("requires every summary field and count while keeping its exact enums and nullable fields", async () => {
     const summary = macroTaskSummary();
-    const read = (value: unknown) => apiFor({ macroTasks: [value], totals: { all: 0, active: 0, host: 0, review: 0 },
-      nextCursor: null, cursor: 0, changed: false }).macroTasks({});
+    const read = (value: unknown) => apiFor({ groups: [{ ...macroTaskGroups([summary])[0], macroTasks: [value] }], totals: { all: 0, active: 0, host: 0, review: 0 },
+      defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false }).macroTasks({});
     for (const key of Object.keys(summary)) {
       await expect(read(without(summary, key))).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
@@ -262,14 +350,16 @@ describe("storage, macro task and version response boundaries", () => {
       await expect(read({ ...summary, counts: { ...summary.counts, [key]: Number.MAX_SAFE_INTEGER } })).resolves.toBeDefined();
     }
     for (const [key, values] of Object.entries({ kind: ["macro-task", "standalone"],
-      titleSource: ["macro-task", "title", "task", "none"], state: ["host", "active", "review", "ended"] })) {
+      titleSource: ["macro-task", "title", "task", "none"], state: ["host", "active", "review", "ended", "empty"] })) {
       for (const value of values) await expect(read({ ...summary, [key]: value })).resolves.toBeDefined();
       await expect(read({ ...summary, [key]: "other" })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
-    for (const key of ["title", "description", "summary", "project", "sourceHostId", "createdAt", "lastActivityAt"]) {
+    for (const key of ["title", "project", "createdAt", "lastActivityAt"]) {
       await expect(read({ ...summary, [key]: null })).resolves.toBeDefined();
       await expect(read({ ...summary, [key]: undefined })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
+    await expect(read({ ...summary, goal: null })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(read({ ...summary, goal: { body: "x", revision: 1, createdAt: date } })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
   });
   it("checks execution-only timing and router identity without validating other routing data", async () => {
     const timeline = macroTaskTimelineFixture();

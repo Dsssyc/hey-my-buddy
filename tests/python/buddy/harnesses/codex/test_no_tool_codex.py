@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from buddy.harnesses.fixture_selection import select_fixture
@@ -31,7 +30,7 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["buddyId
 
 class NoToolCodexTests(unittest.TestCase):
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-no-tool-codex-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-no-tool-codex-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -49,8 +48,9 @@ class NoToolCodexTests(unittest.TestCase):
         self.cwd = self.root / "empty"
         self.cwd.mkdir(mode=0o700)
 
-    def run_case(self, case="ok", timeout=3):
+    def run_case(self, case="ok"):
         """One fast call through the registered role controller; returns the outcome and its directory."""
+        # Bound the test fixture's completion, allowing slow process startup on CI.
         directory = self.root / ("run-" + case)
         directory.mkdir(mode=0o700)
         environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
@@ -62,12 +62,12 @@ class NoToolCodexTests(unittest.TestCase):
         select_fixture(environment, self.root, "codex", FIXTURE)
         context = ExecutionContext("router-task", "router-attempt", 7,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
-                                    "cwd": str(self.cwd), "routerBudgetSeconds": timeout}, directory, {}, environment,
+                                    "cwd": str(self.cwd)}, directory, {}, environment,
                                    session_record_path=str(directory / "session.jsonl"))
-        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, timeout_seconds=timeout)
+        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(timeout + 9), "the fast role controller did not exit")
+        self.assertIsNotNone(handle.wait(39), "the fast role controller did not exit")
         return collect(handle), handle.role_run_control, directory
 
     def test_capability_inherits_user_configuration_and_observes_zero_tools(self):
@@ -133,12 +133,14 @@ class NoToolCodexTests(unittest.TestCase):
         select_fixture(environment, self.root, "codex", FIXTURE)
         context = ExecutionContext("task", "attempt", 1,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
-                                    "cwd": str(self.cwd), "routerBudgetSeconds": 3}, directory, {}, environment,
+                                    "cwd": str(self.cwd), "modelResponseWaitSeconds": 30}, directory, {}, environment,
                                    session_record_path=str(directory / "session.jsonl"))
-        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, 3)
+        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(8))
+        # The same roomy budget run_case gives its success cases, and the same
+        # wait formula (budget plus 9) for the controller's exit.
+        self.assertIsNotNone(handle.wait(30 + 9))
         outcome = collect(handle)
         self.assertEqual(outcome.status, "ok", outcome.result)
         self.assertTrue(outcome.shutdown_confirmed)
@@ -228,25 +230,19 @@ class NoToolCodexTests(unittest.TestCase):
                    "properties": {"reason": {"type": "string", "maxLength": 2}}}
         self.assertEqual(correction_code('{"reason":"too long"}', bounded), 'answer-shape')
 
-    def test_policy_readback_differences_and_deadline(self):
+    def test_policy_readback_differences(self):
         outcome, _control, directory = self.run_case("config-mismatch")
         self.assertEqual(outcome.status, 'ok', outcome.result)
-        self.assertIs(outcome.result["modelStarted"], True)
+        self.assertIs(outcome.result["modelResponded"], True)
         self.assertEqual(len(json.loads((directory / "trace.json").read_text(encoding="utf-8"))["turns"]), 1)
         self.assertEqual(outcome.result["policyCheck"]["configReadback"]["status"], "unknown")
         self.assertEqual(outcome.result["nativeConfigPolicy"]["web_search"], "enabled")
         outcome, _control, directory = self.run_case("wrong-model")
         self.assertEqual(outcome.status, 'failed', outcome.result)
         self.assertEqual(outcome.result["code"], "buddy-mismatch")
-        self.assertIs(outcome.result["modelStarted"], False)
+        self.assertIs(outcome.result["modelResponded"], False)
         self.assertEqual(outcome.result["nativeThreadReceipt"]["model"], "other")
         self.assertNotIn("turns", json.loads((directory / "trace.json").read_text(encoding="utf-8")))
-        outcome, control, _directory = self.run_case("hang", timeout=1)
-        self.assertEqual(outcome.status, 'failed', outcome.result)
-        self.assertEqual(outcome.result["code"], "deadline")
-        self.assertIs(outcome.result["nativeInterruptRequested"], True)
-        self.assertTrue(outcome.result["processState"]["shutdownConfirmed"])
-        self.assertFalse(list(native_path(Path(control["nativeRoot"])).rglob("codex-home")))
 
     def test_absent_user_model_cache_does_not_refuse_a_native_catalog(self):
         (self.home / 'models_cache.json').unlink()

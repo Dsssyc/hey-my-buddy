@@ -101,7 +101,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         "inquiry-mark", "waiting-diamond", "accept-mark"]) {
         expect(await drawing.locator(`[data-slot="${slot}"]`).count(), `${slot} is drawn`).toBeGreaterThan(0);
       }
-      await expect(drawing.locator('[data-slot="track-label"]').filter({ hasText: locale === "zh-CN" ? /可能卡住|无动静/ : /Possibly stuck|Silent/ })).toHaveCount(0);
+      await expect(drawing.locator('[data-slot="track-label"]').filter({ hasText: locale === "zh-CN" ? /疑似停滞|无动静/ : /Possibly stalled|Silent/ })).toHaveCount(0);
       await expect(drawing.locator('[data-slot="gap-label"]')).toHaveText(locale === "zh-CN" ? ["35 分", "2 时 14 分"] : ["35 min", "2 h 14 min"]);
       await expect(page.locator('[data-slot="timeline-row-name"][data-run-id="preview-run-a1"]:visible [data-slot="fixed-by"]')).toHaveText("↩ 2");
       for (const run of ["preview-run-a2", "preview-run-a3"])
@@ -197,8 +197,8 @@ test.describe("unreached expected duration", () => {
     await open(page, `#tasks/${macro}`);
     const track = page.locator('[data-slot="timeline-track"]').filter({ has: page.locator('[data-key="span:execution:att-a3-1"]') });
     await expect(track.locator('[data-slot="expected-mark"]')).toHaveCount(0);
-    const nowX = Number(await track.locator('[data-slot="timeline-now"]').getAttribute("x1"));
-    const axisEnd = Number(await page.locator('[data-slot=axis-baseline]').getAttribute("x2"));
+    const nowX = await page.locator('[data-slot="timeline-now"]').evaluate(node => { const box = node.getBoundingClientRect(); return box.left + box.width / 2; });
+    const axisEnd = await page.locator('[data-slot=axis-baseline]').evaluate(node => node.getBoundingClientRect().right);
     expect(axisEnd).toBeCloseTo(nowX);
     await track.locator('[data-key="span:execution:att-a3-1"]').hover();
     await expect(page.locator('[data-slot="timeline-status"]')).toContainText("Expected 4 h");

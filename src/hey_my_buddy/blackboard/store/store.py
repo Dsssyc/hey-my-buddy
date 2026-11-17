@@ -19,6 +19,7 @@ from ...protocol import activity as activity_module
 from ..tasks import micro_task
 from ..tasks import scheduling
 from ...protocol import schemas
+from ...protocol.input_failure import INPUT_REJECTED, input_failure_view, is_input_too_large, normalize_input_failure
 from ...protocol.reasons import reason as make_reason, reason_from_json, validate_waiting_reason
 from .db import (
     ACTIVE_ATTEMPT_STATES,
@@ -33,6 +34,7 @@ from .db import (
     utc_now,
 )
 from ...errors import BoardError
+from .work import autonomous_tasks
 
 #: Documented task transition table. A transition outside this map is rejected.
 TASK_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -74,7 +76,7 @@ def _overlaps(left: str, right: str) -> bool:
     return left_path.is_relative_to(right_path) or right_path.is_relative_to(left_path)
 
 
-def _public_result_payload(payload: dict) -> dict:
+def _public_result_payload(payload: dict, directory: Path, result_form: str) -> dict:
     """Bound service-owned workspace facts in a reply, leaving the receipt intact."""
     result = payload.get("result")
     if not isinstance(result, dict):
@@ -98,6 +100,14 @@ def _public_result_payload(payload: dict) -> dict:
             seal_view["cumulativePatch"] = bound(cumulative, ("changedPaths",))
         projected[key] = seal_view
 
+    if result_form == "current-report-v2":
+        for key in ("workspaceSeal", "partialWorkspaceSeal"):
+            seal = projected.get(key)
+            if not isinstance(seal, dict) or not isinstance(seal.get("recordFile"), dict):
+                continue
+            file = seal["recordFile"]
+            projected[key] = {**seal, "recordFile": {**file, "path": str(directory / file["path"])}}
+
     for key in ("workspaceSealError", "partialSealError", "cumulativePatchError"):
         error = result.get(key)
         if not isinstance(error, dict) or not isinstance(error.get("details"), dict):
@@ -110,7 +120,7 @@ def _public_result_payload(payload: dict) -> dict:
 
     # A stopped partial result retains its exact input manifest in the receipt.
     # Its public copy can be as large as the output seal on a busy checkout.
-    manifest = result.get("workspaceManifest")
+    manifest = result.get("workspaceManifest") if result_form == "archived-report-v1" else None
     if isinstance(manifest, dict):
         manifest_view = bound(manifest, ("writeScope",))
         snapshot = manifest.get("snapshot")
@@ -127,7 +137,10 @@ def _public_result_payload(payload: dict) -> dict:
                 if paths.get("excludedEntriesSamplesShortened"):
                     snapshot_view["excludedEntriesSamplesShortened"] = True
             manifest_view["snapshot"] = snapshot_view
+        from ..tasks.workspace import manifest_file_reference
+
         projected["workspaceManifest"] = manifest_view
+        projected["workspaceManifestFile"] = manifest_file_reference(directory, manifest)
     return {**payload, "result": projected}
 
 
@@ -166,6 +179,10 @@ class BoardStore:
 
         self.evaluation = EvaluationStore(self, clock=self._clock)
         self.decisions = DecisionCoordinator(self, self.evaluation)
+        from ..routing.maintenance import Maintenance
+        self.maintenance = Maintenance(self)
+        from ..routing.profile import Profile
+        self.profile = Profile(self)
         # The micro-task workflow layer wraps this same store: it opens no second
         # authority and every one of its mutations is one of these transactions.
         self.workflow = WorkflowCoordinator(self, clock=self._clock)
@@ -189,18 +206,18 @@ class BoardStore:
         row = connection.execute("SELECT COALESCE(MAX(seq), 0) AS head FROM events").fetchone()
         return int(row["head"])
 
-    def _notify(self, head: int) -> None:
+    def _notify(self, head: int, *, changed_tasks: frozenset[str] = frozenset()) -> None:
         with self._condition:
             changed = head > self._head
             if changed and self.on_change is not None:
                 with self.db.read() as connection:
-                    task_ids = frozenset(row["task_id"] for row in connection.execute(
+                    changed_tasks = changed_tasks | frozenset(row["task_id"] for row in connection.execute(
                         "SELECT DISTINCT task_id FROM events WHERE seq>? AND seq<=? AND task_id IS NOT NULL",
                         (self._head, head)))
             self._head = max(self._head, head)
             self._condition.notify_all()
-        if changed and self.on_change is not None:
-            self.on_change(task_ids)
+        if (changed or changed_tasks) and self.on_change is not None:
+            self.on_change(changed_tasks)
 
     def stop_waiters(self) -> None:
         """Release all event waits before shutting down their service transport."""
@@ -218,14 +235,17 @@ class BoardStore:
         attempt_id: str | None = None,
         revision: int | None = None,
         payload: dict | None = None,
+        wake_owned: bool = True,
     ) -> int:
         at = self.now()
         event_payload = dict(payload or {})
         actor = event_payload.pop("actor", None)
+        if actor is not None and actor['role'] == 'lead' and task_id is not None:
+            revision = connection.execute('SELECT revision FROM tasks WHERE task_id=?', (task_id,)).fetchone()[0]
         cursor = connection.execute(
             "INSERT INTO events(task_id, attempt_id, revision, kind, payload_json, actor_role, actor_id, created_at) VALUES(?,?,?,?,?,?,?,?)",
             (task_id, attempt_id, revision, kind, canonical_json(event_payload),
-             actor["role"] if actor is not None else None, actor["id"] if actor is not None else None, at),
+             actor["role"] if actor is not None else None, actor.get("id") if actor is not None else None, at),
         )
         seq = int(cursor.lastrowid)
         if kind == "attempt.activity":
@@ -240,7 +260,8 @@ class BoardStore:
             )
         from ..tasks.macro_tasks import record_activity
         record_activity(connection, task_id, seq, at)
-        self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=at)
+        if wake_owned:
+            self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=at)
         return seq
 
     def head(self) -> int:
@@ -273,6 +294,7 @@ class BoardStore:
 
     def task_wait(self, params: dict) -> dict:
         schemas.reject_unknown(params, {"runId", "afterRevision", "timeoutMs", "consumeReminders", "reminderWaitId"}, "task.wait")
+        schemas.required_string(params, 'runId', max_length=128)
         consume_reminders = schemas.optional_bool(params, "consumeReminders", False)
         if consume_reminders:
             schemas.required_string(params, "reminderWaitId", max_length=128)
@@ -285,18 +307,18 @@ class BoardStore:
         ):
             raise BoardError("INVALID_ARGUMENT", "afterRevision must be a nonnegative integer")
         deadline = self._monotonic() + timeout_ms / 1000.0
+        from ...protocol.awaiting import message_kind
+        from ..tasks import messages
         while True:
             head = self.head()
             if consume_reminders:
-                from ..tasks.reminders import consume
-                reminder = consume(self, params)
-                if reminder is not None:
-                    view = self.task_get({"runId": params.get("runId")})["task"]
-                    return {**view, "reminder": reminder}
-            view = self.task_get({"runId": params.get("runId")})["task"]
+                message = messages.consume(self, params)
+                if message:
+                    return {**self._wait_view(params['runId'], message=message), **message}
+            view = self._wait_view(params['runId'])
             # Re-check after subscribing so a change between read and subscribe is
             # never lost; the recheck happens inside events_wait.
-            if view["resultAvailable"] or timeout_ms == 0 or (
+            if message_kind(view) is not None or timeout_ms == 0 or (
                 after_revision is not None and view["revision"] > after_revision
             ):
                 return view
@@ -307,10 +329,30 @@ class BoardStore:
                 {
                     "after": head,
                     "timeoutMs": int(max(1, remaining * 1000)),
-                    "runId": view["runId"],
                     "limit": 1,
                 }
             )
+
+    def _wait_view(self, task_id: str, *, message: dict | None = None) -> dict:
+        with self.db.read() as connection:
+            task = self._task_row(connection, {'runId': task_id})
+            view = self._decorate(connection, task)
+            selected = view.get('selectedAttempt')
+            view['executionIssues'] = ([{**issue, 'attemptId': selected['attemptId']} for issue in selected['issues']]
+                                       if selected is not None else [])
+            view['serviceIssues'] = [
+                {'stage': row['stage'], 'code': row['code'], 'message': row['message'], 'observedAt': row['observed_at']}
+                for row in connection.execute('SELECT * FROM service_issues ORDER BY stage')]
+            if message and 'issue' in message:
+                issue = message['issue']
+                key = 'executionIssues' if issue['kind'] == 'execution' else 'serviceIssues'
+                detail = issue['detail']
+                # The occurrence's event remains the receipt's evidence after
+                # resolution, including a lost reply retried during a recurrence.
+                view[key] = [detail, *(item for item in view[key] if
+                                      (item['stage'], item.get('attemptId')) !=
+                                      (detail['stage'], detail.get('attemptId')))]
+            return view
 
     def events_wait(self, params: dict, *, stop: threading.Event | None = None) -> dict:
         """Bounded event wait with a check/subscribe/recheck sequence.
@@ -366,7 +408,7 @@ class BoardStore:
     def _event_view(self, row: sqlite3.Row) -> dict:
         payload = json.loads(row["payload_json"])
         if row["actor_role"] is not None:
-            payload["actor"] = {"role": row["actor_role"], "id": row["actor_id"]}
+            payload["actor"] = {"role": row["actor_role"], **({"id": row["actor_id"]} if row["actor_id"] is not None else {})}
         return {
             "seq": int(row["seq"]),
             "kind": row["kind"],
@@ -411,9 +453,7 @@ class BoardStore:
     def _receipt_response(self, connection: sqlite3.Connection, row: sqlite3.Row | None) -> dict | None:
         if row is None:
             return None
-        from ..tasks.command_receipts import replay_response
-
-        return replay_response(self.workflow, connection, row["kind"], json.loads(row["response_json"]))
+        return json.loads(row["response_json"])
 
     def _receipt(
         self,
@@ -439,8 +479,6 @@ class BoardStore:
         attempt_id: str | None = None,
         subject: str | None = None,
     ) -> None:
-        from ..tasks.command_receipts import stored_response
-
         connection.execute(
             "INSERT OR REPLACE INTO commands(command_id, task_id, attempt_id, kind, request_hash, response_json,"
             " subject) VALUES(?,?,?,?,?,?,?)",
@@ -450,7 +488,7 @@ class BoardStore:
                 attempt_id,
                 kind,
                 sha256_text(canonical_json(request)),
-                canonical_json(stored_response(kind, response)),
+                canonical_json(response),
                 subject,
             ),
         )
@@ -463,17 +501,15 @@ class BoardStore:
         view = {
             "runId": row["task_id"],
             "requestId": row["request_id"],
-            "owner": row["owner"],
             "adapter": row["adapter"],
             "cwd": row["cwd"],
             "task": spec.get("task"),
             "spec": spec,
-            **({"routerBudgetSeconds": row["router_budget_seconds"]} if row["adapter"] == "decision"
-               else {"expectedSeconds": row["expected_seconds"]}),
+            **({"modelResponseWaitSeconds": spec.get("modelResponseWaitSeconds")} if row["adapter"] == "decision"
+               else {"expectedSeconds": spec["expectedSeconds"]}),
             "inputFingerprint": row["input_fingerprint"],
             "fingerprintVersion": row["fingerprint_version"],
-            "requiredCapabilities": json.loads(row["required_capabilities"]),
-            "exclusiveResources": json.loads(row["exclusive_resources"]),
+            "requiredCapabilities": spec.get("requiredCapabilities", []),
             "state": row["state"],
             "queueReason": row["queue_reason"],
             "revision": row["revision"],
@@ -497,8 +533,7 @@ class BoardStore:
         }
         return view
 
-    @staticmethod
-    def _attempt_view(row: sqlite3.Row, *, include_result: bool = True) -> dict:
+    def _attempt_view(self, row: sqlite3.Row, *, include_result: bool = True) -> dict:
         """Public attempt record. The claim capability and nonce verifier never appear."""
         recorded = json.loads(row["result_json"]) if row["result_json"] else {}
         view = {
@@ -511,6 +546,7 @@ class BoardStore:
             "runtimeIdentity": row["runtime_identity"],
             "logPaths": recorded.get("logPaths") or {},
             "resultAvailable": row["result_json"] is not None,
+            "resultForm": row["result_form"],
             "tokenUsage": (recorded.get("result") or {}).get("tokenUsage"),
             "shutdownConfirmed": bool(row["shutdown_confirmed"]),
             "cancelRequested": row["cancel_requested_at"] is not None,
@@ -529,7 +565,7 @@ class BoardStore:
             "revision": row["revision"],
         }
         if include_result and row["result_json"] is not None:
-            view["result"] = _public_result_payload(recorded)
+            view["result"] = _public_result_payload(recorded, self.directory, row["result_form"])
         return view
 
     @staticmethod
@@ -610,6 +646,7 @@ class BoardStore:
             recorded = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
             view["tokenUsage"] = (recorded.get("result") or {}).get("tokenUsage")
             view["providerRejection"] = provider_rejection_view(recorded.get("result"))
+            view["inputFailure"] = input_failure_view(recorded)
             release = connection.execute(
                 "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='attempt.released'",
                 (task["task_id"], attempt["attempt_id"]),
@@ -662,6 +699,7 @@ class BoardStore:
             view["workflowShutdown"] = self.workflow.shutdown_summary(connection, task["task_id"])
             view["workflow"] = workflow
             view["workflowState"] = workflow["state"]
+            view["actions"] = workflow["actions"]
             view["awaitingHost"] = workflow["awaitingHost"]
             if (workflow["state"] == "cancelled" or
                     (workflow["hostConclusion"] is not None and workflow["hostConclusion"]["executionStatus"] == "cancelled")) and "cancellation" not in view:
@@ -721,8 +759,8 @@ class BoardStore:
         }
 
     def model_limits(self, connection: sqlite3.Connection) -> dict[tuple[str, str, str], int]:
-        """Explicit per-model-service limits from the user-owned ``model_service_concurrency`` table."""
-        rows = connection.execute("SELECT harness, provider, model, concurrency_limit FROM model_service_concurrency").fetchall()
+        """Explicit per-model-service limits stored on model services."""
+        rows = connection.execute("SELECT harness, provider, model, concurrency_limit FROM model_services WHERE concurrency_limit IS NOT NULL").fetchall()
         return {
             (row["harness"], row["provider"], row["model"]): row["concurrency_limit"]
             for row in rows
@@ -777,6 +815,9 @@ class BoardStore:
         for row in connection.execute("SELECT d.harness,d.provider,d.model FROM router_dispatches d"
                                       " JOIN tasks t ON t.task_id=d.task_id WHERE t.state='queued'"):
             model_services.add((row["harness"], row["provider"], row["model"]))
+        for row in connection.execute("SELECT spec_json FROM tasks WHERE state='queued' AND adapter='decision'"
+                                      " AND json_extract(spec_json,'$.decision.kind') IN ('maintain','profile')"):
+            model_services.add(self.decisions.selector_model_service(connection, json.loads(row[0])))
         return model_services
 
     def _full_model_services(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
@@ -818,7 +859,7 @@ class BoardStore:
 
         The machine-wide ceiling is checked first, then the specification's own model
         model service, so the queue reason names the limit that is actually full. Workspace
-        and exclusive-resource admission applies to all work unchanged.
+        admission applies to all work unchanged.
         """
         if self.upgrading():
             raise BoardError('UPGRADE_IN_PROGRESS', 'Admission is fenced until the coordinated upgrade finishes')
@@ -829,14 +870,11 @@ class BoardStore:
             active = self._model_active_counts(connection)
             if active.get(model_service, 0) >= self._effective_model_limit(connection, model_service):
                 return scheduling.REASON_MODEL_CAPACITY
-        resources = {"cwd": [spec["cwd"]], "exclusive": list(spec.get("exclusiveResources", []))}
         for claim in self._held_claims(connection):
             if exclude_task and claim["task_id"] == exclude_task:
                 continue
-            if claim["kind"] == "cwd" and any(_overlaps(spec["cwd"], claim["resource"]) for _ in resources["cwd"]):
+            if _overlaps(spec["cwd"], claim["resource"]):
                 return "cwd-overlap"
-            if claim["kind"] == "exclusive" and claim["resource"] in resources["exclusive"]:
-                return "exclusive-resource"
         return None
 
     def _model_service_admission_blocker(self, connection: sqlite3.Connection, model_service: tuple[str, str, str]) -> str | None:
@@ -973,23 +1011,27 @@ class BoardStore:
         if micro_task is None and spec["adapter"] in schemas.CODING_HARNESSES:
             raise BoardError("MICRO_TASK_REQUIRED", "Coding work requires submit (workflow_submit) so routing, ownership and turn evidence remain micro-task")
         request_id = schemas.required_string(params, "requestId", max_length=schemas.MAX_REQUEST_ID)
-        owner = None if micro_task is not None else schemas.optional_string(params, "owner") or "cli"
         fingerprint = schemas.spec_fingerprint(spec)
         request = {"requestId": request_id, "fingerprint": fingerprint}
 
         with self.db.write() as connection:
             existing = connection.execute("SELECT * FROM tasks WHERE request_id = ?", (request_id,)).fetchone()
             run = self.workflow._run_optional(connection, existing["task_id"]) if existing is not None else None
-            if run is not None:
-                self.workflow._require_replayable_submission(connection, run, request_id)
             if command_id:
                 receipt = self._receipt(connection, command_id, "task.submit", request)
                 if receipt is not None:
                     return receipt
             if existing is not None:
                 if micro_task is not None:
-                    if run is None or run["request_fingerprint"] != micro_task["requestFingerprint"]:
-                        raise BoardError("CONFLICT", "requestId already belongs to a different micro-task request")
+                    if run is None or run["creation_key"] != micro_task["creationKey"]:
+                        raise BoardError("CONFLICT", "The execution admission identity is already in use")
+                    lead=micro_task.get("lead")
+                    if lead is not None:
+                        self.workflow._active_credential(connection,lead)
+                        if connection.execute("SELECT 1 FROM workflow_lead_tasks WHERE owned_run_id=? AND lead_run_id=?",
+                                              (run["run_id"],lead["runId"])).fetchone() is None:
+                            raise BoardError("FORBIDDEN","The creation key belongs to another Lead's micro task")
+                    return {"task": self._decorate(connection, existing), "duplicate": True}
                 if existing["input_fingerprint"] == fingerprint:
                     response = {"task": self._decorate(connection, existing), "duplicate": True}
                 else:
@@ -1011,22 +1053,18 @@ class BoardStore:
                 now = self.now()
                 blocker = self._admission_blocker(connection, spec)
                 connection.execute(
-                    "INSERT INTO tasks(task_id, request_id, owner, spec_json, input_fingerprint,"
-                    " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, expected_seconds,"
+                    "INSERT INTO tasks(task_id, request_id, spec_json, input_fingerprint,"
+                    " fingerprint_version, adapter, cwd,"
                     " state, queue_reason, revision, created_at, updated_at)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         task_id,
                         request_id,
-                        owner,
                         canonical_json(spec),
                         fingerprint,
                         schemas.FINGERPRINT_VERSION_CURRENT,
                         spec.get("harness") or spec.get("adapter") or "unresolved",
-                        canonical_json(spec.get("requiredCapabilities", [])),
                         spec["cwd"],
-                        canonical_json(spec.get("exclusiveResources", [])),
-                        spec["expectedSeconds"],
                         "queued",
                         blocker or "awaiting-execution",
                         1,
@@ -1045,9 +1083,8 @@ class BoardStore:
                         "cwd": spec["cwd"],
                         "queueReason": blocker or "awaiting-execution",
                         "inputFingerprint": fingerprint,
-                        **({"microTask": {"sourceHostId": micro_task["hostId"]},
-                            "actor": ({"role": "lead", "id": micro_task["lead"]["runId"]}
-                                      if micro_task.get("lead") else {"role": "host", "id": micro_task["hostId"]})}
+                        **({"actor": ({"role": "lead", "id": micro_task["lead"]["runId"]}
+                                      if micro_task.get("lead") else {"role": "host"})}
                            if micro_task is not None else {}),
                     },
                 )
@@ -1094,7 +1131,6 @@ class BoardStore:
                 "rootsOnly",
                 "query",
                 "projectId",
-                "hostId",
                 "filter",
             },
             "task.list",
@@ -1117,7 +1153,6 @@ class BoardStore:
         roots_only = schemas.optional_bool(params, "rootsOnly", False)
         query = schemas.optional_string(params, "query", max_length=micro_task.QUERY_MAX_LENGTH)
         project_id = schemas.optional_string(params, "projectId", max_length=micro_task.PROJECT_ID_MAX_LENGTH)
-        host_id = schemas.optional_string(params, "hostId", max_length=micro_task.HOST_ID_MAX_LENGTH)
         filter_name = schemas.optional_string(params, "filter", max_length=16) or "all"
         if filter_name not in micro_task.HISTORY_FILTERS:
             raise BoardError("INVALID_ARGUMENT", "filter must be one of: all, active, host, review")
@@ -1136,7 +1171,6 @@ class BoardStore:
         history_clauses, history_values = micro_task.history_where(
             roots_only=roots_only,
             project_id=project_id,
-            host_id=host_id,
             query=query,
             filter_name=filter_name,
         )
@@ -1164,7 +1198,7 @@ class BoardStore:
             has_more = len(rows) > limit
             page = rows[:limit]
             tasks = [
-                self._decorate(connection, row, lineage_result=micro_task.metadata_from_row(row)) for row in page
+                self._decorate(connection, row, lineage_result=micro_task.metadata_from_row(connection, row)) for row in page
             ]
             next_cursor = (
                 micro_task.encode_cursor(page[-1]["created_at"], page[-1]["task_id"]) if page and has_more else None
@@ -1185,13 +1219,21 @@ class BoardStore:
             payload = json.loads(attempt["result_json"])
             # Only the current execution receipt is unpacked. Its adapter result is
             # opaque data, even when it contains fields named result or turn.
-            view["result"] = _public_result_payload(payload)["result"]
+            view["result"] = _public_result_payload(payload, self.directory, attempt["result_form"])["result"]
             view["resultMeta"] = {key: value for key, value in payload.items() if key != "result"}
             view["attemptId"] = attempt["attempt_id"]
             view["resultDelivered"] = view["result"] is not None
+            turn = connection.execute('SELECT input_json,access FROM workflow_turns WHERE attempt_id=?',
+                                      (attempt['attempt_id'],)).fetchone()
+            from ...protocol.turn_input import NONE_TURN_INPUT_VERSION
+            if turn is not None and json.loads(turn['input_json'])['version'] == NONE_TURN_INPUT_VERSION:
+                view.update(self.workflow._none_notice(turn['access']))
         return view
 
     def task_cancel(self, params: dict, *, command_id: str | None = None, initiator: str = "unknown") -> dict:
+        from ..routing.decision import decision_spec
+        from ..tasks.workflow import console_authority_from_scope
+
         schemas.reject_unknown(
             params,
             {
@@ -1199,15 +1241,22 @@ class BoardStore:
                 "requestId",
                 "note",
                 "requestedBy",
-                *schemas.CONTROL_FIELDS,
                 schemas.CONSOLE_AUTHORITY_FIELD,
             },
             "task.cancel",
         )
         note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
                 if params.get("note") is not None else None)
-        actor = {"role": "service" if initiator == "service" else "host",
-                 "id": schemas.optional_string(params, "requestedBy") or "cli"}
+        console_authority = console_authority_from_scope()
+        if console_authority is not None:
+            if "requestedBy" in params:
+                raise BoardError("INVALID_ARGUMENT", "requestedBy is not accepted from a console session",
+                                 field="requestedBy")
+            actor = {"role": "console", "id": console_authority["sessionId"]}
+            initiator = "console"
+        else:
+            actor = {"role": "service" if initiator == "service" else "host",
+                     "id": schemas.optional_string(params, "requestedBy") or "cli"}
         request = {"selector": {k: params[k] for k in ("runId", "requestId") if k in params}, "note": note}
         with self.db.write() as connection:
             if command_id:
@@ -1215,6 +1264,9 @@ class BoardStore:
                 if receipt is not None:
                     return receipt
             task = self._task_row(connection, params)
+            if console_authority is not None and (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") not in ("maintain", "profile"):
+                raise BoardError("FORBIDDEN", "A console session may cancel only maintenance or profile executions; use macro task stop for Host work",
+                                 runId=task["task_id"])
             self.workflow.guard_task_control(connection, task, params, operation="task_cancel")
             now = self.now()
             already = task["state"] in TERMINAL_TASK_STATES
@@ -1260,211 +1312,7 @@ class BoardStore:
         self._notify(head)
         return response
 
-    def task_retry(self, params: dict, *, command_id: str | None = None) -> dict:
-        """Explicitly create a new attempt generation for a non-running task.
 
-        Retrying unknown or failed work is never automatic: a lost RPC or a lost
-        execution does not start anything by itself.
-
-        An attempt whose shutdown is unconfirmed keeps its resource claims and
-        refuses to be retried. There is deliberately **no operator override**: a
-        written note is not evidence of termination. Recovery releases the claim
-        only after verified process shutdown, or proof that no process was created.
-        """
-        schemas.reject_unknown(
-            params,
-            {
-                "runId",
-                "requestId",
-                "note",
-                "requestedBy",
-                *schemas.CONTROL_FIELDS,
-                schemas.CONSOLE_AUTHORITY_FIELD,
-            },
-            "task.retry",
-        )
-        note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
-                if params.get("note") is not None else None)
-        request = {
-            "selector": {k: params[k] for k in ("runId", "requestId") if k in params},
-            "note": note,
-        }
-        with self.db.write() as connection:
-            if command_id:
-                receipt = self._receipt(connection, command_id, "task.retry", request)
-                if receipt is not None:
-                    return receipt
-            task = self._task_row(connection, params)
-            self.workflow.guard_task_control(connection, task, params, operation="task_retry")
-            spec = json.loads(task["spec_json"])
-            if spec.get("decision"):
-                # A paid decision call is never replayed implicitly. A decision result
-                # is retained and inspected; a new request is an explicit Host choice.
-                raise BoardError(
-                    "UNSUPPORTED",
-                    "A decision run is not retried; submit a new selection_request "
-                    "with a new requestId. Nothing was re-executed.",
-                    taskId=task["task_id"],
-                )
-            attempt = self._selected_attempt(connection, task)
-            uncertain = attempt is not None and (
-                attempt["execution_state"] in ACTIVE_ATTEMPT_STATES or not attempt["shutdown_confirmed"]
-            )
-            if uncertain:
-                raise BoardError(
-                    "SHUTDOWN_UNCONFIRMED",
-                    "The current attempt's shutdown is unconfirmed, so nothing is released and no replacement may "
-                    "touch its resources. The worker that owns the process handle must reattach and report an "
-                    "observed outcome; a written note is not evidence of termination.",
-                    attemptId=attempt["attempt_id"],
-                    retainedClaims=[claim["resource"] for claim in self._held_claims(connection)],
-                )
-            if task["state"] in ("running", "cancelling"):
-                raise BoardError(
-                    "CONFLICT",
-                    "This run is still active; cancel it before retrying",
-                    state=task["state"],
-                    attemptId=attempt["attempt_id"] if attempt else None,
-                )
-            if attempt is not None:
-                self._release_claims(connection, attempt["attempt_id"])
-            blocker = self._admission_blocker(connection, spec, exclude_task=task["task_id"])
-            self._transition_task(connection, task, "queued")
-            connection.execute(
-                "UPDATE tasks SET queue_reason=?, active_attempt_id=NULL, selected_attempt_id=NULL,"
-                " accepted_at=NULL, acceptance_note=NULL,"
-                " review_rejected_at=NULL, review_rejection_note=NULL WHERE task_id = ?",
-                (blocker or "awaiting-execution", task["task_id"]),
-            )
-            if task["accepted_at"] or task["review_rejected_at"]:
-                # The review belongs to the attempt that was reviewed; it is kept as
-                # history in the event stream, never inherited by the new attempt.
-                review = (
-                    {"acceptedAt": task["accepted_at"], "verdict": "accepted", "note": task["acceptance_note"]}
-                    if task["accepted_at"] else
-                    {"reviewRejectedAt": task["review_rejected_at"], "verdict": "rejected",
-                     "note": task["review_rejection_note"]}
-                )
-                self._append_event(
-                    connection,
-                    "task.review_archived",
-                    task_id=task["task_id"],
-                    attempt_id=attempt["attempt_id"] if attempt else None,
-                    revision=task["revision"] + 1,
-                    payload=review,
-                )
-            self._append_event(
-                connection,
-                "task.retried",
-                task_id=task["task_id"],
-                attempt_id=attempt["attempt_id"] if attempt else None,
-                revision=task["revision"] + 1,
-                payload={"note": note, "previousAttemptId": attempt["attempt_id"] if attempt else None},
-            )
-            task = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task["task_id"],)).fetchone()
-            response = {"task": self._decorate(connection, task), "retry": True}
-            if command_id:
-                self._store_receipt(connection, command_id, "task.retry", request, response, task_id=task["task_id"])
-            head = self._head_of(connection)
-        self._notify(head)
-        return response
-
-    def task_acknowledge(self, params: dict, *, command_id: str | None = None) -> dict:
-        """Record that a human or agent reviewed the actual result.
-
-        Acceptance never converts failure into success and never rewrites the
-        execution status; it records the reviewed verdict plus the evidence that
-        made it possible.
-        """
-        schemas.reject_unknown(
-            params,
-            {
-                "runId",
-                "requestId",
-                "note",
-                "verdict",
-                "evidence",
-                "acknowledgedBy",
-                *schemas.CONTROL_FIELDS,
-                schemas.CONSOLE_AUTHORITY_FIELD,
-            },
-            "task.acknowledge",
-        )
-        note, _ = schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)
-        verdict = schemas.optional_string(params, "verdict") or "accepted"
-        if verdict not in ("accepted", "rejected"):
-            raise BoardError("INVALID_ARGUMENT", "verdict must be 'accepted' or 'rejected'")
-        evidence = schemas.string_list(params, "evidence", limit=32)
-        actor = {"role": "host", "id": schemas.optional_string(params, "acknowledgedBy") or "cli"}
-        request = {"selector": {k: params[k] for k in ("runId", "requestId") if k in params}, "note": note, "verdict": verdict, "evidence": evidence}
-        with self.db.write() as connection:
-            if command_id:
-                receipt = self._receipt(connection, command_id, "task.acknowledge", request)
-                if receipt is not None:
-                    return receipt
-            task = self._task_row(connection, params)
-            self.workflow.guard_task_control(connection, task, params, operation="task_acknowledge")
-            if json.loads(task["spec_json"]).get("decision"):
-                # A model recommendation is not business work and never becomes
-                # acceptance or performance evidence.
-                raise BoardError(
-                    "UNSUPPORTED",
-                    "A decision run is not acknowledged as business work; its recommendation is recorded separately "
-                    "and never counts as task acceptance or model-performance evidence.",
-                    taskId=task["task_id"],
-                )
-            attempt = self._selected_attempt(connection, task)
-            if attempt is None or attempt["result_json"] is None:
-                raise BoardError("NOT_READY", "Inspect a persisted result before acknowledging")
-            if not attempt["shutdown_confirmed"]:
-                raise BoardError(
-                    "SHUTDOWN_UNCONFIRMED",
-                    "Runner shutdown must be confirmed before acknowledgement; surviving processes are unknown",
-                    attemptId=attempt["attempt_id"],
-                )
-            if task["accepted_at"] or task["review_rejected_at"]:
-                recorded_verdict = "accepted" if task["accepted_at"] else "rejected"
-                recorded_note = task["acceptance_note"] if task["accepted_at"] else task["review_rejection_note"]
-                if recorded_note != note or recorded_verdict != verdict:
-                    raise BoardError(
-                        "CONFLICT",
-                        "This run already has a different recorded review; a reviewed outcome is not relabelled",
-                        acceptedAt=task["accepted_at"],
-                        reviewRejectedAt=task["review_rejected_at"],
-                        verdict=recorded_verdict,
-                    )
-                response = {"task": self._decorate(connection, task), "duplicate": True}
-            else:
-                now = self.now()
-                if verdict == "accepted":
-                    connection.execute(
-                        "UPDATE tasks SET accepted_at=?, acceptance_note=?,"
-                        " updated_at=?, revision=revision+1 WHERE task_id = ?",
-                        (now, note, now, task["task_id"]),
-                    )
-                else:
-                    connection.execute(
-                        "UPDATE tasks SET review_rejected_at=?, review_rejection_note=?,"
-                        " updated_at=?, revision=revision+1 WHERE task_id = ?",
-                        (now, note, now, task["task_id"]),
-                    )
-                self._append_event(
-                    connection,
-                    "task.accepted" if verdict == "accepted" else "task.rejected",
-                    task_id=task["task_id"],
-                    attempt_id=attempt["attempt_id"],
-                    revision=task["revision"] + 1,
-                    payload={"verdict": verdict, "actor": actor, "evidence": evidence, "noteBytes": len(note.encode())},
-                )
-                task = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task["task_id"],)).fetchone()
-                response = {"task": self._decorate(connection, task), "duplicate": False}
-            if command_id:
-                self._store_receipt(
-                    connection, command_id, "task.acknowledge", request, response, task_id=task["task_id"]
-                )
-            head = self._head_of(connection)
-        self._notify(head)
-        return response
 
     # -- transitions ---------------------------------------------------------
     def _transition_task(self, connection: sqlite3.Connection, task: sqlite3.Row, state: str) -> None:
@@ -1646,7 +1494,7 @@ class BoardStore:
                 supported = set(adapter_capabilities(task["adapter"]))
                 if task["adapter"] in schemas.CODING_HARNESSES:
                     supported.update((f"execution:{task['adapter']}", f"effort:{spec['effort']}"))
-                if not set(json.loads(task["required_capabilities"])).issubset(supported):
+                if not set(spec.get("requiredCapabilities", [])).issubset(supported):
                     blocker = "capability-mismatch"
                     self._set_queue_reason(connection, task, blocker)
                     continue
@@ -1748,11 +1596,12 @@ class BoardStore:
                 generation = chosen_generation
                 attempt_id = chosen_attempt_id
                 now = self.now()
+                from ..evaluation.models import current_model
                 connection.execute(
                     "INSERT INTO attempts(attempt_id, task_id, generation, nonce_verifier,"
-                    " execution_state, ownership, adapter, model_harness, model_provider, model_model,"
+                    " execution_state, ownership, adapter, model_harness, model_provider, model_model, model_id,"
                     " started_at, created_at, updated_at, revision)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     (
                         attempt_id,
                         chosen["task_id"],
@@ -1765,6 +1614,7 @@ class BoardStore:
                         # never updated afterwards, so historical and shutdown-uncertain
                         # attempts cannot change which model service slot they occupy.
                         *(chosen_model_service if chosen_model_service is not None else (None, None, None)),
+                        current_model(connection, *chosen_model_service) if chosen_model_service is not None else None,
                         now,
                         now,
                         now,
@@ -1772,7 +1622,7 @@ class BoardStore:
                 )
                 connection.execute("UPDATE attempts SET cleanup_pending=1 WHERE attempt_id=?", (attempt_id,))
                 effective_cwd = chosen["cwd"]
-                for kind, values in (("cwd", [effective_cwd]), ("exclusive", spec.get("exclusiveResources", []))):
+                for kind, values in (("cwd", [effective_cwd]),):
                     for resource in values:
                         # (task, resource) is unique, so a retried task re-holds its own
                         # previously released claim instead of leaving it released.
@@ -2155,12 +2005,12 @@ class BoardStore:
         if termination_reason == "interrupted":
             raise BoardError("INVALID_ARGUMENT", "Only service recovery can record an interrupted result",
                              field="terminationReason")
-        stop_reasons = {"wrap-up", "grace-expired", "forced-stop", "console-stop", "service-stop", "unknown-stop"}
+        stop_reasons = {"pause", "wrap-up", "grace-expired", "forced-stop", "console-stop", "service-stop", "unknown-stop"}
         if termination_reason in stop_reasons and not shutdown_confirmed:
             raise BoardError("INVALID_ARGUMENT", "A stop termination reason requires confirmed shutdown",
                              field="terminationReason")
-        if termination_reason == "wrap-up" and status != "cancelled":
-            raise BoardError("INVALID_ARGUMENT", "wrap-up requires a cancelled result",
+        if termination_reason in ("pause", "wrap-up") and status != "cancelled":
+            raise BoardError("INVALID_ARGUMENT", "pause and wrap-up require a cancelled result",
                              field="terminationReason")
         schemas.optional_string(params, "error", max_length=4000)
         schemas.optional_string(params, "runtimeIdentity")
@@ -2214,7 +2064,7 @@ class BoardStore:
         # A micro-task turn's sealed output manifest is verified outside the transaction
         # too; a manifest that cannot be verified fails the attempt honestly instead
         # of publishing an unverified success.
-        self.workflow.precheck_result(params)
+        output_record = self.workflow.precheck_result(params)
         # The seal-side shared-stash observation of this attempt's repository is
         # read here, outside the result transaction; the turn's pinned fact binds
         # it below. A failed or partial seal keeps the same honest collection.
@@ -2234,7 +2084,7 @@ class BoardStore:
         }
         return self._commit_execution_result(
             request, seal_stash=seal_stash,
-            completion_evidence=stop_evidence)
+            completion_evidence=stop_evidence, output_record=output_record)
 
     def confirm_execution_shutdown(self, attempt_id: str, evidence: dict) -> dict:
         """Supplement only a no-receipt interruption with its later native-stop proof."""
@@ -2245,22 +2095,37 @@ class BoardStore:
         # native-stop proof can now bind its safely sealed partial output.
         params = {**payload, "shutdownConfirmed": True, "attemptId": attempt_id}
         stop_output = {key: evidence[key] for key in ("partialWorkspaceSeal", "workspaceSealError") if key in evidence}
-        self.workflow.precheck_result({**params, "result": {**(payload["result"] or {}), **stop_output}})
+        output_record = self.workflow.precheck_result({**params, "result": {**(payload["result"] or {}), **stop_output}})
         request = {key: params[key] for key in (
             "attemptId", "status", "result", "artifacts", "shutdownConfirmed", "exitCode", "signal",
             "error", "logPaths", "runtimeIdentity", "terminationReason")}
         return self._commit_execution_result(
             request,
-            seal_stash=self.workflow.collect_result_stash_facts(params), shutdown_evidence=evidence)
+            seal_stash=self.workflow.collect_result_stash_facts(params), shutdown_evidence=evidence,
+            output_record=output_record)
 
     def _commit_execution_result(self, request: dict, *, seal_stash, shutdown_evidence: dict | None = None,
-                                 completion_evidence: dict | None = None) -> dict:
+                                 completion_evidence: dict | None = None, output_record: dict | None = None) -> dict:
         # Normalize the imported projection once for every entry path and replay.
         from ...protocol.usage import normalize_token_usage
         imported = request["result"]
-        if isinstance(imported, dict) and "tokenUsage" in imported:
-            request = {**request, "result": {**imported,
-                "tokenUsage": normalize_token_usage(imported["tokenUsage"])}}
+        if isinstance(imported, dict):
+            normalized = dict(imported)
+            if "tokenUsage" in imported:
+                normalized["tokenUsage"] = normalize_token_usage(imported["tokenUsage"])
+            if "inputFailure" in imported:
+                failure = normalize_input_failure(imported["inputFailure"])
+                if failure is None:
+                    raise BoardError("INVALID_ARGUMENT", "The inputFailure facts are invalid")
+                normalized["inputFailure"] = failure
+            if normalized.get("code") == INPUT_REJECTED and "inputFailure" not in normalized:
+                raise BoardError("INVALID_ARGUMENT", "An input rejection requires inputFailure")
+            if normalized.get("code") == INPUT_REJECTED:
+                failure = normalized["inputFailure"]
+                if (request["status"] != "failed" or failure["stage"] == "native-admission"
+                        and (not is_input_too_large(failure) or failure["nativeRequestSent"] is not True)):
+                    raise BoardError("INVALID_ARGUMENT", "An input rejection requires failed admission evidence")
+            request = {**request, "result": normalized}
         status, result = request["status"], request["result"]
         verified_artifacts = request["artifacts"]
         shutdown_confirmed = request["shutdownConfirmed"]
@@ -2270,14 +2135,21 @@ class BoardStore:
         attempt_id_param = request["attemptId"]
         with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id_param)
+            if isinstance(result, dict) and isinstance(result.get("inputFailure"), dict):
+                harness = attempt["model_harness"] or attempt["adapter"]
+                if result["inputFailure"]["harness"]["name"] != harness:
+                    raise BoardError("INVALID_ARGUMENT", "inputFailure harness does not match the execution")
             self._require_effective_attempt(connection, attempt)
             if attempt["execution_state"] == "finished" and attempt["result_json"] is None:
                 raise BoardError("ATTEMPT_FINISHED", "This execution was released before process creation")
             if termination_reason == "deadline" and attempt["adapter"] != "decision":
-                raise BoardError("INVALID_ARGUMENT", "deadline is reserved for an exhausted Router budget", field="terminationReason")
+                raise BoardError("INVALID_ARGUMENT", "deadline is reserved for a Router model response wait", field="terminationReason")
             if termination_reason in ("wrap-up", "grace-expired") and attempt["grace_deadline"] is None:
                 raise BoardError("INVALID_ARGUMENT", "Wrap-up requires a durable grace deadline",
                                  field="terminationReason")
+            if termination_reason == "pause":
+                if attempt["stop_purpose"] != "pause":
+                    raise BoardError("INVALID_ARGUMENT", "pause requires a durable console pause", field="terminationReason")
             if termination_reason == "console-stop" and attempt["stop_initiator"] != "console":
                 raise BoardError("INVALID_ARGUMENT", "console-stop requires a durable console stop",
                                  field="terminationReason")
@@ -2374,7 +2246,7 @@ class BoardStore:
             else:
                 task_state = "failed"
             connection.execute(
-                "UPDATE attempts SET result_json=?,"
+                "UPDATE attempts SET result_json=?, result_form=COALESCE(result_form,'current-report-v2'),"
                 " shutdown_confirmed=?, runtime_identity=COALESCE(?, runtime_identity),"
                 " stop_initiator=COALESCE(stop_initiator,?),finished_at=?, updated_at=?, revision=revision+1 WHERE attempt_id=?",
                 (
@@ -2389,7 +2261,10 @@ class BoardStore:
                 ),
             )
             from ..evaluation.native_observations import persist
-            persist(connection, attempt, result, status=status,
+            persist_result = ({**result, "providerRejection": None}
+                              if isinstance(result, dict) and result.get("code") == INPUT_REJECTED
+                              else result)
+            persist(connection, attempt, persist_result, status=status,
                     shutdown_confirmed=shutdown_confirmed, now=now)
             self._transition_task(connection, task, task_state)
             connection.execute(
@@ -2397,7 +2272,7 @@ class BoardStore:
                 (attempt["task_id"],),
             )
             if shutdown_confirmed:
-                # Resources are released only when the owned process group is
+                # Resources are released only when the owned process session is
                 # confirmed gone. A cancelled or failed attempt whose shutdown is
                 # unconfirmed keeps its claims retained: a replacement must not
                 # touch resources a survivor may still be writing.
@@ -2466,6 +2341,7 @@ class BoardStore:
                 task_state=task_state,
                 now=now,
                 seal_stash=seal_stash,
+                output_record=output_record,
             )
             if micro_task is not None:
                 response["workflow"] = micro_task
@@ -2533,6 +2409,9 @@ class BoardStore:
                     for row in connection.execute("SELECT * FROM service_issues ORDER BY stage")]
 
     def clear_service_issue(self, stage: str) -> None:
+        with self.db.read() as connection:
+            if connection.execute("SELECT 1 FROM service_issues WHERE stage=?", (stage,)).fetchone() is None:
+                return
         with self.db.write() as connection:
             removed = connection.execute("DELETE FROM service_issues WHERE stage=?", (stage,)).rowcount
             if not removed:
@@ -2554,32 +2433,42 @@ class BoardStore:
         self._notify(head)
 
     def _record_runtime_issue(self, stage: str, error, *, attempt_id: str | None = None) -> None:
-        code = error.code if isinstance(error, BoardError) else type(error).__name__
-        message = (error.message if isinstance(error, BoardError) else str(error))[:4000]
-        table = "execution_issues" if attempt_id is not None else "service_issues"
-        selector = "attempt_id=? AND stage=?" if attempt_id is not None else "stage=?"
-        keys = (attempt_id, stage) if attempt_id is not None else (stage,)
         with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id) if attempt_id is not None else None
-            if attempt is not None and stage == "connection" and attempt["execution_state"] in ("finalizing", "finished"):
+            if not self._write_runtime_issue(connection, stage, error, attempt=attempt, now=self.now()):
                 return
-            previous = connection.execute(f"SELECT code,message FROM {table} WHERE {selector}", keys).fetchone()
-            if previous is not None and (previous["code"], previous["message"]) == (code, message):
-                return
-            now = self.now()
-            task_id = attempt["task_id"] if attempt is not None else None
-            if attempt_id is not None:
-                connection.execute("INSERT INTO execution_issues VALUES(?,?,?,?,?) ON CONFLICT(attempt_id,stage)"
-                    " DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at",
-                    (attempt_id, stage, code, message, now))
-            else:
-                connection.execute("INSERT INTO service_issues VALUES(?,?,?,?) ON CONFLICT(stage)"
-                    " DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at",
-                    (stage, code, message, now))
-            self._append_event(connection, "execution.issue" if attempt_id is not None else "service.issue",
-                task_id=task_id, attempt_id=attempt_id, payload={"stage": stage, "code": code, "message": message})
             head = self._head_of(connection)
         self._notify(head)
+
+    def _write_runtime_issue(self, connection, stage: str, error, *, attempt, now: str) -> bool:
+        code = error.code if isinstance(error, BoardError) else type(error).__name__
+        message = (error.message if isinstance(error, BoardError) else str(error))[:4000]
+        attempt_id = attempt['attempt_id'] if attempt is not None else None
+        if attempt is not None and stage == 'connection' and attempt['execution_state'] in ('finalizing', 'finished'):
+            return False
+        table = 'execution_issues' if attempt is not None else 'service_issues'
+        selector = 'attempt_id=? AND stage=?' if attempt is not None else 'stage=?'
+        keys = (attempt_id, stage) if attempt is not None else (stage,)
+        previous = connection.execute(f'SELECT * FROM {table} WHERE {selector}', keys).fetchone()
+        if previous is not None and (previous['code'], previous['message']) == (code, message):
+            return False
+        task_id = attempt['task_id'] if attempt is not None else None
+        kind = 'execution.issue' if attempt is not None else 'service.issue'
+        seq = self._append_event(connection, kind if previous is None else kind + '_updated',
+                                 task_id=task_id, attempt_id=attempt_id, wake_owned=False,
+                                 payload={'stage': stage, 'code': code, 'message': message})
+        occurrence = seq if previous is None else previous['occurrence_seq']
+        if attempt is not None:
+            connection.execute('INSERT INTO execution_issues VALUES(?,?,?,?,?,?) ON CONFLICT(attempt_id,stage)'
+                               ' DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at',
+                               (attempt_id, stage, code, message, now, occurrence))
+        else:
+            connection.execute('INSERT INTO service_issues VALUES(?,?,?,?,?) ON CONFLICT(stage)'
+                               ' DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at',
+                               (stage, code, message, now, occurrence))
+        if previous is None:
+            self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=now)
+        return True
 
     def release_execution(self, attempt_id: str, *, reason: str) -> dict:
         """Release a dispatch when its creator proves no execution process was created."""
@@ -2636,6 +2525,7 @@ class BoardStore:
                 connection, task=task_row, attempt=released_attempt, now=now,
                 seal_stash=seal_stash,
             )
+            task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             head = self._head_of(connection)
         self._notify(head)
         from ..tasks.interruption import _cleanup_dead_material
@@ -2823,7 +2713,12 @@ class BoardStore:
                 rows = connection.execute(
                     "SELECT * FROM artifacts WHERE task_id=? ORDER BY created_at", (task["task_id"],)
                 ).fetchall()
-        return {"artifacts": [self._artifact_view(row) for row in rows]}
+            results = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE kind='result' AND "
+                + ('attempt_id=?' if params.get('attemptId') else 'run_id=?') + ' ORDER BY rowid',
+                (params.get('attemptId') or task['task_id'],)).fetchall()
+            return {"artifacts": [self._artifact_view(row) for row in rows]
+                    + [self.workflow._artifact_view(row, connection=connection) for row in results]}
 
     # -- recovery ------------------------------------------------------------
     @staticmethod
@@ -2953,6 +2848,10 @@ class BoardStore:
             }
             for row in rows
         ]
+
+    def autonomous_tasks(self) -> list[dict[str, str]]:
+        with self.db.read() as connection:
+            return autonomous_tasks(connection)
 
     def active_work(self) -> dict:
         with self.db.read() as connection:

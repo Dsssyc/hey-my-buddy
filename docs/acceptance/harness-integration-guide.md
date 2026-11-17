@@ -17,7 +17,7 @@
 - Host 定稿（`692cbf4a`）：补上 `prepare_run_services`；harness 的说法写明形态（Codex CLI 等）；删掉会过时的探针全表、待消耗升级的一句与“控制台改完后应换成前端测试”的打算（后者进待办）；`docs/README.md` 的参考表与 `AGENTS.md` 的 ADR-023 一段指向这份文档。
 - 一致性检查 15 项与仓库卫生 5 项通过（`692cbf4a`）。
 - 四处定点变异各自被抓住：从执行进程的清理名单里去掉 `dsh`；改掉 ZCode 的 `check_preparation`；把实时问询改成不支持而能力不变；把 `DSH_HOME` 移出原生环境的白名单。
-- 合并：产物原样合在 `socu/batch2` 上（`9b1d2ae6`），看板上验收 `int-0bf29653`。
+- 合并：产物原样合在 `socu/batch2` 上（`9b1d2ae6`），黑板上验收 `int-0bf29653`。
 
 ## 验证的边界
 

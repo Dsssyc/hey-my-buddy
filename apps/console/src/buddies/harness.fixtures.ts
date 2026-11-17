@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { modelFacts } from "./model-fixtures";
+import { render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { vi } from "vitest";
 import { App } from "../App";
@@ -19,7 +20,7 @@ const sonnet = { harness: "claude", provider: "anthropic", model: "claude-sonnet
 const mediumId = "claude:anthropic:claude-sonnet-5:medium";
 
 export function harness(entry: Partial<HarnessHealth> & Pick<HarnessHealth, "harness" | "status">): HarnessHealth {
-  return { revision: 1, manualPath: null, ...entry };
+  return { revision: 1, manualPath: null, permissionsVerifiedVersion: null, ...entry };
 }
 
 /** One harness that is found, one missing, one needing a login and one that does not pass. */
@@ -46,16 +47,16 @@ export function harnesses(): HarnessHealth[] {
 
 type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
 
-export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
-  const buddy: Buddy = { effortRank: null, buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium", available: true,
-    enabled: true, capabilities: ["execution:claude", "decision"], contextWindow: 200_000, description: "", source: "catalog:fixture" };
+export function snapshot(rows: HarnessHealth[] = harnesses(), enabled = true): HarnessSnapshot {
+  const buddy: Buddy = { effortRank: null, buddyId: mediumId, alias: null, ...sonnet, effort: "medium", available: true,
+    enabled, capabilities: ["execution:claude", "decision"], contextWindow: 200_000, description: "", source: "catalog:fixture" };
   return {
-    csrfToken: "csrf", eventCursor: 0,
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+    configuration: { explorationEvery: 5, routerBuddyIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: [buddy],
-    preferences: [], modelServiceNotes: [], decisions: [],
+    preferences: [], ...modelFacts([buddy]), decisions: [],
 
     modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 },
@@ -67,6 +68,7 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
 type Reply = (params: Record<string, any>) => unknown;
 type FixtureOptions = {
   harnesses?: HarnessHealth[];
+  enabled?: boolean;
   /** No browser session was supplied to the view. */
   missingSession?: boolean;
   failFirstCheck?: boolean;
@@ -76,7 +78,7 @@ type FixtureOptions = {
 };
 
 export function fixture(options: FixtureOptions = {}) {
-  let state = snapshot(options.harnesses);
+  let state = snapshot(options.harnesses, options.enabled);
   if (options.missingSession) state = { ...state, consoleSession: undefined as unknown as Snapshot["consoleSession"] };
   const calls: { operation: string; params: Record<string, any> }[] = [];
   let checksToFail = options.failFirstCheck ? 1 : 0;
@@ -126,7 +128,7 @@ export function fixture(options: FixtureOptions = {}) {
     command,
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
     // Mirrors the real api helpers: the existing command route, no new path.
     harnessRefresh: vi.fn(async (csrfToken: string, harness?: string) => {
       const reply = await command("capabilities",
@@ -140,17 +142,8 @@ export function fixture(options: FixtureOptions = {}) {
 }
 
 /** Opens the page at an address and waits for the harness view. */
-export async function openHarness(f: ReturnType<typeof fixture>, hash = "#buddies", expand = true) {
+export async function openHarness(f: ReturnType<typeof fixture>, hash = "#buddies/harness") {
   window.location.hash = hash;
   render(createElement(App, { suppliedApi: f.api }));
-  await screen.findByRole("region", { name: "目录" });
-  if (expand && !hash.startsWith("#buddies/catalog/")) {
-    const first = f.state().harnesses[0];
-    if (first) {
-      const name = { dsh: "DSH", codex: "Codex", claude: "Claude Code", zcode: "ZCode" }[first.harness] ?? first.harness;
-      const summary = await screen.findByRole("button", { name: `${name} 账户` });
-      if (summary.getAttribute("aria-expanded") !== "true") fireEvent.click(summary);
-      await waitFor(() => screen.getByRole("group", { name: `${name} 设置` }));
-    }
-  }
+  await screen.findByRole("region", { name: hash.includes("/models") ? "模型" : "Harness" });
 }

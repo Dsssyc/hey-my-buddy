@@ -6,27 +6,45 @@ import { fieldValue, paneBlock } from "./harness.testing";
 
 afterEach(() => { cleanup(); sessionStorage.clear(); window.location.hash = ""; document.documentElement.dataset.theme = ""; });
 
-const note = "资格来自 harness 的只读档位声明，不代表原生调用已验证。";
-const review = () => fieldValue(paneBlock("位置"), "审阅");
-const word = () => within(review()).getByText(/^(可用|不可用|未知)$/);
+const note = "按 harness 的只读档位声明显示；此处不运行原生调用。";
+const review = () => paneBlock("位置");
+const word = () => within(review()).getByText(/^(强制限制|依照约定|未声明|未知)$/);
 
 describe("declared review level", () => {
+  it("shows both semantic groups and omits the retired verified-version field", async () => {
+    await openHarness(fixture({ harnesses: [harness({ harness: "dsh", status: "ready", version: "0.4.2", permissionsVerifiedVersion: null })] }));
+    const details = screen.getByRole("group", { name: "DSH 设置" });
+    expect(details.textContent).toContain("0.4.2");
+    expect(details.textContent).not.toMatch(/核实时的版本|未核对/);
+    expect(details.querySelectorAll(":scope > [role=group]")).toHaveLength(2);
+    expect(within(paneBlock("账户")).queryByRole("button")).toBeNull();
+  });
+
   it.each(["codex", "claude", "dsh", "zcode"])("reads %s's read level without a model call", async name => {
     const f = fixture({ harnesses: [harness({ harness: name, status: "ready", permissions: { read: "enforced" } })] });
     await openHarness(f);
-    expect(word().textContent).toBe("可用");
+    expect(word().textContent).toBe("强制限制");
     expect(word().getAttribute("aria-description")).toBe(note);
     expect(screen.queryByRole("button", { name: /验证/ })).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
 
   it.each([
-    [{ read: "convention" }, "可用"],
-    [{ write: "enforced" }, "不可用"],
+    [{ read: "convention" }, "依照约定"],
+    [{ write: "enforced" }, "未声明"],
     [undefined, "未知"],
   ] as [HarnessHealth["permissions"], string][])("derives review availability from declarations %o", async (permissions, text) => {
     await openHarness(fixture({ harnesses: [harness({ harness: "codex", status: "ready", permissions })] }));
     expect(word().textContent).toBe(text);
     expect(word().getAttribute("aria-description")).toBe(note);
+  });
+});
+
+describe("declared web level", () => {
+  it.each([["enforced", "强制限制"], ["convention", "未声明强制限制"]] as const)("shows %s with a visible description", async (web, expected) => {
+    await openHarness(fixture({ harnesses: [harness({ harness: "codex", status: "ready", permissions: { web } })] }));
+    const location = paneBlock("位置");
+    expect(location.textContent).toContain(web === "enforced" ? "只联网·强制限制（可建画像）" : "只联网·未强制（不可建画像）");
+    expect(location.textContent).not.toContain("核实时的版本");
   });
 });

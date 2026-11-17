@@ -1,7 +1,5 @@
 import type { ModelService, ModelServiceConcurrencyEntry, Preference, Buddy, Task } from "./types";
-import { catalogPending, buddyName } from "./buddy-name";
-import i18n from "i18next";
-import { actorText } from "./actor";
+import { catalogPending } from "./buddy-name";
 
 export const modelServiceKey = (p: ModelService) => JSON.stringify([p.harness, p.provider, p.model]);
 
@@ -68,12 +66,22 @@ export function retryIntervalSeconds(value: unknown): number | null {
     ? value
     : null;
 }
+/** The model response wait uses the service's 1–86400 second setting range. */
+export const MODEL_RESPONSE_WAIT_MAX = 86400;
+export function modelResponseWaitSeconds(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MODEL_RESPONSE_WAIT_MAX ? value : null;
+}
+/** Null disables exploration; otherwise one eligible micro task in N gets a quota. */
+export function validExplorationEvery(value: unknown): value is number | null {
+  return value === null || typeof value === "number" && Number.isInteger(value) && value >= 2;
+}
+
 export type ModelServiceGroup = { key: string; name: string; harness: string; provider: string; buddies: Buddy[] };
 export function modelServices(buddies: Buddy[]): ModelServiceGroup[] {
   const groups = new Map<string, ModelServiceGroup>();
   for (const buddy of buddies) {
     const key = modelServiceKey(buddy);
-    if (!groups.has(key)) groups.set(key, { key, name: buddyName(buddy), harness: buddy.harness, provider: buddy.provider, buddies: [] });
+    if (!groups.has(key)) groups.set(key, { key, name: buddy.model, harness: buddy.harness, provider: buddy.provider, buddies: [] });
     groups.get(key)!.buddies.push(buddy);
   }
   // Display order only: each harness's current catalog carries its own order.
@@ -94,10 +102,4 @@ export function preferredVariant(modelService: ModelServiceGroup, preferences: P
 }
 export function taskProject(task: Task) {
   return task.lineage?.project ?? null;
-}
-/** Recorded source attribution survives takeover; current ownership is separate. */
-export function taskHost(task: Task) {
-  if (task.lineage?.sourceHostId) return task.lineage.sourceHostId;
-  const lead = task.lineage?.leadOwnership?.leadRunId ?? task.lineage?.rootLeadRunId;
-  return lead ? actorText({ role: "lead", id: lead }) : i18n.t("shell:actor.unrecordedDelegator");
 }

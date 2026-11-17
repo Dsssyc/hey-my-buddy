@@ -7,7 +7,7 @@ import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import { task as detailTask, workflow as detailWorkflow, audit as detailAudit } from "./task-detail/task-detail.fixtures";
-import { macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { listSummary, macroTaskGroups, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import { TooltipProvider } from "./components/ui/tooltip";
 
@@ -17,10 +17,10 @@ function render(ui: ReactElement, options?: RenderOptions) {
 
 function snapshotFixture(): Snapshot {
   return {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session-a" },
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: { id: "session-a" },
 
-    configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    buddies: [], preferences: [], modelServiceNotes: [], decisions: [],
+    configuration: { explorationEvery: 5, routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
+    buddies: [], preferences: [], models: [], modelCorrespondences: [], decisions: [],
  modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: {},
   };
@@ -41,7 +41,7 @@ function harness(paged = false) {
     task: vi.fn(async (runId: string) => detailTask({ runId,
       lineage: { ...detailTask().lineage!, rootRunId: runId },
       workflow: { ...detailTask().workflow!, macroTaskId: timeline.macroTask.macroTaskId } })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [timeline.macroTask], totals: { all: 1, active: 1, host: 0, review: 0 }, nextCursor: paged ? "older" : null, cursor: 41, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups([listSummary(timeline.macroTask)], paged ? "older" : null), totals: { all: 1, active: 1, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 41, changed: false })),
     macroTaskTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),
   } as unknown as ConsoleApi;
   const refresh = vi.fn(async () => structuredClone(snapshot));
@@ -68,15 +68,18 @@ describe("macro task navigation", () => {
   it("removes the whole list column when collapsed and retains its query and pagination after expansion", async () => {
     const f = harness(true);
     await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    await f.user.type(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或编号"), "设计");
+    // jsdom has no geometry: pointer hit-testing belongs to the browser checks.
+    within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目或 ID").focus();
+    await f.user.keyboard("设计");
+    expect(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目或 ID")).toHaveProperty("value", "设计");
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     expect(localStorage.getItem(preference)).toBe("true");
     expect(screen.queryByRole("region", { name: "宏任务列表" })).toBeNull();
     expect(document.querySelector('[data-slot="macro-sidebar"] [data-slot="macro-list"]')).toBeNull();
     await f.user.click(screen.getByRole("button", { name: "展开宏任务列表" }));
-    expect(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或编号")).toHaveProperty("value", "设计");
-    await f.user.click(await screen.findByRole("button", { name: "更早" }));
-    expect(f.api.macroTasks).toHaveBeenCalledWith(expect.objectContaining({ before: "older", limit: 50 }), expect.any(AbortSignal));
+    expect(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目或 ID")).toHaveProperty("value", "设计");
+    await f.user.click(await screen.findByRole("button", { name: "显示更多" }));
+    expect(f.api.macroTasks).toHaveBeenCalledWith(expect.objectContaining({ group: "project:p1", before: "older", limit: 20 }), expect.any(AbortSignal));
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     f.unmount();
     const next = harness();
@@ -112,7 +115,7 @@ describe("macro task navigation", () => {
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     expect(screen.queryByRole("region", { name: "宏任务列表" })).toBeNull();
     await f.user.click(screen.getByRole("button", { name: "展开宏任务列表" }));
-    expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "宏任务列表" })).toBeTruthy();
   });
 
   it("ignores the retired micro task list preference", async () => {
@@ -131,6 +134,8 @@ describe("macro task navigation", () => {
     expect(within(header).getByRole("button", { name: "展开宏任务列表" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "宏任务列表（已收起）" })).toBeNull();
     await f.user.click(within(header).getByRole("button", { name: "展开宏任务列表" }));
-    expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
+    const list = screen.getByRole("region", { name: "宏任务列表" });
+    const selected = list.querySelector('[data-macro-task-id][data-selected="true"]') as HTMLElement;
+    expect(within(selected).getByRole("button", { name: "更多" })).toBeTruthy();
   });
 });

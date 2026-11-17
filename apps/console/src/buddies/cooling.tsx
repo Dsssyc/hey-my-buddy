@@ -23,31 +23,31 @@ function useCooling(providers: ProviderCooling[]) {
   return activeCooling(providers);
 }
 
-/** An inline status, present only while a provider is cooling. */
-export function CoolingStatus({ providers }: { providers: ProviderCooling[] }) {
+type Gate = { canWrite: boolean; refusal: string; busy: boolean };
+
+function RetryButton({ provider, gate, onRetry }: { provider: string; gate: Gate; onRetry: (provider: string) => void }) {
   const { t } = useTranslation("buddies");
-  const cooling = useCooling(providers);
-  // Earliest deadline answers when this harness has another provider to try.
-  const next = cooling.length ? Math.min(...cooling.map(record => Date.parse(record.coolingUntil!))) : null;
-  if (next === null) return null;
-  return <span data-slot="cooling-status" className="text-xs text-ink3 tabular-nums">{t("harness.cooling.status", { time: formatCoolingTime(next) })}</span>;
+  const inert = !gate.canWrite || gate.busy;
+  const reason = inert ? gate.refusal || t("harness.running") : t("harness.cooling.retryHint");
+  return <Hint text={reason}><Button type="button" variant="outline" size="sm" aria-disabled={inert || undefined}
+    onClick={() => { if (!inert) onRetry(provider); }}>{t("harness.cooling.clear")}</Button></Hint>;
 }
 
-export function CoolingDetails({ providers, gate, onClear }: {
-  providers: ProviderCooling[]; gate: { canWrite: boolean; refusal: string; busy: boolean }; onClear: (provider: string) => void;
+/** Provider labels and their own active cooldowns stay together in the section head. */
+export function CoolingHeaderProviders({ names, providers, gate, onRetry }: {
+  names: string[]; providers: ProviderCooling[]; gate: Gate; onRetry: (provider: string) => void;
 }) {
   const { t } = useTranslation("buddies");
   const cooling = useCooling(providers);
-  const refusal = gate.refusal || (gate.busy ? t("harness.running") : undefined);
-  if (!cooling.length) return null;
-  return <div data-slot="cooling-details" className="mt-4 min-w-0">
-    <div role="group" aria-label={t("harness.cooling.name")}>
-      {cooling.map(record => <div key={record.provider} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 pb-3">
-        <span className="font-mono text-xs wrap-anywhere">{record.provider}</span>
-        <span className="col-start-1 text-xs text-ink3">{t("harness.cooling.status", { time: formatCoolingTime(Date.parse(record.coolingUntil!)) })}</span>
-        <Hint text={refusal}><Button className="col-start-2 row-start-1 row-span-2" variant="outline" aria-disabled={!gate.canWrite || gate.busy || undefined}
-          onClick={() => onClear(record.provider)}>{t("harness.cooling.clear")}</Button></Hint>
-      </div>)}
-    </div>
-  </div>;
+  const displayed = [...new Set([...names, ...cooling.map(record => record.provider)])];
+  return <>{displayed.map(name => {
+    const record = cooling.find(entry => entry.provider === name);
+    return <span key={name} data-slot="header-provider" className="relative z-10 inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink2">
+      <span>{name}</span>
+      {record && <>
+        <span data-slot="cooling-status" className="text-ink3 tabular-nums">{t("harness.cooling.status", { time: formatCoolingTime(Date.parse(record.coolingUntil!)) })}</span>
+        <span className="pointer-events-auto"><RetryButton provider={name} gate={gate} onRetry={onRetry} /></span>
+      </>}
+    </span>;
+  })}</>;
 }

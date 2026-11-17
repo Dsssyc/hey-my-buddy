@@ -15,6 +15,7 @@ import time
 import zlib
 
 from .db import SCHEMA_VERSION, utc_now
+from .upgrade import UPGRADE_FLOOR_SCHEMA
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
 from ... import private_dirs, private_files
@@ -166,7 +167,7 @@ def _verify(directory: Path) -> dict:
                 'databaseSnapshot', 'runtime', 'pluginCommit', 'pluginCommitStatus', 'files'}
     if not isinstance(manifest, dict) or not required <= manifest.keys() or not isinstance(manifest['files'], dict):
         raise BoardError('BACKUP_INVALID', 'Backup manifest is incomplete')
-    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
+    if manifest.get('format') != 1 or type(manifest.get('schema')) is not int or not UPGRADE_FLOOR_SCHEMA <= manifest['schema'] <= SCHEMA_VERSION:
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)}
     if 'board.sqlite3.gz' not in manifest['files'] or set(manifest['files']) - allowed:
@@ -212,8 +213,10 @@ def _backup_paths(root: Path) -> tuple[Path, Path, Path, Path]:
     incoming, current, previous = (root / name for name in ('.incoming', 'current', '.previous'))
     journal = root / '.publish.json'
     for path in (incoming, current, previous):
+        _guard(path)
         if path.exists() and not path.is_dir():
             raise BoardError('BACKUP_UNSAFE_PATH', 'Backup generation must be a directory')
+    _guard(journal)
     if journal.exists() and not journal.is_file():
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup journal must be a regular file')
     return incoming, current, previous, journal

@@ -33,7 +33,15 @@ from pathlib import Path
 
 from hey_my_buddy.paths import native_path
 
+# Synthetic row inventory for the default ACP-profile dump.
+TOOL_ROWS = ('tool-bash', 'tool-executor-native', 'tool-executor-ptc', 'tool-fs', 'tool-fs-search', 'tool-goal', 'tool-jobs', 'tool-plugin-manager', 'tool-pwsh', 'tool-result-pruner', 'tool-skill', 'tool-subagent', 'tool-subagent-control', 'tool-subagent-fork', 'tool-todo', 'tool-web', 'tool-workflow', 'tool-working-directory')
+
 _LOG_LOCK = threading.Lock()
+
+#: The encoded working-directory component this fake writes its rollouts
+#: under, standing in for the component the installed agent derives from the
+#: session's working directory.
+RECORD_WORK_DIR = "--fake-agent-cwd--"
 
 
 def log(log_path: Path, event: dict) -> None:
@@ -129,6 +137,7 @@ class FakeAgent:
         self.permission_command = args.permission_command
         self.permission_path = args.permission_path
         self.finish_fail_then_retry = args.finish_fail_then_retry
+        self.finish_again = args.finish_again
         self.no_finish = args.no_finish
         self.forge_receipt = args.forge_receipt
         self.stop_reason = args.stop_reason
@@ -138,7 +147,9 @@ class FakeAgent:
         self.session_updates_fixture = args.session_updates_fixture
         self.emit_tool_update = args.emit_tool_update
         self.bare_final = args.bare_final
+        self.no_answer_chunk = args.no_answer_chunk
         self.session_record = args.session_record
+        self.config_options_fixture = args.config_options_fixture
         self.stderr_note = args.stderr_note
         self.emit_foreign_chunk = args.emit_foreign_chunk
         self.spam_unknown_kinds = args.spam_unknown_kinds
@@ -279,12 +290,17 @@ class FakeAgent:
                     return Path(row["config"]["root"])
         return Path(os.environ.get("DSH_HOME") or Path(os.environ["HOME"]) / ".dsh") / "sessions"
 
+    def record_directory(self, session_id: str) -> Path:
+        """The session's two-level record directory under the pinned root."""
+        return self.sessions_dir() / RECORD_WORK_DIR / session_id
+
     def persist_session(self, session_id: str, session: dict, *, new: bool = False) -> bool:
         """Record a session in the pinned root; claim new IDs across processes."""
         directory = self.sessions_dir()
         native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
         marker = directory / f"{session_id}.fake-session.json"
-        if new and any(native_path(directory).glob(f"{session_id}.v3.jsonl*")):
+        record_dir = self.record_directory(session_id)
+        if new and any(native_path(record_dir).glob("session*.jsonl*")):
             return False
         try:
             with native_path(marker).open("x" if new else "w", encoding="utf-8", newline="\n") as handle:
@@ -405,6 +421,12 @@ class FakeAgent:
             self._stop_reading.set()
             log(self.log_path, {"event": "stdin-frozen", "method": method})
         if method == "session/prompt":
+            if method in self.error_data_on:
+                self.send({"jsonrpc": "2.0", "id": message["id"], "error": {
+                    "code": -32602, "message": "fixture admission refusal",
+                    "data": {"input_error_code": "input_too_large", "max_chars": 9,
+                             "actual_chars": 10, "marker": "SAFE-TEST-MARKER-in-data"}}})
+                return
             if self.park_prompt:
                 log(self.log_path, {"event": "parked-prompt"})
                 threading.Event().wait()  # never returns: only the group stop ends this
@@ -437,6 +459,13 @@ class FakeAgent:
             self.close_stubs()
             os._exit(0)
 
+    def config_options_for(self, model_value: str, effort_value: str) -> list:
+        """A recorded reply's configuration options, when a fixture names them."""
+        if self.config_options_fixture:
+            document = json.loads(native_path(Path(self.config_options_fixture)).read_text(encoding="utf-8"))
+            return document["configOptions"]
+        return config_options(model_value, effort_value)
+
     def answer(self, method: str, params: dict) -> dict:
         if method == "initialize":
             return {"result": {
@@ -459,8 +488,8 @@ class FakeAgent:
                     break
             self.sessions[session_id] = session
             return {"result": {"sessionId": session_id, "modes": None,
-                               "configOptions": config_options(self.sessions[session_id]["model"],
-                                                               self.sessions[session_id]["effort"]),
+                               "configOptions": self.config_options_for(self.sessions[session_id]["model"],
+                                                                        self.sessions[session_id]["effort"]),
                                "mountedMcp": mounted}}
         if method == "session/set_config_option":
             session = self.sessions.get(params.get("sessionId"))
@@ -470,7 +499,7 @@ class FakeAgent:
                 session["model"] = params.get("value")
             elif params.get("configId") == "reasoning_effort":
                 session["effort"] = params.get("value")
-            return {"result": {"configOptions": config_options(session["model"], session["effort"])}}
+            return {"result": {"configOptions": self.config_options_for(session["model"], session["effort"])}}
         if method == "session/list" and "session/list" in self.error_data_on:
             return {"error": {"code": -32000, "message": "SAFE-TEST-MARKER-in-message",
                               "data": {"marker": "SAFE-TEST-MARKER-in-data"}}}
@@ -492,7 +521,7 @@ class FakeAgent:
             if self.replay_history:
                 self.replayed_history(params.get("sessionId"))
             answer = {"result": {"modes": None,
-                                 "configOptions": config_options(session["model"], session["effort"])}}
+                                 "configOptions": self.config_options_for(session["model"], session["effort"])}}
             if self.resume_echo_foreign_id:
                 # The observed answer carries no session id at all; an agent
                 # that echoes one naming another session is the mismatch case.
@@ -617,7 +646,7 @@ class FakeAgent:
         index = min(self.prompt_count, len(self.final_answers) - 1) if self.final_answers else 0
         self.prompt_count += 1
         answer = self.final_answers[index] if self.final_answers else '{"choice":"a"}'
-        if self.session_record != "quota-before":
+        if self.session_record != "quota-before" and not self.no_answer_chunk:
             self.notify_client("session/update", {"sessionId": session_id,
                                                   "update": {"sessionUpdate": "agent_message_chunk",
                                                              "content": {"type": "text", "text": answer}}})
@@ -775,6 +804,22 @@ class FakeAgent:
                                                  "expectedArtifacts": [],
                                                  "acceptance": "the Host accepts the attention receipt"}}
                 finish(attention_outcome, "call_finish_3")
+        if self.finish_again and "tool-refusal" not in text:
+            # The root calls the finish tool again after its accepted receipt.
+            # The model saw the accepted result first, so wait for the
+            # controller's published acceptance, then record what the bridge
+            # answered for the repeat.
+            marker = Path(self.bridge_config).parent / "finish-accepted.json"
+            bounded = time.monotonic() + 10
+            while time.monotonic() < bounded and not native_path(marker).exists():
+                time.sleep(0.05)
+            result = worker_services.call_session_tool(self.finish_tool.rsplit("__", 1)[-1],
+                                                       completed_outcome, configuration)
+            answer = result["content"][0]["text"]
+            tool_frame("call_finish_2", self.finish_tool, "in_progress")
+            tool_result("call_finish_2", "completed", answer)
+            log(self.log_path, {"event": "finish-again", "refused": result.get("isError") is True,
+                                "answer": answer})
         self.notify_client("session/update", {"sessionId": frame_id,
                                               "update": {"sessionUpdate": "usage_update",
                                                          "used": 900, "size": 1000000}})
@@ -783,17 +828,18 @@ class FakeAgent:
     # -- the synthetic private session record ---------------------------------
 
     def write_session_record(self, session_id: str, prompt_text: str) -> None:
-        """Write one synthetic ``session.v3`` rollout under the pinned sessions root.
+        """Write one synthetic ``session.v4`` rollout under the pinned sessions root.
 
-        The shapes mirror the desensitized native fixture: a version-3 session
-        header, a user message, turn/step markers, assistant messages whose
-        ``source`` names the model and whose ``usage`` carries the native
-        counters, and a terminal turn end. This is a fixture written by the
-        fake agent, never a native record; it only exercises the driver's
-        optional record reader end to end. A resumed turn appends its own
-        block to the rollout the previous process left in the shared root —
-        the boundary the driver froze — with scenario switches for the shapes
-        that must leave the turn's usage unknown.
+        The file lands in the session's two-level directory, like the installed
+        agent's current generation. The shapes mirror the desensitized native
+        fixture: a generation-4 session header, a user message, turn/step
+        markers, assistant messages whose ``source`` names the model and whose
+        ``usage`` carries the native counters, and a terminal turn end. This is
+        a fixture written by the fake agent, never a native record; it only
+        exercises the driver's optional record reader end to end. A resumed
+        turn appends its own block to the rollout the previous process left in
+        the shared root — the boundary the driver froze — with scenario
+        switches for the shapes that must leave the turn's usage unknown.
         """
         mode = self.session_record
         if not mode:
@@ -802,7 +848,7 @@ class FakeAgent:
             if self.resumed_session:
                 self.write_resumed_session_record(session_id, prompt_text, mode)
             return
-        directory = self.sessions_dir()
+        directory = self.record_directory(session_id)
         native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
         now_ms = int(time.time() * 1000)
         source = {"kind": "model", "provider": "fake", "model": "m1"}
@@ -816,7 +862,7 @@ class FakeAgent:
             return {"type": "assistant/message", "seq": seq, "data": data}
 
         events = [
-            {"type": "session", "version": 3,
+            {"type": "session", "version": 4,
              "id": "fake-session-foreign" if mode == "foreign" else session_id,
              "createdAt": now_ms, "cwd": os.getcwd(), "isSeeded": False,
              "origin": "acp", "delegationDepth": 0},
@@ -857,14 +903,14 @@ class FakeAgent:
         if mode == "quota-truncated":
             lines += "malformed record frame\n"
         if mode == "corrupt":
-            path = directory / f"{session_id}.v3.jsonl.zstd"
+            path = directory / "session.v4.jsonl.zstd"
             native_path(path).write_bytes(b"this is not a zstd stream\n")
         elif mode == "plain":
-            path = directory / f"{session_id}.v3.jsonl"
+            path = directory / "session.v4.jsonl"
             native_path(path).write_text(lines, encoding="utf-8", newline="\n")
         else:
             import zstandard
-            path = directory / f"{session_id}.v3.jsonl.zstd"
+            path = directory / "session.v4.jsonl.zstd"
             native_path(path).write_bytes(zstandard.ZstdCompressor().compress(lines.encode()))
         log(self.log_path, {"event": "session-record-written", "mode": mode,
                             "path": str(path), "sessionId": session_id})
@@ -881,9 +927,9 @@ class FakeAgent:
         growing past the reader's proportionate bound.
         """
         import zstandard
-        directory = self.sessions_dir()
+        directory = self.record_directory(session_id)
         native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
-        path = directory / f"{session_id}.v3.jsonl.zstd"
+        path = directory / "session.v4.jsonl.zstd"
         existing: list[bytes] = []
         if native_path(path).is_file():
             try:
@@ -929,7 +975,7 @@ class FakeAgent:
                                 "path": str(path), "sessionId": session_id})
             return
         if mode == "resume-rewrite":
-            rewritten = [json.dumps({"type": "session", "version": 3, "id": session_id,
+            rewritten = [json.dumps({"type": "session", "version": 4, "id": session_id,
                                      "createdAt": now_ms, "cwd": os.getcwd(),
                                      "isSeeded": False, "origin": "acp",
                                      "delegationDepth": 0}).encode()]
@@ -1118,6 +1164,9 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
                         help="private output file for the selected incoming frame")
     # The public launch face the run module's driver always passes, accepted and
     # recorded like the installed agent's: the profile name and the patch file.
+    parser.add_argument("--dump-default-config", action="store_true")
+    parser.add_argument("--inventory-output", default=None)
+    parser.add_argument("--inventory-failure", action="store_true")
     parser.add_argument("--profile", default=None)
     parser.add_argument("--patch", default=None)
     parser.add_argument("--delay", action="append", default=[],
@@ -1173,8 +1222,12 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
                         help="emit one completed tool_call/update pair before the answer")
     parser.add_argument("--bare-final", action="store_true",
                         help="emit no usage snapshot: only the message chunk and the stop")
+    parser.add_argument("--no-answer-chunk", action="store_true",
+                        help="finish the prompt without an agent message chunk")
     parser.add_argument("--finish-fail-then-retry", action="store_true",
                         help="the first finish call fails natively and the root retries")
+    parser.add_argument("--finish-again", action="store_true",
+                        help="call the finish tool again after the accepted receipt and record what it answered")
     parser.add_argument("--no-finish", action="store_true",
                         help="end the micro task prompt without ever calling the finish tool")
     parser.add_argument("--forge-receipt", action="store_true",
@@ -1185,8 +1238,10 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
                                  "flood", "plain", "resume", "resume-missing",
                                  "resume-rewrite", "resume-shorten", "resume-duplicate",
                                  "resume-flood"],
-                        help="write one synthetic session.v3 rollout under the patch-pinned sessions root; "
+                        help="write one synthetic session.v4 rollout under the patch-pinned sessions root; "
                              "the resume* modes shape the resumed turn's rollout boundary")
+    parser.add_argument("--config-options-fixture",
+                        help="serve this JSON document's configOptions list as every session's configuration options")
     parser.add_argument("--stderr-note", default=None,
                         help="write one line to stderr at startup, for the tail mirror")
     parser.add_argument("--emit-foreign-chunk", action="store_true",
@@ -1220,6 +1275,13 @@ def main() -> int:
     native_path(log_path.parent).mkdir(parents=True, exist_ok=True)
     if not check_private_home(log_path, Path(args.fixture_root)):
         return 3
+    if args.dump_default_config:
+        if args.inventory_failure:
+            print("synthetic-private-secret", file=sys.stderr)
+            return 1
+        print(args.inventory_output if args.inventory_output is not None else
+              "\n".join("- id: " + row + "\n  name: fake" for row in TOOL_ROWS))
+        return 0
     log(log_path, {"event": "launch-face", "profile": args.profile, "patch": args.patch})
     FakeAgent(args).serve()
     return 0

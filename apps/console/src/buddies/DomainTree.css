@@ -1,0 +1,32 @@
+.domain-tree { min-width: 0; contain: inline-size; }
+.domain-tree-overview { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; color: var(--ink3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.domain-tree-overview button { flex: none; color: var(--ink2); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; transition: color 150ms var(--ease-out-quart); }
+.domain-tree-overview button:hover { color: var(--ink); }
+.domain-tree-overview button:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }
+.domain-tree-stage { margin-top: 12px; }
+.domain-tree-viewport { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; }
+.domain-tree-list { display: grid; grid-template-columns: max-content 54px minmax(180px, 1fr); gap: 2px 18px; min-width: 100%; width: max-content; }
+.domain-tree-row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; min-height: 35px; border: 0; padding: 0; background: transparent; color: var(--ink); font-size: 14px; text-align: left; -webkit-user-select: none; user-select: none; cursor: default; transition: background-color 120ms ease; }
+.domain-tree-row[aria-expanded] { cursor: pointer; }
+.domain-tree-row:hover, .domain-tree-row[data-details-open="true"] { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.domain-tree-row:focus-visible { outline: 2px solid var(--color-ring); outline-offset: -2px; }
+.domain-tree-name { position: relative; display: flex; align-items: center; gap: 6px; min-width: max-content; padding-left: calc(4px + var(--depth) * 22px); white-space: nowrap; }
+.domain-tree-guide { position: absolute; left: calc(var(--depth) * 22px - 12px); top: -13px; width: 12px; height: 29px; border-left: 1px solid var(--line2); border-bottom: 1px solid var(--line2); pointer-events: none; }
+.domain-tree-chevron { width: 12px; color: var(--ink3); font-size: 12px; line-height: 1; }
+.domain-tree-count { color: var(--ink2); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+.domain-tree-bar { display: block; width: 100%; height: 9px; background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.domain-tree-bar-fill { display: flex; gap: 3px; height: 100%; min-width: 2px; transition: width 180ms var(--ease-out-quart); }
+.domain-tree-segment { flex-basis: 0; min-width: 1px; height: 100%; transition: filter 120ms ease, box-shadow 120ms ease, flex-grow 180ms var(--ease-out-quart); }
+.domain-tree-segment[data-highlight="true"] { filter: brightness(1.32); box-shadow: 0 0 0 1px var(--ink); }
+.domain-tree-popover-title { color: var(--ink); font-size: 16px; font-weight: 500; }
+.domain-tree-popover-title span { color: var(--ink3); font-size: 12px; font-weight: 400; }
+.domain-tree-popover-definition { margin-top: 12px; color: var(--ink2); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.domain-tree-popover-merged { margin-top: 10px; color: var(--ink3); font-size: 12px; overflow-wrap: anywhere; }
+.domain-tree-popover-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+.domain-tree-info { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; margin-left: -2px; border-radius: 4px; color: var(--ink3); opacity: 0; pointer-events: none; cursor: pointer; transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease; }
+.domain-tree-info svg { width: 16px; height: 16px; }
+.domain-tree-row:hover .domain-tree-info, .domain-tree-row:focus-visible .domain-tree-info, .domain-tree-info:focus-visible, .domain-tree-row[data-details-open="true"] .domain-tree-info { opacity: 1; pointer-events: auto; }
+.domain-tree-info:hover, .domain-tree-info[data-state="open"] { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.domain-tree-info:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 0; }
+@media (prefers-reduced-motion: reduce) { .domain-tree-overview button, .domain-tree-bar-fill, .domain-tree-row, .domain-tree-segment, .domain-tree-info { transition: none; } }

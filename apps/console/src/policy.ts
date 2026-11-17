@@ -1,4 +1,7 @@
-import { reasonText } from "./i18n/reason";
+import { createElement, type ReactNode } from "react";
+import { BuddyName } from "./components/AliasTag";
+import { Message } from "./i18n/Message";
+import { ReasonMessage } from "./i18n/ReasonMessage";
 import i18n from "i18next";
 import type { Draft, Buddy } from "./types";
 import {
@@ -6,8 +9,8 @@ import {
   preferenceChanges,
   buddySettings,
 } from "./draft";
-import { concurrencyLimit, modelServiceKey, retryIntervalSeconds } from "./console-data";
-import { buddyName, buddyTitle } from "./buddy-name";
+import { concurrencyLimit, modelResponseWaitSeconds, modelServiceKey, retryIntervalSeconds, validExplorationEvery } from "./console-data";
+import { effortText } from "./buddy-name";
 
 /** The two capabilities have distinct authority and cannot stand in for each other. */
 export function hasFastRoutingCapability(buddy: Buddy | undefined): boolean {
@@ -85,7 +88,7 @@ export function routerRefusal(buddy: Buddy, mode: "fast" | "review" = "review"):
 type PolicyIssue = {
   buddyId: string;
   label: string;
-  message: string;
+  message: ReactNode;
   /** Model service key for a model service issue; buddy-level issues leave it unset. */
   modelService?: string;
   /** The Router itself needs attention; the page's routing status shows it. */
@@ -93,13 +96,21 @@ type PolicyIssue = {
 };
 
 function labelOf(buddy: Buddy | undefined, buddyId: string): string {
-  return buddy ? buddyTitle(buddy) : buddyId;
+  return buddy ? [buddy.model, effortText(buddy.effort)].filter(Boolean).join(" · ") : buddyId;
 }
 
-function availabilityReason(buddy: Buddy | undefined): string {
+function nameOf(buddy: Buddy | undefined, buddyId: string): ReactNode {
+  return createElement(BuddyName, { buddy, children: labelOf(buddy, buddyId) });
+}
+
+function sentence(id: string, values: Record<string, ReactNode>): ReactNode {
+  return createElement(Message, { ns: "console", id, values });
+}
+
+function availabilityReason(buddy: Buddy | undefined): ReactNode {
   if (!buddy) return i18n.t("console:noLongerInTheCurrentCatalog");
   return buddy.unavailableReason
-    ? i18n.t("console:currentlyUnavailable", { v0: reasonText(buddy.unavailableReason) })
+    ? sentence("console:currentlyUnavailable", { v0: createElement(ReasonMessage, { reason: buddy.unavailableReason }) })
     : i18n.t("console:notInTheCurrentCatalog");
 }
 
@@ -107,7 +118,7 @@ function availabilityReason(buddy: Buddy | undefined): string {
  * Why a pin is not legal right now, matching the board: a new pin requires an
  * available *and* enabled buddy. Null means it is legal.
  */
-function pinRefusal(buddy: Buddy | undefined): string | null {
+function pinRefusal(buddy: Buddy | undefined): ReactNode {
   if (!buddy || !buddy.available) return availabilityReason(buddy);
   if (!buddy.enabled) return i18n.t("console:disabled");
   return null;
@@ -130,7 +141,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
   for (const entry of draft.modelServiceConcurrency) {
     if (concurrencyLimit(entry.limit) !== null) continue;
     const member = draft.buddies.find((buddy) => modelServiceKey(buddy) === modelServiceKey(entry));
-    const subject = member ? buddyName(member) : `${entry.harness}/${entry.provider}/${entry.model}`;
+    const subject = entry.model;
     issues.push({
       buddyId: member?.buddyId ?? `${entry.harness}/${entry.provider}/${entry.model}`,
       modelService: modelServiceKey(entry),
@@ -139,13 +150,13 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
     });
   }
   for (const setting of buddySettings(baseline, draft)) {
-    if (!setting.enabled) continue;
+    if (setting.enabled !== true) continue;
     const buddy = buddies.get(setting.buddyId);
     if (!buddy?.available) {
       issues.push({
         buddyId: setting.buddyId,
         label: labelOf(buddy, setting.buddyId),
-        message: i18n.t("console:cannotEnableItRevertThisChange", { v0: labelOf(buddy, setting.buddyId), v1: availabilityReason(buddy) }),
+        message: sentence("console:cannotEnableItRevertThisChange", { v0: nameOf(buddy, setting.buddyId), v1: availabilityReason(buddy) }),
       });
     }
   }
@@ -160,7 +171,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       issues.push({
         buddyId: change.buddyId,
         label: labelOf(buddy, change.buddyId),
-        message: i18n.t("console:cannotPinItChooseAnAvailableReasoning", { v0: labelOf(buddy, change.buddyId), v1: refusal }),
+        message: sentence("console:cannotPinItChooseAnAvailableReasoning", { v0: nameOf(buddy, change.buddyId), v1: refusal }),
       });
     }
   }
@@ -172,6 +183,21 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       message: i18n.t("console:retryIntervalMustBeAnIntegerFrom"),
     });
   }
+  if (draft.configuration && modelResponseWaitSeconds(draft.configuration.modelResponseWaitSeconds) === null) {
+    issues.push({ buddyId: "", label: i18n.t("buddies:roles.responseWait.name"), message: i18n.t("buddies:roles.responseWait.invalid") });
+  }
+  if (draft.configuration && !validExplorationEvery(draft.configuration.explorationEvery)) {
+    issues.push({ buddyId: "", label: i18n.t("buddies:roles.exploration.name"), message: i18n.t("buddies:roles.exploration.invalid") });
+  }
+  if (draft.configuration?.maintenanceIntervalSeconds !== undefined && (!Number.isSafeInteger(draft.configuration.maintenanceIntervalSeconds) || draft.configuration.maintenanceIntervalSeconds < 1)) {
+    issues.push({ buddyId: "", label: i18n.t("buddies:maintenance.interval"), message: i18n.t("buddies:maintenance.intervalInvalid") });
+  }
+  if (draft.configuration && routerFieldChanged(baseline, draft, "maintenanceBuddyId") && draft.configuration.maintenanceBuddyId) {
+    const buddy = buddies.get(draft.configuration.maintenanceBuddyId);
+    if (!buddy || !buddy.enabled || !buddy.available) {
+      issues.push({ buddyId: draft.configuration.maintenanceBuddyId, label: i18n.t("buddies:maintenance.buddy"), message: i18n.t("buddies:maintenance.ineligible") });
+    }
+  }
   if (draft.configuration && routerFieldChanged(baseline, draft, "routerBuddyIds")) {
     // Settings name published complete identities. Runtime eligibility and
     // temporary availability belong to the shared current Router resolver.
@@ -181,7 +207,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
         : [buddy.harness, buddy.provider, buddy.model, buddy.effort].some(value => !value?.trim())
           ? i18n.t("console:incompleteBuddyIdentity") : null;
       if (refusal) issues.push({ buddyId: target, label: labelOf(buddy, target),
-        message: i18n.t("console:cannotSaveTheRouterList", { v0: labelOf(buddy, target), v1: refusal }) });
+        message: sentence("console:cannotSaveTheRouterList", { v0: nameOf(buddy, target), v1: refusal }) });
     }
   }
   return issues;
@@ -194,7 +220,7 @@ export function routerAttention(source: Pick<Draft, "configuration" | "buddies">
   const buddy = source.buddies.find(p => p.buddyId === id);
   const refusal = buddy ? routerRefusal(buddy, mode) : i18n.t("console:noLongerInTheCatalog");
   return refusal ? { buddyId: id, router: true, label: labelOf(buddy, id),
-    message: i18n.t("console:currentRouterChooseSetAsRouterFrom", { v0: labelOf(buddy, id), v1: refusal }) } : null;
+    message: sentence("console:currentRouterChooseSetAsRouterFrom", { v0: nameOf(buddy, id), v1: refusal }) } : null;
 }
 
 export function decisionAttention(source: Pick<Draft, "configuration" | "buddies">): PolicyIssue | null {
@@ -221,7 +247,7 @@ export function attentionIssues(
       issues.push({
         buddyId: preference.buddyId,
         label: labelOf(buddy, preference.buddyId),
-        message: i18n.t("console:thePinnedChoicePointsToEnableIt", { v0: labelOf(buddy, preference.buddyId), v1: refusal }),
+        message: sentence("console:thePinnedChoicePointsToEnableIt", { v0: nameOf(buddy, preference.buddyId), v1: refusal }),
       });
     }
   }

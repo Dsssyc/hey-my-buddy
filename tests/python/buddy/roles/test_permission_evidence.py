@@ -10,6 +10,7 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.buddy.roles import inline_run, run_execution
+from hey_my_buddy.buddy.roles.prompts import PromptText
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.private_dirs import ensure_private_dir
 from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
@@ -43,9 +44,10 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
         result = rc.RunResult(identity=request.identity, harness=request.harness,
                               end=rc.RunEnd(status=status, reason_code="native-refused" if status != "ok" else None),
                               stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
-        handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
+        handle = run_execution.InlineRunHandle(control, request.identity)
         with mock.patch.object(inline_run, "run_seam", return_value=object()), \
-                mock.patch.object(run_execution, "worker_request", return_value=(request, None, None, None)), \
+                mock.patch.object(run_execution, "worker_request", return_value=(
+                    request, None, None, None, PromptText((("task", request.input_text),)).parts)), \
                 mock.patch.object(inline_run, "run_harness", return_value=result) as native_run, \
                 mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)), \
                 mock.patch.object(run_execution, "_worker_result", return_value={"outcome": {}}):
@@ -56,7 +58,7 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
 
     def test_native_outcomes_keep_permission_and_stop_facts_without_a_permission_file(self):
         for harness, levels in PERMISSION_LEVELS.items():
-            for permission in ("read", "write", "full"):
+            for permission in (level for level in levels if level != "none"):
                 for status in ("ok", "error", "unknown"):
                     with self.subTest(harness=harness, permission=permission, status=status):
                         root = ensure_private_dir(self.base / f"{harness}-{permission}-{status}")

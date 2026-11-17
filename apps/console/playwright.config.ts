@@ -21,7 +21,7 @@ export default defineConfig({
   use: { baseURL: `http://127.0.0.1:${port}/`, browserName: "chromium", trace: process.env.CI ? "retain-on-failure" : "off" },
   // https://playwright.dev/docs/test-webserver
   webServer: {
-    command: `${previewPython ? `"${previewPython}"` : "uv run --no-project python"} tests/probes/macro_task_console_preview.py --assets "${assets}" --port ${port}`,
+    command: `${previewPython ? `"${previewPython}"` : "uv run --frozen python"} tests/probes/macro_task_console_preview.py --assets "${assets}" --port ${port}`,
     cwd: repository,
     url: `http://127.0.0.1:${port}/`,
     reuseExistingServer: false,

@@ -17,7 +17,7 @@
 
 Host 在 `ca1cad90` 后传达开发者的决定：交给 harness 的内容清单是穷尽的，省一次模型调用也不是例外。本次从发现、带会话工具的 Worker 与最终消息载体的两种范围中删除 `titleGenerationEnabled=False`，问询实验与本说明的握手探针同步删除该字段。会话标题跟 ZCode 原生默认走；空工具清单、空会话 MCP、off-peak 与 dynamic workflow 的关闭仍表达无工具权限，不改；没有为可能出现的标题事件增加处理。模拟原生程序在收到建会话参数时明确断言没有标题覆盖，带工具的模拟程序对建会话与续接参数都作同一检查。
 
-Host 在本次续接输入中报告：真实 ZCode 0.16.9 无须另外指定就能以发现、Worker、无工具三种方式启动，目录的 12 个四段名字与原有目录相同，启动前后用户供应方文件与应用包内置文件均未改写；额度用尽时 Worker 与无工具路径均带回原生失败原因和额度事实，回合里的记忆与搜索答复来自用户设置。这些是 Host 对标题覆盖删除前源码的实测，本实现方没有执行真实 CLI 或读取用户文件；删除覆盖后、原生生成标题时的无工具真实调用留给 Host 复核，不能用模拟程序的通过代替。
+Host 在本次续接输入中报告：真实 ZCode 0.16.9 无须另外指定就能以发现、Worker、无工具三种方式启动，目录的 12 个四元组与原有目录相同，启动前后用户供应方文件与应用包内置文件均未改写；额度用尽时 Worker 与无工具路径均带回原生失败原因和额度事实，回合里的记忆与搜索答复来自用户设置。这些是 Host 对标题覆盖删除前源码的实测，本实现方没有执行真实 CLI 或读取用户文件；删除覆盖后、原生生成标题时的无工具真实调用留给 Host 复核，不能用模拟程序的通过代替。
 
 `InstalledZcodeTests.setUp` 先调用 `test_zcode.ZcodeFixtureCase.setUp`，后者在测试临时根下创建 `native-user-home`，用它覆盖环境里的 HOME、USERPROFILE 和 `ZCODE_DATA_BASE_DIR`；真实 CLI 测试随后把数据根换成同一临时根下的 `account-empty`，其包装脚本只指定临时根下的合成个人供应方文件与内置测试副本。`ExecutionContext.environment` 带入这些值，控制器再经现有原生环境白名单把 HOME、USERPROFILE、数据根带给 CLI，这只能证明传入的配置位置和 HOME 等环境值是私有的，不能据此断言原生运行状态也完全隔离；此前“原有隔离成立”的结论过强，按下文 Host 实测纠正。包装脚本的 bundled 内置路径仍是应用包里的公开内置文件；它不是用户个人配置。该测试需要真实 CLI、loopback HTTP 服务、macOS sandbox-exec 和角色启动器，本回合没有运行它。
 
@@ -69,7 +69,7 @@ Host 在本次续接输入中报告：真实 ZCode 0.16.9 无须另外指定就�
 
 ## 供应方名字与计费
 
-改前目录的供应方名字来自 `settings.model.available[].ref.providerId`，只是经过访问类型筛选；改后仍来自同一字段，删除筛选，`providerLabel` 仍只作显示名称。模型 ID 仍是 `ref.modelId`，推理强度仍是原生 `reasoning.levels[].value`，harness 仍是 `zcode`。原来已被接受的供应方不会改名；同一份配置内容交给同一原生 CLI，四段身份的来源没有变。Host 在第二回合输入中报告：用真实 ZCode 0.16.9、只补内置定位的无模型探针读到 12 个四段名字，与日常记录全部一致，配置读回等于请求；这是 Host 的探测证据，本实现方没有读日常看板或执行真实 CLI。Host 在本次续接输入中已报告原文件定位与用户偏好的真实复核结果，见上节；模拟 CLI 不证明真实接口。
+改前目录的供应方名字来自 `settings.model.available[].ref.providerId`，只是经过访问类型筛选；改后仍来自同一字段，删除筛选，`providerLabel` 仍只作显示名称。模型 ID 仍是 `ref.modelId`，推理强度仍是原生 `reasoning.levels[].value`，harness 仍是 `zcode`。原来已被接受的供应方不会改名；同一份配置内容交给同一原生 CLI，四段身份的来源没有变。Host 在第二回合输入中报告：用真实 ZCode 0.16.9、只补内置定位的无模型探针读到 12 个四元组，与日常记录全部一致，配置读回等于请求；这是 Host 的探测证据，本实现方没有读日常黑板或执行真实 CLI。Host 在本次续接输入中已报告原文件定位与用户偏好的真实复核结果，见上节；模拟 CLI 不证明真实接口。
 
 没有增加名为 `unknown` 的供应方或向原生 setter 传入伪造名字。ZCode 这条接口报告的是每个可用模型自己的 `ref.providerId`，没有依赖“缺省供应方”的目录分支；用户的默认选择来自原生 `settings.model.current.providerId`，配置核对使用显式请求与原生读回。缺少这些身份事实时，本批没有猜一个通用内置名字；真实 CLI 若出现这样的形状，交 Host 根据原生证据决定。
 
@@ -142,7 +142,7 @@ for mode in ("discovery", "worker", "no-tool"):
         sid = z._checked_root_session(snap, str(cwd), previous=None, mode="initial",
                                       require_interactive=mode == "worker")
         models = snap["settings"]["model"]["available"]
-        # 只记录非秘密的原生目录身份；与安装前目录的四段名字比较。
+        # 只记录非秘密的原生目录身份；与安装前目录的四元组比较。
         names = [("zcode", m["ref"]["providerId"], m["ref"]["modelId"], level["value"])
                  for m in models for level in m.get("reasoning", {}).get("levels", [])]
         print(json.dumps({"mode": mode, "version": spawn.version, "names": names,

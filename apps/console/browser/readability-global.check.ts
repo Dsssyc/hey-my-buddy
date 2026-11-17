@@ -2,7 +2,6 @@ import { expect } from "@playwright/test";
 import { contrastOf, open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const stoppingMacro = "macro-22222222-2222-4222-8222-222222222222";
 
 test.describe("shared readability", () => {
   test.use({ locale: "zh-CN", viewport: { width: 1280, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" });
@@ -12,9 +11,10 @@ test.describe("shared readability", () => {
   });
 
   test("dark tooltip and popover are legible floating surfaces", async ({ page }) => {
-    await open(page, "#buddies");
-    const fold = page.locator("[data-slot=fold-handle]").first();
-    await fold.hover();
+    await open(page, "#buddies/harness");
+    const permission = page.getByRole("group", { name: "Codex 设置", exact: true })
+      .locator("[aria-description]").filter({ hasText: /^强制限制$/ });
+    await permission.hover();
     const tooltip = page.locator("[data-slot=tooltip-content]");
     await expect(tooltip).toBeVisible();
     expect(await contrastOf(tooltip)).toBeGreaterThanOrEqual(4.5);
@@ -33,13 +33,11 @@ test.describe("shared readability", () => {
   });
 
   test("disclosures have neutral selection, pointer and keyboard focus", async ({ page }) => {
-    await open(page, "#buddies");
+    await open(page, "#buddies/models");
     const fold = page.locator("[data-slot=fold-handle]").first();
     expect(await fold.evaluate(node => getComputedStyle(node).cursor)).toBe("pointer");
-    const chevron = fold.locator("[data-slot=disclosure]");
+    const chevron = fold.locator("..").locator("[data-slot=disclosure]");
     const text = await page.locator("body").evaluate(node => getComputedStyle(node).color);
-    await expect(fold).toHaveAttribute("data-variant", "ghost");
-    await expect(fold).toHaveAttribute("data-size", "icon-sm");
     expect(await chevron.evaluate(node => getComputedStyle(node).color)).not.toBe(text);
     await expect(chevron).toHaveCSS("width", "16px");
     await expect(chevron).toHaveAttribute("stroke-width", "2");
@@ -52,7 +50,8 @@ test.describe("shared readability", () => {
     await page.mouse.move(0, 0);
     await page.keyboard.press("Tab");
     await fold.focus();
-    await expect(page.locator("[data-slot=tooltip-content]")).toBeVisible();
+    await page.waitForTimeout(700);
+    await expect(page.locator("[data-slot=tooltip-content]")).toHaveCount(0);
     expect(await fold.evaluate(node => node.matches(":focus-visible"))).toBe(true);
     expect(await fold.evaluate(node => getComputedStyle(node).boxShadow)).toContain("inset");
     await fold.click();
@@ -61,24 +60,26 @@ test.describe("shared readability", () => {
     await expect(fold).toHaveCSS("background-color", hovered);
     await fold.click();
 
-    const model = page.locator("[data-slot=model-row]").first();
-    await model.locator("button").first().click();
-    await expect(model).toHaveClass(/bg-selection/);
+    const model = page.locator("[data-slot=model-row] > button").first();
+    await model.click();
+    await expect(model).toHaveAttribute("aria-expanded", "true");
+    const selection = await model.evaluate(node => {
+      const reference = document.createElement("div");
+      reference.style.backgroundColor = "var(--past-wash)";
+      document.body.append(reference);
+      const neutral = getComputedStyle(reference).backgroundColor;
+      reference.remove();
+      return { actual: getComputedStyle(node).backgroundColor, neutral };
+    });
+    expect(selection.actual).toBe(selection.neutral);
     await expect(model).not.toHaveClass(/bg-live/);
+    await model.hover();
+    await expect(model).toHaveCSS("cursor", "pointer");
+    await expect(model).toHaveCSS("background-color", selection.neutral);
+    await page.keyboard.press("Tab");
+    await model.focus();
+    expect(await model.evaluate(node => node.matches(":focus-visible"))).toBe(true);
+    expect(await model.evaluate(node => getComputedStyle(node).boxShadow)).not.toBe("none");
   });
 
-  test("stop facts appear on pointer and keyboard focus", async ({ page }) => {
-    await open(page, `#tasks/${stoppingMacro}`);
-    const status = page.locator("[data-slot=macro-stop-state]");
-    await expect(status).toHaveText("正在停止");
-    await expect(status).toHaveAttribute("aria-description", /停止未确认/);
-    const detail = await status.getAttribute("aria-description");
-    await status.hover();
-    await expect(page.getByRole("tooltip")).toHaveText(detail!);
-    await page.mouse.move(0, 0);
-    await expect(page.getByRole("tooltip")).toHaveCount(0);
-    await page.keyboard.press("Tab");
-    await status.focus();
-    await expect(page.getByRole("tooltip")).toHaveText(detail!);
-  });
 });

@@ -31,21 +31,21 @@ class LocalPathTests(unittest.TestCase):
                 ):
                     for value in accepted:
                         with self.subTest(platform=flavor.__name__, value=value):
-                            self.assertEqual(schemas._canonical_cwd(value), canonical)
+                            self.assertEqual(schemas.canonical_cwd(value), canonical)
                             realpath.assert_called_with(value)
                     realpath.reset_mock()
                     for value in (*rejected, None, 123):
                         with self.subTest(platform=flavor.__name__, value=value), self.assertRaises(BoardError):
-                            schemas._canonical_cwd(value)
+                            schemas.canonical_cwd(value)
                     realpath.assert_not_called()
 
     def test_native_cwd_still_requires_an_existing_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            self.assertEqual(schemas._canonical_cwd(str(directory)), str(directory.resolve()))
+            self.assertEqual(schemas.canonical_cwd(str(directory)), str(directory.resolve()))
             file = directory / "file"
             file.touch()
             for value in (file, directory / "missing"):
                 with self.subTest(value=value), self.assertRaises(BoardError) as caught:
-                    schemas._canonical_cwd(str(value))
+                    schemas.canonical_cwd(str(value))
                 self.assertEqual(caught.exception.message, "cwd must be an existing directory")

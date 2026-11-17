@@ -32,6 +32,10 @@ from hey_my_buddy.protocol.run_identity import RunIdentity
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
+POSIX_IDENTITY = {"pid": 1, "startedAt": 123, "jobName": None,
+                  "bootId": "linux:00000000-0000-4000-8000-000000000001"}
+
+
 class ConnectionEvents:
     def __init__(self):
         self.events = queue.Queue()
@@ -118,12 +122,14 @@ class ExecutionObservationTests(unittest.TestCase):
     def monitor(scheduler, claim, handle, identity=None):
         scheduler._observed[claim["attempt"]["attemptId"]] = _ExecutionObservation(
             claim["task"]["taskId"], scheduler._condition)
+        if isinstance(handle, Mock) and identity is not None:
+            handle.process = None  # This fixture supplies recovery observations.
         scheduler._monitor(claim, handle, identity)
 
     @contextmanager
     def observing(self, scheduler, claim, location, client, *, endpoint_reads=None):
         self.start_connections(scheduler)
-        identity = {"pid": 1}
+        identity = POSIX_IDENTITY
         attempt_id = claim["attempt"]["attemptId"]
         waits = queue.Queue()
         original_wait = threading.Condition.wait_for
@@ -152,8 +158,8 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler._condition.wait_for = lambda _predicate, timeout=None: scheduler._stopping.set()
             with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint", return_value=None), \
                     patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="alive"), \
-                    patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_group") as kill:
-                self.monitor(scheduler, claim, location, {"pid": 1})
+                    patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_session") as kill:
+                self.monitor(scheduler, claim, location, POSIX_IDENTITY)
             store.execution_connection.assert_called_once_with("attempt", connected=False)
             self.assertEqual(store.record_execution_issue.call_args.args[2].code, "EXECUTION_UNKNOWN")
             store.record_execution_deadline.assert_not_called()
@@ -172,13 +178,74 @@ class ExecutionObservationTests(unittest.TestCase):
             client.stop.side_effect = BoardError("LIVE_UNAVAILABLE", "frozen endpoint")
             with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint", return_value=client), \
                     patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="alive"), \
-                    patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_group",
-                          side_effect=lambda _identity: scheduler._stopping.set()) as kill:
-                self.monitor(scheduler, claim, location, {"pid": 1})
-            kill.assert_called_once_with({"pid": 1})
+                    patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_session",
+                          side_effect=lambda _identity, **kw: scheduler._stopping.set()) as kill:
+                self.monitor(scheduler, claim, location, POSIX_IDENTITY)
+            self.assertEqual(kill.call_count, 1)
+            self.assertEqual(kill.call_args.args, (POSIX_IDENTITY,))
+            self.assertIsNotNone(kill.call_args.kwargs["members"])
             client.connect.assert_called_once()
             self.live_registry.unbind.assert_called_once_with("attempt", client)
             store.recover_executions.assert_not_called()
+
+    def test_owned_observer_scans_once_per_wake_and_reuses_it_for_recovery(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.task_get.return_value = {"task": {"cancelRequested": False}}
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
+            claim, location = self.recovered(root)
+            handle = SimpleNamespace(**location.__dict__, process=Mock(), _members=Mock(),
+                observe=Mock(return_value=(None, "alive")), budget_path=location.budget_path)
+            scheduler._condition.wait_for = lambda *_args, **_kw: scheduler._stopping.set()
+            with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint", return_value=None), \
+                 patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity") as inspect:
+                self.monitor(scheduler, claim, handle, POSIX_IDENTITY)
+            handle.observe.assert_called_once_with()
+            inspect.assert_not_called()
+            store.recover_executions.assert_not_called()
+
+    def test_finalizing_without_connection_recovers_after_alive_then_gone_without_issue(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.task_get.return_value = {"task": {"attemptState": "finalizing", "cancelRequested": False}}
+            store.execution_finished.return_value = True
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
+            claim, location = self.recovered(root)
+            handle = SimpleNamespace(**location.__dict__, process=Mock(), _members=Mock(),
+                observe=Mock(side_effect=[(0, "alive"), (0, "gone")]), budget_path=location.budget_path)
+            scheduler._handles["attempt"] = (handle, POSIX_IDENTITY)
+            scheduler._condition.wait_for = Mock(return_value=True)
+            with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint") as read:
+                self.monitor(scheduler, claim, handle, POSIX_IDENTITY)
+            self.assertEqual(handle.observe.call_count, 2)
+            store.record_execution_issue.assert_not_called()
+            store.recover_executions.assert_called_once_with(
+                "attempt", process_identity=POSIX_IDENTITY, stopped_evidence={"kind": "identity-absent"})
+            self.assertNotIn("attempt", scheduler._handles)
+            read.assert_not_called()
+            self.live_registry.bind.assert_not_called()
+
+    def test_finalizing_without_connection_records_unknown_shutdown_issue(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.task_get.return_value = {"task": {"attemptState": "finalizing", "cancelRequested": False}}
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
+            claim, location = self.recovered(root)
+            handle = SimpleNamespace(**location.__dict__, process=Mock(), _members=Mock(),
+                observe=Mock(return_value=(0, "unknown")), budget_path=location.budget_path)
+            scheduler._handles["attempt"] = (handle, POSIX_IDENTITY)
+            scheduler._condition.wait_for = lambda *_args, **_kw: scheduler._stopping.set()
+            with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint") as read:
+                self.monitor(scheduler, claim, handle, POSIX_IDENTITY)
+            handle.observe.assert_called_once_with()
+            store.record_execution_issue.assert_called_once()
+            attempt_id, stage, error = store.record_execution_issue.call_args.args
+            self.assertEqual((attempt_id, stage, error.code, error.message), (
+                "attempt", "shutdown", "EXECUTION_UNKNOWN", "Execution shutdown cannot be verified"))
+            store.recover_executions.assert_not_called()
+            self.assertIn("attempt", scheduler._handles)
+            read.assert_not_called()
+            self.live_registry.bind.assert_not_called()
 
     def test_unknown_process_identity_prevents_connection_and_signalling_after_deadline(self):
         with tempfile.TemporaryDirectory() as root:
@@ -192,8 +259,8 @@ class ExecutionObservationTests(unittest.TestCase):
             with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint") as read, \
                     patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="unknown"), \
                     patch("hey_my_buddy.protocol.process_identity.inspect_process_identity", return_value="unknown"), \
-                    patch("hey_my_buddy.protocol.process_identity._SystemSource.signal_group") as send:
-                self.monitor(scheduler, claim, location, {"pid": 1})
+                    patch("hey_my_buddy.protocol.process_identity._SystemSource.signal_process") as send:
+                self.monitor(scheduler, claim, location, POSIX_IDENTITY)
             read.assert_not_called()
             send.assert_not_called()
             store.recover_executions.assert_not_called()
@@ -229,9 +296,8 @@ class ExecutionObservationTests(unittest.TestCase):
     def test_failed_parent_capture_is_closed_by_a_verified_child_report(self):
         store = Mock()
         scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
-        handle = Mock(pid=123, process_started_at=456, pgid=123, job=None)
-        identity = {"bootId": "test-boot", "pid": 123, "startedAt": 456,
-                    "processGroupId": 123, "jobName": None}
+        handle = Mock(pid=123, process_started_at=456, session_id=123, job=None)
+        identity = {"bootId": "test-boot", "pid": 123, "startedAt": 456, "jobName": None}
         scheduler._handles["attempt-1"] = (handle, None)
         with patch("hey_my_buddy.blackboard.service.execution_scheduler.boot_id", return_value="test-boot"):
             self.assertIsNone(scheduler.verify_identity("attempt-1", {**identity, "startedAt": 111}, None))
@@ -243,12 +309,12 @@ class ExecutionObservationTests(unittest.TestCase):
         store.release_execution.assert_not_called()
         handle.terminate.assert_not_called()
 
-    def test_missing_identity_uses_reaped_creator_and_empty_group(self):
+    def test_missing_identity_uses_confirmed_creator_stop(self):
         store = Mock()
         scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
         handle = Mock()
-        handle.process.poll.return_value = 1
-        handle.group_alive.return_value = False
+        handle.poll.return_value = 1
+        handle.shutdown_confirmed.return_value = True
         scheduler._handles["attempt-1"] = (handle, None)
         store.task_get.return_value = {"task": {"selectedAttempt": {
             "attemptId": "attempt-1", "executionState": "finished"}}}
@@ -268,11 +334,11 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             scheduler.TICK_SECONDS = 0
             handle = Mock()
-            handle.process.poll.return_value = 1
+            handle.poll.return_value = 1
             handle.execution_directory = Path(root)
             handle.budget_path = Path(root) / "execution-budget.json"
             claim = {"attempt": {"attemptId": "attempt-1"}, "task": {"taskId": "task-1"}}
-            identity = {"pid": 1}
+            identity = POSIX_IDENTITY
             with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint",
                        return_value=None), patch(
                        "hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity",
@@ -294,7 +360,7 @@ class ExecutionObservationTests(unittest.TestCase):
             client = self.client()
             client.connection_observation.close()
             handle = Mock()
-            handle.process.poll.return_value = None
+            handle.poll.return_value = None
             handle.execution_directory = Path(root)
             handle.role_run_identity = Mock()
             handle.budget_path = Path(root) / "execution-budget.json"
@@ -303,10 +369,10 @@ class ExecutionObservationTests(unittest.TestCase):
                        return_value=client), patch(
                        "hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity",
                        side_effect=["alive", "identity-absent"]) as inspect:
-                self.monitor(scheduler, claim, handle, {"pid": 1})
+                self.monitor(scheduler, claim, handle, POSIX_IDENTITY)
             self.assertEqual(inspect.call_count, 2)
             store.recover_executions.assert_called_once_with(
-                "attempt-1", process_identity={"pid": 1},
+                "attempt-1", process_identity=POSIX_IDENTITY,
                 stopped_evidence={"kind": "identity-absent"})
             handle.signal_group.assert_not_called()
             self.assertEqual(self.live_registry.unbind.call_count, 1)
@@ -315,11 +381,10 @@ class ExecutionObservationTests(unittest.TestCase):
         service = Mock()
         scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
         handle = Mock()
-        captured = {"bootId": "test-boot", "pid": 1, "startedAt": 11,
-                    "processGroupId": 1, "jobName": None}
+        captured = {"bootId": "test-boot", "pid": 1, "startedAt": 11, "jobName": None}
         with scheduler._lock:
             scheduler._handles["owned"] = (handle, captured)
-        report = {**captured, "pid": 2, "processGroupId": 2}
+        report = {**captured, "pid": 2}
         self.assertIsNone(scheduler.verify_identity("owned", report, None))
         self.assertEqual(scheduler.verify_identity("owned", captured, None), captured)
         with patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity",
@@ -459,7 +524,7 @@ class ExecutionObservationTests(unittest.TestCase):
             service = Mock(store=store)
             scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             handle = Mock()
-            handle.process.poll.return_value = None
+            handle.poll.return_value = None
             handle.execution_directory = Path(root)
             handle.budget_path = Path(root) / "budget.json"
             clients = [self.client(), self.client()]
@@ -472,7 +537,7 @@ class ExecutionObservationTests(unittest.TestCase):
                        side_effect=clients), patch(
                        "hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity",
                        return_value="alive"):
-                self.monitor(scheduler, claim, handle, {"pid": 1})
+                self.monitor(scheduler, claim, handle, POSIX_IDENTITY)
             for client in clients:
                 client.stop.assert_called_once_with(initiator="service", grace_deadline=None, force=True)
 
@@ -491,14 +556,14 @@ class ExecutionObservationTests(unittest.TestCase):
                        "hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity",
                        side_effect=["alive", "identity-absent"]):
                 self.monitor(scheduler, {"attempt": {"attemptId": "attempt"}, "task": {"taskId": "task"}},
-                                   handle, {"pid": 1})
+                                   handle, POSIX_IDENTITY)
             store.record_execution_issue.assert_called_once()
             args = store.record_execution_issue.call_args.args
             self.assertEqual(args[:2], ("attempt", "connection"))
             self.assertEqual(args[2].code, "EXECUTION_UNKNOWN")
             store.record_execution_deadline.assert_not_called()
             store.recover_executions.assert_called_once_with(
-                "attempt", process_identity={"pid": 1}, stopped_evidence={"kind": "identity-absent"})
+                "attempt", process_identity=POSIX_IDENTITY, stopped_evidence={"kind": "identity-absent"})
             self.assertNotIn("attempt", scheduler._handles)
 
     def test_force_age_comes_from_persisted_request(self):
@@ -559,22 +624,26 @@ class ExecutionObservationTests(unittest.TestCase):
             pairs = [self.recovered(Path(root) / name, task_id=name, attempt_id=name) for name in ('a', 'b')]
             clients = {name: self.client() for name in ('a', 'b')}
             waits = queue.Queue()
+            other_waits = queue.Queue()
             original_wait = threading.Condition.wait_for
             def wait(condition, predicate, timeout=None):
                 name = threading.current_thread().name
                 if name in ('execution-a', 'execution-b'):
                     waits.put((name, timeout))
+                    if name == 'execution-b':
+                        other_waits.put(timeout)
                 return original_wait(condition, predicate, timeout)
             with patch('hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity', return_value='alive'), \
                  patch('hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint',
                        side_effect=lambda directory, *_args, **_kwargs: clients[directory.name]), \
                  patch.object(threading.Condition, 'wait_for', autospec=True, side_effect=wait):
                 for claim, location in pairs:
-                    scheduler._handles[claim['attempt']['attemptId']] = (location, {'pid': 1})
-                    scheduler._start_observer(claim, location, {'pid': 1})
+                    scheduler._handles[claim['attempt']['attemptId']] = (location, POSIX_IDENTITY)
+                    scheduler._start_observer(claim, location, POSIX_IDENTITY)
                 try:
                     self.assertEqual({waits.get(timeout=2), waits.get(timeout=2)},
                                      {('execution-a', None), ('execution-b', None)})
+                    self.assertIsNone(other_waits.get(timeout=2))
                     other_reads = store.task_get.call_args_list.count(call({'runId': 'b'}))
                     scheduler.wake(frozenset({'a'}))
                     self.assertEqual(waits.get(timeout=2), ('execution-a', None))
@@ -585,8 +654,10 @@ class ExecutionObservationTests(unittest.TestCase):
                     self.assertEqual(name, 'execution-a')
                     self.assertGreater(timeout, 0)
                     self.assertEqual(store.task_get.call_args_list.count(call({'runId': 'b'})), other_reads)
+                    # A may wait again after its reconnect timer; B must not.
                     with self.assertRaises(queue.Empty):
-                        waits.get(timeout=.03)
+                        other_waits.get(timeout=.03)
+                    self.assertEqual(store.task_get.call_args_list.count(call({'runId': 'b'})), other_reads)
                 finally:
                     scheduler.stop()
 
@@ -667,7 +738,7 @@ class ExecutionObservationTests(unittest.TestCase):
             claim, location = self.recovered(root)
             claim["sessionRecordPath"] = None
             service.admit_execution.return_value = {"claim": claim}
-            handle = SimpleNamespace(**location.__dict__, process_identity={"pid": 1},
+            handle = SimpleNamespace(**location.__dict__, process_identity=POSIX_IDENTITY,
                                      budget_path=location.budget_path, process=None)
             client = self.client()
             creating, release, delivered = threading.Event(), threading.Event(), threading.Event()
@@ -704,7 +775,7 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             claim, _location = self.recovered(root)
             handle = Mock(budget_path=Path(root) / "budget.json")
-            handle.process.poll.return_value = None
+            handle.poll.return_value = None
             scheduler._handles["attempt"] = (handle, None)
             scheduler._start_observer(claim, handle, None)
             try:
@@ -725,7 +796,7 @@ class ExecutionObservationTests(unittest.TestCase):
             claim["sessionRecordPath"] = None
             service.admit_execution.return_value = {"claim": claim}
             store.execution_observations.return_value = [claim]
-            handle = Mock(process_identity={"pid": 1})
+            handle = Mock(process_identity=POSIX_IDENTITY)
             with patch("hey_my_buddy.blackboard.service.execution_scheduler.launch_execution", return_value=handle), \
                  patch("hey_my_buddy.blackboard.service.execution_scheduler.threading.Thread.start",
                        side_effect=RuntimeError("thread creation failed")):
@@ -733,14 +804,14 @@ class ExecutionObservationTests(unittest.TestCase):
                     scheduler._admit_available()
             self.assertEqual(scheduler._observed, {})
             self.assertEqual(scheduler._threads, set())
-            self.assertEqual(scheduler._handles, {"attempt": (handle, {"pid": 1})})
+            self.assertEqual(scheduler._handles, {"attempt": (handle, POSIX_IDENTITY)})
             scheduler.send_pending_stops()
             resumed = threading.Event()
             with patch.object(scheduler, "_observe", side_effect=lambda *_args: resumed.set()) as observe:
                 scheduler._resume_executions()
                 self.assertTrue(resumed.wait(2))
                 scheduler.stop()
-            observe.assert_called_once_with(claim, handle, {"pid": 1})
+            observe.assert_called_once_with(claim, handle, POSIX_IDENTITY)
             store.release_execution.assert_not_called()
             store.recover_executions.assert_not_called()
 
@@ -776,14 +847,14 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             claim, location = self.recovered(root)
             client = self.client()
-            with self.observing(scheduler, claim, location, client) as waits:
+            with patch('hey_my_buddy.blackboard.service.execution_scheduler.time.monotonic', return_value=100.0), \
+                 self.observing(scheduler, claim, location, client) as waits:
                 self.assertIsNone(waits.get(timeout=2))
                 fsync_json(location.budget_path, {"binding": location.execution_binding,
-                                                "deadline": time.monotonic() + 60})
+                                                "deadline": 160.0})
                 scheduler.wake()
                 timeout = waits.get(timeout=2)
-                self.assertGreater(timeout, 58)
-                self.assertLessEqual(timeout, 60)
+                self.assertEqual(timeout, 60.0)
                 client.connect.assert_called_once()
                 client.stop.assert_not_called()
 
@@ -811,8 +882,8 @@ class ExecutionObservationTests(unittest.TestCase):
                  patch.object(scheduler, "_deadline", return_value=102.0), \
                  patch.object(scheduler, "_timestamp", side_effect=lambda value: 102.0 if value else None), \
                  patch.object(scheduler._condition, "wait_for", side_effect=advance), \
-                 patch.object(scheduler, "_force_if_required", side_effect=lambda *_: killed_at.append(clock[0])):
-                self.monitor(scheduler, claim, location, {"pid": 1})
+                 patch.object(scheduler, "_force_if_required", side_effect=lambda *_, **kw: killed_at.append(clock[0])):
+                self.monitor(scheduler, claim, location, POSIX_IDENTITY)
             self.assertEqual(waits[:2], [2.0, 8.0])
             self.assertAlmostEqual(waits[2], .1)
             self.assertEqual(killed_at, [110.0])
@@ -834,15 +905,17 @@ class ExecutionObservationTests(unittest.TestCase):
                 client = self.client()
                 identity = {"pid": 1, "startedAt": 123, "jobName": "Local\\HeyMyBuddy-" + str(uuid.uuid4())}
                 if not windows:
-                    identity.update(bootId="linux:" + str(uuid.uuid4()), processGroupId=1, jobName=None)
+                    identity.update(bootId="linux:" + str(uuid.uuid4()), jobName=None)
                 source = Mock()
+                source.boot_id.return_value = identity.get("bootId")
                 job = Mock()
                 job.active.return_value = 0
                 source.started_at.return_value = None
                 source.open_job.side_effect = lambda _name: contextlib.nullcontext(job)
-                signal = job.terminate if windows else source.signal_group
+                members = Mock()
+                signal = job.terminate if windows else members.signal
                 signal.side_effect = [OSError("signal failed"), None] if first == "signal-error" else None
-                observation = "_inspect_job_identity" if windows else "inspect_process_identity"
+                observation = "_inspect_job_identity" if windows else "_inspect_posix"
                 waits = []
                 def advance(_predicate, timeout=None):
                     waits.append(timeout)
@@ -857,16 +930,15 @@ class ExecutionObservationTests(unittest.TestCase):
                      patch.object(scheduler._condition, "wait_for", side_effect=advance), \
                      patch.object(process_identity.signal, "SIGKILL", 9, create=True), \
                      patch("hey_my_buddy.protocol.process_identity._SystemSource", return_value=source), \
+                     patch("hey_my_buddy.protocol.process_identity._posix_members", return_value=members), \
                      patch("hey_my_buddy.protocol.process_identity." + observation,
                            side_effect=["unknown", "alive"] if first == "unknown" else ["alive", "alive"]):
                     self.monitor(scheduler, claim, location, identity)
                 self.assertAlmostEqual(waits[0], .1)
                 self.assertAlmostEqual(waits[1], .2)
-                self.assertEqual(signal.call_count, 1 if first == "unknown" else 2)
+                self.assertEqual(signal.call_count, 1 if windows and first == "unknown" else 2)
                 store.recover_executions.assert_not_called()
                 store.release_execution.assert_not_called()
-                if first == "signal-error" and not windows:
-                    self.assertEqual(store.record_execution_issue.call_args.args[1], "force-stop")
 
     def test_budget_is_read_on_attachment_and_drives_force_without_a_notification(self):
         from hey_my_buddy.protocol.execution import fsync_json
@@ -892,7 +964,7 @@ class ExecutionObservationTests(unittest.TestCase):
                  patch("hey_my_buddy.blackboard.service.execution_scheduler.time.monotonic", side_effect=lambda: clock[0]), \
                  patch.object(scheduler, "_timestamp", side_effect=lambda value: 104.0 if value else None), \
                  patch.object(scheduler._condition, "wait_for", side_effect=advance):
-                self.monitor(scheduler, claim, location, {"pid": 1})
+                self.monitor(scheduler, claim, location, POSIX_IDENTITY)
             self.assertEqual(waits, [4.0, 8.0])
             client.stop.assert_called_once_with(initiator="deadline", grace_deadline=None, force=True)
             store.record_execution_deadline.assert_called_once_with("attempt", "deadline")
@@ -919,7 +991,7 @@ class ExecutionObservationTests(unittest.TestCase):
                  patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="alive"), \
                  patch.object(scheduler, "_deadline", side_effect=lambda _: time.monotonic() + 60), \
                  patch.object(scheduler._condition, "wait_for", side_effect=stop_wait):
-                self.monitor(scheduler, claim, location, {"pid": 1})
+                self.monitor(scheduler, claim, location, POSIX_IDENTITY)
             self.assertEqual(store.task_get.call_count, 2)
             self.assertEqual(len(waits), 1)
             self.assertGreater(waits[0], 58)
@@ -945,8 +1017,8 @@ class ExecutionObservationTests(unittest.TestCase):
                      patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity",
                            side_effect=["alive", remaining]), \
                      patch.object(scheduler._condition, "wait_for", side_effect=stop_at_backoff), \
-                     patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_group") as kill:
-                    self.monitor(scheduler, claim, location, {"pid": 1})
+                     patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_session") as kill:
+                    self.monitor(scheduler, claim, location, POSIX_IDENTITY)
                 self.assertEqual(len(waits), 1)
                 self.assertGreater(waits[0], 0)
                 store.recover_executions.assert_not_called()
@@ -1106,7 +1178,7 @@ class ExecutionObservationTests(unittest.TestCase):
                  patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint",
                        side_effect=PermissionError("unreadable material")):
                 scheduler.send_pending_stops()
-                self.monitor(scheduler, claim, location, {"pid": 1})
+                self.monitor(scheduler, claim, location, POSIX_IDENTITY)
             store.record_execution_deadline.assert_called_once_with("attempt", "service-stop")
             store.execution_connection.assert_called_once_with("attempt", connected=False)
             store.recover_executions.assert_not_called()
@@ -1225,8 +1297,8 @@ class RootCreationTeardownTests(BoardTestCase):
                 self.assertEqual(scheduler._handles, {})
                 # The suspended root is stopped on the service-held Job handle
                 # and observed empty; no resume or duplication ever happens.
-                self.assertEqual(api.events, ["create", ("assign", 77, 42), ("terminate", 77),
-                                              ("active", 77), ("active", 77), ("close", 77)])
+                self.assertEqual(api.events, ["create", ("assign", 77, 42), ("active", 77), ("active", 77),
+                                              ("terminate", 77), ("active", 77), ("close", 77)])
                 self.assertEqual(process.returncode, 1)
                 self.assertFalse((board.directory / "attempts" / task["runId"] / attempt_id
                                   / "spawn.marker").exists())
@@ -1240,8 +1312,8 @@ class RootCreationTeardownTests(BoardTestCase):
         attempt_id = claim["attempt"]["attemptId"]
         self.assertEqual(scheduler._handles, {})
         self.assertEqual(api.events, ["create", ("assign", 77, 42), ("resume", 42),
-                                      ("duplicate", 321, 77), ("terminate", 77),
-                                      ("active", 77), ("active", 77), ("close", 77)])
+                                      ("duplicate", 321, 77), ("active", 77), ("active", 77),
+                                      ("terminate", 77), ("active", 77), ("close", 77)])
         self.assertEqual(process.returncode, 1)
         self.assertTrue((board.directory / "attempts" / task["runId"] / attempt_id
                          / "spawn.marker").is_file())
@@ -1283,7 +1355,7 @@ class SessionRecordGroupingTests(WorkflowTestCase):
             with self.subTest(named=named):
                 root = self.submit(board, request_id=f"session-group-{named}", kind="worktree",
                                    cwd=str(self.workdir(f"session-group-{named}")),
-                                   **({"macroTask": {"title": "Session group"}} if named else {}))
+                                   **({"create_macro": {"title": "Session group", 'goal': "Session group"}} if named else {}))
                 claim = self.claim(board, run_id=root["runId"],
                                    claim_request_id=f"session-group-claim-{named}")["claim"]
                 group = console_identity(board.store, claim["task"]["taskId"],
@@ -1294,11 +1366,15 @@ class SessionRecordGroupingTests(WorkflowTestCase):
 
                 self.finish_turn(board, {"claim": claim}, disposition="assistance")
                 view = board.call("workflow_get", {"runId": root["runId"]})
+                helper_dir = self.workdir(f"session-child-{named}")
+                # Each existing helper represents a separate checkout, even when
+                # the private test root is nested beneath the source repository.
+                (helper_dir / ".git").mkdir()
                 decision = self.decide(board, view, view["activeRequest"]["requestId"],
-                                       command_id=f"session-helper-{named}", helpers=[{
-                                           "requestId": f"session-child-{named}", "task": "assist",
-                                           "cwd": str(self.workdir(f"session-child-{named}")),
-                                           "executionWorkspace": {"kind": "existing", "access": "write"}}])
+                                        helpers=[{
+                                           "title": f"session-child-{named}", "task": "assist",
+                                           "cwd": str(helper_dir),
+                                           "workspace": {"kind": "existing", "access": "write"}}])
                 child_id = decision["children"][0]["taskId"]
                 helper = self.claim(board, run_id=child_id,
                                     claim_request_id=f"session-child-claim-{named}")["claim"]

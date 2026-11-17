@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from hey_my_buddy.console.console_sessions import MAX_ENTRIES, MAX_SESSIONS, ENTRY_SECONDS
 from hey_my_buddy.errors import BoardError
 from console.test_console import Browser, ConsoleTestCase, http_call
-from support import _child_environment, wait_for
+from support import BoardClient, _child_environment, wait_for
 from private_acl import assert_private_path
 
 
@@ -122,7 +122,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertNotIn(snapshot['csrfToken'], data)
         assert_private_path(self, session_file, 0o600)
         board.console.close()
-        board.console = Console(board.store, board.service, port=browser.port)
+        board.console = Console(board.store, board.service, runtime_identity=board.control["runtime"], port=browser.port)
         board.console.start(issue_ticket=False)
         restored = browser.bootstrap()
         self.assertEqual(snapshot['consoleSession']['id'], restored['consoleSession']['id'])
@@ -135,7 +135,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         board = self.board()
         _, browser = self.open_console(board)
         other = self.board()
-        occupied = Console(other.store, other.service, port=browser.port)
+        occupied = Console(other.store, other.service, runtime_identity=other.control["runtime"], port=browser.port)
         with self.assertRaises(BoardError) as caught:
             occupied.start()
         self.assertEqual(caught.exception.code, 'CONSOLE_PORT_IN_USE')
@@ -158,13 +158,13 @@ class ConsoleSessionTests(ConsoleTestCase):
             reserved.bind(('127.0.0.1',0))
             port=reserved.getsockname()[1]
         with mock.patch.dict(os.environ, {'HMB_CONSOLE_PORT':str(port)}):
-            board.console=Console(board.store,board.service)
+            board.console=Console(board.store,board.service, runtime_identity=board.control["runtime"])
             board.console.start(issue_ticket=False)
             self.assertEqual(board.console.port,port)
             board.console.close()
         clean={k:v for k,v in os.environ.items() if k!='HMB_CONSOLE_PORT'}
         with mock.patch.dict(os.environ,clean,clear=True):
-            board.console=Console(board.store,board.service)
+            board.console=Console(board.store,board.service, runtime_identity=board.control["runtime"])
             board.console.start(issue_ticket=False)
             self.assertEqual(board.console.origin,f'http://127.0.0.1:{port}')
             assert_private_path(self, board.directory / 'console-settings.json', 0o600)
@@ -234,7 +234,7 @@ class ConsoleSessionTests(ConsoleTestCase):
 class ConsoleForegroundTests(ConsoleTestCase):
     def test_real_cli_interrupt_closes_only_its_console_and_preserves_work(self):
         with self.daemon():
-            code, before = self.cli('ping')
+            code, before = self.cli('health')
             self.assertEqual(code, 0)
             task = self.submit_execution(**{
                 'requestId': 'console-wait-owned-task', 'task': 'outlive the browser',
@@ -290,12 +290,12 @@ class ConsoleForegroundTests(ConsoleTestCase):
                 self.assertEqual(result['wait']['status'], 'interrupted')
                 self.assertTrue(result['wait']['close']['closed'])
                 self.assertEqual(result['consoleId'], result['wait']['close']['consoleId'])
-                code, after = self.cli('ping')
+                code, after = self.cli('health')
                 self.assertEqual(code, 0)
                 self.assertEqual(after['serviceId'], before['serviceId'])
-                code, viewed = self.cli('status', json.dumps({'runId': task['runId']}))
+                code, viewed = self.cli('get', json.dumps({'runId': task['runId']}))
                 self.assertEqual(code, 0)
-                self.assertIn(viewed['state'], ('queued', 'running', 'completed'))
+                self.assertIn(viewed['task']['state'], ('queued', 'running', 'completed'))
                 self.assertFalse(self.cli('console', '{"action":"status"}')[1]['running'])
             finally:
                 if child.poll() is None:
@@ -303,5 +303,6 @@ class ConsoleForegroundTests(ConsoleTestCase):
                     child.communicate(timeout=10)
                 reader.join(5)
                 self.assertFalse(reader.is_alive(), 'CLI notice reader remained after child exit')
-                self.cli('execution-cancel', json.dumps({'runId': task['runId'], 'note': 'private test cleanup'}))
+                cancelled = BoardClient(self.directory).cancel(runId=task['runId'], note='private test cleanup')
+                self.assertIn(cancelled['state'], ('cancelling', 'cancelled'))
                 self.cli('await', json.dumps({'runId': task['runId'], 'waitSeconds': 15}))

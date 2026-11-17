@@ -18,7 +18,7 @@ names through the real root-turn tracker.
 """
 from __future__ import annotations
 import json
-from temporary import TemporaryDirectory
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -47,9 +47,21 @@ def update(session_id="session-1", call_id="call-1", name="read", kind="tool_cal
 
 class DshToolFactsTests(unittest.TestCase):
     def setUp(self):
-        private = TemporaryDirectory()
+        private = tempfile.TemporaryDirectory()
         self.addCleanup(private.cleanup)
         self.state_dir = Path(private.name) / "state"
+
+    def test_terminal_acp_status_sets_outcome_and_pending_stays_unknown(self):
+        for status, expected in (("completed", "success"), ("failed", "failure"),
+                                 ("in_progress", "unknown")):
+            with self.subTest(status=status):
+                collector = DshToolFacts(dict(BINDING), state_dir=self.state_dir)
+                collector.add_root("session-1")
+                collector.observe(update(name="read", status=status))
+                package = collector.finish(True)
+                call = list(read_tool_calls(package, state_dir=self.state_dir))[0]
+                self.assertEqual(call["outcome"], expected)
+                self.assertEqual(package["unsettledToolCalls"], int(status == "in_progress"))
 
     def test_known_names_classify_through_the_fixed_table_and_unknown_stay_other(self):
         for name, category in (("read", "read"), ("glob", "search"), ("bash", "execute"), ("write", "edit"), ("edit", "edit"), ("run-command", "other")):
@@ -183,11 +195,12 @@ class DshReceiptSeamTests(unittest.TestCase):
     """
 
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="dsh-receipt-attention-")
+        temporary = tempfile.TemporaryDirectory(prefix="dsh-receipt-attention-")
         self.addCleanup(temporary.cleanup)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64,
-                       "attentionPath": str(Path(temporary.name) / "absent-attention.json")}
+                       "attentionPath": str(Path(temporary.name) / "absent-attention.json"),
+                       "finishAcceptedPath": str(Path(temporary.name) / "finish-accepted.json")}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
         self.native = "mcp__buddy_x__hey_my_buddy_finish_turn"
 

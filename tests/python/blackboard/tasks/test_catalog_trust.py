@@ -562,23 +562,22 @@ class ExplicitCatalogTrustTests(BoardTestCase):
             self.assertEqual(alpha['high']['catalogStatus'], 'pending')
             self.assertEqual(alpha['high']['pendingSince'], self.clock.value)
 
-    def masked_retired_effort(self):
+    def retired_effort_after_health_round_trip(self):
         self.evaluation.record_catalog(reading(efforts=('high', 'low')))
         self.evaluation.record_catalog(reading(efforts=('high',)))
-        # Before this fix old health code could overwrite the retirement reason
-        # on every buddy. The last adopted native reading still proves that
-        # only high is legal, even when no row keeps the retirement reason.
+        # Health is independent of effort retirement; a health round trip
+        # cannot change which efforts the adopted reading lists.
         with self.board.store.db.write() as db:
-            db.execute("UPDATE buddies SET available=0,enabled=1,"
-                       "unavailable_code='harness.probe-failed',unavailable_params_json='{\"operation\":\"probe\"}',unavailable_content=NULL WHERE harness='dsh'")
+            db.execute("UPDATE buddies SET enabled=1 WHERE harness='dsh'")
+        self.fail_health_then_recover()
 
-    def test_health_mask_cannot_restore_a_retired_effort_on_unknown_read(self):
-        self.masked_retired_effort()
+    def test_health_round_trip_preserves_retired_effort_on_unknown_read(self):
+        self.retired_effort_after_health_round_trip()
         self.evaluation.record_catalog(reading(models=(), account_status='unknown'))
         self.assert_only_high_is_usable()
 
     def test_first_absence_and_pending_recovery_keep_only_last_legal_efforts(self):
-        self.masked_retired_effort()
+        self.retired_effort_after_health_round_trip()
         self.evaluation.record_catalog(reading(models=()))
         self.assert_only_high_is_usable(pending=True)
         first_absence = self.clock.value

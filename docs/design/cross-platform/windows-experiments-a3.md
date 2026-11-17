@@ -18,7 +18,7 @@ Python 显式安装为 `uv python install 3.12 --no-bin --no-registry`，安装�
 
 模型无关探针在 `tmp/windows-a3/probe.py`、`probe_v1.py`、`junction_probe.py`、`junction_probe_v1.py`。Job 创建额外直接检查 183 并读回 flags；分配、恢复、成员与计数沿用源码 `WindowsAPI`，身份、会话、句柄类型及最终名称使用显式 Win32 ctypes 签名。每个成功创建的后代自行报告真实 PID，再由观察者对指定根句柄调用 `IsProcessInJob`，没有以“当前某个 Job”的 flags 代替根成员关系。私有停止文件仅是本轮替身协议。
 
-远端原始子进程输出、逐项回执、探针及运行时安装日志已取回 `tmp/windows-a3/raw-results.zip`，376 项，SHA-256 为 `d7b5ce115e0e1537c9cdfd0acb9335a1fd1271877cee43244e45e2f11bc9d98a`；展开在 `tmp/windows-a3/remote-raw/`，CRC 检查无坏条目。包中没有源码克隆、venv、缓存或看板。收集、下载记录为 `11-collect.*`、`12-download.json`；`derived-summary.json` 是从原始输出提取并核对的索引，不替代原始记录。
+远端原始子进程输出、逐项回执、探针及运行时安装日志已取回 `tmp/windows-a3/raw-results.zip`，376 项，SHA-256 为 `d7b5ce115e0e1537c9cdfd0acb9335a1fd1271877cee43244e45e2f11bc9d98a`；展开在 `tmp/windows-a3/remote-raw/`，CRC 检查无坏条目。包中没有源码克隆、venv、缓存或黑板。收集、下载记录为 `11-collect.*`、`12-download.json`；`derived-summary.json` 是从原始输出提取并核对的索引，不替代原始记录。
 
 ## 全新根 Job 与真实 venv 后代矩阵
 
@@ -105,7 +105,7 @@ venv 主轮的残留身份为 PID 38188、FILETIME 134370574531894472，先前�
 
 ## 清理与未观察边界
 
-证据取回并核对摘要、CRC 后，远端按本轮可执行文件路径或命令行与实验根的关系枚举，输出 `RELATED PROCESSES BEFORE CLEANUP 0`；随后只对本轮工作根执行递归删除，返回 `WORK ROOT EXISTS False`，退出 0。新开独立 SSH 再核对工作根不存在且相关进程为 0。命令、退出码及 stdout/stderr 在 `13-cleanup.*`、`14-cleanup-verify.*`。没有启动或重启日常服务，没有接触日常看板、harness 配置和登录状态，没有更改系统设置、PATH、注册表、计划任务、Defender 或防火墙。
+证据取回并核对摘要、CRC 后，远端按本轮可执行文件路径或命令行与实验根的关系枚举，输出 `RELATED PROCESSES BEFORE CLEANUP 0`；随后只对本轮工作根执行递归删除，返回 `WORK ROOT EXISTS False`，退出 0。新开独立 SSH 再核对工作根不存在且相关进程为 0。命令、退出码及 stdout/stderr 在 `13-cleanup.*`、`14-cleanup-verify.*`。没有启动或重启日常服务，没有接触日常黑板、harness 配置和登录状态，没有更改系统设置、PATH、注册表、计划任务、Defender 或防火墙。
 
 桌面普通/管理员 PowerShell 交替、从 PowerShell/VS Code/Host shell 启动与关窗口、可见窗口、跨 Windows 会话、Defender 开启条件及新的 ACL bootstrap 均未观察，也不在本轮范围。后续由开发者在普通与管理员桌面分别运行同一探针，登记令牌与 sessionId，观察窗口与启动方退出后原身份/Job；若桌面和 SSH sessionId 不同，再相互按原 Local 名打开并回原会话核对成员。Defender 应在本来满足实时扫描条件的环境首尾读回状态，再执行另行安排的热路径，不用本轮结果代替。上述操作应各用新私有根、取回原始输出并清场；本轮没有通过重启、注销或改变安全设置取得这些条件。
 

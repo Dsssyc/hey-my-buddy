@@ -23,7 +23,7 @@ def read(command: list[str], environment: dict, *, entry: str | None = None) -> 
                         env=native_environment(environment, command=command, entry=entry),
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                         start_new_session=True, close_fds=True)
-    handle = ProcessHandle(child, stop_channel="stdin", own_group=True, log_paths={})
+    handle = ProcessHandle(child, stop_channel="stdin", log_paths={})
     try:
         connection = Connection(child, time.monotonic() + 8, threading.Event())
         connection.on_request = lambda message: connection.send({"id": message["id"], "error": {

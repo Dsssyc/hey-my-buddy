@@ -1,6 +1,7 @@
 """Authenticated policy changes cannot be forged by a Host."""
 
-from support import BoardTestCase
+from support import BoardTestCase, seed_buddy
+from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import schemas
 
@@ -16,7 +17,8 @@ class UserPolicyTests(BoardTestCase):
         self.board_.service.register_console_authority(self.session)
         with self.board_.store.db.write() as db:
             for buddy_id, available in [('live', 1), ('retired', 0)]:
-                db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,?,?,?)", (buddy_id, buddy_id, 'dsh', 'fixture', buddy_id, 'max', available, 1, '["decision"]'))
+                seed_buddy(db, buddy_id=buddy_id, harness='dsh', provider='fixture',
+                           model=buddy_id, effort='max', available=available, now=self.board_.store.now())
             db.execute("INSERT INTO router_buddies(position,buddy_id) VALUES(0,'retired')")
             db.execute("INSERT INTO evaluation_preferences VALUES('retired','pin','user intent')")
 
@@ -36,29 +38,105 @@ class UserPolicyTests(BoardTestCase):
 
     def test_host_cannot_publish_user_policy_or_replay_console_command(self):
         params = self.publication_params()
-        payload = self.payload(params, modelServiceNoteChanges=[{**LIVE_MODEL_SERVICE, 'text': 'human opinion'}])
+        payload = self.payload(params, buddySettings=[{'buddyId': 'live', 'enabled': False}])
         self.assert_denied('user_policy_publish', payload)
         self.assertTrue(self.user('user_policy_publish', payload)['published'])
         self.assert_denied('user_policy_publish', payload)
 
     def test_buddy_settings_patch_accepts_more_than_200_distinct_buddies(self):
         with self.board_.store.db.write() as db:
-            db.executemany(
-                "INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json)"
-                " VALUES(?,?,?,?,?,?,?,?,?)",
-                [(f'bulk-{index}', f'bulk-{index}', 'dsh', 'fixture', f'model-{index}', 'max', 1, 1, '[]')
-                 for index in range(205)])
+            for index in range(205):
+                seed_buddy(db, buddy_id=f'bulk-{index}', harness='dsh', provider='fixture',
+                           model=f'model-{index}', effort='max', now=self.board_.store.now())
         changes = [{'buddyId': f'bulk-{index}', 'enabled': False} for index in range(205)]
         published = self.user('user_policy_publish', self.payload({}, 'bulk-disable', buddySettings=changes))
         self.assertEqual(published['counts']['buddySettings'], 205)
 
+    def aliases(self):
+        with self.board_.store.db.read() as db:
+            return {row['buddy_id']: (row['alias'], row['enabled']) for row in
+                    db.execute('SELECT buddy_id,alias,enabled FROM buddies ORDER BY buddy_id')}
+
+    def test_alias_only_patch_trims_and_clears_without_changing_enablement(self):
+        self.user('user_policy_publish', self.payload({}, 'name-retired',
+                  buddySettings=[{'buddyId': 'retired', 'alias': '  阿尔法  '}]))
+        self.assertEqual(self.aliases()['retired'], ('阿尔法', 1))
+        self.user('user_policy_publish', self.payload({}, 'clear-retired',
+                  buddySettings=[{'buddyId': 'retired', 'alias': None}]))
+        self.assertEqual(self.aliases()['retired'], (None, 1))
+        self.user('user_policy_publish', self.payload({}, 'name-at-limit',
+                  buddySettings=[{'buddyId': 'live', 'alias': '字' * 64}]))
+        self.assertEqual(self.aliases()['live'], ('字' * 64, 1))
+        with self.assertRaises(BoardError) as caught:
+            self.user('user_policy_publish', self.payload({}, 'empty-setting',
+                      buddySettings=[{'buddyId': 'retired'}]))
+        self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+
+    def test_alias_batch_allows_atomic_swap(self):
+        self.user('user_policy_publish', self.payload({}, 'first-names', buddySettings=[
+            {'buddyId': 'live', 'alias': 'Alpha'}, {'buddyId': 'retired', 'alias': 'Beta'}]))
+        self.user('user_policy_publish', self.payload({}, 'swap-names', buddySettings=[
+            {'buddyId': 'live', 'alias': 'Beta'}, {'buddyId': 'retired', 'alias': 'Alpha'}]))
+        self.assertEqual(self.aliases(), {'live': ('Beta', 1), 'retired': ('Alpha', 1)})
+
+    def test_unicode_casefold_conflict_reports_the_other_buddy_and_rolls_back(self):
+        self.user('user_policy_publish', self.payload({}, 'first-name',
+                  buddySettings=[{'buddyId': 'retired', 'alias': 'Straße'}]))
+        with self.assertRaises(BoardError) as caught:
+            self.user('user_policy_publish', self.payload({}, 'conflicting-name', buddySettings=[
+                {'buddyId': 'live', 'enabled': False, 'alias': 'STRASSE'}]))
+        error = caught.exception
+        self.assertEqual(error.code, 'ALIAS_CONFLICT')
+        self.assertEqual(error.details, {
+            'buddyId': 'live', 'conflictingBuddyId': 'retired',
+            'reason': {'code': 'alias.conflict', 'params': {
+                'conflictingBuddy': {'harness': 'dsh', 'provider': 'fixture',
+                                     'model': 'retired', 'effort': 'max'}}}})
+        self.assertEqual(self.aliases(), {'live': (None, 1), 'retired': ('Straße', 1)})
+
+    def test_alias_batch_rejects_two_new_names_that_fold_together(self):
+        with self.assertRaises(BoardError) as caught:
+            self.user('user_policy_publish', self.payload({}, 'same-batch', buddySettings=[
+                {'buddyId': 'live', 'alias': 'Sigma'},
+                {'buddyId': 'retired', 'alias': 'SIGMA'}]))
+        self.assertEqual(caught.exception.code, 'ALIAS_CONFLICT')
+        self.assertEqual({caught.exception.details['buddyId'],
+                          caught.exception.details['conflictingBuddyId']}, {'live', 'retired'})
+        self.assertEqual(caught.exception.details['reason']['params'], {
+            'conflictingBuddy': {'harness': 'dsh', 'provider': 'fixture',
+                                'model': caught.exception.details['conflictingBuddyId'], 'effort': 'max'}})
+        self.assertEqual(self.aliases(), {'live': (None, 1), 'retired': (None, 1)})
+
+    def test_invalid_and_reserved_aliases_report_specific_reasons(self):
+        values = [
+            (42, 'ALIAS_INVALID', 'alias.invalid', 'type'),
+            ('  ', 'ALIAS_INVALID', 'alias.invalid', 'empty'),
+            ('a' * 65, 'ALIAS_INVALID', 'alias.invalid', 'length'),
+            ('a / b', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            ('a[b', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            ('a]b', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            ('a\x00b', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            ('a\x85b', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            ('a\nb', 'ALIAS_INVALID', 'alias.invalid', 'format'),
+            (' ROUTE ', 'ALIAS_RESERVED', 'alias.reserved', None),
+        ]
+        for index, (value, code, reason_code, violation) in enumerate(values):
+            with self.subTest(value=value), self.assertRaises(BoardError) as caught:
+                self.user('user_policy_publish', self.payload({}, f'bad-alias-{index}',
+                          buddySettings=[{'buddyId': 'live', 'alias': value}]))
+            self.assertEqual(caught.exception.code, code)
+            self.assertEqual(caught.exception.details['buddyId'], 'live')
+            self.assertEqual(caught.exception.details['reason']['code'], reason_code)
+            self.assertEqual(caught.exception.details['reason']['params'],
+                             {'violation': violation} if violation is not None else {})
+            self.assertEqual(self.aliases()['live'], (None, 1))
+
     def test_retired_pin_and_selector_do_not_block_disable_or_other_edits(self):
         grant = self.publication_params()
-        payload = self.payload(grant, buddySettings=[{'buddyId': 'retired', 'enabled': False}], modelServiceNoteChanges=[{**LIVE_MODEL_SERVICE, 'text': 'prefer local evidence'}])
+        payload = self.payload(grant, buddySettings=[{'buddyId': 'retired', 'enabled': False}])
         self.user('user_policy_publish', payload)
         self.assertTrue(self.user('user_policy_publish', payload)['duplicate'])
-        snapshot = self.board_.call('console_snapshot', {})
-        self.assertEqual(snapshot['modelServiceNotes'][0]['text'], 'prefer local evidence')
+        snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(snapshot['configuration']['routerBuddyIds'], ['retired'])
         self.assertEqual(snapshot['preferences'][0]['mode'], 'pin')
         self.assertFalse(next(p for p in snapshot['buddies'] if p['buddyId'] == 'retired')['enabled'])
@@ -66,7 +144,7 @@ class UserPolicyTests(BoardTestCase):
     def test_note_only_change_does_not_reenable_an_unavailable_pin(self):
         grant = self.publication_params()
         self.user('user_policy_publish', self.payload(grant, preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin', 'note': 'Keep this intent while its provider is offline'}]))
-        snapshot = self.board_.call('console_snapshot', {})
+        snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertEqual(snapshot['preferences'][0]['note'], 'Keep this intent while its provider is offline')
         self.assertFalse(next(p for p in snapshot['buddies'] if p['buddyId'] == 'retired')['available'])
 
@@ -78,13 +156,13 @@ class UserPolicyTests(BoardTestCase):
             with self.subTest(note=note):
                 self.user('user_policy_publish', self.payload({}, f'note-{index}',
                           preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin', 'note': note}]))
-                self.assertEqual(self.board_.call('console_snapshot', {})['preferences'],
+                self.assertEqual(console_snapshot_projection(self.board_.service)[0]['preferences'],
                                  [{'buddyId': 'retired', 'mode': 'pin', 'note': expected}])
                 with self.board_.store.db.read() as db:
                     self.assertEqual(db.execute('SELECT note FROM evaluation_preferences').fetchone()[0], expected)
         self.user('user_policy_publish', self.payload({}, 'omitted-note',
                   preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin'}]))
-        self.assertEqual(self.board_.call('console_snapshot', {})['preferences'],
+        self.assertEqual(console_snapshot_projection(self.board_.service)[0]['preferences'],
                          [{'buddyId': 'retired', 'mode': 'pin', 'note': None}])
 
     def test_invalid_preference_notes_roll_back_the_publication(self):
@@ -96,7 +174,7 @@ class UserPolicyTests(BoardTestCase):
                           buddySettings=[{'buddyId': 'live', 'enabled': False}],
                           preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin', **field}]))
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
-            snapshot = self.board_.call('console_snapshot', {})
+            snapshot = console_snapshot_projection(self.board_.service)[0]
             self.assertEqual(snapshot['preferences'],
                              [{'buddyId': 'retired', 'mode': 'pin', 'note': 'user intent'}])
             self.assertTrue(next(b for b in snapshot['buddies'] if b['buddyId'] == 'live')['enabled'])
@@ -106,13 +184,17 @@ class UserPolicyTests(BoardTestCase):
         for changes in [
             {'buddySettings': [{'buddyId': 'live', 'enabled': False}, {'buddyId': 'retired', 'enabled': True}]},
             {'buddySettings': [{'buddyId': 'retired', 'enabled': False, 'available': True}]},
-            {'modelServiceNoteChanges': [{**LIVE_MODEL_SERVICE, 'text': 'x'}, {**LIVE_MODEL_SERVICE, 'text': 'y'}]},
+            {'buddySettings': [{'buddyId': 'live', 'enabled': False}], 'modelNoteChanges': []},
         ]:
-            with self.assertRaises(BoardError):
+            with self.assertRaises(BoardError) as caught:
                 self.user('user_policy_publish', self.payload(grant, **changes))
-        snapshot = self.board_.call('console_snapshot', {})
+            if 'modelNoteChanges' in changes:
+                self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+                self.assertEqual(str(caught.exception), 'Unknown user_policy.publish parameter: modelNoteChanges')
+                self.assertEqual(caught.exception.details['field'], 'modelNoteChanges')
+        snapshot = console_snapshot_projection(self.board_.service)[0]
         self.assertNotIn('tableRevision', snapshot)
-        self.assertEqual(snapshot['modelServiceNotes'], [])
+        self.assertNotIn('modelNotes', snapshot)
         self.assertTrue(next(p for p in snapshot['buddies'] if p['buddyId'] == 'live')['enabled'])
 
 
@@ -123,7 +205,7 @@ class UserPolicyTests(BoardTestCase):
         result = self.user('user_policy_publish', self.payload(grant, modelServiceConcurrency=patch))
         self.assertEqual(result['counts']['modelServiceConcurrency'], 1)
         with self.board_.store.db.read() as db:
-            stored = db.execute('SELECT concurrency_limit FROM model_service_concurrency').fetchall()
+            stored = db.execute('SELECT concurrency_limit FROM model_services WHERE concurrency_limit IS NOT NULL').fetchall()
         self.assertEqual([row['concurrency_limit'] for row in stored], [3])
         self.assert_denied('user_policy_publish', self.payload(self.publication_params(), 'forged-limits', modelServiceConcurrency=patch))
 
@@ -132,7 +214,7 @@ class UserPolicyTests(BoardTestCase):
         patch = [{**LIVE_MODEL_SERVICE, 'limit': 2 ** 63 - 1}]
         self.user('user_policy_publish', self.payload(grant, 'raised-limit', modelServiceConcurrency=patch))
         with self.board_.store.db.read() as db:
-            stored = db.execute('SELECT concurrency_limit FROM model_service_concurrency').fetchone()
+            stored = db.execute('SELECT concurrency_limit FROM model_services WHERE concurrency_limit IS NOT NULL').fetchone()
         self.assertEqual(stored['concurrency_limit'], 2 ** 63 - 1)
 
     def test_model_service_concurrency_rejects_integer_beyond_sqlite_without_mutation(self):
@@ -143,8 +225,9 @@ class UserPolicyTests(BoardTestCase):
                 modelServiceConcurrency=[{**LIVE_MODEL_SERVICE, 'limit': 2 ** 63}],
             ))
         self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+        self.assertIn('positive SQLite integer', str(caught.exception))
         with self.board_.store.db.read() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM model_service_concurrency').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM model_services WHERE concurrency_limit IS NOT NULL').fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT enabled FROM buddies WHERE buddy_id='live'").fetchone()[0], 1)
 
     def test_model_service_concurrency_rejects_derived_fields_and_bad_limits(self):
@@ -162,4 +245,4 @@ class UserPolicyTests(BoardTestCase):
                 self.user('user_policy_publish', self.payload(grant, modelServiceConcurrency=patch))
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
         with self.board_.store.db.read() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) AS count FROM model_service_concurrency').fetchone()['count'], 0)
+            self.assertEqual(db.execute('SELECT COUNT(*) AS count FROM model_services WHERE concurrency_limit IS NOT NULL').fetchone()['count'], 0)

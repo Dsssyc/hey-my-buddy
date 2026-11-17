@@ -31,7 +31,8 @@ from ..private_files import publish_bytes
 #: names exist so a package carrying one is judged, never silently accepted.
 ACP_CATEGORIES = ("read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other")
 TOOL_EVENT_PHASES = ("start", "end")
-TOOL_EVIDENCE_VERSION = 2
+TOOL_OUTCOMES = ("success", "failure", "unknown")
+TOOL_EVIDENCE_VERSION = 3
 #: One call has a fixed identity, category set and phase set. Its serialized
 #: row is bounded; the number of rows grows with the work and travels as a file.
 MAX_CALL_BYTES = 32 * 1024
@@ -39,6 +40,7 @@ MAX_CALL_BYTES = 32 * 1024
 # Router runs alone are judged; Worker permissions stay native.
 PERMISSION_TOOL_CATEGORIES = {
     "none": frozenset(),
+    "web": frozenset({"fetch"}),
     "read": frozenset({"read", "search", "execute", "fetch"}),
 }
 
@@ -47,11 +49,11 @@ TOOLS_FORBIDDEN = "router-tools-forbidden"
 
 PACKAGE_FIELDS = frozenset({
     "version", "binding", "nativeIdentity", "streamComplete", "calls",
-    "toolCalls", "unsettledToolCalls",
+    "toolCalls", "unsettledToolCalls", "toolSummary",
 })
 BINDING_FIELDS = frozenset({"harness", "taskId", "attemptId", "generation"})
-EVENT_FIELDS = frozenset({"nativeIdentity", "callId", "toolName", "category", "phase"})
-CALL_FIELDS = frozenset({"nativeIdentity", "callId", "categories", "phases",
+EVENT_FIELDS = frozenset({"nativeIdentity", "callId", "toolName", "category", "phase", "outcome"})
+CALL_FIELDS = frozenset({"nativeIdentity", "callId", "categories", "phases", "outcome",
                          "facts", "consistent", "endBeforeStart", "incomplete", "malformed", "belongsToRoot"})
 CALL_FILE_FIELDS = frozenset({"path", "sha256", "bytes"})
 
@@ -61,7 +63,10 @@ CALL_FILE_FIELDS = frozenset({"path", "sha256", "bytes"})
 #: stays ``other``; it is never promoted to a legal category.
 NATIVE_TOOL_CATEGORIES: dict[str, dict[str, str]] = {
     "dsh": {"read": "read", "glob": "search", "grep": "search", "bash": "execute",
-            "write": "edit", "edit": "edit"},
+            "write": "edit", "edit": "edit", "web_search": "fetch", "web_fetch": "fetch",
+            # working_directory reads or changes the session's working directory
+            # without touching file contents (DSH CLI 0.2.2-rc.1).
+            "working_directory": "read"},
     "claude": {
         "Read": "read", "LS": "read", "Skill": "read",
         "Glob": "search", "Grep": "search",
@@ -74,7 +79,7 @@ NATIVE_TOOL_CATEGORIES: dict[str, dict[str, str]] = {
         "exec_command": "execute", "shell_command": "execute", "write_stdin": "execute",
         "local_shell_call": "execute",
         "fileChange": "edit",
-        "web_search_call": "fetch",
+        "web_search_call": "fetch", "webSearch": "fetch",
     },
     "zcode": {
         "Read": "read",
@@ -114,7 +119,7 @@ def _event(value: Any) -> dict:
     if not isinstance(value, dict) or set(value) != EVENT_FIELDS:
         raise BoardError(
             "INVALID_ARGUMENT",
-            "a normalized tool event must carry exactly nativeIdentity, callId, toolName, category and phase",
+            "a normalized tool event must carry exactly nativeIdentity, callId, toolName, category, phase and outcome",
         )
     identity = _identity(value.get("nativeIdentity"))
     call_id, tool_name = value.get("callId"), value.get("toolName")
@@ -126,8 +131,12 @@ def _event(value: Any) -> dict:
         raise BoardError("INVALID_ARGUMENT", "category must be an ACP tool-call category")
     if value.get("phase") not in TOOL_EVENT_PHASES:
         raise BoardError("INVALID_ARGUMENT", "phase must be start or end")
+    if value.get("outcome") not in TOOL_OUTCOMES:
+        raise BoardError("INVALID_ARGUMENT", "outcome must be success, failure or unknown")
+    if value["phase"] == "start" and value["outcome"] != "unknown":
+        raise BoardError("INVALID_ARGUMENT", "a start cannot report a tool outcome")
     return {"nativeIdentity": identity, "callId": call_id, "toolName": tool_name,
-            "category": value["category"], "phase": value["phase"]}
+            "category": value["category"], "phase": value["phase"], "outcome": value["outcome"]}
 
 
 def _classify(table: dict[str, str], name: Any, native_type: Any) -> str | None:
@@ -146,12 +155,29 @@ def _classify(table: dict[str, str], name: Any, native_type: Any) -> str | None:
     return first if first == second else "other"
 
 
+def classify_tool_name(harness: Any, name: Any) -> str:
+    """Classify one native display name with the harness's fixed table.
+
+    Session-content projections classify display titles, which the session
+    record keeps without size limits; a name of any length therefore classifies
+    here, and an unrecognized one stays ``other``. Evidence normalization keeps
+    its own bounded identity and is not this function's concern.
+    """
+    table = NATIVE_TOOL_CATEGORIES.get(harness) if isinstance(harness, str) else None
+    if table is None:
+        raise BoardError("UNSUPPORTED_HARNESS", f"No fixed tool classification for harness {harness!r}")
+    if not isinstance(name, str) or not name:
+        raise BoardError("INVALID_ARGUMENT", "a native tool name must be a nonempty string")
+    return table.get(name, "other")
+
+
 def normalize_tool_event(harness: Any, native_event: Any) -> dict | None:
     """Classify one controller-extracted native tool fact into the ACP vocabulary.
 
     ``native_event`` carries only the facts the native controller extracted —
     ``nativeIdentity``, ``callId``, ``toolName`` (or the native event ``type``
-    where the harness names its calls that way) and ``phase``; every other key,
+    where the harness names its calls that way), ``phase`` and an optional
+    ``outcome`` (unknown when the native frame has none); every other key,
     including tool arguments, result bodies and model claims, is dropped.
     Returns ``None`` when the fact is model reasoning text rather than a tool
     call, and raises :class:`BoardError` for input no event can be built from.
@@ -176,13 +202,14 @@ def normalize_tool_event(harness: Any, native_event: Any) -> dict | None:
     category = _classify(table, name, native_type)
     if category is None:
         return None
-    return {
+    return _event({
         "nativeIdentity": identity,
         "callId": call_id,
         "toolName": name if isinstance(name, str) and name else native_type,
         "category": category,
         "phase": phase,
-    }
+        "outcome": native_event.get("outcome", "unknown"),
+    })
 
 
 class ToolEventEvidence:
@@ -217,14 +244,15 @@ class ToolEventEvidence:
                    if call["nativeIdentity"] and call["callId"] and "start" in call["countedPhases"])
 
     def _observe(self, identity: dict, call_id: str | None, name: str | None,
-                 category: str, phase: str | None, *, incomplete: bool, malformed: bool = False) -> None:
+                 category: str, phase: str | None, *, outcome: str = "unknown",
+                 incomplete: bool, malformed: bool = False) -> None:
         identity_key = canonical_json(identity)
         if self._finished or identity_key in self._closed_roots:
             self._late = True
         call = self._calls.setdefault((identity_key, call_id), {
             "nativeIdentity": identity, "callId": call_id, "categories": set(),
             "phases": set(), "countedPhases": set(), "facts": set(), "consistent": True,
-            "endBeforeStart": False, "incomplete": False, "malformed": False,
+            "endBeforeStart": False, "incomplete": False, "malformed": False, "outcomes": set(),
         })
         call["categories"].add(category)
         if phase == "end" and "start" not in call["phases"]:
@@ -239,6 +267,10 @@ class ToolEventEvidence:
         if len(call["facts"]) < 3:
             call["facts"].add(fact)
         call["consistent"] = _consistent_call_facts(self.binding["harness"], call["facts"])
+        if phase == "end" and outcome != "unknown":
+            call["outcomes"].add(outcome)
+        if len(call["outcomes"]) > 1:
+            incomplete = True
         call["malformed"] |= malformed
         call["incomplete"] |= incomplete
         self._incomplete |= incomplete
@@ -258,7 +290,8 @@ class ToolEventEvidence:
             category = "other"
         record = {"nativeIdentity": identity, "callId": bounded(native_event.get("callId")),
                   "toolName": name or native_type, "category": category or "other",
-                  "phase": native_event.get("phase") if native_event.get("phase") in TOOL_EVENT_PHASES else None}
+                  "phase": native_event.get("phase") if native_event.get("phase") in TOOL_EVENT_PHASES else None,
+                  "outcome": native_event.get("outcome", "unknown")}
         try:
             _event(record)
             malformed = False
@@ -271,7 +304,7 @@ class ToolEventEvidence:
         """Collapse repeated projections, preserving conflicts and end order."""
         record = _event(event)
         self._observe(record["nativeIdentity"], record["callId"], record["toolName"],
-                      record["category"], record["phase"], incomplete=False)
+                      record["category"], record["phase"], outcome=record["outcome"], incomplete=False)
 
     def finish(self, native_identity: list, stream_complete: bool, *,
                exclude_calls: Iterable[tuple[str, str]] | None = None) -> dict:
@@ -321,6 +354,8 @@ class ToolEventEvidence:
             calls.append({
                 "nativeIdentity": dict(call["nativeIdentity"]), "callId": call["callId"],
                 "categories": sorted(call["categories"]), "phases": sorted(call["phases"]),
+                "outcome": (next(iter(call["outcomes"]))
+                            if len(call["outcomes"]) == 1 and not call["incomplete"] else "unknown"),
                 "facts": [{"toolName": name, "category": category} for name, category in
                           sorted(call["facts"], key=lambda fact: (fact[0] or "", fact[1]))],
                 "consistent": call["consistent"], "endBeforeStart": call["endBeforeStart"],
@@ -333,6 +368,7 @@ class ToolEventEvidence:
             "streamComplete": bool(self._stream_reported) and not self._late and not self._incomplete,
             "calls": write_tool_calls(self.binding, calls, state_dir=self.state_dir),
             "toolCalls": started, "unsettledToolCalls": unsettled,
+            "toolSummary": summarize_tool_calls(calls),
         }
 
 
@@ -351,6 +387,68 @@ def write_tool_calls(binding: dict, calls: Iterable[dict], *, state_dir: Path) -
     return {"path": str(path), "sha256": digest, "bytes": len(content)}
 
 
+def _add_tool_call(totals: dict, call: dict) -> None:
+    # Match the existing count of unique identified starts. An orphan end
+    # proves no invocation; ambiguous names stay unnamed instead of guessed.
+    if not call["nativeIdentity"] or not call["callId"] or "start" not in call["phases"]:
+        return
+    names = {fact["toolName"] for fact in call["facts"]}
+    if len(names) == 1:
+        name = next(iter(names))
+    elif call["consistent"] and "commandExecution" in names:
+        # Codex's typed item and raw request describe the same call. The raw
+        # request supplies the operation name, while commandExecution is its type.
+        name = next(iter(names - {"commandExecution"}))
+    else:
+        name = None
+    counts = totals.setdefault(name, {"calls": 0, "failed": 0, "unknown": 0})
+    counts["calls"] += 1
+    counts["failed"] += call["outcome"] == "failure"
+    counts["unknown"] += call["outcome"] == "unknown"
+
+
+def _summary_rows(totals: dict) -> list[dict]:
+    return [{"toolName": name, **totals[name]} for name in sorted(totals, key=lambda name: name or "")]
+
+
+def summarize_tool_calls(calls: Iterable[dict]) -> list[dict]:
+    """Count unique call rows by native tool name, without retaining their bodies."""
+    totals: dict = {}
+    for call in calls:
+        _add_tool_call(totals, call)
+    return _summary_rows(totals)
+
+
+def merge_tool_summaries(summaries: Iterable[list[dict]]) -> list[dict]:
+    """Combine already validated per-attempt or per-turn summaries."""
+    totals: dict = {}
+    for summary in summaries:
+        for item in summary:
+            counts = totals.setdefault(item["toolName"], {"calls": 0, "failed": 0, "unknown": 0})
+            for field in counts:
+                counts[field] += item[field]
+    return _summary_rows(totals)
+
+
+def _validate_tool_summary(summary: Any) -> None:
+    if not isinstance(summary, list):
+        raise BoardError("INVALID_ARGUMENT", "toolSummary must be a list")
+    names = []
+    for item in summary:
+        if not isinstance(item, dict) or set(item) != {"toolName", "calls", "failed", "unknown"}:
+            raise BoardError("INVALID_ARGUMENT", "a toolSummary entry must carry exactly toolName, calls, failed and unknown")
+        if item["toolName"] is not None:
+            check_text(item["toolName"], "toolSummary.toolName", maximum=512)
+        names.append(item["toolName"])
+        if any(type(item[field]) is not int or not 0 <= item[field] <= MAX_COUNT
+               for field in ("calls", "failed", "unknown")):
+            raise BoardError("INVALID_ARGUMENT", "toolSummary counts must be nonnegative integers")
+        if not item["calls"] or item["failed"] + item["unknown"] > item["calls"]:
+            raise BoardError("INVALID_ARGUMENT", "toolSummary outcomes must fit its positive call count")
+    if len(set(names)) != len(names) or names != sorted(names, key=lambda name: name or ""):
+        raise BoardError("INVALID_ARGUMENT", "toolSummary must have unique names in order")
+
+
 def validate_tool_evidence_package(evidence: Any) -> None:
     """The envelope boundary; file content is checked by the receiving judge."""
     if not isinstance(evidence, dict) or set(evidence) != PACKAGE_FIELDS:
@@ -365,6 +463,7 @@ def validate_tool_evidence_package(evidence: Any) -> None:
     for key in ("toolCalls", "unsettledToolCalls"):
         if type(evidence[key]) is not int or not 0 <= evidence[key] <= MAX_COUNT:
             raise BoardError("INVALID_ARGUMENT", key + " must be a nonnegative count")
+    _validate_tool_summary(evidence["toolSummary"])
     roots = evidence["nativeIdentity"]
     if not isinstance(roots, list):
         raise BoardError("INVALID_ARGUMENT", "nativeIdentity must be a list of root identities")
@@ -386,6 +485,8 @@ def validate_tool_evidence_package(evidence: Any) -> None:
 def _call_summary(value: Any, harness: str) -> dict:
     if not isinstance(value, dict) or set(value) != CALL_FIELDS:
         raise BoardError("INVALID_ARGUMENT", "a tool call summary must carry exactly its fixed fields")
+    if value["outcome"] not in TOOL_OUTCOMES:
+        raise BoardError("INVALID_ARGUMENT", "a tool call outcome must be success, failure or unknown")
     identity = value["nativeIdentity"]
     if not isinstance(identity, dict):
         raise BoardError("INVALID_ARGUMENT", "a call identity must carry only bounded native fields")
@@ -402,6 +503,8 @@ def _call_summary(value: Any, harness: str) -> dict:
     for name in ("consistent", "endBeforeStart", "incomplete", "malformed", "belongsToRoot"):
         if type(value[name]) is not bool:
             raise BoardError("INVALID_ARGUMENT", "tool call " + name + " must be a boolean")
+    if value["outcome"] != "unknown" and "end" not in value["phases"]:
+        raise BoardError("INVALID_ARGUMENT", "a known tool outcome requires an end")
     facts = value["facts"]
     if not isinstance(facts, list) or not 1 <= len(facts) <= 3:
         raise BoardError("INVALID_ARGUMENT", "a call retains at most three distinct name/category facts")
@@ -457,6 +560,17 @@ def _consistent_call_facts(harness: str, facts: set) -> bool:
                for name, category in facts)
 
 
+def _allowed_codex_web_call(call: dict) -> bool:
+    """Recognize Codex CLI 0.164.0's restricted JavaScript dispatcher.
+
+    Nested tool calls have their own native events and must pass this judge
+    separately. Web searches use the single normalized fetch category.
+    """
+    return (call["categories"] == ["execute"]
+            and call["facts"] == [{"toolName": "exec", "category": "execute"}])
+
+
+
 def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> str | None:
     """The one publication matrix over digest-bound per-call facts.
 
@@ -472,21 +586,26 @@ def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> s
         if not evidence["nativeIdentity"]:
             return TOOL_EVIDENCE_UNVERIFIED
         allowed = PERMISSION_TOOL_CATEGORIES[permission]
+        harness = evidence["binding"]["harness"]
         incomplete = not evidence["streamComplete"]
         forbidden = False
         malformed = False
         keys = set()
+        totals: dict = {}
         started = unsettled = 0
         for call in read_tool_calls(evidence, state_dir=state_dir):
             key = (canonical_json(call["nativeIdentity"]), call["callId"])
             if key in keys:
                 return TOOL_EVIDENCE_UNVERIFIED
             keys.add(key)
+            _add_tool_call(totals, call)
             identified = bool(call["nativeIdentity"] and call["callId"])
             malformed |= call["malformed"]
             phases = set(call["phases"])
             categories = set(call["categories"])
-            if permission == "none" or call["consistent"] and not categories <= allowed:
+            codex_web_call = (harness == "codex" and permission == "web"
+                              and _allowed_codex_web_call(call))
+            if permission == "none" or call["consistent"] and not (categories <= allowed or codex_web_call):
                 forbidden = True
             root = bool(call["nativeIdentity"]) and call["nativeIdentity"] in evidence["nativeIdentity"]
             if call["belongsToRoot"] != root:
@@ -495,7 +614,7 @@ def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> s
                            or call["endBeforeStart"] or phases != {"start", "end"})
             started += identified and "start" in phases
             unsettled += identified and phases == {"start"}
-        if malformed:
+        if malformed or _summary_rows(totals) != evidence["toolSummary"]:
             return TOOL_EVIDENCE_UNVERIFIED
         if forbidden:
             return TOOLS_FORBIDDEN
@@ -510,6 +629,7 @@ def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> s
 __all__ = [
     "ACP_CATEGORIES", "BINDING_FIELDS", "CALL_FIELDS", "CALL_FILE_FIELDS", "EVENT_FIELDS", "MAX_CALL_BYTES",
     "NATIVE_TOOL_CATEGORIES", "NON_TOOL_NAMES", "PACKAGE_FIELDS", "PERMISSION_TOOL_CATEGORIES",
-    "TOOL_EVIDENCE_UNVERIFIED", "TOOL_EVIDENCE_VERSION", "TOOLS_FORBIDDEN", "ToolEventEvidence",
+    "TOOL_EVIDENCE_UNVERIFIED", "TOOL_EVIDENCE_VERSION", "TOOL_OUTCOMES", "TOOLS_FORBIDDEN", "ToolEventEvidence",
+    "classify_tool_name", "merge_tool_summaries", "summarize_tool_calls",
     "judge_tool_evidence", "normalize_tool_event", "read_tool_calls", "validate_tool_evidence_package",
 ]

@@ -1,69 +1,103 @@
-"""Ordered native observations and retained buddy identities."""
+"""Current native readings and normalized model-service facts."""
 from __future__ import annotations
 
 import json
-import uuid
+from itertools import islice
 
 from ..evaluation import user_policy
+from . import buddy_state
 from .catalog import CatalogView
-from ..store.db import canonical_json, sha256_text
+from ..store.db import canonical_json
 from ...errors import BoardError
-from ...protocol.reasons import reason
+from ...protocol.reasons import reason, reason_from_json
 
 
-def begin(evaluation, request_id=None, *, harnesses=None):
-    request_id = request_id or 'catalog-' + str(uuid.uuid4())
+def begin(evaluation, *, harnesses=None):
+    """Reserve an ordered reading without retaining its request or payload."""
+    from ...protocol.harness_names import HARNESS_NAMES
+    from ..service.harness_health import read_health
     with evaluation.db.write() as db:
-        row = db.execute('SELECT * FROM catalog_observations WHERE request_id=?', (request_id,)).fetchone()
-        if row is None:
-            from ...protocol.harness_names import HARNESS_NAMES
-            from ..service.harness_health import read_health
-            records = harnesses if harnesses is not None else [read_health(db, name) for name in HARNESS_NAMES]
-            db.execute('INSERT INTO catalog_observations(request_id,harnesses_json) VALUES(?,?)',
-                       (request_id, canonical_json(records)))
-            row = db.execute('SELECT * FROM catalog_observations WHERE request_id=?', (request_id,)).fetchone()
-        return {'observationId': row['observation_id'], 'response': json.loads(row['response_json']) if row['response_json'] else None,
-                'harnesses': json.loads(row['harnesses_json'])}
+        records = harnesses if harnesses is not None else [read_health(db, name) for name in HARNESS_NAMES]
+        sequence = db.execute('SELECT COALESCE(MAX(sequence),0)+1 FROM catalog_current').fetchone()[0]
+        for record in records:
+            name = record['harness']
+            db.execute('INSERT INTO catalog_current(harness,sequence,status,reason,updated_at) VALUES(?,?,?,?,?) '
+                       'ON CONFLICT(harness) DO UPDATE SET sequence=excluded.sequence',
+                       (name, sequence, 'unread', None, evaluation._now()))
+        return {'sequence': sequence, 'harnesses': records}
 
 
 def current(db):
-    providers, results = [], []
-    for row in db.execute('SELECT c.*, d.payload_json, o.response_json FROM catalog_current c LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id LEFT JOIN catalog_observations o ON o.observation_id=c.observation_id ORDER BY c.harness'):
-        from .catalog import catalog_account_status
-        observed = json.loads(row['response_json']) if row['response_json'] else {}
-        discovery = next((item for item in observed.get('catalog', {}).get('discoveries', [])
-                          if item['harness'] == row['harness']), {})
-        results.append({'harness': row['harness'], 'status': row['status'],
-                        'accountStatus': catalog_account_status(db, row['harness']),
-                        'reason': json.loads(row['reason']) if row['reason'] else None,
-                        'content': discovery.get('content')})
-        if row['payload_json']:
-            from ..service.harness_health import read_health
-            health = read_health(db, row['harness'])
-            healthy = health['status'] == 'ready'
-            providers.extend({**p, 'models': [{**m, 'available': bool(m.get('available', True)) and healthy,
-                              'unavailableReason': m.get('unavailableReason') if healthy or not m.get('available', True) else health['reason'],
-                              'unavailableContent': m.get('unavailableContent') if healthy or not m.get('available', True) else None} for m in p['models']]}
-                             for p in json.loads(row['payload_json'])['providers'] if p['harness'] == row['harness'])
-    if not results:
+    """Reconstruct the catalog view solely from current normalized facts."""
+    providers, discoveries = {}, []
+    for reading in db.execute("SELECT * FROM catalog_current WHERE status!='unread' ORDER BY harness"):
+        discoveries.append({'harness': reading['harness'], 'status': reading['status'],
+                            'accountStatus': reading['account_status'],
+                            'reason': json.loads(reading['reason']) if reading['reason'] else None,
+                            'content': reading['content']})
+    if not discoveries:
         return None
+    states = {}
+    for buddy in buddy_state.rows(db):
+        if not buddy['retired']:
+            states.setdefault(tuple(buddy[key] for key in ('harness', 'provider', 'model')), []).append(buddy)
+    for model in db.execute('SELECT * FROM model_services WHERE pending_since IS NULL AND confirmed_absent_at IS NULL ORDER BY harness,provider,model'):
+        key = (model['harness'], model['provider'])
+        efforts = sorted(states.get(key + (model['model'],), []), key=lambda buddy: (buddy['effort_rank'], buddy['buddy_id']))
+        if not efforts:
+            continue
+        state = efforts[0]
+        provider = providers.setdefault(key, {'harness': key[0], 'provider': key[1], 'displayName': key[1], 'models': []})
+        provider['models'].append({
+            'id': model['model'], 'name': model['model'], 'description': state['description'],
+            'contextWindow': state['context_window'], 'inputModalities': json.loads(model['input_modalities_json']),
+            'efforts': [item['effort'] for item in efforts],
+            'available': bool(state['available']),
+            'unavailableReason': reason_from_json(state['unavailable_code'], state['unavailable_params_json']),
+            'unavailableContent': state['unavailable_content'],
+        })
     return CatalogView({'source': 'current-native-observations', 'harnessVersion': None,
-                        'providerVersion': None, 'discoveredAt': None,
-                        'providers': providers, 'discoveries': results, 'warnings': []})
+                        'discoveredAt': None, 'providers': list(providers.values()),
+                        'discoveries': discoveries, 'warnings': []})
 
 
-def _buddy_content(row):
-    # Reading provenance does not change a buddy's facts.
-    return {key: row[key] for key in row.keys()
-            if key != 'source'}
+def _content(db):
+    # Reading provenance is evidence, not a change to selection facts.
+    buddies = {row['buddy_id']: {key: value for key, value in row.items() if key not in ('source', 'catalog_state', 'catalog_reason')}
+               for row in buddy_state.rows(db)}
+    models = [tuple(row) for row in db.execute(
+        'SELECT harness,provider,model,description,context_window,input_modalities_json,unavailable_code,'
+        'unavailable_params_json,unavailable_content,pending_since,confirmed_absent_at '
+        'FROM model_services ORDER BY harness,provider,model')]
+    return buddies, models
 
 
-def record(evaluation, discovered, observation_id=None, *, health_generation=None):
-    payload = discovered
-    if observation_id is None:
-        observation_id = begin(evaluation)['observationId']
-    identity = {k: v for k, v in payload.items() if k != 'discoveredAt'}
-    discovery_id = 'cat-' + sha256_text(canonical_json(identity))[:24]
+def _response(db, *, applied, stale):
+    view = current(db)
+    if view is None:
+        from ..service.harness_health import read_health
+        from ...protocol.harness_names import HARNESS_NAMES
+        view = CatalogView({'source': 'harness-health', 'harnessVersion': None, 'discoveredAt': None,
+                            'providers': [], 'discoveries': [
+                                {'harness': name, 'status': 'unknown', 'accountStatus': 'unknown',
+                                 'reason': read_health(db, name)['reason']} for name in HARNESS_NAMES], 'warnings': []})
+    payload = view.payload
+    return {'catalog': payload, 'buddies': view.proposed_buddies(),
+            'appliedHarnesses': applied, 'staleHarnesses': stale}
+
+
+def response(evaluation):
+    """Read the current refresh reply after native health refreshes finish."""
+    with evaluation.db.read() as db:
+        return _response(db, applied=[], stale=[])
+
+
+def record(evaluation, discovered, sequence=None, *, health_generation=None):
+    if sequence is None:
+        sequence = begin(evaluation)['sequence']
+    from .catalog import CONFIRMATION_SECONDS, TRUSTED_ACCOUNT_STATUSES, _parse_time
+    from ..evaluation.models import ensure_model_service
+    from ..service.harness_health import read_health
     with evaluation.db.write() as db:
         if (evaluation.board.directory / 'upgrade.json').exists():
             raise BoardError('UPGRADE_IN_PROGRESS', 'Catalog publication is fenced until upgrade verification finishes')
@@ -72,185 +106,130 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             health = db.execute('SELECT revision,status FROM harness_health WHERE harness=?', (name,)).fetchone()
             if health is None or health['revision'] != generation or health['status'] != 'ready':
                 return {'staleHarnesses': [name], 'appliedHarnesses': []}
-        observation = db.execute('SELECT * FROM catalog_observations WHERE observation_id=?', (observation_id,)).fetchone()
-        if observation is None:
-            raise BoardError('NOT_FOUND', 'Unknown catalog observation')
-        if observation['response_json']:
-            response = json.loads(observation['response_json'])
-            if response['discoveryId'] != discovery_id:
-                raise BoardError('CONFLICT', 'This observation already recorded a different discovery')
-            return {**response, 'duplicate': True}
+        before = _content(db)
         now = evaluation._now()
-        duplicate = db.execute('SELECT 1 FROM evaluation_catalog WHERE discovery_id=?', (discovery_id,)).fetchone() is not None
-        db.execute('INSERT OR IGNORE INTO evaluation_catalog(discovery_id,payload_json) VALUES(?,?)', (discovery_id, canonical_json(payload)))
-        before = {row['buddy_id']: _buddy_content(row)
-                  for row in db.execute('SELECT * FROM buddies')}
-        pending_before = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending ORDER BY harness,provider,model')]
-        applied, stale = [], []
-        transitions = []
-        from .catalog import (CONFIRMATION_SECONDS, CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON,
-                              TRUSTED_ACCOUNT_STATUSES, _model_service_key, _parse_time, _pending_map,
-                              _write_pending_map, identities_from_payload, note_confirmed_read,
-                              restore_retained_availability)
-        for result in payload['discoveries']:
+        applied, stale, transitions = [], [], []
+        for result in discovered['discoveries']:
             name = result['harness']
-            prior = db.execute('SELECT c.*, d.payload_json FROM catalog_current c LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.harness=?', (name,)).fetchone()
-            if prior and int(prior['observation_id']) > observation_id:
+            prior = db.execute('SELECT * FROM catalog_current WHERE harness=?', (name,)).fetchone()
+            if prior is None or prior['sequence'] != sequence:
                 stale.append(name)
                 continue
-            # ADR-027 rule 1: the blackboard, not the harness, decides trust. A
-            # complete reading without a confirmed (or not-applicable) account
-            # fact is recorded as an unknown observation and replaces nothing.
             trusted = result['status'] == 'complete' and result.get('accountStatus') in TRUSTED_ACCOUNT_STATUSES
             stored_reason = None if trusted else (
                 reason('catalog.account-status-unknown', harness=name) if result['status'] == 'complete'
                 else result.get('reason') or reason('catalog.native-unknown', harness=name))
-            selected_discovery = discovery_id if trusted else (prior['discovery_id'] if prior else None)
-            db.execute('INSERT INTO catalog_current(harness,observation_id,discovery_id,status,reason,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(harness) DO UPDATE SET observation_id=excluded.observation_id,discovery_id=excluded.discovery_id,status=excluded.status,reason=excluded.reason,updated_at=excluded.updated_at', (name, observation_id, selected_discovery, 'complete' if trusted else 'unknown', canonical_json(stored_reason) if stored_reason else None, now))
+            db.execute('UPDATE catalog_current SET status=?,reason=?,content=?,updated_at=? WHERE harness=?',
+                       ('complete' if trusted else 'unknown', canonical_json(stored_reason) if stored_reason else None,
+                        result.get('content'), now, name))
             applied.append(name)
             if not trusted:
-                # Health may have recovered while the account fact stayed
-                # unknown: the retained confirmed catalog keeps its model state,
-                # and the 0s health left behind are not a disappearance.
-                restore_retained_availability(db, name)
                 continue
-            note_confirmed_read(db, name, now=now, account_status=result.get('accountStatus'))
+            db.execute('UPDATE catalog_current SET read_at=?,account_status=? WHERE harness=?',
+                       (now, result['accountStatus'], name))
             if name == 'zcode':
                 from ...protocol.billing import zcode_access
                 health_row = db.execute("SELECT record_json FROM harness_health WHERE harness='zcode'").fetchone()
                 if health_row:
-                    record = json.loads(health_row['record_json'])
-                    native_access = {p['provider']: zcode_access(p.get('accessType'), now)
-                                     for p in discovered.get('providers', [])
-                                     if isinstance(p, dict) and p.get('harness') == 'zcode'
-                                     and any(item['harness'] == 'zcode' and item['provider'] == p.get('provider')
-                                             for item in payload['providers'])}
-                    record['billingByProvider'] = native_access
-                    db.execute("UPDATE harness_health SET record_json=? WHERE harness='zcode'", (canonical_json(record),))
-            view = CatalogView({**payload, 'providers': [p for p in payload['providers'] if p['harness'] == name]})
-            view.discovery_id = discovery_id
-            from ..service.harness_health import read_health
-            from ...buddy.harnesses.runtime_selection import bound
-            # Publication can run in a background discovery thread with no
-            # request context. Derive certificates from this transaction's
-            # authoritative health version, not a stale or absent caller bind.
-            with bound([read_health(db, name)]):
-                entries = view.proposed_buddies()
-            seen = {p['buddyId'] for p in entries}
-            model_services = {(p['provider'], p['model']) for p in entries}
-            pending = _pending_map(db, name)
-            # The model services the last adopted catalog still listed as available.
-            # Health 0s on buddy rows are deliberately absent here: they are
-            # not evidence that a native model disappeared (ADR-027 rule 2).
-            retained_identities = identities_from_payload(
-                prior['payload_json'] if prior is not None else None, name)
-            retained = {(provider, model) for provider, model, _effort in retained_identities}
-            existing = db.execute('SELECT buddy_id,provider,model,effort,available,unavailable_code'
-                                  ' FROM buddies WHERE harness=?', (name,)).fetchall()
-            model_service_rows: dict[tuple[str, str], list] = {}
-            for row in existing:
-                model_service_rows.setdefault((row['provider'], row['model']), []).append(row)
-            absent_before = {model_service for model_service, rows in model_service_rows.items()
-                             if rows and all(not row['available'] for row in rows)
-                             and any(row['unavailable_code'] == CONFIRMED_ABSENCE_REASON for row in rows)}
-            for model_service, rows in model_service_rows.items():
-                if model_service in model_services:
-                    continue
-                if _model_service_key(*model_service) not in pending and model_service not in retained:
-                    # An archived board can retain a user's configured buddy
-                    # without retaining any catalog history. Its first trusted
-                    # reading grounds the absence directly in catalog evidence.
-                    db.execute('UPDATE buddies SET available=0,unavailable_code=?,unavailable_params_json=?,unavailable_content=NULL'
-                               ' WHERE harness=? AND provider=? AND model=?',
-                               (CONFIRMED_ABSENCE_REASON, '{}', name, *model_service))
-                    continue
-                # ADR-027 rule 2: disappearance is a model-identity question. An
-                # effort that vanished while its model remains is a metadata
-                # retirement, never a model disappearance.
-                key = _model_service_key(*model_service)
-                since = pending[key]['since'] if key in pending else None
-                first_absence, moment = _parse_time(since), _parse_time(now)
-                if since is None:
-                    efforts = sorted(effort for provider, model, effort in retained_identities
-                                     if (provider, model) == model_service)
-                    pending[key] = {'since': now, 'efforts': efforts}
-                    # The prior adopted reading proves the legal efforts even
-                    # when old health code overwrote a retirement reason. Save
-                    # those efforts before the empty reading replaces it.
-                    for row in rows:
-                        if (row['effort'] in efforts and not row['available'] and
-                                row['unavailable_code'] not in (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON)):
-                            db.execute('UPDATE buddies SET available=1,unavailable_code=NULL,unavailable_params_json=NULL,unavailable_content=NULL'
-                                       ' WHERE buddy_id=?', (row['buddy_id'],))
-                    transitions.append({'kind': 'catalog.model_pending', 'harness': name,
-                                        'provider': model_service[0], 'model': model_service[1], 'pendingSince': now})
-                elif (first_absence is not None and moment is not None
-                        and (moment - first_absence).total_seconds() >= CONFIRMATION_SECONDS):
-                    db.execute('UPDATE buddies SET available=0,unavailable_code=?,unavailable_params_json=?,unavailable_content=NULL'
-                               ' WHERE harness=? AND provider=? AND model=? AND available=1',
-                               (CONFIRMED_ABSENCE_REASON, '{}', name, *model_service))
-                    pending.pop(key, None)
-                    transitions.append({'kind': 'catalog.model_unavailable', 'harness': name,
-                                        'provider': model_service[0], 'model': model_service[1],
-                                        'pendingSince': since, 'confirmedAt': now})
-                # Still inside the confirmation window (or an unparseable stamp):
-                # the model stays usable and no transition is invented.
-            # Effort rows missing while their model remains are metadata
-            # retirements; enabled remains the user's intent.
+                    health_record = json.loads(health_row['record_json'])
+                    health_record['billingByProvider'] = {
+                        p['provider']: zcode_access(p.get('accessType'), now)
+                        for p in discovered['providers'] if p['harness'] == name}
+                    db.execute("UPDATE harness_health SET record_json=? WHERE harness='zcode'", (canonical_json(health_record),))
+            native = [p for p in discovered['providers'] if p['harness'] == name]
+            listed = {(p['provider'], m['id']): m for p in native for m in p['models']}
+            existing = db.execute('SELECT * FROM model_services WHERE harness=?', (name,)).fetchall()
             for old in existing:
-                if old['buddy_id'] not in seen and (old['provider'], old['model']) in model_services:
-                    db.execute('UPDATE buddies SET available=0,unavailable_code=?,unavailable_params_json=?,unavailable_content=NULL WHERE buddy_id=?',
-                               (RETIRED_EFFORT_REASON, '{}', old['buddy_id']))
-            for p in entries:
-                from ..service.harness_health import read_health
-                health = read_health(db, name)
-                if p['available'] and health['status'] != 'ready':
-                    p = {**p, 'available': False, 'unavailableReason': health['reason'],
-                         'unavailableContent': None}
-                existing_row = db.execute('SELECT harness,provider,model,effort FROM buddies WHERE buddy_id=?', (p['buddyId'],)).fetchone()
-                if existing_row and tuple(existing_row) != tuple(p[key] for key in ('harness', 'provider', 'model', 'effort')):
-                    raise BoardError('CATALOG_INVALID', 'A native buddy ID collided with a different execution identity', buddyId=p['buddyId'])
-                unavailable = p['unavailableReason']
-                db.execute('INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_code,unavailable_params_json,unavailable_content) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,?) ON CONFLICT(buddy_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_code=excluded.unavailable_code,unavailable_params_json=excluded.unavailable_params_json,unavailable_content=excluded.unavailable_content', (p['buddyId'], p['label'], p['harness'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], unavailable['code'] if unavailable else None, canonical_json(unavailable['params']) if unavailable else None, p['unavailableContent']))
-            # ADR-027 rules 2 and 6: reappearance inside a trusted reading
-            # recovers the model service, clears its first absence and says so once.
-            for model_service in model_services:
-                key = _model_service_key(*model_service)
-                if key not in pending and model_service not in absent_before:
+                key = (old['provider'], old['model'])
+                if key in listed or old['confirmed_absent_at'] is not None:
                     continue
-                window = pending.pop(key, None)
-                since = window['since'] if window is not None else None
-                usable = db.execute('SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? AND available=1 LIMIT 1',
-                                    (name, *model_service)).fetchone() is not None
-                if usable:
-                    transition = {'kind': 'catalog.model_recovered', 'harness': name,
-                                  'provider': model_service[0], 'model': model_service[1], 'recoveredAt': now}
-                    if since:
-                        transition['pendingSince'] = since
-                    transitions.append(transition)
-            _write_pending_map(db, name, pending)
-        table_changed = False
-        for row in db.execute('SELECT * FROM buddies').fetchall():
-            if before.get(row['buddy_id']) != _buddy_content(row):
-                table_changed = True
-        pending_after = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending ORDER BY harness,provider,model')]
-        table_changed = table_changed or pending_before != pending_after
-        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'buddies': CatalogView(payload).proposed_buddies(), 'appliedHarnesses': applied, 'staleHarnesses': stale}
-        db.execute('UPDATE catalog_observations SET response_json=? WHERE observation_id=?', (canonical_json(response), observation_id))
+                if old['pending_since'] is None:
+                    # Without an adopted available reading there is no legal
+                    # model state to retain during a confirmation window.
+                    if old['source_sequence'] is None or old['unavailable_code'] is not None:
+                        db.execute('UPDATE model_services SET confirmed_absent_at=? WHERE harness=? AND provider=? AND model=?', (now, name, *key))
+                    else:
+                        db.execute('UPDATE model_services SET pending_since=? WHERE harness=? AND provider=? AND model=?', (now, name, *key))
+                        transitions.append({'kind': 'catalog.model_pending', 'harness': name,
+                                            'provider': key[0], 'model': key[1], 'pendingSince': now})
+                else:
+                    first, moment = _parse_time(old['pending_since']), _parse_time(now)
+                    if first is not None and moment is not None and (moment - first).total_seconds() >= CONFIRMATION_SECONDS:
+                        db.execute('UPDATE model_services SET pending_since=NULL,confirmed_absent_at=? WHERE harness=? AND provider=? AND model=?', (now, name, *key))
+                        transitions.append({'kind': 'catalog.model_unavailable', 'harness': name,
+                                            'provider': key[0], 'model': key[1], 'pendingSince': old['pending_since'], 'confirmedAt': now})
+            old_by_key = {(row['provider'], row['model']): row for row in existing}
+            view = CatalogView({**discovered, 'providers': native})
+            entries = view.proposed_buddies()
+            for (provider, model), metadata in listed.items():
+                unavailable = metadata['unavailableReason']
+                facts = {
+                    'description': metadata['description'], 'context_window': metadata['contextWindow'],
+                    'input_modalities_json': canonical_json(metadata['inputModalities']),
+                    'unavailable_code': unavailable['code'] if unavailable else None,
+                    'unavailable_params_json': canonical_json(unavailable['params']) if unavailable else None,
+                    'unavailable_content': metadata['unavailableContent'],
+                    'pending_since': None, 'confirmed_absent_at': None,
+                }
+                old = old_by_key.get((provider, model))
+                efforts = [row['effort'] for row in db.execute(
+                    'SELECT effort FROM buddies WHERE harness=? AND provider=? AND model=? AND retired=0 ORDER BY effort_rank,buddy_id',
+                    (name, provider, model))]
+                if (old is None or old['source_sequence'] is None
+                        or any(old[field] != value for field, value in facts.items())
+                        or efforts != metadata['efforts']):
+                    db.execute('INSERT INTO model_services(harness,provider,model,description,context_window,input_modalities_json,'
+                               'unavailable_code,unavailable_params_json,unavailable_content,pending_since,confirmed_absent_at,source_sequence) '
+                               'VALUES(?,?,?,?,?,?,?,?,?,?,?,?) '
+                               'ON CONFLICT(harness,provider,model) DO UPDATE SET description=excluded.description,context_window=excluded.context_window,'
+                               'input_modalities_json=excluded.input_modalities_json,unavailable_code=excluded.unavailable_code,'
+                               'unavailable_params_json=excluded.unavailable_params_json,unavailable_content=excluded.unavailable_content,'
+                               'pending_since=NULL,confirmed_absent_at=NULL,source_sequence=excluded.source_sequence',
+                               (name, provider, model, *facts.values(), sequence))
+                marks = ','.join('?' for _ in metadata['efforts'])
+                db.execute('UPDATE buddies SET retired=1 WHERE harness=? AND provider=? AND model=? '
+                           f'AND retired=0 AND effort NOT IN ({marks})', (name, provider, model, *metadata['efforts']))
+                if old is not None and (old['pending_since'] is not None or old['confirmed_absent_at'] is not None):
+                    if metadata['available'] and read_health(db, name)['status'] == 'ready':
+                        transition = {'kind': 'catalog.model_recovered', 'harness': name, 'provider': provider,
+                                      'model': model, 'recoveredAt': now}
+                        if old['pending_since'] is not None:
+                            transition['pendingSince'] = old['pending_since']
+                        transitions.append(transition)
+            ranks = view.effort_ranks()
+            for entry in entries:
+                identity = tuple(entry[key] for key in ('harness', 'provider', 'model', 'effort'))
+                old = db.execute('SELECT harness,provider,model,effort FROM buddies WHERE buddy_id=?', (entry['buddyId'],)).fetchone()
+                if old is not None and tuple(old) != identity:
+                    raise BoardError('CATALOG_INVALID', 'A native buddy ID collided with a different execution identity', buddyId=entry['buddyId'])
+                db.execute('INSERT INTO buddies(buddy_id,harness,provider,model,effort,effort_rank,retired,enabled) VALUES(?,?,?,?,?,?,0,0) '
+                           'ON CONFLICT(buddy_id) DO UPDATE SET effort_rank=excluded.effort_rank,retired=0 '
+                           'WHERE buddies.effort_rank!=excluded.effort_rank OR buddies.retired!=0',
+                           (entry['buddyId'], *identity, ranks[identity[:3]][entry['effort']]))
+                ensure_model_service(db, *identity[:3], now)
+            # Retired efforts follow all efforts in the current native order.
+            for provider, model in listed:
+                offset = len(listed[(provider, model)]['efforts'])
+                retired = db.execute('SELECT buddy_id FROM buddies WHERE harness=? AND provider=? AND model=? AND retired=1 ORDER BY effort_rank,buddy_id', (name, provider, model)).fetchall()
+                for rank, old in enumerate(retired, offset):
+                    db.execute('UPDATE buddies SET effort_rank=? WHERE buddy_id=? AND effort_rank!=?', (rank, old['buddy_id'], rank))
+        changed = before != _content(db)
         for transition in transitions:
             kind = transition.pop('kind')
             evaluation.board._append_event(db, kind, payload=transition)
-        if table_changed:
-            evaluation.board._append_event(db, 'evaluation.catalog_discovered', payload={'discoveryId': discovery_id, 'observationId': observation_id, 'appliedHarnesses': applied, 'staleHarnesses': stale})
+        response = _response(db, applied=applied, stale=stale)
+        if changed:
+            evaluation.board._append_event(db, 'evaluation.catalog_discovered', payload={
+                'appliedHarnesses': applied, 'staleHarnesses': stale})
         head = evaluation.board._head_of(db)
-    if table_changed:
+    if changed:
         evaluation.board._notify(head)
     return response
 
 
 def buddies(evaluation, params):
     from ...protocol import schemas
-    schemas.reject_unknown(params, {'limit', 'after', 'includeUnavailable', 'query', 'harness'}, 'buddy.list')
+    schemas.reject_unknown(params, {'limit', 'after', 'includeUnavailable', 'query', 'harness', 'enabled'}, 'buddy.list')
     limit = params.get('limit', 100)
     if type(limit) is not int or not 1 <= limit <= 200:
         raise BoardError('INVALID_ARGUMENT', 'limit must be between 1 and 200')
@@ -260,24 +239,23 @@ def buddies(evaluation, params):
     include = schemas.optional_bool(params, 'includeUnavailable', False)
     query = schemas.optional_string(params, 'query', max_length=200) or ''
     harness = schemas.optional_string(params, 'harness', max_length=32)
-    clauses = ['p.buddy_id>?', "(? OR (p.available=1 AND h.status='ready'))"]
-    values = [after, int(include)]
-    if harness:
-        clauses.append('p.harness=?')
-        values.append(harness)
-    for term in query.split()[:8]:
-        escaped = term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-        clauses.append("(p.buddy_id LIKE ? ESCAPE '\\' OR p.label LIKE ? ESCAPE '\\' OR p.model LIKE ? ESCAPE '\\' OR p.provider LIKE ? ESCAPE '\\' OR p.harness LIKE ? ESCAPE '\\')")
-        values.extend(['%' + escaped + '%'] * 5)
-    if len(query.split()) > 8:
+    enabled = schemas.optional_bool(params, 'enabled', False)
+    terms = [term.casefold() for term in query.split()]
+    if len(terms) > 8:
         raise BoardError('INVALID_ARGUMENT', 'query accepts at most 8 search terms')
     with evaluation.db.read() as db:
-        rows = db.execute('SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM buddies p LEFT JOIN harness_health h ON h.harness=p.harness LEFT JOIN catalog_current c ON c.harness=p.harness WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.buddy_id LIMIT ?', [*values, limit + 1]).fetchall()
-        from .catalog import pending_model_services
-        pending = pending_model_services(db)
-        current_catalog = current(db)
-        effort_ranks = current_catalog.effort_ranks() if current_catalog is not None else {}
-        values = [evaluation._buddy_view(row, pending=pending, effort_ranks=effort_ranks) for row in rows[:limit]]
+        def matches(row):
+            if row['buddy_id'] <= after or (not include and not row['available']):
+                return False
+            if enabled and not row['enabled']:
+                return False
+            fields = tuple(str(row[field] or '').casefold() for field in
+                           ('alias', 'model', 'provider', 'harness', 'effort'))
+            complete_name = f"{row['harness']} / {row['provider']} / {row['model']} / {row['effort']}".casefold()
+            return all(any(term in field for field in (*fields, complete_name)) for term in terms)
+        candidates = sorted(buddy_state.rows(db, harness=harness), key=lambda row: row['buddy_id'])
+        rows = list(islice((row for row in candidates if matches(row)), limit + 1))
+        values = [evaluation._buddy_view(row) for row in rows[:limit]]
         from ...protocol.billing import for_provider
         from ..routing.quota_routing import cooling
         for value in values:

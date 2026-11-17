@@ -95,6 +95,8 @@ class FocusedChecksTests(unittest.TestCase):
                    if name == "frontend-vitest" else ""),
                 encoding="utf-8", newline="\n",
             )
+        (console / "node_modules" / "semver").mkdir(parents=True, exist_ok=True)
+        (console / "node_modules" / "semver" / "package.json").write_text("{}", encoding="utf-8")
         return console
 
     def invoke(self, arguments, *, process_table=(), node=sys.executable):
@@ -108,6 +110,9 @@ class FocusedChecksTests(unittest.TestCase):
             patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(self.temporary),
                                     "HMB_RUNTIME": "/fixture/pinned-runtime",
                                     "HMB_AGENT_CREDENTIAL_FD": "17", "HMB_NODE": node}),
+            # The synthetic frontend runs Python as Node; its version gate is
+            # covered separately by test_checks_node_version.
+            patch.object(checks, "node_version_failure", return_value=None),
             observer,
             patch.object(checks, "_windows_owned_processes",
                          return_value=([], ["fixture process observation incomplete"], []))
@@ -129,15 +134,21 @@ class FocusedChecksTests(unittest.TestCase):
             ([str(self.top / "test_first.py")], ["test_first"]),
             (["tests/python/nested"], ["nested.deeper.test_third", "nested.test_second"]),
             (["tests/python/test_first.py", "tests/python/nested"],
-             ["nested.deeper.test_third", "nested.test_second", "test_first"]),
+             ["test_first", "nested.deeper.test_third", "nested.test_second"]),
             (["tests/python/test_first.py", str(self.top / "test_first.py"), "tests/python"],
-             ["nested.deeper.test_third", "nested.test_second", "test_first"]),
+             ["test_first", "nested.deeper.test_third", "nested.test_second"]),
         )
         for arguments, expected in cases:
             with self.subTest(arguments=arguments):
                 self.assertEqual(checks.selected_test_modules(self.root, arguments), expected)
         self.assertEqual(checks.selected_test_modules(self.root, []),
                          checks.python_test_modules(self.root))
+
+    def test_explicit_file_priority_reaches_the_worker_queue(self):
+        code, output, errors = self.invoke(['--jobs', '1',
+            'tests/python/nested/test_second.py', 'tests/python/test_first.py'])
+        self.assertEqual(code, 0, errors + output)
+        self.assertLess(output.index('] nested.test_second ok'), output.index('] test_first ok'))
 
     def test_all_usage_errors_precede_private_root_creation(self):
         for arguments in (
@@ -154,6 +165,20 @@ class FocusedChecksTests(unittest.TestCase):
                 if not arguments[0].startswith("--"):
                     self.assertIn(arguments[0], errors)
                 self.assertEqual(list(self.temporary.iterdir()), [])
+
+    def test_rejected_private_root_is_removed_before_any_suite_runs(self):
+        error = BoardError("PRIVATE_PATH_UNSAFE", "State root has an untrusted ancestor")
+        with (patch.object(checks.state_root, "check_state_root", side_effect=error) as checked,
+              patch.object(checks, "run_suites_parallel") as run):
+            code, output, errors = self.invoke(["tests/python/test_first.py"])
+        self.assertEqual(code, 2, errors + output)
+        checked.assert_called_once()
+        rejected = checked.call_args.args[0]
+        self.assertIn(str(rejected), errors)
+        self.assertIn(error.message, errors)
+        self.assertFalse(rejected.exists())
+        self.assertEqual(list(self.temporary.iterdir()), [])
+        run.assert_not_called()
 
     def test_focused_serial_and_parallel_runs_start_each_selected_file_once(self):
         for jobs in (1, 2):
@@ -356,6 +381,100 @@ class FocusedChecksTests(unittest.TestCase):
         self.assertIn(f"tests passed; teardown incomplete; preserved {retained}; exit 3",
                       output.splitlines()[-1])
 
+    def test_deferred_windows_fixture_cleanup_is_summarized_after_final_removal_and_failure(self):
+        for winerror, fails, expected_code in ((5, False, 0), (32, True, 1)):
+            with self.subTest(winerror=winerror, fails=fails):
+                name = f"test_deferred_cleanup_{winerror}"
+                (self.top / f"{name}.py").write_text(
+                    "import os, tempfile, unittest\nfrom pathlib import Path\nfrom unittest.mock import patch\n"
+                    "from hey_my_buddy.cli import checks\n"
+                    "class Case(unittest.TestCase):\n"
+                    "    def test_fixture_cleanup(self):\n"
+                    f"        error = OSError('fixture WinError {winerror}')\n"
+                    f"        error.winerror = {winerror}\n"
+                    "        with patch.object(checks, 'os', wraps=os) as windows, "
+                    "patch.object(checks, 'remove_private_test_root', side_effect=error):\n"
+                    "            windows.name = 'nt'\n"
+                    "            with tempfile.TemporaryDirectory() as scratch:\n"
+                    "                Path(scratch, 'evidence').write_bytes(b'fixture')\n"
+                    + ("        self.fail('fixture assertion')\n" if fails else ""),
+                    encoding="utf-8", newline="\n",
+                )
+                code, output, errors = self.invoke(["--jobs", "1", f"tests/python/{name}.py"])
+                self.assertEqual(code, expected_code, errors + output)
+                self.assertIn("fixture cleanup deferred 1 time(s):", output)
+                self.assertIn(f"  {name}: ", output)
+                self.assertIn(f"fixture WinError {winerror}", output)
+                self.assertIn("private root removed", output.splitlines()[-1])
+                self.assertEqual(list(self.temporary.iterdir()), [])
+                if fails:
+                    self.assertIn("fixture assertion", output)
+                    self.assertIn("tests failed:", output.splitlines()[-1])
+                else:
+                    self.assertIn("tests passed; private root removed; exit 0", output.splitlines()[-1])
+
+    def test_blocked_fixture_deletion_preserves_passing_result_and_teardown_evidence(self):
+        (self.top / "test_blocked_cleanup.py").write_text(
+            "import os, tempfile, unittest\nfrom pathlib import Path\nfrom unittest.mock import patch\n"
+            "from hey_my_buddy.cli import checks\n"
+            "class Case(unittest.TestCase):\n"
+            "    def test_fixture_passes(self):\n"
+            "        error = OSError('fixture delete-pending entry')\n"
+            "        error.winerror = 145\n"
+            "        def blocked(root, *, onexc):\n"
+            "            try:\n                raise FileNotFoundError('pending')\n"
+            "            except FileNotFoundError as missing:\n"
+            "                onexc(os.unlink, str(Path(root, 'pending')), missing)\n"
+            "            try:\n                raise error\n"
+            "            except OSError as blocked:\n                onexc(os.rmdir, str(root), blocked)\n"
+            "        with patch.object(checks, 'os', wraps=os) as windows, "
+            "patch.object(checks.shutil, 'rmtree', side_effect=blocked):\n"
+            "            windows.name = 'nt'\n"
+            "            with tempfile.TemporaryDirectory() as scratch:\n"
+            "                Path(scratch, 'evidence').write_bytes(b'fixture passed')\n"
+            "            self.assertTrue(Path(scratch, 'evidence').exists())\n",
+            encoding="utf-8", newline="\n",
+        )
+        error = OSError("fixture delete-pending entry")
+        error.winerror = 145
+        with patch.object(checks, "remove_private_test_root", side_effect=error):
+            code, output, errors = self.invoke(["--jobs", "1", "tests/python/test_blocked_cleanup.py"])
+        self.assertEqual(code, 3, errors + output)
+        retained, = self.temporary.iterdir()
+        self.assertEqual([path.read_bytes() for path in retained.rglob("evidence")], [b"fixture passed"])
+        evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(evidence["cleanupError"], "OSError: fixture delete-pending entry")
+        self.assertIn("test_blocked_cleanup ok", output)
+        self.assertIn("fixture cleanup deferred 1 time(s):", output)
+        self.assertIn("  test_blocked_cleanup: ", output)
+        self.assertIn("fixture delete-pending entry", output)
+        self.assertIn(f"tests passed; teardown incomplete; preserved {retained}; exit 3",
+                      output.splitlines()[-1])
+
+    def test_unobservable_fixture_path_still_requires_the_runners_final_removal(self):
+        (self.top / "test_missing_fixture_path.py").write_text(
+            "import tempfile, unittest\nfrom pathlib import Path\nfrom unittest.mock import patch\n"
+            "from hey_my_buddy.cli import checks\n"
+            "class Case(unittest.TestCase):\n"
+            "    def test_fixture_passes(self):\n"
+            "        with patch.object(checks.shutil, 'rmtree', side_effect=FileNotFoundError('fixture path unobservable')):\n"
+            "            with tempfile.TemporaryDirectory() as scratch:\n"
+            "                Path(scratch, 'evidence').write_bytes(b'fixture passed')\n"
+            "        self.assertTrue(Path(scratch, 'evidence').exists())\n",
+            encoding="utf-8", newline="\n",
+        )
+        error = OSError("fixture directory still nonempty")
+        error.winerror = 145
+        with patch.object(checks, "remove_private_test_root", side_effect=error):
+            code, output, errors = self.invoke(["--jobs", "1", "tests/python/test_missing_fixture_path.py"])
+        self.assertEqual(code, 3, errors + output)
+        retained, = self.temporary.iterdir()
+        self.assertEqual([path.read_bytes() for path in retained.rglob("evidence")], [b"fixture passed"])
+        evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(evidence["cleanupError"], "OSError: fixture directory still nonempty")
+        self.assertIn("test_missing_fixture_path ok", output)
+        self.assertIn("tests passed; teardown incomplete; preserved", output.splitlines()[-1])
+
 
 class WindowsSweepTests(unittest.TestCase):
     def test_windows_refuses_sweep_without_changing_roots_or_evidence(self):
@@ -491,7 +610,9 @@ class SweepTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "POSIX account ownership")
     def test_sweep_does_not_touch_another_users_directory(self):
-        root = self.abandoned()
+        # A retained root belongs to an earlier runner, so this process has
+        # never checked or cached its private boundary.
+        root = Path(tempfile.mkdtemp(prefix="hey-my-buddy-checks-", dir=self.directory))
         original = Path.stat
         def foreign(path, *args, **kwargs):
             metadata = original(path, *args, **kwargs)
@@ -508,7 +629,8 @@ class SweepTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "POSIX owner-private mode")
     def test_sweep_rejects_shared_permissions_without_repair(self):
-        root = self.abandoned()
+        root = Path(tempfile.mkdtemp(prefix="hey-my-buddy-checks-", dir=self.directory))
+        (root / checks.CREATOR_FILE_NAME).write_text("999999999\n", encoding="utf-8", newline="\n")
         root.chmod(0o755)
         code, output = self.sweep([])
         self.assertEqual(code, 3, output)
@@ -519,10 +641,7 @@ class SweepTests(unittest.TestCase):
     def test_default_sweep_location_matches_root_creation_location(self):
         environment = {key: value for key, value in os.environ.items() if key != "HMB_CHECKS_TMPDIR"}
         with patch.dict(os.environ, environment, clear=True):
-            with patch.object(checks.sys, "platform", "darwin"):
-                self.assertEqual(checks.private_root_directory(), Path("/tmp"))
-            with patch.object(checks.sys, "platform", "linux"):
-                self.assertEqual(checks.private_root_directory(), Path(tempfile.gettempdir()))
+            self.assertEqual(checks.private_root_directory(), Path(tempfile.gettempdir()))
 
 
 if __name__ == "__main__":

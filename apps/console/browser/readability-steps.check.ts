@@ -19,9 +19,11 @@ for (const { locale, previous, next, copy, failed } of [
       await expect(back).toBeDisabled();
       await expect(forward).toBeEnabled();
       await back.hover();
-      await expect(page.getByRole("tooltip")).toContainText(previous);
+      await page.waitForTimeout(700);
+      await expect(page.getByRole("tooltip")).toHaveCount(0);
       await forward.hover();
-      await expect(page.getByRole("tooltip")).toContainText(next);
+      await page.waitForTimeout(700);
+      await expect(page.getByRole("tooltip")).toHaveCount(0);
       await page.mouse.move(0, 0);
       const [navigation, track, arrow] = await Promise.all([
         strip.locator('[data-slot="step-navigation"]').boundingBox(),

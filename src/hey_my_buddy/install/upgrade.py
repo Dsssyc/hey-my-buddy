@@ -22,6 +22,8 @@ from .launcher import write_active_runtime
 from ..protocol.contracts import CONTRACT_VERSION
 from ..protocol.service_process import independent_service_popen
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
+from ..blackboard.store.upgrade import supported_schema, upgrade_state
+from ..blackboard.store.work import autonomous_tasks
 from ..errors import BoardError
 
 # A private C-Two 0.7.5 restart with one frozen execution released ownership
@@ -64,25 +66,13 @@ def file_lock(path: Path, *, timeout: float = 0):
 
 def _idle_board(connection: sqlite3.Connection) -> int:
     schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if schema is None or schema[0] != str(SCHEMA_VERSION):
-        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {SCHEMA_VERSION}')
-    # A micro-task Host boundary has no autonomous next turn. A recorded or
-    # queued continuation still has work to prepare/claim, even if the run
-    # currently reports a Host boundary. Routing and helper tasks are checked
-    # independently below through the complete task inventory.
-    active = connection.execute(
-        "SELECT t.task_id,t.state FROM tasks t"
-        " WHERE t.state IN ('queued','running','cancelling','reconciliation-needed')"
-        " AND NOT (t.state='queued' AND EXISTS ("
-        " SELECT 1 FROM workflow_runs r WHERE r.run_id=t.task_id AND r.state='awaiting-host'"
-        " AND NOT EXISTS (SELECT 1 FROM workflow_continuations c WHERE c.run_id=r.run_id"
-        " AND c.state IN ('recorded','queued'))))"
-    ).fetchall()
-    unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1").fetchall()
+    version = supported_schema(schema[0] if schema is not None else None)
+    active = autonomous_tasks(connection)
+    unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1 OR cleanup_pending=1").fetchall()
     if active or unresolved:
         raise BoardError('UPGRADE_NOT_IDLE', 'Upgrade requires idle work and confirmed shutdown; no task was cancelled',
-                         active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
-    return int(schema[0])
+                         active=active[:20], unresolvedAttempts=[r[0] for r in unresolved[:20]])
+    return version
 
 
 def ensure_idle(state: Path) -> int:
@@ -183,6 +173,48 @@ def detach(state: Path, target: Path, *, require_idle: bool) -> None:
         # detached. The caller then restores that runtime without touching work.
         if require_idle:
             ensure_idle(state)
+
+
+def _rebuild_ipc_root(state: Path) -> None:
+    """Retire a private Unix namespace under the start and idle owner fences."""
+    if os.name == 'nt':
+        return
+    state_fd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(state_fd)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'IPC removal requires a private state directory', path=str(state))
+        try:
+            info = os.stat('ipc', dir_fd=state_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'IPC removal requires a private directory without links',
+                             path=str(state / 'ipc'))
+        shutil.rmtree('ipc', dir_fd=state_fd)
+    finally:
+        os.close(state_fd)
+
+
+def _retire_host_files(state: Path) -> list[str]:
+    """Remove old Host-only files after the replacement service is verified."""
+    removed = [name for name in ('controls', 'submissions')
+               if private_dirs.remove_tree(state / name)]
+    if removed:
+        private_files.sync_directory(state, follow_symlinks=False)
+    return removed
+
+
+def _finish_host_retirement(state: Path, journal: dict) -> dict:
+    """Retire schema-34 Host files once; failure cannot fence a verified install."""
+    if journal['before']['schema'] >= 35:
+        return {}
+    try:
+        journal['retiredHostDirectories'] = _retire_host_files(state)
+    except (OSError, BoardError) as error:
+        journal['hostCleanupError'] = _failure_reason(error)
+        return {'hostCleanupError': journal['hostCleanupError']}
+    return {}
 
 
 def start(state: Path, target: Path) -> dict:
@@ -296,9 +328,10 @@ def restore(state: Path, current: Path) -> None:
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True) -> dict:
-    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != SCHEMA_VERSION:
+    expected_schema = before['schema']
+    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != expected_schema:
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match',
-                         tables=['meta'] if health.get('schemaVersion') != SCHEMA_VERSION else [])
+                         tables=['meta'] if health.get('schemaVersion') != expected_schema else [])
     settings = before.get('runtimeSettings', {})
     if any(health.get(key) != value for key, value in settings.items()):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
@@ -312,7 +345,7 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
                    if actual['fingerprints'].get(name) != value]
         if changed:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Retained database values changed', tables=changed)
-    return {'runtimeContentId': target.name, 'schemaVersion': SCHEMA_VERSION,
+    return {'runtimeContentId': target.name, 'schemaVersion': expected_schema,
             **({'retainedDataFingerprints': True} if contract_changed else {})}
 
 
@@ -326,7 +359,7 @@ def _failure_reason(error: Exception) -> dict:
 def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
     if not journal.get('skillTarget'):
         return None
-    from .skill_install import agent_skills_home, claude_skills_home, _is_link, SKILL
+    from .skill_install import agent_skills_home, harness_link_locations, _is_link, SKILL
     try:
         target, staged, previous = (Path(journal[name]) for name in ('skillTarget', 'skillStage', 'skillPrevious'))
         expected = resolved_path(agent_skills_home()) / SKILL
@@ -338,8 +371,16 @@ def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
                 or staged.name != '.hey-my-buddy-upgrade-stage-' + suffix
                 or previous.name != '.hey-my-buddy-upgrade-previous-' + suffix):
             raise ValueError('unsafe skill paths')
-        if journal.get('claudeLink') and Path(journal['claudeLink']).absolute() != claude_skills_home() / SKILL:
-            raise ValueError('unsafe Claude link')
+        facts = journal['harnessLinks']
+        locations = harness_link_locations()
+        if not isinstance(facts, dict) or facts.keys() != locations.keys():
+            raise ValueError('invalid harness link inventory')
+        for name, fact in facts.items():
+            if (not isinstance(fact, dict) or set(fact) != {'path', 'existedBefore', 'enabled', 'created'}
+                    or not isinstance(fact['path'], str) or Path(fact['path']) != locations[name][0]
+                    or any(type(fact[key]) is not bool for key in ('existedBefore', 'enabled', 'created'))
+                    or (fact['created'] and (fact['existedBefore'] or not fact['enabled']))):
+                raise ValueError('unsafe harness link fact')
         return target, staged, previous
     except (BoardError, KeyError, TypeError, ValueError):
         raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal skill paths do not match this installation') from None
@@ -357,10 +398,8 @@ def _restore_skill(journal: dict, paths: tuple[Path, Path, Path] | None) -> None
         shutil.rmtree(native_path(target))
     if native_path(staged).exists():
         shutil.rmtree(native_path(staged))
-    link = journal.get('claudeLink')
-    from .skill_install import _is_link, _remove_claude_link
-    if journal.get('claudeLinkWasMissing') and link and _is_link(Path(link)) and resolved_path(Path(link)) == target:
-        _remove_claude_link(Path(link))
+    from .skill_install import _restore_links
+    _restore_links(journal['harnessLinks'], target)
 
 
 def _publish_skill(journal: dict, paths: tuple[Path, Path, Path] | None) -> None:
@@ -370,10 +409,8 @@ def _publish_skill(journal: dict, paths: tuple[Path, Path, Path] | None) -> None
     if native_path(target).exists():
         native_path(target).rename(native_path(previous))
     native_path(staged).rename(native_path(target))
-    from .skill_install import _link_claude
-    linked = _link_claude(target)
-    if linked['status'] == 'linked':
-        journal['createdClaudeLink'] = linked['path']
+    from .skill_install import _link_harnesses
+    _link_harnesses(target, journal['harnessLinks'])
 
 
 def _verify_skill_generation(paths: tuple[Path, Path, Path] | None, target: Path, health: dict) -> None:
@@ -491,11 +528,9 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
             journal = {'startedAt': utc_now(), 'previous': str(previous), 'target': str(target), 'phase': 'preflight',
                        'contractChanged': contract_changed, 'before':before, 'environment':preserved}
             if skill_stage is not None:
-                from .skill_install import claude_skills_home, SKILL
-                claude_link = claude_skills_home() / SKILL
+                from .skill_install import _link_facts
                 journal.update(skillTarget=str(skill_target), skillStage=str(skill_stage), skillPrevious=str(skill_previous),
-                               skillHadPrevious=native_path(skill_target).exists(), claudeLink=str(claude_link),
-                               claudeLinkWasMissing=not native_path(claude_link).exists() and not _is_link(claude_link))
+                               skillHadPrevious=native_path(skill_target).exists(), harnessLinks=_link_facts())
             write_journal(marker, journal)
             backed_up = None
             active = previous
@@ -513,13 +548,20 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                         backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
                         journal.update(phase='backed-up', backup=backed_up)
                         write_journal(marker, journal)
-                    journal.update(phase='prepared', expected=before)
+                    expected = before
+                    if contract_changed and before['schema'] < SCHEMA_VERSION:
+                        migration = upgrade_state(state)
+                        expected = {**idle_snapshot(state), 'runtimeSettings': runtime_settings}
+                        journal['schemaUpgrade'] = migration
+                    journal.update(phase='prepared', expected=expected)
                     write_journal(marker, journal)
+                    if contract_changed:
+                        _rebuild_ipc_root(state)
                 active = target
                 health = start(state, target)
-                evidence = verify_started(state, target, health, before, contract_changed=contract_changed)
+                evidence = verify_started(state, target, health, expected, contract_changed=contract_changed)
                 _verify_skill_generation(skill_paths, target, health)
-                journal.update(phase='skill-switching', expected=before)
+                journal.update(phase='skill-switching', expected=expected)
                 write_journal(marker, journal)
                 _publish_skill(journal, skill_paths)
                 write_journal(marker, journal)
@@ -546,7 +588,9 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                     if backed_up is not None:
                         with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
                              file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):
+                            ensure_idle(state)
                             restore(state, Path(backed_up['path']))
+                            _rebuild_ipc_root(state)
                     # A race admitted work before the old daemon detached: preserve it
                     # and restart the previous runtime without restoring an older DB.
                     recovered = start(state, previous)
@@ -571,6 +615,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                     retained = 'journal and backup retained' if backed_up is not None else 'journal retained'
                     raise BoardError('UPGRADE_RECOVERY_REQUIRED', f'Automatic rollback could not prove recovery; {retained}; rerun install to recover', journal=str(marker),
                                      reason=reason, recoveryReason=journal['recoveryFailure']) from recovery
+            host_cleanup = _finish_host_retirement(state, journal)
             write_journal(state / 'upgrade-last.json', journal)
             skill_cleanup_error = _finish_skill(skill_paths)
             journal_error = None
@@ -581,6 +626,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
             pruning = retain_runtimes(state, target, previous)
             return {'upgraded':True, **({'backup':backed_up} if backed_up is not None else {}), 'verification':evidence, 'previousRuntime':previous.name,
                     'rollback':None, 'runtimePruning':pruning,
+                    **host_cleanup,
                     **({'skillCleanupError':skill_cleanup_error} if skill_cleanup_error is not None else {}),
                     **({'journalError':journal_error} if journal_error is not None else {})}
 
@@ -603,6 +649,7 @@ def recover(state: Path, root: Path) -> dict:
         _verify_skill_generation(skill_paths, target, target_health)
         write_active_runtime(state, target, journal.get('environment'))
         journal.update(verification=evidence)
+        host_cleanup = _finish_host_retirement(state, journal)
         write_journal(state / 'upgrade-last.json', journal)
         skill_cleanup_error = _finish_skill(skill_paths)
         journal_error = None
@@ -612,6 +659,7 @@ def recover(state: Path, root: Path) -> dict:
             journal_error = str(error)
         pruning = retain_runtimes(state, target, previous)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence, 'runtimePruning':pruning,
+                **host_cleanup,
                 **({'backup':journal['backup']} if 'backup' in journal else {}),
                 **({'skillCleanupError':skill_cleanup_error} if skill_cleanup_error is not None else {}),
                 **({'journalError':journal_error} if journal_error is not None else {})}
@@ -644,6 +692,7 @@ def recover(state: Path, root: Path) -> dict:
     with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
          file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):
         if contract_changed:
+            ensure_idle(state)
             saved = journal.get('backup')
             if saved is not None:
                 current = state / 'backups/current'
@@ -651,6 +700,7 @@ def recover(state: Path, root: Path) -> dict:
                     raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match this installation')
                 restore(state, current)
             before = idle_snapshot(state)
+            _rebuild_ipc_root(state)
         else:
             before = journal['before']
     health = start(state, previous)

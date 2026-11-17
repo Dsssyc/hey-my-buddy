@@ -9,6 +9,7 @@ from unittest import mock
 from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
+from hey_my_buddy.buddy.roles.prompts import PromptText
 from hey_my_buddy.buddy.roles import inline_run, router, run_execution, structured_call, turn_io
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection
 from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
@@ -77,10 +78,10 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "input.json").write_text("{}", encoding="utf-8")
-            control = {"operation": "worker", "harness": "zcode", "timeoutSeconds": None,
+            control = {"operation": "worker", "harness": "zcode",
                        "inputFile": str(root / "input.json"), "nativeRoot": directory}
-            handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
-            with mock.patch.object(run_execution, "worker_request", return_value=(request, None, None, None)), \
+            handle = run_execution.InlineRunHandle(control, request.identity)
+            with mock.patch.object(run_execution, "worker_request", return_value=(request, None, None, None, PromptText((("task", request.input_text),)).parts)), \
                  mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)), \
                  mock.patch.object(inline_run, "run_harness", return_value=result), \
                  mock.patch.object(run_execution, "_worker_result", return_value=turn) as publish:
@@ -150,7 +151,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
             handle = SimpleNamespace(role_run_control=control, role_run_identity=result.identity,
                                      role_run_original_identity=result.identity, result=result,
                                      role_run_active_control=control, role_run_active_identity=result.identity,
-                                     cancel_requested=False, turn_record=None, error=None,
+                                     cancel_requested=False, stop_initiator=None, turn_record=None, error=None,
                                      exit_code=0, shutdown_confirmed=lambda: True)
             partial = [{"kind": "partial-workspace", "location": directory}]
             with mock.patch.object(run_execution, "_read_request", return_value=self.request()), \
@@ -165,11 +166,11 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         self.assertEqual(outcome.result["tokenUsage"], result.usage.value)
         self.assertEqual(outcome.result["lastAssistantMessage"]["text"], "done")
         self.assertTrue(outcome.result["nativeSession"]["present"])
-        self.assertEqual(outcome.result["workspaceManifest"], {"partial": True})
+        self.assertNotIn("workspaceManifest", outcome.result)
         self.assertEqual(outcome.artifacts, partial)
 
-    def router_collect(self, payload, mode="fast"):
-        context = SimpleNamespace(decision_input={"buddy": {}, "budget": {},
+    def router_collect(self, payload, mode="fast", domain_nodes=()):
+        context = SimpleNamespace(decision_input={"domainNodes": list(domain_nodes), "buddy": {}, "budget": {},
                                                  "routingMode": mode, "buddies": [{"buddyId": "chosen"}]})
         handle = SimpleNamespace(role_run_control={"operation": mode},
                                  exit_code=0, shutdown_confirmed=lambda: True)
@@ -199,11 +200,41 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         self.assertIsNone(correction.stop_reason)
         evidence = rc.NativeEvidence(unknown_events=facts["unknownEvents"])
         payload = self.project(self.result(evidence=evidence))[0]
-        payload["rawAnswer"] = {"buddyId": "chosen", "note": "fits", "evidence": []}
+        payload["rawAnswer"] = {"domainNodeId": None, "taskType": "change", "buddyId": "chosen", "note": "fits", "evidence": []}
         outcome = self.router_collect(payload)
         self.assertEqual(outcome.status, "ok")
         self.assertEqual(outcome.result["decision"]["buddyId"], "chosen")
         self.assertEqual(outcome.result["nativeEvidence"]["unknownEvents"], facts["unknownEvents"])
+
+    def test_router_role_uses_the_frozen_domain_enum_in_both_modes(self):
+        for mode, payload in zip(("fast", "review"), self.project(self.result())):
+            answer = {"buddyId": "chosen", "domainNodeId": "ipc", "taskType": "debug",
+                      "note": "fits", "evidence": [{"kind": "statistics", "ref": "chosen — IPC history"}]}
+            payload["rawAnswer"] = answer
+            nodes = [{"nodeId": "ipc", "name": "IPC"}]
+            outcome = self.router_collect(payload, mode, nodes)
+            self.assertEqual(outcome.status, "ok", outcome.result)
+            self.assertEqual(outcome.result["decision"], answer)
+            payload["rawAnswer"] = {**answer, "domainNodeId": "merged-ipc"}
+            rejected = self.router_collect(payload, mode, nodes)
+            self.assertEqual(rejected.status, "failed")
+            self.assertEqual(rejected.result["code"], "answer-shape")
+
+    def test_router_results_keep_the_harness_reported_token_usage_in_both_modes(self):
+        for mode, payload in zip(("fast", "review"), self.project(self.result())):
+            payload["rawAnswer"] = {"buddyId": "chosen", "domainNodeId": None, "taskType": "change",
+                                    "note": "fits", "evidence": []}
+            outcome = self.router_collect(payload, mode)
+            self.assertEqual(outcome.status, "ok", outcome.result)
+            self.assertEqual(outcome.result["tokenUsage"], self.result().usage.value)
+
+    def test_router_token_usage_stays_unknown_when_the_harness_reported_none(self):
+        for mode, payload in zip(("fast", "review"),
+                                 self.project(self.result().model_copy(update={"usage": None}))):
+            payload["rawAnswer"] = {"buddyId": "chosen", "domainNodeId": None, "taskType": "change",
+                                    "note": "fits", "evidence": []}
+            outcome = self.router_collect(payload, mode)
+            self.assertIsNone(outcome.result["tokenUsage"])
 
     def test_unknown_events_use_the_ordinary_format_correction_rule(self):
         correction = FastCorrection({"type": "object"}, "Choose")

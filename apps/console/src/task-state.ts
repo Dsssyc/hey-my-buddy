@@ -38,8 +38,8 @@ type TaskTitle = {
 /**
  * The one micro task title rule (0.16 0.1): explicit workflow.title, then the
  * first nonempty task line labelled 取自任务首行, then 未命名微任务. A Worker
- * resultSummary is never a title; callers show it only as a “结果” line. The
- * raw task text stays available in the detail view.
+ * result summary is never a title. The raw task text and complete report stay
+ * available in the detail view.
  */
 export function taskTitle(task: Task): TaskTitle {
   const explicit = normalizeDisplay(task.workflow?.title ?? "");

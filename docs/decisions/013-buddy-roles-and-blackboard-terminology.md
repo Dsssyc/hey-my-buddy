@@ -23,6 +23,8 @@
 
 地位对等不等于权限对等。Host 与 Worker 的权限不对称仍是不变量：Worker buddy 不能创建委派，也不能冒充 Host（见 [architecture](../reference/architecture.md#host-directed-work)）。本决定只改名，不放开这一限制；将来若允许 Worker buddy 成为子委派的 Host buddy，需要单独决定。
 
+2026-11-04 补充（开发者定）：这套术语，连同 hey-my-buddy 的机制名与记录名，只属于它自己的工作流，即黑板上的任务、续派、备注、报告与结论。buddy 在它所服务的项目里写下的东西，包括代码、注释、文档与提交历史，用那个项目自己的说法；在 hey-my-buddy 自己的仓库里，项目的说法就是这套术语，所以照旧。起因是开发者另一个项目 C-Two 的 Host 把 Host、Worker、微任务等词写进了 C-Two 自己的文档，其中 Host 与 worker 还和 C-Two 自己的术语撞了名。skill 的开头向 Host 写明这一条；Worker 与 Lead 的角色文字也要补上，另行修改。
+
 ## 考虑过的方案
 
 - **保留 "Buddy" 作为产品或服务名，Host 和 Worker 不加限定。** 现有的四种含义仍然并存，读者需要逐句猜测行动者。

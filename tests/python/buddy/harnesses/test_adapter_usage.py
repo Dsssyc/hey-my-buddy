@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from temporary import TemporaryDirectory
+import tempfile
 import unittest
 from pathlib import Path
 from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixture
@@ -26,7 +26,7 @@ CODEX_NATIVE = json.loads((FIXTURES / "codex/fixtures/native-usage-codex.json").
 
 class CodexUsageContractTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-codex-usage-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-usage-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
@@ -141,10 +141,11 @@ class DshUsageContractTests(DshRoleCase):
                 "import json, os, sys\nfrom pathlib import Path\nimport zstandard\n"
                 f"sys.path.insert(0, {str(Path(__file__).parents[2])!r})\n"
                 "from buddy.harnesses.dsh.acp import fake_agent\n"
+                "from hey_my_buddy.paths import native_path\n"
                 "original = fake_agent.FakeAgent.write_session_record\n"
                 "def record(self, session_id, prompt):\n"
                 "    original(self, session_id, prompt)\n"
-                "    path = self.sessions_dir() / (session_id + '.v3.jsonl.zstd')\n"
+                "    path = native_path(self.record_directory(session_id) / 'session.v4.jsonl.zstd')\n"
                 "    raw = zstandard.ZstdDecompressor().decompress(path.read_bytes()).decode()\n"
                 "    events = [json.loads(line) for line in raw.splitlines()]\n"
                 "    for event in events:\n"
@@ -181,7 +182,7 @@ class DshUsageContractTests(DshRoleCase):
         self.assertTrue(record.is_relative_to(native_root(
             Path(context.environment["HMB_STATE_DIR"]), "dsh", context.task_id)))
         self.assertTrue(record.is_relative_to(Path(handle.role_run_control["nativeRoot"])))
-        self.assertTrue(record.name.endswith(".v3.jsonl.zstd"))
+        self.assertTrue(record.name.endswith("session.v4.jsonl.zstd"))
 
     def test_a_bound_record_becomes_the_canonical_attempt_projection(self):
         _context, _handle, outcome = self.execute_record()

@@ -16,7 +16,8 @@ import importlib.util
 import json
 import os
 import sys
-from temporary import TemporaryDirectory
+import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -28,7 +29,7 @@ from hey_my_buddy.private_dirs import context_root
 from hey_my_buddy.buddy.harnesses.run_contract import (
     RunResult)
 from hey_my_buddy.buddy.roles import turn_io
-from hey_my_buddy.buddy.roles.controller import worker_executor
+from hey_my_buddy.buddy.roles.controller import worker_executor, worker_stop
 
 from buddy.harnesses.dsh.acp.support import FAKE_AGENT
 from buddy.harnesses.fixture_selection import mock_role_workspace
@@ -50,7 +51,7 @@ class DshRoleCase(unittest.TestCase):
     """One private root; the micro task attempt runs through the shared executor."""
 
     def setUp(self):
-        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-dsh-role-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-dsh-role-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         from hey_my_buddy.protocol.rpc_config import configure_client
@@ -94,7 +95,7 @@ class DshRoleCase(unittest.TestCase):
             task_id="task", attempt_id=attempt, generation=index,
             session_record_path=str(self.root / f"session-{attempt}.jsonl"),
             spec={**SPEC, "cwd": str(self.cwd), "task": "fixture micro task task",
-                  "expectedSeconds": 1, **({"routerBudgetSeconds": timeout} if timeout is not None else {})},
+                  "expectedSeconds": 1, **({"modelResponseWaitSeconds": timeout} if timeout is not None else {})},
             directory=self.root / "attempts" / attempt, runtime={}, environment=dict(self.environment),
             turn={"turnId": f"turn-{index}", "input": identity})
 
@@ -114,8 +115,8 @@ class DshRoleCase(unittest.TestCase):
         executor.prepare(context)
         handle = executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait((context.timeout_seconds or 15) + 15),
-                             "the role controller did not settle within its deadline")
+        self.assertIsNotNone(handle.wait(35),
+                             "the role controller did not settle")
         return handle, executor.collect(handle, context)
 
 
@@ -187,12 +188,46 @@ class DescriptionSeamTests(DshRoleCase):
 
 
 class WorkerRegisteredRunTests(DshRoleCase):
+    def test_pause_cancels_native_prompt_without_a_summary(self):
+        from hey_my_buddy.buddy.runtime.execution import classify_termination
+
+        context = self.context(timeout=None)
+        self.micro_task_record(context)
+        record = json.loads(self.record.read_text(encoding="utf-8"))
+        record["dsh"]["command"] += ["--hang-prompt"]
+        self.record.write_text(json.dumps(record), encoding="utf-8", newline="\n")
+        executor = worker_executor("dsh")
+        executor.prepare(context)
+        handle = executor.start(context)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if self.log.exists() and any(json.loads(line).get("event") == "hanging-prompt"
+                                         for line in self.log.read_text(encoding="utf-8").splitlines()):
+                break
+            time.sleep(0.02)
+        else:
+            self.fail("the fixture prompt did not start")
+        worker_stop(executor, handle, stop_initiator="pause", grace_deadline=time.monotonic() + 10)
+        self.assertIsNotNone(handle.wait(30), "DSH fixture pause did not settle")
+        outcome = executor.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=True,
+                                              stop_initiator="pause"), "pause")
+        self.assertIs(outcome.result["wrapUpDelivered"], False)
+        self.assertNotIn("turn", outcome.result)
+        self.assertTrue(handle.result.stop_evidence.interrupt.requested)
+        self.assertTrue(outcome.result["nativeSession"]["resumable"], outcome.to_report())
+        events = [json.loads(line).get("event") for line in self.log.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(events.count("cancel-received"), 1)
+
     def test_native_resume_without_a_binding_reports_no_model_start(self):
         context = self.context(index=2, mode="native-session", previous="never-bound-session")
         _, outcome = self.execute(context)
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result["code"], "native-resume-unavailable")
-        self.assertIs(outcome.result["modelStarted"], False)
+        self.assertIs(outcome.result["modelResponded"], False)
         self.assertTrue(outcome.shutdown_confirmed)
 
     def test_a_noncompleted_native_turn_keeps_its_reason_without_a_finish_receipt(self):
@@ -293,7 +328,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertEqual(reply.status, "queued", (reply.status, reply.reason_code, reply.error_code))
         thread.join(timeout=60)
         handle = holder[0]
-        self.assertIsNotNone(handle.wait(context.timeout_seconds + 15))
+        self.assertIsNotNone(handle.wait(30))
         outcome = executor.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed",

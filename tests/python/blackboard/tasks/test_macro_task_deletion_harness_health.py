@@ -17,17 +17,16 @@ NOT_FOUND = reason('harness.not-found', operation='probe')
 
 class DeletionHarnessHealthTests(WorkflowTestCase):
     def closed(self, board, request_id, *, macro_task=None):
-        extra = {'macroTask': {'title': macro_task}} if macro_task else {}
+        extra = {'create_macro': {'title': macro_task, 'goal': macro_task}} if macro_task else {}
         run = self.submit(board, request_id=request_id, cwd=str(self.workdir('project')), **extra)
-        cancelled = board.call('workflow_cancel', {'runId': run['runId'], **self.control(run)})
-        board.call('workflow_conclude', {'runId': run['runId'], 'note': 'Private health fixture is settled',
-                                         **self.control(cancelled)})
+        cancelled = board.call('workflow_cancel', {'runId': run['runId']})
+        board.call('workflow_conclude', {'runId': run['runId'], 'note': 'Private health fixture is settled'})
         return run
 
     def owned_user_store_session(self, board, run):
         """One finished Codex attempt whose receipt proves a user-store session."""
         attempt_id = 'health-attempt-1'
-        receipt = {'result': {'nativeSession': {'harness': 'codex', 'sessionId': SESSION_ID,
+        receipt = {'status': 'ok', 'shutdownConfirmed': True, 'result': {'nativeSession': {'harness': 'codex', 'sessionId': SESSION_ID,
                                                 'captured': True, 'storageOwner': 'harness-user-store',
                                                 'resumeMode': 'initial'},
                               'nativeCheckpoint': {'version': 1, 'sessionId': SESSION_ID,
@@ -35,7 +34,7 @@ class DeletionHarnessHealthTests(WorkflowTestCase):
         now = board.store.now()
         with board.store.db.write() as db:
             db.execute('INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,'
-                       'adapter,shutdown_confirmed,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                       "adapter,shutdown_confirmed,result_json,result_form,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'current-report-v2',?,?)",
                        (attempt_id, run['runId'], 1, 'fixture', 'finished', 'codex', 1,
                         json.dumps(receipt), now, now))
         return attempt_id
@@ -47,7 +46,7 @@ class DeletionHarnessHealthTests(WorkflowTestCase):
 
     def physical_io_off(self):
         stack = ExitStack()
-        for stage in ('_delete_sessions', '_delete_workspaces', '_delete_private_roots', '_delete_cli_files'):
+        for stage in ('_delete_sessions', '_delete_workspaces', '_delete_private_roots'):
             stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
         return stack
 

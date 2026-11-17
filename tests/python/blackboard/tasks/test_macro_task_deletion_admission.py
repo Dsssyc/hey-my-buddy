@@ -12,19 +12,87 @@ from hey_my_buddy.paths import native_path
 
 
 class DeletionAdmissionTests(LifecycleTestCase):
+    def submit_case(self, board, *, title, task, cwd, checkout, write_scope, macro_task_id="standalone"):
+        return board.call("workflow_submit", {
+            "cwd": str(cwd), "macroTaskId": macro_task_id, "title": title, "task": task,
+            "buddy": " / ".join(BUDDY.values()), "checkout": checkout, "access": "write",
+            "writeScope": list(write_scope), "inputs": [], "expectedSeconds": 1800,
+        })
+
+    def test_new_micro_task_cannot_borrow_checkout_after_owner_deletion_is_marked(self):
+        board = self.board()
+        created = board.call("workflow_create", {
+            "cwd": str(self.repo), "title": "Deleting owner", "goal": "Deleting owner",
+        })
+        owner = self.submit_case(board, title="deleting-managed-owner", task="Own the managed checkout",
+                                 cwd=self.repo, checkout="worktree", write_scope=(".",),
+                                 macro_task_id=created["macroTaskId"])
+        claimed = self.claim(board, owner["runId"])
+        from hey_my_buddy.protocol.workspace_manifest import resolve_manifest
+        manifest = resolve_manifest(board.directory, claimed["claim"]["turn"]["input"]["executionWorkspace"])
+        checkout = Path(manifest["path"])
+        (checkout / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
+        seal = workspace.seal(self.directory, manifest, owner["runId"],
+                              claimed["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, claimed, seal)
+        view = self.view(board, owner["runId"])
+        artifact = next(item for item in view["artifacts"] if item["kind"] == "output")
+        with patch.object(board.store.workflow, "_reclaim_checkout",
+                          return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            self.accept(board, view, artifact, not_required=True)
+
+        with patch.object(deletion, "_delete_workspaces", side_effect=OSError("fixture physical failure")):
+            interrupted = deletion.delete(board.store, created["macroTaskId"], 1)
+        self.assertEqual(interrupted["state"], "deleting")
+        self.assertTrue(checkout.is_dir())
+        with board.store.db.read() as connection:
+            self.assertIsNotNone(connection.execute(
+                "SELECT 1 FROM macro_task_deletions WHERE target_id=?", (created["macroTaskId"],),
+            ).fetchone())
+
+        def assert_refused(suffix, cwd):
+            request_id = "deleting-managed-borrower-" + suffix
+            with self.subTest(cwd=cwd), self.assertRaises(BoardError) as caught:
+                self.submit_case(board, title=request_id, task="Borrow the deleting managed checkout",
+                                 cwd=cwd, checkout="existing", write_scope=(".",))
+            self.assertEqual(caught.exception.code, "PREPARATION_CONFLICT")
+            with board.store.db.read() as connection:
+                self.assertIsNone(connection.execute(
+                    "SELECT 1 FROM workflow_runs WHERE title=?", (request_id,),
+                ).fetchone())
+
+        for suffix, cwd in (("root", checkout), ("child", checkout / "src"),
+                            ("normalized", checkout / "src" / "..")):
+            assert_refused(suffix, cwd)
+
+        (checkout / ".git").unlink()
+        self.git("-C", str(checkout), "init", "-q", "-b", "main")
+        self.git("-C", str(checkout), "config", "user.email", "buddy@example.invalid")
+        self.git("-C", str(checkout), "config", "user.name", "Buddy Test")
+        self.git("-C", str(checkout), "add", ".")
+        self.git("-C", str(checkout), "commit", "-qm", "replacement repository")
+        self.assertNotEqual(workspace.inspect(str(checkout))["projectId"], manifest["projectId"])
+        assert_refused("replacement-repository", checkout)
+
+        nested = checkout / "src"
+        self.git("-C", str(nested), "init", "-q", "-b", "main")
+        self.git("-C", str(nested), "config", "user.email", "buddy@example.invalid")
+        self.git("-C", str(nested), "config", "user.name", "Buddy Test")
+        self.git("-C", str(nested), "add", ".")
+        self.git("-C", str(nested), "commit", "-qm", "nested repository")
+        self.assertNotEqual(workspace.inspect(str(nested))["projectId"], manifest["projectId"])
+        assert_refused("nested-repository", nested)
+
     def failed_run(self, *, conflict=False):
         board = self.board()
-        submitted = board.call("workflow_submit", {
-            **BUDDY, "requestId": "deleting-host-write", "hostId": "host-1",
-            "task": "Private deletion admission fixture", "cwd": str(self.repo),
-            "submissionToken": "t" * 32,
-            "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["src"]},
-        })
+        submitted = self.submit_case(board, title="deleting-host-write",
+                                     task="Private deletion admission fixture", cwd=self.repo,
+                                     checkout="existing", write_scope=("src",))
         run_id = submitted["runId"]
-        self.controls[run_id] = submitted["control"]
         claimed = self.claim(board, run_id)
         attempt = claimed["claim"]["attempt"]
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        from hey_my_buddy.protocol.workspace_manifest import resolve_manifest
+        manifest = resolve_manifest(board.directory, claimed["claim"]["turn"]["input"]["executionWorkspace"])
         result = {"status": "failed"}
         if conflict:
             (self.repo / "tracked.txt").write_text("outside the scope\n", encoding="utf-8", newline="\n")
@@ -37,23 +105,23 @@ class DeletionAdmissionTests(LifecycleTestCase):
             "status": "failed", "result": result, "shutdownConfirmed": True, "exitCode": 1,
             "error": result.get("workspaceSealError", "Private fixture failure"),
         })
-        # Cancellation settles any attention request while preserving the failed
-        # site's evidence, so both public Host operations remain meaningful.
-        board.call("workflow_cancel", {"runId": run_id, **self.control(submitted)})
+        # A failed run may conclude after cancellation; a scope request stays open
+        # so the resolution action still identifies the exact recorded site.
+        if not conflict:
+            board.call("workflow_cancel", {"runId": run_id})
         view = self.view(board, run_id)
         return board, manifest, view
 
     def host_write(self, board, view, *, conflict):
         if not conflict:
             return board.call("workflow_conclude", {
-                "runId": view["runId"], "note": "Review this failed execution", **self.control(view),
+                "runId": view["runId"], "note": "Review this failed execution",
             })
         site = view["workspaceConflicts"][0]
-        return board.store.workflow.workspace_resolve({
-            "runId": view["runId"], "commandId": "deleting-resolution", "expectedRevision": view["revision"],
-            "conflictId": site["conflictId"], "action": "adopt", "paths": [],
+        return board.call("workflow_continue", {
+            "runId": view["runId"], "requestId": view["activeRequest"]["requestId"],
+            "resolution": "adopt",
             "observedFingerprint": site["observedFingerprint"], "note": "Review this exact failed site",
-            **self.control(view),
         })
 
     def refs(self, manifest):
@@ -94,9 +162,6 @@ class DeletionAdmissionTests(LifecycleTestCase):
     def test_conclude_is_refused_after_the_second_deletion_pass_without_pinning(self):
         self.deletion_window(conflict=False)
 
-    def test_workspace_resolve_is_refused_after_the_second_deletion_pass_without_pinning(self):
-        self.deletion_window(conflict=True)
-
     def mark_at_lock(self, *, conflict):
         board, manifest, view = self.failed_run(conflict=conflict)
         directory = self.directory / "workspaces" / manifest["workspaceId"]
@@ -129,5 +194,5 @@ class DeletionAdmissionTests(LifecycleTestCase):
     def test_conclude_rechecks_marking_after_precheck_under_the_workspace_lock(self):
         self.mark_at_lock(conflict=False)
 
-    def test_workspace_resolve_rechecks_marking_after_precheck_under_the_workspace_lock(self):
+    def test_continue_resolution_rechecks_marking_after_precheck_under_the_workspace_lock(self):
         self.mark_at_lock(conflict=True)

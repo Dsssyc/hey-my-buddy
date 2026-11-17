@@ -11,6 +11,7 @@ The finish receipt is minted by the real private MCP bridge, exactly like
 """
 import hashlib
 import json
+from inquiry_queue import InquiryQueue
 import os
 import subprocess
 import sys
@@ -42,6 +43,9 @@ RESUME_CASES = ("resume-ok", "cursor-lost", "delta-only")
 def send(value):
     print(json.dumps(value), flush=True)
 
+
+
+inquiry_queue = InquiryQueue(send, lambda: session_id)
 
 def rewrite(value):
     if isinstance(value, str):
@@ -204,6 +208,8 @@ for line in sys.stdin:
         send({"id": request_id, "result": snapshot()})
     elif method == "session/subscribe":
         send({"id": request_id, "result": {"sessionId": session_id, "events": [], "eventSeq": 0}})
+    elif method.startswith("v4/") and inquiry_queue.handle(method, params, request_id):
+        continue
     elif method == "session/messages":
         message_page(request_id, params)
     elif method == "session/send":

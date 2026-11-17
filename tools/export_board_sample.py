@@ -5,13 +5,30 @@ Run from the repository root:
     uv run --frozen python tools/export_board_sample.py OUTPUT [--source STATE]
 
 Only console history, its fixed session records, and inquiry journals belonging
-to selected attempts are exported. The destination retains the source schema
-and is published only after the candidate passes the stop checks.
+to selected attempts are exported, together with the catalog's current state:
+every row of each catalog table (buddies, model_services, catalog_current,
+evaluation_catalog, catalog_observations, catalog_pending,
+model_service_concurrency, harness_health) that the source schema has, so buddy
+availability can be compared on real data across versions. No buddy travels
+enabled: a private service started on the sample launches no harness until
+someone enables a buddy there. Every model service the catalog names travels
+with its whole correspondence history and the models rows that history
+references, so the model identity the routing path reads never goes missing.
+Each selected micro task's applied cleanup plans travel with it, so the private
+service reading the sample never plans a reclamation inside the source state; a
+run whose checkout the source has not reclaimed is left out rather than
+pointing maintenance at a live checkout. The one judge is the staged sample
+itself, upgraded as an install would upgrade it: what the product's own
+candidate query still names there decides the exclusion, and the destination
+retains the source schema and is published only after that query falls silent
+and the stop checks pass.
 """
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
+from contextlib import closing, contextmanager
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -25,11 +42,45 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hey_my_buddy import private_dirs
-from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, initialize_defaults
+from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, initialize_defaults, utc_now
+from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA, upgrade_state
+from hey_my_buddy.blackboard.routing.statistics import backfill
 from hey_my_buddy.blackboard.tasks.macro_tasks import RUN_GROUPS_SQL
+from hey_my_buddy.blackboard.tasks.reclamation import workspace_candidates
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.workspace_manifest import resolve_manifest, resolve_record, cumulative_patch_error
 from hey_my_buddy.state_root import get_state_dir
 
 MAX_TASKS = 100
+
+#: The catalog's current state travels whole, so each version's view of buddy
+#: availability can be compared on the same real rows. The order lets every
+#: foreign key between these tables be satisfied as written: catalog_pending
+#: references catalog_current, and the buddies of a later schema reference
+#: model_services. A table the source schema does not have is not exported.
+CATALOG_TABLES = ('model_services', 'buddies', 'catalog_observations',
+                  'catalog_current', 'catalog_pending', 'evaluation_catalog',
+                  'model_service_concurrency', 'harness_health')
+
+
+class _CandidateStore:
+    """The one store surface the maintenance candidate query reads."""
+
+    def __init__(self, connection):
+        self._connection = connection
+
+    @property
+    def db(self):
+        return self
+
+    @contextmanager
+    def read(self):
+        yield self._connection
+
+
+def _reclamation_candidates(connection) -> set[str]:
+    """Name the runs the service's own maintenance query would still reclaim."""
+    return set(workspace_candidates(_CandidateStore(connection)))
 
 
 def _rows(connection, table: str, column: str, values) -> list[dict]:
@@ -52,7 +103,39 @@ def _session_groups(records: dict, groups: dict[str, str]) -> dict[str, str]:
     return result
 
 
-def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str]]]:
+def _rebind_workspace_owners(connection, records: dict) -> None:
+    """Keep each selected reference's one SQL owner without importing other tasks."""
+    candidates: dict[tuple[str, str], list[dict]] = {}
+    for table, digest_column in (("workflow_artifacts", "input_manifest_sha256"),
+                                 ("workflow_continuations", "workspace_manifest_sha256")):
+        for row in records[table]:
+            if table == "workflow_artifacts" and row["kind"] != "input":
+                continue
+            if row["workspace_facts_role"] in ("pending", "none"):
+                continue
+            candidates.setdefault((row["workspace_id"], row[digest_column]), []).append(row)
+    for (workspace_id, digest), rows in candidates.items():
+        selected_owners = [row for row in rows if row["workspace_facts_role"] == "owner"]
+        if selected_owners:
+            if len(selected_owners) != 1:
+                raise ValueError("Selected workspace references have multiple owners")
+            continue
+        original = connection.execute(
+            "SELECT workspace_kind,checkout_root,repository_path,input_commit,staged_commit FROM workflow_artifacts "
+            "WHERE kind='input' AND workspace_facts_role='owner' AND workspace_id=? AND input_manifest_sha256=? "
+            "UNION ALL SELECT workspace_kind,checkout_root,repository_path,input_commit,staged_commit FROM workflow_continuations "
+            "WHERE workspace_facts_role='owner' AND workspace_id=? AND workspace_manifest_sha256=?",
+            (workspace_id, digest, workspace_id, digest)).fetchall()
+        if len(original) != 1:
+            raise ValueError("Selected workspace reference has no unique source owner")
+        chosen = rows[0]
+        chosen.update(workspace_facts_role="owner", workspace_kind=original[0][0],
+                      checkout_root=original[0][1], repository_path=original[0][2],
+                      input_commit=original[0][3], staged_commit=original[0][4])
+
+
+def _select(connection, source_schema: int,
+            excluded: set[str]) -> tuple[dict[str, list[dict]], list[tuple[str, str, str]]]:
     # The most recently accepted micro tasks are selected; the reversed list
     # writes them into the destination oldest first.
     selected = [row[0] for row in connection.execute(
@@ -60,6 +143,8 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
         "WHERE r.state='accepted' AND t.accepted_at IS NOT NULL "
         "ORDER BY t.accepted_at DESC, r.run_id DESC LIMIT ?", (MAX_TASKS,))]
     selected.reverse()
+    # `excluded` holds the runs the staged sample's own upgraded check named.
+    selected = [run_id for run_id in selected if run_id not in excluded]
     runs = {row["run_id"]: row for row in _rows(connection, "workflow_runs", "run_id", selected)}
     records = {"workflow_runs": [runs[run_id] for run_id in selected]}
     routes = _rows(connection, "workflow_routes", "run_id", selected)
@@ -83,6 +168,14 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
                   'workflow_workspace_conflicts', 'workflow_integrations', 'workflow_artifacts',
                   'workflow_suggestions', 'workflow_host_conclusions'):
         records[table] = _rows(connection, table, 'run_id', selected)
+    # Applied plans are the source's own "this checkout is reclaimed" fact; without
+    # them the private service plans a reclamation of the source state's path. The
+    # other states prove nothing of the kind and die in the upgrade chain anyway.
+    records['workspace_cleanup_plans'] = [row for row in
+                                          _rows(connection, 'workspace_cleanup_plans', 'run_id', selected)
+                                          if row['state'] == 'applied']
+    if source_schema >= 34:
+        _rebind_workspace_owners(connection, records)
     # Relationships survive only when both micro tasks were selected. A selected
     # child of an omitted parent becomes a root; no omitted task is pulled in.
     for table, owner, child in (('workflow_children', 'parent_run_id', 'child_task_id'),
@@ -94,13 +187,50 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
         f'SELECT * FROM ({RUN_GROUPS_SQL}) WHERE run_id IN ({",".join("?" for _ in selected)})', selected)}
     macros = {group for group in groups.values() if not group.startswith('run:')}
     records['macro_tasks'] = _rows(connection, 'macro_tasks', 'macro_task_id', macros)
+    if source_schema >= 35:
+        project_ids = {row['project_id'] for row in records['macro_tasks']}
+        project_ids.update(row['standalone_project_id'] for row in records['workflow_runs']
+                           if row['standalone_project_id'] is not None)
+        records['projects'] = _rows(connection, 'projects', 'project_id', project_ids)
+    # The catalog's current state belongs to the board, not to any selected
+    # task: every row of each catalog table the source schema has travels.
+    tables = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    for table in CATALOG_TABLES:
+        if table in tables:
+            records[table] = [dict(row) for row in connection.execute(
+                f'SELECT * FROM "{table}" ORDER BY rowid')]
+    # The recorded health of a real harness is evidence, but no sample may act
+    # on it: every buddy travels disabled, so a private service on the sample
+    # starts no harness until someone enables a buddy there.
+    for buddy in records['buddies']:
+        buddy['enabled'] = 0
+    if source_schema >= 37:
+        # Every model service the catalog names keeps its current
+        # correspondence, and the history is append-only with undo deleting
+        # only the latest row, so all rows of each service travel in source
+        # rowid order, merged with the services the selected attempts
+        # recorded. A schema before 40 names its services through buddies.
+        services = {(row['model_harness'], row['model_provider'], row['model_model'])
+                    for row in records['attempts'] if row['model_id'] is not None}
+        services.update((row['harness'], row['provider'], row['model'])
+                        for row in (records['model_services'] if source_schema >= 40
+                                    else records['buddies']))
+        records['model_correspondences'] = [dict(row) for row in connection.execute(
+            'SELECT * FROM model_correspondences ORDER BY rowid')
+            if (row['harness'], row['provider'], row['model']) in services]
+        model_ids = {row['model_id'] for row in records['attempts'] if row['model_id'] is not None}
+        model_ids.update(row['model_id'] for row in records['model_correspondences'])
+        records['models'] = _rows(connection, 'models', 'model_id', model_ids)
     for run in records['workflow_runs']:
         group = groups[run['run_id']]
         if not group.startswith('run:'):
             run['macro_task_id'] = group
-        # None of the source's capability verifiers belongs to the new board.
-        run['control_verifier'] = secrets.token_hex(32)
-        run['submission_verifier'] = None
+        # Schema 35 has no Host capability columns. Earlier source forms keep
+        # their own structure, without carrying authority into the new board.
+        if source_schema < 35:
+            run['control_verifier'] = secrets.token_hex(32)
+            run['submission_verifier'] = None
     for attempt in records['attempts']:
         attempt['nonce_verifier'] = secrets.token_hex(32)
     session_groups = _session_groups(records, groups)
@@ -111,12 +241,12 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
 
 def _source_schema(connection) -> tuple[str, list[tuple[str, str]]]:
     version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if version is None or version[0] != str(SCHEMA_VERSION):
-        raise ValueError(f"Source must use schema {SCHEMA_VERSION}")
+    if version is None or version[0] not in {str(v) for v in range(UPGRADE_FLOOR_SCHEMA, SCHEMA_VERSION + 1)}:
+        raise ValueError(f"Source must use schema {UPGRADE_FLOOR_SCHEMA} through {SCHEMA_VERSION}")
     definitions = [(row['type'], row['sql']) for row in connection.execute(
-        "SELECT type,sql FROM sqlite_master WHERE type IN ('table','index') "
+        "SELECT type,sql FROM sqlite_master WHERE type IN ('table','index','trigger') "
         "AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%' "
-        "ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, rowid")]
+        "ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, rowid")]
     return version[0], definitions
 
 
@@ -125,7 +255,18 @@ def _create_schema(connection, version: str, definitions: list[tuple[str, str]])
         connection.execute(ddl)
     connection.execute("INSERT INTO meta(key,value) VALUES('schema_version',?)", (version,))
     connection.execute("INSERT INTO meta(key,value) VALUES(?,?)", (SECRET_KEY, secrets.token_hex(32)))
-    initialize_defaults(connection)
+    if int(version) >= 38:
+        initialize_defaults(connection)
+    else:
+        # The sample keeps the source schema. Its pre-38 Router defaults need
+        # the retired preset column; the current configuration writer cannot
+        # initialize that stored form.
+        connection.execute(
+            "INSERT INTO router_settings(id,default_mode,budget_preset,retry_interval_seconds) "
+            "VALUES(1,'fast','standard',600)")
+        connection.execute(
+            "INSERT INTO reminder_settings(id,silence_seconds,updated_at,revision) "
+            "VALUES(1,900,?,1)", (utc_now(),))
 
 
 _PRIVATE_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
@@ -150,6 +291,84 @@ def _copy_optional_regular(origin: Path, target: Path) -> None:
             shutil.copyfileobj(stream, destination)
 
 
+def _copy_required_regular(origin: Path, target: Path, digest: str | None = None) -> None:
+    with os.fdopen(private_dirs.open_regular_fd(origin, os.O_RDONLY), 'rb') as stream:
+        private_dirs.ensure_private_dir(target.parent)
+        actual = hashlib.sha256()
+        with os.fdopen(private_dirs.open_regular_fd(
+                target, os.O_WRONLY | os.O_CREAT | os.O_EXCL), 'wb') as destination:
+            while chunk := stream.read(1024 * 1024):
+                actual.update(chunk)
+                destination.write(chunk)
+        if digest is not None and actual.hexdigest() != digest:
+            raise ValueError('Selected output record does not match its stored digest')
+
+
+def _referenced_files(records: dict, source: Path, output: Path) -> list[tuple[Path, Path, str | None]]:
+    """Copy only files explicitly named by selected schema 34/35 facts."""
+    files: dict[Path, tuple[Path, Path, str | None]] = {}
+    owners = {(row['workspace_id'], row.get('input_manifest_sha256') or row.get('workspace_manifest_sha256')): row
+              for table in ('workflow_artifacts', 'workflow_continuations') for row in records[table]
+              if row.get('workspace_facts_role') == 'owner'}
+    originals = {row['run_id']: owners[(row['workspace_id'], row['input_manifest_sha256'])]['input_commit']
+                 for row in records['workflow_artifacts'] if row['kind'] == 'input'}
+    attempts = {row['attempt_id']: row for row in records['attempts']}
+    for artifact in records['workflow_artifacts']:
+        if artifact['content_form'] == 'input-reference':
+            ref = {'workspaceId': artifact['workspace_id'],
+                   'manifestSha256': artifact['input_manifest_sha256']}
+            resolve_manifest(source, ref)
+            relative = Path('workspaces') / ref['workspaceId'] / 'manifest.json'
+            files[relative] = (source / relative, output / relative, None)
+        elif artifact['content_form'] == 'record-reference':
+            relative = Path(artifact['record_path'])
+            if relative.is_absolute() or not relative.parts or '..' in relative.parts or relative.parts[0] != 'workspaces':
+                raise ValueError('Selected output record is outside the source state')
+            if relative in files and files[relative][2] != artifact['record_sha256']:
+                raise ValueError('Selected output records disagree on one file identity')
+            files[relative] = (source / relative, output / relative, artifact['record_sha256'])
+            record = resolve_record(source, {'recordFile': {'path': relative.as_posix(), 'sha256': artifact['record_sha256']},
+                                             'snapshotSha256': artifact['output_snapshot_sha256']})
+            patch = relative.with_suffix('.patch')
+            files[patch] = (source / patch, output / patch, record['diffSha256'])
+            original = originals[artifact['run_id']]
+            if (original != record['inputCommit'] and artifact['kind'] != 'abandoned-site'
+                    and cumulative_patch_error(artifact, attempts.get(artifact['attempt_id'])) is None):
+                cumulative = relative.parent / ('cumulative-' + original + '.patch')
+                files[cumulative] = (source / cumulative, output / cumulative, None)
+        elif artifact['content_form'] == 'result-reference':
+            from hey_my_buddy.protocol.turn_result import result_path
+            expected = result_path(source, artifact['run_id'], artifact['attempt_id'])
+            relative = Path(artifact['record_path'])
+            if (relative.is_absolute() or '..' in relative.parts
+                    or relative.as_posix() != expected.relative_to(source).as_posix()):
+                raise ValueError('Selected result receipt is outside its bound attempt')
+            if relative in files and files[relative][2] != artifact['record_sha256']:
+                raise ValueError('Selected result receipts disagree on one file identity')
+            files[relative] = (source / relative, output / relative, artifact['record_sha256'])
+    for turn in records['workflow_turns']:
+        document = json.loads(turn['input_json'])
+        if document['version'] != 4:
+            continue
+        ref = document['executionWorkspace']
+        resolve_manifest(source, ref)
+        relative = Path('workspaces') / ref['workspaceId'] / 'manifest.json'
+        files[relative] = (source / relative, output / relative, None)
+    for attempt in records['attempts']:
+        if attempt.get('result_form') != 'current-report-v2' or attempt['result_json'] is None:
+            continue
+        result = (json.loads(attempt['result_json']).get('result') or {})
+        for key in ('workspaceSeal', 'partialWorkspaceSeal'):
+            seal = result.get(key)
+            if not isinstance(seal, dict) or 'recordFile' not in seal:
+                continue
+            file = seal['recordFile']
+            relative = Path(file['path'])
+            if relative.is_absolute() or '..' in relative.parts or relative not in files or files[relative][2] != file['sha256']:
+                raise ValueError('Selected result record has no matching artifact binding')
+    return list(files.values())
+
+
 def _validate(connection) -> None:
     # Finished is not enough on its own: an unconfirmed stop must never escape.
     # ownership is not judged: a lost connection freezes it at 'uncertain' even
@@ -169,6 +388,31 @@ def _validate(connection) -> None:
         raise ValueError('Sample failed SQLite integrity_check')
 
 
+def _staged_candidates(stage: Path, source_schema: int) -> set[str]:
+    """Reclamation candidates of the staged sample as the service will see it.
+
+    A sample below the current schema is judged through the same upgrade the
+    install runs when the private service opens it, so the check never depends
+    on workspace facts the source schema cannot state yet.
+    """
+    if source_schema == SCHEMA_VERSION:
+        with closing(sqlite3.connect(stage / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            return _reclamation_candidates(connection)
+    with tempfile.TemporaryDirectory(prefix='.board-sample-upgrade-') as temporary:
+        upgraded = Path(temporary) / 'state'
+        private_dirs.ensure_private_dir(upgraded)
+        shutil.copyfile(stage / DB_FILE, upgraded / DB_FILE)
+        os.chmod(upgraded / DB_FILE, 0o600)
+        try:
+            upgrade_state(upgraded)
+        except BoardError as error:
+            raise ValueError(f'The staged sample cannot upgrade: {error.message}') from error
+        with closing(sqlite3.connect(upgraded / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            return _reclamation_candidates(connection)
+
+
 def export_sample(source: Path, output: Path) -> Path:
     source = Path(source).expanduser().absolute()
     output = Path(output).expanduser().absolute()
@@ -180,51 +424,79 @@ def export_sample(source: Path, output: Path) -> Path:
         raise ValueError('Source and output must be separate directory trees')
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
         raise ValueError(f'Refusing nonempty output: {output}')
-    # One short SQLite snapshot covers all selected rows and session identities.
-    # Close it before building the destination or copying immutable finished sessions.
-    # No product store is opened against the source; no write/WAL pragma is issued.
-    with closing(sqlite3.connect((source / DB_FILE).as_uri() + '?mode=ro', uri=True)) as reader:
-        reader.row_factory = sqlite3.Row
-        reader.execute('BEGIN')
-        version, definitions = _source_schema(reader)
-        records, sessions = _select(reader)
-    with tempfile.TemporaryDirectory(prefix='.board-sample-', dir=output.parent) as temporary:
-        stage = Path(temporary) / 'state'
-        private_dirs.ensure_private_dir(stage)
-        with closing(sqlite3.connect(stage / DB_FILE)) as writer:
-            writer.row_factory = sqlite3.Row
-            writer.execute('PRAGMA foreign_keys=ON')
-            writer.execute('BEGIN')
-            try:
-                writer.execute('PRAGMA defer_foreign_keys=ON')
-                _create_schema(writer, version, definitions)
-                for table, rows in records.items():
-                    for row in rows:
-                        columns = ','.join(f'"{key}"' for key in row)
-                        writer.execute(f'INSERT INTO "{table}" ({columns}) VALUES '
-                                       f'({",".join("?" for _ in row)})', tuple(row.values()))
-                # The surviving lineage determines each destination session's
-                # group; source group identity still locates the original file.
-                target_groups = _session_groups(records, {
-                    row['run_id']: row['group_id'] for row in writer.execute(RUN_GROUPS_SQL)})
-                for task, attempt, group in sessions:
-                    origin = private_dirs.session_record_path(source, group, attempt)
-                    target = private_dirs.session_record_path(stage, target_groups[task], attempt)
-                    _copy_optional_regular(origin, target)
-                for attempt in records['attempts']:
-                    origin = _journal_path(source, attempt['task_id'], attempt['attempt_id'])
-                    target = _journal_path(stage, attempt['task_id'], attempt['attempt_id'])
-                    _copy_optional_regular(origin, target)
-                _validate(writer)
-                writer.commit()
-            except BaseException:
-                writer.rollback()
-                raise
-        os.chmod(stage / DB_FILE, 0o600)
-        if output.exists():
-            output.rmdir()  # Only an empty destination can be replaced.
-        stage.rename(output)
-    return output
+    excluded: set[str] = set()
+    for rebuild in (False, True):
+        # One short SQLite snapshot covers all selected rows and session identities.
+        # Close it before building the destination or copying immutable finished sessions.
+        # No product store is opened against the source; no write/WAL pragma is issued.
+        with closing(sqlite3.connect((source / DB_FILE).as_uri() + '?mode=ro', uri=True)) as reader:
+            reader.row_factory = sqlite3.Row
+            reader.execute('BEGIN')
+            version, definitions = _source_schema(reader)
+            records, sessions = _select(reader, int(version), excluded)
+            referenced_files = _referenced_files(records, source, output) if int(version) >= 34 else []
+        with tempfile.TemporaryDirectory(prefix='.board-sample-', dir=output.parent) as temporary:
+            stage = Path(temporary) / 'state'
+            private_dirs.ensure_private_dir(stage)
+            with closing(sqlite3.connect(stage / DB_FILE)) as writer:
+                writer.row_factory = sqlite3.Row
+                writer.execute('PRAGMA foreign_keys=ON')
+                writer.execute('BEGIN')
+                try:
+                    writer.execute('PRAGMA defer_foreign_keys=ON')
+                    _create_schema(writer, version, definitions)
+                    for table, rows in records.items():
+                        for row in rows:
+                            columns = ','.join(f'"{key}"' for key in row)
+                            writer.execute(f'INSERT INTO "{table}" ({columns}) VALUES '
+                                           f'({",".join("?" for _ in row)})', tuple(row.values()))
+                    if int(version) >= 31:
+                        # Cumulative statistics were introduced in schema 31.
+                        # This is a new private board containing only the selected
+                        # history. Its cumulative facts describe that same history;
+                        # no source-wide statistics or maintenance records escape.
+                        if int(version) >= 37:
+                            backfill(writer)
+                        else:
+                            from hey_my_buddy.blackboard.store.schema_30_31 import backfill as name_backfill
+                            name_backfill(writer)
+                            if int(version) >= 36:
+                                from hey_my_buddy.blackboard.store.schema_35_36 import _accumulate_defects
+                                _accumulate_defects(writer)
+                    # The surviving lineage determines each destination session's
+                    # group; source group identity still locates the original file.
+                    target_groups = _session_groups(records, {
+                        row['run_id']: row['group_id'] for row in writer.execute(RUN_GROUPS_SQL)})
+                    for task, attempt, group in sessions:
+                        origin = private_dirs.session_record_path(source, group, attempt)
+                        target = private_dirs.session_record_path(stage, target_groups[task], attempt)
+                        _copy_optional_regular(origin, target)
+                    for attempt in records['attempts']:
+                        origin = _journal_path(source, attempt['task_id'], attempt['attempt_id'])
+                        target = _journal_path(stage, attempt['task_id'], attempt['attempt_id'])
+                        _copy_optional_regular(origin, target)
+                    for origin, target, digest in referenced_files:
+                        _copy_required_regular(origin, stage / target.relative_to(output), digest)
+                    _validate(writer)
+                    writer.commit()
+                except BaseException:
+                    writer.rollback()
+                    raise
+            remaining = _staged_candidates(stage, int(version))
+            if not remaining:
+                os.chmod(stage / DB_FILE, 0o600)
+                if output.exists():
+                    output.rmdir()  # Only an empty destination can be replaced.
+                stage.rename(output)
+                return output
+        if not rebuild:
+            # The one judge is the staged sample itself, upgraded exactly as the
+            # opening service's install would and read with the product's own
+            # candidate query: the runs it names hold checkouts the source has
+            # not reclaimed, and the sample is built once more without them.
+            excluded = remaining
+    raise ValueError('Sample still names unreclaimed checkouts after one rebuild: '
+                     + ', '.join(sorted(remaining)))
 
 
 def main(argv: list[str] | None = None) -> int:

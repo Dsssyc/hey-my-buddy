@@ -18,7 +18,6 @@ import json
 import os
 import sys
 import tempfile
-from temporary import TemporaryDirectory
 import time
 import unittest
 from pathlib import Path
@@ -33,7 +32,7 @@ class AcpTestCase(unittest.TestCase):
 
     def setUp(self) -> None:
         name = self.id().rsplit(".", 1)[-1]
-        self.container = TemporaryDirectory(
+        self.container = tempfile.TemporaryDirectory(
             prefix=f"acp-{name}-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.container.cleanup)
         self.test_dir = Path(self.container.name).resolve()

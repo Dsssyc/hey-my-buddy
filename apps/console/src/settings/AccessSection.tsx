@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { ConsoleApi } from "../api";
 import { errorText, parseConsoleAccess } from "../api";
 import type { ConsoleAccess } from "../types";
-import { formatDateTime, formatShortDateTime } from "../i18n/format";
+import { formatShortDateTime } from "../i18n/format";
 import { Hint } from "../components/hint";
 import { Button } from "../components/ui/button";
 import { Switch } from "../components/ui/switch";
@@ -61,9 +61,7 @@ export function AccessSection({ api, csrfToken, access, refresh, unavailable }: 
               <span className="inline-flex items-center gap-2 font-mono tabular-nums">{session.id.slice(0, 8)}
                 {session.current && <span className="inline-flex items-center gap-1 font-sans text-xs text-ink"><StateMark kind="live" />{t("access.current")}</span>}
               </span>
-              <Hint text={t("access.lastSeen", { time: formatDateTime(session.lastSeen * 1000) })}>
-                <time tabIndex={0} dateTime={new Date(session.lastSeen * 1000).toISOString()} className="text-xs text-ink2 tabular-nums">{formatShortDateTime(session.lastSeen * 1000)}</time>
-              </Hint>
+              <time dateTime={new Date(session.lastSeen * 1000).toISOString()} className="text-xs text-ink2 tabular-nums">{formatShortDateTime(session.lastSeen * 1000)}</time>
               <Hint text={reason}>{session.current
                 ? <DialogTrigger asChild><Button variant="outline" size="sm" className="ml-auto" aria-disabled={!!reason || undefined}
                     aria-label={t("access.revokeCurrent")} onClick={event => { if (reason) event.preventDefault(); }}>{t("access.revoke")}</Button></DialogTrigger>

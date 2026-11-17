@@ -1,0 +1,562 @@
+{
+  "source": {
+    "form": "ZCode app-bundled CLI app-server",
+    "version": "0.17.0",
+    "recordedAt": "2026-10-31",
+    "bundleSha256": "97490d0f06a7a225d54d47817acf4b4859cdb268b59f2490caaeda982bef063a",
+    "probe": "tests/probes/zcode_realtime_inquiry.py",
+    "normalization": "Volatile identifiers, timestamps and workspace path normalized; only relevant snapshot fragments retained.",
+    "isolation": "Private HOME/config/database/workspace, dummy loopback provider and outbound network denied.",
+    "counterexampleVariant": "The idle queue input was removed from the default probe after it unexpectedly started a native turn."
+  },
+  "cases": {
+    "initialization": {
+      "calls": [
+        {
+          "method": "v4/command",
+          "params": {
+            "commandId": "commandId-1",
+            "clientId": "hmb-private-inquiry-probe",
+            "sessionId": null,
+            "type": "createSession",
+            "payload": {
+              "workspaceId": "<private-workspace>",
+              "permissionScope": "session"
+            },
+            "issuedAt": 1
+          },
+          "response": {
+            "id": 2,
+            "result": {
+              "commandId": "commandId-1",
+              "status": "accepted",
+              "revisionAtDecision": 0,
+              "result": {
+                "type": "createSession",
+                "sessionId": "sessionId-2"
+              },
+              "memoryEnabled": false
+            }
+          }
+        },
+        {
+          "method": "v4/conversation/subscribe",
+          "params": {
+            "topic": "conversation/<private-session>",
+            "connectionId": "hmb-private-inquiry-probe",
+            "clientMode": "web-remote-replayable"
+          },
+          "response": {
+            "id": 5,
+            "result": {
+              "ack": {
+                "subscriptionId": "subscriptionId-3",
+                "mode": "snapshot",
+                "logEpoch": "logEpoch-4",
+                "openTiming": {
+                  "version": 1,
+                  "initialFrameEncodeMs": 1,
+                  "sessionRuntimeState": "warm",
+                  "snapshotRowCount": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "method": "v4/command",
+          "params": {
+            "commandId": "commandId-5",
+            "clientId": "hmb-private-inquiry-probe",
+            "sessionId": "sessionId-2",
+            "type": "sendText",
+            "payload": {},
+            "issuedAt": 1
+          },
+          "response": {
+            "id": 6,
+            "result": {
+              "commandId": "commandId-5",
+              "status": "rejected",
+              "reasonCode": "proto.invalidPayload",
+              "message": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"text\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]",
+              "revisionAtDecision": 0
+            }
+          }
+        },
+        {
+          "method": "v4/command",
+          "params": {
+            "commandId": "commandId-6",
+            "clientId": "hmb-private-inquiry-probe",
+            "sessionId": "sessionId-2",
+            "type": "deleteQueueItem",
+            "payload": {},
+            "issuedAt": 1
+          },
+          "response": {
+            "id": 7,
+            "result": {
+              "commandId": "commandId-6",
+              "status": "rejected",
+              "reasonCode": "proto.invalidPayload",
+              "message": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"queueItemId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]",
+              "revisionAtDecision": 0
+            }
+          }
+        },
+        {
+          "method": "v4/command",
+          "params": {
+            "commandId": "commandId-7",
+            "clientId": "hmb-private-inquiry-probe",
+            "sessionId": "sessionId-2",
+            "type": "deleteQueueItem",
+            "payload": {
+              "queueItemId": "private-probe-absent-item"
+            },
+            "issuedAt": 1
+          },
+          "response": {
+            "id": 8,
+            "result": {
+              "commandId": "commandId-7",
+              "status": "rejected",
+              "reasonCode": "proto.invalidPayload",
+              "message": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"baseRevision\"\n    ],\n    \"message\": \"CAS commands require baseRevision and baseLogEpoch\"\n  }\n]",
+              "revisionAtDecision": 0
+            }
+          }
+        },
+        {
+          "method": "v4/command",
+          "params": {
+            "commandId": "commandId-8",
+            "clientId": "hmb-private-inquiry-probe",
+            "sessionId": "sessionId-2",
+            "type": "deleteQueueItem",
+            "payload": {
+              "queueItemId": "private-probe-absent-item"
+            },
+            "baseRevision": 1,
+            "baseLogEpoch": "logEpoch-4",
+            "issuedAt": 1
+          },
+          "response": {
+            "id": 9,
+            "result": {
+              "commandId": "commandId-8",
+              "status": "noop",
+              "revisionAtDecision": 1,
+              "reasonCode": "queue.itemMissing"
+            }
+          }
+        },
+        {
+          "method": "v4/conversation/subscribe",
+          "params": {
+            "topic": "conversation/<private-session>",
+            "connectionId": "hmb-private-inquiry-probe",
+            "clientMode": "web-remote-replayable"
+          },
+          "response": {
+            "id": 10,
+            "result": {
+              "ack": {
+                "subscriptionId": "subscriptionId-9",
+                "mode": "snapshot",
+                "logEpoch": "logEpoch-4",
+                "openTiming": {
+                  "version": 1,
+                  "initialFrameEncodeMs": 0,
+                  "sessionRuntimeState": "warm",
+                  "snapshotRowCount": 0
+                }
+              }
+            }
+          }
+        }
+      ],
+      "snapshotFragments": {
+        "before": {
+          "sessionId": "sessionId-2",
+          "revision": 1,
+          "logEpoch": "logEpoch-4",
+          "control": {
+            "phase": "draft",
+            "sessionEnded": false,
+            "canStop": false,
+            "stopState": "idle",
+            "stopTargetKind": "unknown",
+            "activeWorks": [],
+            "lastError": null,
+            "apiRetry": null
+          },
+          "queue": {
+            "items": [],
+            "autoDrain": true
+          },
+          "usage": {
+            "contextWindow": null,
+            "cumulative": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            }
+          }
+        },
+        "afterIdle": {
+          "sessionId": "sessionId-2",
+          "revision": 1,
+          "logEpoch": "logEpoch-4",
+          "control": {
+            "phase": "draft",
+            "sessionEnded": false,
+            "canStop": false,
+            "stopState": "idle",
+            "stopTargetKind": "unknown",
+            "activeWorks": [],
+            "lastError": null,
+            "apiRetry": null
+          },
+          "queue": {
+            "items": [],
+            "autoDrain": true
+          },
+          "usage": {
+            "contextWindow": null,
+            "cumulative": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            }
+          }
+        }
+      },
+      "rootStarts": 0,
+      "shutdownConfirmed": true,
+      "shutdownEscalated": false,
+      "privateNativeTableRows": {
+        "session": 1,
+        "session_input": 0
+      }
+    },
+    "idleQueueCounterexample": {
+      "calls": [
+        {
+          "method": "v4/command",
+          "params": {
+            "commandId": "commandId-10",
+            "clientId": "hmb-private-inquiry-probe",
+            "sessionId": null,
+            "type": "createSession",
+            "payload": {
+              "workspaceId": "<private-workspace>",
+              "permissionScope": "session"
+            },
+            "issuedAt": 1
+          },
+          "response": {
+            "id": 2,
+            "result": {
+              "commandId": "commandId-10",
+              "status": "accepted",
+              "revisionAtDecision": 0,
+              "result": {
+                "type": "createSession",
+                "sessionId": "sessionId-11"
+              },
+              "memoryEnabled": false
+            }
+          }
+        },
+        {
+          "method": "v4/conversation/subscribe",
+          "params": {
+            "topic": "conversation/<private-session>",
+            "connectionId": "hmb-private-inquiry-probe",
+            "clientMode": "web-remote-replayable"
+          },
+          "response": {
+            "id": 5,
+            "result": {
+              "ack": {
+                "subscriptionId": "subscriptionId-12",
+                "mode": "snapshot",
+                "logEpoch": "logEpoch-13",
+                "openTiming": {
+                  "version": 1,
+                  "initialFrameEncodeMs": 0,
+                  "sessionRuntimeState": "warm",
+                  "snapshotRowCount": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "method": "v4/command",
+          "params": {
+            "commandId": "commandId-14",
+            "clientId": "hmb-private-inquiry-probe",
+            "sessionId": "sessionId-11",
+            "type": "sendText",
+            "payload": {},
+            "issuedAt": 1
+          },
+          "response": {
+            "id": 6,
+            "result": {
+              "commandId": "commandId-14",
+              "status": "rejected",
+              "reasonCode": "proto.invalidPayload",
+              "message": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"text\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]",
+              "revisionAtDecision": 0
+            }
+          }
+        },
+        {
+          "method": "v4/command",
+          "params": {
+            "commandId": "commandId-15",
+            "clientId": "hmb-private-inquiry-probe",
+            "sessionId": "sessionId-11",
+            "type": "deleteQueueItem",
+            "payload": {},
+            "issuedAt": 1
+          },
+          "response": {
+            "id": 7,
+            "result": {
+              "commandId": "commandId-15",
+              "status": "rejected",
+              "reasonCode": "proto.invalidPayload",
+              "message": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"queueItemId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]",
+              "revisionAtDecision": 0
+            }
+          }
+        },
+        {
+          "method": "v4/command",
+          "params": {
+            "commandId": "commandId-16",
+            "clientId": "hmb-private-inquiry-probe",
+            "sessionId": "sessionId-11",
+            "type": "sendText",
+            "payload": {
+              "text": "private held queue probe",
+              "requestedDelivery": "queue"
+            },
+            "issuedAt": 1
+          },
+          "response": {
+            "id": 8,
+            "result": {
+              "commandId": "commandId-16",
+              "status": "accepted",
+              "revisionAtDecision": 1,
+              "result": {
+                "type": "inputAccepted",
+                "delivery": "startNow",
+                "inputId": "commandId-16"
+              },
+              "memoryEnabled": false
+            }
+          }
+        },
+        {
+          "method": "v4/conversation/subscribe",
+          "params": {
+            "topic": "conversation/<private-session>",
+            "connectionId": "hmb-private-inquiry-probe",
+            "clientMode": "web-remote-replayable"
+          },
+          "response": {
+            "id": 9,
+            "result": {
+              "ack": {
+                "subscriptionId": "subscriptionId-17",
+                "mode": "snapshot",
+                "logEpoch": "logEpoch-13",
+                "openTiming": {
+                  "version": 1,
+                  "initialFrameEncodeMs": 0,
+                  "sessionRuntimeState": "warm",
+                  "snapshotRowCount": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "method": "v4/conversation/subscribe",
+          "params": {
+            "topic": "conversation/<private-session>",
+            "connectionId": "hmb-private-inquiry-probe",
+            "clientMode": "web-remote-replayable"
+          },
+          "response": {
+            "id": 10,
+            "result": {
+              "ack": {
+                "subscriptionId": "subscriptionId-18",
+                "mode": "snapshot",
+                "logEpoch": "logEpoch-13",
+                "openTiming": {
+                  "version": 1,
+                  "initialFrameEncodeMs": 0,
+                  "sessionRuntimeState": "warm",
+                  "snapshotRowCount": 2
+                }
+              }
+            }
+          }
+        }
+      ],
+      "snapshotFragments": {
+        "before": {
+          "sessionId": "sessionId-11",
+          "revision": 1,
+          "logEpoch": "logEpoch-13",
+          "control": {
+            "phase": "draft",
+            "sessionEnded": false,
+            "canStop": false,
+            "stopState": "idle",
+            "stopTargetKind": "unknown",
+            "activeWorks": [],
+            "lastError": null,
+            "apiRetry": null
+          },
+          "queue": {
+            "items": [],
+            "autoDrain": true
+          },
+          "usage": {
+            "contextWindow": null,
+            "cumulative": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            }
+          }
+        },
+        "afterEnqueue": {
+          "sessionId": "sessionId-11",
+          "revision": 1,
+          "logEpoch": "logEpoch-13",
+          "control": {
+            "phase": "draft",
+            "sessionEnded": false,
+            "canStop": false,
+            "stopState": "idle",
+            "stopTargetKind": "unknown",
+            "activeWorks": [],
+            "lastError": null,
+            "apiRetry": null
+          },
+          "queue": {
+            "items": [],
+            "autoDrain": true
+          },
+          "usage": {
+            "contextWindow": null,
+            "cumulative": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            }
+          }
+        },
+        "held": {
+          "sessionId": "sessionId-11",
+          "revision": 2,
+          "logEpoch": "logEpoch-13",
+          "control": {
+            "phase": "running",
+            "sessionEnded": false,
+            "canStop": true,
+            "stopState": "stoppable",
+            "stopTargetKind": "assistant",
+            "activeWorks": [
+              {
+                "kind": "primaryTurn",
+                "foregroundExecutionId": "runtime_command_1",
+                "sourceCommandId": "commandId-16",
+                "startedAt": 1793438801726
+              }
+            ],
+            "lastError": null,
+            "apiRetry": null
+          },
+          "queue": {
+            "items": [],
+            "autoDrain": true
+          },
+          "usage": {
+            "contextWindow": null,
+            "cumulative": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0
+            }
+          }
+        }
+      },
+      "rootStarts": 1,
+      "shutdownConfirmed": true,
+      "shutdownEscalated": false,
+      "turnStarted": [
+        {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "71d6239b-968f-4d51-9767-a4d4769ef1a8",
+          "payload": {
+            "executionStartedAt": 1,
+            "turnNumber": 0,
+            "input": "private held queue probe",
+            "messageId": "messageId-19",
+            "inputId": "commandId-16",
+            "foregroundExecutionId": "runtime_command_1",
+            "queryId": "commandId-16",
+            "intent": {
+              "sourceCommandId": "commandId-16",
+              "queueItemId": "queueItemId-20",
+              "clientId": "hmb-private-inquiry-probe",
+              "kind": "sendText",
+              "text": "private held queue probe",
+              "modelSelection": {
+                "providerId": "private-probe",
+                "modelId": "GLM-5.3-Flash",
+                "options": {
+                  "reasoningLevel": "low"
+                }
+              },
+              "mode": "build",
+              "planEnabled": false,
+              "admissionSeq": 1,
+              "admittedAt": 1,
+              "requestedDelivery": "queue",
+              "admittedDelivery": "queue"
+            }
+          },
+          "seq": 2,
+          "sessionId": "sessionId-11",
+          "timestamp": 1,
+          "traceId": "traceId-21",
+          "turnId": "turnId-22",
+          "type": "turn.started"
+        }
+      ]
+    }
+  },
+  "limits": [
+    "No real model service or paid provider was contacted.",
+    "The initialization case starts no native turn; the counterexample records one native turn honestly.",
+    "A nonempty held queue, guide delivery during an active model turn and automatic drain after a successful turn were not dynamically verified."
+  ]
+}

@@ -36,7 +36,7 @@
 
 ## 已执行与留给 Host 的验证
 
-指定只读解释器、检出源码优先、清除任务给出的 10 项继承环境变量后，最终局部命令通过 61 条测试，退出码 0。新增 `test_refusal_facts` 的 23 条测试整文件通过；`test_native_run.RoleSeamFunctionTests`、`test_dsh_tool_evidence`、`test_session_records` 也通过；另执行了 ACP `EnvelopeValidationTest` 的三个纯内存超大帧测试。实际回合、完整检查和真实原生启动器未运行，没有安装依赖、读取日常看板、读取用户配置或发起模型调用。
+指定只读解释器、检出源码优先、清除任务给出的 10 项继承环境变量后，最终局部命令通过 61 条测试，退出码 0。新增 `test_refusal_facts` 的 23 条测试整文件通过；`test_native_run.RoleSeamFunctionTests`、`test_dsh_tool_evidence`、`test_session_records` 也通过；另执行了 ACP `EnvelopeValidationTest` 的三个纯内存超大帧测试。实际回合、完整检查和真实原生启动器未运行，没有安装依赖、读取日常黑板、读取用户配置或发起模型调用。
 
 在检出根设置 `PYTHON_BIN` 为 Host 提供的冻结依赖解释器，然后可重放已执行命令；不要令它指向待安装的新环境。
 
@@ -59,7 +59,7 @@ env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME \
 
 ## Host 在真实 DSH 上的无模型读取办法
 
-在检出源码下，由 Host 指定已确认的 DSH 可执行文件，以 `runtime_selection.bound` 只绑定该命令，使用新建的临时私有根直接执行 `run_discovery`，不经过服务或日常看板。它只发送 initialize、session/new、session/close，读取原生选择器后由现有代码确认进程停止；保留用户自己的原生配置供 DSH 自己读取。下面的第二次读取在真实 initialize 应答返回后只把客户端看到的形状替换为列表，验证改过的握手路径仍能在真实 DSH 上继续读取目录，返回 unknown 握手事实；这是 Host 的无模型形状故障注入，不代表原生 DSH 真返回了列表，也不验证暂缓的目录形状转换。
+在检出源码下，由 Host 指定已确认的 DSH 可执行文件，以 `runtime_selection.bound` 只绑定该命令，使用新建的临时私有根直接执行 `run_discovery`，不经过服务或日常黑板。它只发送 initialize、session/new、session/close，读取原生选择器后由现有代码确认进程停止；保留用户自己的原生配置供 DSH 自己读取。下面的第二次读取在真实 initialize 应答返回后只把客户端看到的形状替换为列表，验证改过的握手路径仍能在真实 DSH 上继续读取目录，返回 unknown 握手事实；这是 Host 的无模型形状故障注入，不代表原生 DSH 真返回了列表，也不验证暂缓的目录形状转换。
 
 将代码作为临时探针运行，`sys.argv[1]` 传入 DSH 可执行文件的绝对路径；解释器从该检出的 `src` 导入源码。探针只打印方法名、目录读取状态和诊断，不输出用户配置正文。
 
@@ -143,7 +143,7 @@ for inject_unknown in (False, True):
 
 ### 已执行与留给 Host 的验证
 
-每个文件单独一个进程，源码来自本检出，依赖用任务给的只读解释器；与检查运行器一样给每个测试进程一个私有的临时 `BUDDY_STATE_DIR`（否则读该变量的 8 条 C-Two 测试在收集时就报 `KeyError`），其余任务列出的继承环境变量已清除，没有读或写日常看板、用户配置与凭据。通过的 9 个文件共 204 条：`test_native_run` 61、`acp.test_acp_connection` 39、`test_refusal_facts` 27、`test_session_records` 18、`test_native_resume` 15、`acp.test_acp_launch` 15、`acp.test_acp_session` 12、`test_dsh_tool_evidence` 11、`test_dsh_session_storage` 6；`git diff --check` 通过。Host 打回 1 之后重跑了这 9 个文件与两个留给 Host 的文件，结果与打回前相同（`unconfirmed` 的收窄只改 `test_refusal_facts` 的一条断言并把它拆成两条，其余文件未受影响）。
+每个文件单独一个进程，源码来自本检出，依赖用任务给的只读解释器；与检查运行器一样给每个测试进程一个私有的临时 `BUDDY_STATE_DIR`（否则读该变量的 8 条 C-Two 测试在收集时就报 `KeyError`），其余任务列出的继承环境变量已清除，没有读或写日常黑板、用户配置与凭据。通过的 9 个文件共 204 条：`test_native_run` 61、`acp.test_acp_connection` 39、`test_refusal_facts` 27、`test_session_records` 18、`test_native_resume` 15、`acp.test_acp_launch` 15、`acp.test_acp_session` 12、`test_dsh_tool_evidence` 11、`test_dsh_session_storage` 6；`git diff --check` 通过。Host 打回 1 之后重跑了这 9 个文件与两个留给 Host 的文件，结果与打回前相同（`unconfirmed` 的收窄只改 `test_refusal_facts` 的一条断言并把它拆成两条，其余文件未受影响）。
 
 留给 Host 的两个文件在本环境不过，且在本检出的基线上失败数与失败点相同（都停在受管角色控制器子进程里的 ACP initialize：`native-disconnected`、原生退出码 3，与这次改动无关）：`buddy.harnesses.dsh.test_no_tool_dsh`（6 条，5 条不过）与 `buddy.harnesses.dsh.test_dsh_role_wiring`（12 条，9 条不过，只有 3 条 `DescriptionSeamTests` 通过）。Host 需要在自己的环境里补跑这两个文件，它们覆盖受管 Worker、受管发现路由与注册快速 seam。完整检查、真实 DSH 读取与回合、故障注入与安装仍由 Host 做；本节没有跑 `apps/console`，也没有启动任何服务与 Worker。
 
@@ -165,6 +165,6 @@ for inject_unknown in (False, True):
 
 ### 已执行与留给 Host 的验证
 
-每个文件单独一个进程，源码来自本检出，依赖用任务给的只读解释器，任务列出的继承环境变量已清除，每个测试进程用私有的临时 `BUDDY_STATE_DIR`；没有读或写日常看板、用户配置与凭据，没有安装、没有真实回合、没有启动服务与 Worker，也没有跑 `apps/console`。通过的 12 个文件共 227 条：`test_native_run` 62、`test_refusal_facts` 29、`acp.test_acp_connection` 39、`test_session_records` 18、`test_native_resume` 15、`acp.test_acp_launch` 15、`acp.test_acp_session` 12、`test_dsh_tool_evidence` 11、`test_dsh_session_storage` 6、`buddy.harnesses.test_quota_failures` 11（它直接调用 `_build_result`，是上面不扩签名的原因）、`blackboard.tasks.test_workflow_worker` 5、`blackboard.tasks.test_host_workflow_worker` 4；`git diff --check` 通过。
+每个文件单独一个进程，源码来自本检出，依赖用任务给的只读解释器，任务列出的继承环境变量已清除，每个测试进程用私有的临时 `BUDDY_STATE_DIR`；没有读或写日常黑板、用户配置与凭据，没有安装、没有真实回合、没有启动服务与 Worker，也没有跑 `apps/console`。通过的 12 个文件共 227 条：`test_native_run` 62、`test_refusal_facts` 29、`acp.test_acp_connection` 39、`test_session_records` 18、`test_native_resume` 15、`acp.test_acp_launch` 15、`acp.test_acp_session` 12、`test_dsh_tool_evidence` 11、`test_dsh_session_storage` 6、`buddy.harnesses.test_quota_failures` 11（它直接调用 `_build_result`，是上面不扩签名的原因）、`blackboard.tasks.test_workflow_worker` 5、`blackboard.tasks.test_host_workflow_worker` 4；`git diff --check` 通过。
 
 本环境跑不过、交给 Host 的两个文件是 `buddy.harnesses.dsh.test_no_tool_dsh`（6 条，5 条不过）与 `buddy.harnesses.dsh.test_dsh_role_wiring`（12 条，10 条不过、1 条出错）。用 `git archive d272ceb2` 取出基线树重跑，两者在基线上的失败集合与失败点与改后完全相同（都是受管角色控制器子进程里的 ACP initialize：`native-disconnected`、原生退出码 3），因此这两处失败与本改动无关，但仍需 Host 在自己的环境里确认这两个文件整体通过。完整检查、真实 DSH 读取与回合、故障注入与安装仍由 Host 做。

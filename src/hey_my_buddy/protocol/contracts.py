@@ -2,7 +2,7 @@
 
 Every operation is a named method with a validated request schema — there is no
 public ``dispatch(method, JSON)`` facade and no Python-to-Node engine relay. Complex
-payloads travel as bounded JSON strings over C-Two 0.9.0. This DTO is a
+payloads travel as bounded JSON strings over C-Two. This DTO is a
 **same-user Python API only**: it is not claimed to be cross-language portable,
 no FastDB DTO is used here, and a non-Python client must define its own contract.
 
@@ -14,7 +14,7 @@ control capacity that cancel, renew and result commits need.
 import c_two as cc
 
 # Patch releases share the software's major/minor contract (major.minor.0).
-CONTRACT_VERSION = "0.54.0"
+CONTRACT_VERSION = "0.69.0"
 CONTROL_NAME = "hey-my-buddy-control"
 WAIT_NAME = "hey-my-buddy-wait"
 
@@ -52,16 +52,32 @@ class BuddyControl:
     def console(self, request_json: str) -> str:
         ...
 
-    def console_snapshot(self, request_json: str) -> str:
-        ...
 
     def reminder_settings_set(self, request_json: str) -> str:
+        ...
+
+    def maintenance_start(self, request_json: str) -> str:
+        ...
+
+    def profile_start(self, request_json: str) -> str:
+        ...
+
+    def maintenance_pending(self, request_json: str) -> str:
+        ...
+
+    def domain_rename(self, request_json: str) -> str:
+        ...
+
+    def domain_merge(self, request_json: str) -> str:
         ...
 
     def storage_plan(self, request_json: str) -> str:
         ...
 
     def storage_apply(self, request_json: str) -> str:
+        ...
+
+    def project_relocate(self, request_json: str) -> str:
         ...
 
     def worker_sessions(self, request_json: str) -> str:
@@ -83,20 +99,20 @@ class BuddyControl:
     def task_cancel(self, request_json: str) -> str:
         ...
 
-    def task_retry(self, request_json: str) -> str:
-        ...
 
-    def task_acknowledge(self, request_json: str) -> str:
-        ...
 
-    def task_wait(self, request_json: str) -> str:
-        ...
 
     # -- executions ---------------------------------------------------------
     def execution_progress(self, request_json: str) -> str:
         ...
 
     def execution_result(self, request_json: str) -> str:
+        ...
+
+    def execution_profile(self, request_json: str) -> str:
+        ...
+
+    def execution_maintenance(self, request_json: str) -> str:
         ...
 
     # -- messages and artifacts --------------------------------------------
@@ -122,8 +138,6 @@ class BuddyControl:
         raise NotImplementedError
 
     # -- bounded decisions --------------------------------------------------
-    def selection_request(self, request_json: str) -> str:
-        ...
 
     def selection_get(self, request_json: str) -> str:
         ...
@@ -138,20 +152,22 @@ class BuddyControl:
         ...
 
     # -- micro-task workflow --------------------------------------------------
+    def workflow_create(self, request_json: str) -> str:
+        ...
+
+    def workflow_amend(self, request_json: str) -> str:
+        ...
+
     def workflow_submit(self, request_json: str) -> str:
         ...
 
     def workflow_get(self, request_json: str) -> str:
         ...
 
-    def workflow_decide(self, request_json: str) -> str:
-        ...
 
     def workflow_continue(self, request_json: str) -> str:
         ...
 
-    def workflow_takeover(self, request_json: str) -> str:
-        ...
 
     def workflow_cancel(self, request_json: str) -> str:
         ...
@@ -162,26 +178,30 @@ class BuddyControl:
     def workflow_conclude(self, request_json: str) -> str:
         ...
 
-    def workflow_reclaim(self, request_json: str) -> str:
-        ...
 
-    def workflow_scope_amend(self, request_json: str) -> str:
-        ...
 
-    def workflow_workspace_resolve(self, request_json: str) -> str:
-        ...
+
 
     def workflow_suggest(self, request_json: str) -> str:
         ...
 
-    # -- work macro tasks (reads and console-only stop/deletion) -------------
+    # -- work macro tasks (reads and console-only lifecycle/deletion) -------------
     def macro_task_list(self, request_json: str) -> str:
         ...
 
     def macro_task_timeline(self, request_json: str) -> str:
         ...
 
-    def macro_task_stop(self, request_json: str) -> str:
+    def macro_task_goal_history(self, request_json: str) -> str:
+        ...
+
+    def macro_task_pause(self, request_json: str) -> str:
+        ...
+
+    def macro_task_resume(self, request_json: str) -> str:
+        ...
+
+    def macro_task_end(self, request_json: str) -> str:
         ...
 
     def macro_task_deletion_preview(self, request_json: str) -> str:
@@ -201,8 +221,6 @@ class BuddyWait:
     def task_wait(self, request_json: str) -> str:
         ...
 
-    def wait_capacity(self, request_json: str) -> str:
-        ...
 
 
 @cc.crm(namespace="hey.my.buddy", version=CONTRACT_VERSION)

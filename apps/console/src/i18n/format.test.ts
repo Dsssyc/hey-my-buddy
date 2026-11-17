@@ -1,10 +1,32 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setLanguageChoice } from "./index";
-import { formatCoolingTime, formatClockMinutes, formatCompact, formatDuration, formatList, formatMoment, formatMomentMinutes, formatNumber, formatRelative } from "./format";
+import { dateTimeFormat, formatCoolingTime, formatClockMinutes, formatCompact, formatDuration, formatList, formatMoment, formatMomentMinutes, formatNumber, formatRelative } from "./format";
 
 afterEach(() => setLanguageChoice("browser"));
 
 describe("the numbers and the times the detail writes", () => {
+  it("reuses date formatters for the same locale, local zone and options", () => {
+    setLanguageChoice("en");
+    const options = { hour: "2-digit", minute: "2-digit", hour12: false } as const;
+    const first = dateTimeFormat(options);
+    expect(dateTimeFormat({ ...options })).toBe(first);
+    expect(dateTimeFormat({ ...options, second: "2-digit" })).not.toBe(first);
+    setLanguageChoice("zh");
+    const translated = dateTimeFormat(options);
+    expect(translated).not.toBe(first);
+    expect(dateTimeFormat(options)).toBe(translated);
+    // The cache key is the host's own zone segment, so the mocked zone must
+    // differ from the running environment's; a UTC runner would otherwise see
+    // its real zone in the mock and keep the cache valid.
+    const realZone = new Date().toTimeString().slice(9);
+    const foreignZone = realZone.startsWith("GMT+0530")
+      ? "GMT+0630 (Myanmar Time)"
+      : "GMT+0530 (India Standard Time)";
+    const zone = vi.spyOn(Date.prototype, "toTimeString").mockReturnValue(`12:00:00 ${foreignZone}`);
+    expect(dateTimeFormat(options)).not.toBe(translated);
+    zone.mockRestore();
+  });
+
   it("lists two and three names with the language's separators", () => {
     setLanguageChoice("zh");
     expect(formatList(["Codex", "DSH"])).toBe("Codex、DSH");
@@ -29,10 +51,12 @@ describe("the numbers and the times the detail writes", () => {
     expect(formatDuration(2 * 3_600_000 + 59_000, "minutes")).toBe("2 时 0 分");
   });
 
-  it("writes a count of tokens short above a thousand, and whole below", () => {
+  it("writes a count of tokens short above a thousand, whole below, and in millions from a million", () => {
     expect(formatCompact(999)).toBe("999");
     expect(formatCompact(23_400)).toBe("23.4k");
     expect(formatCompact(18_000)).toBe("18.0k");
+    expect(formatCompact(1_000_000)).toBe("1.0M");
+    expect(formatCompact(9_638_100)).toBe("9.6M");
     expect(formatNumber(12_000)).toBe("12,000");
   });
 

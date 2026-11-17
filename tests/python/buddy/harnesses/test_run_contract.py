@@ -13,8 +13,8 @@ import hashlib
 import json
 import os
 import tempfile
-from temporary import TemporaryDirectory
 import unittest
+from typing import get_args
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest import mock
 
@@ -76,7 +76,7 @@ def full_result() -> rc.RunResult:
     return rc.RunResult(
         identity=identity(), harness="zcode",
         end=rc.RunEnd(status="ok", native_exit_code=0),
-        harness_version="0.42.0", model_started=True,
+        harness_version="0.42.0", model_responded=True,
 
         buddy=rc.ResultBuddy(
             requested=rc.RunBuddy(provider="fixture-provider", model="fixture-model", effort="off"),
@@ -178,6 +178,55 @@ class CodecRoundtripTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             edited(request, permission="unknown")
 
+    def test_web_permission_order_and_harness_declarations_share_the_contract(self):
+        from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS, adapter_capabilities, buddy_capabilities
+        levels = ("none", "web", "read", "write", "full")
+        self.assertEqual(get_args(rc.PermissionLevel), levels)
+        request = edited(full_request(Path(tempfile.gettempdir()).resolve()), permission="web")
+        self.assertEqual(rc.RunRequest.from_payload(request.to_payload()).permission, "web")
+        self.assertEqual({name for name, declared in PERMISSION_LEVELS.items() if "web" in declared},
+                         {"codex", "claude", "dsh"})
+        for harness, declared in PERMISSION_LEVELS.items():
+            with self.subTest(harness=harness):
+                self.assertEqual(tuple(declared), tuple(level for level in levels if level in declared))
+                if "web" in declared:
+                    self.assertEqual(declared["web"], "enforced")
+                self.assertEqual("permission:web" in adapter_capabilities(harness), "web" in declared)
+                self.assertEqual("permission:web" in buddy_capabilities(harness, []), "web" in declared)
+
+    def test_undeclared_web_permission_is_refused(self):
+        from hey_my_buddy.buddy.harnesses.registry import require_permission
+        from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
+        for harness, declared in PERMISSION_LEVELS.items():
+            if "web" in declared:
+                require_permission({"harness": harness}, "web")
+            with self.subTest(harness=harness), mock.patch.dict(PERMISSION_LEVELS, {
+                    harness: {level: value for level, value in declared.items() if level != "web"}}):
+                with self.assertRaises(BoardError) as rejected:
+                    require_permission({"harness": harness}, "web")
+                self.assertEqual(rejected.exception.code, "UNSUPPORTED_CAPABILITY")
+                self.assertEqual(rejected.exception.details["requiredCapability"], "permission:web")
+
+    def test_web_rejects_native_resume_for_every_harness_at_the_request_boundary(self):
+        from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
+        request = full_request(Path(tempfile.gettempdir()).resolve())
+        continuation = rc.RunContinuation(mode="native-session", previous_session_id="previous")
+        for harness in PERMISSION_LEVELS:
+            with self.subTest(harness=harness):
+                with self.assertRaises(BoardError):
+                    edited(request, harness=harness, permission="web", continuation=continuation)
+                with self.assertRaises(BoardError):
+                    rc.RunRequest.from_payload(request.to_payload() | {
+                        "harness": harness, "permission": "web", "continuation": continuation.to_payload()})
+
+    def test_web_allows_fresh_sessions_with_reconstructed_context(self):
+        request = edited(full_request(Path(tempfile.gettempdir()).resolve()), permission="web")
+        self.assertIsNone(rc.RunRequest.from_payload(request.to_payload()).continuation)
+        reconstructed = edited(request, continuation=rc.RunContinuation(
+            mode="reconstructed-new-session", previous_session_id="previous"))
+        self.assertEqual(rc.RunRequest.from_payload(reconstructed.to_payload()).continuation.mode,
+                         "reconstructed-new-session")
+
     def test_codex_full_worker_selects_the_worker_carrier(self):
         from hey_my_buddy.buddy.harnesses.codex import native_run as codex
         from hey_my_buddy.buddy.harnesses.registry import require_permission
@@ -220,7 +269,7 @@ class CodecRoundtripTests(unittest.TestCase):
                 rc.RunRequest.from_payload(request.to_payload() | fields)
 
     def setUp(self):
-        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-run-contract-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-run-contract-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
@@ -229,6 +278,14 @@ class CodecRoundtripTests(unittest.TestCase):
         self.assertEqual(rc.RunRequest.from_payload(request.to_payload()), request)
         result = full_result()
         self.assertEqual(rc.RunResult.from_payload(result.to_payload()), result)
+
+    def test_current_result_uses_only_model_responded_without_an_old_name_alias(self):
+        payload = full_result().to_payload()
+        self.assertIs(payload["modelResponded"], True)
+        self.assertNotIn("modelStarted", payload)
+        payload["modelStarted"] = payload.pop("modelResponded")
+        with self.assertRaises(BoardError):
+            rc.RunResult.from_payload(payload)
 
     def test_the_format_version_is_the_exact_integer(self):
         text = json.dumps(full_request(self.root).to_payload())
@@ -244,14 +301,14 @@ class CodecRoundtripTests(unittest.TestCase):
 
     def test_unknown_stays_unknown_in_a_minimal_result(self):
         result = rc.RunResult(identity=identity(), harness="codex", end=rc.RunEnd(status="cancelled"))
-        self.assertIsNone(result.model_started)
+        self.assertIsNone(result.model_responded)
         self.assertIsNone(result.buddy.requested)
         self.assertIsNone(result.usage)
         self.assertIsNone(result.native_identity)
         self.assertEqual(result.stop_evidence.native.group_state, "unknown")
         self.assertIsNone(result.stop_evidence.interrupt.requested)
         back = rc.RunResult.from_payload(result.to_payload())
-        self.assertIsNone(back.model_started)
+        self.assertIsNone(back.model_responded)
         self.assertIsNone(back.harness_version)
         # An absent optional text is None/JSON null end to end; the legacy
         # receipts' literal "unknown" spelling is a role projection, not a
@@ -368,7 +425,7 @@ class CodecRoundtripTests(unittest.TestCase):
         for index in range(1000):
             for phase in ("start", "end"):
                 collector.observe({"nativeIdentity": root, "callId": f"c{index}" + "x" * 120,
-                                   "toolName": "mcp_" + "n" * 500, "category": "other", "phase": phase})
+                                   "toolName": "mcp_" + "n" * 500, "category": "other", "phase": phase, "outcome": "unknown"})
         package = collector.finish([root], True)
         self.assertGreater(package["calls"]["bytes"], rc.MAX_PACKAGE_BYTES)
         self.assertLess(len(json.dumps(package).encode()), 4096)
@@ -445,8 +502,8 @@ class StrictScalarTypeTests(unittest.TestCase):
         with self.assertRaises(BoardError, msg="generation"):
             rc.RunRequest.from_payload(payload)
         result_payload = full_result().to_payload()
-        result_payload["modelStarted"] = 1
-        with self.assertRaises(BoardError, msg="modelStarted"):
+        result_payload["modelResponded"] = 1
+        with self.assertRaises(BoardError, msg="modelResponded"):
             rc.RunResult.from_payload(result_payload)
         result_payload = full_result().to_payload()
         result_payload["end"]["nativeExitCode"] = "0"
@@ -682,6 +739,22 @@ class InterfaceSurfaceTests(unittest.TestCase):
                     native_operation(name, "delete-sessions")
                 self.assertEqual(failure.exception.code, "UNSUPPORTED")
 
+    def test_the_observed_version_fact_selects_the_input_limit_declaration(self):
+        # The public version text this contract carries is the same fact the
+        # input-limit selection reads; the check itself is not wired into any
+        # run path here.
+        from hey_my_buddy.protocol.capabilities import select_input_limit
+
+        def observed(version):
+            result = rc.RunResult(identity=identity(), harness="codex",
+                                  end=rc.RunEnd(status="ok"), harness_version=version)
+            return rc.RunResult.from_payload(result.to_payload()).harness_version
+
+        self.assertEqual(select_input_limit("codex", observed("codex-cli 0.164.0")).state, "known")
+        for version in ("codex-cli 0.165.0", None):
+            with self.subTest(version=version):
+                self.assertEqual(select_input_limit("codex", observed(version)).state, "unknown")
+
     def test_tool_evidence_packages_keep_incomplete_facts(self):
         package = PAYLOADS["codex"]["payloads"]["fastSuccess"]["toolEvidence"]
         result_payload = full_result().to_payload()
@@ -703,13 +776,13 @@ class InterfaceSurfaceTests(unittest.TestCase):
         carried = json.loads(json.dumps(package))
         row = {"nativeIdentity": {}, "callId": None, "categories": ["other"], "phases": [],
                "facts": [{"toolName": None, "category": "other"}], "consistent": True,
-               "endBeforeStart": False, "incomplete": True, "malformed": True, "belongsToRoot": False}
+               "endBeforeStart": False, "incomplete": True, "malformed": True, "belongsToRoot": False, "outcome": "unknown"}
         carried["calls"] = tool_evidence.write_tool_calls(carried["binding"], [row], state_dir=STATE_DIR)
         payload = full_result().to_payload()
         payload["toolEvidence"] = carried
         decoded = rc.RunResult.from_payload(payload)
         self.assertEqual(list(tool_evidence.read_tool_calls(decoded.tool_evidence.value, state_dir=STATE_DIR)), [row])
-        for mutation in ({"version": 1}, {"calls": []},
+        for mutation in ({"version": 1}, {"version": 2}, {"calls": []},
                          {"calls": {**package["calls"], "sha256": "x" * 64}},
                          {"calls": {**package["calls"], "path": "relative/calls.jsonl"}},
                          {"calls": {**package["calls"], "bytes": True}}):

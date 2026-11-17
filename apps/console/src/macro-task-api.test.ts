@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApi } from "./api";
 import type { MacroTaskPage, MacroTaskTimeline } from "./macro-task-types";
-import { macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { listSummary, macroTaskGroups, macroTaskTimelineFixture } from "./macro-task-fixtures";
 
 describe("work macro task reads", () => {
   it("reads null titles and event facts from the current service without labels or summaries", async () => {
@@ -17,7 +17,7 @@ describe("work macro task reads", () => {
     expect(result.timeline.events[0]).not.toHaveProperty("summary");
   });
   it("reports macroTask list verification from each HTTP response without changing its envelope", async () => {
-    const page: MacroTaskPage = { macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false };
+    const page: MacroTaskPage = { groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 41, changed: false };
     const firstDate = "Fri, 09 Oct 2026 18:00:00 GMT";
     const secondDate = "Fri, 09 Oct 2026 18:05:00 GMT";
     const fetcher = vi.fn<typeof fetch>()
@@ -33,58 +33,64 @@ describe("work macro task reads", () => {
     expect(fetcher.mock.calls[1][1]?.headers).toEqual({ "If-None-Match": '"macroTasks"' });
   });
   it("sends list filters through GET /api/macro-tasks with the caller's abort signal", async () => {
-    const page: MacroTaskPage = { macroTasks: [], totals: { all: 7, active: 3, host: 2, review: 1 }, nextCursor: "keyset+cursor/==", cursor: 41, changed: true };
+    const page: MacroTaskPage = { groups: [], totals: { all: 7, active: 3, host: 2, review: 1 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 41, changed: true };
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(page)));
     const api = createApi("/private/", fetcher);
     const controller = new AbortController();
-    await expect(api.macroTasks({ limit: 50, before: "keyset+cursor/==", projectId: "repository:a", hostId: "Host B",
-      query: "时间轴", filter: "review", sort: "created-asc" }, controller.signal)).resolves.toEqual(page);
+    await expect(api.macroTasks({ limit: 50, before: "keyset+cursor/==", group: "project:repository:a", query: "时间轴", filter: "review", sort: "created-asc" }, controller.signal)).resolves.toEqual(page);
     const [location, init] = fetcher.mock.calls[0];
     const url = new URL(String(location), "http://localhost");
     expect(url.pathname).toBe("/private/api/macro-tasks");
     expect(Object.fromEntries(url.searchParams)).toEqual({ limit: "50", before: "keyset+cursor/==",
-      projectId: "repository:a", hostId: "Host B", query: "时间轴", filter: "review", sort: "created-asc" });
+      group: "project:repository:a", query: "时间轴", filter: "review", sort: "created-asc" });
     expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store", signal: controller.signal });
     expect(init?.method || "GET").toBe("GET");
     expect(init?.body).toBeUndefined();
   });
 
   it("omits empty optional list parameters instead of sending blank filters", async () => {
-    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })));
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })));
     const api = createApi("/private", fetcher);
-    await api.macroTasks({ query: "", projectId: "", hostId: "", filter: "all" });
+    await api.macroTasks({ query: "", group: "", filter: "all" });
     const url = new URL(String(fetcher.mock.calls[0][0]), "http://localhost");
     expect(Object.fromEntries(url.searchParams)).toEqual({ filter: "all" });
   });
 
   it("rejects incomplete list envelopes instead of treating them as an empty page", async () => {
     const totals = { all: 0, active: 0, host: 0, review: 0 };
-    for (const payload of [{ macroTasks: [], totals }, { macroTasks: {}, totals, nextCursor: null, cursor: 0, changed: false },
-      { macroTasks: [], totals: { ...totals, all: "0" }, nextCursor: null, cursor: 0, changed: false },
-      { macroTasks: [], totals: { ...totals, review: -1 }, nextCursor: null, cursor: 0, changed: false },
-      { macroTasks: [], totals: { all: 0, active: 0, host: 0 }, nextCursor: null, cursor: 0, changed: false },
-      { macroTasks: [], totals, nextCursor: 1, cursor: 0, changed: false },
-      { macroTasks: [], totals, nextCursor: null, cursor: 0 }]) {
+    for (const payload of [{ groups: [], totals }, { groups: {}, totals, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false },
+      { groups: [], totals: { ...totals, all: "0" }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false },
+      { groups: [], totals: { ...totals, review: -1 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false },
+      { groups: [], totals: { all: 0, active: 0, host: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false },
+      { groups: [{ id: "project:p1", project: null, total: 1, macroTasks: [], nextCursor: 1 }], totals, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false },
+      { groups: [], totals, cursor: 0 }]) {
       const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(payload))) as typeof fetch);
       await expect(api.macroTasks({})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
   });
 
-  it("accepts nullable descriptions and root outcome counts, refusing malformed ones", async () => {
+  it("accepts timeline goals and root outcome counts, refusing malformed ones", async () => {
     const good = macroTaskTimelineFixture();
-    const withDescription = { ...good, macroTask: { ...good.macroTask, description: "用户口述的目标描述。", counts: { ...good.macroTask.counts, accepted: 2 } } };
+    const withGoal = { ...good, macroTask: { ...good.macroTask,
+      goal: { body: "用户口述的目标描述。", revision: 2, createdAt: "2026-10-05T02:30:00Z" },
+      counts: { ...good.macroTask.counts, accepted: 2 } } };
     // The read resolves to {timeline, verifiedAtMs}; verifiedAtMs is the
     // response's own HTTP Date, pinned here with a fixed header value.
     const verifiedAtMs = Date.parse("Mon, 05 Oct 2026 02:30:00 GMT");
-    const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(withDescription),
+    const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(withGoal),
       { headers: { Date: new Date(verifiedAtMs).toUTCString() } })) as typeof fetch);
     await expect(api.macroTaskTimeline("macro-1", {})).resolves.toMatchObject({
-      timeline: { macroTask: { description: "用户口述的目标描述。", counts: { accepted: 2 } },
+      timeline: { macroTask: { goal: { body: "用户口述的目标描述。", revision: 2,
+        createdAt: "2026-10-05T02:30:00Z" }, counts: { accepted: 2 } },
         rows: expect.any(Array) },
       verifiedAtMs,
     });
     for (const malformed of [
-      { ...good, macroTask: { ...good.macroTask, description: 7 } },
+      { ...good, macroTask: listSummary(good.macroTask) },
+      { ...good, macroTask: { ...good.macroTask, goal: 7 } },
+      { ...good, macroTask: { ...good.macroTask, goal: { ...good.macroTask.goal!, body: 7 } } },
+      { ...good, macroTask: { ...good.macroTask, goal: { ...good.macroTask.goal!, revision: 0 } } },
+      { ...good, macroTask: { ...good.macroTask, goal: { ...good.macroTask.goal!, createdAt: "bad" } } },
       { ...good, macroTask: { ...good.macroTask, counts: { ...good.macroTask.counts, accepted: "2" } } },
       { ...good, macroTask: { ...good.macroTask, counts: { ...good.macroTask.counts, failed: undefined } } },
       { ...good, macroTask: { ...good.macroTask, counts: { ...good.macroTask.counts, failed: -1 } } },
@@ -94,30 +100,44 @@ describe("work macro task reads", () => {
       const reader = createApi("/private", vi.fn(async () => new Response(JSON.stringify(malformed))) as typeof fetch);
       await expect(reader.macroTaskTimeline("macro-1", {})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
-    const badList = { macroTasks: [{ ...good.macroTask, description: [] }], totals: { all: 1, active: 1, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false };
+    const listSummaryRow = listSummary(good.macroTask);
+    const badList = { groups: [{ ...macroTaskGroups([listSummaryRow])[0], macroTasks: [{ ...listSummaryRow, goal: [] }] }], totals: { all: 1, active: 1, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false };
     const listApi = createApi("/private", vi.fn(async () => new Response(JSON.stringify(badList))) as typeof fetch);
     await expect(listApi.macroTasks({})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    const validList = { ...badList, groups: macroTaskGroups([listSummaryRow]) };
+    await expect(createApi("/private", vi.fn(async () => new Response(JSON.stringify(validList))) as typeof fetch).macroTasks({}))
+      .resolves.toEqual(validList);
     for (const malformed of [
-      { ...good.macroTask, summary: undefined },
-      { ...good.macroTask, sourceHostId: undefined },
-      { ...good.macroTask, project: { ...good.macroTask.project, path: 4 } },
-      { ...good.macroTask, counts: { ...good.macroTask.counts, host: -1 } },
-      { ...good.macroTask, counts: { ...good.macroTask.counts, failed: "1" } },
+      { ...listSummaryRow, project: { ...listSummaryRow.project, kind: "unknown" } },
+      { ...listSummaryRow, project: { kind: "git" as const, ...listSummaryRow.project, path: 4 } },
+      { ...listSummaryRow, counts: { ...listSummaryRow.counts, host: -1 } },
+      { ...listSummaryRow, counts: { ...listSummaryRow.counts, failed: "1" } },
     ]) {
       const reader = createApi("/private", vi.fn(async () => new Response(JSON.stringify({
-        macroTasks: [malformed], totals: { all: 1, active: 1, host: 0, review: 0 },
-        nextCursor: null, cursor: 0, changed: false,
+        groups: [{ ...macroTaskGroups([listSummaryRow])[0], macroTasks: [malformed] }], totals: { all: 1, active: 1, host: 0, review: 0 },
+        defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false,
       }))) as typeof fetch);
       await expect(reader.macroTasks({})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
   });
 
+  it("parses a 1 MiB goal body only in the timeline detail", async () => {
+    const body = "x".repeat(1024 * 1024);
+    const detail = macroTaskTimelineFixture();
+    detail.macroTask.goal = { body, revision: 2, createdAt: "2026-10-05T02:30:00Z" };
+    const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(detail))) as typeof fetch);
+    const read = await api.macroTaskTimeline(detail.macroTask.macroTaskId, {});
+    expect(read.timeline.macroTask.goal?.body).toBe(body);
+    expect(read.timeline.macroTask.goal?.revision).toBe(2);
+    expect(listSummary(read.timeline.macroTask)).not.toHaveProperty("goal");
+  });
+
   it("accepts nullable summary fields from the service's standalone projection", async () => {
-    const source = macroTaskTimelineFixture().macroTask;
-    const standalone = { ...source, kind: "standalone", titleSource: "none", description: null,
-      summary: null, sourceHostId: null, project: null, createdAt: null, lastActivityAt: null };
-    const payload = { macroTasks: [standalone], totals: { all: 1, active: 1, host: 0, review: 0 },
-      nextCursor: null, cursor: 41, changed: false };
+    const source = listSummary(macroTaskTimelineFixture().macroTask);
+    const standalone = { ...source, kind: "standalone" as const, titleSource: "none" as const,
+      summary: null, project: null, createdAt: null, lastActivityAt: null };
+    const payload = { groups: macroTaskGroups([standalone]), totals: { all: 1, active: 1, host: 0, review: 0 },
+      defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 41, changed: false };
     const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(payload))) as typeof fetch);
     await expect(api.macroTasks({})).resolves.toEqual(payload);
   });
@@ -240,4 +260,19 @@ describe("work macro task reads", () => {
     expect(timeline.rows.map(row => row.runId)).toEqual(["r1", "r2", "r3", "r5", "r4", "r6"]);
     expect(timeline.spans.every(span => typeof span.spanId === "string")).toBe(true);
   });
+});
+
+it("reads all goal revisions through the console-only endpoint and rejects malformed version facts", async () => {
+  const goal = { body: "目标\n\n完整正文。", revision: 2, createdAt: "2026-11-01T06:00:00Z" };
+  const payload = { macroTaskId: "macro-test", goals: [goal, { ...goal, revision: 1 }] };
+  const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(payload)));
+  const controller = new AbortController();
+  expect(await createApi("/private", fetcher).macroTaskGoals("macro-test", controller.signal)).toEqual(payload);
+  expect(fetcher.mock.calls[0][0]).toBe("/private/api/macro-tasks/macro-test/goals");
+  expect(fetcher.mock.calls[0][1]?.signal).toBe(controller.signal);
+  for (const broken of [{ ...payload, goals: null }, { ...payload, goals: [{ ...goal, revision: 0 }] },
+    { ...payload, goals: [{ ...goal, createdAt: "invalid" }] }, { ...payload, goals: [{ ...goal, body: 42 }] }]) {
+    const api = createApi("/private", async () => new Response(JSON.stringify(broken)));
+    await expect(api.macroTaskGoals("macro-test")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  }
 });

@@ -12,11 +12,11 @@
 
 **A4（低）`hostId` 可为空之后其余按 Host 判断的地方。** 逐处看过：`_authorize` 的代次与令牌校验不变；接管与接管重放（`workflow.py:3244-3297`、`3321`）对 None 的比较是对的；宏任务挂接对 Lead 走 `lead["runId"]` 的宏任务，不调用 `attach_macro_task`；协助任务的请求指纹按 None 计算，与提交一侧一致；`task_list` 的 Lead 过滤只按 `workflow_lead_tasks`（`src/hey_my_buddy/blackboard/store/store.py:1041`）；仓库里已没有代码按 `lead:` 前缀判断。按 Host 过滤的投影 `(source_host_id = ? OR current_host_id = ?)`（`src/hey_my_buddy/blackboard/tasks/micro_task.py:364`）对新的名下微任务得到 NULL，对升级过来的却得到 `lead:<运行>`，见 B2。
 
-**A5（低）启动器读凭据文件的边界够用，没有找到可利用之处。** `agent_credential_document`（`src/hey_my_buddy/install/launcher.py:94-112`）经 `read_private` 以 `O_NOFOLLOW` 打开，要求普通文件、属主是当前用户、没有组与其他人的权限，再要求非空令牌与绝对的 `stateDir`。`stateDir` 指向别的看板时，令牌由签发看板的密钥派生，`resolve_credential` 在别的看板上查不到就 `UNAUTHORIZED`，从不退回管理员或 Host 权限（`workflow.py:923-939`）；`stateDir` 还决定 `selected_runtime(state)` 执行哪个运行时的 Python，但能写出一个属主私有的凭据文件的只有同一个用户，而 Lead 本来就能执行命令，不构成越权。小问题：文件不存在时 `read_private` 返回 None，报的是“没有令牌”而不是“读不到文件”。证伪做法：分别用指向第二个私有看板的 `stateDir`、组可读的文件、符号链接的文件、缺失的文件调用启动器的 `get`，都应是 `UNAUTHORIZED`，且服务端没有记下任何操作。
+**A5（低）启动器读凭据文件的边界够用，没有找到可利用之处。** `agent_credential_document`（`src/hey_my_buddy/install/launcher.py:94-112`）经 `read_private` 以 `O_NOFOLLOW` 打开，要求普通文件、属主是当前用户、没有组与其他人的权限，再要求非空令牌与绝对的 `stateDir`。`stateDir` 指向别的黑板时，令牌由签发黑板的密钥派生，`resolve_credential` 在别的黑板上查不到就 `UNAUTHORIZED`，从不退回管理员或 Host 权限（`workflow.py:923-939`）；`stateDir` 还决定 `selected_runtime(state)` 执行哪个运行时的 Python，但能写出一个属主私有的凭据文件的只有同一个用户，而 Lead 本来就能执行命令，不构成越权。小问题：文件不存在时 `read_private` 返回 None，报的是“没有令牌”而不是“读不到文件”。证伪做法：分别用指向第二个私有黑板的 `stateDir`、组可读的文件、符号链接的文件、缺失的文件调用启动器的 `get`，都应是 `UNAUTHORIZED`，且服务端没有记下任何操作。
 
 **A6（低）令牌的去向。** 提示词只放文件路径（`src/hey_my_buddy/buddy/roles/prompts.py:16-22`），回合输入不含令牌；原生 harness 进程的环境按白名单只留系统与账户变量（`src/hey_my_buddy/buddy/harnesses/discovery.py:281` 起），四处环境合并已删，原生命令拿不到任何 `HMB_*`；启动器与 CLI 的错误信息不再带路径或令牌。剩下的风险是模型自己 `cat` 这个文件，令牌就进了原生会话记录；这只能靠角色说明，令牌随下一次签发或执行结束吊销（`workflow.py:3738`、`6566`），影响有限。
 
-**A7（低）原样令牌的环境变量 `HMB_AGENT_CREDENTIAL` 还在。** `src/hey_my_buddy/cli/main.py:321` 仍先读它，源码里已没有产生它的地方（只有 `runtime_selection.py:72` 的透传）。它不带看板目录，设了它就按 `HMB_STATE_DIR` 或默认目录找看板；同时设了两个变量时令牌来自环境、看板来自文件，可能不是同一个看板。这一条在基点里就有，不是本次引入，但要求是“经环境传递的那一条删掉”，建议一并删除，只留凭据文件。
+**A7（低）原样令牌的环境变量 `HMB_AGENT_CREDENTIAL` 还在。** `src/hey_my_buddy/cli/main.py:321` 仍先读它，源码里已没有产生它的地方（只有 `runtime_selection.py:72` 的透传）。它不带黑板目录，设了它就按 `HMB_STATE_DIR` 或默认目录找黑板；同时设了两个变量时令牌来自环境、黑板来自文件，可能不是同一个黑板。这一条在基点里就有，不是本次引入，但要求是“经环境传递的那一条删掉”，建议一并删除，只留凭据文件。
 
 没有凭据的调用在任何路径上被当成 Lead 的情形没有找到：Lead 角色只来自已验证的执行凭据（`workflow.py:866-868`、`1670`），而执行凭据先经 `authorize_agent_operation` 的操作集合与名下关系检查（`workflow.py:953-998`），非 Lead 的 Worker 凭据调不到 Lead 的操作。
 
@@ -24,7 +24,7 @@
 
 **B1（中）归属与整合方仍是靠前缀区分的字符串，而且新旧两种写法并存。** `tasks.owner` 对 Host 是 `host:<名字>`，对 Lead 是光秃的 Lead 运行标识（`workflow.py:1736`），普通任务是 `cli` 或调用方随手给的文字；工作区意图的 `integrator` 对 Host 是 `host:<名字>`，对 Lead 是光秃的运行标识（`schemas.py:569`），Lead 名下的协助任务是字面的 `host`（A3）。一个值是 Lead 的运行还是某个 Host 的名字，只能看有没有 `host:` 前缀，这正是要求要去掉的那种歧义；Host 自己给 `owner` 一个运行标识形状的字符串，就与 Lead 的写法分不开。既然归属只看 `workflow_lead_tasks`，建议这两个字段要么改成有结构的角色加标识，要么对名下微任务不再存（可以从 `workflow_lead_tasks` 与 `host_id` 推出来）。
 
-**B2（中）旧事件载荷里的 `lead:` 名字没有换算，仍被当成 Host 名字读出来。** 升级只把事件载荷顶层的 `actor` 移到新列（`src/hey_my_buddy/blackboard/store/upgrade.py:180-186`），`task.submitted` 的 `microTask.sourceHostId`、`workflow.helper_admitted` 的 `sourceHostId` 与 `integrator`、`workflow.takeover` 的 `previousHostId`/`newHostId` 保持 `lead:<运行>` 或 `host:lead:<运行>`。微任务投影从这些载荷取“来源 Host”（`micro_task.py:116-141`），于是升级过来的名下微任务显示 `sourceHostId: "lead:<运行>"`，新建的名下微任务显示 null，按 Host 过滤时前者会被当成一个名叫 `lead:<运行>` 的 Host 的工作。一个值的意思随写入时间而变，违反 Invariants。复现：在样板看板上建立一条名下关系（`test_upgrade_fixture.py` 新增用例的做法），升级后调 `task_list` 或读微任务元数据，比较升级过来的与新提交的名下微任务的 `sourceHostId`。建议升级把这几处产品自己写的载荷字段按同一规则换算（名下的置 null），或者让投影不再从载荷取来源 Host。
+**B2（中）旧事件载荷里的 `lead:` 名字没有换算，仍被当成 Host 名字读出来。** 升级只把事件载荷顶层的 `actor` 移到新列（`src/hey_my_buddy/blackboard/store/upgrade.py:180-186`），`task.submitted` 的 `microTask.sourceHostId`、`workflow.helper_admitted` 的 `sourceHostId` 与 `integrator`、`workflow.takeover` 的 `previousHostId`/`newHostId` 保持 `lead:<运行>` 或 `host:lead:<运行>`。微任务投影从这些载荷取“来源 Host”（`micro_task.py:116-141`），于是升级过来的名下微任务显示 `sourceHostId: "lead:<运行>"`，新建的名下微任务显示 null，按 Host 过滤时前者会被当成一个名叫 `lead:<运行>` 的 Host 的工作。一个值的意思随写入时间而变，违反 Invariants。复现：在样板黑板上建立一条名下关系（`test_upgrade_fixture.py` 新增用例的做法），升级后调 `task_list` 或读微任务元数据，比较升级过来的与新提交的名下微任务的 `sourceHostId`。建议升级把这几处产品自己写的载荷字段按同一规则换算（名下的置 null），或者让投影不再从载荷取来源 Host。
 
 **B3（中低）升级后的整合方在三处不一致。** 一是 `workflow_runs.workspace_manifest_json` 里的清单（带摘要，不应改写）保留 `host:lead:<运行>`，而续接时新工作区的整合方直接取自这份清单（`workflow.py:6380`），于是升级过来的名下微任务每续一次，就把旧写法写进新的清单；二是表的重建只换算 `owned` 里的运行（`upgrade.py:168-171`），名下微任务的协助任务的 `execution_workspace_json` 仍是 `host:lead:<运行>`；三是回执的改写按 `inherited`（含协助任务）换算（`upgrade.py:113-115`），同一个协助任务的回执说整合方是 Lead 运行，表里却是旧写法。复现：样板里建一个名下微任务和它的协助任务，升级后分别读两者的 `execution_workspace_json` 与对应回执；再对升级过来的名下微任务 `continue` 一次，读新清单的 `integrator`。根子在 B1：整合方若不再是前缀字符串，这三处都不用换算。
 
@@ -42,7 +42,7 @@
 
 **B10（低）宏任务时间线的标记丢了角色。** `macro_tasks.py:790` 只取 `actor_id`，于是 `stop`、`auto`、Lead 的运行标识与 Host 的名字混在同一个字段里，分不出是谁。
 
-**站得住的部分。** Host 自己起名叫 `lead:...` 不会被当成名下：换算的前提是在 `workflow_lead_tasks`（及其协助任务）里（`upgrade.py:223-232`），新增测试也覆盖了。名下的漏掉：只有不在 `workflow_lead_tasks` 里的才不认，这正是要求。`attempt_legacy_starts` 的拒绝条件是执行未结束或停止未确认（`upgrade.py:216-222`），覆盖了“未知不等于已停”的情形，结清了的删掉不丢证据；没有找到该拒绝而未拒绝的情形。回滚完整：`migrate` 在一个 `BEGIN IMMEDIATE` 事务里完成所有 DDL 与改写，任何异常都 `ROLLBACK`（`upgrade.py:204-277`），之后的启动或校验失败由安装流程用已验证的 schema 20 备份还原，中断后的 `recover` 对 `migrating`、`migrated` 两个阶段同样还原备份（`src/hey_my_buddy/install/upgrade.py:604-617`）。重建表时按列名逐行复制，新表多出的只有两列，旧表多出的列会让插入失败而不是被丢掉；事件序号原样保留，事件从不删除，`AUTOINCREMENT` 的序列在重建后仍等于最大序号。重建是把整张表读进内存，日常看板的事件表很大时值得在副本上量一次耗时与内存。
+**站得住的部分。** Host 自己起名叫 `lead:...` 不会被当成名下：换算的前提是在 `workflow_lead_tasks`（及其协助任务）里（`upgrade.py:223-232`），新增测试也覆盖了。名下的漏掉：只有不在 `workflow_lead_tasks` 里的才不认，这正是要求。`attempt_legacy_starts` 的拒绝条件是执行未结束或停止未确认（`upgrade.py:216-222`），覆盖了“未知不等于已停”的情形，结清了的删掉不丢证据；没有找到该拒绝而未拒绝的情形。回滚完整：`migrate` 在一个 `BEGIN IMMEDIATE` 事务里完成所有 DDL 与改写，任何异常都 `ROLLBACK`（`upgrade.py:204-277`），之后的启动或校验失败由安装流程用已验证的 schema 20 备份还原，中断后的 `recover` 对 `migrating`、`migrated` 两个阶段同样还原备份（`src/hey_my_buddy/install/upgrade.py:604-617`）。重建表时按列名逐行复制，新表多出的只有两列，旧表多出的列会让插入失败而不是被丢掉；事件序号原样保留，事件从不删除，`AUTOINCREMENT` 的序列在重建后仍等于最大序号。重建是把整张表读进内存，日常黑板的事件表很大时值得在副本上量一次耗时与内存。
 
 ## C. 过度防御与多余的机制
 

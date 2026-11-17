@@ -394,6 +394,9 @@ class RuntimeMaterializationTests(unittest.TestCase):
             return run(command, **options)
 
         self.enterContext(patch.object(runtime.subprocess, "run", side_effect=run_fake_uv))
+        # This class materializes its synthetic project. Its leak checks must
+        # use that source, even when the private roots live inside the checkout.
+        self.enterContext(patch.object(runtime, "project_root", return_value=self.root))
         write_assets(self.root)
         write_manifest(self.root)
 
@@ -707,6 +710,23 @@ class RuntimeMaterializationTests(unittest.TestCase):
         replaced = self.root.with_name("project-replaced")
         self.root.rename(replaced)
         try:
+            turn_input = {
+                "version": 3, "taskId": "task", "attemptId": "attempt", "generation": 1, "turnId": "turn",
+                "resumeMode": "initial", "previousSessionId": None,
+                "context": {
+                    "taskId": "task", "turnIndex": 1,
+                    "buddy": {"harness": "zcode", "provider": "fixture", "model": "fixture", "effort": "low"},
+                    "delegationAuthority": False, "routing": {"decisionId": None, "buddyRevision": 1},
+                    "nextActions": ["Continue the original task from the recorded checkpoint."],
+                },
+                "executionWorkspace": {
+                    "access": "write", "kind": "worktree", "version": 4, "workspaceId": "ws-fixture",
+                    "path": "/state/workspaces/ws-fixture/checkout", "writeScope": ["src"],
+                    "manifestSha256": "0" * 64,
+                    "snapshot": {"includedUntracked": ["tmp/one"], "executionSelectors": []},
+                },
+            }
+            frozen_turn = json.dumps(turn_input)
             environment = {name: value for name, value in os.environ.items()
                            if not name.startswith("HMB_") and name not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
             environment["PYTHONPATH"] = str(target / "src")
@@ -716,8 +736,8 @@ class RuntimeMaterializationTests(unittest.TestCase):
                  "from hey_my_buddy.buddy.roles.prompts import worker_prompt, router_prompt, wrap_up_prompt; "
                  "print(json.dumps({'resources': {n: [str(resource_path('roles.'+n)), "
                  "resource_path('roles.'+n).read_text(encoding='utf-8')] for n in ('worker','router','lead','wrap_up')}, "
-                 "'worker': worker_prompt('ROLE: task', {}, delivery=()), 'router': router_prompt('ROLE: task'), "
-                 "'wrap_up': wrap_up_prompt()}))"],
+                 f"'worker': worker_prompt('ROLE: task', json.loads({frozen_turn!r}), delivery=()), "
+                 "'router': router_prompt('ROLE: task'), 'wrap_up': wrap_up_prompt()}))"],
                 cwd=target, env=environment, capture_output=True, text=True, timeout=30, encoding="utf-8")
             self.assertEqual(probe.returncode, 0, probe.stderr)
             actual = json.loads(probe.stdout)
@@ -826,7 +846,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         target = self.materialize()
         record = runtime.read_ready(target)
         pyvenv = Path(record["environment"]) / "pyvenv.cfg"
-        pyvenv.write_text(pyvenv.read_text(encoding='utf-8') + f"project = {REAL_ROOT}\n", encoding="utf-8", newline="\n")
+        pyvenv.write_text(pyvenv.read_text(encoding='utf-8') + f"project = {self.root}\n", encoding="utf-8", newline="\n")
         leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
         self.assertTrue(any("references the project source tree" in leak for leak in leaks), leaks)
 

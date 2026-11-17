@@ -43,51 +43,54 @@ CONTROL_OPERATIONS = (
     "quota_redetect",
     "service_control",
     "console",
-    "console_snapshot",
     "reminder_settings_set",
+    "maintenance_start",
+    "profile_start",
+    "maintenance_pending",
+    "domain_rename",
+    "domain_merge",
     "runtime_info",
     "storage_plan",
     "storage_apply",
+    "project_relocate",
     "worker_sessions",
     "task_get",
     "task_list",
     "task_result",
     "task_cancel",
-    "task_retry",
-    "task_acknowledge",
-    "task_wait",
     "execution_progress",
     "execution_result",
+    "execution_maintenance",
+    "execution_profile",
     "message_get",
     "message_list",
     "inquiry_observe",
     "artifact_list",
     "events_read",
     "user_policy_publish",
-    "selection_request",
     "selection_get",
     "selection_list",
     "model_catalog_refresh",
     "buddy_list",
+    "workflow_create",
+    "workflow_amend",
     "workflow_submit",
     "workflow_get",
-    "workflow_decide",
     "workflow_continue",
-    "workflow_takeover",
     "workflow_cancel",
     "workflow_accept",
     "workflow_conclude",
-    "workflow_reclaim",
-    "workflow_scope_amend",
-    "workflow_workspace_resolve",
     "workflow_suggest",
     "macro_task_list",
     "macro_task_timeline",
-    "macro_task_stop",
+    "macro_task_goal_history",
+    "macro_task_pause",
+    "macro_task_resume",
+    "macro_task_end",
     "macro_task_deletion_preview",
     "macro_task_delete",
 )
-WAIT_OPERATIONS = ("events_wait", "task_wait", "wait_capacity")
+WAIT_OPERATIONS = ("events_wait", "task_wait")
 
 
 class WaitAdmission:
@@ -142,6 +145,10 @@ class _BaseResource:
                 )
             workflow_module.set_request_scope(scope)
             try:
+                common_cli = {"health", "capabilities", "harness.set", "quota.redetect", "runtime.info", "storage.plan", "storage.apply", "project.relocate", "worker.sessions", "service.control", "console"}
+                if operation in common_cli:
+                    from ...protocol.requests import parse_request, dump_request
+                    params = dump_request(parse_request(operation.replace(".", "_"), params, audience="service"))
                 if self.store.upgrading():
                     permitted = operation in {"ping", "health", "runtime.info", "capabilities"}
                     if operation == 'capabilities' and params.get('refresh'):
@@ -154,10 +161,6 @@ class _BaseResource:
                 health = getattr(self, 'harnesses', None)
                 with bound(health.all()) if health and getattr(self, 'automatic_discovery', False) else nullcontext():
                     result = handler(params)
-                if scope['kind'] == workflow_module.SERVICE_KIND:
-                    waiting = self._waiting_for_host(params)
-                    if waiting:
-                        result['waitingForHost'] = waiting
             finally:
                 workflow_module.clear_request_scope()
             return schemas.encode(result)
@@ -172,39 +175,6 @@ class _BaseResource:
                 {"error": {"code": "INTERNAL_ERROR", "message": f"{operation} failed inside the service: {detail}"}}
             )
 
-    def _waiting_for_host(self, params: dict) -> dict:
-        """Count the default Host history filters after the operation has finished."""
-        host_id = params.get('hostId')
-        run_id = params.get('runId')
-        request_id = params.get('requestId')
-        if not (host_id or run_id or request_id):
-            return {}
-        with self.store.db.read() as connection:
-            if not host_id:
-                if run_id:
-                    row = connection.execute(
-                        'SELECT host_id FROM workflow_runs WHERE run_id=?', (run_id,),
-                    ).fetchone()
-                else:
-                    row = connection.execute(
-                        'SELECT r.host_id FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id '
-                        'WHERE t.request_id=?', (request_id,),
-                    ).fetchone()
-                if row is None:
-                    return {}
-                host_id = row['host_id']
-            if host_id is None:
-                return {}
-            clauses, values = micro_task.history_where(host_id=host_id)
-            counts = ', '.join(
-                f'SUM(CASE WHEN {micro_task.FILTER_SQL[name]} THEN 1 ELSE 0 END) AS {name}'
-                for name in ('host', 'review')
-            )
-            row = connection.execute(
-                f'SELECT {counts} FROM ({micro_task.TASK_HISTORY_SQL}) AS history '
-                f"WHERE {' AND '.join(clauses)}", values,
-            ).fetchone()
-            return {name: row[name] for name in ('host', 'review') if row[name]}
 
     def _authenticate(self, params: dict) -> dict:
         """Every operation carries the private service token, verified here.
@@ -253,7 +223,6 @@ class BoardService(_BaseResource):
         on_restart: Callable[[dict], dict],
         console_factory: Callable[[dict], dict] | None = None,
         runtime_directory: Path | None = None,
-        on_accepted: Callable[[str], None] | None = None,
         automatic_discovery: bool = False,
         admission_lock: threading.RLock | None = None,
     ):
@@ -265,7 +234,6 @@ class BoardService(_BaseResource):
         self.on_restart = on_restart
         self.console_factory = console_factory
         self.runtime_directory = runtime_directory
-        self.on_accepted = on_accepted
         self.evaluation = store.evaluation
         self.decisions = store.decisions
         from .harness_health import HarnessHealth
@@ -306,7 +274,6 @@ class BoardService(_BaseResource):
 
     def health(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            schemas.reject_unknown(params, set(), "health")
             identity = runtime.resolve_runtime()
             return {
                 "status": "ok",
@@ -328,6 +295,7 @@ class BoardService(_BaseResource):
                 "capacity": self.store.capacity_report(),
                 "routingHealth": self.decisions.health_summary(),
                 "waitCapacity": self.control.get("wait_capacity"),
+                "waitAdmission": self.control["wait_admission"].stats() if self.control.get("wait_admission") else None,
                 "rpcProfile": self.control.get("rpc_profile"),
                 "persistenceError": self.store.persistence_error,
                 "serviceIssues": self.store.service_issues(),
@@ -339,11 +307,10 @@ class BoardService(_BaseResource):
 
     def capabilities(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            schemas.reject_unknown(params, {"includeUnavailable", "refresh", "harness"}, "capabilities")
             from ...buddy.harnesses.registry import local_capabilities
             from .harness_health import HARNESSES
             from ...buddy.harnesses.runtime_selection import bound
-            if schemas.optional_bool(params, 'refresh', False):
+            if params.get('refresh',False):
                 for name in [params['harness']] if params.get('harness') else HARNESSES:
                     self.harnesses.refresh(name, force=True)
             elif self.automatic_discovery and not self.store.upgrading():
@@ -375,9 +342,12 @@ class BoardService(_BaseResource):
         from ..tasks import storage
         return self._guard("storage.apply", request_json, lambda params: storage.apply(self.store, params))
 
+    def project_relocate(self, request_json: str) -> str:
+        from ..tasks import projects
+        return self._guard("project.relocate", request_json, lambda params: projects.relocate(self.store, params))
+
     def runtime_info(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            schemas.reject_unknown(params, {"destination"}, "runtime.info")
             destination = params.get("destination")
             return {
                 "identity": runtime.resolve_runtime(),
@@ -389,15 +359,11 @@ class BoardService(_BaseResource):
 
     def service_control(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            schemas.reject_unknown(params, {"action", "drainSeconds", "note"}, "service.control")
-            action = schemas.required_string(params, "action", max_length=32)
-            if action not in ("stop", "restart", "status"):
-                raise BoardError("INVALID_ARGUMENT", "action must be 'stop', 'restart' or 'status'")
+            action = params["action"]
             if action == "status":
                 return {"action": "status", "control": dict(self.control)}
-            drain = schemas.optional_int(params, "drainSeconds", 10, 0, 120)
-            note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
-                    if params.get("note") is not None else None)
+            drain = params.get("drainSeconds",10)
+            note = params.get("note")
             if action == "stop":
                 return self.on_stop({"drainSeconds": drain, "note": note})
             return self.on_restart({"drainSeconds": drain, "note": note})
@@ -407,41 +373,74 @@ class BoardService(_BaseResource):
     # -- console and evaluation ---------------------------------------------
     def console(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            schemas.reject_unknown(params, {"action", "expectedConsoleId"}, "console")
-            action = schemas.optional_string(params, "action") or "open"
-            if action not in ("open", "close", "status"):
-                raise BoardError("INVALID_ARGUMENT", "action must be 'open', 'close' or 'status'")
-            if "expectedConsoleId" in params:
-                if action != "close":
-                    raise BoardError("INVALID_ARGUMENT", "expectedConsoleId is only valid for close")
-                params["expectedConsoleId"] = schemas.required_string(params, "expectedConsoleId", max_length=24, pattern=re.compile(r"^[0-9a-f]{24}$"))
+            action = params.get("action") or "open"
             if self.console_factory is None:
                 raise BoardError("UNSUPPORTED", "This service build has no console")
             return self.console_factory({**params, "action": action})
 
         return self._guard("console", request_json, handler)
 
-    def console_snapshot(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
-            self._touch_harnesses(params)
-            snapshot = self.evaluation.snapshot(params)
-            snapshot['harnesses'] = self.harnesses.all()
-            # The JSON route is a read: it never admits a selection reader and never
-            # calls a model. The browser layer injects its own CSRF token into this
-            # object; a C-Two/CLI caller gets an empty token because it has no session.
-            from ...console.server import assets_ready
-
-            snapshot["capabilities"]["consoleAssets"] = assets_ready()
-            snapshot["routingHealth"] = self.decisions.health_summary()
-            snapshot["reminderSettings"] = self.reminder_settings_view()
-            return snapshot
-
-        return self._guard("console.snapshot", request_json, handler)
 
     def reminder_settings_view(self) -> dict:
         with self.store.db.read() as db:
             row = db.execute("SELECT silence_seconds,updated_at,revision FROM reminder_settings WHERE id=1").fetchone()
         return {"silenceSeconds": row["silence_seconds"], "updatedAt": row["updated_at"], "revision": row["revision"]}
+
+    @staticmethod
+    def _require_console():
+        scope = workflow_module.current_scope()
+        if scope is None or scope.get("kind") != workflow_module.CONSOLE_KIND:
+            raise BoardError("UNAUTHORIZED", "Maintenance controls require an authenticated console session")
+
+    def maintenance_start(self, request_json: str) -> str:
+        def handler(params):
+            self._require_console()
+            schemas.reject_unknown(params, set(), "maintenance.start")
+            return self.store.maintenance.trigger(manual=True)
+        return self._guard("maintenance.start", request_json, handler)
+
+    def profile_start(self, request_json: str) -> str:
+        def handler(params):
+            self._require_console()
+            schemas.reject_unknown(params, {"modelId"}, "profile.start")
+            model_id = schemas.required_string(params, "modelId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN)
+            return self.store.profile.trigger(model_id)
+        return self._guard("profile.start", request_json, handler)
+
+    def maintenance_pending(self, request_json: str) -> str:
+        def handler(params):
+            self._require_console()
+            schemas.reject_unknown(params, set(), "maintenance.pending")
+            from ..routing.maintenance_data import pending_count
+            with self.store.db.read() as connection:
+                return {"pendingMicroTaskCount": pending_count(connection)}
+        return self._guard("maintenance.pending", request_json, handler)
+
+    def domain_rename(self, request_json: str) -> str:
+        def handler(params):
+            self._require_console()
+            schemas.reject_unknown(params, {"nodeId", "name", "definition"}, "domain.rename")
+            from ..routing.maintenance_data import rename_domain
+            with self.store.db.write() as connection:
+                rename_domain(connection, params.get("nodeId"), params.get("name"), params.get("definition"))
+                self.store._append_event(connection, "domain.renamed", payload=params)
+                head = self.store._head_of(connection)
+            self.store._notify(head)
+            return {"nodeId": params["nodeId"]}
+        return self._guard("domain.rename", request_json, handler)
+
+    def domain_merge(self, request_json: str) -> str:
+        def handler(params):
+            self._require_console()
+            schemas.reject_unknown(params, {"sourceId", "targetId"}, "domain.merge")
+            from ..routing.maintenance_data import merge_domain
+            with self.store.db.write() as connection:
+                merge_domain(connection, params.get("sourceId"), params.get("targetId"))
+                self.store._append_event(connection, "domain.merged", payload=params)
+                head = self.store._head_of(connection)
+            self.store._notify(head)
+            return {"sourceId": params["sourceId"], "targetId": params["targetId"]}
+        return self._guard("domain.merge", request_json, handler)
 
     def reminder_settings_set(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
@@ -488,7 +487,7 @@ class BoardService(_BaseResource):
             if native_fact is None:
                 raise BoardError('CATALOG_INVALID', 'Native discovery omitted its harness observation', harness=name)
             payload['discoveries'] = [native_fact]
-            catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
+            catalog_store.record(self.evaluation, payload, observation['sequence'], health_generation=(name, record['revision']))
         except BoardError as error:
             if error.code != 'UPGRADE_IN_PROGRESS':
                 self.harnesses.invalidate(name, record['revision'],
@@ -500,10 +499,7 @@ class BoardService(_BaseResource):
 
     def harness_set(self, request_json: str) -> str:
         def handler(params):
-            schemas.reject_unknown(params, {'harness', 'path'}, 'harness.set')
-            name = schemas.required_string(params, 'harness', max_length=32)
-            if 'path' not in params:
-                raise BoardError('INVALID_ARGUMENT', 'path is required; use null to restore automatic detection')
+            name = params['harness']
             return {'harness': self.harnesses.set_path(name, params['path'])}
         return self._guard('harness.set', request_json, handler)
 
@@ -572,12 +568,11 @@ class BoardService(_BaseResource):
         from ...protocol.usage import identifier
 
         def handler(params):
-            schemas.reject_unknown(params, {'harness', 'provider', 'requestId'}, 'quota.redetect')
-            request_id = schemas.required_string(params, 'requestId', max_length=128)
-            name = schemas.required_string(params, 'harness', max_length=32)
+            request_id = params['requestId']
+            name = params['harness']
             from .harness_health import _name
             _name(name)
-            provider = identifier(schemas.required_string(params, 'provider', max_length=128))
+            provider = identifier(params['provider'])
             if provider is None:
                 raise BoardError('INVALID_ARGUMENT', 'provider must be one identifier, not free text')
             request = {'harness': name, 'provider': provider}
@@ -597,22 +592,18 @@ class BoardService(_BaseResource):
     def _touch_harnesses(self, params, *, explicit=False):
         if not self.automatic_discovery:
             return
-        specs = [params]
-        specs.extend(params[key] for key in ('buddy', 'spec') if isinstance(params.get(key), dict))
+        selections = [params.get('buddy')]
         if isinstance(params.get('helpers'), list):
-            specs.extend(helper.get('spec', helper) for helper in params['helpers'] if isinstance(helper, dict))
-        names = {spec.get('harness') for spec in specs if isinstance(spec, dict) and isinstance(spec.get('harness'), str)}
+            selections.extend(helper.get('buddy') for helper in params['helpers'] if isinstance(helper, dict))
+        with self.store.db.read() as connection:
+            names = {workflow_module.named_buddy(connection, choice)['harness']
+                     for choice in selections if isinstance(choice, str) and choice != 'route'}
         for name in sorted(names):
             if explicit and name in HARNESS_NAMES and self.harnesses.get(name)['status'] != 'ready':
                 self.harnesses.refresh(name, force=True)
         self.harnesses.kick()
 
     # -- decisions ----------------------------------------------------------
-    def selection_request(self, request_json: str) -> str:
-        def handler(params):
-            self._touch_harnesses(params, explicit=True)
-            return self.decisions.request_select(params)
-        return self._guard("selection.request", request_json, handler)
 
     def selection_get(self, request_json: str) -> str:
         return self._guard("selection.get", request_json, self.decisions.get)
@@ -624,27 +615,17 @@ class BoardService(_BaseResource):
         def handler(params: dict) -> dict:
             from ..catalog import catalog, catalog_store
 
-            schemas.reject_unknown(params, {"requestId"}, "model.catalog.refresh")
-            request_id = schemas.optional_string(params, "requestId", max_length=128)
-            observation = catalog_store.begin(self.evaluation, request_id)
-            if observation["response"] is not None:
-                return {**observation["response"], "duplicate": True}
+            schemas.reject_unknown(params, set(), "model.catalog.refresh")
             if self.automatic_discovery:
                 from .harness_health import HARNESSES
                 for name in HARNESSES:
                     self.harnesses.refresh(name, force=True)
-                with self.store.db.read() as db:
-                    cached = catalog_store.current(db)
-                discovered = cached.payload if cached else {'source': 'harness-health', 'providers': [], 'discoveries': [
-                    {'harness': row['harness'], 'status': 'unknown', 'reason': row.get('reason')} for row in self.harnesses.all()]}
-                if cached is None:
-                    discovered = catalog.canonical_payload(discovered)
-            else:
-                from ...buddy.harnesses.runtime_selection import bound
-                with bound(observation['harnesses']):
-                    discovered = catalog.discover(directory=self.store.directory, harnesses=observation['harnesses'])
-            recorded = self.evaluation.record_catalog(discovered, observation["observationId"])
-            return {**recorded, "requestId": request_id}
+                return catalog_store.response(self.evaluation)
+            from ...buddy.harnesses.runtime_selection import bound
+            observation = catalog_store.begin(self.evaluation)
+            with bound(observation['harnesses']):
+                discovered = catalog.discover(directory=self.store.directory, harnesses=observation['harnesses'])
+            return self.evaluation.record_catalog(discovered, observation["sequence"])
 
         return self._guard("model.catalog.refresh", request_json, handler)
 
@@ -657,24 +638,22 @@ class BoardService(_BaseResource):
         return self._guard("buddy.list", request_json, handler)
 
     # -- micro-task workflow --------------------------------------------------
+    def workflow_create(self, request_json: str) -> str:
+        return self._guard("workflow.create", request_json, self.store.workflow.create)
+
+    def workflow_amend(self, request_json: str) -> str:
+        return self._guard("workflow.amend", request_json, self.store.workflow.amend)
+
     def workflow_submit(self, request_json: str) -> str:
         def handler(params):
-            normalized = self.store.workflow.normalize_submission(params)
-            self._touch_harnesses(normalized["spec"], explicit=True)
-            return self.store.workflow.submit_normalized(params, normalized)
+            normalized=self.store.workflow.normalize_submission(params)
+            return self.store.workflow.submit_normalized(normalized,
+                prepare_buddy=lambda: self._touch_harnesses(normalized,explicit=True))
         return self._guard("workflow.submit", request_json, handler)
 
     def workflow_get(self, request_json: str) -> str:
         return self._guard("workflow.get", request_json, self.store.workflow.get)
 
-    def workflow_decide(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
-            authority = workflow_module.console_authority_from_scope()
-            normalized = self.store.workflow.normalize_decision(params, console_authority=authority)
-            self._touch_harnesses({"helpers": normalized["helpers"]}, explicit=True)
-            return self.store.workflow.decide_normalized(params, normalized, console_authority=authority)
-
-        return self._guard("workflow.decide", request_json, handler)
 
     def workflow_continue(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
@@ -685,13 +664,6 @@ class BoardService(_BaseResource):
 
         return self._guard("workflow.continue", request_json, handler)
 
-    def workflow_takeover(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
-            return self.store.workflow.takeover(
-                params, console_authority=workflow_module.console_authority_from_scope()
-            )
-
-        return self._guard("workflow.takeover", request_json, handler)
 
     def workflow_cancel(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
@@ -703,12 +675,9 @@ class BoardService(_BaseResource):
 
     def workflow_accept(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            result = self.store.workflow.accept(
+            return self.store.workflow.accept(
                 params, console_authority=workflow_module.console_authority_from_scope()
             )
-            if result.get("verdict") == "accepted" and self.on_accepted is not None:
-                self.on_accepted(result["runId"])
-            return result
 
         return self._guard("workflow.accept", request_json, handler)
 
@@ -720,29 +689,9 @@ class BoardService(_BaseResource):
 
         return self._guard("workflow.conclude", request_json, handler)
 
-    def workflow_reclaim(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
-            return self.store.workflow.reclaim(
-                params, console_authority=workflow_module.console_authority_from_scope()
-            )
 
-        return self._guard("workflow.reclaim", request_json, handler)
 
-    def workflow_scope_amend(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
-            return self.store.workflow.scope_amend(
-                params, console_authority=workflow_module.console_authority_from_scope()
-            )
 
-        return self._guard("workflow.scope_amend", request_json, handler)
-
-    def workflow_workspace_resolve(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
-            return self.store.workflow.workspace_resolve(
-                params, console_authority=workflow_module.console_authority_from_scope()
-            )
-
-        return self._guard("workflow.workspace_resolve", request_json, handler)
 
     def worker_sessions(self, request_json: str) -> str:
         from ..tasks import worker_sessions
@@ -770,10 +719,32 @@ class BoardService(_BaseResource):
             "macro_task.timeline", request_json, lambda params: macro_tasks.macro_task_timeline(self.store, params)
         )
 
-    def macro_task_stop(self, request_json: str) -> str:
+    def macro_task_goal_history(self, request_json: str) -> str:
         return self._guard(
-            "macro_task.stop", request_json,
-            lambda params: self.store.workflow.stop_macro_task(
+            "macro_task.goal_history", request_json,
+            lambda params: macro_tasks.macro_task_goal_history(self.store, params),
+        )
+
+    def macro_task_pause(self, request_json: str) -> str:
+        return self._guard(
+            "macro_task.pause", request_json,
+            lambda params: self.store.workflow.pause_macro_task(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            ),
+        )
+
+    def macro_task_resume(self, request_json: str) -> str:
+        return self._guard(
+            "macro_task.resume", request_json,
+            lambda params: self.store.workflow.resume_macro_task(
+                params, console_authority=workflow_module.console_authority_from_scope()
+            ),
+        )
+
+    def macro_task_end(self, request_json: str) -> str:
+        return self._guard(
+            "macro_task.end", request_json,
+            lambda params: self.store.workflow.end_macro_task(
                 params, console_authority=workflow_module.console_authority_from_scope()
             ),
         )
@@ -840,14 +811,8 @@ class BoardService(_BaseResource):
     def task_cancel(self, request_json: str) -> str:
         return self._guard("task.cancel", request_json, self.store.task_cancel)
 
-    def task_retry(self, request_json: str) -> str:
-        return self._guard("task.retry", request_json, self.store.task_retry)
 
-    def task_acknowledge(self, request_json: str) -> str:
-        return self._guard("task.acknowledge", request_json, self.store.task_acknowledge)
 
-    def task_wait(self, request_json: str) -> str:
-        return self._guard("task.wait", request_json, self.store.task_wait)
 
     # -- executions ---------------------------------------------------------
     def admit_execution(self, nonce: str, task_id: str | None = None) -> dict:
@@ -891,6 +856,12 @@ class BoardService(_BaseResource):
 
     def execution_result(self, request_json: str) -> str:
         return self._guard("execution.result", request_json, self.store.execution_result_reference)
+
+    def execution_profile(self, request_json: str) -> str:
+        return self._guard("execution.profile", request_json, self.store.profile.answer)
+
+    def execution_maintenance(self, request_json: str) -> str:
+        return self._guard("execution.maintenance", request_json, self.store.maintenance.answer)
 
     # -- messages -----------------------------------------------------------
     def message_get(self, request_json: str) -> str:
@@ -944,8 +915,6 @@ class WaitService(_BaseResource):
     def task_wait(self, request_json: str) -> str:
         return self._bounded("task.wait", request_json, self.store.task_wait)
 
-    def wait_capacity(self, request_json: str) -> str:
-        return self._guard("wait.capacity", request_json, lambda params: self.admission.stats())
 
 
 def call_operation(service: Any, operation: str, params: dict) -> dict:

@@ -110,12 +110,14 @@ class AcpClient:
 
     # -- native prompt operations, for a later driver ---------------------------
 
-    def prompt(self, session_id: str, text: str, timeout: float = PROMPT_TIMEOUT) -> dict:
+    def prompt(self, session_id: str, text: str, timeout: float = PROMPT_TIMEOUT,
+               *, on_sent=None) -> dict:
         """Submit one text prompt; the response carries the stop reason. Running
         a prompt calls the model - callers own that authorization."""
         blocks = [{"type": "text", "text": str(text)}]
         return self.connection.request("session/prompt", {"sessionId": str(session_id),
-                                                          "prompt": blocks}, timeout)
+                                                          "prompt": blocks}, timeout,
+                                       on_sent=on_sent)
 
     def cancel(self, session_id: str, timeout: float = 10.0) -> None:
         """Send the cancel notification through the bounded writer within its

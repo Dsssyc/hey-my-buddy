@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const shots = fileURLToPath(new URL("../../../tmp/readability", import.meta.url));
+const shots = fileURLToPath(new URL("../../../tmp/console-hints/readability-timeline", import.meta.url));
 
 for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.describe(`readability ${theme} ${width}`, () => {
   test.use({ viewport: { width, height: 1000 }, locale: "zh-CN", reducedMotion: "reduce" });
@@ -69,6 +69,7 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) test.describe(
     const spanId = (await group.getAttribute("data-key"))!.slice(5);
     const tail = page.locator(`[data-slot=execution-breath][data-span-id="${spanId}"]`);
     await expect(tail).toBeVisible();
+    await settle(page);
     const geometry = await bar.locator("xpath=ancestor::*[@data-slot='timeline-track']").evaluate(node => {
       const base = node.querySelector<SVGRectElement>('[data-slot=execution-bar][data-outcome=running]')!;
       const end = node.querySelector<SVGRectElement>('[data-slot=execution-breath]')!;
@@ -111,7 +112,9 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) test.describe(
       expect(await tail.evaluate(node => node.getAnimations()[0]!.startTime)).toBe(start);
     }
     await group.hover();
-    await expect(page.getByRole("tooltip")).toContainText("/");
+    await expect(page.locator('[data-slot="timeline-readout"]')).toContainText("/");
+    await page.waitForTimeout(700);
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
   });
 });
 

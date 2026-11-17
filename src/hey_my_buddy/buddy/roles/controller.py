@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 __all__ = [
     'FastPreparation',
     'ReviewPreparation',
+    'ProfilePreparation',
     'WorkerPreparation',
     'prepare_worker_run',
     'run_harness',
@@ -96,6 +97,8 @@ def stop_termination_reason(*, shutdown_confirmed: bool, stop_initiator: str | N
     """Classify a stop once, separately from its initiator and shutdown evidence."""
     if shutdown_confirmed is not True:
         return None
+    if stop_initiator == "pause":
+        return "pause"
     if wrap_up_delivered:
         return "wrap-up"
     if grace_expired:
@@ -140,6 +143,15 @@ def start_wrap_up(handle: InlineRunHandle, deadline: float, *, stop_initiator: s
     """Interrupt the current native turn once, with its bounded wrap-up intent."""
     handle.stop_initiator = stop_initiator
     handle.wrap_up_started = True
+    handle.grace_deadline = deadline
+    handle.cancel_requested = True
+    handle.signalled_at = time.monotonic()
+    handle.cancelled.set()
+
+
+def start_pause(handle: InlineRunHandle, deadline: float) -> None:
+    """Interrupt the native turn and retain its session for a later continuation."""
+    handle.stop_initiator = "pause"
     handle.grace_deadline = deadline
     handle.cancel_requested = True
     handle.signalled_at = time.monotonic()
@@ -191,7 +203,23 @@ class ReviewPreparation:
             object.__setattr__(self, "run_module", run_seam(self.harness))
 
 
-def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -> InlineRunHandle:
+@dataclass(frozen=True)
+class ProfilePreparation:
+    """A web call in an empty private directory, with fresh correction sessions."""
+
+    harness: str
+    request: ReadOnlyStructuredRequest
+    context: ExecutionContext
+    private_cwd: Path
+    run_module: HarnessRun | None = None
+
+    def __post_init__(self):
+        from ..harnesses.registry import run_seam
+        if self.run_module is None:
+            object.__setattr__(self, "run_module", run_seam(self.harness))
+
+
+def start_router_preparation(preparation: FastPreparation | ReviewPreparation | ProfilePreparation) -> InlineRunHandle:
     """Start the prepared role through its frozen registered run.
 
     Eligibility and the selected description stay frozen at preparation. A
@@ -201,6 +229,9 @@ def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -
     if isinstance(preparation, FastPreparation):
         from .run_execution import start_fast
         return start_fast(module, preparation.harness, preparation.context, preparation.request)
+    if isinstance(preparation, ProfilePreparation):
+        from .run_execution import start_profile
+        return start_profile(preparation.harness, preparation.context, preparation.request)
     from .run_execution import start_review
     return start_review(preparation.harness, preparation.context, preparation.request)
 

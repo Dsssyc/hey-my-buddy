@@ -19,11 +19,11 @@ function catalog(): Buddy[] {
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [
-    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off",
+    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", alias: null,
       available: true, enabled: true },
-    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high",
+    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", alias: null,
       available: true, enabled: false },
-    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
+    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", alias: null,
       available: false, enabled: true, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
   ];
 }
@@ -40,12 +40,12 @@ type LimitPatch = { harness: string; provider: string; model: string; limit: num
 function fixture(options: { discoveryLimit?: number } = {}) {
   const buddies = catalog();
   let state: Snapshot = {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { explorationEvery: 5, routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null},
     buddies,
 
-    modelServiceNotes: [], preferences: [], decisions: [],
+    models: [], modelCorrespondences: [], preferences: [], decisions: [],
     modelServiceConcurrency: [flashEntry, retiredEntry],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
@@ -70,7 +70,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
 
 
     if (operation === "buddy_list") {
-      return { buddies, modelServiceNotes: [], preferences: [],         modelServiceConcurrency: structuredClone(state.modelServiceConcurrency), nextCursor: null };
+      return { buddies, models: [], modelCorrespondences: [], preferences: [],         modelServiceConcurrency: structuredClone(state.modelServiceConcurrency), nextCursor: null };
     }
     if (operation === "model_catalog_refresh") {
       // The program publishes directory facts itself. A discovery can also
@@ -89,7 +89,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
     command,
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
   return { api, command, operations, published, snapshot: () => state };
 }
@@ -134,9 +134,9 @@ describe("a model's concurrency", () => {
     // Directly editable: there is no global edit switch gating the field.
     expect(screen.queryByRole("switch", { name: "编辑设置" })).toBeNull();
     expect(concurrencyInput()).toHaveProperty("value", "2");
-    expect(within(pane()).getByText("占用 1")).toBeTruthy();
+    expect(within(pane()).getByLabelText("占用 1")).toBeTruthy();
     // The model row writes the same two numbers at its trailing edge.
-    expect(within(modelRow(FLASH)).getByLabelText("占用 1，上限 2").textContent).toBe("1 / 2");
+    expect(within(modelRow(FLASH)).getByLabelText("占用 1 / 2").textContent).toBe("1 / 2");
     expect(f.command).not.toHaveBeenCalled();
   });
 
@@ -161,7 +161,7 @@ describe("a model's concurrency", () => {
     expect(wire).not.toContain("buddyId");
     // The raise is visible immediately and the occupancy stays observation.
     expect(concurrencyInput()).toHaveProperty("value", "6");
-    expect(within(pane()).getByText("占用 1")).toBeTruthy();
+    expect(within(pane()).getByLabelText("占用 1")).toBeTruthy();
     expect(within(pane()).queryByRole("img", { name: "未保存" })).toBeNull();
   });
 
@@ -187,8 +187,8 @@ describe("a model's concurrency", () => {
     // The draft limit belongs to the model; its collapsed row follows it.
     expect(within(pane()).getAllByRole("spinbutton")).toHaveLength(1);
     expect(concurrencyInput()).toHaveProperty("value", "6");
-    expect(within(pane()).getByText("占用 1")).toBeTruthy();
-    expect(within(modelRow(FLASH)).getByLabelText("占用 1，上限 6").textContent).toBe("1 / 6");
+    expect(within(pane()).getByLabelText("占用 1")).toBeTruthy();
+    expect(within(modelRow(FLASH)).getByLabelText("占用 1 / 6").textContent).toBe("1 / 6");
   });
 
   it("keeps an out-of-range input unsaved until it is corrected", async () => {

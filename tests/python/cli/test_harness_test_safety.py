@@ -86,9 +86,12 @@ class HarnessTestSafetyTests(unittest.TestCase):
             script = console / "node_modules" / name
             script.parent.mkdir(parents=True)
             script.write_text(probe, encoding="utf-8", newline="\n")
+        (console / "node_modules" / "semver").mkdir(parents=True)
+        (console / "node_modules" / "semver" / "package.json").write_text("{}", encoding="utf-8")
         self.addCleanup(lambda: self.assertIsNone(checks.teardown_private_root(self.root)))
         with patch.dict(os.environ, {"HMB_PREVIEW_PYTHON": "untrusted-parent-python"}), \
-                patch.object(checks.shutil, "which", return_value=sys.executable):
+                patch.object(checks.shutil, "which", return_value=sys.executable), \
+                patch.object(checks, "node_version_failure", return_value=None):
             outcome = checks.run_frontend_suite(checkout, self.root, set(), threading.Lock(), threading.Event())
         self.assertEqual(outcome.returncode, 0, outcome.stderr)
         replies = [json.loads(line) for line in outcome.stdout.splitlines() if line.startswith("{")]

@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 from threading import Event
 from types import SimpleNamespace
+from admission import admit_execution
 from hey_my_buddy.protocol import service_process
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.blackboard.store import backup
@@ -18,7 +19,7 @@ from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy import locking, private_dirs
 from hey_my_buddy.blackboard.tasks import storage
 from hey_my_buddy.install import upgrade
-from hey_my_buddy.install import launcher
+from hey_my_buddy.install import launcher, skill_install
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
@@ -220,7 +221,7 @@ class UpgradeTests(BoardTestCase):
              mock.patch.object(upgrade, 'detach'), \
              mock.patch.object(upgrade, 'start', return_value=health) as start, \
              mock.patch.object(upgrade, 'retain_runtimes', return_value={'complete': True}), \
-             mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}), \
+             mock.patch('hey_my_buddy.install.skill_install._link_harnesses', return_value={'status': 'already-linked'}), \
              mock.patch.object(upgrade.shutil, 'rmtree', side_effect=refuse_previous):
             result = upgrade.upgrade(state, skill_source=source, skill_target=skill)
         self.assertTrue(result['upgraded'], result)
@@ -244,7 +245,9 @@ class UpgradeTests(BoardTestCase):
         old_skill = skill.with_name('.hey-my-buddy-upgrade-previous-' + 'c' * 32)
         old_skill.mkdir(parents=True)
         journal = {'phase': 'verified', 'contractChanged': False, 'previous': str(previous), 'target': str(target),
-                   'before': {}, 'expected': {}, 'skillTarget': str(skill), 'skillStage': str(staged), 'skillPrevious': str(old_skill)}
+                   'before': {'schema': SCHEMA_VERSION}, 'expected': {}, 'skillTarget': str(skill),
+                   'skillStage': str(staged), 'skillPrevious': str(old_skill),
+                   'harnessLinks': skill_install._link_facts()}
         upgrade.write_journal(state / 'upgrade.json', journal)
         with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=skill.parent), \
              mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
@@ -352,9 +355,9 @@ class UpgradeTests(BoardTestCase):
             (directory / 'SKILL.md').write_text(value, encoding="utf-8", newline="\n")
             (directory / 'scripts/hey-my-buddy').write_text(value + ' launcher', encoding="utf-8", newline="\n")
         journal = {'skillTarget': str(skill), 'skillStage': str(staged),
-                   'skillPrevious': str(previous), 'skillHadPrevious': True}
+                   'skillPrevious': str(previous), 'skillHadPrevious': True, 'harnessLinks': {}}
         with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=skill.parent), \
-             mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}):
+             mock.patch('hey_my_buddy.install.skill_install._link_harnesses', return_value={'status': 'already-linked'}):
             upgrade._publish_skill(journal, (skill, staged, previous))
             self.assertEqual((skill / 'SKILL.md').read_text(encoding="utf-8"), 'new')
             upgrade._restore_skill(journal, (skill, staged, previous))
@@ -364,6 +367,36 @@ class UpgradeTests(BoardTestCase):
         self.assertFalse(staged.exists())
         self.assertEqual(json.loads((old_skill / 'skill.json').read_text(encoding="utf-8")), {'name': 'buddy'})
         self.assertTrue(old_link.is_symlink())
+
+    def test_recovery_rejects_retired_link_facts_before_files_or_service_change(self):
+        state = self.directory / 'retired-journal'
+        state.mkdir()
+        skill = self.directory / 'skills/hey-my-buddy'
+        staged = skill.with_name('.hey-my-buddy-upgrade-stage-' + 'a' * 32)
+        previous = skill.with_name('.hey-my-buddy-upgrade-previous-' + 'a' * 32)
+        for directory in (skill, staged, previous):
+            directory.mkdir(parents=True)
+            (directory / 'keep').write_bytes(b'retained')
+        link = self.directory / 'claude/hey-my-buddy'
+        journal = {'contractChanged': False, 'skillTarget': str(skill), 'skillHadPrevious': True,
+                   'skillStage': str(staged), 'skillPrevious': str(previous),
+                   'claudeLink': str(link), 'claudeLinkWasMissing': True, 'createdClaudeLink': str(link)}
+        upgrade.write_journal(state / 'upgrade.json', journal)
+        before = {str(path.relative_to(self.directory)): path.read_bytes() if path.is_file() else None
+                  for path in self.directory.rglob('*')}
+        with mock.patch.object(skill_install, 'agent_skills_home', return_value=skill.parent), \
+             mock.patch.object(upgrade, 'probe') as probe, \
+             mock.patch.object(upgrade, 'start') as start, \
+             mock.patch.object(upgrade, 'detach') as detach, \
+             mock.patch.object(upgrade, 'command') as command:
+            with self.assertRaises(BoardError) as caught:
+                upgrade.recover(state, self.directory / 'runtimes')
+        self.assertEqual(caught.exception.code, 'UPGRADE_RECOVERY_REQUIRED')
+        self.assertEqual(caught.exception.message, 'Journal skill paths do not match this installation')
+        for operation in (probe, start, detach, command):
+            operation.assert_not_called()
+        self.assertEqual(before, {str(path.relative_to(self.directory)): path.read_bytes() if path.is_file() else None
+                                  for path in self.directory.rglob('*')})
 
     def test_recovery_rejects_unrelated_skill_paths_before_deleting(self):
         unrelated = self.directory / 'unrelated'
@@ -383,6 +416,10 @@ class UpgradeTests(BoardTestCase):
     def test_raced_admission_aborts_before_backup_and_keeps_previous_owner(self):
         board = self.board()
         state = board.directory
+        ipc = state / 'ipc'
+        ipc.mkdir(mode=0o700)
+        (ipc / 'retained-endpoint').write_bytes(b'raced execution')
+        original_inode = ipc.stat().st_ino
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
         previous.mkdir(parents=True)
@@ -421,6 +458,9 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(journal['phase'], 'rolled-back')
         self.assertEqual(journal['failure'], reason)
         self.assertTrue(result['rollback']['workPreserved'])
+        self.assertEqual(ipc.stat().st_ino, original_inode)
+        self.assertEqual({entry.name: entry.read_bytes() for entry in ipc.iterdir()},
+                         {'retained-endpoint': b'raced execution'})
         command.assert_called_once_with(state, previous, 'restart', {'drainSeconds': 0})
         ensure_idle.assert_called_once_with(state)
         snapshot.assert_called_once_with(state)
@@ -433,6 +473,10 @@ class UpgradeTests(BoardTestCase):
     def test_changed_contract_recovery_without_backup_preserves_raced_work(self):
         state, root = self.directory / 'state', self.directory / 'runtimes'
         state.mkdir()
+        ipc = state / 'ipc'
+        ipc.mkdir(mode=0o700)
+        (ipc / 'retained-endpoint').write_bytes(b'raced execution')
+        original_inode = ipc.stat().st_ino
         previous, target = root / ('a' * 32), root / ('b' * 32)
         journal = {'phase': 'recovery-required', 'contractChanged': True, 'previous': str(previous),
                    'target': str(target), 'before': {'schema': SCHEMA_VERSION}}
@@ -456,6 +500,9 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(result, {'upgraded': False, 'recoveredJournal': True,
                                  'rollback': {'runtimeContentId': previous.name, 'workPreserved': True}})
         start.assert_called_once_with(state, previous)
+        self.assertEqual(ipc.stat().st_ino, original_inode)
+        self.assertEqual({entry.name: entry.read_bytes() for entry in ipc.iterdir()},
+                         {'retained-endpoint': b'raced execution'})
         self.assertFalse(marker.exists())
         self.assertEqual(launcher.read_private(state / 'active-runtime.json')['runtimeDir'], str(previous))
 
@@ -536,12 +583,32 @@ class UpgradeTests(BoardTestCase):
         with mock.patch.object(backup, 'database_snapshot', side_effect=AssertionError('full scan during preflight')):
             self.assertEqual(upgrade.preflight(board.directory, contract_changed=True), {'schema': SCHEMA_VERSION})
 
+    def test_contract_cutover_requires_finished_execution_materials_to_be_cleaned(self):
+        board = self.board()
+        board.submit_execution(requestId='pending-cleanup', task='completed work', cwd=str(self.workdir()),
+                               adapter='command', argv=['echo', 'done'])
+        claim = admit_execution(board.client(), 'n' * 32)['claim']
+        attempt_id = claim['attempt']['attemptId']
+        board.call('execution_result', {'attemptId': attempt_id, 'generation': claim['attempt']['generation'],
+                                       'nonce': 'n' * 32, 'status': 'ok', 'shutdownConfirmed': True})
+        with board.store.db.read() as connection:
+            row = board.store._attempt_row(connection, attempt_id)
+            self.assertEqual((row['execution_state'], row['shutdown_confirmed'], row['cleanup_pending']),
+                             ('finished', 1, 1))
+        with self.assertRaises(BoardError) as caught:
+            upgrade.preflight(board.directory, contract_changed=True)
+        self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
+        self.assertEqual(caught.exception.details['unresolvedAttempts'], [attempt_id])
+        board.store.complete_execution_cleanup(attempt_id)
+        self.assertEqual(upgrade.preflight(board.directory, contract_changed=True), {'schema': SCHEMA_VERSION})
+
     def test_upgrade_journal_fences_admission_without_cancellation(self):
         board=self.board()
         marker=board.directory/'upgrade.json';marker.write_text('{}', encoding="utf-8", newline="\n")
         self.assertEqual(board.call('ping', {})['status'], 'ok')
         with self.assertRaises(BoardError) as caught:
-            board.call('task_retry', {'runId': 'blocked'})
+            board.call('workflow_create', {'cwd': str(self.directory), 'title': 'Blocked by install',
+                                           'goal': 'Do not admit a new macro during cutover'})
         self.assertEqual(caught.exception.code,'UPGRADE_IN_PROGRESS')
         self.assertEqual(board.store.count_tasks(),0)
 
@@ -709,7 +776,7 @@ class UpgradeTests(BoardTestCase):
 
     def test_upgrade_refuses_older_or_unknown_schema(self):
         board=self.board()
-        for version in ('19', '20', '21', '22', '23', '24', '25', '26', '27', '28', '31', '028', '029', '999'):
+        for version in ('19', '20', '21', '22', '23', '24', '25', '26', '27', '28', '29', str(SCHEMA_VERSION + 1), '028', '029', '030', '031', '999'):
             with self.subTest(schema=version):
                 with board.store.db.write() as connection:
                     connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))

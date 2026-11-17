@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 from fake_executable import make_fake_executable
 from support import (
+    DAEMON_READY_TIMEOUT_SECONDS,
     _child_environment,
     remove_private_test_root,
     request_private_service_stop,
@@ -280,7 +281,7 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
                 process = collect_spawn(DAEMON_COMMAND, env=environment,
                                         stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                         start_new_session=True)
-                deadline = time.monotonic() + 25
+                deadline = time.monotonic() + DAEMON_READY_TIMEOUT_SECONDS
                 while True:
                     endpoint = transport._read_endpoint(state)
                     if endpoint:

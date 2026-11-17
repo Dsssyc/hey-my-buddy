@@ -30,6 +30,8 @@ The four Sonnet 5 probes of 2026-09-26 requested effort `medium` and ran in the 
 
 ## Worker permission levels
 
+The Host explicitly selects `access`; full access requires a single-line reason. Worker cwd is its allocated Git checkout or the supplied directory when `checkout: "none"`. The latter copies and seals no files, retaining only a fixed turn result and marking writable directory changes unsealed; acceptance uses `notRequired`. The permission level governs writes and execution through Claude Code and does not bound reads. A continuation changes authorization for the next turn through the same native run path ([workflow](workflow.md#workspace-and-artifact-rules)).
+
 A Worker turn states its level through the command line and the attempt-private `--settings` file; the user's own Claude Code configuration stays in force and is not rewritten for it. Every turn is a new native session, so a level change simply starts the next turn with the other settings. The session's first event reports the permission mode in force: a mode that can be read and differs from the requested one ends the turn before any model input with `unsupported-capability`, for example when managed settings disable bypassing permissions, and a mode that cannot be read is recorded as a fact.
 
 | Level | Permission mode | Bash sandbox |

@@ -11,7 +11,9 @@ from buddy.harnesses.fixture_selection import select_fixture
 from hey_my_buddy.buddy.harnesses.claude.native_run import _catalog
 from hey_my_buddy.buddy.harnesses.registry import adapter
 from hey_my_buddy.protocol import schemas
-from support import wait_for
+from support import wait_for, enable_fixture_buddy
+from hey_my_buddy.blackboard.store.store import BoardStore
+from hey_my_buddy.protocol.client import BoardClient
 from blackboard.tasks.test_workflow_worker import MicroTaskWorkerTestCase
 
 
@@ -27,9 +29,14 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
         super().setUp()
         self.catalog_fixture({"source": "file:claude-worker-fixture", "providers": [{
             "harness": "claude", "provider": "anthropic", "displayName": "Anthropic",
-            "packageName": "claude-code", "packageVersion": "fixture",
             "models": [{"id": BUDDY["model"], "name": "Opus fixture",
                         "efforts": ["high"], "inputModalities": ["text"]}]}], "warnings": []})
+
+        store = BoardStore(self.directory)
+        try:
+            enable_fixture_buddy(store, BUDDY)
+        finally:
+            store.db.close()
 
     def env(self):
         environment = {"HMB_CLAUDE_FIXTURE_STATE": str(self.directory / "native-fixture.json"),
@@ -39,12 +46,10 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
 
     def execute_fixture(self):
         code, submission = self.cli("submit", json.dumps({
-            **BUDDY, "requestId": "claude-private-worker", "hostId": "host-1",
+            "macroTaskId": "standalone", "title": "claude-private-worker",
             "task": "Exercise only the mock native protocol", "cwd": str(self.repo),
-            "expectedSeconds": 20,
-            "executionWorkspace": {"kind": "worktree", "access": "write",
-                                   "base": {"kind": "commit", "ref": self.git("rev-parse", "HEAD").strip()},
-                                   "writeScope": ["tracked.txt"]}}), env=self.env())
+            "buddy": " / ".join(BUDDY.values()), "checkout": "worktree", "access": "write",
+            "inputs": [], "writeScope": ["tracked.txt"], "expectedSeconds": 20}), env=self.env())
         self.assertEqual(code, 0, submission)
         run_id = submission["runId"]
         last = {}
@@ -59,8 +64,7 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
 
         view = wait_for(settled, timeout=60)
         self.assertIsNotNone(view, last)
-        code, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
-        self.assertEqual(code, 0, receipt)
+        receipt = BoardClient(self.directory, autostart=False).result(runId=run_id)
         return view, receipt
 
     def test_micro_task_worker_seals_only_a_proven_claude_result(self):
@@ -101,4 +105,6 @@ class ClaudeCatalogRuleTests(unittest.TestCase):
                        {"value": "haiku", "resolvedModel": "haiku"}]}, "fixture")
         self.assertEqual([m["id"] for m in catalog["providers"][0]["models"]], ["haiku"])
         self.assertEqual(catalog["providers"][0]["models"][0]["efforts"], ["default"])
+        self.assertNotIn("providerVersion", catalog)
+        self.assertFalse({"packageName", "packageVersion"} & catalog["providers"][0].keys())
         self.assertTrue(catalog["warnings"])

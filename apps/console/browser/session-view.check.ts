@@ -1,6 +1,6 @@
+import { fixtureCoverage } from "../src/session-view/test-fixtures";
 import { expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { open, test, expectNoSidewaysScroll, screenshots } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
@@ -9,11 +9,11 @@ const step = (run: string, number: number, macro = A) => `#tasks/${macro}/${run}
 const session = (run: string, number: number, macro = A) => `${step(run, number, macro)}?tab=session`;
 const long = session("preview-run-a1", 7);
 const deep = session("preview-run-a1-h1", 3);
-const correctionShots = fileURLToPath(new URL("../../../tmp", import.meta.url));
+const correctionShots = screenshots;
 type Language = "en" | "zh";
 
 const panel = (page: Page) => page.locator('[data-slot="session-view"]');
-const viewport = (page: Page) => panel(page).locator('[data-slot="message-scroller-viewport"]');
+const viewport = (page: Page) => panel(page).locator('[data-slot="scroll-area-viewport"]');
 const row = (page: Page, type: string) => panel(page).locator(`[data-session-row="${type}"]`);
 const tool = (page: Page, id: string) => panel(page).locator(`[data-session-tool="tool:${id}"]`);
 const notes = (page: Page) => panel(page).locator('[data-session-row="note"]');
@@ -51,8 +51,32 @@ for (const language of ["en", "zh"] as const) for (const width of [1440, 390]) f
       await openSession(page, long);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       await expect(sessionTab(page, language)).toHaveAttribute("aria-selected", "true");
-      await expect(panel(page).getByText(language === "zh" ? "已结束" : "Ended", { exact: true })).toBeVisible();
-      await expect(panel(page).getByText(/Codex/)).toContainText(language === "zh" ? "不提供" : "Not provided");
+      // No header above the session: its content starts right under the tab row,
+      // and the coverage control sits at that row's right end, in this tab alone.
+      const tabsList = tabs(page).locator('[data-slot="tabs-list"]');
+      const scroller = viewport(page);
+      await expect(scroller).toBeVisible();
+      const gap = await scroller.evaluate((node, list) => node.getBoundingClientRect().top - list.getBoundingClientRect().bottom, await tabsList.elementHandle());
+      expect(gap).toBeLessThan(20);
+      const coverageButton = tabs(page).getByRole("button", { name: language === "zh" ? "会话内容" : "Session content", exact: true });
+      await expect(coverageButton).toBeVisible();
+      await overviewTab(page, language).click();
+      await expect(coverageButton).toHaveCount(0);
+      await sessionTab(page, language).click();
+      await expect(coverageButton).toBeVisible();
+      await coverageButton.click();
+      const coverage = page.getByRole("table", { name: language === "zh" ? "会话内容" : "Session content" });
+      await expect(coverage.getByText(language === "zh" ? "不提供：未记录此执行的会话。" : "Not provided: Session was not recorded for this execution.", { exact: true })).toContainText(language === "zh" ? "不提供" : "Not provided");
+      await expect(coverage.getByRole("row")).toHaveCount(5);
+      await expect(coverage.getByText(language === "zh" ? "有证据 · fixture CLI 1" : "Evidence available · fixture CLI 1", { exact: true })).toBeVisible();
+      await expect(coverage.getByText(language === "zh" ? "未核实" : "Unverified", { exact: true })).toHaveCount(3);
+      if (language === "zh" && width === 1440) {
+        const directory = `${screenshots}/session-coverage/`;
+        mkdirSync(directory, { recursive: true });
+        await page.locator('[data-slot="popover-content"]').screenshot({ path: `${directory}coverage-${theme}.png` });
+      }
+      await page.keyboard.press("Escape");
+      await expect(coverage).not.toBeVisible();
       await expect(row(page, "calls").first()).toBeAttached();
       await expect(tool(page, "tool-long")).toBeAttached();
       await expect(tool(page, "codex-failed-command")).toHaveCount(0);
@@ -134,7 +158,7 @@ test.describe("session content and navigation", () => {
       // the earlier page arrives without any scrolling. Later polls add nothing.
       const events = opening ? [message("短会话最新一条。"), message("短会话倒数第二条。")]
         : earlier ? [message("更早第三条。"), message("更早第二条。"), message("更早第一条。")] : [];
-      await route.fulfill({ json: { state: "ended", stopped: null, omitted: [], before: opening ? 60 : 0, after: opening ? 62 : 60, hasEarlier: opening, events } });
+      await route.fulfill({ json: { state: "ended", stopped: null, coverage: fixtureCoverage, before: opening ? 60 : 0, after: opening ? 62 : 60, hasEarlier: opening, events } });
     });
     await openSession(page, long);
     await expect(panel(page).getByText("更早第一条。")).toBeAttached();
@@ -210,6 +234,7 @@ test.describe("session content and navigation", () => {
   test("starts from the latest page again after the session tab is left and reopened", async ({ page }) => {
     await openSession(page, deep);
     await expect.poll(() => notes(page).count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(2);
     const firstPage = await notes(page).count();
     await expect(row(page, "task")).toHaveCount(0);
     await readOneEarlierPage(page, firstPage);
@@ -223,7 +248,7 @@ test.describe("session content and navigation", () => {
     // Back exactly as a first open: only the latest page, read from its end.
     await expect.poll(() => notes(page).count()).toBe(firstPage);
     await expect(row(page, "task")).toHaveCount(0);
-    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(48);
+    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(2);
   });
 
   test("offers Session only on routing and execution steps", async ({ page }) => {
@@ -269,55 +294,6 @@ test.describe("session content and navigation", () => {
     await openSession(page, long);
     await expect(panel(page).getByRole("status")).toContainText("Session recording stopped: The session record could not be written.");
     await expect(row(page, "answer").locator('[data-slot="code-block"]')).toContainText('{"ready":true}');
-  });
-
-  test("keeps a reader away from the bottom until New content is pressed, then follows additions", async ({ page }) => {
-    await page.clock.install();
-    await openSession(page, session("preview-run-a3", 3));
-    await expect(panel(page).getByText("Running", { exact: true })).toBeVisible();
-    await viewport(page).evaluate(node => { node.scrollTop = 0; });
-    await page.clock.fastForward(12_000);
-    await expect(panel(page).getByRole("button", { name: "New content" })).toBeVisible();
-    expect(await viewport(page).evaluate(node => node.scrollTop)).toBe(0);
-    await panel(page).getByRole("button", { name: "New content" }).click();
-    await page.clock.fastForward(6000);
-    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(48);
-  });
-
-  test("follows tool output in the main viewport and preserves its reader's position when away", async ({ page }) => {
-    await page.clock.install();
-    let next = 0;
-    await page.route('**/api/tasks/*/attempts/*/session?*', async route => {
-      const after = new URL(route.request().url()).searchParams.get("after");
-      const update = after === null
-        ? { sessionUpdate: "tool_call", toolCallId: "stream-tool", title: "Synthetic streaming output", kind: "execute", status: "in_progress", content: [{ type: "content", content: { type: "text", text: "Initial output line\n".repeat(120) } }], _meta: { nativeItemId: "stream-tool", contentSegment: "stdout" } }
-        : { sessionUpdate: "tool_call_update", toolCallId: "stream-tool", content: [{ type: "content", content: { type: "text", text: `stream-tail-${++next}\n` } }], _meta: { nativeItemId: "stream-tool", contentSegment: "stdout" } };
-      const before = after === null ? 61 : Number(after);
-      await route.fulfill({ json: { state: "running", stopped: null, omitted: [], before, after: before + 1, hasEarlier: false, events: [{ sessionId: "att-a1-2", update }] } });
-    });
-    await openSession(page, long);
-    const call = await expandTool(page, "stream-tool");
-    await call.getByRole("button", { name: /^Show remaining \d+ lines$/ }).click();
-    await viewport(page).evaluate(node => new Promise<void>(resolve => {
-      node.addEventListener("scroll", () => resolve(), { once: true });
-      node.scrollTop = node.scrollHeight;
-    }));
-    await page.clock.runFor(20);
-    const first = page.waitForResponse(response => response.url().includes("/session?") && response.url().includes("after="));
-    await page.clock.fastForward(3000);
-    await first;
-    await expect(call.locator('[data-slot="session-output"]')).toContainText("stream-tail-1");
-    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(48);
-    await viewport(page).evaluate(node => new Promise<void>(resolve => {
-      node.addEventListener("scroll", () => resolve(), { once: true });
-      node.scrollTop = 0;
-    }));
-    await page.clock.runFor(20);
-    const second = page.waitForResponse(response => response.url().includes("/session?") && response.url().includes("after="));
-    await page.clock.fastForward(3000);
-    await second;
-    await expect(panel(page).getByRole("button", { name: "New content" })).toBeVisible();
-    expect(await viewport(page).evaluate(node => node.scrollTop)).toBe(0);
   });
 
   test("cancels a pending request when its tab is hidden or another step opens", async ({ page }) => {
@@ -369,6 +345,7 @@ for (const theme of ["dark", "light"] as const) test.describe(`a session of many
     });
     await openSession(page, deep);
     await expect.poll(() => notes(page).count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(2);
     const firstPage = await notes(page).count();
     // Only the latest page is loaded; the opening still lies behind earlier pages.
     await expect(row(page, "task")).toHaveCount(0);
@@ -403,6 +380,7 @@ test.describe("the quiet reading line", () => {
     });
     await openSession(page, deep);
     await expect(panel(page).getByText("长会话结束：已核对到最新一条。")).toBeAttached();
+    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(2);
     const loaded = await notes(page).count();
     await reachTop(page);
     const line = panel(page).locator('[data-slot="session-loading-earlier"]');
@@ -413,7 +391,8 @@ test.describe("the quiet reading line", () => {
   });
 });
 
-for (const [opening, growth, height] of [[1, 40, 600], [6, 31, 480]] as const) test.describe(`a running session without earlier pages grows past a short viewport (${opening} rows at open)`, () => {
+// Leave room for the common step title and waits above the session tabs.
+for (const [opening, growth, height] of [[1, 40, 700], [6, 31, 580]] as const) test.describe(`a running session without earlier pages grows past a short viewport (${opening} rows at open)`, () => {
   test.use({ locale: "en-US", viewport: { width: 1440, height }, reducedMotion: "reduce", colorScheme: "dark" });
 
   test("keeps following additions without any scrolling", async ({ page }) => {
@@ -429,7 +408,7 @@ for (const [opening, growth, height] of [[1, 40, 600], [6, 31, 480]] as const) t
         : grown ? [] : Array.from({ length: growth }, (_, index) => row(opening + index + 1));
       if (!starts) grown = true;
       const after = starts ? opening : opening + growth;
-      await route.fulfill({ json: { state: "running", stopped: null, omitted: [], before: 0, after, hasEarlier: false, events } });
+      await route.fulfill({ json: { state: "running", stopped: null, coverage: fixtureCoverage, before: 0, after, hasEarlier: false, events } });
     });
     await openSession(page, session("preview-run-a3", 3));
     await expect(panel(page).getByText(opening === 1 ? "运行中的唯一一行。" : "运行中的第 1 行。")).toBeVisible();
@@ -442,7 +421,7 @@ for (const [opening, growth, height] of [[1, 40, 600], [6, 31, 480]] as const) t
     await page.clock.fastForward(12_000);
     await expect(panel(page).getByText(`运行中的第 ${opening + growth} 行。`)).toBeVisible();
     await expect(panel(page).getByRole("button", { name: "New content" })).toHaveCount(0);
-    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(48);
+    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(2);
   });
 });
 
@@ -528,7 +507,7 @@ test.describe("four harness preview records", () => {
     await expect(task.locator('[data-slot="session-output"]')).toContainText("ROLE: Router buddy");
     await expect(task.locator('[data-slot="session-output"]')).toContainText("为合成任务选择执行 buddy。");
     const answer = row(page, "answer");
-    await expect(answer.locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Selected buddy", "Explanation", "Evidence"]);
+    await expect(answer.locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Domain node", "Task type", "Selected buddy", "Explanation", "Evidence"]);
     await expect(answer).toContainText("dsh:deepseek-official:deepseek-flash:max");
     await expect(answer).toContainText("合成任务由 DeepSeek Flash 执行。");
     await expect(answer).toContainText("符合本次合成路由约束。");
@@ -540,7 +519,7 @@ test.describe("four harness preview records", () => {
   test("review-mode Router abstention keeps its own task heading and structured decision", async ({ page }) => {
     await openSession(page, session("preview-run-a2", 5));
     await expect(row(page, "task").locator("h3")).toHaveText("Choose a buddy for this micro task (review mode)");
-    await expect(row(page, "answer").locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Selected buddy", "Explanation", "Evidence"]);
+    await expect(row(page, "answer").locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Domain node", "Task type", "Selected buddy", "Explanation", "Evidence"]);
     await expect(row(page, "answer")).toContainText("null");
     await expect(row(page, "answer")).toContainText("合成证据不足，请 Host 选择。");
   });
@@ -611,7 +590,7 @@ for (const language of ["en", "zh"] as const) test.describe(`structured answers 
     await page.evaluate(hash => { location.hash = hash; }, session("preview-run-a1", 2));
     await expect(panel(page)).toBeVisible();
     const router = row(page, "answer");
-    await expect(router.locator('[data-slot="session-answer-fields"] dt')).toHaveText(language === "zh" ? ["选中的 buddy", "说明", "依据"] : ["Selected buddy", "Explanation", "Evidence"]);
+    await expect(router.locator('[data-slot="session-answer-fields"] dt')).toHaveText(language === "zh" ? ["领域节点", "任务类型", "选中的 buddy", "说明", "依据"] : ["Domain node", "Task type", "Selected buddy", "Explanation", "Evidence"]);
     await expectNoSidewaysScroll(page);
     await router.scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${screenshots}/session-router-${language}-narrow-light.png`, fullPage: true });

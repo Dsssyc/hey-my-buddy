@@ -55,7 +55,7 @@ for (const mode of ["overlay", "classic"] as const) for (const theme of ["dark",
           await settle(page);
           const view = await viewport.evaluate(node => {
             const box = node.getBoundingClientRect();
-            return { left: box.left + node.clientLeft, right: box.left + node.clientLeft + node.clientWidth,
+            return { left: box.left + node.clientLeft, right: box.left + node.clientLeft + node.clientWidth - parseFloat(getComputedStyle(node).paddingRight),
               top: box.top + node.clientTop, bottom: box.top + node.clientTop + node.clientHeight };
           });
           const outer = await marker.evaluate(node => {

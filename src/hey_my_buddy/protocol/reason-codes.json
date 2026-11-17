@@ -1,4 +1,6 @@
 {
+  "dsh-tool-inventory-unreadable": ["version"],
+  "dsh-tool-inventory-format-unrecognized": ["version"],
   "ANCESTOR_TERMINAL": [],
   "CONFLICT": [],
   "ILLEGAL_TRANSITION": [],
@@ -7,6 +9,9 @@
   "UPGRADE_IN_PROGRESS": [],
   "account.login-required": [],
   "account.not-checked": [],
+  "alias.conflict": ["conflictingBuddy"],
+  "alias.invalid": ["violation"],
+  "alias.reserved": [],
   "all-candidates-cooling": [
     "retryAt"
   ],
@@ -44,6 +49,8 @@
     "harness"
   ],
   "catalog.native-warning": [],
+  "checkout.process-scan-failed": [],
+  "checkout.process-blockers": ["processes", "unreadableProcesses"],
   "config-options-shape-unreadable": [],
   "config-shape-unreadable": [],
   "console.entry-unavailable": [],
@@ -163,8 +170,6 @@
   "macro-task-deletion.queued": [],
   "macro-task-deletion.ref-changed": [],
   "macro-task-deletion.ref-unproven": [],
-  "macro-task-deletion.repository-changed": [],
-  "macro-task-deletion.repository-missing": [],
   "macro-task-deletion.review": [],
   "macro-task-deletion.routing": [],
   "macro-task-deletion.running": [],
@@ -174,9 +179,15 @@
   "macro-task-deletion.unsafe-path": [],
   "macro-task-deletion.unsealed-changes": [],
   "macro-task-deletion.unsealed-handoff": [],
+  "macro-task-ended": [],
   "micro-task-cancelled": [],
   "micro-task-not-found": [],
   "micro-task-not-owned": [],
+  "micro-task.owned-concluded": ["runId"],
+  "maintenance-answer-invalid": ["errors"],
+  "profile-answer-invalid": ["errors"],
+  "profile-not-configured": [],
+  "profile-web-unsupported": [],
   "model-cursor-shape-unreadable": [],
   "model-list-shape-unreadable": [],
   "native-authority-required": [
@@ -185,16 +196,17 @@
   "native-metadata-wait-expired": [],
   "no-legal-candidate": [],
   "not-enabled": [],
-  "readonly-budget-exhausted": [],
   "router-abstained": [],
   "router-all-unavailable": [],
   "router-budget-exhausted": [],
+  "router-not-responding": ["seconds"],
   "router-catalog-unavailable": [
     "cause"
   ],
   "router-disabled": [],
   "router-dispatch-unverified": [],
   "router-evidence-out-of-bounds": [],
+  "router-exploration-out-of-bounds": ["bound"],
   "router-harness-unavailable": [
     "cause"
   ],
@@ -229,14 +241,12 @@
     "retryAt"
   ],
   "router-stop-unconfirmed": [],
-  "router-timeout": [],
   "router-tool-evidence-unverified": [],
   "router-tools-forbidden": [],
   "routing-taken-over": [],
   "routing-unusable-selection": [],
   "service-stopped-before-launch": [],
   "session-record-write-failed": ["category", "message", "truncated"],
-  "session.codex-internal-reasoning-omitted": [],
   "session.deleted": [],
   "session.invalid-record": [],
   "session.not-integrated": [],
@@ -253,5 +263,7 @@
   ],
   "workspace.continuation-prepare-failed": [
     "continuationId"
-  ]
+  ],
+  "work-paused": [],
+  "workflow.input-rejected": ["harness"]
 }

@@ -72,7 +72,7 @@
 - B45：`docs/reference/objectives.md` / Submission metadata；原来：宏任务加入方式只列 objective 与 objectiveId。现在：补列当前 macroTaskOf，通过同项目与原 Host 的运行关联加入。依据：`src/hey_my_buddy/protocol/schemas.py:normalize_presentation; src/hey_my_buddy/blackboard/tasks/macro_tasks.py:120-137`。
 - B46：`docs/reference/objectives.md` / Read shapes；原来：counts 的完整字段列表漏列 accepted。现在：补列 accepted，与实际根微任务计数一致。依据：`src/hey_my_buddy/blackboard/tasks/macro_tasks.py:371-375`。
 - B47：`docs/reference/cli.md` / Execution records；原来：仅点名 dsh/zcode 和缺省 adapter 会被 execution-submit 拒绝。现在：概括为全部 coding harnesses，包含 codex 与 claude。依据：`src/hey_my_buddy/blackboard/store/store.py:task_submit; src/hey_my_buddy/protocol/schemas.py:CODING_HARNESSES`。
-- B49：`docs/reference/usage.md` / Operating rules；原来：备份与升级一律只有滚动 backups/current/、只要 idle 就可切换。现在：分清滚动备份和待执行的永久归档升级；后者要求工作关闭、停止已证实、检出已回收，只带设置进入新看板。依据：`src/hey_my_buddy/install/upgrade.py:346-397,727-751; src/hey_my_buddy/blackboard/store/backup.py:create`。
+- B49：`docs/reference/usage.md` / Operating rules；原来：备份与升级一律只有滚动 backups/current/、只要 idle 就可切换。现在：分清滚动备份和待执行的永久归档升级；后者要求工作关闭、停止已证实、检出已回收，只带设置进入新黑板。依据：`src/hey_my_buddy/install/upgrade.py:346-397,727-751; src/hey_my_buddy/blackboard/store/backup.py:create`。
 - B50：`docs/reference/workspace-lifecycle.md` / Workspace lifecycle operations；原来：accept 校验固定 Git refs，容易理解为要求引用当前仍指向原提交。现在：明确 accept 校验固定 Git 对象与清单绑定；引用存在且未移动的要求在 reclaim 处说明。依据：`src/hey_my_buddy/blackboard/tasks/workspace.py:1910-1999,2308-2343`。
 
 以上共 51 处名称之外的说明修正；同一项终态或参数规则在不同页面各计一处，单纯字段改名不计入本数。

@@ -29,7 +29,9 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         const box = wash.getBoundingClientRect(), viewport = tracks.getBoundingClientRect();
         const gaps = Array.from(svg.querySelectorAll<SVGRectElement>("[data-slot=timeline-break]"));
         const fill = getComputedStyle(wash).fill.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [];
-        return { left: box.left, right: box.right, viewportLeft: viewport.left, viewportRight: viewport.right,
+        const edges = [...node.querySelectorAll('[data-slot=timeline-row-edge]')];
+        return { left: box.left, right: Math.max(box.right, ...edges.map(edge => edge.getBoundingClientRect().right)), viewportLeft: viewport.left, viewportRight: viewport.right,
+          edgeFill: edges.every(edge => getComputedStyle(edge).backgroundColor === getComputedStyle(wash).fill),
           trackLeft: svg.getBoundingClientRect().left, gapCount: gaps.length, coversGaps: gaps.every(gap => {
             const rect = gap.getBoundingClientRect();
             return box.left <= rect.left && box.right >= rect.right && !!(gap.compareDocumentPosition(wash) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -40,6 +42,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       expect(drawing.right).toBeGreaterThanOrEqual(drawing.viewportRight - 2);
       expect(drawing.gapCount).toBeGreaterThan(0);
       expect(drawing.coversGaps).toBe(true);
+      expect(drawing.edgeFill, "the row wash continues through its paint-only edge").toBe(true);
       expect(drawing.fill).toHaveLength(3);
       expect(Math.max(...drawing.fill) - Math.min(...drawing.fill)).toBeLessThanOrEqual(10);
       if (locale === "zh-CN") await page.screenshot({ path: `${shots}/name-selected-${theme}-${width}.png` });

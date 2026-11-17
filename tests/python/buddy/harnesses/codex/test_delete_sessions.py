@@ -2,7 +2,7 @@
 import json
 import os
 from pathlib import Path
-from temporary import TemporaryDirectory
+import tempfile
 import unittest
 from unittest.mock import patch
 from buddy.harnesses.fixture_selection import select_fixture
@@ -21,7 +21,7 @@ FIXTURE = Path(__file__).parent / "fixtures/delete_sessions_codex.py"
 
 class DeleteSessionTests(unittest.TestCase):
     def setUp(self):
-        temporary = TemporaryDirectory(dir=os.environ.get("HMB_CHECKS_TMPDIR"))
+        temporary = tempfile.TemporaryDirectory(dir=os.environ.get("HMB_CHECKS_TMPDIR"))
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         (self.root / "codex-home").mkdir()
@@ -67,7 +67,7 @@ class DeleteSessionTests(unittest.TestCase):
         for session_id, code, message in cases:
             with self.subTest(session_id=session_id), self.assertRaises(BoardError) as caught:
                 CodexAdapter().delete_sessions(["owned", session_id, "must-not-delete"], state_dir=Path(os.environ["HMB_STATE_DIR"]))
-            self.assertEqual(caught.exception.details["nativeError"], {"code": code, "message": message})
+            self.assertEqual(caught.exception.details["nativeError"], {"code": code, "message": message, "nativeMethod": "thread/delete"})
             self.assertTrue(str(caught.exception).startswith("Codex rejected thread/delete: "))
             self.assertLessEqual(len(str(caught.exception).encode("utf-8")), 512)
             if len(message.encode("utf-8")) < 400:
@@ -94,11 +94,11 @@ class DeleteSessionTests(unittest.TestCase):
         self.assertFalse(self.trace.exists())
 
     def test_native_stop_failure_is_not_success_after_delete(self):
-        halt = native_run._halt_owned_group
+        halt = native_run._halt_owned_session
         def unconfirmed(*args):
             _stopped, signalled = halt(*args)
             return False, signalled
-        with patch.object(native_run, "_halt_owned_group", side_effect=unconfirmed), self.assertRaises(CodexProtocolError) as caught:
+        with patch.object(native_run, "_halt_owned_session", side_effect=unconfirmed), self.assertRaises(CodexProtocolError) as caught:
             self.native_delete(["owned"])
         self.assertEqual(caught.exception.code, "native-shutdown-failed")
         self.assertFalse(caught.exception.discovery_shutdown_confirmed)

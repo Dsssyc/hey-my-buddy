@@ -14,7 +14,7 @@
 
 原始命令或外部微任务中保存旧完整视图的操作回执在升级中清除。清理按不可变的运行身份、`commands.task_id` 和明确的视图回执种类绑定，包括工作流操作与会携带任务视图的 Worker、普通任务操作；保留消息和其他运行的回执。预期快照同时声明删除后的命令数与完整行指纹，存量回执不会在升级后重放旧 buddy 形式。
 
-迁移发生在旧服务与 Worker 停止、持有看板锁之后，迁移前后使用 `database_snapshot(exact=True)`。预先投影 `commands` 的换算和删除、`workflow_runs`、`events` 以及 `meta` 仅 schema 版本变化后的完整行指纹，同时核对 `workers` 与包括事件序号的完整 `sqlite_sequence` 指纹。稀疏变更只使用更新、插入、删除三项一种形式；在线运行后的就绪核对保留原有生命周期快照语义。样板升级与新建看板继续比较 schema 结构，篡改测试覆盖保留内容、回执、workers、meta 和序列。
+迁移发生在旧服务与 Worker 停止、持有黑板锁之后，迁移前后使用 `database_snapshot(exact=True)`。预先投影 `commands` 的换算和删除、`workflow_runs`、`events` 以及 `meta` 仅 schema 版本变化后的完整行指纹，同时核对 `workers` 与包括事件序号的完整 `sqlite_sequence` 指纹。稀疏变更只使用更新、插入、删除三项一种形式；在线运行后的就绪核对保留原有生命周期快照语义。样板升级与新建黑板继续比较 schema 结构，篡改测试覆盖保留内容、回执、workers、meta 和序列。
 
 C1 提醒只对有原生事件流的编码 harness 执行调度和记录 `native-silence`，命令与外部执行保留预期时长提醒。服务层原生静默场景现使用离线 DSH CLI 夹具与私有 Worker；真实命令执行服务测试验证超过静默阈值后仍没有“可能卡住”及原生静默提醒。控制台继续通过通用界面读取空 buddy 的旧记录，没有命令或外部微任务专用文案、组件或预览分支。
 

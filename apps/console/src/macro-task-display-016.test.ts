@@ -1,38 +1,37 @@
 import { describe, expect, it } from "vitest";
+import i18n from "i18next";
 import type { TimelineRow, TimelineSpan } from "./macro-task-types";
 import { acceptanceWaitMs, buddyLabel, buddyNameParts, rowStateInfo, spanOutcome } from "./macro-task-display";
 
-describe("0.16 friendly buddy names (0.3)", () => {
+describe("recorded model names", () => {
   const config = (model: string, effort: string | null = "high") => ({
     harness: "claude", provider: "anthropic", model, effort,
   });
 
-  it("prefers a matching snapshot buddy name, then known ids, then the raw id", () => {
-    const buddies = [{ harness: "claude", provider: "anthropic", model: "claude-opus-5-5", label: "Claude Opus 5.5 · high", effort: "high" }];
-    expect(buddyLabel(config("claude-opus-5-5"), buddies)).toBe("Claude Opus 5.5 · high");
-    expect(buddyLabel(config("claude-sonnet-5"))).toBe("Claude Sonnet 5 · high");
-    expect(buddyLabel(config("glm-5.3", "max"))).toBe("GLM-5.3 · max");
-    expect(buddyLabel(config("my-own-model"))).toBe("my-own-model · high");
+  it("uses every recorded model id without a display-name mapping", () => {
+    for (const model of ["claude-opus-5-5", "claude-sonnet-5", "glm-5.3", "my-own-model"]) {
+      expect(buddyNameParts(config(model))).toEqual({ name: model, effort: "high" });
+      expect(buddyLabel(config(model))).toBe(`${model} · high`);
+    }
     expect(buddyLabel(null)).toBe("buddy 未记录");
   });
 
-  it("omits the effort half when it is empty, and keeps every native name including off", () => {
-    expect(buddyLabel(config("glm-5.3", ""))).toBe("GLM-5.3");
-    expect(buddyLabel(config("glm-5.3", null))).toBe("GLM-5.3");
-    expect(buddyLabel(config("glm-5.3", "off"))).toBe("GLM-5.3 · off");
+  it("omits absent efforts and keeps native off", () => {
+    expect(buddyLabel(config("glm-5.3", ""))).toBe("glm-5.3");
+    expect(buddyLabel(config("glm-5.3", null))).toBe("glm-5.3");
+    expect(buddyLabel(config("glm-5.3", "off"))).toBe("glm-5.3 · off");
   });
-
-  it("shares a snapshot display name between rows and execution bars without the effort suffix", () => {
-    const buddy = { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" };
-    const buddies = [{ ...buddy, label: "GPT-6.1-Sol · high" }];
-    expect(buddyNameParts(buddy, buddies)).toEqual({ name: "GPT-6.1-Sol", effort: "high" });
-    expect(buddyLabel(buddy, buddies)).toBe("GPT-6.1-Sol · high");
-    expect(buddyNameParts(config("claude-sonnet-5"))).toEqual({ name: "Claude Sonnet 5", effort: "high" });
-  });
-
 });
 
 describe("recorded row state", () => {
+  it("shows a paused queued row as paused", async () => {
+    try {
+      for (const [language, label] of [["zh", "已暂停"], ["en", "Paused"]] as const) {
+        await i18n.changeLanguage(language);
+        expect(rowStateInfo({ state: "executing", status: "queued", queueReason: "paused" } as TimelineRow)).toMatchObject({ label, settled: false });
+      }
+    } finally { await i18n.changeLanguage("zh"); }
+  });
   it("attributes Host waits to a recorded Lead owner", () => {
     expect(rowStateInfo({ state: "awaiting-host", rootLeadRunId: "lead-1" } as TimelineRow).label).toBe("等待 Lead");
     expect(rowStateInfo({ state: "waiting-owned" } as TimelineRow).label).toBe("等待名下的微任务");
@@ -42,7 +41,48 @@ describe("recorded row state", () => {
     const owned = { runId: "owned", rootLeadRunId: lead.runId, state: "cancelled", status: "cancelling", shutdownConfirmed: false } as TimelineRow;
     expect(rowStateInfo(owned, [lead, owned]).label).toBe("正在停止");
     expect(rowStateInfo(lead, [lead, owned]).label).toBe("正在停止");
-    expect(rowStateInfo(lead, [lead, { ...owned, status: "cancelled", shutdownConfirmed: true }]).label).toBe("已取消");
+    expect(rowStateInfo(lead, [lead, { ...owned, status: "cancelled", shutdownConfirmed: true }]).label).toBe("已取消，等待 Host");
+  });
+  it("keeps unconcluded failures and cancellations waiting for their recorded owner in both languages", async () => {
+    try {
+      for (const language of ["zh", "en"] as const) {
+        await i18n.changeLanguage(language);
+        for (const [state, rootLeadRunId, zh, en] of [
+          ["failed", null, "失败，等待 Host", "Failed, waiting for Host"],
+          ["cancelled", null, "已取消，等待 Host", "Cancelled, waiting for Host"],
+          ["failed", "lead", "失败，等待 Lead", "Failed, waiting for Lead"],
+          ["cancelled", "lead", "已取消，等待 Lead", "Cancelled, waiting for Lead"],
+        ] as const) {
+          expect(rowStateInfo({ state, rootLeadRunId } as TimelineRow)).toMatchObject({
+            label: language === "zh" ? zh : en, tone: "amber", settled: false,
+          });
+        }
+      }
+    } finally { await i18n.changeLanguage("zh"); }
+  });
+  it("keeps failed and cancelled helpers terminal regardless of their root's owner", async () => {
+    try {
+      for (const language of ["zh", "en"] as const) {
+        await i18n.changeLanguage(language);
+        for (const rootLeadRunId of [null, "lead"]) {
+          expect(rowStateInfo({ kind: "helper", state: "failed", rootLeadRunId } as TimelineRow)).toMatchObject({
+            label: language === "zh" ? "执行失败" : "Execution failed", tone: "red", glyph: "✕", settled: false,
+          });
+          expect(rowStateInfo({ kind: "helper", state: "cancelled", rootLeadRunId } as TimelineRow)).toMatchObject({
+            label: language === "zh" ? "已取消" : "Cancelled", tone: "neutral", settled: true,
+          });
+        }
+      }
+    } finally { await i18n.changeLanguage("zh"); }
+  });
+  it("uses the execution's active state before a root's failed or cancelled result", () => {
+    for (const state of ["failed", "cancelled"]) {
+      for (const status of ["queued", "running", "cancelling", "reconciliation-needed"]) {
+        const row = rowStateInfo({ kind: "micro-task", state, status, category: "active" } as TimelineRow);
+        expect(row.label).not.toContain("等待 Host");
+        expect(row.settled).toBe(false);
+      }
+    }
   });
 });
 
@@ -50,6 +90,7 @@ describe("0.16 acceptance wait (P1.8)", () => {
   const row: TimelineRow = {
     runId: "r1", parentRunId: null, rootRunId: "r1", rootLeadRunId: null, delegationAuthority: false, title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "accepted", status: "completed", category: "ended",
+    conclusionStatus: null,
     shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null,
     acceptedAt: "2026-09-26T07:25:00Z", reviewRejectedAt: null, reviewRejectionNote: null,
   };

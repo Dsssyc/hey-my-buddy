@@ -50,7 +50,7 @@ Worker 的结束参数、签名 receipt 和返回 outcome 继续保持原样，`
 | blackboard/catalog/test_catalog、tasks/test_permission_levels、store/test_migrations | 3 | 34 |
 | 合计 | 78 | 1,294 |
 
-没有启动真实 harness、真实 hey-my-buddy 服务、启动器或 Worker，没有访问用户配置、凭据、日常看板，没有登录或模型调用。没有运行 install、前端、完整检查或探针。本批次的真实服务与 C-Two 子进程用例留给 Host；以下列明名称，子类继承的测试也属于未运行项。
+没有启动真实 harness、真实 hey-my-buddy 服务、启动器或 Worker，没有访问用户配置、凭据、日常黑板，没有登录或模型调用。没有运行 install、前端、完整检查或探针。本批次的真实服务与 C-Two 子进程用例留给 Host；以下列明名称，子类继承的测试也属于未运行项。
 
 `buddy.harnesses.test_c_two_live.NativeDeadlineTests` 的六项：`test_first_connection_expires_pre_dispatch_and_recovers`、`test_already_connected_peer_expires_pre_dispatch_and_recovers`、`test_zero_connection_and_call_budgets_are_native_pre_dispatch`、`test_dispatched_call_expires_but_same_connection_and_remote_call_survive`、`test_delayed_owner_never_consumes_an_expired_queue_entry`、`test_connection_time_does_not_renew_the_owner_queue_window`；它们使用真实 C-Two 子进程端点。
 

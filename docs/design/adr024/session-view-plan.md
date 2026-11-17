@@ -121,4 +121,4 @@ Codex 整批由 Host 核对“打开运行中会话、追加、结束继续读�
 5. **分页。** 游标照旧是字节偏移，控制台把它当作不透明的值，不用改。
 6. **回收、存储与删除。** 记录不在微任务的私有目录里了：回收不再为它保留文件；存储检查的 `session-records` 一类按分组目录列出占用，只能随宏任务删除；原因 `session-records-retained` 删除（连同控制台的文字）。删除宏任务时，连同这个分组的会话目录一起删，“已经没有了”算作这一项已完成。删除路径改动，按规矩另请一次独立审查。
 
-**微任务 G（会话视图 G：每次执行一个库，第二回合起按本节改为 JSONL）。** 位置、控制信息、写入方、四个 harness 接线处的失败处理、读取、回收、存储、删除、原因码；控制台只删去 `session-records-retained` 的文字并重建资源。检查：受影响的 Python 测试（四个 harness、控制台、回收、存储、删除、原因码、服务恢复），`npm --prefix apps/console run typecheck`、`npm --prefix apps/console test` 与重建资源。版本仍是 0.47.0：它没有安装，日常看板里没有会话记录，不需要升级。
+**微任务 G（会话视图 G：每次执行一个库，第二回合起按本节改为 JSONL）。** 位置、控制信息、写入方、四个 harness 接线处的失败处理、读取、回收、存储、删除、原因码；控制台只删去 `session-records-retained` 的文字并重建资源。检查：受影响的 Python 测试（四个 harness、控制台、回收、存储、删除、原因码、服务恢复），`npm --prefix apps/console run typecheck`、`npm --prefix apps/console test` 与重建资源。版本仍是 0.47.0：它没有安装，日常黑板里没有会话记录，不需要升级。

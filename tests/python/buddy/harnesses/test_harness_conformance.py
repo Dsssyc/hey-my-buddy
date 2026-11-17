@@ -18,7 +18,7 @@ import inspect
 import os
 import re
 import sqlite3
-from temporary import TemporaryDirectory
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -44,7 +44,7 @@ from hey_my_buddy.protocol.tool_evidence import ACP_CATEGORIES, NATIVE_TOOL_CATE
 ROOT = Path(__file__).resolve().parents[4]
 DELIVERY_MODES = ("realtime", "cooperative-checkpoint", "unsupported")
 ENFORCEMENTS = ("enforced", "convention")
-PERMISSIONS = ("none", "read", "write", "full")
+PERMISSIONS = ("none", "web", "read", "write", "full")
 #: The surface every coding harness shares; `native-session` is deliberately
 #: not here, because it tracks each adapter's own native-resume declaration.
 SHARED_CAPABILITIES = ("inquiry", "workspace", "cancel", "artifacts", "deadline")
@@ -355,7 +355,7 @@ class HarnessConformanceTests(unittest.TestCase):
             with self.subTest(boundary="native allowlist", variable=variable):
                 self.assertEqual(native.get(variable), "/fixture/daily")
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", native)
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             controller = controller_environment(Path(directory), dict(parent))
             readonly = controller_environment(Path(directory), dict(parent), read_only=True)
         for variable in variables:
@@ -364,7 +364,7 @@ class HarnessConformanceTests(unittest.TestCase):
                 self.assertEqual(readonly.get(variable), "/fixture/daily")
         self.assertEqual(controller.get("HMB_AGENT_CREDENTIAL_FILE"), "/fixture/credential.json")
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", readonly)
-        with TemporaryDirectory() as directory, \
+        with tempfile.TemporaryDirectory() as directory, \
                 mock.patch.dict(os.environ, {**{variable: "/users/fixture/daily" for variable in variables},
                                              "HMB_AGENT_CREDENTIAL_FILE": "/fixture/credential.json",
                                              "UV_CACHE_DIR": directory}):

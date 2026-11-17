@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from temporary import TemporaryDirectory
 import threading
 import unittest
 from pathlib import Path
@@ -40,7 +39,7 @@ class FakeConnection:
 
 class NativeInquiryTests(unittest.TestCase):
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-codex-inquiry-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-inquiry-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)

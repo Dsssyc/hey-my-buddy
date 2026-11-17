@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from temporary import TemporaryDirectory
 import unittest
 import uuid
 from pathlib import Path
@@ -63,14 +62,20 @@ def block_stop(session="session-root"):
             "event": {"type": "content_block_stop", "index": 1}}
 
 
-def tool_result(call_id, session="session-root", parent=None):
+#: Passed to ``tool_result`` to leave ``is_error`` out of the block entirely.
+FLAG_ABSENT = object()
+
+
+def tool_result(call_id, session="session-root", parent=None, is_error=FLAG_ABSENT):
     fields = {}
     if session is not None:
         fields["session_id"] = session
     if parent is not None:
         fields["parent_tool_use_id"] = parent
-    return {"type": "user", "message": {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": call_id, "content": "ok"}]}, **fields}
+    block = {"type": "tool_result", "tool_use_id": call_id, "content": "ok"}
+    if is_error is not FLAG_ABSENT:
+        block["is_error"] = is_error
+    return {"type": "user", "message": {"role": "user", "content": [block]}, **fields}
 
 
 def result_frame(session="session-root"):
@@ -103,7 +108,7 @@ def armed(frames):
     return collector
 
 
-DELIVERED = {"buddyId": "legal", "note": "the delivered value", "evidence": [{"kind": "file", "ref": "one"}]}
+DELIVERED = {"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "the delivered value", "evidence": [{"kind": "file", "ref": "one"}]}
 
 
 def settled_stream():
@@ -114,8 +119,17 @@ def settled_stream():
 
 
 class ProjectionTests(unittest.TestCase):
+    def test_tool_result_error_flag_is_set_only_on_failure(self):
+        for error, expected in ((FLAG_ABSENT, "success"), (False, "success"), (True, "failure"),
+                                (None, "unknown"), (0, "unknown"), (1, "unknown"), ("yes", "unknown")):
+            with self.subTest(error=error):
+                _, package = project([init_frame(), assistant_tool("Read", "toolu_1"),
+                                      tool_result("toolu_1", is_error=error)])
+                self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["outcome"],
+                                 expected)
+
     def test_collector_uses_its_explicit_state_root(self):
-        with TemporaryDirectory(prefix="claude-evidence-root-") as directory:
+        with tempfile.TemporaryDirectory(prefix="claude-evidence-root-") as directory:
             state_dir = Path(directory) / "state"
             self.assertNotEqual(state_dir, Path(os.environ["HMB_STATE_DIR"]))
             collector = ReadOnlyToolEvidence(dict(BINDING), state_dir=state_dir)
@@ -131,7 +145,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(package["nativeIdentity"], [ROOT])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (2, 0))
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(package["version"], 2)
+        self.assertEqual(package["version"], 3)
         self.assertEqual([(call["callId"], call["categories"], call["phases"])
                           for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
                          [("toolu_1", ["read"], ["end", "start"]),
@@ -381,7 +395,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_a_second_different_full_input_refuses_the_exemption_in_either_order(self):
-        other = {"buddyId": "conflict", "note": "a different complete input", "evidence": []}
+        other = {"domainNodeId": None, "taskType": "change", "buddyId": "conflict", "note": "a different complete input", "evidence": []}
         for name, first, second in (("delivered-first", DELIVERED, other), ("conflict-first", other, DELIVERED)):
             with self.subTest(order=name):
                 collector = armed([init_frame(), structured_use("toolu_so_1", first),
@@ -516,7 +530,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
 
 class RunnerReceiptTests(unittest.TestCase):
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-claude-evidence-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-evidence-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -537,14 +551,14 @@ class RunnerReceiptTests(unittest.TestCase):
     def context(self, case):
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}", generation=1,
                                 session_record_path=str(self.root / f"session-{uuid.uuid4().hex}.jsonl"),
-                                spec={"cwd": str(self.cwd), "task": "Review the frozen copy", "routerBudgetSeconds": 20,
+                                spec={"cwd": str(self.cwd), "task": "Review the frozen copy", "modelResponseWaitSeconds": 20,
                                       "provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "low"},
                                 directory=self.root / "attempt-1", runtime={},
                                 environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case}, turn=None)
 
-    def run_read_only(self, case, *, tool_calls=8):
+    def run_read_only(self, case):
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]),
-                                            {"timeoutSeconds": 20, "toolCalls": tool_calls})
+                                            capture_evidence=False)
         context = self.context(case)
         handle = start_review("claude", context, request)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
@@ -558,10 +572,9 @@ class RunnerReceiptTests(unittest.TestCase):
         session = receipt["nativeIdentity"]["sessionId"]
         uuid.UUID(session, version=4)
         self.assertEqual(receipt["usage"]["toolCalls"], 2)
-        self.assertIsNone(receipt["usage"]["bytesRead"])
         self.assertIsInstance(receipt["usage"]["elapsedMs"], int)
         evidence = receipt["toolEvidence"]
-        self.assertEqual(evidence["version"], 2)
+        self.assertEqual(evidence["version"], 3)
         self.assertEqual(evidence["binding"], {"harness": "claude", "taskId": "micro-task-1",
                                                "attemptId": context.attempt_id, "generation": 1})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": session}])
@@ -573,7 +586,7 @@ class RunnerReceiptTests(unittest.TestCase):
     def test_replayed_and_stream_projected_calls_count_once_in_the_receipt(self):
         # A limit of one allows the one real call: the old per-frame block count
         # would have seen three projections and interrupted the turn instead.
-        context, outcome = self.run_read_only("replay", tool_calls=1)
+        context, outcome = self.run_read_only("replay")
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
         self.assertEqual((evidence["toolCalls"], len(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])))), (1, 1))
@@ -610,18 +623,6 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertFalse(evidence["streamComplete"])
         self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read", state_dir=Path(context.environment["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
-
-    def test_budget_exhaustion_reports_the_unified_count_and_an_unfinished_stream(self):
-        context, outcome = self.run_read_only("budget", tool_calls=1)
-        self.assertEqual(outcome.status, "failed", outcome.result)
-        receipt = outcome.result
-        self.assertEqual(receipt["code"], "readonly-budget-exhausted")
-        self.assertEqual(receipt["usage"]["toolCalls"], 2)
-        evidence = receipt["toolEvidence"]
-        self.assertEqual((evidence["toolCalls"], len(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])))), (2, 2))
-        self.assertFalse(evidence["streamComplete"])
-        self.assertTrue(json.loads((self.root / "fixture.json").read_text(encoding="utf-8"))["interrupted"],
-                        "the N+1 call must be interrupted through the native control request")
 
     def test_premature_tool_output_is_collected_before_the_boundary_rejection(self):
         context, outcome = self.run_read_only("premature")

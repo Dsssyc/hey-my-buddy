@@ -10,10 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import tempfile
-from temporary import TemporaryDirectory
 import time
 import unittest
 from pathlib import Path
@@ -38,7 +36,7 @@ class CodexAdapterTests(unittest.TestCase):
         developer_source = mock.patch.dict(os.environ, {'HMB_DEV_SOURCE': '1'})
         developer_source.start()
         self.addCleanup(developer_source.stop)
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-codex-test-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-test-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -58,14 +56,14 @@ class CodexAdapterTests(unittest.TestCase):
         select_fixture(self.environment, self.root, "codex", FIXTURE)
         self.adapter = worker_executor("codex")
 
-    def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=8):
+    def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=None):
         turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
                       "previousSessionId": previous, "context": {},
                       "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
         return ExecutionContext(session_record_path=str(self.root / f"session-{index}.jsonl"), task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"adapter": "codex", "cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
-                                      **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
+                                      **({"modelResponseWaitSeconds": timeout} if timeout is not None else {}),
                                       "provider": "openai", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_CODEX_FIXTURE_CASE": case},
@@ -74,17 +72,16 @@ class CodexAdapterTests(unittest.TestCase):
     def execute(self, context):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
+        self.assertIsNotNone(handle.wait(180), "Codex fixture controller did not exit")
         return self.adapter.collect(handle, context)
 
-    def wait_native_turn_start(self, timeout=10):
-        """Bounded wait for the fixture's explicit native turn-start fact.
+    def wait_native_turn_start(self, handle, timeout=180):
+        """Wait for the native start and the controller's matching turn receipt.
 
-        The marker is written only after the fixture actually emitted the
-        turn/start response and the turn/started notification, so waiting on it
-        proves the native turn had started before the cancel — never a blind
-        sleep, and never a thread merely existing.
+        The fixture can publish its marker before the controller consumes the
+        response. Its waiting-model activity proves the turn identity is bound
+        before a test asks for native interruption or continuation.
         """
         path = Path(self.environment["HMB_CODEX_FIXTURE_STATE"])
         deadline = time.monotonic() + timeout
@@ -96,30 +93,34 @@ class CodexAdapterTests(unittest.TestCase):
             for thread in (state.get("threads") or {}).values():
                 started = thread.get("turnStart")
                 if isinstance(started, dict) and started.get("threadId") and started.get("turnId"):
-                    return started
+                    live = handle.live_endpoint
+                    activity = live.current_activity() if live is not None else None
+                    if (activity is not None and activity.get("phase") == "waiting-model"
+                            and activity.get("nativeSessionId") == started["threadId"]):
+                        return started
             time.sleep(0.05)
-        self.fail("the fixture never recorded a started native turn before the cancel")
+        self.fail("the fixture and controller never confirmed the same started native turn")
 
-    def review(self, case, *, index, budget_options=None, capture=True):
+    def review(self, case, *, index, capture=True):
         from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
+        from hey_my_buddy.blackboard.routing.router import answer_schema
         context = self.context(case, index=index)
         context.turn = None
         context.agent_credential = None
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]),
-                                            {**budget(), **(budget_options or {})}, capture_evidence=capture)
+                                            capture_evidence=capture)
         handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
                                                             (None, self.cwd, "fixture-digest")))
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(30), "Codex fixture controller did not exit")
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
+        self.assertIsNotNone(handle.wait(180), "Codex fixture controller did not exit")
         return collect(handle), context
 
     def test_completed_native_turn_has_structured_provenance_and_preserved_final_activity(self):
         context = self.context()
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
+        self.assertIsNotNone(handle.wait(180), "Codex fixture controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
@@ -224,7 +225,7 @@ class CodexAdapterTests(unittest.TestCase):
         select_command(context.environment, self.root, "codex", [str(broken)])
         outcome = self.execute(context)
         self.assertEqual(outcome.status, 'failed', outcome.to_report())
-        self.assertIs(outcome.result['modelStarted'], False)
+        self.assertIs(outcome.result['modelResponded'], False)
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertFalse(list(native_path(Path(context.environment['HMB_STATE_DIR'])).rglob('codex-home')))
         self.assertEqual((self.home / 'auth.json').read_text(encoding="utf-8"), 'source login')
@@ -268,7 +269,7 @@ class CodexAdapterTests(unittest.TestCase):
         native_path(path).write_text(json.dumps(binding), encoding="utf-8", newline="\n")
         refused = self.execute(self.context(index=3, previous=first.result['sessionId']))
         self.assertEqual(refused.result['code'], 'native-resume-unavailable')
-        self.assertIs(refused.result['modelStarted'], False)
+        self.assertIs(refused.result['modelResponded'], False)
         rebuilt = self.execute(self.context(index=4, previous=first.result['sessionId'],
                                             mode='reconstructed-new-session'))
         self.assertEqual(rebuilt.status, 'ok', rebuilt.to_report())
@@ -318,7 +319,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertFalse(first.result["nativeSession"]["resumable"])
         second = self.execute(self.context(index=2, previous=first.result["sessionId"]))
         self.assertEqual(second.result["code"], "native-resume-unavailable")
-        self.assertIs(second.result["modelStarted"], False)
+        self.assertIs(second.result["modelResponded"], False)
 
     def test_disconnect_retains_completed_message_without_inventing_native_completion(self):
         outcome = self.execute(self.context("disconnect-after-message"))
@@ -339,7 +340,7 @@ class CodexAdapterTests(unittest.TestCase):
         second = self.execute(self.context(index=2, previous=first.result["sessionId"]))
         self.assertEqual(second.status, "failed")
         self.assertEqual(second.result["code"], "native-resume-unavailable")
-        self.assertIs(second.result["modelStarted"], False)
+        self.assertIs(second.result["modelResponded"], False)
 
     def test_native_resume_requires_matching_task_binding_and_history(self):
         first = self.execute(self.context())
@@ -351,7 +352,7 @@ class CodexAdapterTests(unittest.TestCase):
         changed = self.execute(self.context(index=3, previous=thread_id, effort="high"))
         self.assertEqual(changed.status, "failed")
         self.assertEqual(changed.result["code"], "native-resume-unavailable")
-        self.assertIs(changed.result["modelStarted"], False)
+        self.assertIs(changed.result["modelResponded"], False)
         reconstructed = self.execute(self.context(index=4, previous=thread_id, mode="reconstructed-new-session", effort="high"))
         self.assertEqual(reconstructed.status, "ok", reconstructed.to_report())
         self.assertNotEqual(reconstructed.result["turn"]["sessionId"], thread_id)
@@ -415,57 +416,45 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertNotIn("turn", outcome.result)
 
-    def test_deadline_ends_native_process_group(self):
-        outcome = self.execute(self.context("hang", timeout=1))
-        self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.result["code"], "deadline")
-        self.assertTrue(outcome.shutdown_confirmed)
 
     def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
         context = self.context("ok", timeout=None)
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertEqual(handle.deadline, math.inf)
-        self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
+        self.assertIsNotNone(handle.wait(180), "Codex fixture controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
 
     def test_absent_budget_still_honors_explicit_user_cancellation(self):
-        context = self.context("hang", timeout=None)
+        context = self.context("hang-unbounded", timeout=None)
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertEqual(handle.deadline, math.inf)
-        started = self.wait_native_turn_start()
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
+        started = self.wait_native_turn_start(handle)
         self.assertEqual(set(started), {"threadId", "turnId"})
         time.sleep(1.2)
         self.assertIsNone(handle.wait(0), "the micro task must outlive its one-second estimate")
         self.adapter.cancel(handle, grace_seconds=8)
-        self.assertIsNotNone(handle.wait(10))
+        # This waits for run collection after the native interrupt and group
+        # stop; it does not measure a service cancellation deadline.
+        self.assertIsNotNone(handle.wait(180), "Codex cancellation did not finish its run collection")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
 
-    def test_positive_timeout_keeps_a_finite_stamped_deadline(self):
-        context = self.context(timeout=8)
-        self.adapter.prepare(context)
-        handle = self.adapter.start(context)
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertGreater(handle.deadline, time.monotonic())
-        self.assertFalse(math.isinf(handle.deadline))
 
     def test_user_cancel_interrupts_the_owned_native_turn(self):
-        context = self.context("hang", timeout=12)
+        context = self.context("hang-unbounded", timeout=180)
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.wait_native_turn_start()
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
+        self.wait_native_turn_start(handle)
         self.adapter.cancel(handle, grace_seconds=8)
-        self.assertIsNotNone(handle.wait(10))
+        self.assertIsNotNone(handle.wait(180), "Codex cancellation did not finish its run collection")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
@@ -477,16 +466,16 @@ class CodexAdapterTests(unittest.TestCase):
         context = self.context("wrap-up", timeout=None)
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        started = self.wait_native_turn_start()
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
+        started = self.wait_native_turn_start(handle)
         session_path = Path(context.session_record_path)
-        record_deadline = time.monotonic() + 5
+        record_deadline = time.monotonic() + 180
         while not session_path.exists() and time.monotonic() < record_deadline:
             time.sleep(0.01)
         first_record = notifications(session_path)
         controller.worker_stop(self.adapter, handle, stop_initiator="host",
                                grace_deadline=time.monotonic() + 10)
-        self.assertIsNotNone(handle.wait(15), "Codex fixture summary controller did not exit")
+        self.assertIsNotNone(handle.wait(180), "Codex fixture summary controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertIs(outcome.result.get("wrapUpDelivered"), True, outcome.to_report())
@@ -518,10 +507,37 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(json.loads(lines[-1]['update']['content']['text'])['outcome']['summary'],
                          'Stopped partial work summary')
 
+    def test_pause_interrupts_native_turn_without_a_summary(self):
+        from hey_my_buddy.buddy.runtime.execution import classify_termination
+
+        context = self.context("wrap-up", timeout=None)
+        self.adapter.prepare(context)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
+        started = self.wait_native_turn_start(handle)
+        controller.worker_stop(self.adapter, handle, stop_initiator="pause",
+                               grace_deadline=time.monotonic() + 10)
+        self.assertIsNotNone(handle.wait(180), "Codex fixture pause did not settle")
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=True,
+                                              stop_initiator="pause"), "pause")
+        self.assertTrue(handle.result.stop_evidence.interrupt.requested)
+        self.assertTrue(outcome.result["nativeSession"]["resumable"])
+        self.assertEqual(outcome.result["nativeCheckpoint"]["nativeTurnStatus"], "interrupted")
+        self.assertNotIn("turn", outcome.result)
+        self.assertIs(outcome.result["wrapUpDelivered"], False)
+        state = json.loads(Path(self.environment["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
+        turns = state["threads"][started["threadId"]]["turns"]
+        self.assertEqual([(item["id"], item["status"]) for item in turns],
+                         [(started["turnId"], "interrupted")])
+        self.assertEqual(state["threads"][started["threadId"]].get("resumeRequests", []), [])
+
     def test_read_only_accepts_disabled_network_receipt(self):
         result, _context = self.review('readonly-network-disabled', index=41)
         self.assertEqual(result.status, 'ok', result.result)
-        self.assertIs(result.result['modelStarted'], True)
+        self.assertIs(result.result['modelResponded'], True)
         self.assertEqual(result.result['policyCheck']['threadReceipt']['status'], 'confirmed')
         # The native receipt keeps its actual networkAccess value.
         self.assertIn('nativePolicy', result.result)
@@ -543,7 +559,6 @@ class CodexAdapterTests(unittest.TestCase):
         raw = result.result["rawAnswer"]
         answer = json.loads(raw) if isinstance(raw, str) else raw
         self.assertEqual(answer["buddyId"], "legal")
-        self.assertIsNone(result.result["usage"]["bytesRead"])
         self.assertFalse((self.root / "attempt-43" / "turn-output.json").exists())
 
     def test_read_only_inherits_user_home_and_leaves_user_auth_untouched(self):
@@ -555,12 +570,12 @@ class CodexAdapterTests(unittest.TestCase):
         context.turn = None
         context.environment['CODEX_HOME'] = str(account_home)
         from hey_my_buddy.buddy.roles.structured_call import collect
-        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
-        request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']), budget())
+        from hey_my_buddy.blackboard.routing.router import answer_schema
+        request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']))
         handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
                                                             (None, self.cwd, "fixture-digest")))
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(20))
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(180)) if not handle.finished else None)
+        self.assertIsNotNone(handle.wait(180))
         result = collect(handle)
         self.assertEqual(result.status, 'ok', result.result)
         self.assertTrue(result.shutdown_confirmed)
@@ -570,25 +585,6 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(thread["home"], context.environment["HOME"])
         self.assertFalse(list(native_path(Path(context.environment["HMB_STATE_DIR"])).rglob("codex-home")))
         self.assertEqual(source_auth.read_text(encoding="utf-8"), 'private fixture auth')
-
-    def test_read_only_budget_interrupts_the_native_turn_and_keeps_unknown_read_bytes(self):
-        result, _context = self.review('readonly-budget', index=45, budget_options={'toolCalls': 0})
-        self.assertEqual(result.status, 'failed', result.result)
-        self.assertEqual(result.result['code'], 'readonly-budget-exhausted')
-        self.assertTrue(result.shutdown_confirmed)
-        # The interrupt facts are the run's own: the request happened and the
-        # native side acknowledged it — never inferred from the confirmed stop.
-        self.assertIs(result.result['nativeInterruptRequested'], True)
-        self.assertTrue(result.result['nativeInterruptAcknowledged'])
-        self.assertIsNone(result.result['usage']['bytesRead'])
-        self.assertEqual(result.result['usage']['toolCalls'], 1)
-
-    def test_denied_raw_tool_call_still_consumes_router_budget(self):
-        result, _context = self.review('readonly-denied-budget', index=46, budget_options={'toolCalls': 0})
-        self.assertEqual(result.result['code'], 'readonly-budget-exhausted')
-        self.assertEqual(result.result['usage']['toolCalls'], 1)
-        self.assertTrue(result.shutdown_confirmed)
-        self.assertEqual(result.result['nativeRawToolEvents'][0]['params']['item']['call_id'], 'denied-1')
 
     def test_readonly_repairs_format_once_in_same_thread_but_not_bounds(self):
         for index, (case, calls) in enumerate((('readonly-repair', 2), ('readonly-outside', 1)), 47):

@@ -4,10 +4,13 @@ from __future__ import annotations
 import importlib.util
 import http.client
 import json
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from hey_my_buddy.blackboard.tasks.macro_tasks import HOST_MARKERS
 from hey_my_buddy.protocol.session_content import SessionNotification
@@ -21,11 +24,215 @@ SPEC.loader.exec_module(preview)
 
 
 class LeadStopPreviewTests(unittest.TestCase):
+    def test_dense_outline_preview_keeps_the_large_tree_shape_and_original_examples(self):
+        original = preview.console_snapshot('normal', True)
+        dense = preview.console_snapshot('domains', True)
+        nodes = dense['domainNodes']
+        children = {}
+        for node in nodes:
+            children.setdefault(node['parentId'], []).append(node)
+        roots = children[None]
+        def total(node):
+            return node['directCount'] + sum(total(child) for child in children.get(node['nodeId'], []))
+        self.assertEqual(len(nodes), 81)
+        self.assertEqual(len(roots), 41)
+        self.assertEqual([total(node) for node in roots],
+                         [139, 103, 89, 75, 74, 67, 51, 44, 41, 37, 28, 24, 20, 18,
+                          17, 17, 16, 15, 15, 14, 14, 13, 12, 12, 10, 10, 8, 8, 7, 6,
+                          5, 5, 3, 3, 3, 3, 2, 1, 1, 1, 1])
+        self.assertEqual(sum(node['nodeId'] in children for node in roots), 14)
+        self.assertEqual(max(len(children.get(node['nodeId'], [])) for node in roots), 6)
+        second_level = [child for root in roots for child in children.get(root['nodeId'], [])]
+        third_level_groups = [children[node['nodeId']] for node in second_level if node['nodeId'] in children]
+        self.assertEqual([len(group) for group in third_level_groups], [5])
+        self.assertTrue(all(node['nodeId'] not in children for node in third_level_groups[0]))
+        self.assertTrue(all(node['directCount'] >= 0 and node['mergedIntoId'] is None for node in nodes))
+        self.assertEqual(original['kindEvaluations'], dense['kindEvaluations'])
+        self.assertTrue(any(node['mergedIntoId'] for node in original['domainNodes']))
+        self.assertIn('domains', preview.SCENARIOS)
+
+    def test_catalogue_redo_examples_keep_missing_measurements_and_declared_versions(self):
+        snapshot = preview.console_snapshot('normal', True)
+        services = {(row['harness'], row['provider'], row['model']) for row in snapshot['modelServiceConcurrency']}
+        self.assertNotIn(('codex', 'openai', 'gpt-5-mini'), services)
+        self.assertIn(('codex', 'openai', 'gpt-5-mini'),
+                      {(row['harness'], row['provider'], row['model']) for row in snapshot['buddies']})
+        harnesses = {row['harness']: row for row in snapshot['harnesses']}
+        self.assertEqual(harnesses['dsh']['permissionsVerifiedVersion'], '0.2.2-rc.1')
+        self.assertIsNone(harnesses['zcode']['permissionsVerifiedVersion'])
+        self.assertNotIn('web', harnesses['zcode'].get('permissions', {}))
+
+    def test_model_profile_preview_uses_current_snapshot_and_command_shapes(self):
+        snapshot = preview.console_snapshot('normal', True)
+        self.assertNotIn('modelServiceNotes', snapshot)
+        self.assertEqual(snapshot['configuration']['modelResponseWaitSeconds'], 60)
+        self.assertFalse({'routingBudget', 'profileBudget', 'routingBudgetLimits'}
+                         & snapshot['configuration'].keys())
+        self.assertIn(snapshot['configuration']['profileBuddyId'],
+                      {buddy['buddyId'] for buddy in snapshot['buddies']})
+        self.assertEqual(snapshot['configuration']['profileUnavailableReason'],
+                         {'code': 'profile-web-unsupported', 'params': {}})
+        models = {row['modelId']: row for row in snapshot['models']}
+        self.assertEqual(len(models), len(preview.MODEL_IDS))
+        self.assertEqual(set(row['source'] for row in snapshot['modelCorrespondences']),
+                         {'same-name', 'profile', 'user'})
+        for row in snapshot['modelCorrespondences']:
+            self.assertIn(row['modelId'], models)
+            self.assertIn({key: row[key] for key in ('harness', 'provider', 'model')},
+                          models[row['modelId']]['names'])
+            if row['source'] == 'profile':
+                self.assertTrue(row['evidenceUrl'].startswith('https://'))
+                self.assertIsNotNone(row['evidenceDate'])
+                self.assertTrue(row['canUndo'])
+        self.assertNotIn('modelNotes', snapshot)
+        profiled = models[preview.MODEL_IDS['gpt-5-codex']]
+        self.assertEqual({claim['polarity'] for claim in profiled['profile']['claims']},
+                         {'strength', 'weakness'})
+        self.assertEqual(profiled['profile']['profileRunId'], profiled['latestProfileRun']['profileRunId'])
+        self.assertEqual(profiled['latestProfileRun']['state'], 'completed')
+        self.assertEqual(profiled['latestProfileRun']['usage']['attempts'][0]['tokenUsage']['inputTokens'], 4200)
+        self.assertEqual(profiled['latestProfileRun']['toolSummary'], [
+            {'toolName': 'web_search', 'calls': 2, 'failed': 0, 'unknown': 1},
+            {'toolName': 'web_fetch', 'calls': 2, 'failed': 2, 'unknown': 0},
+            {'toolName': None, 'calls': 1, 'failed': 0, 'unknown': 1},
+        ])
+        unprofiled = models[preview.MODEL_IDS['glm-5']]
+        self.assertIsNone(unprofiled['profile'])
+        self.assertEqual(unprofiled['latestProfileRun']['state'], 'failed')
+        self.assertEqual(unprofiled['latestProfileRun']['toolSummary'], [
+            {'toolName': 'web_search', 'calls': 6, 'failed': 0, 'unknown': 0},
+            {'toolName': 'web_fetch', 'calls': 8, 'failed': 8, 'unknown': 0},
+        ])
+        self.assertEqual(unprofiled['latestProfileRun']['reason']['code'], 'profile-answer-invalid')
+        self.assertEqual(models[preview.MODEL_IDS['gpt-5-mini']]['latestProfileRun']['state'], 'running')
+        self.assertIsNone(models[preview.MODEL_IDS['gpt-5-mini']]['latestProfileRun']['finishedAt'])
+        page = preview.command_result('normal', 'buddy_list', {})
+        for field in ('models', 'modelCorrespondences'):
+            self.assertEqual(page[field], snapshot[field])
+        self.assertEqual(preview.command_result('normal', 'profile_start',
+                         {'modelId': profiled['modelId']}),
+                         {'status': 'unavailable', 'reason': snapshot['configuration']['profileUnavailableReason']})
+        with self.assertRaises(preview.PreviewError) as missing:
+            preview.command_result('normal', 'profile_start', {'modelId': 'missing'})
+        self.assertEqual(missing.exception.code, 'NOT_FOUND')
+
+    def test_kind_evaluations_come_from_the_service_projection_of_synthetic_rows(self):
+        from unittest.mock import patch
+        from hey_my_buddy.console.reads import _kind_evaluations
+
+        with patch('hey_my_buddy.console.reads._kind_evaluations', wraps=_kind_evaluations) as read:
+            snapshot = preview.console_snapshot('normal', True)
+        read.assert_called_once()
+        rows = snapshot['kindEvaluations']
+        flash = next(row for row in rows if (row['harness'], row['modelId'], row['effort'])
+                     == ('dsh', preview.MODEL_IDS['deepseek-flash'], 'max'))
+        self.assertNotIn('model', flash)
+        self.assertEqual(flash['modelDisplayName'], 'deepseek-flash')
+        self.assertEqual({name['provider'] for name in flash['modelNames']},
+                         {'deepseek-official', 'deepseek-partner'})
+        self.assertEqual(flash['statistics']['overall']['samples'], 4)
+        self.assertEqual(flash['statistics']['byDomain']['preview-domain-ui']['samples'], 4)
+        self.assertEqual(flash['statistics']['byDomainTaskType']['preview-domain-routing']['verify']['samples'], 1)
+        self.assertEqual(flash['summary'], {'text': '合成样例：界面改造有过一次返工，路由验证一次通过。'})
+        self.assertEqual(flash['statistics']['infrastructureFailures'][0]['provider'], 'deepseek-official')
+        codex = next(row for row in rows if (row['harness'], row['modelId'], row['effort'])
+                     == ('codex', preview.MODEL_IDS['gpt-5-codex'], 'high'))
+        self.assertEqual(set(codex['statistics']['byDomain']),
+                         {'preview-domain-ui', 'preview-domain-console', 'preview-domain-tokens'})
+        current_name = next(row for row in snapshot['modelCorrespondences']
+                            if (row['harness'], row['provider'], row['model'])
+                            == ('codex', 'openai', 'gpt-5-codex'))
+        self.assertEqual(codex['previousGroups'], [{
+            'modelId': 'synthetic-previous-codex', 'modelDisplayName': 'Earlier Codex',
+            'names': [{'harness': 'codex', 'provider': 'openai', 'model': 'gpt-5-codex',
+                       'since': current_name['createdAt']}],
+        }])
+        # Kinds without samples still use the service's empty-statistics projection.
+        empty = next(row for row in rows if row['modelId'] == preview.MODEL_IDS['gpt-5-mini']
+                     and row['effort'] == 'low')
+        self.assertEqual(empty['statistics']['overall']['samples'], 0)
+        self.assertIsNone(empty['summary'])
+
+    def test_router_preview_records_response_wait_without_a_total_budget(self):
+        route = preview.ROUTING_A1
+        self.assertEqual(route['modelResponseWaitSeconds'], 60)
+        self.assertNotIn('budget', route)
+        task = preview.task_view(preview.FIXTURES['runs']['preview-run-a1-router'])
+        self.assertEqual(task['spec']['modelResponseWaitSeconds'], 60)
+        self.assertNotIn('routerBudgetSeconds', task['spec'])
+        self.assertNotIn('modelResponseWaitSeconds', task['spec']['decision'])
+
+    def test_unconcluded_failures_and_cancellations_wait_for_host(self):
+        page = preview.macro_task_page({'filter': 'host'})
+        summary = next(item for group in page['groups'] for item in group['macroTasks']
+                       if item['macroTaskId'] == preview.MACRO_C)
+        self.assertEqual(summary['state'], 'host')
+        self.assertEqual({key: summary['counts'][key] for key in ('host', 'failed', 'ended', 'accepted')},
+                         {'host': 2, 'failed': 1, 'ended': 5, 'accepted': 2})
+        filtered = preview.macro_task_timeline({'macroTaskId': preview.MACRO_C, 'filter': 'host'}, 'normal')
+        self.assertEqual({row['runId'] for row in filtered['rows']}, {'preview-run-d2', 'preview-run-d3'})
+        self.assertEqual({row['category'] for row in filtered['rows']}, {'host'})
+        for run_id in ('preview-run-d2', 'preview-run-d3'):
+            self.assertIsNone(preview.workflow_get({'runId': run_id})['hostConclusion'])
+        concluded = preview.workflow_get({'runId': 'preview-run-d4'})
+        self.assertEqual(concluded['state'], 'concluded')
+        self.assertEqual(concluded['hostConclusion']['executionStatus'], 'failed')
+        self.assertEqual(preview.pending_root_count(), 7)
+        for run_id in ('preview-run-d5-h1', 'preview-run-d5-h2'):
+            self.assertEqual(preview.FIXTURES['runs'][run_id]['category'], 'ended')
+            self.assertFalse(preview.matches(preview.FIXTURES['runs'][run_id], {'filter': 'active'}))
+        self.assertNotIn('preview-run-b6', {row['runId'] for row in preview.macro_task_timeline(
+            {'macroTaskId': preview.MACRO_B, 'filter': 'host'}, 'normal')['rows']})
+
+    def test_input_rejections_retain_the_same_frozen_facts_in_every_projection(self):
+        rows = preview.macro_task_timeline({'macroTaskId': preview.MACRO_INPUT}, 'normal')['rows']
+        self.assertEqual({row['runId'] for row in rows},
+                         {'preview-run-input-preflight', 'preview-run-input-native'})
+        for suffix, stage in (('input-preflight', 'preflight'), ('input-native', 'native-admission')):
+            run_id = f'preview-run-{suffix}'
+            entry = preview.FIXTURES['runs'][run_id]
+            view = preview.task_view(entry)
+            failure = view['inputFailure']
+            self.assertEqual(failure['stage'], stage)
+            self.assertEqual(view['workflow']['requestReason'], {'code': 'workflow.input-rejected',
+                                                               'params': {'harness': failure['harness']['name']}})
+            record = preview.workflow_get({'runId': run_id, 'includeAudit': True})
+            for item in (record['turns'][0], record['currentTurn'], record['activeRequest'],
+                         record['requests'][0], record['audit']['turns'][0], record['audit']['requests'][0]):
+                self.assertEqual(item['inputFailure'], failure)
+            self.assertEqual(record['state'], 'awaiting-host')
+            self.assertEqual(record['macroTaskId'], preview.MACRO_INPUT)
+            self.assertEqual(entry['group'], preview.MACRO_INPUT)
+
+    def test_preview_root_stop_states_match_the_board_host_filter(self):
+        from hey_my_buddy.blackboard.tasks.macro_tasks import _state
+        for owned in (False, True):
+            for helper in (False, True):
+                for run_state in ('awaiting-host', 'failed', 'cancelled'):
+                    for status in ('queued', 'running', 'cancelling', 'reconciliation-needed', 'failed', 'cancelled'):
+                        root = preview.run('matrix-root', project='alpha', title='root', title_source='title', task_text='root',
+                                           created=preview.instant(1, 0), updated=preview.instant(1, 1), state=run_state,
+                                           status=status, category='ended', buddy=None,
+                                           lead_owner=('lead', 'lead-turn') if owned else None)
+                        rows = [root]
+                        if helper:
+                            rows.append(preview.run('matrix-child', project='alpha', title='helper', title_source='title',
+                                                    task_text='helper', created=preview.instant(1, 0), updated=preview.instant(1, 1),
+                                                    state=run_state, status=status, category='ended', buddy=None, parent='matrix-root'))
+                        indexed = preview.index_runs(rows)
+                        entry = indexed['runs']['matrix-child' if helper else 'matrix-root']
+                        self.assertEqual(entry['lineage']['rootLeadRunId'], 'lead' if owned else None)
+                        expected = _state({'run_state': run_state, 'state': status,
+                                           'root_lead_run_id': 'lead' if owned else None,
+                                           'child_parent_run_id': 'matrix-root' if helper else None,
+                                           'accepted_at': None, 'decision_id': None, 'adapter': 'codex',
+                                           'micro_task_run_id': entry['runId'], 'review_ready': 0})
+                        self.assertEqual(entry['category'], expected, (owned, helper, run_state, status))
+
     def test_lead_stop_is_attributed_in_the_execution_event_and_cancellation(self):
         view = preview.workflow_get({"runId": "preview-run-b6"})
         task = view["task"]
         actor = {"role": "lead", "id": "preview-run-b3"}
-        self.assertIsNone(view["hostId"])
         self.assertEqual(actor["id"], task["lineage"]["leadOwnership"]["leadRunId"])
         self.assertEqual("cancelled", view["state"])
         self.assertEqual("cancelled", task["state"])
@@ -72,7 +279,7 @@ class LeadStopPreviewTests(unittest.TestCase):
         row = next(row for row in timeline["rows"] if row["runId"] == owned["runId"])
         self.assertEqual(("cancelled", "cancelling", "active", False),
                          (row["state"], row["status"], row["category"], row["shutdownConfirmed"]))
-        self.assertEqual("active", timeline["macroTask"]["state"])
+        self.assertEqual("host", timeline["macroTask"]["state"])
         events = [event for event in timeline["events"] if event["runId"] == owned["runId"] and event["kind"] == "cancel"]
         self.assertEqual(["lead"], [event["actor"]["role"] for event in events])
         self.assertEqual(attempt["cancelRequestedAt"], events[0]["at"])
@@ -113,6 +320,23 @@ class SessionPreviewTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_timeline_response_clock_does_not_advance_with_server_uptime(self):
+        for request in range(2):
+            if request:
+                # Cross the HTTP Date's one-second resolution without restarting
+                # the preview: a later browser shard must see the same clock.
+                time.sleep(1.1)
+            connection = http.client.HTTPConnection(*self.server.server_address, timeout=10)
+            try:
+                connection.request("GET", f"/api/macro-tasks/{preview.MACRO_A}/timeline")
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                served = parsedate_to_datetime(response.getheader("Date"))
+                timeline = json.loads(response.read())
+                self.assertEqual(served, datetime.fromisoformat(timeline["observedAt"].replace("Z", "+00:00")))
+            finally:
+                connection.close()
+
     def test_ended_long_session_pages_by_bytes_and_carries_full_content(self):
         pair = preview.SESSION_LONG
         events = preview.session_events(pair)
@@ -122,7 +346,8 @@ class SessionPreviewTests(unittest.TestCase):
         status, latest = self.get(pair)
         self.assertEqual(200, status)
         self.assertEqual(("ended", 100, True), (latest["state"], len(latest["events"]), latest["hasEarlier"]))
-        self.assertEqual([{"code": "session.codex-internal-reasoning-omitted", "params": {}}], latest["omitted"])
+        self.assertEqual({"status": "unavailable", "reason": {"code": "session.not-recorded", "params": {}}}, latest["coverage"]["reasoning"])
+        self.assertEqual({"status": "evidenced", "version": "fixture CLI 1"}, latest["coverage"]["messages"])
         status, earlier = self.get(pair, f'?before={latest["before"]}&limit=100')
         self.assertEqual(200, status)
         self.assertEqual(events, earlier["events"] + latest["events"])

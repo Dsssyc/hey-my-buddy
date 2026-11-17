@@ -10,6 +10,38 @@ from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES
 
 
 class ResultViewTests(BoardTestCase):
+    def test_current_result_exposes_record_identity_without_input_manifest(self):
+        from hey_my_buddy.blackboard.store.store import _public_result_payload
+
+        seal = {"recordFile": {"path": "workspaces/ws-fixture/outputs/output.json", "sha256": "a" * 64},
+                "snapshotSha256": "b" * 64}
+        payload = {"status": "ok", "result": {"workspaceSeal": seal}}
+        with self.assertRaises(TypeError):
+            _public_result_payload(payload, self.directory)
+        projected = _public_result_payload(payload, self.directory, "current-report-v2")
+        self.assertEqual(projected["result"]["workspaceSeal"]["recordFile"],
+                         {"path": str(self.directory / seal["recordFile"]["path"]), "sha256": "a" * 64})
+        self.assertEqual(payload["result"]["workspaceSeal"], seal)
+        self.assertNotIn("workspaceManifest", projected["result"])
+        self.assertNotIn("workspaceManifestFile", projected["result"])
+
+    def test_result_views_preserve_shared_and_separate_patch_paths(self):
+        from hey_my_buddy.blackboard.store.store import _public_result_payload
+
+        for key in ("workspaceSeal", "partialWorkspaceSeal"):
+            for path in ("/private/output.patch", "/private/cumulative.patch"):
+                with self.subTest(seal=key, path=path):
+                    seal = {"diffPath": "/private/output.patch", "diffSha256": "digest",
+                            "changedPaths": ["src/file.py"],
+                            "cumulativePatch": {"path": path, "sha256": "digest", "changedPaths": ["src/file.py"]}}
+                    payload = {"status": "ok", "result": {key: seal}}
+                    view = _public_result_payload(payload, self.directory, "archived-report-v1")["result"][key]
+                    self.assertEqual(view["diffPath"], seal["diffPath"])
+                    self.assertEqual(view["diffSha256"], seal["diffSha256"])
+                    self.assertEqual(view["cumulativePatch"]["path"], path)
+                    self.assertEqual(view["cumulativePatch"]["sha256"], "digest")
+                    self.assertNotIn("changedPathsCount", seal)
+
     def test_large_workspace_seal_is_bounded_in_all_public_result_replies(self):
         board = self.board()
         task = board.submit_execution(requestId="large-workspace-result", task="collect workspace output",
@@ -67,7 +99,7 @@ class ResultViewTests(BoardTestCase):
         from hey_my_buddy.blackboard.store.store import _public_result_payload
 
         paths = ["目录/" + "界" * 1500] * 40
-        manifest = {"writeScope": paths, "snapshot": {
+        manifest = {"workspaceId": "ws-fixture", "writeScope": paths, "snapshot": {
             "includeSelectors": paths, "executionSelectors": paths,
             "includedUntracked": paths, "excludedUntracked": paths,
             "excludedEntries": {f"src/{index:04d}-" + "a" * 800: "digest" for index in range(40)},
@@ -76,7 +108,7 @@ class ResultViewTests(BoardTestCase):
             "changedPaths": paths, "snapshot": {"includedUntracked": paths},
             "diffPath": "/private/partial.patch",
         }, "workspaceManifest": manifest}}
-        view = _public_result_payload(envelope)["result"]
+        view = _public_result_payload(envelope, self.directory, "archived-report-v1")["result"]
         self.assertEqual(envelope["result"]["workspaceManifest"], manifest)
         self.assertEqual(view["partialWorkspaceSeal"]["changedPathsCount"], 40)
         self.assertEqual(view["workspaceManifest"]["writeScopeCount"], 40)
@@ -94,7 +126,7 @@ class ResultViewTests(BoardTestCase):
         error = {"code": "WORKSPACE_SCOPE_VIOLATION", "message": "outside scope",
                  "details": {"paths": paths, "changedPaths": paths, "evidence": evidence}}
         payload = {"status": "failed", "result": {"partialSealError": error}}
-        view = _public_result_payload(payload)
+        view = _public_result_payload(payload, self.directory, "archived-report-v1")
         self.assertEqual(payload["result"]["partialSealError"]["details"]["evidence"], evidence)
         details = view["result"]["partialSealError"]["details"]
         self.assertEqual(details["pathsCount"], len(paths))

@@ -5,16 +5,20 @@ from collections.abc import Mapping, Sequence
 
 from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
+from ..store.schema_37_38 import DEFAULT_MODEL_RESPONSE_WAIT_SECONDS, MAX_MODEL_RESPONSE_WAIT_SECONDS
 
-FIELDS = frozenset({"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget"})
+FIELDS = frozenset({"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "modelResponseWaitSeconds",
+                    "maintenanceBuddyId", "maintenanceIntervalSeconds", "profileBuddyId", "explorationEvery"})
 MODES = ("fast", "review")
-PRESETS = ("brief", "standard", "deep")
 RETRY_INTERVAL_MIN_SECONDS = 1
 RETRY_INTERVAL_MAX_SECONDS = 2147483647
+EXPLORATION_EVERY_MIN = 2
 
 
 DEFAULT_ROUTER_SETTINGS = {"routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
-                           "defaultRoutingMode": "fast", "routingBudget": "standard"}
+                           "defaultRoutingMode": "fast", "modelResponseWaitSeconds": DEFAULT_MODEL_RESPONSE_WAIT_SECONDS,
+                           "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600,
+                           "profileBuddyId": None, "explorationEvery": 5}
 
 
 def _object(value: object, fields: frozenset[str], label: str) -> Mapping:
@@ -74,6 +78,33 @@ def validate_router_settings_patch(value: object) -> dict:
                                                                "routerRetryIntervalSeconds")
     if "defaultRoutingMode" in entry:
         result["defaultRoutingMode"] = _choice(entry["defaultRoutingMode"], MODES, "defaultRoutingMode")
-    if "routingBudget" in entry:
-        result["routingBudget"] = _choice(entry["routingBudget"], PRESETS, "routingBudget")
+    if "modelResponseWaitSeconds" in entry:
+        seconds = entry["modelResponseWaitSeconds"]
+        if isinstance(seconds, bool) or not isinstance(seconds, int) or not 1 <= seconds <= MAX_MODEL_RESPONSE_WAIT_SECONDS:
+            raise BoardError("INVALID_ARGUMENT",
+                             f"modelResponseWaitSeconds must be between 1 and {MAX_MODEL_RESPONSE_WAIT_SECONDS} seconds")
+        result["modelResponseWaitSeconds"] = seconds
+    if "maintenanceBuddyId" in entry:
+        buddy_id = entry["maintenanceBuddyId"]
+        if buddy_id is not None:
+            _buddy_entries([buddy_id], "maintenanceBuddyId")
+        result["maintenanceBuddyId"] = buddy_id
+    if "profileBuddyId" in entry:
+        buddy_id = entry["profileBuddyId"]
+        if buddy_id is not None:
+            _buddy_entries([buddy_id], "profileBuddyId")
+        result["profileBuddyId"] = buddy_id
+    if "maintenanceIntervalSeconds" in entry:
+        seconds = entry["maintenanceIntervalSeconds"]
+        if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:
+            raise BoardError("INVALID_ARGUMENT", "maintenanceIntervalSeconds must be a positive integer")
+        result["maintenanceIntervalSeconds"] = seconds
+    if "explorationEvery" in entry:
+        every = entry["explorationEvery"]
+        if every is not None and (isinstance(every, bool) or not isinstance(every, int)
+                                  or every < EXPLORATION_EVERY_MIN):
+            raise BoardError("INVALID_ARGUMENT",
+                             f"explorationEvery must be null (exploration off) or an integer"
+                             f" of at least {EXPLORATION_EVERY_MIN}")
+        result["explorationEvery"] = every
     return result

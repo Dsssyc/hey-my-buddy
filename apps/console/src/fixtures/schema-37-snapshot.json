@@ -1,0 +1,300 @@
+{
+  "eventCursor": 9,
+  "runtimeIdentity": "schema-37-projection",
+  "configuration": {
+    "routerBuddyIds": [],
+    "routerRetryIntervalSeconds": 600,
+    "defaultRoutingMode": "fast",
+    "maintenanceBuddyId": null,
+    "maintenanceIntervalSeconds": 3600,
+    "explorationEvery": 5,
+    "profileBuddyId": null,
+    "profileUnavailableReason": {
+      "code": "profile-not-configured",
+      "params": {}
+    },
+    "modelResponseWaitSeconds": 60
+  },
+  "tasks": {
+    "pendingCount": 0
+  },
+  "csrfToken": "fixture-csrf",
+  "consoleSession": {
+    "id": "fixture-session"
+  },
+  "preferences": [],
+  "modelServiceConcurrency": [],
+  "domainNodes": [],
+  "kindEvaluations": [
+    {
+      "harness": "claude",
+      "effort": "high",
+      "modelId": "09ba4b92-9c9f-4e18-a0a9-1a04af7a2f8e",
+      "modelDisplayName": "claude-opus-4-8",
+      "previousGroups": [],
+      "modelNames": [
+        {
+          "harness": "claude",
+          "provider": "anthropic",
+          "model": "claude-opus-4-8"
+        }
+      ],
+      "summary": null,
+      "statistics": {
+        "overall": {
+          "samples": 0,
+          "successes": 0,
+          "failures": 0,
+          "firstPasses": 0,
+          "reworkRounds": 0,
+          "defects": 0,
+          "firstPassRate": null,
+          "failureRate": null,
+          "medianDeliverySeconds": null,
+          "usage": {
+            "samples": 0,
+            "medianInputTokens": null,
+            "medianCachedInputTokens": null,
+            "medianOutputTokens": null
+          }
+        },
+        "byDomain": {},
+        "byDomainTaskType": {},
+        "infrastructureFailures": []
+      }
+    },
+    {
+      "harness": "claude",
+      "effort": "low",
+      "modelId": "09ba4b92-9c9f-4e18-a0a9-1a04af7a2f8e",
+      "modelDisplayName": "claude-opus-4-8",
+      "modelNames": [
+        {
+          "harness": "claude",
+          "provider": "anthropic",
+          "model": "claude-opus-4-8"
+        }
+      ],
+      "summary": null,
+      "statistics": {
+        "overall": {
+          "samples": 0,
+          "successes": 0,
+          "failures": 0,
+          "firstPasses": 0,
+          "reworkRounds": 0,
+          "defects": 0,
+          "firstPassRate": null,
+          "failureRate": null,
+          "medianDeliverySeconds": null,
+          "usage": {
+            "samples": 0,
+            "medianInputTokens": null,
+            "medianCachedInputTokens": null,
+            "medianOutputTokens": null
+          }
+        },
+        "byDomain": {},
+        "byDomainTaskType": {},
+        "infrastructureFailures": []
+      },
+      "previousGroups": []
+    }
+  ],
+  "models": [
+    {
+      "modelId": "09ba4b92-9c9f-4e18-a0a9-1a04af7a2f8e",
+      "displayName": "claude-opus-4-8",
+      "names": [
+        {
+          "harness": "claude",
+          "provider": "anthropic",
+          "model": "claude-opus-4-8"
+        }
+      ],
+      "profile": null,
+      "latestProfileRun": null
+    }
+  ],
+  "modelCorrespondences": [
+    {
+      "harness": "claude",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "correspondenceId": "ceb1f831-7bdf-4945-a5f4-c8b5f80ec5eb",
+      "modelId": "09ba4b92-9c9f-4e18-a0a9-1a04af7a2f8e",
+      "createdAt": "2026-11-06T17:14:21.486Z",
+      "source": "same-name",
+      "evidenceUrl": null,
+      "evidenceDate": null,
+      "canUndo": false
+    }
+  ],
+  "buddies": [
+    {
+      "buddyId": "claude:anthropic:claude-opus-4-8:low",
+      "harness": "claude",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "effort": "low",
+      "effortRank": 0,
+      "available": true,
+      "enabled": false,
+      "capabilities": [
+        "execution:claude",
+        "effort:low",
+        "input:text",
+        "decision",
+        "permission:web",
+        "permission:read",
+        "permission:write",
+        "permission:full"
+      ],
+      "contextWindow": null,
+      "description": "Best for everyday, complex tasks",
+      "source": "catalog:cat-5d9687d1c281950512af9e1f",
+      "catalogState": "complete",
+      "catalogReason": null,
+      "catalogStatus": "available",
+      "billing": {
+        "kind": "subscription",
+        "observedAt": "2026-11-06T17:14:18.026984Z",
+        "source": "claude/auth-status"
+      },
+      "providerCooling": null,
+      "alias": null
+    },
+    {
+      "buddyId": "claude:anthropic:claude-opus-4-8:medium",
+      "harness": "claude",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "effort": "medium",
+      "effortRank": 1,
+      "available": true,
+      "enabled": false,
+      "capabilities": [
+        "execution:claude",
+        "effort:medium",
+        "input:text",
+        "decision",
+        "permission:web",
+        "permission:read",
+        "permission:write",
+        "permission:full"
+      ],
+      "contextWindow": null,
+      "description": "Best for everyday, complex tasks",
+      "source": "catalog:cat-5d9687d1c281950512af9e1f",
+      "catalogState": "complete",
+      "catalogReason": null,
+      "catalogStatus": "available",
+      "billing": {
+        "kind": "subscription",
+        "observedAt": "2026-11-06T17:14:18.026984Z",
+        "source": "claude/auth-status"
+      },
+      "providerCooling": null,
+      "alias": null
+    },
+    {
+      "buddyId": "claude:anthropic:claude-opus-4-8:high",
+      "harness": "claude",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "effort": "high",
+      "effortRank": 2,
+      "available": true,
+      "enabled": false,
+      "capabilities": [
+        "execution:claude",
+        "effort:high",
+        "input:text",
+        "decision",
+        "permission:web",
+        "permission:read",
+        "permission:write",
+        "permission:full"
+      ],
+      "contextWindow": null,
+      "description": "Best for everyday, complex tasks",
+      "source": "catalog:cat-5d9687d1c281950512af9e1f",
+      "catalogState": "complete",
+      "catalogReason": null,
+      "catalogStatus": "available",
+      "billing": {
+        "kind": "subscription",
+        "observedAt": "2026-11-06T17:14:18.026984Z",
+        "source": "claude/auth-status"
+      },
+      "providerCooling": null,
+      "alias": null
+    },
+    {
+      "buddyId": "claude:anthropic:claude-opus-4-8:xhigh",
+      "harness": "claude",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "effort": "xhigh",
+      "effortRank": 3,
+      "available": true,
+      "enabled": false,
+      "capabilities": [
+        "execution:claude",
+        "effort:xhigh",
+        "input:text",
+        "decision",
+        "permission:web",
+        "permission:read",
+        "permission:write",
+        "permission:full"
+      ],
+      "contextWindow": null,
+      "description": "Best for everyday, complex tasks",
+      "source": "catalog:cat-5d9687d1c281950512af9e1f",
+      "catalogState": "complete",
+      "catalogReason": null,
+      "catalogStatus": "available",
+      "billing": {
+        "kind": "subscription",
+        "observedAt": "2026-11-06T17:14:18.026984Z",
+        "source": "claude/auth-status"
+      },
+      "providerCooling": null,
+      "alias": null
+    },
+    {
+      "buddyId": "claude:anthropic:claude-opus-4-8:max",
+      "harness": "claude",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "effort": "max",
+      "effortRank": 4,
+      "available": true,
+      "enabled": false,
+      "capabilities": [
+        "execution:claude",
+        "effort:max",
+        "input:text",
+        "decision",
+        "permission:web",
+        "permission:read",
+        "permission:write",
+        "permission:full"
+      ],
+      "contextWindow": null,
+      "description": "Best for everyday, complex tasks",
+      "source": "catalog:cat-5d9687d1c281950512af9e1f",
+      "catalogState": "complete",
+      "catalogReason": null,
+      "catalogStatus": "available",
+      "billing": {
+        "kind": "subscription",
+        "observedAt": "2026-11-06T17:14:18.026984Z",
+        "source": "claude/auth-status"
+      },
+      "providerCooling": null,
+      "alias": null
+    }
+  ]
+}

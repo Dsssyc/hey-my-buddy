@@ -158,8 +158,8 @@ class ModeProbe(InstalledZcodeTests):
         mode_calls = []
         original_call = native_run.NativeConnection.call
 
-        def call(connection, method, params):
-            response = original_call(connection, method, params)
+        def call(connection, method, params, **kwargs):
+            response = original_call(connection, method, params, **kwargs)
             if method in ("session/create", "session/resume", "session/setMode"):
                 settings = response.get("settings")
                 mode_calls.append({"method": method, "params": {key: params[key]

@@ -103,7 +103,7 @@ def main():
         print("codex-cli fixture")
         return
     case = os.environ.get("HMB_CODEX_FIXTURE_CASE", "ok")
-    native_config = {"mcp_servers": {"user-tool": {}},
+    native_config = {"mcp_servers": {"user-tool": {"command": "fixture-mcp"}},
                      "features": {"apps": True}, "web_search": "enabled", "approval_policy": "on-request"}
     if case == "custom-provider":
         native_config["model_provider"] = "fixture-provider"
@@ -164,7 +164,7 @@ def main():
             if case == "bad-catalog":
                 send({"id": ident, "result": {"data": {"not": "a list"}, "nextCursor": None}})
                 continue
-            if case in ("unlisted-model", "long-native-error"):
+            if case in ("unlisted-model", "long-native-error", "input-too-large"):
                 send({"id": ident, "result": {"data": [{"model": "other-model", "displayName": "Other",
                     "description": "not the selected model", "hidden": False, "isDefault": True,
                     "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "high"}]}],
@@ -262,7 +262,7 @@ def main():
             write_state(state)
             turn_index = len(state['threads'][thread_id]['turns'])
             turn_id = f"native-turn-{turn_index + 1}"
-            if case in ("unlisted-model", "long-native-error"):
+            if case in ("unlisted-model", "long-native-error", "input-too-large"):
                 # The native answer, not the adapter's catalog reading, decides:
                 # the server rejects the turn under the selected model's own
                 # name. The long case carries a native reason of repeated
@@ -273,7 +273,12 @@ def main():
                 write_state(state)
                 native_reason = ("模型不可用" * 80 + "\U0001D11E" * 10) if case == "long-native-error" \
                     else f"model not found: {params['model']}"
-                send({"id": ident, "error": {"code": -32000, "message": native_reason}})
+                error = {"code": -32602 if case == "input-too-large" else -32000,
+                         "message": "fixture admission refusal" if case == "input-too-large" else native_reason}
+                if case == "input-too-large":
+                    error["data"] = {"input_error_code": "input_too_large", "max_chars": 9,
+                                     "actual_chars": 10, "secret": "must never appear"}
+                send({"id": ident, "error": error})
                 continue
             if case == "quota-before-overflow":
                 for _ in range(140):
@@ -290,6 +295,10 @@ def main():
                         item["text"] = "partial output"
                     send({"method": "item/started", "params": {
                         "threadId": thread_id, "turnId": turn_id, "item": item}})
+                    if activity == "reasoning":
+                        send({"method": "item/reasoning/textDelta", "params": {
+                            "threadId": thread_id, "turnId": turn_id, "itemId": "activity-1",
+                            "delta": "partial reasoning"}})
                 elif activity == "tokens":
                     send_usage("quota-failure", thread_id, turn_id, turn_index)
                 error = {"message": "Selected model is at capacity. Please try a different model.",
@@ -355,11 +364,11 @@ def main():
                 # The controller test releases this only after it reads a
                 # flushed message while no completed item has been sent.
                 release = state_path().with_suffix('.release')
-                deadline = time.monotonic() + 5
-                while not release.exists() and time.monotonic() < deadline:
+                # The caller owns the fixture readiness budget and stops this
+                # child if it cannot observe the stream. Completion depends on
+                # that observation, never on how quickly the caller is scheduled.
+                while not release.exists():
                     time.sleep(0.01)
-                if not release.exists():
-                    raise RuntimeError('session stream was not visible before completion')
                 if case == 'session-stream-disconnect':
                     return
                 send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
@@ -378,7 +387,7 @@ def main():
                 state["threads"][thread_id]["turns"].append(turn)
                 write_state(state)
                 continue
-            if case in ("hang", "interrupt-settled", "interrupt-foreign", "session-interrupt") or (case == "wrap-up" and turn_index == 0):
+            if case in ("hang", "hang-unbounded", "interrupt-settled", "interrupt-foreign", "session-interrupt") or (case == "wrap-up" and turn_index == 0):
                 # These scenarios record an explicit start fact, and only
                 # after the turn/start response and the turn/started notification
                 # were actually emitted: a thread merely existing never counts as a
@@ -387,7 +396,12 @@ def main():
                 state = read_state()
                 state['threads'][thread_id]['turnStart'] = {"threadId": thread_id, "turnId": turn_id}
                 write_state(state)
-                if case == "hang":
+                if case == "hang-unbounded":
+                    # Cancellation must stop this child; it cannot finish by
+                    # reaching a fixture sleep limit or reading another frame.
+                    while True:
+                        time.sleep(1)
+                elif case == "hang":
                     time.sleep(60)
                 else:
                     request = json.loads(sys.stdin.readline())
@@ -496,7 +510,7 @@ def main():
                 if case == "final-last-invalid":
                     item["text"] = "not json"
             if "buddyId" in params.get("outputSchema", {}).get("properties", {}):
-                item["text"] = json.dumps({"buddyId": "foreign" if case == "readonly-outside" else "legal", "note": "Read-only fixture", "evidence": []})
+                item["text"] = json.dumps({"domainNodeId": None, "taskType": "change", "buddyId": "foreign" if case == "readonly-outside" else "legal", "note": "Read-only fixture", "evidence": []})
                 if case in ("readonly-repair", "readonly-repair-evidence") and not state['threads'][thread_id]['turns']:
                     item["text"] = "not-json"
             if case != "no-final":

@@ -18,9 +18,19 @@ from hey_my_buddy.paths import native_path
 def assert_summary_stderr(self, module, *, harness, spec, cwd, native_root, configure):
     invocation = self.base / "worker"
     invocation.mkdir(mode=0o700)
+    workspace_id = "ws-" + "a" * 32
+    manifest = {"version": 5, "workspaceId": workspace_id, "path": str(cwd), "access": "write"}
+    manifest_sha = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"),
+                                             ensure_ascii=True).encode()).hexdigest()
+    manifest["manifestSha256"] = manifest_sha
+    manifest_path = self.base / "state" / "workspaces" / workspace_id / "manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True),
+                             encoding="utf-8")
     document = {"taskId": "task", "attemptId": "attempt", "generation": 1,
-                "turnId": "turn", "resumeMode": "initial", "previousSessionId": None,
-                "context": {}, "executionWorkspace": {"access": "write"}}
+                "version": 4, "turnId": "turn", "resumeMode": "initial", "previousSessionId": None,
+                "context": {}, "executionWorkspace": {"workspaceId": workspace_id,
+                                                      "manifestSha256": manifest_sha}}
     input_path = invocation / "turn-input.json"
     input_path.write_text(json.dumps(document), encoding="utf-8")
     task_path = invocation / "task.txt"
@@ -33,7 +43,7 @@ def assert_summary_stderr(self, module, *, harness, spec, cwd, native_root, conf
                "invocationId": "first-invocation", "cwd": str(cwd),
                "spec": spec,
                "timeoutSeconds": 30}
-    request, services, observer, error = run_execution.worker_request(control, module)
+    request, services, observer, error, _parts = run_execution.worker_request(control, module)
     self.assertIsNone(error)
     configure(services, "first invocation stderr")
     first = module.run(request, observer=observer, services=services, cancelled=lambda: False)
@@ -47,7 +57,7 @@ def assert_summary_stderr(self, module, *, harness, spec, cwd, native_root, conf
         configure(services, "summary invocation stderr")
         return module.run(summary_request, services=services, observer=observer, cancelled=cancelled)
 
-    handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
+    handle = run_execution.InlineRunHandle(control, request.identity)
     with mock.patch.object(inline_run, "run_harness", side_effect=run_summary):
         _, summary_request, summary, delivered, expired = inline_run._summary_run(
             control, request, first, module, time.monotonic() + 30, handle)

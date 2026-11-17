@@ -68,7 +68,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       expect(rejected?.state).toBe("rejected");
       expect(rejected?.resultStatus).toBe("failed");
       const segment = page.locator('[data-key="span:execution:att-b9-1"]');
-      await expect(segment).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "已改派" : "Refused for quota; rerouted"));
+      await expect(segment).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "已改派" : "Provider rejection; rerouted"));
       await expect(segment.locator('[data-slot=execution-bar]')).toHaveAttribute("data-outcome", "rejected");
       await expect(segment.locator('[data-slot=execution-failed]')).toHaveCount(0);
       await segment.focus();
@@ -81,13 +81,12 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
     test("shows Lead stop actors and retains a stopping Lead until owned shutdown is confirmed", async ({ page }) => {
       const data = await timeline(page, MACRO_B);
       const zh = locale === "zh-CN";
-      const stop = zh ? "Lead 停止" : "Stopped by Lead";
+      const stop = zh ? "由 Lead 停止" : "Stopped by Lead";
       const stopping = zh ? "正在停止" : "Stopping";
-      expect(data.macroTask.state).toBe("active");
-      await expect(page.locator("[data-slot=macro-stop-state]")).toHaveText(stopping);
+      expect(data.macroTask.state).toBe("host");
+      expect(data.macroTask.counts.host).toBe(1);
       await expect(page.locator("[data-slot=macro-overview-counts]")).toContainText(zh ? "进行中" : "Running");
       const live = await page.locator('[data-slot=task-work]').evaluate(node => getComputedStyle(node).color);
-      await expect(page.locator("[data-slot=macro-stop-state]")).toHaveCSS("color", live);
       for (const id of ["preview-run-b7", "preview-run-b8"]) {
         await expect(row(page, id).getByText(stopping, { exact: true })).toHaveCSS("color", live);
         await expect(row(page, id).locator("[data-slot=state-mark]")).toHaveAttribute("data-kind", "live");
@@ -115,7 +114,8 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         await expect(pane).toContainText(stop);
         await expect(pane).toContainText(lead!);
         await expectTextUncut(pane.locator("h3, dt, dd, p"));
-        await expect(page.locator("[data-slot=detail-status]")).toHaveText(id === "preview-run-b8" ? stopping : zh ? "已结束" : "Ended");
+        await expect(page.locator("[data-slot=detail-status]")).toHaveText(id === "preview-run-b8" ? stopping : zh ? "已取消，等待 Lead" : "Cancelled, waiting for Lead");
+        await expect(page.locator("[data-slot=detail-status] [data-slot=state-mark]")).toHaveAttribute("data-kind", id === "preview-run-b8" ? "live" : "hand");
         if (id === "preview-run-b8") await expect(page.locator("[data-slot=detail-status]")).toHaveCSS("color", live);
         await expectNoSidewaysScroll(page);
         await settle(page);
@@ -129,8 +129,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(page.locator("[data-slot=detail-status]")).toHaveCSS("color", live);
       await expect(page.locator("[data-slot=detail-status]")).toHaveAttribute("aria-description",
         zh ? "停止未确认 · 待核实执行 1 项" : "Stop unconfirmed · executions to verify: 1");
-      await expect(page.locator("[data-slot=macro-stop-state]")).toHaveText(stopping);
-      const hostStop = zh ? "Host 停止" : "Stopped by Host";
+      const hostStop = zh ? "由 Host 停止" : "Stopped by Host";
       await page.locator("[data-slot=detail-strip]").getByRole("button", { name: new RegExp(hostStop) }).click();
       await expect(page.locator("[data-slot=detail-pane]").getByRole("heading", { level: 3, name: hostStop, exact: true })).toBeVisible();
       await settle(page);

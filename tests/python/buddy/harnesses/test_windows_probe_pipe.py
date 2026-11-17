@@ -62,7 +62,7 @@ class WindowsProbePipeTests(unittest.TestCase):
              mock.patch.object(discovery, 'time', fake_time), \
              mock.patch.object(process_handle, 'time', fake_time), \
              mock.patch.object(process_identity, '_creation_time', return_value=100):
-            handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
             try:
                 yield SimpleNamespace(process=process, api=api, handle=handle, peek=peek, read=read)
             finally:
@@ -205,7 +205,7 @@ class WindowsProbePipeTests(unittest.TestCase):
                    'import os,time; os.write(1,b"fixture 1.2.3\\n"); os.close(1); time.sleep(0.3); os._exit(0)']
         process = owned_popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL)
-        handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+        handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
         try:
             result = discovery._probe_windows(process, time.monotonic() + 3, handle, None)
             self.assertEqual(result, (None, b'fixture 1.2.3\n', True))

@@ -62,8 +62,8 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
   });
 
   test("keeps execution and inquiry hover reachable after the preview clock advances", async ({ page }) => {
-    // The preview's Date advances with server uptime. At this age the narrow
-    // fitted scale puts the execution group's centre on the inquiry's hit area.
+    // Advance the fixed preview clock explicitly. At this age the narrow fitted
+    // scale puts the execution group's centre on the inquiry's hit area.
     await page.route(`**/api/macro-tasks/${macro}/timeline*`, async route => {
       const response = await route.fetch();
       const timeline = await response.json();
@@ -135,9 +135,9 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await page.keyboard.press("+");
     expect(Math.abs((await inquiry.boundingBox())!.x - before)).toBeLessThanOrEqual(1);
     await inquiry.click();
-    const highlighted = page.locator('[data-inquiry-id="inq-a3-1"][data-highlighted=true]');
+    const highlighted = page.locator('[data-item-key="inquiry:inq-a3-1"][data-highlighted=true]');
     await expect(highlighted).toBeInViewport();
-    await expect(page.locator('[data-slot=detail-strip] [aria-pressed=true]')).toHaveAccessibleName(/回合 1/);
+    await expect(page.locator('[data-slot=detail-strip] [aria-pressed=true]')).toHaveAccessibleName(/问询/);
     await page.screenshot({ path: `${shots}/inquiry-${theme}-${width}.png` });
     await expectNoSidewaysScroll(page);
   });
@@ -214,7 +214,7 @@ for (const theme of ["light", "dark"]) test.describe(`model order ${theme}`, () 
     });
     await open(page, `#tasks/${macro}`);
     await page.locator('[data-slot=legend-trigger]').click();
-    await expect(page.locator('[data-slot=timeline-legend]')).toContainText("Possibly stuck");
+    await expect(page.locator('[data-slot=timeline-legend]')).toContainText("Possibly stalled");
     const bars = page.locator('[data-slot=execution-bar]');
     await expect(bars).toHaveCount(2);
     const colors = await bars.evaluateAll(nodes => nodes.map(node => getComputedStyle(node).fill));

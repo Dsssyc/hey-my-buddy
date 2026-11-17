@@ -45,23 +45,23 @@ const account = (harness: string) => ({
   harness, status: "ready", accountType: null, checkedAt: AT,
 });
 const harnesses = [
-  { harness: "dsh", status: "ready", revision: 1, manualPath: null, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: AT, candidates: [],
+  { harness: "dsh", permissionsVerifiedVersion: "0.2.2-rc.1", status: "ready", revision: 1, manualPath: null, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: AT, candidates: [],
     account: account("dsh"), billingByProvider: { "deepseek-official": { kind: "metered", source: "native", observedAt: AT } },
     providers: [{ provider: "deepseek-official", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 1 }] },
-  { harness: "codex", status: "ready", revision: 2, manualPath: null, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: AT, candidates: [],
+  { harness: "codex", permissionsVerifiedVersion: null, status: "ready", revision: 2, manualPath: null, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: AT, candidates: [],
     account: account("codex"),
     permissions: { write: "enforced" },
     providers: [{ provider: "openai", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 2 }] },
-  { harness: "claude", status: "login-required", revision: 3, manualPath: "/home/user/bin/claude", source: "manual", checkedAt: AT,
+  { harness: "claude", permissionsVerifiedVersion: null, status: "login-required", revision: 3, manualPath: "/home/user/bin/claude", source: "manual", checkedAt: AT,
     reason: { code: "harness.login-required", params: { operation: "probe" } },
     candidates: [{ path: "/home/user/bin/claude", source: "manual", status: "failed", reason: { code: "harness.probe-failed", params: { operation: "probe" } } }] },
-  { harness: "zcode", status: "missing", revision: 1, manualPath: null, checkedAt: AT,
+  { harness: "zcode", permissionsVerifiedVersion: null, status: "missing", revision: 1, manualPath: null, checkedAt: AT,
     reason: { code: "harness.not-found", params: { operation: "probe" } },
     candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing", reason: { code: "harness.not-found", params: { operation: "probe" } } }] },
 ] as unknown as HarnessHealth[];
 
 function buddy(harness: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
-  return { effortRank: null, buddyId: `${harness}:${provider}:${model}:${effort}`, label: `${model} · ${effort}`, harness, provider, model, effort,
+  return { effortRank: null, buddyId: `${harness}:${provider}:${model}:${effort}`, alias: null, harness, provider, model, effort,
     available: true, enabled: false, capabilities: [`execution:${harness}`, "routing:fast", "decision"], contextWindow: null, description: "", source: "catalog:fixture", ...extra };
 }
 const buddies = [
@@ -77,15 +77,15 @@ function world(sessionPresent = true) {
   return fixture(snapshot({
     routers: [buddies[0].buddyId], sessionPresent,
     routingHealth: health({ consecutiveFailures: 2, failureCount: 3, abstentionCount: 1, boundsRejectedCount: 1,
-      recentFailures: [{ decisionId: "decision-1", runId: "run-1", at: AT, code: "routing-bounds-rejected" }] }),
+      recentFailures: [{ decisionId: "decision-1", runId: "run-1", macroTaskId: "run:run-1", title: "Review the routing result", at: AT, code: "router-out-of-bounds" }] }),
     extra: { buddies, modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }], harnesses, unavailableBuddyCount: 3 },
   }));
 }
 
-async function openCatalog(f: ReturnType<typeof world>, hash = "#buddies") {
+async function openCatalog(f: ReturnType<typeof world>, hash = "#buddies/models") {
   window.location.hash = hash;
   render(createElement(App, { suppliedApi: f.api }));
-  return await screen.findByRole("region", { name: "Catalog" });
+  return await screen.findByRole("region", { name: "Models" });
 }
 
 beforeEach(async () => { setLanguageChoice("en"); });
@@ -101,10 +101,11 @@ describe("the catalogue in English", () => {
     const user = userEvent.setup();
     const catalog = await openCatalog(world());
     expect(chinese()).toEqual([]);
-    // Every section open on its account, location and cooldown; every section's models unfolded.
+    const sectionNav = screen.getByRole("navigation", { name: "Sections of the Buddies page" });
+    expect(within(sectionNav).getByRole("link", { name: "Harnesses" })).toBeTruthy();
+    expect(within(sectionNav).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["Harnesses", "Models", "Router", "Evaluation"]);
+    // Every section's models are unfolded.
     for (const fold of [...catalog.querySelectorAll<HTMLElement>("[data-slot=fold-handle]")]) if (fold.getAttribute("aria-expanded") === "false") await user.click(fold);
-    for (const summary of [...catalog.querySelectorAll<HTMLElement>("[data-slot=account-summary]")]) await user.click(summary);
-    expect(catalog.querySelectorAll("[data-slot=harness-details]").length).toBeGreaterThan(0);
     expect(chinese()).toEqual([]);
     // Every model row open in turn, with every effort of its strip selected.
     for (const row of [...catalog.querySelectorAll<HTMLElement>("[data-slot=model-row] > button")]) {
@@ -115,17 +116,16 @@ describe("the catalogue in English", () => {
       }
     }
     // The model's own settings and the buddy's: an edit raises the save bar, with its marks.
-    await user.click(within(document.querySelector<HTMLElement>("[data-slot=model-drawer]")!).getAllByRole("switch")[0]);
+    const editableModel = within(catalog).getByRole("button", { name: "dsh / deepseek-official / deepseek-flash" });
+    if (editableModel.getAttribute("aria-expanded") !== "true") await user.click(editableModel);
+    await user.click(document.querySelector<HTMLElement>("[data-slot=model-drawer] [data-slot=buddy-choice] [role=switch][aria-checked=true]")!);
     expect(screen.getByRole("region", { name: "Unsaved changes" })).toBeTruthy();
     expect(chinese()).toEqual([]);
-    // The dialogs the sections open.
-    for (const name of [/^Set path$/]) {
-      await user.click(within(catalog).getAllByRole("button", { name })[0]);
-      await screen.findByRole("dialog");
-      expect(chinese(), String(name)).toEqual([]);
-      await user.keyboard("{Escape}");
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    }
+    await user.click(within(sectionNav).getByRole("link", { name: "Harnesses" }));
+    const harnessView = await screen.findByRole("region", { name: "Harnesses" });
+    await user.click(within(harnessView).getAllByRole("button", { name: "Set path" })[0]);
+    await screen.findByRole("dialog");
+    expect(chinese()).toEqual([]);
   });
 
   it("says nothing in Chinese for a session that cannot write: every refusal and lock", async () => {
@@ -133,8 +133,6 @@ describe("the catalogue in English", () => {
     const catalog = await openCatalog(world(false));
     await user.click(within(catalog).getByRole("button", { name: "Discover models" }));
     expect(await within(catalog).findByText(/authorization has expired/i)).toBeTruthy();
-    await user.click(within(catalog).getByRole("button", { name: "Check all" }));
-    for (const summary of [...catalog.querySelectorAll<HTMLElement>("[data-slot=account-summary]")]) await user.click(summary);
     await user.click(catalog.querySelector<HTMLElement>("[data-slot=model-row] > button")!);
     expect(chinese()).toEqual([]);
     expect(within(catalog).queryByRole("button", { name: "Manage account" })).toBeNull();
@@ -144,7 +142,7 @@ describe("the catalogue in English", () => {
     const user = userEvent.setup();
     const catalog = await openCatalog(world());
     await user.click(catalog.querySelector<HTMLElement>("[data-slot=model-row] > button")!);
-    await user.click(within(document.querySelector<HTMLElement>("[data-slot=model-drawer]")!).getAllByRole("switch")[0]);
+    await user.click(document.querySelector<HTMLElement>("[data-slot=model-drawer] [data-slot=buddy-choice] [role=switch][aria-checked=true]")!);
     const bar = screen.getByRole("region", { name: "Unsaved changes" });
     expect(within(bar).getByRole("button", { name: "Save" })).toBeTruthy();
     expect(within(bar).getByRole("button", { name: "Discard" })).toBeTruthy();
@@ -157,8 +155,8 @@ describe("the roles in English", () => {
     const user = userEvent.setup();
     const f = world();
     await openCatalog(f);
-    await user.click(screen.getByRole("link", { name: /^Roles/ }));
-    const roles = await screen.findByRole("region", { name: "Roles" });
+    await user.click(screen.getByRole("link", { name: /^Router/ }));
+    const roles = await screen.findByRole("region", { name: "Router" });
     expect(chinese()).toEqual([]);
     await user.click(within(roles).getByRole("button", { name: "Add" }));
     const dialog = await screen.findByRole("dialog");
@@ -173,9 +171,9 @@ describe("the roles in English", () => {
 
   it("says in English why the first Router is refused", async () => {
     const f = fixture(snapshot({ routers: [buddies[3].buddyId], extra: { buddies, harnesses } }));
-    window.location.hash = "#buddies/roles";
+    window.location.hash = "#buddies/router";
     render(createElement(App, { suppliedApi: f.api }));
-    const roles = await screen.findByRole("region", { name: "Roles" });
+    const roles = await screen.findByRole("region", { name: "Router" });
     expect(within(roles).getByText(/This reasoning effort is unavailable now/)).toBeTruthy();
     expect(chinese()).toEqual([]);
   });

@@ -92,7 +92,7 @@ for (const width of [1440, 390]) for (const theme of ["dark", "light"]) test.des
     expect(geometry.tabs[1]!.right - geometry.outer.x).toBeLessThan(geometry.outer.width / 2);
     for (const tab of geometry.tabs) expect(tab.width - tab.text).toBeLessThan(2);
     await list.getByRole("tab", { name: "Session", exact: true }).click();
-    await expect(page.locator('[data-slot=session-view]').getByText("Ended", { exact: true })).toBeVisible();
+    await expect(list.getByRole("button", { name: "Session content", exact: true })).toBeVisible();
     await shot(page, `tabs-session-${theme}-${width}`);
   });
 });

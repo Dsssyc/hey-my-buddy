@@ -1,6 +1,15 @@
+import { randomUUID } from "node:crypto";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
 import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle } from "./preview";
+
+const caseIds = new WeakMap<Page, string>();
+test.beforeEach(async ({ page }) => {
+  const id = randomUUID();
+  caseIds.set(page, id);
+  await page.context().setExtraHTTPHeaders({ "X-HMB-Preview-Case": id });
+});
+const caseHeaders = (page: Page) => ({ "X-HMB-Preview-Case": caseIds.get(page)! });
 
 const MACRO = "macro-22222222-2222-4222-8222-222222222222";
 const TIMELINE = `/api/macro-tasks/${MACRO}/timeline`;
@@ -14,7 +23,7 @@ async function openLeadMacro(page: Page, language: string, tasks: string) {
   await expect(page.locator("html")).toHaveAttribute("lang", language);
   await expect(page.getByRole("navigation").first().getByRole("link", { name: new RegExp(`^${tasks}`) })).toBeVisible();
   const read = page.waitForResponse(response => new URL(response.url()).pathname === TIMELINE);
-  await page.locator(`[data-macro-task-id="${MACRO}"] button`).click();
+  await page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-entry]`).click();
   const response = await read;
   expect(response.status()).toBe(200);
   expect(response.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
@@ -95,118 +104,102 @@ for (const { locale, language, tasks } of [
 
     });
 
-    test("confirms the Lead's macro task stop scope and shows the synthetic preview refusal", async ({ page }) => {
+    test("confirms the Lead macro task end scope and reads its conclusion from the updated view", async ({ page }) => {
       const errors = observeErrors(page);
-      const commands: unknown[] = [];
+      const commands: { operation: string; params: { macroTaskId: string; commandId: string } }[] = [];
       page.on("request", request => {
         if (request.method() === "POST" && new URL(request.url()).pathname === "/api/command"
-          && request.postDataJSON().operation === "macro_task_stop") commands.push(request.postDataJSON());
+          && request.postDataJSON().operation === "macro_task_end") commands.push(request.postDataJSON());
       });
-      const { timeline, body } = await openLeadMacro(page, language, tasks);
+      const { timeline } = await openLeadMacro(page, language, tasks);
       const zh = language === "zh-CN";
-      const stopName = zh ? "停止宏任务" : "Stop macro task";
-      const cancelName = zh ? "取消" : "Cancel";
-      const confirmName = zh ? "确认停止宏任务" : "Confirm stop";
-      const more = page.getByRole("button", { name: zh ? "更多" : "More", exact: true });
+      const entry = page.locator(`[data-macro-task-id="${MACRO}"]`);
+      const more = entry.locator("[data-slot=macro-menu-button]");
+      await entry.hover();
       await more.click();
-      const stop = page.getByRole("button", { name: stopName, exact: true });
-      await expect(stop).toBeEnabled();
-      await stop.click();
-      const dialog = page.getByRole("dialog", { name: stopName, exact: true });
+      await page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: zh ? "结束宏任务" : "End macro task", exact: true });
       const summary = timeline.macroTask;
-      await expect(dialog.locator("#stop-macro-task-name")).toHaveAttribute("aria-description", summary.title!);
-      await expect(dialog.locator("#stop-macro-task-name")).toHaveText(summary.title!);
-      await expect(dialog.locator("#stop-macro-task-counts li")).toHaveCount(5);
-      await expect(dialog.locator("#stop-macro-task-body")).not.toContainText(summary.title!);
-      await expect(dialog.locator("#stop-macro-task-counts")).toContainText(zh
-        ? `停止 ${summary.counts.stoppableRoots} 个微任务`
-        : `Micro tasks to stop ${summary.counts.stoppableRoots}`);
-      await expect(dialog.locator("#stop-macro-task-counts")).toContainText(zh
-        ? `停止 ${summary.counts.stoppableHelpers} 个协助任务`
-        : `Helper tasks to stop ${summary.counts.stoppableHelpers}`);
-      await expect(dialog.getByRole("button", { name: cancelName, exact: true })).toBeFocused();
+      await expect(dialog.locator("#end-macro-task-name")).toHaveText(summary.title!);
+      await expect(dialog.locator("#end-macro-task-counts li")).toHaveCount(2);
+      await expect(dialog.locator("#end-macro-task-counts")).toContainText(zh
+        ? `结束 ${summary.counts.unfinished} 个微任务`
+        : `End ${summary.counts.unfinished} micro tasks`);
+      await expect(dialog.locator("#end-macro-task-counts")).toContainText(zh
+        ? `保留 ${summary.counts.delivered} 个已交付微任务`
+        : `Keep ${summary.counts.delivered} delivered micro tasks`);
+      await expect(dialog.getByRole("button", { name: zh ? "取消" : "Cancel", exact: true })).toBeFocused();
       await settle(page);
-      await expectWholeAndApart(page.locator("body"), dialog);
-      await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > [data-slot=stop-dialog-actions]"));
-      await expectWholeAndApart(dialog.locator("[data-slot=stop-dialog-actions]"), dialog.getByRole("button"));
-      await expectTextUncut(dialog.locator("h2, #stop-macro-task-body, li, button"));
+      await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > [data-slot=end-dialog-actions]"));
+      await expectWholeAndApart(dialog.locator("[data-slot=end-dialog-actions]"), dialog.getByRole("button"));
+      await expectTextUncut(dialog.locator("h2, #end-macro-task-body, li, button"));
       await dialog.press("Escape");
       await expect(dialog).toBeHidden();
       expect(commands).toEqual([]);
 
+      await entry.hover();
       await more.click();
-      await stop.click();
-      await dialog.getByRole("button", { name: cancelName, exact: true }).press("Tab");
-      const confirm = dialog.getByRole("button", { name: confirmName, exact: true });
-      await expect(confirm).toBeFocused();
-      const refusal = page.waitForResponse(response => response.request().method() === "POST"
+      await page.getByRole("menuitem", { name: zh ? "结束" : "End", exact: true }).click();
+      const responsePromise = page.waitForResponse(response => response.request().method() === "POST"
         && new URL(response.url()).pathname === "/api/command"
-        && response.request().postDataJSON().operation === "macro_task_stop");
-      await confirm.press("Enter");
-      const response = await refusal;
-      expect(response.status()).toBe(403);
-      expect(response.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
-      expect(await response.json()).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-      expect(commands).toEqual([{ operation: "macro_task_stop", params: { macroTaskId: MACRO, commandId: expect.any(String) } }]);
-      expect(response.request().postDataJSON().params.commandId).not.toBe("");
+        && response.request().postDataJSON().operation === "macro_task_end");
+      await dialog.getByRole("button", { name: zh ? "确认结束" : "End", exact: true }).click();
+      const response = await responsePromise;
+      expect(response.status()).toBe(200);
+      expect((await response.json()).result).toEqual({ macroTaskId: MACRO, duplicate: false });
+      expect(commands).toEqual([{ operation: "macro_task_end", params: { macroTaskId: MACRO, commandId: expect.any(String) } }]);
+      expect(commands[0]!.params.commandId).not.toBe("");
       await expect(dialog).toBeHidden();
-      const status = page.locator("[data-slot=macro-stop-state]");
-      await expect(status).toHaveText(zh ? "停止请求未提交" : "Stop request was refused");
-      await expect(status).toHaveAttribute("aria-description", zh
-        ? "无操作权限；请重新打开控制台。" : "You may not do this; reopen the console.");
-      await expectTextUncut(status);
-      await expect(page.getByText(zh ? "已停止" : "Stopped", { exact: true })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: zh ? "重试停止" : "Retry stop", exact: true })).toHaveCount(0);
-
-      const unchanged = await page.request.get(TIMELINE);
-      expect(unchanged.status()).toBe(200);
-      expect(unchanged.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
-      expect(await unchanged.text()).toBe(body);
-      await expectReadableStart(row(page, LEAD).getByText(zh ? "等待名下的微任务" : "Waiting for owned micro tasks", { exact: true }), zh ? "等待名下的微任务" : "Waiting for owned micro tasks");
-      await expectReadableStart(row(page, WAITING).getByText(zh ? "等待 Lead" : "Waiting for Lead", { exact: true }), zh ? "等待 Lead" : "Waiting for Lead");
-      await page.getByRole("button", { name: zh ? "知道了" : "Dismiss", exact: true }).click();
-      // Dismissing this browser's refusal leaves the earlier recorded Lead stop visible.
-      await expect(status).toHaveText(zh ? "正在停止" : "Stopping");
-      await expect(status).toHaveAttribute("aria-description", zh ? "仍有 1 项停止未确认" : "Stops unconfirmed 1");
-      await more.click();
-      await expect(stop).toBeEnabled();
+      await expect(page.locator("[data-slot=macro-work-state]")).toHaveCount(0);
+      const updatedResponse = await page.request.get(TIMELINE, { headers: caseHeaders(page) });
+      expect(updatedResponse.status()).toBe(200);
+      const updated = await updatedResponse.json() as MacroTaskTimeline;
+      expect(updated.macroTask.counts.unfinished).toBeLessThan(summary.counts.unfinished);
+      expect(updated.rows.filter(item => item.state === "concluded").length)
+        .toBeGreaterThan(timeline.rows.filter(item => item.state === "concluded").length);
+      const concluded = updated.rows.find(item => item.state === "concluded")!;
+      await expect(row(page, concluded.runId)).toHaveAccessibleName(new RegExp(zh ? "已结束" : "Ended"));
       await expectNoSidewaysScroll(page);
       expect(errors.page).toEqual([]);
-      // Chromium may log the actual 403 as a resource error. The response above
-      // proves that this one expected refusal is from the read-only preview.
-      expect(errors.console.length).toBeLessThanOrEqual(1);
-      for (const message of errors.console) expect(message).toMatch(/^Failed to load resource:.*403/);
+      expect(errors.console).toEqual([]);
     });
   });
 }
 
-for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${locale} at narrow width`, () => {
+for (const locale of ["zh-CN", "en-US"]) test.describe(`a long end title in ${locale} at narrow width`, () => {
   test.use({ locale, viewport: { width: 390, height: 844 } });
-  test("truncates only the title while keeping the scope and controls readable", async ({ page }) => {
+  test("wraps the title and keeps the scope and controls readable", async ({ page }) => {
     const title = "核对完整范围与全部已交付结果的宏任务标题：".repeat(10);
     await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
       const response = await route.fetch();
       const data = await response.json();
-      const target = data.macroTasks.find((item: { macroTaskId: string }) => item.macroTaskId === MACRO);
+      const target = data.groups.flatMap((group: { macroTasks: { macroTaskId: string }[] }) => group.macroTasks)
+        .find((item: { macroTaskId: string }) => item.macroTaskId === MACRO);
       target.title! = title;
       await route.fulfill({ response, json: data });
     });
     await open(page, "#tasks");
-    await page.locator(`[data-macro-task-id="${MACRO}"] button`).click();
-    await page.getByRole("button", { name: locale === "zh-CN" ? "更多" : "More", exact: true }).click();
-    await page.getByRole("button", { name: locale === "zh-CN" ? "停止宏任务" : "Stop macro task", exact: true }).click();
+    await page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-entry]`).click();
+    await page.locator("[data-slot=macro-overview-header]").getByRole("button", { name: locale === "zh-CN" ? "‹ 宏任务" : "‹ Macro tasks", exact: true }).click();
+    const entry = page.locator(`[data-macro-task-id="${MACRO}"]`);
+    await entry.hover();
+    await entry.locator("[data-slot=macro-menu-button]").click();
+    await page.getByRole("menuitem", { name: locale === "zh-CN" ? "结束" : "End", exact: true }).click();
     const dialog = page.getByRole("dialog");
-    const titleLine = dialog.locator("#stop-macro-task-name");
+    const titleLine = dialog.locator("#end-macro-task-name");
     await settle(page);
-    await expect(titleLine).toHaveAttribute("aria-description", title);
+    await expect(titleLine).not.toHaveAttribute("aria-description");
     await expect(titleLine).toHaveText(title);
     await expect(dialog).toHaveAccessibleDescription(new RegExp(title.slice(0, 24)));
     expect(await titleLine.evaluate(element => {
-      const style = getComputedStyle(element);
-      return style.whiteSpace === "nowrap" && element.scrollWidth > element.clientWidth;
+      const range = document.createRange(); range.selectNodeContents(element);
+      return getComputedStyle(element).whiteSpace === "normal" && range.getClientRects().length > 1;
     })).toBe(true);
-    await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > [data-slot=stop-dialog-actions]"));
-    await expectTextUncut(dialog.locator("h2, #stop-macro-task-body, li, button"));
+    await titleLine.hover();
+    await page.waitForTimeout(700);
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
+    await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > [data-slot=end-dialog-actions]"));
+    await expectTextUncut(dialog.locator("h2, #end-macro-task-body, li, button"));
     await expectNoSidewaysScroll(page);
   });
 });

@@ -2,8 +2,10 @@ import * as React from "react"
 import { cn } from "cn"
 import { Tooltip as TooltipPrimitive } from "radix-ui"
 
+export const TOOLTIP_DELAY_MS = 600
+
 function TooltipProvider({
-  delayDuration = 600,
+  delayDuration = TOOLTIP_DELAY_MS,
   skipDelayDuration = 0,
   disableHoverableContent = true,
   ...props
@@ -42,8 +44,9 @@ function TooltipContent({
       <TooltipPrimitive.Content
         data-slot="tooltip-content"
         sideOffset={sideOffset}
+        collisionPadding={16}
         className={cn(
-          "pointer-events-none z-50 w-fit max-w-80 origin-(--radix-tooltip-content-transform-origin) animate-in motion-reduce:animate-none motion-reduce:data-[state=closed]:animate-none rounded-md border bg-popover px-3 py-1.5 text-center text-xs text-pretty text-popover-foreground fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
+          "overlay-surface pointer-events-none z-50 w-fit max-w-[min(28rem,calc(100vw-2rem))] origin-(--radix-tooltip-content-transform-origin) animate-in motion-reduce:animate-none motion-reduce:data-[state=closed]:animate-none border bg-popover px-3 py-1.5 text-center text-xs whitespace-pre-line text-pretty text-popover-foreground fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
           className
         )}
         {...props}

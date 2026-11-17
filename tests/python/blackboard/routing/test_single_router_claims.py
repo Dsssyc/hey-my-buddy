@@ -7,6 +7,7 @@ import os
 from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.errors import BoardError
@@ -25,7 +26,7 @@ def stopped_answer(claim, *, state_dir, buddy_id=BUDDY_ID):
             'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
             'inputVerification': {'unchanged': True, 'snapshotSha256': 'private-fixture-digest',
                                   'manifestSha256': (document.get('executionWorkspace') or {}).get('manifestSha256')},
-            'decision': {'buddyId': buddy_id, "note": 'Frozen legal candidate', 'evidence': []}}
+            'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': buddy_id, "note": 'Frozen legal candidate', 'evidence': []}}
 
 
 class SingleRouterClaimTests(DecisionTestCase):
@@ -68,7 +69,7 @@ class SingleRouterClaimTests(DecisionTestCase):
 
     def test_settings_edits_do_not_replace_the_queued_claim_input(self):
         for settings in ({'routerBuddyIds': [SECOND_BUDDY_ID]}, {'defaultRoutingMode': 'fast'},
-                         {'routingBudget': 'brief'}):
+                         {'modelResponseWaitSeconds': 30}):
             with self.subTest(settings=settings):
                 board = self.case_board()
                 self.seed(board)
@@ -88,13 +89,14 @@ class SingleRouterClaimTests(DecisionTestCase):
         frozen = self.decision(board, request['decisionId'])
         with board.store.db.write() as connection:
             connection.execute('UPDATE buddies SET model=? WHERE buddy_id=?', ('deepseek-v4-pro', BUDDY_ID))
+            ensure_model_service(connection, 'dsh', 'deepseek-official', 'deepseek-v4-pro', board.store.now())
         claimed = self.claim_route(board, request)['claim']
         self.assertIsNotNone(claimed)
         self.assertEqual(claimed['decisionInput'], frozen['input'])
 
     def test_disabled_and_unavailable_buddies_are_specific_boundaries(self):
         for sql, code in (("UPDATE buddies SET enabled=0 WHERE buddy_id=?", 'router-disabled'),
-                          ("UPDATE buddies SET available=0 WHERE buddy_id=?", 'router-catalog-unavailable')):
+                          ("UPDATE buddies SET retired=1 WHERE buddy_id=?", 'router-catalog-unavailable')):
             with self.subTest(code=code, sql=sql):
                 board = self.case_board()
                 self.seed(board)
@@ -115,7 +117,8 @@ class SingleRouterClaimTests(DecisionTestCase):
                 frozen = self.decision(board, request['decisionId'])
                 if unavailable == 'health':
                     with board.store.db.write() as connection:
-                        connection.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
+                        connection.execute("UPDATE harness_health SET status='unhealthy',record_json=json_set(record_json,'$.reason',json(?)) WHERE harness='dsh'",
+                        ('{"code":"harness.probe-failed","params":{"operation":"probe"}}',))
                     self.assert_unclaimed(board, request, 'router-harness-unavailable', frozen)
                 else:
                     with patch('hey_my_buddy.blackboard.routing.quota_routing.cooling',
@@ -137,7 +140,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit) VALUES(?,?,?,1)",
+            connection.execute("UPDATE model_services SET concurrency_limit=1 WHERE harness=? AND provider=? AND model=?",
                                (CATALOG_BUDDY['harness'], CATALOG_BUDDY['provider'], CATALOG_BUDDY['model']))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')
@@ -161,7 +164,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit) VALUES(?,?,?,1)",
+            connection.execute("UPDATE model_services SET concurrency_limit=1 WHERE harness=? AND provider=? AND model=?",
                                ('dsh', 'deepseek-official', 'deepseek-flash'))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')
@@ -179,8 +182,6 @@ class SingleRouterClaimTests(DecisionTestCase):
                 ('usage', None, 'router-tool-evidence-unverified'),
                 ('usage', {'elapsedMs': 1, 'toolCalls': False}, 'router-tool-evidence-unverified'),
                 ('usage', {'elapsedMs': 1, 'toolCalls': -1}, 'router-tool-evidence-unverified'),
-                ('usage', {'elapsedMs': 300001, 'toolCalls': 0}, 'router-budget-exhausted'),
-                ('usage', {'elapsedMs': 1, 'toolCalls': 25}, 'router-budget-exhausted'),
                 ('inputVerification', None, 'router-input-changed'),
                 ('inputVerification', {'unchanged': True, 'manifestSha256': None}, 'router-input-changed'),
                 ('inputVerification', {'unchanged': False, 'snapshotSha256': 'changed'}, 'router-input-changed')):
@@ -206,7 +207,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         request = self.request(board)
         claim = self.claim_route(board, request)['claim']
         answer = stopped_answer(claim, state_dir=board.directory)
-        answer['usage'] = {'elapsedMs': 300000, 'toolCalls': 24, 'bytesRead': None}
+        answer['usage'] = {'elapsedMs': 300000, 'toolCalls': 24}
         answer.update(claim_tool_receipt(claim, 24, state_dir=board.directory))
         self.report(board, claim, answer)
         self.assertEqual(self.decision(board, request['decisionId'])['status'], 'completed')
@@ -216,7 +217,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.seed(board)
         request = self.request(board)
         claim = self.claim_route(board, request)['claim']
-        self.report(board, claim, {'status': 'error', 'code': 'router-review-unavailable', 'modelStarted': False},
+        self.report(board, claim, {'status': 'error', 'code': 'router-review-unavailable', 'modelResponded': False},
                     status='failed', shutdown=False)
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'running')

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from temporary import TemporaryDirectory
+import tempfile
 import threading
 import time
 import unittest
@@ -155,9 +155,10 @@ class QueuedSameQuestionConflictTests(unittest.TestCase):
 
 def minted_finish_receipt(input_sha256: str) -> tuple[str, dict]:
     """One real signed finish receipt minted by the session tool itself."""
-    with TemporaryDirectory(prefix="finish-receipt-attention-") as private:
+    with tempfile.TemporaryDirectory(prefix="finish-receipt-attention-") as private:
         bridge = {"identity": dict(FINISH_IDENTITY), "inputSha256": input_sha256, "key": FINISH_KEY,
-                  "attentionPath": str(Path(private) / "absent-attention.json")}
+                  "attentionPath": str(Path(private) / "absent-attention.json"),
+                  "finishAcceptedPath": str(Path(private) / "finish-accepted.json")}
         result = respond({"id": 1, "method": "tools/call",
                           "params": {"name": "hey_my_buddy_finish_turn", "arguments": FINISH_OUTCOME}}, bridge)
     return result["result"]["content"][0]["text"], bridge

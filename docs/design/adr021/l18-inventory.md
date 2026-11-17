@@ -1,12 +1,12 @@
 # ADR-021 L18：升级基点存储清点与夹具
 
-本记录只交付微任务 1，未实现升级、未改产品代码、未安装、未读取日常看板、未运行模型或完整检查；Worker 的验证事实不是 Host 的验收结论。冻结基点 B 为 `e4fbc91696f354991252ea2abddc73d45f286aa5`（0.27.0），冻结输入 C 为 `df9318f38b732681e1004cf190e71bb4bc25fe17`（0.29.0）。依据是 [执行计划](l18-upgrade.md)、[失败演练](../../acceptance/c-two/074-host-review.md#从已安装的版本升级)、AGENTS.md、CONTEXT.md、[architecture](../../reference/architecture.md) 与 ADR-007；以这两个固定提交的源码取证，不以运行中的安装推断。
+本记录只交付微任务 1，未实现升级、未改产品代码、未安装、未读取日常黑板、未运行模型或完整检查；Worker 的验证事实不是 Host 的验收结论。冻结基点 B 为 `e4fbc91696f354991252ea2abddc73d45f286aa5`（0.27.0），冻结输入 C 为 `df9318f38b732681e1004cf190e71bb4bc25fe17`（0.29.0）。依据是 [执行计划](l18-upgrade.md)、[失败演练](../../acceptance/c-two/074-host-review.md#从已安装的版本升级)、AGENTS.md、CONTEXT.md、[architecture](../../reference/architecture.md) 与 ADR-007；以这两个固定提交的源码取证，不以运行中的安装推断。
 
 本记录引用的 storage inventory 与 verification 是原固定交付的历史材料，现归档于 `docs/acceptance/`；其中固定提交路径、旧命令和摘要仍按历史来源解释，不作为当前夹具输入。下文 `B:path:line`、`C:path:line` 指相应固定提交的文件位置，可以用 `git show <完整提交>:<path>` 读取。SQL 附表中 `B:D` 是 B 的 `src/buddy/db.py`，`C:D` 是 C 的 `src/hey_my_buddy/blackboard/store/db.py`。新增对象在 B 不存在时，给出其所在旧分区或旧写入点，明确标记“无”，不伪造旧定义。机器可读的完整定义、列类型/默认值/非空/主键/隐藏标记、外键删除动作、显式与自动索引的列/表达式/排序/部分条件和视图在 [storage-inventory.json](../../acceptance/adr021/l18-storage-inventory.json)；所有对象都保留两个提交的来源。
 
 ## SQL 形式：计划中的四项完整，另有文档计数差异
 
-静态执行两份源码的 SQL 常量到各自内存 SQLite，再比较 `sqlite_master`、`table_xinfo`、`foreign_key_list`、`index_list`、`index_xinfo`；不调用当前产品的建库或打开旧看板。B 有 49 张业务表、114 个索引（含自动索引）、1 个视图；C 有 50 张业务表、117 个索引、1 个视图；两者另有 SQLite 自身的 `sqlite_sequence`。没有表/列/索引/视图消失，既有表的列名、类型、默认值、非空、主键与外键均未改变。差异是 1 张新表及其自动主键索引、2 个新显式索引、1 个部分索引条件、1 个 CHECK 条件；其余 SQL 定义逐字相等（不计源码注释）。architecture 写的“49 tables”比 C 的实际业务表数少 1，供 Host 修订说明，不属于另一项 schema 换算。
+静态执行两份源码的 SQL 常量到各自内存 SQLite，再比较 `sqlite_master`、`table_xinfo`、`foreign_key_list`、`index_list`、`index_xinfo`；不调用当前产品的建库或打开旧黑板。B 有 49 张业务表、114 个索引（含自动索引）、1 个视图；C 有 50 张业务表、117 个索引、1 个视图；两者另有 SQLite 自身的 `sqlite_sequence`。没有表/列/索引/视图消失，既有表的列名、类型、默认值、非空、主键与外键均未改变。差异是 1 张新表及其自动主键索引、2 个新显式索引、1 个部分索引条件、1 个 CHECK 条件；其余 SQL 定义逐字相等（不计源码注释）。architecture 写的“49 tables”比 C 的实际业务表数少 1，供 Host 修订说明，不属于另一项 schema 换算。
 
 | 变化 | B 的具体位置 | C 的具体位置 | 升级处理与保留边界 |
 | --- | --- | --- | --- |
@@ -33,7 +33,7 @@
 | catalog-accounts:<observation_id> / catalog-harnesses:<observation_id> / catalog-account:<adapter> | `src/buddy/catalog_store.py:13,21,95` | `src/hey_my_buddy/blackboard/catalog/catalog_store.py:13,21,115` | 冻结账户字典、健康记录数组、所选 source/credentialRevision，编码不变；原样保留观察绑定与历史事实。新选择 revision 的 binding_key（C accounts.py:68）是读时计算，不增加持久化键。 |
 | **新** catalog-pending:<adapter> | `src/buddy/catalog_store.py:100`（完整读取立即退休缺席模型；无此键） | `src/hey_my_buddy/blackboard/catalog/catalog.py:61,213,226,242`；`catalog_store.py:151` | 每 provider/model 对应 `{since,efforts}`，没有版本字段；不存在时是空 map。不能把旧 unavailable 认作“已被两次可信读取确认缺席”。升级须明确当前目录状态的初始化/失效策略，不改历史观察和用户 enablement。C 的 `_pending_entry` 还接受旧时间字符串，而 B 从未有此键：这是中间开发历史的读时换算，按 0.x 规则应由 Host 纳入消除范围，不能成为本升级的新兼容层。 |
 | **新** catalog-read-at:<adapter> / catalog-account-status:<adapter> / catalog-scan-after:<adapter> | `src/buddy/catalog_store.py:95,98`（只存当前 payload/time，无账户可信状态和扫描窗） | `src/hey_my_buddy/blackboard/catalog/catalog.py:62,164,299,379,387,395` | 时间字符串、confirmed/unknown/not-applicable 字符串、扫描窗时间。历史 complete 不证明账户 confirmed，不能回填虚构的可信读取；应明确 unknown 初始化与后续显式真实发现的边界。缺少键的当前读取也是 unknown。 |
-| **新** router-request:<decision_id> / router-dispatch:<task_id> / attempt-router:<attempt_id> | `src/buddy/decision.py:745`（写 decision_requests；无这些键） | `src/hey_my_buddy/blackboard/routing/router_sequence.py:19,49,97,136` | 无版本字段的不可变请求/分派/claim JSON，包含 facts/baseInput/inspections、四元身份、输入摘要、Router 索引和 attempt 绑定。基点公开操作产生的非终态决策绑定活动内部 task，不能通过升级 idle 边界（证据见下节）；合法空闲看板中的旧终态请求、结果和事件原样保留，不补造新分派或收据。 |
+| **新** router-request:<decision_id> / router-dispatch:<task_id> / attempt-router:<attempt_id> | `src/buddy/decision.py:745`（写 decision_requests；无这些键） | `src/hey_my_buddy/blackboard/routing/router_sequence.py:19,49,97,136` | 无版本字段的不可变请求/分派/claim JSON，包含 facts/baseInput/inspections、四元身份、输入摘要、Router 索引和 attempt 绑定。基点公开操作产生的非终态决策绑定活动内部 task，不能通过升级 idle 边界（证据见下节）；合法空闲黑板中的旧终态请求、结果和事件原样保留，不补造新分派或收据。 |
 | **新** router-outcome:<sha256> | `src/buddy/decision.py:1366`（旧 decision 终态事件；无 receipt） | `src/hey_my_buddy/blackboard/routing/router_history.py:36,100,145` | `{payload,seq,recordedAt}`，无版本字段；新增 Router 事实的事务内幂等收据。保留旧 decision.* 事件作历史证据，不补造 answered/no_answer/claimed。 |
 | account-selection:<adapter> / account-credential:<[adapter,source]> / attempt-account:<attempt_id> | `src/buddy/accounts.py:60,75` | `src/hey_my_buddy/blackboard/catalog/accounts.py:60,88` | source/revision、credentialRevision 整数、冻结账户字典，形式不变；保留。 |
 | account-operation:<uuid> / account-mutation:<[adapter,source]> | `src/buddy/accounts.py:98,309` | `src/hey_my_buddy/blackboard/catalog/accounts.py:111,328` | active/uncertain 与代际 JSON 形式不变；不是可清除的历史噪声。升级 idle 检查拒绝未停机记录（B upgrade.py:65；C install/upgrade.py:65）。 |
@@ -44,7 +44,7 @@
 
 新增 Router 请求/分派/收据与 catalog pending 是结构化 meta 值（来源见上表），不只是新增可选标量；AGENTS.md 的“有结构的记录应有自己的表”只明示保留工作区身份别名这个例外。这组新增存储与该不变量的冲突也交给 Host 修订计划，不能由本清点默认赋予新的例外，也不能在第二微任务只初始化缺键便称所有形式债务已解决。
 
-计划外必须由 Host 决定的是模型目录的当前可信状态初始化；新增 JSON 和键族也应明确加入形式一致性守门的覆盖规则。旧非终态 Router 请求不是本升级 idle 边界内的换算存量，撤回此前要求另定处置的建议。只有机械定义相同的 meta 键值参与一致性比较：密钥、创建时间、账户代际、旧事件、目录观察和各任务收据是数据，不能要求它们与空的新看板逐值相等，更不能为达到“形式相等”而清空。
+计划外必须由 Host 决定的是模型目录的当前可信状态初始化；新增 JSON 和键族也应明确加入形式一致性守门的覆盖规则。旧非终态 Router 请求不是本升级 idle 边界内的换算存量，撤回此前要求另定处置的建议。只有机械定义相同的 meta 键值参与一致性比较：密钥、创建时间、账户代际、旧事件、目录观察和各任务收据是数据，不能要求它们与空的新黑板逐值相等，更不能为达到“形式相等”而清空。
 
 ## 旧 Router 请求与升级空闲边界
 
@@ -106,7 +106,7 @@ helper 与常量：schema_version:58 被三个换算函数和迁移测试调用�
 
 微任务稳定 ID：delivered `00000000-0000-0000-0000-000000000007`，accepted `00000000-0000-0000-0000-00000000000f`，rejected `00000000-0000-0000-0000-000000000017`，cancelled `00000000-0000-0000-0000-00000000001e`。前三个各有 stopped 的模拟 attempt 与完整封存输出；delivered 没有 Host conclusion，accepted 的集成记录为显式 not-required，rejected 的 Host 边界为 awaiting-host。旧 governed API 的验收/打回事件均叫 `workflow.acknowledged`，payload.verdict 分别 accepted/rejected；它没有冒称基点会生成当前新增的 workflow.review_rejected。还有评价、卡片修订、家族备注、模型目录观察/当前指针/可用 profile 和宏任务绑定。
 
-第一版只在旧数据库 iterdump 之后把工作根替换为 `<fixture-root>`，保留原 manifest/hash/fingerprint。Host 的 delivered 结论探针以 `WORKSPACE_MANIFEST_CHANGED` 拒绝；这说明第一版只能载入、读取，原先“待结论样本”的能力描述不足。窄返修重新用同一基点源码及公开操作生成看板，并导出文件系统证据；固定 SQL 仍是模板，不能直接作为活工作区使用，必须经下述还原入口完成绑定。
+第一版只在旧数据库 iterdump 之后把工作根替换为 `<fixture-root>`，保留原 manifest/hash/fingerprint。Host 的 delivered 结论探针以 `WORKSPACE_MANIFEST_CHANGED` 拒绝；这说明第一版只能载入、读取，原先“待结论样本”的能力描述不足。窄返修重新用同一基点源码及公开操作生成黑板，并导出文件系统证据；固定 SQL 仍是模板，不能直接作为活工作区使用，必须经下述还原入口完成绑定。
 
 新增资源只包含封存所需的 10 个固定 Git 对象（原始字节以 hex 文本保存）、22 条 refs/buddy 引用、17 个 input/manifest/pending/output/patch sidecar、5 项旧身份的目录锚点和 26 项相关 SHA-256 预像。生成器在旧公开操作期间观察真实 SHA-256 输入并返回未改变的真实摘要，再导出有路径/身份依赖的图；没有让 hash、身份或封存校验返回假成功。对象与引用固定在既有输入 commit/tree，检查不从生成仓库 fetch、不使用 alternates、不运行基点生成器，也不依赖生成机器遗留的 inode 或 Git 对象。
 
@@ -116,7 +116,7 @@ helper 与常量：schema_version:58 被三个换算函数和迁移测试调用�
 
 唯一入口为 [upgrade_fixture.py](../../../tests/python/blackboard/store/upgrade_fixture.py) 的 `load_fixture(state: Path) -> dict`，state 必须是不存在或空的私有目录。它校验固定文本摘要，物化 repository、四个 detached checkout 和 state/workspaces sidecar，载入基点 SQL，再绑定路径、旧身份及摘要图；不会调用当前建库器、写结论或写身份换算别名/报告。`<fixture-root>/state` 绑定到 state，其余 `<fixture-root>` 绑定到 `state/fixture-root`，因此执行 checkout 不会被误认成受管理的 state/workspaces allocation。
 
-返回值保留 metadata 的全部键（包括 `stableIds`、`sourceCommit`、`schemaVersion`），另有 `state` 与 `fixtureRoot` 两个 Path、`operations`（完成相同绑定的旧模拟操作记录）和 `bindings`（模板旧身份/摘要到还原值的字典）。metadata 中文件摘要描述固定文本，不是还原 SQLite 文件的摘要。升级前后逐值比较和 backup snapshot 必须以函数返回后的旧看板为基线；schema 此时仍为 15。后续真实升级仍先做 15→16，再走既有身份换算，不能把这里的准备 UPDATE 算作迁移或抹去其变动。
+返回值保留 metadata 的全部键（包括 `stableIds`、`sourceCommit`、`schemaVersion`），另有 `state` 与 `fixtureRoot` 两个 Path、`operations`（完成相同绑定的旧模拟操作记录）和 `bindings`（模板旧身份/摘要到还原值的字典）。metadata 中文件摘要描述固定文本，不是还原 SQLite 文件的摘要。升级前后逐值比较和 backup snapshot 必须以函数返回后的旧黑板为基线；schema 此时仍为 15。后续真实升级仍先做 15→16，再走既有身份换算，不能把这里的准备 UPDATE 算作迁移或抹去其变动。
 
 ```python
 from blackboard.store.upgrade_fixture import load_fixture
@@ -138,14 +138,14 @@ delivered_run_id = fixture["stableIds"]["delivered"]
 
 窄返修新增测试编号为 `UpgradeFixtureTests.test_l18_f01_restores_manifests_seals_and_frozen_hash_bindings`、`test_l18_f02_delivered_sample_gets_real_independent_host_seal`、`test_l18_f03_private_roots_rebind_legacy_identity_without_changing_native_history`、`test_l18_f04_raw_template_and_unproved_or_drifted_identity_are_refused`、`test_l18_f05_drifted_patch_and_fixed_git_ref_cannot_prove_a_seal`；消失编号无，仓库文件删除无。聚焦命令为清除继承环境、前置本检出 src/tests/python 并指定私有 state/runtime/TMPDIR 后的 `python -m unittest blackboard.store.test_upgrade_fixture -v`，最终 5 项通过（20.586 秒，退出 0）。首轮 3 项通过、1 项因负向测试查询错列而失败；补充字面路径标记后，原 Worker patch 校验暴露连续替换会重新展开新目录名，修正为一次替换后真实校验与 Host 封存均通过。`git diff --check` 退出 0。原始模板复现、生成、源码摘要复核和测试原始输出均留在本检出的 `tmp/adr021-l18-portable/`，确切目录清单在其中 retained-directories.txt，没有清理过程证据。
 
-未验证 15→16、install/upgrade、完整身份迁移事务、私有 daemon/IPC 及公开 `workflow_conclude` 写结论、真实账户/模型、原生会话续跑、Windows、日常看板或全套检查。Host 接入 `load_fixture` 后仍须在完整升级后的私有服务上对 delivered 样本写结论，并记录固定产物的独立验收；不能用这里的真实 host_seal 成功代替该验收。
+未验证 15→16、install/upgrade、完整身份迁移事务、私有 daemon/IPC 及公开 `workflow_conclude` 写结论、真实账户/模型、原生会话续跑、Windows、日常黑板或全套检查。Host 接入 `load_fixture` 后仍须在完整升级后的私有服务上对 delivered 样本写结论，并记录固定产物的独立验收；不能用这里的真实 host_seal 成功代替该验收。
 
 ## 交给 Host 的计划修订点
 
 1. 将“模型目录当前状态初始化”加入第二微任务，决定无 accountStatus 的旧 complete 读取如何诚实地保留目录、设定 unknown，并覆盖 pending/read-at/scan-after 及中间 pending 字符串读时换算；不凭旧时间构造可信读取。
 2. 旧 Router JSON/事件按终态历史保留，不补造新收据；基点非终态决策的创建和转换路径被 idle 边界排除，不另加续跑/停止换算，也不人为增加 Router 事实。夹具本轮没有执行 Router；此结论由上文固定源码路径核对支持。
 3. 处理旧 upgrade 对 meta 逐值不变的检查与 backup 的 14→15 调用；identity migration 的执行条件跟随 SCHEMA_VERSION，不存在写死 15 的阻塞，不再提出该项修复或额外升级顺序要求。后续真实升级仍按既定路径验证身份换算，L14 的别名表重构及 L15 的历史清理范围不变。
-4. 根据 AGENTS.md 确定新增结构化 Router/catalog meta 记录应如何落入独立表，而不是默许更多例外；形式一致性测试同时覆盖新增 meta/JSON 结构的声明；原始历史值/Hash 不与空白新看板比较。基点不含的新结构无需制造存量，但新源码不能保留只为中间开发版本服务的读时兼容。
+4. 根据 AGENTS.md 确定新增结构化 Router/catalog meta 记录应如何落入独立表，而不是默许更多例外；形式一致性测试同时覆盖新增 meta/JSON 结构的声明；原始历史值/Hash 不与空白新黑板比较。基点不含的新结构无需制造存量，但新源码不能保留只为中间开发版本服务的读时兼容。
 
 Host 独立验收上述固定 artifact 并修订执行计划后，再授权第二微任务；本 Worker 在此边界停止。
 

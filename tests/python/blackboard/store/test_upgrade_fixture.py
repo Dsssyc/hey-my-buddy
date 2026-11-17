@@ -1,6 +1,5 @@
-"""The installed upgrade base opens directly with the current schema."""
+"""The installed schema-30 stock upgrades explicitly without changing its evidence."""
 from __future__ import annotations
-
 import hashlib
 import json
 import os
@@ -10,24 +9,79 @@ import tempfile
 import unittest
 from unittest import mock
 
-from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, _git, _sha, _json
+from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, load_issue_stock, load_delivered_stock, complete_fixture_cleanup, _git, _sha, _json
+from hey_my_buddy.protocol.workspace_manifest import artifact_manifest, record_reference, turn_manifest
 from hey_my_buddy.blackboard.store.store import BoardStore
-from hey_my_buddy.blackboard.routing import router, router_sequence
+from hey_my_buddy.blackboard.routing import router_sequence
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
+from hey_my_buddy.blackboard.store import upgrade as schema_upgrade
+from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA, upgrade_state
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import upgrade
 from hey_my_buddy.paths import native_path
 
+FROZEN_GENERATOR_SHA256 = 'e6eec5e82d9b8f82aa7ff93c76940a43280973de1ed35e35d3aa23c639a99fd9'
+
 
 class UpgradeFixtureTests(unittest.TestCase):
+    def test_issue_stock_pins_openings_and_delivers_the_latest_observation_after_upgrade(self):
+        fixture = load_fixture(self.root / 'issue-stock')
+        load_issue_stock(fixture)
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            originals = {table: list(connection.execute(f'SELECT * FROM {table}'))
+                         for table in ('execution_issues', 'service_issues')}
+            self.assertTrue(all(originals.values()))
+            stale = [row for row in originals['execution_issues'] if row[1] == 'connection']
+            self.assertEqual(len(stale), 1)
+            originals['execution_issues'] = [row for row in originals['execution_issues'] if row[1] != 'connection']
+            report = connection.execute(
+                "SELECT MAX(seq) FROM events WHERE attempt_id=? AND kind='execution.issue'"
+                " AND json_extract(payload_json,'$.stage')='connection'", (stale[0][0],)).fetchone()[0]
+            cleared = connection.execute(
+                "SELECT MAX(seq) FROM events WHERE attempt_id=? AND kind='execution.shutdown_confirmed'",
+                (stale[0][0],)).fetchone()[0]
+            self.assertGreater(cleared, report)
+            openings = dict(connection.execute("SELECT kind,seq FROM events WHERE json_extract(payload_json,'$.stage')='upgrade-stock'"
+                                               " AND json_extract(payload_json,'$.message')='current occurrence'"))
+            self.assertEqual(set(openings), {'execution.issue', 'service.issue'})
+        upgrade_state(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            for table, kind in (('execution_issues', 'execution.issue'), ('service_issues', 'service.issue')):
+                rows = list(connection.execute(f'SELECT * FROM {table}'))
+                self.assertEqual([row[:-1] for row in rows], originals[table])
+                self.assertEqual([row[-1] for row in rows], [openings[kind]])
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM issue_deliveries').fetchone()[0], 0)
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+            fresh = Database(self.root / 'fresh-issue-stock')
+            try:
+                fresh.initialize()
+                with sqlite3.connect(fresh.path) as created:
+                    query = 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
+                    self.assertEqual(list(connection.execute(query)), list(created.execute(query)))
+            finally:
+                fresh.close()
+        store = BoardStore(fixture['state'])
+        self.addCleanup(store.db.close)
+        run_id = fixture['stableIds']['failed']
+        replies = [store.task_wait({'runId': run_id, 'consumeReminders': True,
+                                    'reminderWaitId': f'floor-issue-{index}', 'timeoutMs': 0}) for index in range(2)]
+        self.assertEqual({reply['issue']['kind'] for reply in replies}, {'execution', 'service'})
+        self.assertTrue(all(reply['issue']['detail']['message'] == 'current occurrence updated' for reply in replies))
+        store.record_service_issue('upgrade-stock', RuntimeError('updated after upgrade'))
+        with store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT occurrence_seq FROM service_issues WHERE stage='upgrade-stock'").fetchone()[0],
+                             openings['service.issue'])
+
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix='upgrade-base-fixture-'))
+        self.root = Path(tempfile.mkdtemp(prefix='uf-'))
 
 
-    def restored(self, name='state'):
+    def restored(self, name='state', *, migrate=True):
         fixture = load_fixture(self.root / name)
+        if migrate:
+            upgrade_state(fixture['state'])
         connection = sqlite3.connect(fixture['state'] / 'board.sqlite3')
         connection.row_factory = sqlite3.Row
         self.addCleanup(connection.close)
@@ -37,9 +91,178 @@ class UpgradeFixtureTests(unittest.TestCase):
     def sample(self, fixture, connection):
         run_id = fixture['stableIds']['delivered']
         row = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()
-        manifest = json.loads(row['workspace_manifest_json'])
+        manifest = json.loads(connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1", (run_id,)).fetchone()[0])
         attempt = connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?', (run_id,)).fetchone()[0]
         return run_id, manifest, attempt
+
+    def test_floor_created_descriptions_become_goals_with_original_event_times(self):
+        fixture = load_fixture(self.root / 'goal-stock')
+        load_delivered_stock(fixture)
+        # The released writer normalized the submitted whitespace before it
+        # stored the event; the migration preserves that stored value.
+        expected_body = 'Goal from the 0.54.1 writer. Preserve this line.'
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            connection.row_factory = sqlite3.Row
+            source_events = list(connection.execute(
+                "SELECT payload_json,created_at FROM events WHERE kind='workflow.macro_task_created' ORDER BY seq"))
+            delivered_macro = connection.execute(
+                'SELECT macro_task_id FROM workflow_runs WHERE run_id=?',
+                (fixture['deliveredStockRunId'],)).fetchone()[0]
+            # Distinguish the retained event time from the independent display
+            # row's time; the floor writer's event and sealed inputs stay intact.
+            connection.execute('UPDATE macro_tasks SET created_at=? WHERE macro_task_id=?',
+                               ('2026-01-05T00:00:01.000Z', delivered_macro))
+            source_macros = [tuple(row) for row in connection.execute(
+                'SELECT macro_task_id,title,project_id,created_at,activity_seq,activity_at '
+                'FROM macro_tasks ORDER BY rowid')]
+            paths = list(connection.execute(
+                "SELECT m.project_path,(SELECT json_extract(t.spec_json,'$.cwd')"
+                " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
+                " WHERE r.macro_task_id=m.macro_task_id ORDER BY r.created_at,r.rowid LIMIT 1) AS source_cwd"
+                " FROM macro_tasks m"))
+            self.assertEqual(len(paths), 3)
+            for row in paths:
+                self.assertEqual(row['project_path'], row['source_cwd'])
+        self.assertEqual(len(source_events), 3)
+        descriptions = {json.loads(row['payload_json'])['macroTaskId']:
+                        (json.loads(row['payload_json'])['description'], row['created_at'])
+                        for row in source_events}
+        self.assertEqual(descriptions[delivered_macro], (expected_body, '2026-01-05T00:00:00.000Z'))
+        self.assertEqual([body for macro_id, (body, _at) in descriptions.items()
+                          if macro_id != delivered_macro], [None, None])
+
+        upgrade_state(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM events WHERE kind='workflow.macro_task_created'").fetchone()[0], 0)
+            self.assertEqual(list(connection.execute(
+                'SELECT macro_task_id,revision,body,created_at FROM macro_task_goals')),
+                [(delivered_macro, 1, expected_body, '2026-01-05T00:00:00.000Z')])
+            self.assertEqual([tuple(row) for row in connection.execute(
+                'SELECT macro_task_id,title,project_id,created_at,activity_seq,activity_at '
+                'FROM macro_tasks ORDER BY rowid')], source_macros)
+            self.assertEqual([row[0] for row in connection.execute(
+                'SELECT project_cwd FROM macro_tasks ORDER BY rowid')], [row['source_cwd'] for row in paths])
+            self.assertTrue(all(row[0] for row in connection.execute(
+                'SELECT repository_path FROM macro_tasks')))
+            self.assertNotIn('source_host_id', {row[1] for row in connection.execute('PRAGMA table_info(macro_tasks)')})
+
+    def test_delivered_v3_stock_continues_and_is_accepted_after_upgrade(self):
+        from admission import admit_board
+        from support import FakeClock, InProcessBoard
+
+        fixture = load_fixture(self.root / 'delivered-v3')
+        load_delivered_stock(fixture)
+        run_id = fixture['deliveredStockRunId']
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            raw, state = connection.execute('SELECT workspace_manifest_json,state FROM workflow_runs WHERE run_id=?',
+                                            (run_id,)).fetchone()
+            self.assertEqual(state, 'delivered')
+            self.assertEqual(json.loads(raw)['version'], 3)
+            archived = [tuple(row) for row in connection.execute(
+                'SELECT artifact_id,manifest_json FROM workflow_artifacts WHERE run_id=? ORDER BY rowid', (run_id,))]
+            archived_turns = [tuple(row) for row in connection.execute(
+                'SELECT turn_id,input_json FROM workflow_turns WHERE run_id=? ORDER BY turn_index', (run_id,))]
+        upgrade_state(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            connection.row_factory = sqlite3.Row
+            self.assertEqual([tuple(row) for row in connection.execute(
+                "SELECT artifact_id,manifest_json FROM workflow_artifacts WHERE run_id=? AND content_form='sealed-inline-v1' ORDER BY rowid",
+                (run_id,))], archived)
+            self.assertEqual([tuple(row) for row in connection.execute(
+                'SELECT turn_id,input_json FROM workflow_turns WHERE run_id=? ORDER BY turn_index', (run_id,))],
+                archived_turns)
+            for row in connection.execute('SELECT * FROM workflow_artifacts WHERE run_id=? ORDER BY rowid',
+                                          (run_id,)):
+                self.assertEqual(row['content_form'], 'sealed-inline-v1')
+                self.assertEqual(artifact_manifest(fixture['state'], row), json.loads(row['manifest_json']))
+            self.assertEqual({row[0] for row in connection.execute(
+                'SELECT DISTINCT result_form FROM attempts WHERE task_id=? AND result_json IS NOT NULL', (run_id,))},
+                {'archived-report-v1'})
+        board = InProcessBoard(fixture['state'], clock=FakeClock('2026-01-05T00:10:00.000Z'))
+        self.addCleanup(board.close)
+        view = board.call('workflow_get', {'runId': run_id})
+        self.assertEqual(view['state'], 'delivered')
+        old_manifest = json.loads(raw)
+        self.assertTrue(workspace.verify(old_manifest, state_dir=fixture['state'])['valid'])
+        board.call('workflow_continue', {
+            'runId': run_id, 'artifactId': view['finalArtifactId'],
+            'input': 'Finish the read-only review',
+        })
+        board.store.workflow.prepare_continuation_workspace({'runId': run_id})
+        nonce = 'schema33-fixture-nonce'
+        claim = admit_board(board, {'nonce': nonce, 'runId': run_id})['claim']
+        self.assertIsNotNone(claim)
+        attempt, turn = claim['attempt'], claim['turn']
+        manifest = turn_manifest(fixture['state'], turn['input'])
+        seal = workspace.seal(fixture['state'], manifest, run_id, attempt['attemptId'])
+        session_id = (turn['input']['previousSessionId'] if turn['resumeMode'] == 'native-session'
+                      else 'fixture-schema33-continued')
+        record = {
+            'version': 1, 'taskId': run_id, 'attemptId': attempt['attemptId'],
+            'generation': attempt['generation'], 'turnId': turn['turnId'],
+            'resumeMode': turn['resumeMode'],
+            'previousSessionId': turn['input']['previousSessionId'],
+            'sessionId': session_id, 'promptSha256': 'a' * 64,
+            'inputSha256': turn['inputSha256'],
+            'outcome': {'disposition': 'completed', 'summary': 'Review completed',
+                        'remaining': [], 'decisions': [], 'artifacts': [], 'request': None},
+            'provenance': {'harness': 'codex', 'turnEnd': 'completed',
+                           'outputSchemaValidated': True, 'finalMessageCompleted': True,
+                           'nativeTurnStarted': True, 'nativeTurnCompleted': True,
+                           'nativeThreadId': session_id,
+                           'nativeTurnId': 'fixture-schema33-native-turn',
+                           'finalItemId': 'fixture-item', 'eventSeq': 2},
+        }
+        board.call('execution_result', {
+            'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce,
+            'status': 'ok', 'exitCode': 0, 'shutdownConfirmed': True,
+            'result': {'status': 'ok', 'turn': record,
+                       'workspaceSeal': record_reference(fixture['state'], seal), 'processState': {'shutdownConfirmed': True}, 'fixture': True},
+        })
+        delivered = board.call('workflow_get', {'runId': run_id})
+        self.assertEqual(delivered['state'], 'delivered')
+        with board.store.db.read() as connection:
+            new_turn = connection.execute('SELECT * FROM workflow_turns WHERE turn_id=?',
+                                          (turn['turnId'],)).fetchone()
+            self.assertEqual(json.loads(new_turn['input_json'])['version'], 4)
+            self.assertEqual((new_turn['workspace_id'], new_turn['workspace_manifest_sha256']),
+                             (manifest['workspaceId'], manifest['manifestSha256']))
+            self.assertEqual(connection.execute('SELECT result_form FROM attempts WHERE attempt_id=?',
+                                                (attempt['attemptId'],)).fetchone()[0], 'current-report-v2')
+            continuation = connection.execute(
+                'SELECT * FROM workflow_continuations WHERE turn_id=?', (turn['turnId'],)).fetchone()
+            self.assertEqual((continuation['workspace_id'], continuation['workspace_manifest_sha256']),
+                             (manifest['workspaceId'], manifest['manifestSha256']))
+            self.assertIn(continuation['workspace_facts_role'], ('owner', 'reference'))
+            new_output = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE attempt_id=? AND kind='output'",
+                (attempt['attemptId'],)).fetchone()
+            self.assertEqual(new_output['content_form'], 'record-reference')
+            self.assertIsNone(new_output['manifest_json'])
+            self.assertEqual(artifact_manifest(fixture['state'], new_output)['snapshotSha256'],
+                             seal['snapshotSha256'])
+        target_repository = fixture['fixtureRoot'] / 'repository'
+        _git(target_repository, 'checkout', '-b', 'fixture-schema33-integration')
+        target = {'path': str(target_repository), 'ref': 'refs/heads/fixture-schema33-integration'}
+        verified = workspace.integration_verify(
+            seal, original_input=old_manifest, final_input=manifest, before_commit=old_manifest['inputCommit'], **target)
+        self.assertTrue(verified['verified'])
+        accepted = board.call('workflow_accept', {
+            'runId': run_id, 'artifactId': delivered['finalArtifactId'],
+            'target': target,
+            'beforeCommit': old_manifest['inputCommit'],
+            'note': 'Accepted after the v3 continuation',
+        })
+        self.assertEqual(accepted['state'], 'accepted')
+        self.assertTrue(accepted['integrationId'])
+        with board.store.db.read() as connection:
+            integration = connection.execute('SELECT artifact_id FROM workflow_integrations WHERE integration_id=?',
+                                             (accepted['integrationId'],)).fetchone()
+            self.assertEqual(integration['artifact_id'], delivered['finalArtifactId'])
+            binding = connection.execute('SELECT response_kind,response_id FROM workflow_artifacts WHERE artifact_id=?',
+                                         (delivered['finalArtifactId'],)).fetchone()
+            self.assertEqual(tuple(binding), ('accept', accepted['integrationId']))
 
 
     def insert_retained_native_selections(self, fixture, connection):
@@ -71,8 +294,6 @@ class UpgradeFixtureTests(unittest.TestCase):
 
 
     def test_retained_execution_rows_remain_readable_with_no_buddy(self):
-        from hey_my_buddy.cli.cli_views import list_brief, micro_task_brief, task_brief
-
         fixture, connection = self.restored('read-old-executions')
         selections = self.insert_retained_native_selections(fixture, connection)
         turns = {}
@@ -93,17 +314,16 @@ class UpgradeFixtureTests(unittest.TestCase):
         store.initialize()
         self.addCleanup(store.db.close)
         listed = store.task_list({})
-        brief_rows = {row['runId']: row for row in list_brief(listed)['runs']}
+        listed_rows = {row['runId']: row for row in listed['runs']}
         for run_id, (adapter, _seq) in selections.items():
             with self.subTest(adapter=adapter):
                 workflow = store.workflow.get({'runId': run_id, 'includeAudit': True})
                 task = store.task_get({'runId': run_id})['task']
-                for view in (workflow, micro_task_brief(workflow), task_brief(task), brief_rows[run_id]):
-                    self.assertIsNone(view['buddy'])
+                self.assertIsNone(workflow['buddy'])
+                for view in (task, listed_rows[run_id]):
+                    self.assertIsNone(view['lineage']['buddy'])
                 self.assertNotIn('adapter', workflow)
-                self.assertNotIn('adapter', micro_task_brief(workflow))
-                self.assertEqual(task_brief(task)['adapter'], adapter)
-                self.assertEqual(brief_rows[run_id]['adapter'], adapter)
+                self.assertEqual(listed_rows[run_id]['adapter'], adapter)
                 self.assertIsNone(task['lineage']['buddy'])
                 self.assertEqual(task['adapter'], adapter)
                 self.assertIsNone(workflow['currentTurn']['buddy'])
@@ -114,14 +334,14 @@ class UpgradeFixtureTests(unittest.TestCase):
 
 
     def test_public_operation_stock_retains_source_schema_and_history_hashes(self):
-        fixture, connection = self.restored()
-        self.assertEqual(fixture['sourceCommit'], '4a9fce3e11c48c55975f9b1251c0a8f03a31f707')
-        self.assertEqual(fixture['sourceVersion'], '0.54.0')
-        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
+        fixture, connection = self.restored(migrate=False)
+        self.assertEqual(fixture['sourceCommit'], '4de1dd9478980e924a4a86b2c50aaca33e33b79d')
+        self.assertEqual(fixture['sourceVersion'], '0.54.1')
+        self.assertEqual(fixture['schemaVersion'], UPGRADE_FLOOR_SCHEMA)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
         self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                         str(SCHEMA_VERSION))
+                         str(UPGRADE_FLOOR_SCHEMA))
         self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
                          {'schema_version', 'capability_secret'})
         self.assertEqual(tuple(connection.execute(
@@ -135,10 +355,11 @@ class UpgradeFixtureTests(unittest.TestCase):
         for row in connection.execute("SELECT w.input_json,a.result_json FROM workflow_turns w"
                                       " JOIN attempts a ON a.attempt_id=w.attempt_id WHERE w.state='returned'"):
             self.assertEqual(_sha(row[0].encode()), json.loads(row[1])['result']['turn']['inputSha256'])
+        sealed_manifests = []
         for _, run_id in fixture['stableIds'].items():
             row = connection.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()
             manifest = json.loads(row[0])
-            workspace.verify(manifest, state_dir=fixture['state'])
+            sealed_manifests.append(manifest)
             for artifact in connection.execute('SELECT * FROM workflow_artifacts WHERE run_id=?', (run_id,)):
                 if artifact['kind'] == 'output':
                     output = json.loads(artifact['manifest_json'])
@@ -159,6 +380,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                           (('delivered', 'concluded'), ('accepted', 'accepted'),
                            ('failed', 'concluded'), ('cancelled', 'cancelled'))},
                           **{fixture['stockIds'][key]: 'accepted' for key in ('adopted', 'verified', 'helper', 'lead')},
+                          fixture['fixStock']['target']: 'accepted',
+                          **{fixture['fixStock'][key]: 'cancelled' for key in ('first', 'second')},
                           fixture['stockIds']['helperParent']: 'concluded',
                           fixture['stockIds']['leadOwned']: 'concluded',
                           **{fixture['stockIds'][key]: 'cancelled' for key in ('scopeParent', 'scopeHelper')},
@@ -166,13 +389,16 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks WHERE state IN ('queued','running')").fetchone()[0], 0)
         self.assertEqual({row[0] for row in connection.execute(
             "SELECT json_extract(execution_workspace_json,'$.kind') FROM workflow_runs")}, {'existing', 'worktree'})
-        self.assertEqual(router.configuration(connection)['routerBuddyIds'], fixture['routerBuddyIds'])
+        self.assertEqual([row[0] for row in connection.execute('SELECT buddy_id FROM router_buddies ORDER BY position')], fixture['routerBuddyIds'])
         self.assertEqual(tuple(connection.execute(
             'SELECT default_mode,budget_preset,retry_interval_seconds FROM router_settings').fetchone()),
             ('review', 'deep', 47))
         for table in ('buddies', 'evaluation_preferences', 'model_service_notes',
                       'model_service_concurrency', 'harness_health'):
             self.assertGreater(connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0, table)
+        upgrade_state(fixture['state'])
+        for manifest in sealed_manifests:
+            workspace.verify(manifest, state_dir=fixture['state'])
 
 
     def test_host_seal_replays_without_overwriting_worker_stock(self):
@@ -189,12 +415,13 @@ class UpgradeFixtureTests(unittest.TestCase):
 
 
     def test_portable_roots_rebind_stable_identities_without_changing_native_history(self):
-        first, c1 = self.restored('first state')
-        name = ('第二个 “私有” fixture-root state' if os.name == 'nt'
-                else '第二个 "私有" <fixture-root> state')
-        second, c2 = self.restored(name)
+        first, c1 = self.restored('first')
+        # Git for Windows limits the UTF-8 gitdir pointer even with longpaths;
+        # leave room for the check runner's private root and keep non-ASCII.
+        second, c2 = self.restored('私 库')
         _, m1, _ = self.sample(first, c1)
         _, m2, _ = self.sample(second, c2)
+        self.assertNotEqual(m1['workspaceId'], m2['workspaceId'])
         self.assertNotEqual(m1['repositoryId'], m2['repositoryId'])
         self.assertNotEqual(m1['checkoutId'], m2['checkoutId'])
         self.assertNotEqual(m1['manifestSha256'], m2['manifestSha256'])
@@ -207,15 +434,62 @@ class UpgradeFixtureTests(unittest.TestCase):
             load_fixture(first['state'])
 
 
-    def test_base_opens_directly_and_matches_fresh_structure(self):
-        fixture, connection = self.restored()
+    def test_floor_requires_explicit_upgrade_and_matches_fresh_structure(self):
+        fixture, connection = self.restored(migrate=False)
         state = fixture['state']
+        complete_fixture_cleanup(connection)
         before = upgrade.idle_snapshot(state)
-        files = {p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
-                 if p.is_file() and not p.name.startswith('board.sqlite3')}
-        rowids = {name: [row[0] for row in connection.execute(f'SELECT rowid FROM "{name}" ORDER BY rowid')]
-                  for name in before['tables']}
-        self.assertEqual(before['schema'], SCHEMA_VERSION)
+        old_rows = {name: [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid')]
+                    for name in before['tables']}
+        old_columns = {name: ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info(\"{name}\")'))] for name in before['tables']}
+        macro_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(macro_tasks)')]]
+        task_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(tasks)')]]
+        identity_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(attempt_process_identities)')]]
+        cleanup_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(workspace_cleanup_plans)')]]
+        reservation_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(workspace_reservations)')]]
+        integration_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(workflow_integrations)')]]
+        sealed_roots = {}
+        for (raw,) in connection.execute('SELECT workspace_manifest_json FROM workflow_runs'):
+            manifest = json.loads(raw)
+            sealed_roots[manifest['workspaceId'], manifest['manifestSha256']] = manifest['checkoutRoot']
+        for (raw,) in connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE kind IN ('input','turn-input')"):
+            manifest = json.loads(raw)
+            sealed_roots[manifest['workspaceId'], manifest['manifestSha256']] = manifest['checkoutRoot']
+        releases = dict(connection.execute(
+            "SELECT w.reservation_id,h.created_at FROM workspace_reservations w"
+            " JOIN workflow_host_conclusions h ON h.run_id=w.holder_task_id"
+            " JOIN workflow_runs r ON r.run_id=h.run_id WHERE w.state='held' AND r.state='concluded'"))
+        self.assertTrue(releases)
+        deleted_plans = {row['plan_id'] for row in connection.execute(
+            "SELECT * FROM workspace_cleanup_plans WHERE state IN ('planned','blocked')")}
+        retained_commands = {row['command_id'] for row in connection.execute(
+            "SELECT command_id FROM commands WHERE kind NOT GLOB 'workflow.*'")}
+        retained_events = {row['seq'] for row in connection.execute('SELECT * FROM events')
+                           if row['kind'] != 'workflow.macro_task_created'
+                           and json.loads(row['payload_json']).get('planId') not in deleted_plans}
+        old_project_id = json.loads(connection.execute(
+            'SELECT workspace_manifest_json FROM workflow_runs LIMIT 1').fetchone()[0])['repositoryId']
+        marker_blob = hashlib.sha1(b'blob ' + str(len(old_project_id)).encode() + b'\0'
+                                   + old_project_id.encode()).hexdigest()
+        git_root = fixture['fixtureRoot'].relative_to(state) / 'repository/.git'
+        project_files = {git_root / 'refs/hey-my-buddy/project',
+                         git_root / 'objects' / marker_blob[:2] / marker_blob[2:]}
+
+        def state_files():
+            return {p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
+                    if p.is_file() and not p.name.startswith('board.sqlite3')
+                    and p.relative_to(native_path(state)) not in project_files}
+
+        files = state_files()
+        self.assertEqual(before['schema'], UPGRADE_FLOOR_SCHEMA)
+        with self.assertRaises(Corruption):
+            Database(state).initialize()
+        self.assertEqual(upgrade.preflight(state, contract_changed=True)['schema'], UPGRADE_FLOOR_SCHEMA)
+        with self.assertRaises(BoardError) as caught:
+            upgrade.preflight(state, contract_changed=False)
+        self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
+        self.assertEqual(upgrade_state(state), {'sourceSchema': UPGRADE_FLOOR_SCHEMA, 'targetSchema': SCHEMA_VERSION})
+        self.assertEqual(upgrade.idle_snapshot(state)['schema'], SCHEMA_VERSION)
         for changed in (False, True):
             self.assertEqual(upgrade.preflight(state, contract_changed=changed)['schema'], SCHEMA_VERSION)
         current = Database(state)
@@ -229,24 +503,328 @@ class UpgradeFixtureTests(unittest.TestCase):
             query = 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
             self.assertEqual([tuple(row) for row in connection.execute(query)],
                              [tuple(row) for row in baseline.execute(query)])
+        after = upgrade.idle_snapshot(state)
+        for name, original in old_rows.items():
+            if name == 'sqlite_sequence':
+                continue
+            if name in ('model_service_concurrency', 'evaluation_catalog', 'catalog_current',
+                        'catalog_pending', 'catalog_observations'):
+                if name != 'catalog_current':
+                    self.assertNotIn(name, after['tables'])
+                continue
+            if name == 'model_service_notes':
+                self.assertGreater(len(original), 0)
+                self.assertIsNone(connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='model_notes'").fetchone())
+                continue
+            actual = [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid')]
+            if name == 'meta':
+                self.assertEqual([(row[1], row[2]) for row in actual if row[1] != 'schema_version'],
+                                 [(row[1], row[2]) for row in original if row[1] != 'schema_version'])
+            elif name in ('attempts', 'workflow_runs', 'workflow_children', 'workflow_continuations', 'workflow_turns', 'workflow_artifacts'):
+                changed = {'workspace_manifest_json', 'manifest_sha256'}
+                if name == 'workflow_runs':
+                    changed.add('execution_workspace_json')
+                actual_columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
+                keep = [column for column in old_columns[name] if column in actual_columns and column not in changed]
+                expected = [{column: row[old_columns[name].index(column)] for column in keep} for row in original]
+                self.assertEqual([{column: row[actual_columns.index(column)] for column in keep} for row in actual], expected, name)
+            elif name == 'macro_tasks':
+                actual_columns = ['rowid', *(row[1] for row in connection.execute('PRAGMA table_info(macro_tasks)'))]
+                keep = [column for column in macro_columns if column in actual_columns]
+                self.assertEqual([tuple(row[actual_columns.index(column)] for column in keep) for row in actual],
+                                 [tuple(row[macro_columns.index(column)] for column in keep) for row in original])
+            elif name == 'tasks':
+                removed = {'required_capabilities', 'exclusive_resources', 'expected_seconds',
+                           'router_budget_seconds', 'owner', 'spec_json', 'input_fingerprint'}
+                keep = [i for i, column in enumerate(task_columns) if column not in removed]
+                actual_columns = ['rowid', *(row[1] for row in connection.execute('PRAGMA table_info(tasks)'))]
+                names = [task_columns[i] for i in keep]
+                self.assertEqual([tuple(row[actual_columns.index(column)] for column in names) for row in actual],
+                                 [tuple(row[i] for i in keep) for row in original])
+            elif name == 'attempt_process_identities':
+                keep = [i for i, column in enumerate(identity_columns) if column != 'process_group_id']
+                self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
+            elif name == 'workspace_cleanup_plans':
+                expected = []
+                for row in original:
+                    value = dict(zip(cleanup_columns, row))
+                    if value['plan_id'] in deleted_plans:
+                        continue
+                    evidence = json.loads(value['evidence_json'])
+                    workspace = evidence['workspace']
+                    allocation = workspace['allocation']
+                    self.assertEqual(set(evidence), {'acceptance', 'attemptId', 'finalArtifactId',
+                                                     'hostConclusion', 'integrationId', 'ownerGeneration',
+                                                     'shutdown', 'workspace'})
+                    self.assertEqual(set(workspace), {'allocation', 'attachedBranch', 'checkoutId',
+                                                      'eligible', 'kind', 'locked', 'manifestWorkspaceId',
+                                                      'reasons', 'repositoryId', 'sealedObservation',
+                                                      'unsealedPaths', 'workspaceId', 'worktree'})
+                    self.assertEqual(set(allocation), {'checkoutId', 'kind', 'manifestSha256',
+                                                       'manifestWorkspaceId', 'path', 'repositoryId', 'workspaceId'})
+                    self.assertEqual(set(json.loads(value['result_json'])), {'alreadyRemoved'})
+                    value['evidence_json'] = {
+                        **{key: evidence[key] for key in ('acceptance', 'attemptId', 'finalArtifactId',
+                                                          'hostConclusion', 'integrationId',
+                                                          'shutdown')},
+                        'workspace': {
+                            **{key: workspace[key] for key in ('attachedBranch', 'eligible', 'kind', 'locked',
+                                                                'manifestWorkspaceId', 'reasons',
+                                                                'sealedObservation', 'unsealedPaths',
+                                                                'workspaceId', 'worktree')},
+                            'projectId': workspace['repositoryId'],
+                            'allocation': {
+                                **{key: allocation[key] for key in ('kind', 'manifestSha256',
+                                                                     'manifestWorkspaceId', 'path', 'workspaceId')},
+                                'projectId': allocation['repositoryId'],
+                            },
+                        },
+                    }
+                    for removed in ('checkout_id', 'repository_id', 'expires_at', 'command_id'):
+                        value.pop(removed)
+                    expected.append(value)
+                after_columns = ['rowid', *[column[1] for column in connection.execute('PRAGMA table_info(workspace_cleanup_plans)')]]
+                for row, value in zip(actual, expected, strict=True):
+                    observed = dict(zip(after_columns, row))
+                    observed['evidence_json'] = json.loads(observed['evidence_json'])
+                    self.assertEqual(observed, value)
+            elif name == 'workspace_reservations':
+                expected = []
+                for row in original:
+                    value = dict(zip(reservation_columns, row))
+                    if value['reservation_id'] in releases:
+                        value.update(state='released', released_at=releases[value['reservation_id']])
+                    value['checkout_root'] = sealed_roots[value['workspace_id'], value['manifest_sha256']]
+                    for removed in ('checkout_id', 'repository_id', 'path'):
+                        value.pop(removed)
+                    expected.append(value)
+                after_columns = ['rowid', *[column[1] for column in connection.execute('PRAGMA table_info(workspace_reservations)')]]
+                self.assertEqual([dict(zip(after_columns, row)) for row in actual], expected)
+            elif name == 'workflow_integrations':
+                expected = []
+                for row in original:
+                    value = dict(zip(integration_columns, row))
+                    value.pop('target_repository_id')
+                    value['target_project_id'] = None
+                    value.pop('target_checkout_id')
+                    value.pop('command_id')
+                    expected.append(value)
+                after_columns = ['rowid', *[column[1] for column in connection.execute('PRAGMA table_info(workflow_integrations)')]]
+                self.assertEqual([dict(zip(after_columns, row)) for row in actual], expected)
+            elif name in ('workflow_routes', 'workflow_requests', 'workflow_scope_versions',
+                          'workflow_workspace_conflicts', 'workflow_host_conclusions'):
+                current_columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
+                keep = [column for column in old_columns[name] if column in current_columns]
+                self.assertEqual([tuple(row[current_columns.index(column)] for column in keep) for row in actual],
+                                 [tuple(row[old_columns[name].index(column)] for column in keep) for row in original])
+            elif name == 'commands':
+                self.assertEqual(actual, [row for row in original if row[1] in retained_commands])
+            elif name == 'events':
+                self.assertEqual(actual, [row for row in original if row[1] in retained_events])
+            elif name == 'router_settings':
+                current_columns = ['rowid', *(row[1] for row in connection.execute('PRAGMA table_info(router_settings)'))]
+                keep = [column for column in old_columns[name] if column in current_columns]
+                self.assertEqual([tuple(row[current_columns.index(column)] for column in keep) for row in actual],
+                                 [tuple(row[old_columns[name].index(column)] for column in keep) for row in original])
+                self.assertEqual(actual[0][current_columns.index('model_response_wait_seconds')], 60)
+                self.assertEqual(actual[0][current_columns.index('maintenance_interval_seconds')], 3600)
+                self.assertEqual(actual[0][current_columns.index('exploration_every')], 5)
+            elif name == 'buddies':
+                # The floor's three catalog models all had empty native descriptions.
+                self.assertEqual({dict(zip(old_columns[name], row))['model'] for row in original},
+                                 {'fixture-alpha', 'fixture-beta', 'fixture-gamma'})
+                expected = []
+                for row in original:
+                    value = dict(zip(old_columns[name], row))
+                    for removed in ('label', 'available', 'capabilities_json', 'context_window',
+                                    'description', 'source', 'unavailable_code',
+                                    'unavailable_params_json', 'unavailable_content'):
+                        value.pop(removed)
+                    value.update(alias=None, effort_rank=0, retired=0)
+                    expected.append(value)
+                columns = ['rowid', *[column[1] for column in connection.execute('PRAGMA table_info(buddies)')]]
+                self.assertEqual([dict(zip(columns, row)) for row in actual], expected)
+            elif name in ('decision_requests', 'router_requests'):
+                columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
+                self.assertEqual([tuple(row[columns.index(column)] for column in old_columns[name])
+                                  for row in actual], original, name)
+                form = 'request_form' if name == 'decision_requests' else 'snapshot_form'
+                self.assertTrue(all(row[columns.index(form)] == 'archived-inline-v1' for row in actual))
+            else:
+                self.assertEqual(actual, original, name)
+                self.assertEqual(after['fingerprints'][name], before['fingerprints'][name], name)
+        for name in ('maintenance_runs', 'domain_nodes', 'micro_task_classifications',
+                     'kind_summaries', 'kind_summary_evidence', 'routing_judgments'):
+            self.assertEqual(after['tables'][name], 0, name)
+        self.assertNotIn('kind_summary_citations', after['tables'])
+        with self.assertRaises(BoardError) as caught:
+            upgrade_state(state)
+        self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
+        self.assertEqual(upgrade.idle_snapshot(state), after)
+        self.assertEqual(state_files(), files)
+
+    def test_retained_catalog_becomes_bounded_model_service_stock(self):
+        fixture, connection = self.restored('retained-catalog', migrate=False)
+        old = {row['model']: dict(row) for row in connection.execute('SELECT * FROM buddies')}
+        current = dict(connection.execute('SELECT harness,observation_id FROM catalog_current'))
+        pending = {(row['harness'], row['provider'], row['model']): row['since']
+                   for row in connection.execute('SELECT * FROM catalog_pending')}
+        upgrade_state(fixture['state'])
+        services = {row['model']: dict(row) for row in connection.execute('SELECT * FROM model_services')}
+        self.assertEqual(set(services), set(old))
+        self.assertEqual(services['fixture-alpha']['description'], '')
+        self.assertEqual(services['fixture-alpha']['concurrency_limit'], 3)
+        self.assertEqual(services['fixture-alpha']['source_sequence'], current['codex'])
+        self.assertEqual(json.loads(services['fixture-alpha']['input_modalities_json']), ['text'])
+        self.assertEqual({(row['harness'], row['provider'], row['model']): row['pending_since']
+                          for row in services.values() if row['pending_since']}, pending)
+        self.assertEqual(connection.execute("SELECT sequence FROM catalog_current WHERE harness='codex'").fetchone()[0],
+                         current['codex'])
+        for table in ('evaluation_catalog', 'catalog_observations', 'catalog_pending',
+                      'model_service_concurrency'):
+            self.assertIsNone(connection.execute('SELECT 1 FROM sqlite_master WHERE name=?', (table,)).fetchone())
+
+    def test_legacy_budget_stays_frozen_while_current_views_project_response_wait(self):
+        from support import FakeClock, InProcessBoard
+
+        fixture, connection = self.restored('budget-projections', migrate=False)
+        run_id = fixture['stockIds']['helperParent']
+        decision_id = connection.execute('SELECT current_routing_id FROM workflow_runs WHERE run_id=?',
+                                         (run_id,)).fetchone()[0]
+        frozen = [tuple(row) for row in connection.execute(
+            'SELECT rowid,decision_id,round,snapshot_json,frozen_at FROM router_requests ORDER BY rowid')]
+        legacy_budget = json.loads(connection.execute('SELECT snapshot_json FROM router_requests WHERE decision_id=?',
+                                                       (decision_id,)).fetchone()[0])['facts']['budget']
+        self.assertEqual(legacy_budget, {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64, 'bytesRead': 2097152})
+        upgrade_state(fixture['state'])
+        board = InProcessBoard(fixture['state'], clock=FakeClock('2026-01-01T00:03:00.000Z'))
+        self.addCleanup(board.close)
+        old = board.call('workflow_get', {'runId': run_id, 'routingHistory': {}})
+        # The floor pins alpha, which would select it without calling a Router.
+        with board.store.db.write() as db:
+            db.execute("DELETE FROM evaluation_preferences WHERE mode='pin'")
+        submission = {'macroTaskId': 'standalone', 'title': 'Wait after upgrade',
+                      'task': 'Compare current routing wait views', 'buddy': 'route',
+                      'cwd': str(fixture['fixtureRoot'] / 'repository'), 'checkout': 'worktree',
+                      'access': 'write', 'writeScope': ['.'], 'inputs': [], 'expectedSeconds': 1800}
+        new = board.call('workflow_submit', {**submission})
+        new = board.call('workflow_get', {'runId': new['runId'], 'routingHistory': {}})
+        for view, expected_wait in ((old, None), (new, 60)):
+            self.assertEqual(view['routing']['modelResponseWaitSeconds'], expected_wait, view['routing'])
+            self.assertEqual(view['routingHistory']['entries'][0]['modelResponseWaitSeconds'], expected_wait)
+            decision = board.call('selection_get', {'decisionId': view['routing']['decisionId']})['decision']
+            self.assertEqual(decision['modelResponseWaitSeconds'], expected_wait)
+            self.assertNotIn('budget', view['routing'])
+            self.assertNotIn('budget', decision)
+        timeline = board.call('macro_task_timeline', {'macroTaskId': old['macroTaskId']})
+        spans = [span for span in timeline['spans'] if span['kind'] == 'routing' and span['decisionId'] == decision_id]
+        self.assertTrue(spans)
+        self.assertTrue(all(span['routing']['modelResponseWaitSeconds'] is None for span in spans))
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT rowid,decision_id,round,snapshot_json,frozen_at FROM router_requests ORDER BY rowid')
+                          if row['decision_id'] != new['routing']['decisionId']], frozen)
+        self.assertTrue(all(row[0] == 'archived-inline-v1' for row in connection.execute(
+            'SELECT snapshot_form FROM router_requests WHERE decision_id!=?',
+            (new['routing']['decisionId'],))))
+        archived_request = connection.execute(
+            'SELECT request_form,requested_json FROM decision_requests WHERE decision_id=?',
+            (decision_id,)).fetchone()
+        self.assertEqual(archived_request['request_form'], 'archived-inline-v1')
+        self.assertIn('inputTree', archived_request['requested_json'])
+        historical_dispatch = connection.execute(
+            'SELECT task_id FROM router_dispatches WHERE decision_id=? ORDER BY rowid DESC LIMIT 1',
+            (decision_id,)).fetchone()
+        if historical_dispatch is not None:
+            document = router_sequence.dispatch(connection, historical_dispatch['task_id'])['document']
+            self.assertEqual(document.get('executionWorkspaceForm'), 'archived-inline-v1')
+            self.assertIn('inputTree', document['executionWorkspace'])
+
+    def test_retry_of_upgraded_router_request_freezes_only_a_manifest_reference(self):
+        from support import FakeClock, InProcessBoard
+
+        fixture, connection = self.restored('archived-routing-retry', migrate=False)
+        run_id = fixture['stockIds']['helperParent']
+        decision_id = connection.execute('SELECT current_routing_id FROM workflow_runs WHERE run_id=?',
+                                         (run_id,)).fetchone()[0]
+        original = [tuple(row) for row in connection.execute(
+            'SELECT round,snapshot_json,frozen_at FROM router_requests WHERE decision_id=? ORDER BY round',
+            (decision_id,))]
+        upgrade_state(fixture['state'])
+        board = InProcessBoard(fixture['state'], clock=FakeClock('2026-01-01T00:03:00.000Z'))
+        self.addCleanup(board.close)
+        with board.store.db.write() as db:
+            db.execute("DELETE FROM evaluation_preferences WHERE mode='pin'")
+            row = board.store.decisions._row(db, decision_id)
+            archived = json.loads(row['requested_json'])['executionWorkspace']
+            self.assertIn('inputTree', archived)
+            board.store.decisions._retry_selection(db, row,
+                reason={'code': 'router-out-of-bounds', 'params': {}}, now=board.store.now())
+            snapshots = db.execute(
+                'SELECT round,snapshot_json,snapshot_form,frozen_at FROM router_requests'
+                ' WHERE decision_id=? ORDER BY round', (decision_id,)).fetchall()
+            self.assertEqual([(r['round'], r['snapshot_json'], r['frozen_at'])
+                              for r in snapshots[:-1]], original)
+            latest = snapshots[-1]
+            expected = {key: archived[key] for key in ('workspaceId', 'manifestSha256')}
+            self.assertEqual(latest['snapshot_form'], 'manifest-reference-v2')
+            self.assertEqual(json.loads(latest['snapshot_json'])['baseInput']['executionWorkspace'], expected)
+            task_id = db.execute(
+                'SELECT task_id FROM router_dispatches WHERE decision_id=? AND round=?',
+                (decision_id, latest['round'])).fetchone()[0]
+            dispatch = router_sequence.dispatch(db, task_id)['document']
+            self.assertEqual(dispatch['executionWorkspace'], expected)
+            self.assertEqual(dispatch['executionWorkspaceForm'], 'manifest-reference-v2')
+            retained = db.execute('SELECT requested_json,request_form FROM decision_requests WHERE decision_id=?',
+                                  (decision_id,)).fetchone()
+            self.assertEqual(retained['request_form'], 'archived-inline-v1')
+            self.assertEqual(json.loads(retained['requested_json'])['executionWorkspace'], archived)
+
+    def test_failed_second_column_addition_rolls_back_the_whole_upgrade(self):
+        fixture, connection = self.restored('failed-upgrade', migrate=False)
+        state = fixture['state']
+        complete_fixture_cleanup(connection)
+        before = upgrade.idle_snapshot(state)
+        schema = [tuple(row) for row in connection.execute(
+            'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
+        real_connect = sqlite3.connect
+
+        class FailingConnection(sqlite3.Connection):
+            additions = 0
+
+            def execute(self, sql, parameters=(), /):
+                if sql.startswith('ALTER TABLE router_settings ADD COLUMN'):
+                    self.additions += 1
+                    if self.additions == 2:
+                        raise sqlite3.OperationalError('injected second column failure')
+                return super().execute(sql, parameters)
+
+        with mock.patch.object(schema_upgrade.sqlite3, 'connect',
+                               side_effect=lambda *args, **kwargs: real_connect(*args, **kwargs, factory=FailingConnection)):
+            with self.assertRaisesRegex(sqlite3.OperationalError, 'injected second column failure'):
+                upgrade_state(state)
         self.assertEqual(upgrade.idle_snapshot(state), before)
-        for name, original in rowids.items():
-            self.assertEqual([row[0] for row in connection.execute(f'SELECT rowid FROM "{name}" ORDER BY rowid')],
-                             original, name)
-        self.assertEqual({p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
-                          if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')], schema)
+        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
+                         str(UPGRADE_FLOOR_SCHEMA))
+        self.assertEqual(upgrade_state(state)['targetSchema'], SCHEMA_VERSION)
 
     def test_started_verification_checks_retained_workflow_columns(self):
         fixture, connection = self.restored('projected-columns')
+        complete_fixture_cleanup(connection)
         before = upgrade.idle_snapshot(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
         self.assertTrue(upgrade.verify_started(fixture['state'], target, health, before)['retainedDataFingerprints'])
-        for table, column in (('workflow_runs', 'title'), ('workflow_children', 'role'),
+        for table, column in (('workflow_runs', 'title'), ('workflow_children', 'request_id'),
                               ('workflow_turns', 'input_json')):
             with self.subTest(table=table):
                 original = [tuple(row) for row in connection.execute(f'SELECT rowid,{column} FROM {table}')]
-                connection.execute(f"UPDATE {table} SET {column}='changed'")
+                if table == 'workflow_turns':
+                    connection.execute("UPDATE workflow_turns SET input_json=json_set(input_json,'$.auditProbe','changed')")
+                else:
+                    connection.execute(f"UPDATE {table} SET {column}='changed'")
                 connection.commit()
                 with self.assertRaises(BoardError) as caught:
                     upgrade.verify_started(fixture['state'], target, health, before)
@@ -320,7 +898,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertIsNotNone(deletion)
         target = deletion['target_id']
         with store.db.read() as db:
-            scope = macro_task_deletion._collect(db, target)
+            scope = macro_task_deletion._collect(db, target, fixture['state'])
         identifiers = {target, *scope.runs, *scope.tasks, *scope.attempts, *scope.decisions}
         self.assertTrue(scope.runs)
         self.assertGreater(connection.execute('SELECT COUNT(*) FROM commands').fetchone()[0], 0)
@@ -383,7 +961,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual({row[0] for row in connection.execute('SELECT strategy FROM workflow_integrations')},
                          {'patch', 'not-required'})
         self.assertEqual({row[0] for row in connection.execute('SELECT state FROM workspace_cleanup_plans')},
-                         {'planned', 'applied', 'blocked'})
+                         {'applied'})
         verification = json.loads(connection.execute(
             "SELECT verification_json FROM workflow_integrations WHERE strategy='patch'").fetchone()[0])
         self.assertEqual([item['path'] for item in verification['differingPaths']], ['README.md'])
@@ -404,6 +982,10 @@ class UpgradeFixtureTests(unittest.TestCase):
                          {0, 1})
         self.assertEqual({tuple(row) for row in connection.execute('SELECT mode,note FROM evaluation_preferences')},
                          {('pin', 'fixture pinned buddy'), ('exclude', 'fixture exclusion')})
+        fixes = connection.execute('SELECT run_id,fixed_run_id FROM workflow_fixes ORDER BY rowid').fetchall()
+        self.assertEqual([row[0] for row in fixes],
+                         [fixture['fixStock']['first'], fixture['fixStock']['second']])
+        self.assertEqual({row[1] for row in fixes}, {fixture['fixStock']['target']})
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE kind='quota.redetect'").fetchone()[0], 2)
         for row in connection.execute('SELECT activity_json FROM attempt_activity'):
             self.assertEqual(json.loads(row[0])['eventSeq'], 3)
@@ -469,15 +1051,15 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         references = [entry['params']['receipt'] for entry in fixture['operations']
                       if entry['operation'] == 'execution_result']
-        self.assertEqual(len(references), 20)
+        self.assertEqual(len(references), 20 + int('target' in fixture['fixStock']))
         for reference in references:
-            receipt = read_execution_receipt(Path(reference['path']).parent, sha256=reference['sha256'])
+            receipt = read_execution_receipt(Path(reference['path']).parent, sha256=reference['sha256'], form='archived-report-v1')
             self.assertIsNotNone(receipt)
             attempt = connection.execute('SELECT task_id,generation FROM attempts WHERE attempt_id=?',
                                          (receipt['attemptId'],)).fetchone()
             self.assertEqual(tuple(attempt), (receipt['taskId'], receipt['generation']))
         sessions = list(native_path(fixture['state'] / 'sessions').rglob('*.jsonl'))
-        self.assertEqual(len(sessions), 14)
+        self.assertEqual(len(sessions), 14 + int('target' in fixture['fixStock']))
         for path in sessions:
             lines = path.read_text(encoding="utf-8").splitlines()
             format = SessionFormat.model_validate_json(lines[0])
@@ -488,7 +1070,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             "SELECT run_id FROM workflow_artifacts WHERE kind='turn-input'")},
             {fixture['stableIds']['delivered'], fixture['stableIds']['accepted'], fixture['stockIds']['verified'],
              fixture['stockIds']['lead'], fixture['stockIds']['helperParent'], fixture['stockIds']['helper'],
-             fixture['stockIds']['scopeParent'],
+             fixture['stockIds']['scopeParent'], fixture['fixStock']['target'],
              fixture['edgeStock']['partial-failed']['runId']})
         outputs = [json.loads(row[0]) for row in connection.execute(
             "SELECT manifest_json FROM workflow_artifacts WHERE kind='output'")]
@@ -502,15 +1084,16 @@ class UpgradeFixtureTests(unittest.TestCase):
         evidence = json.loads(conflict['evidence_json'])
         self.assertEqual(evidence['blockingPaths'], ['outside.txt'])
         self.assertEqual([entry['path'] for entry in evidence['entries']], ['outside.txt'])
-        for row in connection.execute('SELECT capabilities_json FROM buddies'):
-            self.assertEqual(set(json.loads(row[0])), {'execution:codex', 'effort:high', 'input:text'})
+        for row in connection.execute('SELECT input_modalities_json FROM model_services'):
+            self.assertEqual(json.loads(row[0]), ['text'])
+        self.assertEqual({row[0] for row in connection.execute('SELECT effort FROM buddies')}, {'high'})
         health = json.loads(connection.execute("SELECT record_json FROM harness_health WHERE harness='codex'").fetchone()[0])
         self.assertEqual(connection.execute("SELECT status FROM harness_health WHERE harness='codex'").fetchone()[0], 'ready')
         self.assertFalse({'harness', 'status', 'available'} & health.keys())
         self.assertFalse({'reviewVerification', 'systemSandbox', 'readOnlyStructured'} & health.keys())
 
     def test_every_other_schema_is_refused_without_writes(self):
-        fixture, connection = self.restored()
+        fixture, connection = self.restored(migrate=False)
         for version in ('24', '25', '26', '27', '28', '29', '0', '999', '028', '28.0', '029', '29.0', '030', '30.0', 'unrecognized'):
             with self.subTest(schema=version):
                 connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))
@@ -529,6 +1112,7 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_started_verification_rejects_changed_retained_events(self):
         fixture, connection = self.restored()
+        complete_fixture_cleanup(connection)
         before = upgrade.idle_snapshot(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
@@ -547,6 +1131,7 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_started_verification_checks_retained_json(self):
         fixture, connection = self.restored('checked-json-retention')
+        complete_fixture_cleanup(connection)
         before = upgrade.idle_snapshot(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
@@ -567,6 +1152,7 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_started_verification_rejects_rewritten_command_receipts(self):
         fixture, connection = self.restored()
+        complete_fixture_cleanup(connection)
         before = upgrade.idle_snapshot(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
@@ -592,3 +1178,103 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
             self.assertEqual(caught.exception.details['tables'], ['commands'])
             command.assert_not_called()
+
+    def test_cleanup_expiry_is_removed_from_populated_floor_stock(self):
+        fixture, connection = self.restored('cleanup-expiry', migrate=False)
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(workspace_cleanup_plans)')}
+        self.assertIn('expires_at', columns)
+        stock = [tuple(row) for row in connection.execute("SELECT plan_id,created_at FROM workspace_cleanup_plans WHERE state IN ('applying','applied') ORDER BY rowid")]
+        self.assertTrue(stock)
+        self.assertTrue(all(row[0] for row in connection.execute('SELECT expires_at FROM workspace_cleanup_plans')))
+        connection.close()
+        upgrade_state(fixture['state'])
+        upgraded = sqlite3.connect(fixture['state'] / 'board.sqlite3')
+        self.addCleanup(upgraded.close)
+        upgraded.row_factory = sqlite3.Row
+        self.assertNotIn('expires_at', {row[1] for row in upgraded.execute('PRAGMA table_info(workspace_cleanup_plans)')})
+        self.assertEqual([tuple(row) for row in upgraded.execute('SELECT plan_id,created_at FROM workspace_cleanup_plans ORDER BY rowid')], stock)
+        for row in upgraded.execute('SELECT * FROM workspace_cleanup_plans'):
+            self.assertNotIn('expiresAt', WorkflowCoordinator._plan_view(row))
+
+    def test_stock_provenance_pins_each_generated_supplement(self):
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        root = Path(__file__).resolve().parents[4]
+        current_generator = _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes())
+        # The floor and older supplements retain the source digest from their
+        # actual generation. The alias supplement was generated by this source.
+        self.assertEqual(metadata['generatorSha256'], FROZEN_GENERATOR_SHA256)
+        alias = metadata['aliasStock']
+        self.assertEqual(alias['schemaVersion'], 39)
+        self.assertEqual(alias['generatorSha256'], current_generator)
+        self.assertEqual(alias['baseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(alias['sha256'], _sha((FIXTURE / 'schema-39-alias-stock.sql').read_bytes()))
+        self.assertIn('--alias-stock-for', alias['generationCommand'])
+        self.assertEqual(alias['sourceDiscoveryId'], 'cat-89b5b236ee44be1428bb5c86')
+        self.assertEqual(set(alias['sourceBuddyIds']), {
+            'codex:openai:fixture-alpha:high',
+            'codex:openai:fixture-beta:high',
+            'codex:openai:fixture-gamma:high',
+        })
+        catalog = metadata['catalogStock']
+        self.assertEqual(catalog['schemaVersion'], 39)
+        self.assertEqual(catalog['generatorSha256'], current_generator)
+        self.assertEqual(catalog['baseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(catalog['sha256'], _sha((FIXTURE / 'schema-39-catalog-stock.sql').read_bytes()))
+        self.assertEqual(catalog['sourceBuddyId'], 'codex:openai:fixture-alpha:high')
+        self.assertEqual(metadata['issueStock']['writerCommit'], metadata['sourceCommit'])
+        self.assertEqual(metadata['issueStock']['generatorSha256'], FROZEN_GENERATOR_SHA256)
+        self.assertEqual(metadata['issueStock']['baseGeneratorSha256'], metadata['generatorSha256'])
+        self.assertEqual(metadata['issueStock']['baseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(metadata['issueStock']['sha256'], _sha((FIXTURE / 'schema-30-issue-stock.sql').read_bytes()))
+        for field in ('cleanupStockGeneratorSha256', 'reservationStockGeneratorSha256',
+                      'deliveredStockGeneratorSha256', 'growth30GeneratorSha256', 'growth33GeneratorSha256'):
+            with self.subTest(field=field):
+                self.assertEqual(metadata[field], FROZEN_GENERATOR_SHA256)
+        self.assertEqual(metadata['legacyStock']['generatorSha256'], FROZEN_GENERATOR_SHA256)
+        self.assertEqual(metadata['modelStock']['generatorSha256'], FROZEN_GENERATOR_SHA256)
+        self.assertEqual(metadata['modelStock']['baseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(metadata['modelStock']['schema31StockSha256'],
+                         _sha((FIXTURE / 'schema-31-stock.sql').read_bytes()))
+        self.assertEqual(metadata['modelStock']['sha256'],
+                         _sha((FIXTURE / 'schema-36-model-stock.sql').read_bytes()))
+        self.assertEqual(metadata['modelStock']['writerCommit'],
+                         'de833698f8a59e6ff0cba6b01c4a98ee8bd20594')
+        self.assertEqual(metadata['modelStock']['floorWriterCommit'], metadata['sourceCommit'])
+        self.assertEqual(metadata['modelStock']['floorWriterSources'], {
+            'src/hey_my_buddy/blackboard/catalog/catalog_store.py':
+                '92268408c4f50b1203a7a21993229add0296a39e818f3f86decb602286273bc9',
+            'src/hey_my_buddy/blackboard/evaluation/user_policy.py':
+                '9ee6d6c4b223e763a8b3afda919ddd9408f0fe388ee962304c6661fdaac22bcb',
+        })
+        self.assertEqual(metadata['modelStock']['writerPath'],
+                         'src/hey_my_buddy/blackboard/routing/maintenance_data.py')
+        self.assertEqual(metadata['modelStock']['writerSha256'],
+                         '66421d8d2f79295d57cd05ffd6c21fb7824f7b9e430d30bc8f0a5750f0317b4a')
+        self.assertEqual(metadata['modelStock']['statisticsWriterPath'],
+                         'src/hey_my_buddy/blackboard/routing/statistics.py')
+        self.assertEqual(metadata['modelStock']['statisticsWriterSha256'],
+                         'fd5c6e1093b0989dbd682f85a8ba6ed439f6d9abccf42bbbfca5e8e8071e606f')
+        self.assertNotIn('baseGeneratorSha256', metadata)
+        self.assertEqual(metadata['cleanupStockGeneratorSha256'], FROZEN_GENERATOR_SHA256)
+        self.assertEqual(metadata['cleanupStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(metadata['cleanupStockSha256'], _sha((FIXTURE / 'schema-31-cleanup-stock.sql').read_bytes()))
+        self.assertIn('--cleanup-stock-for', metadata['cleanupStockGenerationCommand'])
+
+    def test_reservation_stock_records_its_floor_writer_and_generator(self):
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        self.assertEqual(metadata['reservationStockGeneratorSha256'],
+                         FROZEN_GENERATOR_SHA256)
+        self.assertEqual(metadata['reservationStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(metadata['reservationStockSha256'], _sha((FIXTURE / 'schema-30-reservation-stock.sql').read_bytes()))
+        self.assertIn('--reservation-stock-for', metadata['reservationStockGenerationCommand'])
+
+    def test_delivered_stock_records_its_floor_writer_and_physical_resources(self):
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        self.assertEqual(metadata['deliveredStockGeneratorSha256'],
+                         FROZEN_GENERATOR_SHA256)
+        self.assertEqual(metadata['deliveredStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(metadata['deliveredStockSqlSha256'],
+                         _sha((FIXTURE / 'schema-30-delivered-stock.sql').read_bytes()))
+        self.assertEqual(metadata['deliveredStockResourcesSha256'],
+                         _sha((FIXTURE / 'schema-30-delivered-resources.json').read_bytes()))
+        self.assertIn('--delivered-stock-for', metadata['deliveredStockGenerationCommand'])

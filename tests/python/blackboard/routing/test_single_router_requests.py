@@ -26,7 +26,7 @@ class SingleRouterRequestTests(BoardTestCase):
         mock_readonly.install(self)
 
     def request(self, board, **extra):
-        return board.call("selection_request", {"requestId": "selection", "task": "bounded change", **extra})
+        return board.store.decisions.request_select({"requestId": "selection", "task": "bounded change", **extra})
 
     def audit(self, board, response):
         return board.call("selection_get", {"decisionId": response["decisionId"], "includeAudit": True})["decision"]
@@ -38,7 +38,7 @@ class SingleRouterRequestTests(BoardTestCase):
     def test_multi_candidate_freezes_complete_router_and_input_hash(self):
         board = self.board()
         self.seed(board)
-        self.configure(board, routingBudget="deep")
+        self.configure(board, modelResponseWaitSeconds=90)
         response = self.request(board)
         view = self.audit(board, response)
         self.assertEqual(response["status"], "queued")
@@ -47,12 +47,12 @@ class SingleRouterRequestTests(BoardTestCase):
             self.assertEqual(document["routerBuddyIds"], [BUDDY_ID])
             self.assertEqual(document["routerIdentities"], [identity])
             self.assertEqual(document["routingMode"], "review")
-            self.assertEqual(document["budget"], router.budget("deep"))
+            self.assertEqual(document["modelResponseWaitSeconds"], 90)
             self.assertNotIn("fallback", document)
             self.assertNotIn("requestedRoutingMode", document)
         self.assertEqual(view["input"]["buddy"], identity)
         self.assertNotIn("routerBuddyIds", view["requested"])
-        self.assertNotIn("budget", view["requested"])
+        self.assertNotIn("modelResponseWaitSeconds", view["requested"])
         self.assertEqual(view["routerBuddyId"], BUDDY_ID)
         self.assertEqual(view["routerBuddy"], identity)
         self.assertNotIn("inputSha256", view)
@@ -62,18 +62,18 @@ class SingleRouterRequestTests(BoardTestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
             event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='decision.requested'").fetchone()[0])
         self.assertEqual(event["routerIdentities"], [identity])
-        self.assertEqual(event["budget"], router.budget("deep"))
+        self.assertEqual(event["modelResponseWaitSeconds"], 90)
 
     def test_fast_uses_same_router_and_sixty_second_repo_free_input(self):
         board = self.board()
         self.seed(board)
-        self.configure(board, defaultRoutingMode="fast", routingBudget="deep")
+        self.configure(board, defaultRoutingMode="fast", modelResponseWaitSeconds=90)
         view = self.audit(board, self.request(board))
         self.assertEqual(view["routerBuddyId"], BUDDY_ID)
         self.assertEqual(view["routingMode"], "fast")
-        self.assertEqual(view["budget"], router.FAST_BUDGET)
-        self.assertNotIn("routerBudgetSeconds", view["requested"])
-        self.assertEqual(view["input"]["budget"]["timeoutSeconds"], 60)
+        self.assertEqual(view["modelResponseWaitSeconds"], 90)
+        self.assertNotIn("modelResponseWaitSeconds", view["requested"])
+        self.assertEqual(view["input"]["modelResponseWaitSeconds"], 90)
         self.assertNotIn("executionWorkspace", view["input"])
         self.assertNotIn("evidence", view["input"])
         self.assertNotIn("file", view["input"]["outputSchema"]["properties"]["evidence"]["items"]["properties"]["kind"]["enum"])
@@ -88,25 +88,25 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertEqual(view["routerBuddy"]["effort"], "off")
         self.assertEqual({item["buddyId"] for item in view["input"]["buddies"]}, {SECOND_BUDDY_ID, THIRD_BUDDY_ID})
 
-    def test_review_settings_budget_is_frozen_and_can_be_rechecked(self):
+    def test_review_response_wait_is_frozen_and_can_be_rechecked(self):
         board = self.board()
         self.seed(board)
         view = self.audit(board, self.request(board))
-        self.assertEqual(view["budget"], router.budget())
+        self.assertEqual(view["modelResponseWaitSeconds"], 60)
         with board.store.db.read() as connection:
             snapshot = router_sequence.request_snapshot(connection, view["decisionId"])["facts"]
             resolution = router.current_router(connection, frozen=snapshot)
         self.assertEqual(resolution.buddy_id, BUDDY_ID)
         self.assertIsNone(resolution.problem)
-        self.assertEqual(resolution.facts["budget"]["timeoutSeconds"], 300)
-        self.assertEqual(view["input"]["budget"]["timeoutSeconds"], 300)
+        self.assertEqual(resolution.facts["modelResponseWaitSeconds"], 60)
+        self.assertEqual(view["input"]["modelResponseWaitSeconds"], 60)
 
     def test_replay_after_setting_and_candidate_changes_keeps_every_snapshot(self):
         board = self.board()
         self.seed(board)
         first = self.request(board)
         original = self.audit(board, first)
-        self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", routingBudget="brief")
+        self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", modelResponseWaitSeconds=30)
         self.publish_user_patch(board, request_id="exclude", command_id="exclude",
                                 preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "exclude", "note": "later bound"}])
         with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("replay must not resolve")):
@@ -181,20 +181,21 @@ class SingleRouterRequestTests(BoardTestCase):
         self.seed(board)
         with board.store.db.write() as connection:
             for updates, code in (("enabled=0", "router-disabled"),
-                                  ("enabled=1,available=0", "router-catalog-unavailable")):
+                                  ("enabled=1,retired=1", "router-catalog-unavailable")):
                 connection.execute(f"UPDATE buddies SET {updates} WHERE buddy_id=?", (BUDDY_ID,))
                 buddy, actual, _ = router.buddy_problem(connection, BUDDY_ID, "review")
                 self.assertIsNone(buddy)
                 self.assertEqual(actual, code)
+            connection.execute("UPDATE buddies SET retired=0 WHERE buddy_id=?", (BUDDY_ID,))
             cause = {"code": "catalog.model-unavailable", "params": {"harness": "dsh"}}
-            connection.execute("UPDATE buddies SET unavailable_code=?,unavailable_params_json=? WHERE buddy_id=?",
+            connection.execute("UPDATE model_services SET unavailable_code=?,unavailable_params_json=? WHERE (harness,provider,model)=(SELECT harness,provider,model FROM buddies WHERE buddy_id=?)",
                                (cause["code"], canonical_json(cause["params"]), BUDDY_ID))
             _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-catalog-unavailable")
             self.assertEqual(facts, {"cause": cause})
             resolution = router.current_router(connection)
             self.assertEqual(resolution.inspections[0]["cause"], cause)
-            connection.execute("UPDATE buddies SET available=1 WHERE buddy_id=?", (BUDDY_ID,))
+            connection.execute("UPDATE model_services SET unavailable_code=NULL,unavailable_params_json=NULL WHERE (harness,provider,model)=(SELECT harness,provider,model FROM buddies WHERE buddy_id=?)", (BUDDY_ID,))
             with patch("hey_my_buddy.blackboard.service.harness_health.read_health", return_value={"status": "missing", "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}):
                 _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-harness-unavailable")
@@ -214,15 +215,15 @@ class SingleRouterRequestTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         decision = self.audit(board, self.request(board))
-        self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", routingBudget="brief")
+        self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", modelResponseWaitSeconds=30)
         with board.store.db.read() as connection:
             snapshot = router_sequence.request_snapshot(connection, decision["decisionId"])["facts"]
             resolution = router.current_router(connection, frozen=snapshot)
         self.assertEqual(resolution.buddy_id, BUDDY_ID)
         self.assertIsNone(resolution.problem)
         self.assertEqual(resolution.facts, {key: snapshot[key] for key in (
-            "routerBuddyIds", "routerIdentities", "routingMode", "routingBudget",
-            "routerRetryIntervalSeconds", "budget")})
+            "routerBuddyIds", "routerIdentities", "routingMode", "modelResponseWaitSeconds",
+            "routerRetryIntervalSeconds")})
         # The claim layer, covered by the settings-drift claim test, refuses
         # execution after this change. The shared resolver reads frozen facts.
 
@@ -254,25 +255,25 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertNotIn("fallback", view)
         self.assertNotIn("requestedRoutingMode", view)
 
-    def test_selection_request_accepts_task_beyond_old_router_limit(self):
+    def test_direct_selection_accepts_task_beyond_old_router_limit(self):
         board = self.board()
         self.seed(board)
-        response = board.call("selection_request", {"requestId": "large-selection",
+        response = board.store.decisions.request_select({"requestId": "large-selection",
                                                     "task": "x" * 9000})
         view = self.audit(board, response)
         self.assertEqual(view["status"], "queued")
         self.assertEqual(view["input"]["task"], "x" * 9000)
         self.assertIsNotNone(view["runId"])
 
-    def test_selection_request_uses_shared_one_mib_task_bound(self):
+    def test_direct_selection_uses_shared_one_mib_task_bound(self):
         board = self.board()
         self.seed(board)
         task = "x" * schemas.MAX_TASK_BYTES
-        accepted = board.call("selection_request", {"requestId": "exact-one-mib", "task": task})
+        accepted = board.store.decisions.request_select({"requestId": "exact-one-mib", "task": task})
         self.assertEqual(accepted["status"], "queued")
         self.assertEqual(self.audit(board, accepted)["input"]["task"], task)
         with self.assertRaises(BoardError) as raised:
-            board.call("selection_request", {"requestId": "over-one-mib", "task": task + "x"})
+            board.store.decisions.request_select({"requestId": "over-one-mib", "task": task + "x"})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
     def test_admission_failure_rolls_back_request_task_and_event_together(self):
@@ -297,6 +298,16 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.catalog_fixture()
         mock_readonly.install(self)
 
+    def test_workflow_expected_duration_reaches_frozen_router_input(self):
+        from hey_my_buddy.blackboard.routing.router_sequence import request_snapshot
+        board = self.board()
+        self.seed(board)
+        view = self.routed(board, expectedSeconds=900)
+        with board.store.db.read() as connection:
+            frozen = request_snapshot(connection, view["routing"]["decisionId"])["baseInput"]
+        self.assertEqual(frozen["expectedSeconds"], 900)
+        self.assertEqual(frozen["task"], "Produce a verified implementation")
+
     def test_router_unavailable_opens_same_micro_task_attention_and_complete_host_buddy_recovers(self):
         board = self.board()
         self.seed(board, decision_buddy=None)
@@ -320,7 +331,7 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.assertEqual(json.loads(request_row["payload_json"]), {"source": "routing"})
         continued = self.continue_run(board, view, buddy=BUDDY)
         self.assertEqual(continued["runId"], view["runId"])
-        self.assertEqual(continued["buddy"], BUDDY)
+        self.assertEqual(continued["buddy"], {**BUDDY, "alias": None})
         self.assertFalse(continued["awaitingHost"])
         self.register(board)
         self.assertEqual(self.claim(board, run_id=view["runId"])["claim"]["task"]["spec"]["model"], BUDDY["model"])
@@ -330,13 +341,13 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.seed(board)
         original = self.routed(board)
         self.publish_user_patch(board, request_id="new-router", command_id="new-router",
-                                configuration={"routerBuddyIds": [SECOND_BUDDY_ID], "defaultRoutingMode": "fast", "routingBudget": "brief"})
+                                configuration={"routerBuddyIds": [SECOND_BUDDY_ID], "defaultRoutingMode": "fast", "modelResponseWaitSeconds": 30})
         replay = self.routed(board)
         self.assertEqual(replay["routing"], original["routing"])
         history = board.call("workflow_get", {"runId": original["runId"], "routingHistory": {"limit": 10}})["routingHistory"]
         self.assertEqual(history["total"], 1)
         entry = history["entries"][0]
-        for key in ("routerBuddyId", "routerBuddy", "routingMode", "budget"):
+        for key in ("routerBuddyId", "routerBuddy", "routingMode", "modelResponseWaitSeconds"):
             self.assertEqual(entry[key], original["routing"][key])
         self.assertNotIn("fallback", entry)
 
@@ -346,7 +357,7 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("complete buddy must not resolve")):
             view = self.submit(board)
         self.assertEqual(view["routing"]["status"], "explicit")
-        self.assertEqual(view["buddy"], BUDDY)
+        self.assertEqual(view["buddy"], {**BUDDY, "alias": None})
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM decision_requests").fetchone()[0], 0)
 
@@ -355,13 +366,14 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.seed(board, decision_buddy=None)
         first = self.routed(board)
         self.publish_user_patch(board, request_id="choose-router", command_id="choose-router", configuration={"routerBuddyIds": [BUDDY_ID]})
-        pending = self.continue_run(board, first, reroute=True)
+        request_id = first["activeRequest"]["requestId"]
+        pending = self.continue_run(board, first, requestId=request_id, buddy="route")
         board.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
         fresh = board.call("workflow_get", {"runId": first["runId"]})
         self.assertEqual(fresh["routing"]["status"], "queued")
         self.assertNotEqual(fresh["routing"]["decisionId"], first["routing"]["decisionId"])
         self.assertEqual(fresh["routing"]["routerBuddyId"], BUDDY_ID)
-        self.assertTrue(self.continue_run(board, first, reroute=True)["duplicate"])
+        self.assertTrue(self.continue_run(board, first, requestId=request_id, buddy="route")["alreadyResponded"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 2)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)

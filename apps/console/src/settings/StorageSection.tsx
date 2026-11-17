@@ -10,7 +10,7 @@ import { StateMark } from "../components/ui/state-mark";
 import { formatDateTime, formatDuration } from "../i18n/format";
 import { StorageOrphans, StorageOutcome, StorageTable } from "./StorageDetails";
 import { Section } from "./Section";
-import { CATEGORY_ORDER, byteHint, byteText, categoryText } from "./storage-display";
+import { CATEGORY_ORDER, byteText, categoryText } from "./storage-display";
 
 type Phase = "idle" | "planning" | "planned" | "applying" | "applied" | "unknown" | "incomplete";
 
@@ -48,7 +48,10 @@ export function StorageSection({ api, csrfToken, connectionError }: {
   const totalBytes = categories.reduce((sum, category) => sum + category.bytes, 0);
   const totalReclaimable = categories.reduce((sum, category) => sum + category.reclaimableBytes, 0);
   const checkReason = connectionError || (busy ? t(phase === "planning" ? "checking" : "applying") : unresolved ? t("replayFirst") : "");
-  const reclaimReason = connectionError || (!plan ? t("unchecked") : busy ? t(phase === "planning" ? "checking" : "applying") : expired ? t("expiredHint") : totalReclaimable <= 0 ? t("none") : "");
+  const reclaimReason = connectionError || (!plan ? t("unchecked") : busy ? t(phase === "planning" ? "checking" : "applying") : expired ? t("expiredHint") : "");
+  const reclaimDisabled = !!reclaimReason || totalReclaimable <= 0;
+  const checkHint = checkReason || (expired || phase === "applied" ? t("expiredHint") : undefined);
+  const checked = plan ? t(expired || phase === "applied" ? "checkedAt" : "checked", { time: formatDateTime(Date.parse(plan.createdAt)), duration: formatDuration(Math.max(0, Date.parse(plan.expiresAt) - now)) }) : null;
 
   const requestPlan = useCallback(async () => {
     if (connectionError || inFlight.current || unresolved) return;
@@ -83,7 +86,7 @@ export function StorageSection({ api, csrfToken, connectionError }: {
   }, [api, csrfToken, plan, commandId, connectionError]);
 
   function prepareConfirmation() {
-    if (!plan || reclaimReason || unresolved || phase === "applied") return false;
+    if (!plan || reclaimDisabled || unresolved || phase === "applied") return false;
     if (Date.now() >= Date.parse(plan.expiresAt)) { setNow(Date.now()); return false; }
     if (!commandId) setCommandId(crypto.randomUUID());
     return true;
@@ -92,20 +95,21 @@ export function StorageSection({ api, csrfToken, connectionError }: {
   return <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}><Section title={t("heading")}><div data-slot="storage-section" className="max-w-[760px] space-y-4 text-sm" aria-busy={busy}>
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <div role="group" aria-label={t("overview")} className="flex flex-wrap items-center gap-6">
-          <span className="flex items-baseline gap-2"><span className="text-ink3">{t("used")}</span><Hint text={plan ? byteHint(totalBytes) : undefined}><span tabIndex={plan ? 0 : undefined} className="tabular-nums">{plan ? byteText(totalBytes) : t("unchecked")}</span></Hint></span>
-          <span className="flex items-baseline gap-2"><span className="text-ink3">{t("reclaimable")}</span><Hint text={plan ? byteHint(totalReclaimable) : undefined}><span tabIndex={plan ? 0 : undefined} className={`tabular-nums ${plan && totalReclaimable > 0 ? "text-hand" : "text-ink3"}`}>{plan ? byteText(totalReclaimable) : t("unchecked")}</span></Hint></span>
+          <span className="flex items-baseline gap-2"><span className="text-ink3">{t("used")}</span><span className="tabular-nums">{plan ? byteText(totalBytes) : t("unchecked")}</span></span>
+          <span className="flex items-baseline gap-2"><span className="text-ink3">{t("reclaimable")}</span><span className={`tabular-nums ${plan && totalReclaimable > 0 ? "text-hand" : "text-ink3"}`}>{plan ? byteText(totalReclaimable) : t("unchecked")}</span></span>
         </div>
-        <Hint text={checkReason || (expired || phase === "applied" ? t("expiredHint") : plan ? t("checked", { time: formatDateTime(Date.parse(plan.createdAt)), duration: formatDuration(Date.parse(plan.expiresAt) - now) }) : undefined)}><Button variant="outline" aria-disabled={!!checkReason} onClick={() => { if (!checkReason) void requestPlan(); }}>{t("check")}</Button></Hint>
-        {!unresolved && phase !== "applied" && <Hint text={reclaimReason || t("reclaimHint", { bytes: byteText(totalReclaimable) })}><DialogTrigger asChild><Button variant="outline" aria-disabled={!!reclaimReason} onClick={event => { if (!prepareConfirmation()) event.preventDefault(); }}>{t("reclaim")}</Button></DialogTrigger></Hint>}
+        <Hint text={checkHint}><Button variant="outline" aria-disabled={!!checkReason} onClick={() => { if (!checkReason) void requestPlan(); }}>{t("check")}</Button></Hint>
+        {checked && <p data-slot="storage-check-time" className="text-xs text-ink3">{checked}</p>}
+        {!unresolved && phase !== "applied" && <Hint text={reclaimReason || undefined}><DialogTrigger asChild><Button variant="outline" aria-disabled={reclaimDisabled} onClick={event => { if (!prepareConfirmation()) event.preventDefault(); }}>{t("reclaim")}</Button></DialogTrigger></Hint>}
       </div>
       {phase === "planning" && <p role="status" className="flex items-center gap-2 text-xs text-ink2"><StateMark kind="live" />{t("checking")}</p>}
-      {error && <div className="flex items-center gap-3"><p role="alert" className="text-xs text-fail">{error}</p><Hint text={checkReason || (expired || phase === "applied" ? t("expiredHint") : plan ? t("checked", { time: formatDateTime(Date.parse(plan.createdAt)), duration: formatDuration(Date.parse(plan.expiresAt) - now) }) : undefined)}><Button variant="outline" aria-disabled={!!checkReason} onClick={() => { if (!checkReason) void requestPlan(); }}>{t("retry")}</Button></Hint></div>}
+      {error && <div className="flex items-center gap-3"><p role="alert" className="text-xs text-fail">{error}</p><Hint text={checkHint}><Button variant="outline" aria-disabled={!!checkReason} onClick={() => { if (!checkReason) void requestPlan(); }}>{t("retry")}</Button></Hint>{checked && <p className="text-xs text-ink3">{checked}</p>}</div>}
       {plan && <>
         {(expired || phase === "applied") && <p className="text-xs text-ink3">{t(phase === "applied" ? "applied" : "expired")}</p>}
         <StorageTable categories={categories} />
         {plan.orphanProcesses.length > 0 && <StorageOrphans processes={plan.orphanProcesses} />}
         {phase === "applied" && result && <StorageOutcome key={commandId} result={result} />}
-        {unresolved && <div className="flex flex-wrap items-center gap-3"><p role="status" className="flex items-center gap-2 text-xs text-hand"><StateMark kind="hand" />{t(phase === "unknown" ? "unknown" : "incomplete")}</p><Hint text={connectionError || t("replayHint")}><Button variant="outline" size="sm" aria-disabled={!!connectionError} onClick={() => { if (!connectionError) void applyPlan(true); }}>{t("replay")}</Button></Hint></div>}
+        {unresolved && <div className="flex flex-wrap items-center gap-3"><p role="status" className="flex items-center gap-2 text-xs text-hand"><StateMark kind="hand" />{t(phase === "unknown" ? "unknown" : "incomplete")}</p><Hint text={connectionError || undefined}><Button variant="outline" size="sm" aria-disabled={!!connectionError} onClick={() => { if (!connectionError) void applyPlan(true); }}>{t("replay")}</Button></Hint></div>}
         {phase === "applying" && <p role="status" className="flex items-center gap-2 text-xs text-ink2"><StateMark kind="live" />{t("applying")}</p>}
       </>}
     </div>
@@ -117,7 +121,7 @@ export function StorageSection({ api, csrfToken, connectionError }: {
         </ul>}
         {expired && <p role="alert" className="text-sm text-fail">{t("confirmExpired")}</p>}
         {connectionError && <p role="alert" className="text-sm text-fail">{connectionError}</p>}
-        <DialogFooter><Button ref={cancelRef} variant="outline" onClick={() => setConfirmOpen(false)}>{t("cancel")}</Button><Hint text={reclaimReason || undefined}><Button variant="default" aria-disabled={!!reclaimReason} onClick={() => { if (!reclaimReason) void applyPlan(false); }}>{t("confirm")}</Button></Hint></DialogFooter>
+        <DialogFooter><Button ref={cancelRef} variant="outline" onClick={() => setConfirmOpen(false)}>{t("cancel")}</Button><Hint text={reclaimReason || undefined}><Button variant="default" aria-disabled={reclaimDisabled} onClick={() => { if (!reclaimDisabled) void applyPlan(false); }}>{t("confirm")}</Button></Hint></DialogFooter>
       </DialogContent>
   </Section></Dialog>;
 }

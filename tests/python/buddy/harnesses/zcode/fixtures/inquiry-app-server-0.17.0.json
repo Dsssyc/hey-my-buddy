@@ -1,0 +1,170 @@
+{
+  "source": {
+    "form": "ZCode app-bundled CLI app-server",
+    "version": "0.17.0",
+    "recordedAt": "2026-10-31",
+    "probe": "tests/probes/zcode_realtime_inquiry.py",
+    "normalization": "Volatile command/session identifiers and issuedAt normalized; snapshot fragments retain only relevant fields.",
+    "configuration": "Private home, work, database, logs and a dummy provider at loopback port 9; outbound network denied."
+  },
+  "calls": [
+    {
+      "method": "session/subscribe",
+      "snapshotFields": [
+        "messages",
+        "projection",
+        "protocol",
+        "runtime",
+        "session",
+        "settings",
+        "slashCommands",
+        "todos",
+        "todoGroups"
+      ],
+      "responseFragment": {
+        "runtime": {
+          "deliveryKind": "web-remote-replayable",
+          "eventSeq": 0,
+          "pendingRequestIds": [],
+          "goalVerifications": [],
+          "goalVerificationTimeline": [],
+          "stateRevision": 1
+        },
+        "projection": {
+          "activeToolCalls": [],
+          "backgroundJobs": [],
+          "contextUsed": 0,
+          "contextWindow": 200000,
+          "mode": "build",
+          "pendingPermissions": [],
+          "sessionId": "unknown",
+          "status": "idle",
+          "target": null,
+          "totalTokenCount": 0,
+          "turnCount": 0
+        }
+      }
+    },
+    {
+      "method": "v4/command",
+      "params": {
+        "commandId": "command-1",
+        "clientId": "hmb-private-inquiry-probe",
+        "sessionId": "sess-private-inquiry-probe",
+        "type": "sendText",
+        "payload": {},
+        "issuedAt": 1
+      },
+      "response": {
+        "id": 5,
+        "result": {
+          "commandId": "command-1",
+          "status": "rejected",
+          "reasonCode": "proto.invalidPayload",
+          "message": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"text\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]",
+          "revisionAtDecision": 0
+        }
+      }
+    },
+    {
+      "method": "v4/command",
+      "params": {
+        "commandId": "command-2",
+        "clientId": "hmb-private-inquiry-probe",
+        "sessionId": "sess-private-inquiry-probe",
+        "type": "deleteQueueItem",
+        "payload": {},
+        "issuedAt": 1
+      },
+      "response": {
+        "id": 6,
+        "result": {
+          "commandId": "command-2",
+          "status": "rejected",
+          "reasonCode": "proto.invalidPayload",
+          "message": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"queueItemId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]",
+          "revisionAtDecision": 0
+        }
+      }
+    },
+    {
+      "method": "v4/command",
+      "params": {
+        "commandId": "command-3",
+        "clientId": "hmb-private-inquiry-probe",
+        "sessionId": "sess-private-inquiry-probe",
+        "type": "sendText",
+        "payload": {
+          "text": "private held queue probe",
+          "requestedDelivery": "queue"
+        },
+        "issuedAt": 1
+      },
+      "response": {
+        "id": 7,
+        "result": {
+          "commandId": "command-3",
+          "status": "failed",
+          "revisionAtDecision": 0,
+          "reasonCode": "fault.command.executionFailed",
+          "message": "FOREIGN KEY constraint failed"
+        }
+      }
+    },
+    {
+      "method": "session/subscribe",
+      "snapshotFields": [
+        "messages",
+        "projection",
+        "protocol",
+        "runtime",
+        "session",
+        "settings",
+        "slashCommands",
+        "todos",
+        "todoGroups"
+      ],
+      "responseFragment": {
+        "runtime": {
+          "deliveryKind": "web-remote-replayable",
+          "eventSeq": 0,
+          "pendingRequestIds": [],
+          "goalVerifications": [],
+          "goalVerificationTimeline": [],
+          "stateRevision": 1
+        },
+        "projection": {
+          "activeToolCalls": [],
+          "backgroundJobs": [],
+          "contextUsed": 0,
+          "contextWindow": 200000,
+          "mode": "build",
+          "pendingPermissions": [],
+          "sessionId": "unknown",
+          "status": "idle",
+          "target": null,
+          "totalTokenCount": 0,
+          "turnCount": 0
+        }
+      }
+    }
+  ],
+  "privateNativeTableRows": {
+    "session": 0,
+    "session_entry": 0,
+    "session_input": 0
+  },
+  "observation": {
+    "preconditionsConfirmed": false,
+    "blockedAt": "queue-admission",
+    "rootStarts": 0,
+    "shutdownConfirmed": true,
+    "shutdownEscalated": false,
+    "sessionCloseAcknowledged": true
+  },
+  "limitations": [
+    "No successful enqueue, held-queue persistence, queue readback or deletion was observed.",
+    "No guide input, session/send, native model turn or paid model call was made.",
+    "Omitting baseRevision passed command/payload validation, but queue execution failed."
+  ]
+}

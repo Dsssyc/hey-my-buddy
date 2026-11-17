@@ -1,7 +1,7 @@
 """ADR-018 item 11: the shared skill keeps only the long-lived Host workflow.
 
 SKILL.md must stay near 4 KB, carry no version or installation status, keep the
-core micro task workflow (routing health, one work macro task per agenda, waiting
+core micro task workflow (one work macro task per agenda, waiting
 pointers, Host acceptance) and route every detail into the shipped references. The
 tests read the source and the packaging rewrite only; they install nothing and
 change no user setting.
@@ -49,15 +49,9 @@ class SkillWorkflowTests(unittest.TestCase):
 
     def test_the_core_workflow_survives(self):
         for marker in (
-            "health",  # routing state is read before routing is trusted
-            "routingMode",  # the recorded mode is reported honestly
             "macroTaskId",
-            'macroTaskOf: "<runId>"',  # joining an existing run's macro task
-            "controlFile",
             "`accept`",
             "`conclude`",
-            "`reclaim`",
-            "finalArtifactId",
             "await",
         ):
             with self.subTest(marker=marker):
@@ -65,7 +59,7 @@ class SkillWorkflowTests(unittest.TestCase):
 
     def test_waiting_pointers_name_codex_and_claude_paths(self):
         """The skill routes waiting to the per-Host guides instead of describing either flow."""
-        for guide in ("host-codex.md", "host-claude-code.md"):
+        for guide in ("host.md", "host-codex.md", "host-claude-code.md"):
             with self.subTest(guide=guide):
                 self.assertIn(f"(../../docs/reference/{guide})", self.text)
         self.assertNotIn("#waiting-from-", self.text)
@@ -97,6 +91,13 @@ class HostGuideTests(unittest.TestCase):
     """Each per-Host guide carries only its own waiting flow, sandbox allowance and limits."""
 
     MARKERS = {
+        "host.md": (
+            "one `await` per running micro task",  # the shared wait loop
+            "waitSeconds",  # a foreground wait fits the command tool's time limit
+            "If a reply is lost",  # resending returns the original
+            "Before the turn ends",  # open work is found on the blackboard, not in memory
+            "LAUNCH_ACCESS_DENIED",  # the launcher runs outside the sandbox
+        ),
         "host-codex.md": (
             "monitoring-only native subagent",  # one monitor per running micro task
             "fork_turns",  # the monitor spawns with an empty history

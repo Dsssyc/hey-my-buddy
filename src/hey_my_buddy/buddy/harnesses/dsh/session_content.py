@@ -11,7 +11,7 @@ from ....protocol.session_content import (
     MessageChunk, NativeMeta, Plan, PlanEntry, TextContent,
     ToolCall, ToolCallUpdate, ToolContent, ToolLocation,
 )
-from ....protocol.tool_evidence import normalize_tool_event
+from ....protocol.tool_evidence import classify_tool_name
 from ..session_record import SessionRecord
 
 _MESSAGES = {"user_message_chunk", "agent_message_chunk", "agent_thought_chunk"}
@@ -116,9 +116,7 @@ class DshSessionProjector:
         title = update.get("title", previous.get("title"))
         payload = {}
         if isinstance(title, str) and title:
-            event = normalize_tool_event("dsh", {"nativeIdentity": {"sessionId": session},
-                "callId": call_id, "toolName": title, "phase": "start"})
-            payload.update(title=title, kind=event["category"])
+            payload.update(title=title, kind=classify_tool_name("dsh", title))
         if isinstance(update.get("status"), str) and update["status"] in _STATUSES:
             payload["status"] = update["status"]
         for native, field in (("rawInput", "raw_input"), ("rawOutput", "raw_output")):

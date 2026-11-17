@@ -91,8 +91,7 @@ class AttachFixture(unittest.TestCase):
         # This fixture observes bootstrap I/O, not runtime installation. Never
         # resolve an operator's runtime or create environments from a unit test.
         patch("hey_my_buddy.install.runtime.launch_target", return_value=LAUNCH_TARGET).start()
-        sockets = patch("hey_my_buddy.protocol.transport.socket.socket", autospec=True).start()
-        sockets.return_value.accept.return_value = (Mock(), None)
+        patch("hey_my_buddy.protocol.transport._probe_local_ipc").start()
         self.addCleanup(patch.stopall)
 
     def write_endpoint(self, value, mode):
@@ -596,8 +595,7 @@ class ColdStartTests(unittest.TestCase):
         child.wait.return_value = 0
         self.spawn.return_value = child
         patch("hey_my_buddy.install.runtime.launch_target", return_value=LAUNCH_TARGET).start()
-        sockets = patch("hey_my_buddy.protocol.transport.socket.socket", autospec=True).start()
-        sockets.return_value.accept.return_value = (Mock(), None)
+        patch("hey_my_buddy.protocol.transport._probe_local_ipc").start()
         self.addCleanup(patch.stopall)
 
     def test_cold_start_creates_private_state_directory_and_spawns_daemon(self):
@@ -978,7 +976,6 @@ class RpcReadOnlySetupTests(unittest.TestCase):
 
     def native_ping_peer(self):
         """Reuse the protocol probe's native process, profile and stop handshake."""
-        import c_two as cc
         from c_two import crm
         from protocol import test_rpc_config as probe_fixture
         from support import shutdown_private_rpc
@@ -1024,7 +1021,6 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         with patch.object(probe_fixture, "PROBE_SERVER", script):
             probe_fixture.ProbeServer.__init__(peer, self.directory)
         self.assertEqual(Path(json.loads(peer.endpoint_path.read_text(encoding="utf-8"))["root"]), self.directory / "ipc")
-        self.assertEqual(cc.__version__, "0.9.0")
         self.enterContext(patch.object(transport, "BuddyControl", ProbeContract))
         self.enterContext(patch.object(transport, "CONTROL_NAME", "hey-my-buddy-probe"))
         endpoint = {**ENDPOINT, "address": peer.address, "pid": peer.pid}

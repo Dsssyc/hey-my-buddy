@@ -1,4 +1,5 @@
 import type { Reason } from "../reason";
+import type { InputFailure } from "./input-failure";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
 import type { Actor, ActivityPhase, ProviderRejection, RoutingMode, Task, TokenUsage } from "../types";
 
@@ -18,16 +19,22 @@ export type Turn = {
   createdAt: string;
   updatedAt: string;
   buddy: Buddy | null;
-  /** The frozen route of this turn; null when it was not recorded. A null decision is a Host's own pick. */
+  /** The frozen route of this turn; null when it was not recorded. */
   routing: { decisionId: string | null; buddyRevision: number } | null;
+  checkout: "none" | "worktree" | "existing";
+  projectKind: "git" | "folder";
+  access: "read" | "write" | "full";
   tokenUsage: TokenUsage | null;
   providerRejection?: ProviderRejection;
+  inputFailure?: InputFailure;
 };
 
 /** A turn with its result; `summary` is null while the turn has returned nothing. */
 export type ResultTurn = Turn & { summary: string | null; remaining: string[] };
 
 export type CompactRequest = {
+  reason?: Reason | null;
+  inputFailure?: InputFailure;
   requestId: string;
   kind: string;
   state: string;
@@ -49,19 +56,24 @@ export type OpenRequest = CompactRequest & {
 
 export type CumulativePatch = {
   baseCommit: string | null;
-  outputCommit: string | null;
   path: string | null;
   sha256: string | null;
   changedPaths: string[];
 };
 
-/** A sealed output of a turn: the only artifacts the detail draws. */
+/** An output seal or a fixed result from one turn. */
 export type Artifact = {
   artifactId: string;
-  kind: "output" | "resolved-output" | "partial-output";
+  kind: "output" | "resolved-output" | "partial-output" | "result";
   attemptId: string;
-  manifestSha256: string;
-  outputCommit: string | null;
+  contentForm: "sealed-inline-v1" | "record-reference" | "result-reference";
+  sealedEvidence: { snapshotSha256: string; tree: string } | null;
+  legacyEvidence: { manifestSha256: string } | null;
+  integrationSource: { kind: "commits"; baseCommit: string; headCommit: string } | { kind: "patch"; baseCommit: string; path: string; sha256: string } | null;
+  runId: string | null;
+  generation: number | null;
+  resultFile: { path: string; sha256: string } | null;
+  unsealedChanges: boolean;
   diffPath: string | null;
   changedPaths: string[];
   partial: boolean;
@@ -75,10 +87,15 @@ export type Integration = {
   integrationId: string;
   artifactId: string;
   state: string;
-  strategy: string;
+  strategy: "three-way" | "three-way-adjusted" | "merge" | "patch" | "not-required";
   target: { path: string | null; ref: string | null } | null;
   beforeCommit: string | null;
   afterCommit: string | null;
+  verification: { version: number | null; mergeBaseCommit: string | null; expectedTree: string | null;
+    differingPaths: { path: string; expectedMode: string | null; expectedOid: string | null;
+      artifactMode: string | null; artifactOid: string | null }[];
+    conflictingPaths: string[]; adjustments: string[]; hostPaths: string[];
+    artifactMode: string | null; artifactOid: string | null; note: string | null };
   hostPaths: string[];
   note: string | null;
   actor: Actor | null;
@@ -94,7 +111,6 @@ export type HostConclusion = {
   attemptId: string | null;
   actor: Actor;
   createdAt: string;
-  runRevision: number | null;
 };
 
 export type Routing = {
@@ -108,11 +124,12 @@ export type Routing = {
 /** The compact collaboration record of a micro task (`workflow_get {runId}`). */
 export type Workflow = {
   runId: string;
-  revision: number;
+  taskRevision: number;
   state: string;
-  hostId: string | null;
   buddy: Buddy | null;
-  buddyLocked: boolean;
+  checkout: "none" | "worktree" | "existing";
+  projectKind: "git" | "folder";
+  unsealedChanges: boolean;
   delegationAuthority: boolean;
   routing: Routing | null;
   /** The newest turns only; `counts.turns` is how many there are. */
@@ -146,19 +163,24 @@ export type Audit = {
   continuations: Continuation[];
   requests: AuditRequest[];
   hostConclusions: HostConclusion[];
-  revision: number;
 };
 
 /** One recorded routing decision of a micro task (`workflow_get`'s `routingHistory`). */
 export type RoutingEntry = {
+  routerIndex: number | null;
+  exploration: { quota: boolean; reselected: boolean; preferredBuddyId: string | null };
   decisionId: string;
   status: string;
   source: string | null;
-  selectedBuddy: Buddy | null;
+  selectedBuddy: (Buddy & { alias: string | null }) | null;
   routerBuddy: Buddy | null;
   routingMode: RoutingMode | null;
   reason: Reason | null;
   note: string | null;
+  /** Present together only when the Router recorded a judgment. Null means unclassified. */
+  domainNodeId?: string | null;
+  domainNodeName?: string | null;
+  taskType?: "create" | "change" | "debug" | "verify" | "review" | "research" | "write";
 };
 
 /** What was frozen when a routing decision was asked for: the bounds the program chose within. */
@@ -204,9 +226,6 @@ export type Activity = {
   toolName: string | null;
   modelTurns: number | null;
   toolCalls: number | null;
-  lastToolAt: string | null;
-  lastNativeAt: string | null;
-  eventSeq: number | null;
   /** What backs the report: a tool, native activity, or the phase alone (which says nothing of progress). */
   basis: "tool" | "native" | "phase" | "unknown";
 };
@@ -219,17 +238,6 @@ export type Ending = {
   actor: Actor | null;
   note: string | null;
   rejectionCode: "quota-exceeded" | "rate-limited" | "overloaded" | null;
-};
-
-/** Where an execution's native session lives, in the receipt's own words. */
-export type Session = {
-  id: string | null;
-  scope: string | null;
-  owner: string | null;
-  visibility: string | null;
-  resumable: boolean | null;
-  binding: boolean | null;
-  note: string | null;
 };
 
 /** The execution the task view's per-attempt facts are about: the one running, else the last one chosen. */
@@ -245,16 +253,18 @@ export type Attempt = {
   activity: Activity | null;
   /** Null when it ended as it should. */
   ending: Ending | null;
-  session: Session | null;
   tokenUsage: TokenUsage | null;
   shutdownConfirmed: boolean;
 };
 
 /** The task view of one micro task, with the parts the detail reads made definite. */
 export type TaskView = {
+  inputFailure?: InputFailure;
+  requestReason?: Reason | null;
   /** For the presentation helpers the list shares; the detail reads its own facts from the fields beside it. */
   task: Task;
   updatedAt: string;
+  acceptanceNote: string | null;
   attempt: Attempt | null;
   /** The micro task belongs to a Lead, whose decision it waits for. */
   lead: boolean;
@@ -271,7 +281,6 @@ export type Context = {
   inquiries: Inquiries | null;
   /** Where each inquiry is shown, by the key of the step: none is left out. */
   asked: Record<string, Inquiry[]>;
-  highlightedInquiry?: string | null;
   timeline: MacroTaskTimeline | null;
   row: TimelineRow | null;
   nowMs: number;

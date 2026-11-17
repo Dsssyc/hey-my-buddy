@@ -82,7 +82,7 @@ Host 在整合后的完整检查中发现 `buddy/harnesses/claude/test_claude_wo
 
 ## 验证和边界
 
-第二续做回合在当时源码上运行指定的五个 Python 目录：`tests/python/blackboard`、`tests/python/buddy/roles`、`tests/python/console`、`tests/python/cli`、`tests/python/protocol`。检查器使用任务指定解释器及 `PYTHONPATH=src`，清除继承的 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`、`BUDDY_RUNTIME`、`BUDDY_RUNTIME_IDENTITY`、`BUDDY_WORKER_STATE`、`BUDDY_WORKER_ID`、`BUDDY_AGENT_CREDENTIAL`、`BUDDY_AGENT_CREDENTIAL_FILE`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`，并使用支持的 Node 24.21.0 供跨组件检查调用。146 个文件、2,253 项测试通过，0 跳过，最终退出 0，私有测试根已删除。没有运行完整 Python 检查，没有安装、日常看板或真实 harness / 付费模型调用。
+第二续做回合在当时源码上运行指定的五个 Python 目录：`tests/python/blackboard`、`tests/python/buddy/roles`、`tests/python/console`、`tests/python/cli`、`tests/python/protocol`。检查器使用任务指定解释器及 `PYTHONPATH=src`，清除继承的 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`、`BUDDY_RUNTIME`、`BUDDY_RUNTIME_IDENTITY`、`BUDDY_WORKER_STATE`、`BUDDY_WORKER_ID`、`BUDDY_AGENT_CREDENTIAL`、`BUDDY_AGENT_CREDENTIAL_FILE`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`，并使用支持的 Node 24.21.0 供跨组件检查调用。146 个文件、2,253 项测试通过，0 跳过，最终退出 0，私有测试根已删除。没有运行完整 Python 检查，没有安装、日常黑板或真实 harness / 付费模型调用。
 
 第一续做回合的五目录检查曾退出 1：138 个文件通过，8 个文件失败。目录回滚测试引用了基点里已删除的 `blackboard.store.test_migrations.rows`，已改为比较私有数据库全部当前表的行，保留整个目录发布事务回滚的断言，单独重跑 16 项通过；其余 7 个文件由上节缺失助手造成，现已在最终五目录检查中全部通过。第二续做回合还分别聚焦检查了 `test_workspace_lifecycle.py`（49 项）、`test_workflow_preparation.py`（30 项）和 `cli/test_host_preview.py`（3 项），均退出 0、私有根已删除。第一续做回合的后端两文件聚焦检查另有 52 项通过。
 

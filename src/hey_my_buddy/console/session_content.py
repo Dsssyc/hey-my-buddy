@@ -9,9 +9,10 @@ from urllib.parse import parse_qs
 from .. import private_dirs
 from ..blackboard.tasks import session_content as tasks
 from ..blackboard.tasks.workflow import WorkflowCoordinator
-from ..buddy.harnesses.registry import session_omitted, session_projector
+from ..buddy.harnesses.registry import session_coverage, session_projector
 from ..errors import BoardError
 from ..json_codec import decode_strict_json
+from ..paths import native_path
 from ..protocol.reasons import reason
 from ..protocol.session_content import SESSION_FORMAT, SessionFormat, SessionNotification
 
@@ -109,7 +110,7 @@ def read(store, task_id: str, attempt_id: str, params: dict) -> dict:
     stored = json.loads(owner['result_json']) if owner['result_json'] else {}
     stopped = WorkflowCoordinator.result_payload(stored).get('sessionRecordFailure')
     response = {'state': 'ended' if owner['execution_state'] == 'finished' else 'running',
-                'stopped': stopped, 'omitted': list(session_omitted(harness))}
+                'stopped': stopped, 'coverage': {kind: declaration.to_payload() for kind, declaration in session_coverage(harness).items()}}
     path = private_dirs.session_record_path(store.directory, owner['group_id'], attempt_id)
     opened = False
     try:
@@ -119,7 +120,7 @@ def read(store, task_id: str, attempt_id: str, params: dict) -> dict:
             page = _page(stream, params)
             # An open POSIX descriptor survives unlink. Check the fixed name as
             # well so deletion during the read cannot return retained bytes.
-            path.stat()
+            native_path(path).stat()
     except FileNotFoundError:
         if opened or tasks.deleting(store, owner['group_id']):
             raise BoardError('SESSION_DELETED', 'The session record was deleted',

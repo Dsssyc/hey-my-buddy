@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { macroTaskMetrics } from "./macro-task-metrics";
-import { macroTaskTimelineFixture, macroTaskSummary } from "./macro-task-fixtures";
+import { macroTaskTimelineFixture, macroTaskDetail } from "./macro-task-fixtures";
 import type { MacroTaskTimeline, TimelineSpan } from "./macro-task-types";
 
 const minutes = (count: number) => count * 60000;
@@ -129,7 +129,7 @@ describe("macroTask metrics", () => {
   });
 
   it("falls back to the macroTask creation time when no span has a usable start", () => {
-    const timeline = withSpans([], { macroTask: macroTaskSummary({ createdAt: "2026-09-26T01:12:00Z" }) });
+    const timeline = withSpans([], { macroTask: macroTaskDetail({ createdAt: "2026-09-26T01:12:00Z" }) });
     timeline.events = [{
       seq: 1, runId: "r1", kind: "dispatch", at: "2026-09-26T02:00:00Z", decision: null, verdict: null, state: null, strategy: null, note: null, actor: null,
       attemptId: null, requestId: null, artifactId: null,

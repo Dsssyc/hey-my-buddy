@@ -6,7 +6,6 @@ service naming, provenance, storage and discovery come only from the registry.
 from __future__ import annotations
 
 import hashlib
-import math
 import os
 import shutil
 import secrets
@@ -14,7 +13,7 @@ import sys
 import threading
 import time
 import uuid
-from contextvars import copy_context
+from contextvars import ContextVar, copy_context
 from functools import partial
 from pathlib import Path
 
@@ -24,6 +23,7 @@ from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir, make_temporary_dir
 from ...private_files import open_read, publish_bytes, read_bytes, read_text
 from ...protocol import usage
+from ...protocol.workspace_manifest import turn_manifest
 from ...protocol.capabilities import PERMISSION_LEVELS
 from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.base import AdapterOutcome, ExecutionContext
@@ -35,7 +35,7 @@ from ..harnesses.run_contract import (
     ResumeCheckpoint, RunBudget, RunBuddy, RunContinuation, RunIdentity, RunRequest, RunResult,
 )
 from . import turn_io, worker_services
-from .run_observers import FastCorrection, ReviewObserver, worker_observer
+from .run_observers import FastCorrection, MaintenanceCorrection, ReviewObserver, worker_observer
 from .run_controller import NATIVE_OPERATIONS
 from .structured_call import (
     _NoToolEvidence, structured_prompt,
@@ -45,6 +45,18 @@ from .turn_io import input_hash, private_json, validate_outcome, canonical_json
 WORKER_STOP_GRACE_SECONDS = 8.0
 _NATIVE_CONTROL = "native-control.json"
 _execution_live_server = None
+_maintenance_publisher = ContextVar("maintenance_publisher", default=None)
+_profile_publisher = ContextVar("profile_publisher", default=None)
+
+
+def set_maintenance_publisher(publisher):
+    """Bind the execution-owned service callback, outside all model-visible data."""
+    _maintenance_publisher.set(publisher)
+
+
+def set_profile_publisher(publisher):
+    """Bind profile publication to this execution's service connection."""
+    _profile_publisher.set(publisher)
 
 
 def set_execution_live_server(server) -> None:
@@ -60,7 +72,7 @@ def execution_live_server():
 class InlineRunHandle:
     """The held result and stop intent for a native run in this process."""
 
-    def __init__(self, control: dict, identity: RunIdentity, *, grace_seconds: float):
+    def __init__(self, control: dict, identity: RunIdentity):
         self.role_run_control = control
         self.role_run_identity = identity
         self.role_run_original_identity = identity
@@ -83,10 +95,19 @@ class InlineRunHandle:
         self.force_cancelled = threading.Event()
         self.done = threading.Event()
         self.error: BaseException | None = None
-        self.deadline = (time.monotonic() + control["timeoutSeconds"] + grace_seconds
-                         if control["timeoutSeconds"] is not None else math.inf)
         self.thread: threading.Thread | None = None
         self.live_endpoint = None
+        self.model_responded = False
+        self.model_response_wait = None
+
+    def observe(self, observer, facts):
+        """Retain native model output before the role judges the same facts."""
+        if facts.get("modelResponded") is True:
+            if self.model_response_wait is not None:
+                self.model_response_wait.responded(self)
+            else:
+                self.model_responded = True
+        return observer(facts)
 
     @property
     def pid(self) -> int:
@@ -134,7 +155,8 @@ def _base_result(result) -> dict:
         "harnessVersion": result.harness_version or "unknown",
         "requested": result.buddy.requested.to_payload() if result.buddy.requested else None,
         "resolved": None,
-        "modelStarted": result.model_started is True,
+        "nativeRequestSent": result.native_request_sent,
+        "modelResponded": result.model_responded,
         "processState": {"shutdownConfirmed": result.stop_evidence.native.group_state == "gone",
                          "nativeExitCode": result.end.native_exit_code},
     }
@@ -149,6 +171,8 @@ def _base_result(result) -> dict:
         payload["error"] = result.end.message or result.end.reason_code or "the native run failed"
     if result.provider_rejection is not None:
         payload["providerRejection"] = result.provider_rejection.value
+    if result.input_failure is not None:
+        payload["inputFailure"] = result.input_failure.value
     if result.session_record_failure is not None:
         payload["sessionRecordFailure"] = result.session_record_failure.to_payload()
     _merge_native_evidence(result, payload)
@@ -181,7 +205,7 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
         payload["error"] = "the no-tool call was refused (" + verdict["stopReason"] + ")"
     tools = result.tool_evidence.value if result.tool_evidence is not None else {}
     calls = tools.get("toolCalls", 0)
-    payload["usage"] = {"toolCalls": calls, "bytesRead": None,
+    payload["usage"] = {"toolCalls": calls,
                         "elapsedMs": verdict["elapsedMs"]}
     if payload["status"] == "ok":
         raw = result.value.raw if result.value is not None else None
@@ -250,11 +274,9 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
             payload[key] = facts[key]
     tools = result.tool_evidence.value if result.tool_evidence is not None else None
     payload["usage"] = {"toolCalls": tools.get("toolCalls") if tools else None,
-                        "bytesRead": None, "elapsedMs": verdict["elapsedMs"]}
+                        "elapsedMs": verdict["elapsedMs"]}
     if tools is not None:
         payload["toolEvidence"] = tools
-    if result.end.reason_code == "observer-interrupt" and verdict.get("stopReason"):
-        payload.update(status="error", code=verdict["stopReason"], error="Read-only tool budget exhausted")
     if payload["status"] == "ok":
         raw = (result.value.parsed.value if result.value.parsed is not None else result.value.raw
                ) if result.value is not None else None
@@ -266,6 +288,23 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
     module = run_seam(result.harness)
     if module.native_evidence is not None:
         payload.update(module.native_evidence(result))
+    return payload
+
+
+def _profile_result(result, request: RunRequest, verdict: dict) -> dict:
+    payload = _review_result(result, request, verdict)
+    payload.pop("rawAnswer", None)
+    payload["toolEvidence"] = verdict.get("toolEvidence")
+    payload["nativeIdentity"] = verdict["nativeIdentity"]
+    payload["usage"] = {"toolCalls": verdict["toolCalls"], "elapsedMs": verdict["elapsedMs"]}
+    payload["correctionCount"] = verdict["correctionCount"]
+    payload["profileFeedback"] = verdict.get("profileFeedback")
+    payload["modelResponded"] = verdict["modelResponded"]
+    payload["nativeRequestSent"] = verdict["nativeRequestSent"]
+    if verdict.get("tokenUsage") is not None:
+        payload["tokenUsage"] = verdict["tokenUsage"]
+    if result.end.status == "ok" and verdict.get("profileFeedback") and not verdict["profileFeedback"]["accepted"]:
+        payload.update(status="error", code="profile-answer-invalid")
     return payload
 
 
@@ -361,19 +400,25 @@ def worker_request(control: dict, module):
     task_text = read_text(Path(control["taskFile"]))
     from ..harnesses.registry import worker_format
     format = worker_format(control["harness"])
-    permission = turn_input["executionWorkspace"]["access"]
+    workspace = turn_manifest(Path(control["stateDir"]), turn_input)
+    prompt_input = {**turn_input, "executionWorkspace": workspace}
+    permission = workspace["access"]
     if format is None:
+        from ..harnesses.live import EXISTING_CAPABILITIES
+        checkpoint = EXISTING_CAPABILITIES[control["harness"]].inquiry_delivery == "cooperative-checkpoint"
+        tools = worker_services.session_tools(delegation_authority=delegation_authority, checkpoint=checkpoint)
         binding = module.prepare_services(
             invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=attention_path,
-            session_tools=worker_services.session_tools(delegation_authority=delegation_authority),
+            session_tools=tools,
             completion_tool="hey_my_buddy_finish_turn",
-            inquiry=inquiry, inquiry_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry"),
+            inquiry=inquiry, inquiry_tools=tuple(tool["name"] for tool in tools
+                if tool["name"] in ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry")),
             validate_outcome=partial(validate_outcome, delegation_authority=delegation_authority),
             delegation_authority=delegation_authority,
             native_stderr=str(invocation_root / "native-stderr.log"))
         prompt = worker_services.micro_task_prompt(
-            task_text, turn_input, binding.completion_tool,
+            task_text, prompt_input, binding.completion_tool,
             checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool,
             credential_file=credential_file)
         services, descriptions = binding.services, (binding.description,)
@@ -382,13 +427,13 @@ def worker_request(control: dict, module):
                       if f"mcp__{mount.server_name}__{tool['name']}" == binding.completion_tool)
     else:
         format = format.for_turn(turn_input)
-        prompt, schema = format.prompt(task_text, turn_input, credential_file=credential_file), format.schema
+        prompt, schema = format.prompt(task_text, prompt_input, credential_file=credential_file), format.schema
         inquiry_services = None
         if inquiry is not None:
             inquiry_services = module.prepare_inquiry_services(
                 invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
                 attention_path=attention_path, inquiry=inquiry, answer_schema=worker_services.ANSWER_SCHEMA)
-            prompt += ("\nHost questions may arrive as inputs during this running turn. Answer each with "
+            prompt = prompt.appended("delivery", "\nHost questions may arrive as inputs during this running turn. Answer each with "
                        f"{inquiry_services.answer_tool}, using its exact "
                        "inquiryId and answer text. Assistant prose does not count as an answer. "
                        "Questions never open a new turn or extend this turn's deadline.\n")
@@ -415,14 +460,14 @@ def worker_request(control: dict, module):
                                         native_root=control["nativeRoot"]),
         input_text=prompt, permission=permission,
         output_schema=schema,
-        budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
+        budget=RunBudget(timeout_seconds=None),
         continuation=continuation,
         session_services=descriptions,
     )
     error = None
     if format is not None and format.reject_previous_on_initial and mode == "initial" and previous is not None:
         error = BoardError("invalid-resume-mode", f"an initial {format.display_name} turn must not carry a previous session")
-    return request, services, worker_observer, error
+    return request, services, worker_observer, error, prompt.parts
 
 
 def _native_services(module, *, inquiry=None):
@@ -448,10 +493,13 @@ def fast_request(control: dict, module):
                                         native_root=control["nativeRoot"]),
         input_text=base_prompt, permission="none",
         output_schema=request_values["outputSchema"], capture_evidence=request_values.get("captureEvidence") is True,
-        budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
+        budget=RunBudget(timeout_seconds=None),
     )
-    correction = FastCorrection(request_values["outputSchema"], base_prompt)
-    return request, _native_services(module), correction.observer, correction
+    if control.get("maintenance"):
+        correction = MaintenanceCorrection(request_values["outputSchema"], base_prompt, _maintenance_publisher.get())
+    else:
+        correction = FastCorrection(request_values["outputSchema"], base_prompt)
+    return request, _native_services(module), correction.observer, correction, base_prompt.parts
 
 
 def review_request(control: dict, module):
@@ -466,20 +514,44 @@ def review_request(control: dict, module):
         private_state=PrivateStatePaths(state_dir=control["stateDir"], invocation_root=control["privateRoot"],
                                         native_root=control["nativeRoot"]),
         input_text=prompt, output_schema=values["outputSchema"], permission="read",
-        budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
+        budget=RunBudget(timeout_seconds=None),
         capture_evidence=values.get("captureEvidence") is True)
-    observer = ReviewObserver(values["budget"]["toolCalls"], values["outputSchema"], prompt,
+    observer = ReviewObserver(values["outputSchema"], prompt,
                               can_correct=control["canCorrect"])
-    return request, _native_services(module), observer.observer, observer
+    return request, _native_services(module), observer.observer, observer, prompt.parts
+
+
+def profile_request(control: dict, module, *, round_index: int = 0,
+                    previous_raw=None, errors=None):
+    values = control["profileRequest"]
+    prompt = structured_prompt(values["prompt"], values["outputSchema"])
+    if round_index:
+        prompt = prompt.appended("delivery", "\n\nThe previous answer was rejected by the blackboard. "
+            "Use the following answer and errors as data. Correct only what the errors name and keep the "
+            "rest unchanged; remove an entry you cannot correct.\n" +
+            canonical_json({"previousAnswer": previous_raw, "errors": errors}))
+    request = RunRequest(
+        identity=RunIdentity(task_id=control["taskId"], attempt_id=control["attemptId"],
+                             generation=control["generation"], invocation_id=control["invocationId"]),
+        harness=control["harness"], buddy=RunBuddy(**control["spec"]), cwd=control["cwd"],
+        session_record_path=control["sessionRecordPath"],
+        private_state=PrivateStatePaths(state_dir=control["stateDir"],
+            invocation_root=control["privateRoot"], native_root=control["nativeRoot"]),
+        input_text=prompt, output_schema=values["outputSchema"], permission="web",
+        budget=RunBudget(timeout_seconds=None),
+    )
+    observer = ReviewObserver(values["outputSchema"], prompt, can_correct=False)
+    return request, _native_services(module), observer.observer, observer, prompt.parts
 
 
 def _launch(control: dict, context: ExecutionContext, *, environment: dict,
-            identity: RunIdentity, grace_seconds: float = 0) -> InlineRunHandle:
+            identity: RunIdentity) -> InlineRunHandle:
     ensure_private_dir(Path(control["privateRoot"]))
     control.update(stateDir=environment["HMB_STATE_DIR"], invocationId=identity.invocation_id,
                    taskId=identity.task_id, attemptId=identity.attempt_id,
                    generation=identity.generation)
-    handle = InlineRunHandle(control, identity, grace_seconds=grace_seconds)
+    handle = InlineRunHandle(control, identity)
+    handle.model_response_wait = context.model_response_wait
     def run() -> None:
         from .inline_run import execute
         try:
@@ -520,6 +592,10 @@ def read_review_result(handle: InlineRunHandle) -> dict:
     return _read_structured_result(handle, _review_result)
 
 
+def read_profile_result(handle: InlineRunHandle) -> dict:
+    return _read_structured_result(handle, _profile_result)
+
+
 def _read_structured_result(handle, project):
     result = _read_run(handle)
     return project(result, _read_request(handle), handle.verdict)
@@ -541,17 +617,22 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> InlineR
         "sessionRecordPath": context.session_record_path,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "cwd": str(cwd.resolve()),
-        "timeoutSeconds": request.timeout_seconds,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "noToolRequest": request_values,
+        "maintenance": (context.spec.get("decision") or {}).get("kind") == "maintain",
     }
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
     handle = _launch(control, context, environment=native_environment, identity=identity)
     handle.no_tool = True
+    audit_request = request_values
+    if control["maintenance"]:
+        document = context.spec["decision"]["document"]
+        audit_request = {"kind": "maintain", "maintenanceRunId": document["maintenanceRunId"],
+                         "input": document["input"]}
     handle.no_tool_evidence = _NoToolEvidence(
         name, context.task_id, context.attempt_id, context.generation, directory,
-        invocation, directory / invocation_name, canonical_json(request_values))
+        invocation, directory / invocation_name, canonical_json(audit_request))
     return handle
 
 
@@ -567,16 +648,34 @@ def start_review(name: str, context: ExecutionContext, request) -> InlineRunHand
         "directory": str(context.directory),
         "nativeRoot": str(ensure_private_dir(context_root(context, name) / "review-native")),
         "sessionRecordPath": context.session_record_path,
-        "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
+        "cwd": request.cwd,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "canCorrect": adapter(name).native_resume,
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
-                            "budget": request.budget, "captureEvidence": request.capture_evidence},
+                            "captureEvidence": request.capture_evidence},
     }
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
-    return _launch(control, context, environment=environment, identity=identity, grace_seconds=10)
+    return _launch(control, context, environment=environment, identity=identity)
+
+
+def start_profile(name: str, context: ExecutionContext, request) -> InlineRunHandle:
+    """Run a web profile through the registered native seam in a private cwd."""
+    ensure_private_dir(context.directory)
+    private = ensure_private_dir(context_root(context, name) / ("profile-" + uuid.uuid4().hex))
+    control = {
+        "operation": "profile", "harness": name, "privateRoot": str(private),
+        "directory": str(context.directory),
+        "nativeRoot": str(ensure_private_dir(context_root(context, name) / "profile-native")),
+        "sessionRecordPath": context.session_record_path, "cwd": request.cwd,
+        "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
+        "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
+        "profileRequest": {"prompt": request.prompt, "outputSchema": request.output_schema},
+    }
+    identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
+                           generation=context.generation, invocation_id=uuid.uuid4().hex)
+    return _launch(control, context, environment=context.environment, identity=identity)
 
 
 class WorkerRunExecutor:
@@ -619,7 +718,7 @@ class WorkerRunExecutor:
             "directory": str(resolved_path(context.directory)),
             "privateRoot": str(context_root(context, self.name)), "nativeRoot": str(root),
             "sessionRecordPath": context.session_record_path,
-            "cwd": str(Path(context.cwd).resolve()), "timeoutSeconds": context.timeout_seconds,
+            "cwd": str(Path(context.cwd).resolve()),
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
             "taskFile": str(context.task_file()),
             "inquiry": {key: inquiry[key] for key in ("resultsPath",)},
@@ -711,20 +810,32 @@ class WorkerRunExecutor:
             status = "ok"
         seal_error = None
         payload["turnResultPath"] = str(context.turn_output_file())
+        paused_interruption = (handle.stop_initiator == "pause" and shutdown
+                               and result.end.status == "cancelled"
+                               and result.stop_evidence.interrupt is not None
+                               and result.stop_evidence.interrupt.requested is True
+                               and result.continuation is not None
+                               and result.continuation.resumable is True)
         session_id = payload.get("sessionId") or (record or {}).get("sessionId")
         if self.receipt_options.capture_session_from_turn:
             # This registered projection takes its session from the delivered
-            # record. The service validates that record in workflow._validate_turn.
-            session_id = (record or {}).get("sessionId")
+            # record. A paused, acknowledged interruption has no turn record;
+            # its native binding and continuation fact preserve that session.
+            session_id = ((record or {}).get("sessionId") or
+                          (result.native_identity.session_id if paused_interruption
+                           and result.native_identity is not None
+                           else None))
         facts = self.module.session_facts(Path(handle.role_run_control["nativeRoot"]), session_id)
         payload["nativeSession"] = {**facts, "resumeMode": context.turn_input.get("resumeMode"),
             "resumable": bool(facts.get("bindingPresent", True) and shutdown
                               and result.continuation is not None and result.continuation.resumable is True
                               and (record is not None or checkpoint is not None
-                                   and turn_io.checkpoint_resumable(payload, checkpoint)))}
+                                   and turn_io.checkpoint_resumable(payload, checkpoint)
+                                   or paused_interruption and facts.get("bindingPresent") is True))}
         if self.receipt_options.capture_session_from_turn:
-            payload["nativeSession"]["sessionIdSource"] = "turn-record" if session_id else "none"
-        payload["workspaceManifest"] = context.effective_workspace
+            payload["nativeSession"]["sessionIdSource"] = (
+                "turn-record" if record is not None and session_id else
+                "native-interruption" if session_id else "none")
         if error:
             payload["turnError"] = error
             if status == "ok":
@@ -744,7 +855,11 @@ class WorkerRunExecutor:
 
     def stop(self, handle: InlineRunHandle, *, stop_initiator: str,
              grace_deadline: float | None) -> None:
-        if (stop_initiator in WRAP_UP_INITIATORS and grace_deadline is not None
+        if (stop_initiator == "pause" and grace_deadline is not None
+                and self.description.interrupted_resume):
+            from .controller import start_pause
+            start_pause(handle, grace_deadline)
+        elif (stop_initiator in WRAP_UP_INITIATORS and grace_deadline is not None
                 and self.description.interrupted_resume):
             from .controller import start_wrap_up
             start_wrap_up(handle, grace_deadline, stop_initiator=stop_initiator)

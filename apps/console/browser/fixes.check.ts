@@ -18,7 +18,7 @@ for (const { locale, language } of [
     test("renders linked corrections", async ({ page }) => {
     const response = page.waitForResponse(reply => new URL(reply.url()).pathname === timelinePath);
     await open(page, "#tasks");
-    await page.locator(`[data-macro-task-id="${macro}"] button`).click();
+    await page.locator(`[data-macro-task-id="${macro}"] [data-slot=macro-entry]`).click();
     const data = await response;
     expect(data.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
     const timeline = await data.json() as MacroTaskTimeline;
@@ -43,10 +43,8 @@ for (const { locale, language } of [
     const clipped = await second.locator('[data-slot=fix-link]').evaluate(node => node.scrollWidth > node.clientWidth);
     expect(clipped).toBe(true);
     await second.locator('[data-slot=fix-link]').hover();
-    await expect(page.getByRole("tooltip").getByText(target, { exact: true })).toBeVisible();
-    const buddy = timeline.rows.find(item => item.runId === "preview-run-a2")!.buddy!;
-    await expect(page.getByRole("tooltip")).toContainText([buddy.harness, buddy.provider, buddy.model, buddy.effort].join(" / "));
-    await expect(page.getByRole("tooltip")).toBeInViewport();
+    await page.waitForTimeout(700);
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
     await expect(page.locator("html")).toHaveAttribute("lang", language);
     for (const label of [first, second, third]) {
       await expectWholeAndApart(label, label.locator(":scope > span"));

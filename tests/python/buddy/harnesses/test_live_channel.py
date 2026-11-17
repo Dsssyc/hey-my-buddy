@@ -7,7 +7,7 @@ publish owner facts. No native harness or model runs here.
 from __future__ import annotations
 
 import os
-from temporary import TemporaryDirectory
+import tempfile
 import threading
 import time
 import unittest
@@ -38,7 +38,7 @@ def inquiry_request(question: str = "what should I check first?", request_id: st
 class LiveSeamCase(unittest.TestCase):
     def setUp(self):
         self.endpoint = ctl.CTwoLiveEndpoint(identity(), lv.EXISTING_CAPABILITIES["zcode"])
-        self.directory = self.enterContext(TemporaryDirectory(prefix="live-fixture-"))
+        self.directory = self.enterContext(tempfile.TemporaryDirectory(prefix="live-fixture-"))
         self.journal = Path(self.directory) / "inquiries.jsonl"
 
     def ask(self, request, *, timeout_ms=1500):
@@ -92,7 +92,7 @@ class CapabilityTests(unittest.TestCase):
     def test_each_harness_declares_its_existing_facilities_only(self):
         # DSH questions arrive at the session's cooperative checkpoint.
         expected = {"codex": "realtime", "claude": "realtime",
-                    "zcode": "cooperative-checkpoint", "dsh": "cooperative-checkpoint"}
+                    "zcode": "realtime", "dsh": "cooperative-checkpoint"}
         for harness, delivery in expected.items():
             capabilities = lv.EXISTING_CAPABILITIES[harness]
             self.assertEqual(capabilities.inquiry_delivery, delivery, harness)

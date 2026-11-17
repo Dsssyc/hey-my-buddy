@@ -1,14 +1,15 @@
+import { modelFacts } from "./model-fixtures";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import type { ConsoleApi, HarnessHealth } from "../api";
 import type { Buddy, Snapshot } from "../types";
-import { effortCell, level, listed, modelButton, note, pane, queryModel, search, selectModel } from "./page.testing";
+import { choosePreference, effortCell, level, levelPreference, levelSwitch, listed, modelButton, pane, queryModel, search, selectModel } from "./page.testing";
 import { modelServiceKey } from "../console-data";
 
 /**
- * The Buddy page's own navigation: two sections, 目录 and 角色, and inside the
+ * The Buddy page's own navigation: 模型, Router and 评价, and inside the
  * catalogue one directory in which a harness, a model or a buddy can be
  * selected. Every selection has an address; deep links, hashchange and the
  * browser's back action land in the same state, and a deep link cuts through
@@ -30,9 +31,9 @@ const CHECKED_AT = "2026-09-29T09:30:00.000Z";
 const SONNET = "claude / anthropic / claude-sonnet-5";
 const SOL = "codex / openai / gpt-6-sol";
 const GLM = "zcode / zhipu / glm-5";
-const modelsRegion = () => screen.queryByRole("region", { name: "目录" });
+const modelsRegion = () => screen.queryByRole("region", { name: "模型" });
 
-function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harness" | "provider" | "model" | "effort">): Buddy {
+function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "alias" | "harness" | "provider" | "model" | "effort">): Buddy {
   return {
     effortRank: null, available: true, enabled: false, capabilities: [], contextWindow: null,
     description: "", source: "catalog:fixture", ...entry,
@@ -42,15 +43,15 @@ function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harnes
 /** One enabled model service per harness plus an offline model service hidden by default. */
 function buddies(): Buddy[] {
   return [
-    buddy({ effortRank: null, buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
+    buddy({ effortRank: null, buddyId: mediumId, alias: null, ...sonnet, effort: "medium",
       enabled: true, capabilities: ["execution:claude", "routing:fast", "decision"], contextWindow: 200_000 }),
-    buddy({ effortRank: null, buddyId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
+    buddy({ effortRank: null, buddyId: highId, alias: null, ...sonnet, effort: "high",
       capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
-    buddy({ effortRank: null, buddyId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
+    buddy({ effortRank: null, buddyId: solMediumId, alias: null, ...sol, effort: "medium",
       enabled: true, capabilities: ["execution:codex"] }),
-    buddy({ effortRank: null, buddyId: flashMaxId, label: "DeepSeek Flash · max", ...flash, effort: "max",
+    buddy({ effortRank: null, buddyId: flashMaxId, alias: null, ...flash, effort: "max",
       enabled: true, capabilities: ["execution:dsh", "routing:fast"] }),
-    buddy({ buddyId: glmId, label: "GLM-5 · default", ...glm, effort: "default", available: false,
+    buddy({ buddyId: glmId, alias: null, ...glm, effort: "default", available: false,
       unavailableReason: { code: "harness.not-found", params: {} } }),
   ];
 }
@@ -58,18 +59,18 @@ function buddies(): Buddy[] {
 /** Codex lacks local review eligibility; DSH carries a provider cooldown. */
 function harnesses(): HarnessHealth[] {
   return [
-    { harness: "claude", status: "ready", revision: 2, manualPath: null,
+    { harness: "claude", status: "ready", revision: 2, manualPath: null, permissionsVerifiedVersion: null,
       executable: "/usr/local/bin/claude", version: "2.0.1", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [] },
-    { harness: "codex", status: "ready", revision: 2, manualPath: null,
+    { harness: "codex", status: "ready", revision: 2, manualPath: null, permissionsVerifiedVersion: null,
       executable: "/opt/bin/codex", version: "0.159.0", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
       permissions: { write: "enforced" } },
-    { harness: "dsh", status: "ready", revision: 3, manualPath: null,
+    { harness: "dsh", status: "ready", revision: 3, manualPath: null, permissionsVerifiedVersion: null,
       executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
       providers: [{ provider: "deepseek-official", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 1 }] },
-    { harness: "zcode", status: "missing", revision: 1, manualPath: null,
+    { harness: "zcode", status: "missing", revision: 1, manualPath: null, permissionsVerifiedVersion: null,
       reason: { code: "harness.not-found", params: { operation: "probe" } },
       checkedAt: CHECKED_AT, candidates: [] },
   ];
@@ -79,13 +80,13 @@ type SnapshotWithHarnesses = Snapshot & { harnesses: HarnessHealth[] };
 
 function snapshot(routerBuddyId: string | null = solMediumId): SnapshotWithHarnesses {
   const base: Snapshot = {
-    csrfToken: "csrf", eventCursor: 0,
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0,
     consoleSession: { id: "fixture-session" },
 
-    configuration: { routerBuddyIds: routerBuddyId ? [routerBuddyId] : [], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: "review" as const, routingBudget: "standard" },
+    configuration: { explorationEvery: 5, routerBuddyIds: routerBuddyId ? [routerBuddyId] : [], routerRetryIntervalSeconds: 600,
+      defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null },
     buddies: buddies(),
-    preferences: [], modelServiceNotes: [],
+    preferences: [], models: [], modelCorrespondences: [],
     decisions: [],
     modelServiceConcurrency: [
       { ...sonnet, limit: 2, active: 0 }, { ...sol, limit: 2, active: 0 },
@@ -94,7 +95,7 @@ function snapshot(routerBuddyId: string | null = solMediumId): SnapshotWithHarne
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
   };
-  return { ...base, harnesses: harnesses() };
+  return { ...base, ...modelFacts(base.buddies), harnesses: harnesses() };
 }
 
 function fixture(routerBuddyId: string | null = solMediumId, extra: Partial<Snapshot> = {}) {
@@ -103,7 +104,8 @@ function fixture(routerBuddyId: string | null = solMediumId, extra: Partial<Snap
     if (operation === "buddy_list") {
       // Only the checked 显示不可用 asks for this page; the fixture keeps
       // every recorded row on one bounded page.
-      return { buddies: state.buddies, modelServiceNotes: state.modelServiceNotes,
+      return { buddies: state.buddies, models: state.models,
+        modelCorrespondences: state.modelCorrespondences,
         preferences: state.preferences,
         modelServiceConcurrency: state.modelServiceConcurrency, nextCursor: null };
     }
@@ -114,7 +116,7 @@ function fixture(routerBuddyId: string | null = solMediumId, extra: Partial<Snap
     command,
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
   return { api, command };
 }
@@ -139,23 +141,94 @@ afterEach(() => {
 });
 
 describe("the Buddy page's sections and tables", () => {
-  it("opens one directory by default and moves between directory and roles", async () => {
+  it("routes a bare Buddy address to Harness when none are enabled and to Models in daily use", async () => {
+    renderBuddy("#buddies", fixture(solMediumId, { buddies: buddies().map(entry => ({ ...entry, enabled: false })) }));
+    await screen.findByRole("region", { name: "Harness" });
+    expect(current(sectionsNav())).toEqual(["Harness"]);
+    expect(window.location.hash).toBe("#buddies");
+    cleanup();
+    renderBuddy("#buddies", fixture());
+    await listed(1, 1);
+    expect(current(sectionsNav())).toEqual(["模型"]);
+  });
+
+  it("focuses a harness deep link and keeps Models selected when its last buddy is disabled", async () => {
+    const f = fixture();
+    renderBuddy("#buddies/harness/codex", f);
+    await screen.findByRole("region", { name: "Harness" });
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById("harness-title-codex")));
+    cleanup();
+    const user = userEvent.setup();
+    renderBuddy("#buddies/models", fixture(solMediumId, { buddies: buddies().map(entry => ({ ...entry, enabled: entry.buddyId === mediumId })) }));
+    await listed(1, 1);
+    await selectModel(user, SONNET, "Claude Code");
+    const address = window.location.hash;
+    await user.click(levelSwitch("medium"));
+    expect(await screen.findByRole("region", { name: "模型" })).toBeTruthy();
+    expect(window.location.hash).toBe(address);
+  });
+
+  it("keeps one header, whole-directory counts and keyboard focus across filters and sections", async () => {
+    const f = fixture(); const user = userEvent.setup();
+    renderBuddy("#buddies/models", f); await listed(3, 4);
+    const navigation = sectionsNav();
+    const catalogLink = sectionLink(/^模型/);
+    const routerLink = sectionLink(/^Router/);
+    const evaluationLink = sectionLink("评价");
+    expect(within(navigation).getAllByRole("link")).toHaveLength(4);
+    const summary = document.querySelector('[data-slot="buddy-header"] [role="status"]')!;
+    expect(summary.textContent).toBe("4 个 harness · 启用 3 / 5");
+
+    await user.type(search(), "gpt");
+    await listed(1, 1);
+    await user.click(screen.getByRole("checkbox", { name: "仅显示已启用" }));
+    expect(summary.textContent).toBe("4 个 harness · 启用 3 / 5");
+
+    routerLink.focus();
+    await user.keyboard("{Enter}");
+    expect(window.location.hash).toBe("#buddies/router");
+    expect(document.activeElement).toBe(routerLink);
+    expect(sectionsNav()).toBe(navigation);
+    expect(sectionLink(/^模型/)).toBe(catalogLink);
+    expect(sectionLink(/^Router/)).toBe(routerLink);
+    expect(summary.textContent).toBe("4 个 harness · 启用 3 / 5");
+
+    evaluationLink.focus();
+    await user.keyboard("{Enter}");
+    expect(window.location.hash).toBe("#buddies/evaluation");
+    expect(document.activeElement).toBe(evaluationLink);
+    expect(sectionsNav()).toBe(navigation);
+    expect(summary.textContent).toBe("4 个 harness · 启用 3 / 5");
+
+    catalogLink.focus();
+    await user.keyboard("{Enter}");
+    expect(window.location.hash).toBe("#buddies/models");
+    expect(document.activeElement).toBe(catalogLink);
+    expect(sectionsNav()).toBe(navigation);
+    expect(summary.textContent).toBe("4 个 harness · 启用 3 / 5");
+  });
+
+  it("opens one directory by default and moves among directory, Router and evaluation", async () => {
     const f = fixture(); const user = userEvent.setup();
     renderBuddy("#buddies", f); await listed(3, 4);
-    expect(current(sectionsNav())).toEqual(["目录"]);
+    expect(current(sectionsNav())).toEqual(["模型"]);
     expect(modelsRegion()).toBeTruthy();
     expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
-    expect(document.querySelector("[data-slot=harness-details]")).toBeNull();
-    expect(screen.queryByRole("navigation", { name: "目录的内容" })).toBeNull();
-    await user.click(sectionLink(/^角色/));
-    expect(window.location.hash).toBe("#buddies/roles");
-    await screen.findByRole("region", { name: "角色" });
-    expect(modelsRegion()).toBeNull(); expect(current(sectionsNav())).toEqual(["角色"]);
-    expect(screen.getByRole("radiogroup", { name: "审阅预算" })).toBeTruthy();
-    await user.click(sectionLink(/^目录/));
-    expect(window.location.hash).toBe("#buddies/catalog");
+    expect(document.querySelectorAll("[data-slot=harness-card] [data-slot=harness-details]")).toHaveLength(4);
+    expect(screen.queryByRole("navigation", { name: "模型的内容" })).toBeNull();
+    await user.click(sectionLink(/^Router/));
+    expect(window.location.hash).toBe("#buddies/router");
+    await screen.findByRole("region", { name: "Router" });
+    expect(modelsRegion()).toBeNull(); expect(current(sectionsNav())).toEqual(["Router"]);
+    expect(screen.getByRole("spinbutton", { name: "开始作答时限" })).toBeTruthy();
+    await user.click(sectionLink("评价"));
+    expect(window.location.hash).toBe("#buddies/evaluation");
+    expect(current(sectionsNav())).toEqual(["评价"]);
+    expect(screen.getByRole("navigation", { name: "评价列表" })).toBeTruthy();
+    await user.click(sectionLink(/^模型/));
+    expect(window.location.hash).toBe("#buddies/models");
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
-    expect(current(sectionsNav())).toEqual(["目录"]);
+    expect(current(sectionsNav())).toEqual(["模型"]);
   });
 
   it("keeps the selected model, the search and the draft across sections", async () => {
@@ -166,16 +239,16 @@ describe("the Buddy page's sections and tables", () => {
     await user.type(search(), "gpt");
     await listed(1, 1);
     await selectModel(user, SOL, "Codex");
-    await user.type(note(), "分区间保留");
+    await choosePreference(user, "medium", "优先");
     expect(screen.getByText("1 项未保存")).toBeTruthy();
 
-    await user.click(sectionLink(/^角色/));
-    await waitFor(() => expect(screen.getByRole("region", { name: "角色" })).toBeTruthy());
-    await user.click(sectionLink(/^目录/));
+    await user.click(sectionLink(/^Router/));
+    await waitFor(() => expect(screen.getByRole("region", { name: "Router" })).toBeTruthy());
+    await user.click(sectionLink(/^模型/));
     expect(search()).toHaveProperty("value", "gpt");
     await listed(1, 1);
     expect(pane(SOL)).toBeTruthy();
-    expect(note()).toHaveProperty("value", "分区间保留");
+    expect(within(levelPreference("medium")).getByRole("radio", { name: "优先" }).getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText("1 项未保存")).toBeTruthy();
   });
 });
@@ -187,17 +260,17 @@ describe("marks for what waits", () => {
     const user = userEvent.setup();
     renderBuddy("#buddies", f);
     await listed(3, 4);
-    expect(sectionLink(/^角色\s*Router 不可用$/)).toBeTruthy();
-    expect(sectionLink(/^目录$/)).toBeTruthy();
+    expect(sectionLink(/^Router\s*Router 不可用$/)).toBeTruthy();
+    expect(sectionLink(/^模型$/)).toBeTruthy();
     // Inside the catalogue the mark sits on the table, so the section itself carries none.
-    expect(sectionLink(/^目录/)).toBeTruthy();
+    expect(sectionLink(/^模型/)).toBeTruthy();
     const topBar = screen.getByRole("navigation", { name: "主要导航" });
     expect(within(topBar).getByRole("link", { name: /^Buddy\s*Router 不可用$/ })).toBeTruthy();
 
     // Outside the catalogue the table is not on screen, and the section carries its mark.
-    await user.click(sectionLink(/^角色/));
-    expect(sectionLink(/^目录$/)).toBeTruthy();
-    expect(sectionLink(/^角色\s*Router 不可用$/)).toBeTruthy();
+    await user.click(sectionLink(/^Router/));
+    expect(sectionLink(/^模型$/)).toBeTruthy();
+    expect(sectionLink(/^Router\s*Router 不可用$/)).toBeTruthy();
   });
 
   it("keeps the mark while the service reports no current Router, even when the head of the list could work", async () => {
@@ -209,21 +282,21 @@ describe("marks for what waits", () => {
     } });
     renderBuddy("#buddies", f);
     await listed(3, 4);
-    expect(sectionLink(/^角色\s*Router 不可用$/)).toBeTruthy();
+    expect(sectionLink(/^Router\s*Router 不可用$/)).toBeTruthy();
   });
 
-  it("carries no mark on the roles section once a working Router holds the role", async () => {
+  it("carries no mark on the Router section once a working Router holds the role", async () => {
     const f = fixture(mediumId);
     renderBuddy("#buddies", f);
     await listed(3, 4);
-    expect(sectionLink("角色")).toBeTruthy();
+    expect(sectionLink("Router")).toBeTruthy();
   });
 });
 
 describe("deep links", () => {
-  it("opens and focuses the encoded buddy from #buddies/catalog/buddy/<buddyId>", async () => {
+  it("opens and focuses the encoded buddy from #buddies/models/buddy/<buddyId>", async () => {
     const f = fixture();
-    renderBuddy(`#buddies/catalog/buddy/${encodeURIComponent(mediumId)}`, f);
+    renderBuddy(`#buddies/models/buddy/${encodeURIComponent(mediumId)}`, f);
     await listed(3, 4);
     expect(modelsRegion()).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Harness" })).toBeNull();
@@ -233,10 +306,10 @@ describe("deep links", () => {
     await waitFor(() => expect(document.activeElement).toBe(level("medium")));
   });
 
-  it("opens a whole model from #buddies/catalog/model/<key> on its first enabled effort, and a click on a row writes that address", async () => {
+  it("opens a whole model from #buddies/models/model/<key> on its first enabled effort, and a click on a row writes that address", async () => {
     const user = userEvent.setup();
     const f = fixture();
-    const address = (index: number) => `#buddies/catalog/model/${encodeURIComponent(modelServiceKey(buddies()[index]))}`;
+    const address = (index: number) => `#buddies/models/model/${encodeURIComponent(modelServiceKey(buddies()[index]))}`;
     renderBuddy(address(0), f);
     await listed(3, 4);
     await waitFor(() => pane(SONNET));
@@ -245,49 +318,47 @@ describe("deep links", () => {
     await waitFor(() => expect(document.activeElement).toBe(level("medium")));
     // Closing it returns to the bare address; opening another model writes that model's own.
     await user.click(modelButton(SONNET));
-    expect(window.location.hash).toBe("#buddies/catalog");
+    expect(window.location.hash).toBe("#buddies/models");
     await user.click(modelButton(SOL));
     expect(window.location.hash).toBe(address(2));
   });
 
-  it("focuses the named Router line from #buddies/roles/current", async () => {
+  it("opens routing from its own work address", async () => {
     const f = fixture();
-    renderBuddy("#buddies/roles/current", f);
-    await screen.findByRole("region", { name: "角色" });
-    expect(screen.getByRole("region", { name: "角色" })).toBeTruthy();
+    renderBuddy("#buddies/router/routing", f);
+    await screen.findByRole("region", { name: "Router" });
+    expect(within(screen.getByRole("navigation", { name: "Router 的工作" })).getByRole("link", { name: "路由" }).getAttribute("aria-current")).toBe("page");
     expect(modelsRegion()).toBeNull();
-    // The snapshot carries no health facts, so the head of the list is the one serving.
-    const line = screen.getByRole("listitem", { name: `${SOL} / medium` });
-    expect(within(line).getByText("当前")).toBeTruthy();
-    await waitFor(() => expect(document.activeElement).toBe(line));
+    expect(within(screen.getByRole("row", { name: `${SOL} / medium` })).getByText("当前")).toBeTruthy();
   });
 
-  it("shows the directory for the bare Buddy page without rewriting an unknown hash", async () => {
+  it("shows the directory without rewriting the removed roles address", async () => {
     const f = fixture();
-    renderBuddy("#buddies/router", f);
+    renderBuddy("#buddies/roles", f);
     await listed(3, 4);
-    expect(current(sectionsNav())).toEqual(["目录"]);
+    expect(current(sectionsNav())).toEqual(["模型"]);
+    expect(window.location.hash).toBe("#buddies/roles");
   });
 
   it("follows hashchange and the browser back action between views", async () => {
     const f = fixture();
     renderBuddy("#buddies", f);
     await listed(3, 4);
-    await act(async () => { window.location.hash = "#buddies/roles"; });
-    await waitFor(() => expect(screen.getByRole("region", { name: "角色" })).toBeTruthy());
+    await act(async () => { window.location.hash = "#buddies/router"; });
+    await waitFor(() => expect(screen.getByRole("region", { name: "Router" })).toBeTruthy());
     await act(async () => { window.history.back(); });
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
     expect(screen.queryByRole("region", { name: "Harness" })).toBeNull();
   });
 
-  it("goes from the roles section to the Router's model and focuses that buddy", async () => {
+  it("goes from the Router section to the Router's model and focuses that buddy", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    renderBuddy("#buddies/roles", f);
-    await screen.findByRole("region", { name: "角色" });
-    const reviewLine = screen.getByRole("listitem", { name: `${SOL} / medium` });
+    renderBuddy("#buddies/router", f);
+    await screen.findByRole("region", { name: "Router" });
+    const reviewLine = screen.getByRole("row", { name: `${SOL} / medium` });
     await user.click(within(reviewLine).getByRole("link", { name: `${SOL} / medium` }));
-    expect(window.location.hash).toBe(`#buddies/catalog/buddy/${encodeURIComponent(solMediumId)}`);
+    expect(window.location.hash).toBe(`#buddies/models/buddy/${encodeURIComponent(solMediumId)}`);
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
     await waitFor(() => pane(SOL));
     await waitFor(() => expect(document.activeElement).toBe(level("medium")));
@@ -301,11 +372,11 @@ describe("deep links", () => {
     await user.type(search(), "gpt");
     await listed(1, 1);
     expect(queryModel(SONNET)).toBeNull();
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await user.click(screen.getByRole("checkbox", { name: "仅显示已启用" }));
 
-    await act(async () => { window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(highId)}`; });
+    await act(async () => { window.location.hash = `#buddies/models/buddy/${encodeURIComponent(highId)}`; });
     await waitFor(() => expect(search()).toHaveProperty("value", ""));
-    expect(screen.getByRole("checkbox", { name: "只看已启用" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("checkbox", { name: "仅显示已启用" }).getAttribute("aria-checked")).toBe("false");
     await listed(3, 4);
     await waitFor(() => pane(SONNET));
     await waitFor(() => expect(document.activeElement).toBe(level("high")));
@@ -315,13 +386,21 @@ describe("deep links", () => {
 
   it("turns on the unavailable filter and unfolds the harness when an address names an offline buddy", async () => {
     const f = fixture();
-    renderBuddy(`#buddies/catalog/buddy/${encodeURIComponent(glmId)}`, f);
+    const user = userEvent.setup();
+    renderBuddy(`#buddies/models/buddy/${encodeURIComponent(glmId)}`, f);
     const box = await screen.findByRole("checkbox", { name: "显示不可用 1" });
     await waitFor(() => expect(box.getAttribute("aria-checked")).toBe("true"));
     await listed(3, 5);
     // A harness that cannot work starts folded; the address opens it.
     expect(modelButton(GLM).getAttribute("aria-expanded")).toBe("true");
     await waitFor(() => expect(document.activeElement).toBe(level("default")));
+    await user.click(screen.getByRole("link", { name: "查看环境" }));
+    await screen.findByRole("region", { name: "Harness" });
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById("harness-title-zcode")));
+    await user.click(screen.getByRole("link", { name: "模型" }));
+    await screen.findByRole("region", { name: "模型" });
+    await user.click(screen.getByRole("link", { name: "查看环境" }));
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById("harness-title-zcode")));
     expect(f.command).not.toHaveBeenCalled();
   });
 });
@@ -334,14 +413,14 @@ describe("a narrow viewport", () => {
     renderBuddy("#buddies", f);
     await listed(3, 4);
     await selectModel(user, SONNET, "Claude Code");
-    await user.type(note(), "窄屏草稿");
-    expect(within(sectionsNav()).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["目录", "角色"]);
-    await user.click(sectionLink(/^角色/));
-    await screen.findByRole("region", { name: "角色" });
-    await user.click(sectionLink(/^目录/));
+    await choosePreference(user, "medium", "优先");
+    expect(within(sectionsNav()).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["Harness", "模型", "Router", "评价"]);
+    await user.click(sectionLink(/^Router/));
+    await screen.findByRole("region", { name: "Router" });
+    await user.click(sectionLink(/^模型/));
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
     expect(pane(SONNET)).toBeTruthy();
-    expect(note()).toHaveProperty("value", "窄屏草稿");
+    expect(within(levelPreference("medium")).getByRole("radio", { name: "优先" }).getAttribute("aria-checked")).toBe("true");
     // Once a row is opened, the side column offers the way back to the table.
     expect(modelButton(SONNET).getAttribute("aria-expanded")).toBe("true");
     expect(within(pane()).queryByRole("button", { name: "模型" })).toBeNull();

@@ -56,5 +56,20 @@
 | 2026-10-25 | [PyPI 的项目页怎样复用 README](2026-10-25-pypi-project-page.md) | 发版准备计划的 R3 |
 | 2026-10-26 | [没有控制台窗口的子进程怎样软停：别的工具与协议的做法](2026-10-26-windowless-child-soft-stop.md) | B：Windows 上的软停（开发者 2026-10-26 定，见 ADR-031 第 14 条） |
 | 2026-10-26 | [Codex 的睡眠工具与排队唤醒：比 2026-10-14 多了什么](2026-10-26-codex-sleep-and-queue-wake.md) | Codex 的 Host 指南的等待方式；待办“执行上的问题要让控制台与 Host 都知道”（发版之后）；续查 10-14 的三份 |
+| 2026-10-27 | [Antigravity 能不能作为 harness 接进来](2026-10-27-antigravity-harness.md) | 是否接入 Antigravity，待开发者定 |
+| 2026-10-28 | [Antigravity 的 API key 从哪里读；API key 模式下的冒烟测试](2026-10-28-antigravity-api-key-and-smoke.md) | 是否接入 Antigravity 与接入计划，待开发者定；续查 10-27 的一份 |
+| 2026-10-28 | [一次执行的全部后代怎样找到、怎样证明已停：三个系统的机制与成熟工具的做法](2026-10-28-descendant-process-containment.md) | ADR-031 第 4、5 条停止证据的修订，待开发者定 |
+| 2026-10-29 | [按版本号串起的升级：成熟工具怎样分步、旧步骤留多久、预发布给数据什么保证](2026-10-29-schema-upgrade-chains.md) | 升级改为从支持下限起的分步链（schema 31 → 32 那一批的执行计划）；AGENTS.md 存储一段与 ADR-021 升级那一条的修订，待开发者定措辞 |
+| 2026-10-31 | [ZCode 0.17.0 与 DSH 0.2.1-rc.2 能不能在回合进行中送入输入](2026-10-31-zcode-dsh-in-turn-input.md) | 待办“问 ZCode 的 Worker”；ADR-023 |
+| 2026-10-31 | [公开资料与社区里，ZCode、DSH 与 ACP 怎样在回合进行中送入输入](2026-10-31-in-turn-input-public-sources.md) | 待办“问 ZCode 的 Worker”；ADR-023；续查同日上一份 |
+| 2026-10-31 | [DSH 0.2.1-rc.2 在进程边界上提供哪些接口，哪一个能在回合中送入输入](2026-10-31-dsh-boundary-surfaces.md) | 待办“问 ZCode 的 Worker”；ADR-006 2026-10-31 的那一段；ADR-023 与 ADR-030；续查同日的两份 |
+| 2026-10-31 | [ZCode 0.17.0 的入队父行、队列读取与自动执行](2026-10-31-zcode-queue-initialization.md) | ADR-006 实时问询执行前提；续查空会话外键与 v4 队列 |
+| 2026-10-31 | [ZCode 私有会话关闭自动执行后的真实问询验证](2026-10-31-zcode-private-inquiry-live.md) | ADR-006 开发者选 A；一次获批的 GLM-5.3-Flash / low 原生根回合 |
+| 2026-11-02 | [DSH 0.2.1-rc.2 把会话记录写成 v4，我们只读 v3](2026-11-02-dsh-session-record-generations.md) | DSH 读用量的修法；`docs/reference/workers.md` |
+| 2026-11-04 | [hey-my-buddy 在现有多代理编码系统中的位置：开发者三项主张的核对](2026-11-04-delegation-landscape.md) | 开发者 2026-11-04 的定位讨论；README 的“What is hey-my-buddy”一节 |
+| 2026-11-05 | [Antigravity 与 Gemini CLI 从哪里读用户级的 skill](2026-11-05-antigravity-skill-locations.md) | 安装时给 Antigravity 放 skill 链接的待办（ADR-015） |
+| 2026-11-06 | [ZCode 有没有只读模式，能不能预先放行黑板自己的工具](2026-11-06-zcode-read-only-mode.md) | 0.61.2 的 ZCode 权限档位（ADR-023） |
+| 2026-11-09 | [DSH 经 ACP 什么时候把模型的输出送出来](2026-11-09-dsh-acp-step-delivery.md) | ADR-021 第 2 条 2026-11-09 的修改：看不到模型开始的 harness 不套开始等待 |
+| 2026-11-10 | [第三层导航：不叠页签栏的做法，与 Router 分区的三个原型](2026-11-10-third-level-navigation.md) | Router 分区里三项工作的放法，待开发者定 |
 
 2026-10-11 之前的四份是从各自的决定里移过来的，当时没有按上面的写法记录读到哪里为止，这一点在各份记录里照实写明。

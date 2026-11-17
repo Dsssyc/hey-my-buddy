@@ -2,7 +2,7 @@
 import json
 import os
 import queue
-from temporary import TemporaryDirectory
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -175,7 +175,7 @@ class BoundaryAndDrainTests(unittest.TestCase):
         facts = native_run._RunFacts()
         for index in range(70):
             facts.note_unknown(f"future-method-{index}")
-        with TemporaryDirectory(prefix="hey-my-buddy-zcode-facts-") as root:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-facts-") as root:
             invocation = native_run.ensure_private_dir(Path(root))
             refs = native_run._evidence_refs(invocation_root=invocation,
                                              stderr_path=invocation / "missing-stderr.log",
@@ -295,7 +295,7 @@ class NativeShapeRoundTests(NativeRunCase):
             result = native_run.run(self.fast_request("Return only one JSON value matching this schema: {}"),
                 observer=lambda _facts: RunFeedback(action="continue"), services=None, cancelled=lambda: False)
         self.assertEqual(result.end.reason_code, "buddy-mismatch")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.completion_evidence)
         self.assertNotIn("session/send", calls)

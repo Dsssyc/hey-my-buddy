@@ -15,7 +15,7 @@ const t = i18n.getFixedT(null, "buddies");
 
 function buddy(harness: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
   return { effortRank: null,
-    buddyId: `${harness}:${provider}:${model}:${effort}`, label: `${model.toUpperCase()} · ${effort}`, harness, provider, model, effort,
+    buddyId: `${harness}:${provider}:${model}:${effort}`, alias: null, harness, provider, model, effort,
     available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
   };
 }
@@ -34,18 +34,18 @@ function buddies(): Buddy[] {
 
 function snapshot(list: Buddy[] = buddies()): Snapshot {
   return {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "s" },
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: { id: "s" },
 
-    configuration: null, buddies: list, preferences: [],  modelServiceNotes: [], decisions: [],
+    configuration: null, buddies: list, preferences: [],  models: [], modelCorrespondences: [], decisions: [],
     modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "flash", limit: 3, active: 1 }],
     tasks: { pendingCount: 0 }, capabilities: {},
   };
 }
 
 const harnesses: HarnessHealth[] = [
-  { harness: "dsh", status: "ready", revision: 1, manualPath: null },
-  { harness: "codex", status: "ready", revision: 1, manualPath: null },
-  { harness: "claude", status: "login-required", revision: 1, manualPath: null },
+  { harness: "dsh", status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null },
+  { harness: "codex", status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null },
+  { harness: "claude", status: "login-required", revision: 1, manualPath: null, permissionsVerifiedVersion: null },
 ];
 
 function blocks(options: { recorded?: Snapshot; data?: ConsoleView; folded?: Record<string, boolean>; fresh?: string[]; health?: HarnessHealth[] } = {}) {
@@ -72,7 +72,14 @@ describe("which models are listed", () => {
     expect(names({ enabledOnly: true, showUnavailable: true })).toEqual(["claude / anthropic / opus", "dsh / deepseek-official / flash"]);
   });
 
-  it("searches the label, the model, the provider, the harness and the harness's name without regard to case", () => {
+  it("searches aliases and complete identities as well as the model id", () => {
+    const list = [buddy("codex", "openai", "sol", "high", { alias: "Directory Display high" })];
+    expect(listedModels(list, { query: "directory display high", enabledOnly: false, showUnavailable: false }).map(modelIdentity))
+      .toEqual(["codex / openai / sol"]);
+    expect(listedModels(list, { query: "sol", enabledOnly: false, showUnavailable: false })[0].name).toBe("sol");
+  });
+
+  it("searches the alias, the model, the provider, the harness and the harness's name without regard to case", () => {
     expect(names({ query: "  SOL " })).toEqual(["codex / openai / sol"]);
     expect(names({ query: "second-prov" })).toEqual(["dsh / second-provider / pro"]);
     expect(names({ query: "claude code", showUnavailable: true })).toEqual(["claude / anthropic / opus"]);
@@ -106,7 +113,7 @@ describe("the table's blocks", () => {
   it("falls back to plain unavailability for a harness without a health record, and keeps an unknown state as recorded", () => {
     const without = blocks({ health: [] }).find(block => block.harness === "claude")!;
     expect(without.state).toBe("unavailable");
-    const future = blocks({ health: [{ harness: "claude", status: "quarantined" as HarnessHealth["status"], revision: 1, manualPath: null }] })
+    const future = blocks({ health: [{ harness: "claude", status: "quarantined" as HarnessHealth["status"], revision: 1, manualPath: null, permissionsVerifiedVersion: null }] })
       .find(block => block.harness === "claude")!;
     expect(future.state).toBe("quarantined");
     expect(harnessStateText("quarantined", t)).toBe("quarantined");

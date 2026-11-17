@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import json
-import math
 import os
-from temporary import TemporaryDirectory
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -24,7 +23,7 @@ FIXTURE = Path(__file__).parent / "fixtures/mock_zcode.py"
 
 class ZcodeFixtureCase(unittest.TestCase):
     def setUp(self):
-        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-test-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
@@ -62,7 +61,7 @@ class ZcodeFixtureCase(unittest.TestCase):
         return ExecutionContext(task_id="micro-task-1", attempt_id=attempt_id, generation=index,
                                 session_record_path=str(self.root / f"session-{attempt_id}.jsonl"),
                                 spec={"adapter": "zcode", "cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": 1,
-                                      **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
+                                      **({"modelResponseWaitSeconds": timeout} if timeout is not None else {}),
                                       "provider": "fixture-api", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_ZCODE_TEST_CASE": case},
@@ -72,7 +71,7 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait((context.timeout_seconds or 10) + 10), "controller did not exit within its deadline and shutdown grace")
+        self.assertIsNotNone(handle.wait(20), "controller did not exit within its shutdown grace")
         outcome = self.adapter.collect(handle, context)
         return handle, outcome
 
@@ -205,15 +204,14 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertFalse(any("provider" in x["location"] or "bridge" in x["location"] for x in outcome.artifacts))
         # Observation and the cooperative inquiry channel are declared
         # capabilities backed by this attempt's private bridge: questions queue
-        # for delivery at the root's own checkpoint inside the one admitted
-        # native turn, never through an injected send. The session facts stay
+        # for realtime delivery inside the one admitted native turn. The session facts stay
         # separate from the Git workspace facts.
         self.assertIn("observe", self.description.capabilities)
         self.assertIn("inquiry", self.description.capabilities)
         self.assertTrue(outcome.result["inquiry"]["mounted"], outcome.result["inquiry"])
         self.assertFalse({"supported", "requestedDelivery", "startsNewTurn", "extendsDeadline"}
                          & outcome.result["inquiry"].keys())
-        self.assertEqual(outcome.result["inquiry"]["deliveryMode"], "cooperative-checkpoint")
+        self.assertEqual(outcome.result["inquiry"]["deliveryMode"], "realtime")
         self.assertEqual(outcome.result["inquiry"]["answered"], 0)
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], turn["sessionId"])
@@ -240,9 +238,41 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["provenance"]["toolCallId"], "root-call")
 
+    def test_a_second_finish_after_the_accepted_receipt_keeps_the_first_answer(self):
+        # The observed incident: the root calls the finish tool again after its
+        # receipt was accepted. The accepted receipt stays the turn's answer,
+        # the repeat is a retained fact, and the finish tool tells the model
+        # the truth — this turn has already ended — instead of a second receipt.
+        context = self.context("second-finish")
+        _, outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        provenance = outcome.result["turn"]["provenance"]
+        self.assertEqual(provenance["toolCallId"], "root-call")
+        record = provenance["postFinishToolCalls"]
+        self.assertEqual(record["count"], 1)
+        self.assertEqual(record["records"][0]["toolCallId"], "second-call")
+        self.assertTrue(record["records"][0]["toolName"].endswith("__hey_my_buddy_finish_turn"))
+        answer = json.loads(self.native_log(context, "second-finish-answer.json"))
+        self.assertTrue(answer["waitedForAcceptance"], "the controller must publish its acceptance")
+        envelope = json.loads(answer["answer"])
+        self.assertEqual(envelope["reason"], "turn-ended")
+        self.assertIn("already ended", envelope["detail"])
+
+    def test_a_task_tool_after_the_accepted_finish_is_a_fact(self):
+        # The other observed incident: the root runs ZCode's own todo tool
+        # after its accepted finish. The turn completes with the accepted
+        # receipt and the call is a retained fact.
+        context = self.context("post-finish-tool")
+        _, outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        provenance = outcome.result["turn"]["provenance"]
+        self.assertEqual(provenance["toolCallId"], "root-call")
+        self.assertEqual(provenance["postFinishToolCalls"],
+                         {"count": 1, "records": [{"toolName": "TodoWrite", "toolCallId": "call-todo"}]})
+
     def test_protocol_failures_never_import_a_turn(self):
         cases = {"wrong-root": "missing-finish", "wrong-turn": "missing-finish", "tool-error": "finish-tool-failed",
-                 "truncated": "finish-tool-failed", "duplicate": "duplicate-finish", "turn-failure": "native-turn-failed",
+                 "truncated": "finish-tool-failed", "turn-failure": "native-turn-failed",
                  "prompt-failure": "native-turn-failed", "close-failed": "session-close-unconfirmed",
                  "wrong-input": "wrong-native-turn", "forged-receipt": "invalid-finish"}
         for index, (case, code) in enumerate(cases.items(), 1):
@@ -260,14 +290,14 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         handle, outcome = self.execute(self.context("config-mismatch", effort="high"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result["code"], "buddy-mismatch")
-        self.assertFalse(outcome.result["modelStarted"])
+        self.assertFalse(outcome.result["modelResponded"])
         self.assertIsNone(handle.result.buddy.checked.model)
         self.assertNotIn("turn", outcome.result)
 
     def test_unrecognized_model_readback_continues_and_retains_unknown_facts(self):
         handle, outcome = self.execute(self.context("config-unrecognized"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertTrue(outcome.result["modelStarted"])
+        self.assertTrue(outcome.result["modelResponded"])
         self.assertIsNone(handle.result.buddy.checked.model)
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
 
@@ -351,7 +381,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         _, refused = self.execute(self.context(index=2, previous=previous, effort="high"))
         self.assertEqual(refused.status, "failed", refused.to_report())
         self.assertEqual(refused.result.get("code"), "native-resume-unavailable")
-        self.assertIs(refused.result["modelStarted"], False)
+        self.assertIs(refused.result["modelResponded"], False)
         self.assertNotIn("turn", refused.result)
         reconstructed_handle, reconstructed = self.execute(self.context(index=3, previous=previous, mode="reconstructed-new-session", effort="high"))
         self.assertEqual(reconstructed.status, "ok", reconstructed.to_report())
@@ -367,7 +397,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         _, outcome = self.execute(self.context(previous="sess-missing"))
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.result.get("code"), "native-resume-unavailable")
-        self.assertIs(outcome.result["modelStarted"], False)
+        self.assertIs(outcome.result["modelResponded"], False)
 
     def test_bound_native_resume_rejects_missing_or_different_native_sessions(self):
         _, first = self.execute(self.context())
@@ -387,11 +417,6 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
 
-    def test_deadline_stops_owned_native_process_group(self):
-        _, outcome = self.execute(self.context("hang", timeout=1))
-        self.assertEqual(outcome.status, "failed")
-        self.assertEqual(outcome.result.get("code"), "timeout")
-        self.assertTrue(outcome.shutdown_confirmed)
 
     def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
         context = self.context("ok", timeout=None)
@@ -399,14 +424,12 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertEqual(outcome.result["turn"]["outcome"]["summary"], "fixture work completed")
-        self.assertEqual(handle.deadline, math.inf)
 
     def test_absent_budget_still_honors_explicit_cancellation(self):
         context = self.context("hang", timeout=None)
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertEqual(handle.deadline, math.inf)
         self.wait_native_input(context)
         self.adapter.cancel(handle)
         self.assertIsNotNone(handle.wait(15))
@@ -415,20 +438,22 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
 
-    def test_positive_timeout_keeps_a_finite_stamped_deadline(self):
-        context = self.context(timeout=10)
+
+    def test_blocked_native_stdin_still_honors_cancellation(self):
+        context = self.context("blocked-input", timeout=None)
+        context.spec["task"] = "x" * 262144
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertGreater(handle.deadline, time.monotonic())
-        self.assertFalse(math.isinf(handle.deadline))
-
-    def test_blocked_native_stdin_does_not_disable_the_deadline(self):
-        context = self.context("blocked-input", timeout=1)
-        context.spec["task"] = "x" * 262144
-        _, outcome = self.execute(context)
-        self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.result.get("code"), "timeout")
+        self.own_handle(handle)
+        deadline = time.monotonic() + 20
+        while "session/subscribe" not in self.native_log(context, "methods.jsonl").split():
+            self.assertLess(time.monotonic(), deadline, "fixture never blocked its native input")
+            time.sleep(0.05)
+        self.assertIsNone(handle.wait(0.1))
+        self.adapter.cancel(handle)
+        self.assertIsNotNone(handle.wait(15))
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
 
     def test_oauth_provider_is_not_rejected_during_preparation(self):
@@ -482,7 +507,9 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
             result = self.description.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(result["providers"][0]["models"][0]["efforts"], ["low", "high"])
         self.assertEqual(result["providers"][0]["harness"], "zcode")
-        self.assertEqual(result["providers"][0]["packageVersion"], "fixture-0.16.9")
+        self.assertEqual(result["harnessVersion"], "fixture-0.16.9")
+        self.assertNotIn("providerVersion", result)
+        self.assertFalse({"packageName", "packageVersion"} & result["providers"][0].keys())
         self.assertEqual(result["providers"][0]["models"][0]["contextWindow"], 200000)
         self.assertEqual(result["providers"][0]["models"][0]["inputModalities"], ["text"])
         self.assertTrue(result["providers"][0]["models"][0]["available"])

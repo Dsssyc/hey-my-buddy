@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog, catalog_store
+from hey_my_buddy.errors import BoardError
 
 
 def native_payload(account_status, *, status="complete", reason=None, models=("alpha",)):
@@ -30,6 +31,11 @@ class CatalogRefreshServiceTests(BoardTestCase):
         stub = SimpleNamespace(discover_models=lambda *, state_dir: native_payload(account_status, **reading))
         with patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=stub):
             self.service._refresh_harness_catalog("dsh", self.record)
+
+    def test_refresh_rejects_retired_request_identity(self):
+        with self.assertRaises(BoardError) as caught:
+            self.board.call("model_catalog_refresh", {"requestId": "old-refresh"})
+        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
     def catalog_state(self):
         with self.board.store.db.read() as db:
@@ -60,8 +66,8 @@ class CatalogRefreshServiceTests(BoardTestCase):
         self.refresh_catalog("confirmed", models=("alpha", "beta"))
         _, _, confirmed_at = self.catalog_state()
         with self.board.store.db.read() as db:
-            confirmed_discovery = db.execute("SELECT discovery_id FROM catalog_current WHERE harness='dsh'").fetchone()[0]
             confirmed_buddies = [tuple(row) for row in db.execute("SELECT * FROM buddies WHERE harness='dsh'")]
+            confirmed_services = [tuple(row) for row in db.execute("SELECT * FROM model_services WHERE harness='dsh' ORDER BY provider,model")]
         for elapsed in (1, catalog.CONFIRMATION_SECONDS + 1):
             self.clock.advance(elapsed)
             self.refresh_catalog("confirmed", status="unknown", reason={"code": "catalog.model-shape-unreadable", "params": {}},
@@ -71,11 +77,11 @@ class CatalogRefreshServiceTests(BoardTestCase):
             self.assertEqual(row["reason"], {"code": "catalog.model-shape-unreadable", "params": {}})
             self.assertEqual(read_at, confirmed_at)
             with self.board.store.db.read() as db:
-                self.assertEqual(db.execute("SELECT discovery_id FROM catalog_current WHERE harness='dsh'").fetchone()[0],
-                                 confirmed_discovery)
                 self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM buddies WHERE harness='dsh'")],
                                  confirmed_buddies)
-                self.assertEqual(catalog.pending_model_services(db), {})
+                self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM model_services WHERE harness='dsh' ORDER BY provider,model")],
+                                 confirmed_services)
+                self.assertEqual({(row['harness'], row['provider'], row['model']): row['pending_since'] for row in db.execute('SELECT harness,provider,model,pending_since FROM model_services WHERE pending_since IS NOT NULL')}, {})
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind LIKE 'catalog.model_%'").fetchone()[0], 0)
 
     def test_confirmed_account_fact_publishes_the_catalog(self):
@@ -92,7 +98,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
         self.clock.advance(1)
         self.refresh_catalog("confirmed", models=("alpha", "gamma"))
         with self.board.store.db.read() as db:
-            self.assertEqual(catalog.pending_model_services(db), {("dsh", "fixture", "beta"): self.clock.value})
+            self.assertEqual({(row['harness'], row['provider'], row['model']): row['pending_since'] for row in db.execute('SELECT harness,provider,model,pending_since FROM model_services WHERE pending_since IS NOT NULL')}, {("dsh", "fixture", "beta"): self.clock.value})
         self.clock.advance(catalog.CONFIRMATION_SECONDS + 1)
         self.refresh_catalog("confirmed", models=("alpha", "gamma"))
         row, buddies, read_at = self.catalog_state()
@@ -102,12 +108,13 @@ class CatalogRefreshServiceTests(BoardTestCase):
         self.assertEqual({p["buddy_id"] for p in buddies},
                          {"dsh:fixture:alpha:max", "dsh:fixture:beta:max", "dsh:fixture:gamma:max"})
         with self.board.store.db.read() as db:
-            buddies = {p["model"]: p for p in db.execute("SELECT model,available,unavailable_code FROM buddies")}
+            from hey_my_buddy.blackboard.catalog import buddy_state
+            buddies = {p["model"]: p for p in buddy_state.rows(db)}
             self.assertTrue(buddies["alpha"]["available"])
             self.assertTrue(buddies["gamma"]["available"])
             self.assertFalse(buddies["beta"]["available"])
-            self.assertEqual(buddies["beta"]["unavailable_code"], catalog.CONFIRMED_ABSENCE_REASON)
-            self.assertEqual(catalog.pending_model_services(db), {})
+            self.assertEqual(buddies["beta"]["unavailable_code"], 'catalog.model-absent')
+            self.assertEqual({(row['harness'], row['provider'], row['model']): row['pending_since'] for row in db.execute('SELECT harness,provider,model,pending_since FROM model_services WHERE pending_since IS NOT NULL')}, {})
 
     def test_missing_or_unknown_account_fact_replaces_nothing(self):
         for account_status in (None, "unknown"):
@@ -138,24 +145,21 @@ class CatalogRefreshServiceTests(BoardTestCase):
                          "A reread hook uses the claimed scan window")
 
 
-class ConsoleSnapshotContractTests(BoardTestCase):
-    """The named console_snapshot operation keeps its full C-Two shape.
+class ConsoleProjectionTests(BoardTestCase):
+    """The console reads its service projection without a retired RPC."""
 
-    The console's periodic HTTP read moved to the slim projection in
-    ``hey_my_buddy.console.reads``; callers of the operation itself (C-Two,
-    CLI, probes) still get the task page that was part of this contract.
-    """
+    def test_projection_keeps_current_settings_and_pending_count(self):
+        from hey_my_buddy.console.reads import console_snapshot_projection
 
-    def test_operation_keeps_tasks(self):
         board = self.board()
-        snapshot = board.call("console_snapshot", {})
-        self.assertIn("runs", snapshot["tasks"])
-        self.assertIn("total", snapshot["tasks"])
+        snapshot, _deadline = console_snapshot_projection(board.service)
+        self.assertEqual(snapshot["tasks"]["pendingCount"], 0)
         self.assertIn("harnesses", snapshot)
         self.assertIn("routingHealth", snapshot)
-        self.assertTrue(snapshot["capabilities"]["consoleAssets"] is False or
-                        snapshot["capabilities"]["consoleAssets"] is True)
-        # The slim console core and this operation agree on every shared key.
+        self.assertEqual(snapshot["capabilities"], board.evaluation.capabilities())
+        # The console projection reuses the core's current settings.
         core = board.evaluation.console_core()
         for key in core:
+            if key == "tasks":
+                continue
             self.assertEqual(snapshot[key], core[key], key)

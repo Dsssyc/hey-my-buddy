@@ -1,40 +1,32 @@
 ---
 name: hey-my-buddy
-description: Delegate bounded work with routing and owned workspaces; verify artifacts. Host handles trivial or unclear work.
+description: Delegate bounded pieces of your current work — implementing, fixing tests, investigating, reviewing — to other coding agents, each routed to a suitable model, then verify and accept the result. Use it whenever such a piece can run while you continue or suits another model better; do trivial or still-unclear steps yourself.
 ---
 
 # Hey My Buddy
 
-The submitting session is the Host: it owns acceptance and authorization; Workers cannot create micro tasks.
+The submitting session is the Host: it owns acceptance and authorization; Workers cannot create micro tasks. The project's files and history use its own terms, not the board's (roles, mechanisms, records).
 
 ## Start here
 
-Use the absolute launcher (`~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy`; Windows `scripts/hey-my-buddy.cmd`) with one JSON object: positional, `--params-file PATH` or UTF-8 stdin `-`. `hey-my-buddy help [METHOD]` reads validated parameters, starts nothing. Brief; use `"output":"full"`.
+Use the absolute launcher (`~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy`; Windows `scripts/hey-my-buddy.cmd`) with one JSON object: positional, `--params-file PATH` or UTF-8 stdin `-`. `hey-my-buddy help [COMMAND]` gives the commands, fields and legal combinations; it starts nothing. Replies name the next ids and legal commands; `"output":"full"` shows all.
 
-Read `health` for the Router list, mode and capacity; report failures with decision code and `routingMode`. A sole candidate needs no Router: fast sends the task to its provider, review reads a frozen repository copy.
-
-[usage](../../docs/reference/usage.md), [CLI](../../docs/reference/cli.md), [workflow](../../docs/reference/workflow.md), [harnesses](../../docs/reference/harnesses.md), [Claude](../../docs/reference/claude-code.md).
+Installing, health, storage and relocation are the user's operations ([operations](../../docs/reference/operations.md#host-operations)).
 
 ## Delegate through acceptance
 
-1. One micro task, one independently reviewable outcome: about a module or concern, with its own checks; mechanical apart from diagnosis. Define inputs, outcome and checks in the user's language; untracked inputs need `includeUntracked`. Use `executionWorkspace`: `existing` for sequential ownership, separate `worktree` checkouts for parallel writers; neither is an OS sandbox. `access`: `read`, `write` (default) or `full` with `accessNote`.
-2. Omit `harness`/`provider`/`model`/`effort` for routing; a complete buddy is only for an explicit user choice or boundary recovery. One agenda, one macro task: its first micro task carries `macroTask: {title}` and an intent `title` (≤30 chars), later ones its `macroTaskId` or `macroTaskOf: "<runId>"`. Submit once with a stable `requestId`; keep `runId`/`macroTaskId`/`controlFile`.
-3. Before waiting, submit micro tasks independent of the running ones (no shared files, no needed result); the board queues them. Wait through your Host guide ([codex](../../docs/reference/host-codex.md), [claude](../../docs/reference/host-claude-code.md)); read only yours. One `await` per running micro task; a timeout never cancels it; unknown never means stopped: on `EXECUTION_UNKNOWN` tell the user.
-4. At a boundary `decide` on helpers or `continue` with input; a routing one takes `reroute:true` (first choice when `routing-changed`) or a legal `buddy` with a `note`. To hand off, `continue` with an enabled `buddy` and a `note`, after `cancel` if a turn runs; partial work is unverified. [Recovery](../../docs/reference/workflow.md).
-5. Verify changed paths, risky hunks and checks on the fixed artifact, then `accept` the exact sealed `artifactId` (`finalArtifactId` when delivered) with a `note` and the integration `target`, or `notRequired` with a note saying why: it verifies the integration and reclaims the checkout. Prose and RPC replies are not acceptance. A waiting Host may finish directly; `conclude` ends a failed, cancelled or unaccepted micro task with a note, and nothing continues it afterwards; `reclaim` retries a blocked checkout removal.
+1. One agenda, one macro task: `create` it with `cwd`, a short `title` and the `goal`. `amend` revises the goal. A piece outside any agenda is `"macroTaskId":"standalone"`.
+2. One micro task, one independently reviewable outcome: one concern with its own checks; mechanical apart from diagnosis. Write the brief in the user's language: inputs, outcome, checks and the plan to follow; the Worker stops and asks instead of deciding alone or working around ([brief](../../docs/reference/workflow.md#writing-the-brief)). `submit` names every choice: `buddy` is `route` unless the user named one, then its name or alias as `get` `{"buddies":true}` lists it; `checkout` is `worktree` for parallel writers or `existing` for sequential work in your Git checkout, or `none` to work in `cwd` itself, sealing nothing; `access` is `read`, `write` or `full` with an `accessNote`. A Git checkout also takes `inputs`, the untracked files it carries (`[]` if none), and with `write` or `full` a narrow `writeScope`. Resending `create` or `submit` returns the original unless the `title` changes.
+3. Submit independent micro tasks before waiting. Wait as the [Host guide](../../docs/reference/host.md) says; Codex and Claude Code add theirs ([codex](../../docs/reference/host-codex.md), [claude](../../docs/reference/host-claude-code.md)). One `await` per running micro task; unknown never means stopped: on `EXECUTION_UNKNOWN` tell the user. `inquire` asks a running turn.
+4. At a boundary `continue` its `requestId` with input or a helper decision. To hand off or reroute running work, `cancel` it, then `continue` the stopped turn's `artifactId` or `turnId` with input, a `buddy` and a `note`.
+5. Reread the brief (full `get`); check the report and the fixed output against it: changed paths, risky hunks, checks. Integrate the Worker's commits or the fixed patch, then `accept` the `artifactId` the reply gives, with a `note`, the `target` and, unless its tip is your merge, its `beforeCommit`, plus `adjusted` if you changed the result; or with `notRequired` and its reason, always for `checkout: none`. To send work back, `continue` its `artifactId` with what must change. Prose and RPC replies are not acceptance. `conclude` ends work for good, stopping it first if it runs.
 
-`hey-my-buddy console` opens loopback, login off; `{"browser":false}` returns its URL ([console](../../docs/reference/console.md)).
-
-Install on the user's word; a new middle version needs idle work ([operations](../../docs/reference/operations.md)).
+`hey-my-buddy console` opens the [console](../../docs/reference/console.md) on loopback.
 
 ## Capabilities and authority
 
-[Harnesses](../../docs/reference/harnesses.md) own capabilities. Sign-in stays the user's.
+[Harnesses](../../docs/reference/harnesses.md) own capabilities. Sign-in stays the user's. `access` asks the harness to limit writing and execution, not reading: a Worker reads what its harness allows, a checkout is no OS sandbox, and the brief and what the Worker sends its model reach the provider; keep secrets out of the brief.
 
-`worker-sessions` lists proven Codex Worker sessions ([details](../../docs/reference/operations.md)).
+A Lead (`delegationAuthority`) only at the user's explicit request, confirmed first ([usage](../../docs/reference/usage.md)).
 
-A Lead (`delegationAuthority`) only at the user's explicit request, confirmed first ([usage](../../docs/reference/usage.md#a-lead-for-a-large-macro-task)).
-
-Preferences, enablement, capacity and Router settings are user-owned: change them only in the console. Routing and execution share capacity and model service limits; native permissions need Host attention.
-
-`quota-redetect` ends a provider's cooldown ([harnesses](../../docs/reference/harnesses.md)).
+Preferences, enablement, capacity and Router settings are user-owned: change them only in the console.

@@ -7,7 +7,7 @@ from pathlib import Path
 import queue
 import subprocess
 import sys
-from temporary import TemporaryDirectory
+import tempfile
 import threading
 import time
 import unittest
@@ -36,7 +36,7 @@ from hey_my_buddy.errors import BoardError
 
 # The session tools one run actually mounts; refusal envelopes verify only
 # against this set, never a fixed global one.
-MOUNTED_TOOLS = ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn")
+MOUNTED_TOOLS = ("hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn")
 from hey_my_buddy.buddy.roles.turn_io import validate_outcome
 
 
@@ -55,11 +55,13 @@ class ActivityReasonTests(unittest.TestCase):
 
 class ReceiptTests(unittest.TestCase):
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="zcode-receipt-attention-")
+        temporary = tempfile.TemporaryDirectory(prefix="zcode-receipt-attention-")
         self.addCleanup(temporary.cleanup)
+        self.temporary = Path(temporary.name)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64,
-                       "attentionPath": str(Path(temporary.name) / "absent-attention.json")}
+                       "attentionPath": str(self.temporary / "absent-attention.json"),
+                       "finishAcceptedPath": str(self.temporary / "finish-accepted.json")}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
 
     def receipt(self):
@@ -234,8 +236,75 @@ class ReceiptTests(unittest.TestCase):
         with self.assertRaises(NativeError):
             self.root_event(tracker, 4, "tool.updated", {"kind": "error", "toolCallId": "accepted"})
         self.assertIs(tracker.receipt, accepted)
-        with self.assertRaises(NativeError):
-            self.root_event(tracker, 5, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "duplicate"})
+
+    def test_tools_after_the_accepted_receipt_are_facts_and_the_turn_completes(self):
+        tracker = self.started_tracker()
+        self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "accepted"})
+        self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "accepted",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        accepted = tracker.receipt
+        # A plain task tool after the accepted finish — the TodoWrite incident —
+        # and a repeated finish call: neither fails the turn, both are retained
+        # facts, and the accepted receipt stays the answer.
+        self.root_event(tracker, 4, "tool.updated", {"kind": "scheduled", "toolName": "TodoWrite", "toolCallId": "todo-1"})
+        self.root_event(tracker, 5, "tool.updated", {"kind": "result", "toolCallId": "todo-1",
+            "result": {"success": True, "truncated": False}})
+        self.root_event(tracker, 6, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "second"})
+        self.root_event(tracker, 7, "tool.updated", {"kind": "result", "toolCallId": "second",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        self.root_event(tracker, 8, "turn.completed", {"inputId": "input-root", "resultType": "success"})
+        tracker.observe({"method": "state.updated", "params": {"sessionId": "sess-root", "reason": "prompt_completed"}}, 9)
+        tracker.close_ordinal = 10
+        self.assertIs(tracker.receipt, accepted)
+        provenance = tracker.provenance()
+        self.assertEqual(provenance["toolCallId"], "accepted")
+        self.assertEqual(provenance["postFinishToolCalls"], {"count": 2, "records": [
+            {"toolName": "TodoWrite", "toolCallId": "todo-1"},
+            {"toolName": "finish", "toolCallId": "second"}]})
+
+    def test_a_repeated_finish_before_any_result_is_a_fact_and_the_first_result_counts(self):
+        tracker = self.started_tracker()
+        self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "first"})
+        self.root_event(tracker, 3, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "second"})
+        self.root_event(tracker, 4, "tool.updated", {"kind": "result", "toolCallId": "second",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        self.root_event(tracker, 5, "tool.updated", {"kind": "result", "toolCallId": "first",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        self.root_event(tracker, 6, "turn.completed", {"inputId": "input-root", "resultType": "success"})
+        tracker.observe({"method": "state.updated", "params": {"sessionId": "sess-root", "reason": "prompt_completed"}}, 7)
+        tracker.close_ordinal = 8
+        self.assertEqual(tracker.provenance()["toolCallId"], "first")
+        self.assertEqual(tracker.provenance()["postFinishToolCalls"],
+                         {"count": 1, "records": [{"toolName": "finish", "toolCallId": "second"}]})
+
+    def test_another_tool_between_the_finish_call_and_its_result_still_fails(self):
+        tracker = self.started_tracker()
+        self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "finish-1"})
+        with self.assertRaises(NativeError) as error:
+            self.root_event(tracker, 3, "tool.updated", {"kind": "scheduled", "toolName": "TodoWrite", "toolCallId": "todo"})
+        self.assertEqual(error.exception.code, "duplicate-finish")
+
+    def test_the_accepted_receipt_publishes_the_marker_the_bridge_reads(self):
+        published = []
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge,
+                                   validate_outcome=validate_outcome, mounted_tools=("hey_my_buddy_finish_turn",),
+                                   on_finish_receipt=published.append)
+        self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
+        self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "accepted"})
+        self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "accepted",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0]["receiptId"], tracker.receipt["receiptId"])
+        # A turn that ends without a finish never publishes the marker.
+        unpublished = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge,
+                                       validate_outcome=validate_outcome,
+                                       mounted_tools=("hey_my_buddy_finish_turn",),
+                                       on_finish_receipt=published.append)
+        self.root_event(unpublished, 1, "turn.started", {"inputId": "input-root"})
+        with self.assertRaises(NativeError) as error:
+            self.root_event(unpublished, 2, "turn.completed", {"inputId": "input-root", "resultType": "success"})
+        self.assertEqual(error.exception.code, "missing-finish")
+        self.assertEqual(len(published), 1)
 
     def test_a_wrapper_successful_refusal_result_recovers_for_a_corrected_retry(self):
         # The incident shape: the MCP isError refusal (a signed envelope) is
@@ -322,11 +391,12 @@ class ReceiptSeamTests(unittest.TestCase):
     """
 
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="zcode-seam-attention-")
+        temporary = tempfile.TemporaryDirectory(prefix="zcode-seam-attention-")
         self.addCleanup(temporary.cleanup)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64,
-                       "attentionPath": str(Path(temporary.name) / "absent-attention.json")}
+                       "attentionPath": str(Path(temporary.name) / "absent-attention.json"),
+                       "finishAcceptedPath": str(Path(temporary.name) / "finish-accepted.json")}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
         self.native = "mcp__buddy_x__hey_my_buddy_finish_turn"
 
@@ -359,252 +429,98 @@ class ReceiptSeamTests(unittest.TestCase):
 
 
 class InquiryEvidenceTests(unittest.TestCase):
-    """The root-turn tracker owns inquiry authority; relays and forgeries fail."""
+    """Only root signed answers count; late answers preserve the finish."""
 
     def setUp(self):
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
-        self.deliveries: list[tuple[dict, str]] = []
-        self.answers: list[tuple[dict, str]] = []
-        self.tracker = RootTurnEvidence(
-            "sess-root", "input-root", "mcp__buddy_x__hey_my_buddy_finish_turn", self.bridge,
-            checkpoint_name="mcp__buddy_x__hey_my_buddy_checkpoint",
-            answer_name="mcp__buddy_x__hey_my_buddy_answer_inquiry",
-            on_delivery=lambda receipt, call: self.deliveries.append((receipt, call)),
-            on_answer=lambda receipt, call: self.answers.append((receipt, call)),
+        self.answers = []
+        self.tracker = RootTurnEvidence("sess-root", "input-root", "mcp__buddy_x__hey_my_buddy_finish_turn", self.bridge,
+            answer_name="mcp__buddy_x__hey_my_buddy_answer_inquiry", on_answer=lambda receipt, call: self.answers.append((receipt, call)),
             validate_outcome=validate_outcome, mounted_tools=MOUNTED_TOOLS)
-
-    def event(self, seq: int, kind: str, payload: dict, **identity) -> None:
-        self.tracker.observe({"method": "session/event", "params": {
-            "sessionId": "sess-root", "turnId": "native-turn", "seq": seq,
-            "type": kind, "payload": payload, **identity,
-        }}, seq)
-
-    def started(self):
         self.event(1, "turn.started", {"inputId": "input-root"})
 
-    def receipt_text(self, kind: str, payload: dict) -> str:
-        receipt = {"version": 1, "kind": kind, "identity": self.bridge["identity"], "receiptId": "e" * 32, **payload}
-        receipt["signature"] = sign_receipt(receipt, self.bridge["key"])
-        return json.dumps(receipt)
+    def event(self, seq, kind, payload, **identity):
+        self.tracker.observe({"method": "session/event", "params": {"sessionId": "sess-root", "turnId": "native-turn",
+            "seq": seq, "type": kind, "payload": payload, **identity}}, seq)
 
-    def test_verified_checkpoint_and_answer_results_reach_the_callbacks(self):
-        self.started()
-        content = self.receipt_text("inquiry-checkpoint", {"inquiries": [
-            {"inquiryId": "q-1", "question": "what?", "questionSha256": "c" * 64, "state": "queued",
-             "askedAt": "t"}]})
-        self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                       "toolCallId": "ckpt-1"})
-        self.event(3, "tool.updated", {"kind": "result", "toolCallId": "ckpt-1",
-                                       "result": {"success": True, "truncated": False, "content": content}})
-        self.assertEqual(self.deliveries[0][1], "ckpt-1")
-        answer = self.receipt_text("inquiry-answer", {"inquiryId": "q-1", "questionSha256": "c" * 64,
-                                                      "answer": "this"})
-        self.event(4, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_answer_inquiry",
-                                       "toolCallId": "ans-1"})
-        self.event(5, "tool.updated", {"kind": "result", "toolCallId": "ans-1",
-                                       "result": {"success": True, "truncated": False, "content": answer}})
-        self.assertEqual(self.answers[0][0]["inquiryId"], "q-1")
-        self.assertEqual(self.answers[0][1], "ans-1")
+    def answer(self, seq, call="answer", **flags):
+        self.event(seq, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_answer_inquiry",
+                                       "toolCallId": call, **flags})
 
-    def test_child_relays_and_foreign_turns_never_reach_the_callbacks(self):
-        self.started()
-        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
-        seq = 2
-        for relay in ({"source": "subagent"}, {"agentId": "agent-1"}, {"background": True},
-                      {"childSessionId": "sess-child"}, {"childToolCallId": "child-1"}, {"parentToolCallId": "p"}):
-            with self.subTest(relay=relay):
-                self.event(seq, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                                 "toolCallId": "relay-call", **relay})
-                self.event(seq + 1, "tool.updated", {"kind": "result", "toolCallId": "relay-call", **relay,
-                                                     "result": {"success": True, "truncated": False, "content": content}})
-                seq += 2
-        self.event(seq, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                         "toolCallId": "other-turn-call"})
-        self.event(seq + 1, "tool.updated", {"kind": "result", "toolCallId": "other-turn-call",
-                                             "result": {"success": True, "truncated": False, "content": content}},
-                   turnId="turn-other")
-        self.assertEqual(self.deliveries, [])
+    def receipt(self):
+        value = {"version": 1, "kind": "inquiry-answer", "identity": self.bridge["identity"], "receiptId": "e"*32,
+                 "inquiryId": "q", "questionSha256": "c"*64, "answer": "answer"}
+        return self.signed(value)
 
-    def test_failed_inquiry_tool_results_allow_a_corrected_retry(self):
-        self.started()
-        self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                       "toolCallId": "ckpt-bad"})
-        self.event(3, "tool.updated", {"toolCallId": "ckpt-bad", "kind": "error", "error": "unknown inquiry"})
-        self.event(4, "tool.updated", {"toolCallId": "ckpt-bad2", "kind": "error", "error": "again"})
-        self.assertEqual(self.deliveries, [])
-        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
-        self.event(5, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                       "toolCallId": "ckpt-good"})
-        self.event(6, "tool.updated", {"kind": "result", "toolCallId": "ckpt-good",
-                                       "result": {"success": True, "truncated": False, "content": content}})
-        self.assertEqual(len(self.deliveries), 1)
+    def signed(self, value):
+        value["signature"] = sign_receipt(value, self.bridge["key"])
+        return json.dumps(value)
 
-    def refusal_text(self, tool: str, reason: str, detail: str = "correction text") -> str:
-        envelope = {"version": 1, "kind": "tool-refusal", "identity": self.bridge["identity"],
-                    "inputSha256": self.bridge["inputSha256"], "tool": tool, "reason": reason,
-                    "detail": detail, "receiptId": "f" * 32}
-        envelope["signature"] = sign_receipt(envelope, self.bridge["key"])
-        return json.dumps(envelope)
+    def result(self, seq, call="answer", content=None, **flags):
+        self.event(seq, "tool.updated", {"kind": "result", "toolCallId": call,
+            "result": {"success": True, "truncated": False, "content": content or self.receipt(), **flags}})
 
-    def test_failed_marker_results_verify_inquiry_refusals_first(self):
-        # The checkpoint and answer tools get the same contract as finish: a
-        # refusal-shaped content on a success:false result is verified before
-        # the ordinary retryable-error path, so a forged or wrong-tool envelope
-        # is fatal even on the failed-marker path.
-        header = "MCP tool returned an error:\n"
-        self.started()
-        self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                       "toolCallId": "ckpt-false"})
-        self.event(3, "tool.updated", {"kind": "result", "toolCallId": "ckpt-false",
-                                       "result": {"success": False, "truncated": False,
-                                                  "content": header + self.refusal_text("hey_my_buddy_checkpoint", "inquiry-channel-absent")}})
-        self.assertEqual(self.tracker.checkpoint_calls["ckpt-false"]["result"], "tool-refusal")
-        self.assertEqual(self.deliveries, [])
-        self.event(4, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_answer_inquiry",
-                                       "toolCallId": "ans-false"})
-        self.event(5, "tool.updated", {"kind": "result", "toolCallId": "ans-false",
-                                       "result": {"success": False, "truncated": False,
-                                                  "content": header + self.refusal_text("hey_my_buddy_answer_inquiry", "unknown-inquiry")}})
-        self.assertEqual(self.tracker.answer_calls["ans-false"]["result"], "tool-refusal")
-        self.assertEqual(self.answers, [])
-        with self.assertRaises(ReceiptError) as error:
-            self.event(6, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                           "toolCallId": "ckpt-forged"})
-            self.event(7, "tool.updated", {"kind": "result", "toolCallId": "ckpt-forged",
-                                           "result": {"success": False, "truncated": False,
-                                                      "content": header + self.refusal_text("hey_my_buddy_answer_inquiry", "unknown-inquiry")}})
-        self.assertEqual(error.exception.code, "invalid-tool-refusal")
-        forged = json.loads(self.refusal_text("hey_my_buddy_checkpoint", "inquiry-channel-absent"))
-        forged["detail"] = "changed after signing"
-        with self.assertRaises(ReceiptError) as error:
-            self.event(8, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_answer_inquiry",
-                                           "toolCallId": "ans-forged"})
-            self.event(9, "tool.updated", {"kind": "result", "toolCallId": "ans-forged",
-                                           "result": {"success": False, "truncated": False,
-                                                      "content": header + json.dumps(forged)}})
-        self.assertEqual(error.exception.code, "invalid-tool-refusal")
+    def test_root_answer_reaches_callback(self):
+        self.answer(2); self.result(3)
+        self.assertEqual(self.answers[0][0]["inquiryId"], "q")
+        self.assertEqual(self.answers[0][1], "answer")
 
-    def test_wrapper_successful_refusals_keep_the_inquiry_turn_alive(self):
-        # The incident's native-wrapper shape on the checkpoint and answer tools:
-        # the MCP isError refusal arrives as a successful result. A verified
-        # envelope must not deliver or answer anything, and an unverified one
-        # (here: signed for another tool) fails the turn.
-        self.started()
-        self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                       "toolCallId": "ckpt-bad"})
-        self.event(3, "tool.updated", {"kind": "result", "toolCallId": "ckpt-bad",
-                                       "result": {"success": True, "truncated": False,
-                                                  "content": self.refusal_text("hey_my_buddy_checkpoint", "inquiry-channel-absent")}})
-        self.assertEqual(self.tracker.checkpoint_calls["ckpt-bad"]["result"], "tool-refusal")
-        self.event(4, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_answer_inquiry",
-                                       "toolCallId": "ans-bad"})
-        self.event(5, "tool.updated", {"kind": "result", "toolCallId": "ans-bad",
-                                       "result": {"success": True, "truncated": False,
-                                                  "content": self.refusal_text("hey_my_buddy_answer_inquiry", "unknown-inquiry")}})
-        self.assertEqual(self.tracker.answer_calls["ans-bad"]["result"], "tool-refusal")
-        self.assertEqual(self.deliveries, [])
-        self.assertEqual(self.answers, [])
-        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
-        self.event(6, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                       "toolCallId": "ckpt-good"})
-        self.event(7, "tool.updated", {"kind": "result", "toolCallId": "ckpt-good",
-                                       "result": {"success": True, "truncated": False, "content": content}})
-        self.assertEqual(len(self.deliveries), 1)
-        with self.assertRaises(ReceiptError) as error:
-            self.event(8, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_answer_inquiry",
-                                           "toolCallId": "ans-forged"})
-            self.event(9, "tool.updated", {"kind": "result", "toolCallId": "ans-forged",
-                                           "result": {"success": True, "truncated": False,
-                                                      "content": self.refusal_text("hey_my_buddy_checkpoint", "inquiry-channel-absent")}})
-        self.assertEqual(error.exception.code, "invalid-tool-refusal")
+    def test_child_and_foreign_answers_do_not_reach_callback(self):
+        for index, flags in enumerate(({"source": "subagent"}, {"agentId": "agent"}, {"background": True},
+                                      {"childSessionId": "child"}, {"parentToolCallId": "parent"})):
+            self.answer(2+index*2, "child-"+str(index), **flags)
+            self.result(3+index*2, "child-"+str(index))
+        self.event(12, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_answer_inquiry",
+                                       "toolCallId": "foreign"}, sessionId="foreign")
+        self.assertFalse(self.answers)
 
-    def test_forged_truncated_or_duplicate_results_fail_the_turn(self):
-        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
-        for case, result in (
-            ("forged", {"success": True, "truncated": False, "content": content[:-8] + '"changed"}'}),
-            ("truncated", {"success": True, "truncated": True, "content": content}),
-            ("no-success", {"truncated": False, "content": content}),
-            ("duplicate", {"success": True, "truncated": False, "content": content}),
-        ):
-            with self.subTest(case=case):
-                tracker = RootTurnEvidence(
-                    "sess-root", "input-root", "mcp__buddy_x__hey_my_buddy_finish_turn", self.bridge,
-                    checkpoint_name="mcp__buddy_x__hey_my_buddy_checkpoint",
-                    on_delivery=lambda receipt, call: None,
-                    validate_outcome=validate_outcome, mounted_tools=MOUNTED_TOOLS)
-                tracker.observe({"method": "session/event", "params": {
-                    "sessionId": "sess-root", "turnId": "native-turn", "seq": 1, "type": "turn.started",
-                    "payload": {"inputId": "input-root"}}}, 1)
-                tracker.observe({"method": "session/event", "params": {
-                    "sessionId": "sess-root", "turnId": "native-turn", "seq": 2, "type": "tool.updated",
-                    "payload": {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                "toolCallId": "ckpt-1"}}}, 2)
-                if case == "duplicate":
-                    good = {"success": True, "truncated": False, "content": content}
-                    tracker.observe({"method": "session/event", "params": {
-                        "sessionId": "sess-root", "turnId": "native-turn", "seq": 3, "type": "tool.updated",
-                        "payload": {"kind": "result", "toolCallId": "ckpt-1", "result": good}}}, 3)
-                with self.assertRaises((NativeError, ReceiptError)) as error:
-                    tracker.observe({"method": "session/event", "params": {
-                        "sessionId": "sess-root", "turnId": "native-turn", "seq": 4, "type": "tool.updated",
-                        "payload": {"kind": "result", "toolCallId": "ckpt-1", "result": result}}}, 4)
-                self.assertIn(error.exception.code, ("invalid-inquiry-receipt", "invalid-provenance"))
+    def test_forged_truncated_missing_success_and_duplicate_answers_fail(self):
+        self.answer(2)
+        receipt = json.loads(self.receipt()); receipt["answer"] = "changed"
+        with self.assertRaises(ReceiptError):
+            self.result(3, content=json.dumps(receipt))
+        with self.assertRaises(NativeError):
+            self.result(4, truncated=True)
+        with self.assertRaises(NativeError):
+            self.result(5, success=None)
+        self.result(6)
+        with self.assertRaises(NativeError):
+            self.result(7)
 
-    def test_a_result_without_its_scheduled_call_is_ignored(self):
-        self.started()
-        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
-        self.event(2, "tool.updated", {"kind": "result", "toolCallId": "never-scheduled",
-                                       "result": {"success": True, "truncated": False, "content": content}})
-        self.assertEqual(self.deliveries, [])
+    def test_native_error_and_signed_refusal_allow_a_new_answer_call(self):
+        self.answer(2)
+        self.event(3, "tool.updated", {"kind": "error", "toolCallId": "answer"})
+        for index, success in enumerate((True, False)):
+            call = "refusal-"+str(index)
+            self.answer(4+index*2, call)
+            content = self.signed({"version": 1, "kind": "tool-refusal", "identity": self.bridge["identity"],
+                "inputSha256": self.bridge["inputSha256"], "tool": "hey_my_buddy_answer_inquiry",
+                "reason": "unknown-inquiry", "detail": "unknown inquiry", "receiptId": "f"*32})
+            self.result(5+index*2, call, content="MCP tool returned an error:\n"+content, success=success)
+        self.answer(8, "corrected"); self.result(9, "corrected")
+        self.assertEqual(len(self.answers), 1)
 
-    def test_no_inquiry_tool_may_be_scheduled_after_the_finish_call(self):
-        self.started()
+    def test_an_answer_after_a_refused_finish_is_still_late(self):
         self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_finish_turn",
-                                       "toolCallId": "finish-1"})
-        with self.assertRaises(NativeError) as error:
-            self.event(3, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                           "toolCallId": "late-ckpt"})
-        self.assertEqual(error.exception.code, "duplicate-finish")
+                                       "toolCallId": "finish"})
+        self.event(3, "tool.updated", {"kind": "error", "toolCallId": "finish"})
+        self.answer(4, "late"); self.result(5, "late")
+        self.assertTrue(self.tracker.answer_calls["late"]["late"])
+        self.assertEqual(len(self.answers), 1)
 
-    def test_thousands_of_inquiry_calls_keep_duplicate_detection(self):
-        # A long turn may checkpoint constantly. Receipts reach the callback
-        # while call identities remain available for duplicate detection.
-        self.started()
-        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
-        total = 1200
-        for index in range(total):
-            self.event(2 * index + 2, "tool.updated", {"kind": "scheduled",
-                                                       "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                                       "toolCallId": f"ckpt-{index}"})
-            self.event(2 * index + 3, "tool.updated", {"kind": "result", "toolCallId": f"ckpt-{index}",
-                                                       "result": {"success": True, "truncated": False,
-                                                                  "content": content}})
-        self.assertEqual(len(self.deliveries), total)
-        self.assertEqual(len(self.tracker.checkpoint_calls), total)
-        self.assertTrue(all(call["result"] in (None, "tool-error", "tool-refusal", "receipt-verified")
-                            for call in self.tracker.checkpoint_calls.values()),
-                        "a verified checkpoint receipt payload must never be retained")
-        self.assertFalse(any(isinstance(call["result"], dict) for call in self.tracker.checkpoint_calls.values()))
-        # The turn is still fully functional after all those checkpoints...
-        self.event(2 * total + 2, "tool.updated", {"kind": "scheduled",
-                                                   "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
-                                                   "toolCallId": "ckpt-live"})
-        self.event(2 * total + 3, "tool.updated", {"kind": "result", "toolCallId": "ckpt-live",
-                                                   "result": {"success": True, "truncated": False,
-                                                              "content": content}})
-        self.assertEqual(len(self.deliveries), total + 1)
-        # ...a duplicate terminal result for a retained call still fails...
-        with self.assertRaises(NativeError):
-            self.event(2 * total + 4, "tool.updated", {"kind": "result", "toolCallId": "ckpt-live",
-                                                       "result": {"success": True, "truncated": False,
-                                                                  "content": content}})
-        # ...and an ancient duplicate is still detected.
-        with self.assertRaises(NativeError):
-            self.event(2 * total + 5, "tool.updated", {"kind": "result", "toolCallId": "ckpt-0",
-                                                       "result": {"success": True, "truncated": False,
-                                                                  "content": content}})
-        self.assertEqual(len(self.deliveries), total + 1)
+    def test_late_answer_after_finish_preserves_successful_completion(self):
+        self.event(2, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_finish_turn", "toolCallId": "finish"})
+        outcome = {"disposition": "completed", "summary": "work preserved", "remaining": [], "decisions": [], "artifacts": [], "request": None}
+        finish = self.signed({"version": 1, "identity": self.bridge["identity"], "inputSha256": self.bridge["inputSha256"],
+                              "outcome": outcome, "receiptId": "f"*32})
+        self.result(3, "finish", content=finish)
+        self.answer(4, "late"); self.result(5, "late")
+        self.event(6, "turn.completed", {"inputId": "input-root", "resultType": "success"})
+        self.assertTrue(self.tracker.answer_calls["late"]["late"])
+        self.assertEqual(self.tracker.receipt["outcome"], outcome)
+        self.assertEqual(self.tracker.call_id, "finish")
+        self.assertEqual(len(self.answers), 1)
 
 
 class NativeFailureAttributionTests(unittest.TestCase):
@@ -871,7 +787,7 @@ class BuddyTests(unittest.TestCase):
         self.assertEqual(len(result["providers"]), 2)
         provider = result["providers"][0]
         self.assertEqual(provider["harness"], "zcode")
-        self.assertEqual(provider["packageVersion"], "native-test-version")
+        self.assertEqual(result["harnessVersion"], "native-test-version")
         models = {entry["id"]: entry for entry in provider["models"]}
         self.assertEqual(set(models), {"vision", "fast"})
         self.assertEqual(models["vision"]["efforts"], ["high", "max"])
@@ -960,21 +876,23 @@ class NativeConnectionShapeTests(unittest.TestCase):
 
 
 class OwnedProcessEvidenceTests(unittest.TestCase):
-    def test_failed_group_observation_cannot_confirm_shutdown(self):
+    def test_failed_membership_observation_cannot_confirm_shutdown(self):
         process = mock.Mock(pid=12345)
         process.poll.return_value = 0
+        process.returncode = 0
         if os.name == "nt":
             job = mock.Mock()
             process._buddy_job = job
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
+        handle._exit_code = 0
         for error in (OSError(errno.EIO, "process observation unavailable"), PermissionError()):
             with self.subTest(error=type(error).__name__):
                 if os.name == "nt":
                     job.active.side_effect = error
                     self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
                 else:
-                    with mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=error):
+                    with mock.patch.object(handle._members, "observe", side_effect=error):
                         self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
         if os.name == "nt":
             job.active.side_effect = None
@@ -982,7 +900,7 @@ class OwnedProcessEvidenceTests(unittest.TestCase):
             self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
             job.close.assert_called_once_with(confirmed=True)
         else:
-            with mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=ProcessLookupError()):
+            with mock.patch.object(handle._members, "observe", return_value="identity-absent"):
                 self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
 
 

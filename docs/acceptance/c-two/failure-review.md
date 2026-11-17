@@ -44,9 +44,9 @@
 | `buddy.harnesses.zcode.test_zcode_tool_evidence` | 8/0；1827 | 控制器无结果，模拟原生回合未收到 prompt；尚未定位。 |
 | `buddy.roles.test_registered_run_wiring` | 3/0；1997 | 注册接线用例的原生角色失败；控制器失败原因未定位。 |
 | `buddy.runtime.test_live_lifecycle_integration` | 0/1；1953 | Mock 客户端的 `state_dir` 被当作路径，报 `Path(Mock)` TypeError；未修。 |
-| `cli.test_cli` | 5/0；2062 | 私有看板 transport 桩不接受 `state_dir` 关键字；未修。 |
+| `cli.test_cli` | 5/0；2062 | 私有黑板 transport 桩不接受 `state_dir` 关键字；未修。 |
 | `cli.test_cli_views` | 6/0；2155 | request 桩不接受 `state_dir` 关键字；未修。 |
-| `cli.test_host_cli` | 8/0；2268 | 私有看板 transport 桩不接受 `state_dir` 关键字；未修。 |
+| `cli.test_host_cli` | 8/0；2268 | 私有黑板 transport 桩不接受 `state_dir` 关键字；未修。 |
 | `cli.test_host_preview` | 1/0；2239 | 本检出缺 console 开发依赖，前端解析器入口不存在；记录环境前提，未安装依赖或修改产品。 |
 | `console.test_console` | 1/0；229 | 模型目录预期文件夹具，实际来自原生观察；夹具的继承 `BUDDY_MODEL_CATALOG_FILE` 被子进程环境隔离丢弃，需要显式传递，未修。 |
 

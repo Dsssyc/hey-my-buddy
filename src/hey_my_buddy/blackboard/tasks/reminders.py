@@ -83,7 +83,7 @@ def _scan(store, connection, now: str, instant: float, *, record: bool) -> tuple
     changed = False
     silence_seconds = connection.execute('SELECT silence_seconds FROM reminder_settings WHERE id=1').fetchone()[0]
     attempts = connection.execute(
-        "SELECT a.*, t.expected_seconds FROM attempts a JOIN tasks t ON t.task_id=a.task_id"
+        "SELECT a.*, json_extract(t.spec_json,'$.expectedSeconds') AS expected_seconds FROM attempts a JOIN tasks t ON t.task_id=a.task_id"
         " WHERE a.execution_state IN ('starting','executing','uncertain')"
         " AND a.result_json IS NULL AND t.active_attempt_id=a.attempt_id AND t.adapter!='decision'"
     ).fetchall()
@@ -137,35 +137,38 @@ def _scan(store, connection, now: str, instant: float, *, record: bool) -> tuple
     return delay, changed
 
 
-def consume(store, selector: dict) -> dict | None:
-    """Claim exactly one pending reminder for an await, across CLI invocations."""
-    with store.db.write() as connection:
-        task = store._task_row(connection, selector)
-        delivery_id = selector['reminderWaitId']
-        delivered = connection.execute(
-            'SELECT r.*, a.started_at FROM attempt_reminders r'
-            ' JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.delivery_id=?',
-            (delivery_id,),
-        ).fetchone()
-        if delivered is not None:
-            if delivered['task_id'] != task['task_id']:
-                from ...errors import BoardError
-                raise BoardError('CONFLICT', 'reminderWaitId belongs to a different run')
-            return view(delivered)
-        attempt = store._selected_attempt(connection, task)
-        if attempt is None or attempt['execution_state'] in ('finalizing', 'finished') or attempt['result_json'] is not None:
-            return None
-        row = connection.execute(
-            'SELECT r.*, a.started_at FROM attempt_reminders r'
-            ' JOIN attempts a ON a.attempt_id=r.attempt_id'
-            ' WHERE r.attempt_id=? AND r.delivered_at IS NULL ORDER BY r.reminder_id LIMIT 1',
-            (attempt['attempt_id'],),
-        ).fetchone()
-        if row is None:
-            return None
-        connection.execute('UPDATE attempt_reminders SET delivered_at=?,delivery_id=? WHERE reminder_id=?',
-                           (store.now(), delivery_id, row['reminder_id']))
-        return view(row)
+def pending(connection, task):
+    """The selected execution's next undelivered reminder, for either observer."""
+    return connection.execute(
+        'SELECT r.*, a.started_at, e.seq AS event_seq FROM tasks t'
+        ' JOIN attempts a ON a.attempt_id=COALESCE(t.active_attempt_id,t.selected_attempt_id)'
+        ' JOIN attempt_reminders r ON r.attempt_id=a.attempt_id'
+        " JOIN events e ON e.kind='attempt.reminder' AND e.attempt_id=r.attempt_id"
+        " AND json_extract(e.payload_json,'$.reminderId')=r.reminder_id"
+        " WHERE t.task_id=? AND a.execution_state NOT IN ('finalizing','finished') AND a.result_json IS NULL"
+        ' AND r.delivered_at IS NULL ORDER BY r.reminder_id LIMIT 1',
+        (task['task_id'],),
+    ).fetchone()
+
+
+def consume(store, connection, task, delivery_id: str) -> dict | None:
+    """Claim a reminder inside the message delivery transaction."""
+    delivered = connection.execute(
+        'SELECT r.*, a.started_at FROM attempt_reminders r'
+        ' JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.delivery_id=?',
+        (delivery_id,),
+    ).fetchone()
+    if delivered is not None:
+        if delivered['task_id'] != task['task_id']:
+            from ...errors import BoardError
+            raise BoardError('CONFLICT', 'reminderWaitId belongs to a different run')
+        return view(delivered)
+    row = pending(connection, task)
+    if row is None:
+        return None
+    connection.execute('UPDATE attempt_reminders SET delivered_at=?,delivery_id=? WHERE reminder_id=?',
+                       (store.now(), delivery_id, row['reminder_id']))
+    return view(row)
 
 
 class Scheduler:

@@ -1,8 +1,13 @@
 """The one reader of DSH's private session records, whole or resumed.
 
-The optional ``session.v3`` rollout a DSH process writes under the pinned
-sessions root is this harness's only source of the observed model identity,
-the per-step usage and the retained root assistant text. Everything here is
+The current-generation rollout a DSH process writes under the pinned sessions
+root is this harness's only source of the observed model identity, the
+per-step usage and the retained root assistant text. A session's records sit
+in the directory named for it under one encoded working-directory component;
+the lookup selects the largest generation there — DSH migrates older
+generations only beside newer ones and uses the largest itself — reads it
+only when its generation is one the reader knows, and requires the header's
+version to equal the generation of the file's own name. Everything here is
 streaming — the project's pinned ``zstandard`` library for the
 compressed variant, proportionate total/line caps, a bound stop marks the
 read truncated instead of pretending the file ended — and every failure mode
@@ -35,9 +40,10 @@ from ....private_files import open_read
 
 from ....json_codec import decode_strict_json
 
-#: The record file suffixes and header version the lookup and fold accept.
-_RECORD_SUFFIXES = (".v3.jsonl.zstd", ".v3.jsonl")
-_RECORD_VERSION = 3
+#: The record generations the reader accepts; the fields it folds are the
+#: same in both. A larger generation on disk leaves the session without a
+#: readable record, an unknown like any other.
+_RECORD_GENERATIONS = (3, 4)
 #: Decompressed proportionate bounds: a record is read streaming, never wholly
 #: into memory, and a bound stop is an honestly partial fact, never a guess.
 _MAX_RECORD_TOTAL_BYTES = 64 * 1024 * 1024
@@ -177,30 +183,56 @@ class RecordAccumulator:
         return projected
 
 
+def _record_generation(name: str) -> int | None:
+    """The generation a record file's own name carries, or ``None`` for any other name.
+
+    Generation 0 is named ``session``, every later one ``session.vN`` with N
+    decimal and without leading zeros, each optionally zstandard-compressed.
+    A migration's temporary file carries no generation and is not a record.
+    """
+    for suffix in (".jsonl.zstd", ".jsonl"):
+        if not name.endswith(suffix):
+            continue
+        stem = name[: -len(suffix)]
+        if stem == "session":
+            return 0
+        digits = stem[len("session.v"):] if stem.startswith("session.v") else None
+        if digits and digits.isascii() and digits.isdigit() and not digits.startswith("0"):
+            return int(digits)
+        return None
+    return None
+
+
 def record_candidates(root: Path, session_id: str) -> list[Path]:
-    """Locate only this session's known rollout names in the pinned root."""
+    """Locate this session's current rollout files in the pinned root.
+
+    A session's records sit exactly two levels under the root, in the
+    directory named for the session inside one encoded working-directory
+    component; files anywhere else are not records. A directory can hold
+    several generations beside each other, and only its largest one is a
+    candidate, kept when its generation is one the reader knows.
+    """
     if not session_id or session_id in (".", "..") or "/" in session_id or "\\" in session_id:
         return []
-    names = (f"{session_id}.v3.jsonl", f"{session_id}.v3.jsonl.zstd")
-    paths = [root / name for name in names]
-    paths.extend(root / session_id / f"session{suffix}" for suffix in _RECORD_SUFFIXES)
-    # DSH can put a session directory under one encoded working-directory
-    # component. Inspect that one level, then only the target session's names.
+    paths: list[Path] = []
     for name in sorted(path.name for path in native_path(root).iterdir()):
         work_dir = root / name
         if native_path(work_dir).is_symlink() or not native_path(work_dir).is_dir():
             continue
-        paths.extend(work_dir / session_id / f"session{suffix}" for suffix in _RECORD_SUFFIXES)
-
-    def regular_candidate(path: Path) -> bool:
-        current = root
-        for part in path.relative_to(root).parts[:-1]:
-            current /= part
-            if native_path(current).is_symlink() or not native_path(current).is_dir():
-                return False
-        return not native_path(path).is_symlink() and native_path(path).is_file()
-
-    return sorted(path for path in paths if regular_candidate(path))
+        session_dir = work_dir / session_id
+        if native_path(session_dir).is_symlink() or not native_path(session_dir).is_dir():
+            continue
+        selected: tuple[int, Path] | None = None
+        for entry in sorted(item.name for item in native_path(session_dir).iterdir()):
+            generation = _record_generation(entry)
+            if generation is not None and (selected is None or generation > selected[0]):
+                selected = (generation, session_dir / entry)
+        if selected is None or selected[0] not in _RECORD_GENERATIONS:
+            continue
+        path = selected[1]
+        if not native_path(path).is_symlink() and native_path(path).is_file():
+            paths.append(path)
+    return sorted(paths)
 
 
 def _record_text(value: object) -> str:
@@ -258,9 +290,11 @@ def fold_record(path: Path, session_ids: frozenset, acc: RecordAccumulator) -> b
     """Fold one record file in; return whether its header named one of the run's sessions.
 
     The header's own session id is the only attribution: a foreign session's
-    record is skipped, never folded into this attempt's facts. A malformed
-    event line marks the read partial and the fold continues with the rest.
+    record is skipped, never folded into this attempt's facts. The header must
+    also name the generation of the file's own name. A malformed event line
+    marks the read partial and the fold continues with the rest.
     """
+    generation = _record_generation(path.name)
     stream = RecordStream(path)
     session = None
     for raw in stream.lines():
@@ -272,7 +306,7 @@ def fold_record(path: Path, session_ids: frozenset, acc: RecordAccumulator) -> b
         if not isinstance(event, dict):
             continue
         if session is None:
-            if (event.get("type") != "session" or event.get("version") != _RECORD_VERSION
+            if (event.get("type") != "session" or event.get("version") != generation
                     or not isinstance(event.get("id"), str)):
                 continue
             if event["id"] not in session_ids:
@@ -350,15 +384,17 @@ class RecordBaseline:
 def _matching_lines(path: Path, session_id: str) -> tuple[tuple[str, ...], bool]:
     """The ordered line digests of one matching record file, and its reliability.
 
-    A file matches when its header names the target session. Reading stops at
-    the header when the file belongs to another session, so a foreign record
-    costs one header read, never a full scan: a confirmed foreign file is
-    skipped whole and never makes the read unreliable, however its own lines
-    continue. A file whose header cannot be read — empty, malformed, or a read
-    that stopped before any header line — cannot be attributed to any session,
-    so it keeps the boundary honestly unreliable instead of being assumed
-    absent or foreign.
+    A file matches when its header names the target session and the
+    generation of the file's own name. Reading stops at the header when the
+    file belongs to another session, so a foreign record costs one header
+    read, never a full scan: a confirmed foreign file is skipped whole and
+    never makes the read unreliable, however its own lines continue. A file
+    whose header cannot be read — empty, malformed, or a read that stopped
+    before any header line — cannot be attributed to any session, so it keeps
+    the boundary honestly unreliable instead of being assumed absent or
+    foreign.
     """
+    generation = _record_generation(path.name)
     stream = RecordStream(path)
     digests: list[str] = []
     matched = False
@@ -372,7 +408,7 @@ def _matching_lines(path: Path, session_id: str) -> tuple[tuple[str, ...], bool]
             digests.append(hashlib.sha256(raw).hexdigest())
             continue
         if not matched:
-            if (event.get("type") != "session" or event.get("version") != _RECORD_VERSION
+            if (event.get("type") != "session" or event.get("version") != generation
                     or not isinstance(event.get("id"), str)):
                 return (), False
             if event["id"] != session_id:

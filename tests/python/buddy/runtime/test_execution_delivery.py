@@ -46,17 +46,17 @@ class ExecutionDeliveryTests(unittest.TestCase):
     def budget_execution(self, client, suffix=""):
         task_id, attempt_id = "router-task" + suffix, "router-attempt" + suffix
         claim = {"task": {"taskId": task_id, "spec": {
-            "adapter": "decision", "routerBudgetSeconds": 60, "cwd": str(self.state)}},
+            "adapter": "decision", "modelResponseWaitSeconds": 60, "cwd": str(self.state)}},
             "attempt": {"taskId": task_id, "attemptId": attempt_id, "generation": 1},
             "decisionInput": {"buddy": {"harness": "codex"}, "routingMode": "fast",
-                              "budget": {"timeoutSeconds": 60}}}
+                              "modelResponseWaitSeconds": 60}}
         execution = entry.Execution(claim, self.state, "n" * 64, client=client)
         native_path(execution.directory).mkdir(parents=True, mode=0o700)
         return execution, claim
 
     def execute_budget(self, execution, claim, on_start):
         handle = mock.Mock(cancel_requested=False, stop_initiator=None, grace_expired=False,
-                           result=None, evidence_retention_failure=None)
+                           result=None, evidence_retention_failure=None, model_responded=False)
         handle.wait.return_value = 0
         def start(*_args):
             on_start()
@@ -144,7 +144,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         report = {"status": "failed", "shutdownConfirmed": True,
                   "terminationReason": "harness-error"}
         receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
-        self.assertEqual(set(receipt), {"attemptId", "taskId", "generation", "report", "createdAt"})
+        self.assertEqual(set(receipt), {"version", "attemptId", "taskId", "generation", "report", "createdAt"})
         self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
         raw = native_path(self.execution.directory / "result-receipt.json").read_text(encoding="utf-8")
         self.assertNotIn("nonce", raw)
@@ -155,7 +155,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
     def test_receipt_reader_refuses_foreign_binding_and_malformed_envelope(self):
         from hey_my_buddy.protocol.execution import fsync_json, RECEIPT
         binding = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
-        receipt = {**binding, "report": {},
+        receipt = {**binding, "version": 2, "report": {},
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         fsync_json(self.execution.directory / RECEIPT, receipt)
         self.assertEqual(read_execution_receipt(self.execution.directory, binding=binding), receipt)
@@ -169,7 +169,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                     read_execution_receipt(self.execution.directory, binding=binding)
 
     def test_offline_delivery_retries_same_attempt_result_after_flushing_hint(self):
-        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+        receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"},
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
@@ -199,7 +199,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
 
     def test_uncertain_delivery_fails_once_and_preserves_exact_receipt(self):
         from hey_my_buddy.buddy.runtime.receipts import write_receipt, RECEIPT
-        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+        receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
         write_receipt(self.execution.directory, receipt)
         original = native_path(self.execution.directory / RECEIPT).read_bytes()
@@ -224,7 +224,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
             with self.subTest(code=code):
                 directory = self.execution.directory / code
                 native_path(directory).mkdir()
-                receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+                receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                            "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
                 write_receipt(directory, receipt)
                 client = mock.Mock()
@@ -236,7 +236,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 self.assertFalse(native_path(directory / "result-delivery.json").exists())
 
     def test_result_waits_for_hint_already_in_backoff(self):
-        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+        receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"},
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
@@ -316,7 +316,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                                capture_output=True, text=True, timeout=10, encoding="utf-8")
         self.assertEqual(child.returncode, 0, child.stderr)
         identity = json.loads(child.stdout)
-        self.assertEqual(identity["pid"], identity["processGroupId"])
+        self.assertEqual(set(identity), {"bootId", "pid", "startedAt", "jobName"})
         self.assertIsNone(identity["jobName"])
 
     @unittest.skipIf(os.name == "nt", "POSIX reports its own identity without a marker")
@@ -327,7 +327,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                              "jobName": None, "sessionRecordPath": None})
         self.assertFalse((self.state / "attempts/task-1/attempt-1/spawn.marker").exists())
         identity = {"bootId": "linux:00000000-0000-4000-8000-000000000001",
-                    "pid": 301, "startedAt": 105, "processGroupId": 301, "jobName": None}
+                    "pid": 301, "startedAt": 105, "jobName": None}
         client = mock.Mock()
 
         def execute(_execution):
@@ -474,7 +474,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in pause.call_args_list], [0.25, 0.5])
 
     def test_fatal_hint_refusal_ends_receipt_delivery_with_durable_receipt(self):
-        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+        receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"},
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
@@ -559,7 +559,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
 
     def test_unknown_progress_failure_during_delivery_leaves_receipt_and_exits(self):
         from hey_my_buddy.buddy.runtime.receipts import write_receipt, RECEIPT
-        receipt = {'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1,
+        receipt = {'version': 2, 'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1,
                    'report': {'status': 'ok', 'shutdownConfirmed': True}, 'createdAt': 'fixture'}
         write_receipt(self.execution.directory, receipt)
         original = native_path(self.execution.directory / RECEIPT).read_bytes()
@@ -583,15 +583,28 @@ class ExecutionDeliveryTests(unittest.TestCase):
         receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
         original = native_path(self.execution.directory / RECEIPT).read_bytes()
         budget = self.execution.directory / BUDGET
-        native_path(budget).write_text('{}')
+        native_path(budget).write_text('{}', encoding="utf-8")
         unlink = Path.unlink
         def fail_budget(path, **kwargs):
             if path == native_path(budget):
                 raise OSError('budget cleanup failed')
             return unlink(path, **kwargs)
-        with mock.patch.object(self.execution, 'execute', return_value=receipt), \
+        with mock.patch('hey_my_buddy.protocol.process_identity._active_native_journal', None), \
+             mock.patch.object(self.execution, 'execute', return_value=receipt), \
              mock.patch.object(Path, 'unlink', autospec=True, side_effect=fail_budget):
             with self.assertRaisesRegex(OSError, 'budget cleanup failed'):
                 self.execution.run()
         self.assertEqual(native_path(self.execution.directory / RECEIPT).read_bytes(), original)
         self.execution.client.submit_result.assert_not_called()
+
+    def test_cleanup_does_not_read_the_private_wait_file_before_delivery(self):
+        from hey_my_buddy.protocol.execution import BUDGET
+        receipt = self.execution.receipt(CLAIM, {'status': 'ok', 'shutdownConfirmed': True}, self.execution.directory)
+        budget = self.execution.directory / BUDGET
+        native_path(budget).write_text('{"binding":"not-the-execution"}', encoding="utf-8")
+        with mock.patch('hey_my_buddy.protocol.process_identity._active_native_journal', None), \
+             mock.patch.object(self.execution, 'execute', return_value=receipt), \
+             mock.patch.object(entry, 'deliver_receipt', return_value=True) as deliver:
+            self.assertTrue(self.execution.run())
+        deliver.assert_called_once()
+        self.assertFalse(native_path(budget).exists())

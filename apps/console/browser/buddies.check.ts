@@ -2,40 +2,61 @@ import { expect } from "@playwright/test";
 import { TOOLBAR_ITEMS, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
 
 const languages = [
-  { locale: "zh-CN", sections: ["目录", "角色"] },
-  { locale: "en-US", sections: ["Catalog", "Roles"] },
+  { locale: "zh-CN", sections: ["Harness", "模型", "Router", "评价"], enabled: "启用" },
+  { locale: "en-US", sections: ["Harnesses", "Models", "Router", "Evaluation"], enabled: "Enabled" },
 ];
 
-for (const { locale, sections } of languages) for (const width of [1280, 390]) {
-  test.describe(`the Buddy page navigation in ${locale} at ${width}px`, () => {
-    test.use({ locale, viewport: { width, height: 844 } });
+for (const { locale, sections, enabled } of languages) {
+  test.describe(`the Buddy page header in ${locale} at 1440px`, () => {
+    test.use({ locale, viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
 
-    test("places the section links in the catalogue toolbar and keeps every item whole", async ({ page }) => {
-      await open(page, "#buddies/catalog");
-      const navigation = page.getByRole("main").getByRole("navigation");
-      await expect(navigation).toHaveCount(1);
+    test("keeps one full-width header and a flush underline across all four sections", async ({ page }) => {
+      await open(page, "#buddies/harness");
+      const main = page.getByRole("main");
+      const header = main.locator('[data-slot="buddy-header"]');
+      const navigation = header.getByRole("navigation");
       const links = navigation.getByRole("link");
-      for (const [index, name] of sections.entries()) await expect(links.nth(index)).toContainText(name);
-      await expectWholeAndApart(navigation, links);
-      await expectTextUncut(links);
-      await expectWholeAndApart(page.getByRole("main"), page.locator("[data-slot=catalogue-toolbar]").locator(TOOLBAR_ITEMS));
-      await expectNoSidewaysScroll(page);
-      const [bar, toolbar] = [await page.getByRole("banner").first().boundingBox(), await page.locator("[data-slot=catalogue-toolbar]").boundingBox()];
-      expect(toolbar!.x).toBe(0);
-      expect(toolbar!.width).toBe(width);
-      expect(toolbar!.y).toBe(bar!.y + bar!.height);
-    });
-
-    test("returns from roles to the single catalogue address without a table selector", async ({ page }) => {
-      await open(page, "#buddies/catalog");
-      const navigation = page.getByRole("main").getByRole("navigation");
-      await navigation.getByRole("link").nth(1).click();
-      await expect(page).toHaveURL(/#buddies\/roles$/);
       await expect(navigation).toHaveCount(1);
-      await navigation.getByRole("link").nth(0).click();
-      await expect(page).toHaveURL(/#buddies\/catalog$/);
-      await expect(navigation).toHaveCount(1);
-      await expect(page.getByRole("main").getByRole("table")).toHaveCount(0);
+      await expect(links).toHaveCount(4);
+      expect(await links.evaluateAll(nodes => nodes.map(node => node.firstChild?.textContent))).toEqual(sections);
+      await expect(header.getByRole("status")).toContainText(enabled);
+      const baseline = (await header.boundingBox())!;
+      const banner = (await page.getByRole("banner").first().boundingBox())!;
+      expect(baseline.y).toBe(banner.y + banner.height);
+      expect(baseline.height).toBe(36);
+      expect(baseline.width).toBe(1440);
+      const views = ["harness", "models", "router", "evaluation"];
+      for (const [index, view] of views.entries()) {
+        await links.nth(index).click();
+        await expect(page).toHaveURL(new RegExp(`#buddies/${view}$`));
+        await expect(main.getByRole("region", { name: sections[index], exact: true })).toBeVisible();
+        expect(await header.boundingBox()).toEqual(baseline);
+        await expectWholeAndApart(header, header.locator('nav > a, :scope > [role="status"]'));
+        await expectTextUncut(header.locator('nav > a, :scope > [role="status"]'));
+        const selected = links.nth(index);
+        await expect(selected).toHaveAttribute("aria-current", "page");
+        const geometry = await selected.evaluate(link => {
+          const bounds = link.getBoundingClientRect();
+          const text = document.createRange(); text.selectNode(link.firstChild!);
+          const words = text.getBoundingClientRect();
+          const underline = getComputedStyle(link, "::after");
+          return { textMiddle: (words.top + words.bottom) / 2, linkMiddle: (bounds.top + bounds.bottom) / 2,
+            underlineBottom: bounds.bottom - parseFloat(underline.bottom), height: parseFloat(underline.height) };
+        });
+        expect(Math.abs(geometry.textMiddle - geometry.linkMiddle)).toBeLessThanOrEqual(1);
+        expect(geometry.underlineBottom).toBeCloseTo(baseline.y + baseline.height, 0);
+        expect(geometry.height).toBe(2);
+        if (view === "models") {
+          const toolbar = main.locator('[data-slot="catalogue-toolbar"]');
+          expect((await toolbar.boundingBox())!.y).toBe(baseline.y + baseline.height);
+          await expectWholeAndApart(main, toolbar.locator(TOOLBAR_ITEMS));
+        }
+        await expectNoSidewaysScroll(page);
+      }
+      await links.nth(0).click();
+      await expect(page).toHaveURL(/#buddies\/harness$/);
+      expect(await header.boundingBox()).toEqual(baseline);
+      await expect(main.getByRole("table")).toHaveCount(0);
     });
   });
 }

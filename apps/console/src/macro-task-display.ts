@@ -1,5 +1,5 @@
 import i18n from "i18next";
-import { locale } from "./i18n";
+import { dateTimeFormat } from "./i18n/format";
 import { parseTimelineInstant } from "./timeline/instant";
 import { excerpt } from "./task-state";
 import { stopActorText } from "./actor";
@@ -76,34 +76,47 @@ export function outcomeLabel(span: TimelineSpan, outcome: SpanOutcome): string {
 
 const ROW_STATE_STYLE: Record<string, { tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string }> = {
   executing: { tone: "green", glyph: "▸", glyphClass: "running" },
+  running: { tone: "green", glyph: "▸", glyphClass: "running" },
   "awaiting-host": { tone: "amber", glyph: "◆", glyphClass: "warn" },
   "waiting-owned": { tone: "amber", glyph: "◆", glyphClass: "warn" },
   "waiting-helpers": { tone: "green", glyph: "▸", glyphClass: "running" },
   delivered: { tone: "neutral", glyph: "✓", glyphClass: "muted" },
   accepted: { tone: "neutral", glyph: "✓", glyphClass: "ok" },
-  cancelled: { tone: "neutral", glyph: "⊘", glyphClass: "muted" },
+  cancelled: { tone: "amber", glyph: "◆", glyphClass: "warn" },
   cancelling: { tone: "green", glyph: "▸", glyphClass: "running" },
-  failed: { tone: "red", glyph: "✕", glyphClass: "bad" },
+  failed: { tone: "amber", glyph: "◆", glyphClass: "warn" },
   "reconciliation-needed": { tone: "amber", glyph: "?", glyphClass: "warn" },
 };
 
 const STATE_LABELS: Record<string, string> = {
   get queued() { return i18n.t("console:queued"); }, get running() { return i18n.t("console:executing"); }, get cancelling() { return i18n.t("console:cancelling"); }, get completed() { return i18n.t("console:executionCompleted"); },
-  get cancelled() { return i18n.t("console:cancelled"); }, get failed() { return i18n.t("console:executionFailed"); }, get "reconciliation-needed"() { return i18n.t("console:awaitingReconciliation"); },
+  get "reconciliation-needed"() { return i18n.t("console:awaitingReconciliation"); },
   get executing() { return i18n.t("console:executing"); }, get "awaiting-host"() { return i18n.t("console:waitingForHost"); }, get "waiting-helpers"() { return i18n.t("console:helpersRunning"); },
   get "waiting-owned"() { return i18n.t("console:waitingForOwnedMicroTasks"); },
   get delivered() { return i18n.t("console:awaitingAcceptance"); }, get accepted() { return i18n.t("console:accepted"); }, get concluded() { return i18n.t("console:ended"); },
 };
 
-/** Settled terminal states: nobody needs to do anything, so the row's state word is its left edge alone. */
-const SETTLED_STATES = new Set(["accepted", "concluded", "cancelled", "completed"]);
+/** Settled terminal states need no Host action. */
+const SETTLED_STATES = new Set(["accepted", "concluded", "completed"]);
 
 export function rowStateInfo(row: TimelineRow, rows: readonly TimelineRow[] = []): { label: string; tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string; settled: boolean } {
+  if (row.status === "queued" && row.queueReason === "paused") return {
+    label: i18n.t("shell:macroWork.paused"), tone: "neutral", glyph: "Ⅱ", glyphClass: "muted", settled: false,
+  };
   const key = row.status === "cancelling" || row.state === "cancelled" && rows.some(owned => owned.rootLeadRunId === row.runId && !owned.shutdownConfirmed)
-    ? "cancelling" : row.state || row.status;
+    ? "cancelling"
+    : (row.state === "failed" || row.state === "cancelled") && ["queued", "running", "reconciliation-needed"].includes(row.status)
+      ? row.status : row.state || row.status;
   const style = ROW_STATE_STYLE[key];
+  if (row.kind === "helper" && (key === "failed" || key === "cancelled")) {
+    return key === "failed"
+      ? { label: i18n.t("console:executionFailed"), tone: "red", glyph: "✕", glyphClass: "bad", settled: false }
+      : { label: i18n.t("console:cancelled"), tone: "neutral", glyph: "⊘", glyphClass: "muted", settled: true };
+  }
   return {
-    label: key === "cancelling" ? i18n.t("tasks:stopping") : key === "awaiting-host" && row.rootLeadRunId ? i18n.t("console:waitingForLead") : STATE_LABELS[key] || key || i18n.t("console:unknown"),
+    label: key === "cancelling" ? i18n.t("tasks:stopping")
+      : key === "failed" || key === "cancelled" ? i18n.t(`taskDetail:state.${key}${row.rootLeadRunId ? "Lead" : "Host"}`)
+      : key === "awaiting-host" && row.rootLeadRunId ? i18n.t("console:waitingForLead") : STATE_LABELS[key] || key || i18n.t("console:unknown"),
     tone: style?.tone ?? "neutral",
     glyph: style?.glyph ?? "■",
     glyphClass: style?.glyphClass ?? "muted",
@@ -137,69 +150,16 @@ export function displayTitle(titleSource: string, recorded: string | null): Titl
   return { text, fullText: title, clipped: text !== title, fromTask };
 }
 
-/** Product names for known native model ids (0.16 0.3); unknown ids stay as is. */
-const KNOWN_MODEL_NAMES: Record<string, string> = {
-  "claude-opus-5-5": "Claude Opus 5.5",
-  "claude-sonnet-5": "Claude Sonnet 5",
-  "glm-5.3": "GLM-5.3",
-};
-
-/** A snapshot buddy reduced to the fields friendly naming needs. */
-export type FriendlyBuddy = { harness: string; provider: string; model: string; label?: string; effort?: string };
 export type BuddyNameParts = { name: string; effort: string };
 
-/**
- * Builds the friendly-name resolver: a snapshot buddy whose harness,
- * provider and model all match wins with its buddyName; then the fixed
- * known-id map; then the raw model id.
- */
-function buddyNamer(buddies?: readonly FriendlyBuddy[] | null): (buddy: TimelineBuddy | null | undefined) => BuddyNameParts {
-  const byTuple = new Map<string, FriendlyBuddy>();
-  for (const buddy of buddies ?? []) {
-    const key = JSON.stringify([buddy.harness ?? "", buddy.provider ?? "", buddy.model ?? ""]);
-    if (!byTuple.has(key)) byTuple.set(key, buddy);
-  }
-  return (buddy) => {
-    if (!buddy) return { name: "", effort: "" };
-    const matched = byTuple.get(JSON.stringify([buddy.harness ?? "", buddy.provider ?? "", buddy.model ?? ""]));
-    const name = matched
-      ? buddyDisplayName(matched)
-      : KNOWN_MODEL_NAMES[(buddy.model ?? "").trim()] ?? (buddy.model ?? "").trim();
-    const effort = effortDisplay(buddy.effort);
-    return { name, effort };
-  };
+/** The recorded model id and native effort, available separately for execution bars. */
+export function buddyNameParts(buddy: TimelineBuddy | null | undefined): BuddyNameParts {
+  return { name: buddy?.model ?? "", effort: (buddy?.effort ?? "").trim() };
 }
 
-/** buddyName() behaviour for a snapshot buddy (label minus its effort tail). */
-function buddyDisplayName(buddy: FriendlyBuddy): string {
-  const label = (buddy.label ?? "").trim();
-  const effort = (buddy.effort ?? "").trim();
-  if (label && effort) {
-    const suffix = ` · ${effort}`;
-    if (label.endsWith(suffix)) {
-      const stripped = label.slice(0, -suffix.length).trim();
-      if (stripped) return stripped;
-    }
-  }
-  return label || buddy.model;
-}
-
-/** effortText() behaviour without importing the buddy module. */
-function effortDisplay(effort: string | null | undefined): string {
-  // Native values keep their recorded name, `off` included.
-  return (effort ?? "").trim();
-}
-
-const defaultNamer = buddyNamer(null);
-
-/** The shared display name and native effort, available separately for execution bars. */
-export function buddyNameParts(buddy: TimelineBuddy | null | undefined, buddies?: readonly FriendlyBuddy[] | null): BuddyNameParts {
-  return (buddies ? buddyNamer(buddies) : defaultNamer)(buddy);
-}
-
-/** One consistent friendly name and effort form for task rows and timeline spans. */
-export function buddyLabel(buddy: TimelineBuddy | null | undefined, buddies?: readonly FriendlyBuddy[] | null): string {
-  const { name, effort } = buddyNameParts(buddy, buddies);
+/** One consistent model id and effort form for task rows and timeline spans. */
+export function buddyLabel(buddy: TimelineBuddy | null | undefined): string {
+  const { name, effort } = buddyNameParts(buddy);
   return [name, effort].filter(Boolean).join(" · ") || i18n.t("console:buddyNotRecorded");
 }
 
@@ -208,7 +168,7 @@ export function buddyLabel(buddy: TimelineBuddy | null | undefined, buddies?: re
 function format(value: string | number | null | undefined, options: Intl.DateTimeFormatOptions): string {
   if (value === null || value === undefined || value === "") return i18n.t("console:notRecorded");
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? i18n.t("console:notRecorded") : new Intl.DateTimeFormat(locale, options).format(date);
+  return Number.isNaN(date.getTime()) ? i18n.t("console:notRecorded") : dateTimeFormat(options).format(date);
 }
 
 export function clockTime(value: string | number | null | undefined): string {

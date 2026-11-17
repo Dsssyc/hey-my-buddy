@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { expect, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { MacroTaskTimeline } from "../macro-task-types";
@@ -15,14 +15,16 @@ export type Options = { replies?: Replies; timeline?: MacroTaskTimeline | null; 
 export type StepHandle = { set: (step: number | null) => void };
 
 /** The page owns the step and the detail asks it to change: this holds the step as the address would. */
-function Harness({ options, steps, onStep, onBack, onOpenRun }: { options: Options; steps: StepHandle; onStep: (step: number) => void; onBack: () => void; onOpenRun: (runId: string) => void }) {
+function Harness({ options, steps, onStep, onBack, onOpenRun }: { options: Options; steps: StepHandle; onStep: (step: number, item?: string) => void; onBack: () => void; onOpenRun: (runId: string) => void }) {
   const [step, setStep] = useState<number | null>(options.step ?? null);
   const [tab, setTab] = useState<"overview" | "session">("overview");
+  const [origin, setOrigin] = useState(options.origin ?? null);
+  useEffect(() => setOrigin(options.origin ?? null), [options.origin]);
   steps.set = setStep;
   const reads = options.client ?? client(options.replies);
   return <TooltipProvider delayDuration={0}><TaskDetail client={reads} sessionClient={{ session: async () => ({}) }} tab={tab} onTab={setTab} runId="m1" timeline={options.timeline === undefined ? timeline() : options.timeline}
-    timelineLoading={options.timelineLoading ?? false} nowMs={Date.parse(at("11:30"))} step={step} origin={options.origin ?? null} active={options.active ?? true}
-    onStep={next => { onStep(next); setStep(next); }} onBack={onBack} onOpenRun={onOpenRun} /></TooltipProvider>;
+    timelineLoading={options.timelineLoading ?? false} nowMs={Date.parse(at("11:30"))} step={step} origin={origin} active={options.active ?? true}
+    onStep={(next, item) => { if (item === undefined) onStep(next); else { onStep(next, item); setOrigin(item); setTab("overview"); } setStep(next); }} onBack={onBack} onOpenRun={onOpenRun} /></TooltipProvider>;
 }
 
 export function open(options: Options = {}) {
@@ -37,7 +39,7 @@ export function open(options: Options = {}) {
 }
 
 /** The steps strip along the top of the detail: the micro task's own row of the macro task. */
-export const strip = () => screen.getByRole("group", { name: "这个微任务的各步" });
+export const strip = () => screen.getByRole("group", { name: "微任务步骤" });
 export const stripSlice = (key: string) => strip().querySelector(`[data-key="${key}"]`) as SVGElement | null;
 /** What the chosen step calls itself in the pane below the strip. */
 export const chosenStep = () => (pane().querySelector("h3") ?? pane()).textContent!;

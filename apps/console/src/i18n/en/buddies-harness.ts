@@ -2,7 +2,9 @@ import type zh from "../zh/buddies-harness";
 
 export default {
   detailsLabel: "{{name}} settings",
-  summaryLabel: "{{name}} account",
+  found: "Found {{found}} / {{total}}",
+  checkedAt: "Checked {{time}}",
+  empty: "No check is recorded yet. Check a harness to see its status and settings here.",
 
   check: "Check",
   checkAll: "Check all",
@@ -25,23 +27,28 @@ export default {
     restored: "Automatic detection restored; {{name}}: {{status}}",
   },
   pane: {
-    version: "Version",
     location: "Location",
+    permissions: "Permissions",
     path: "Path",
-    source: "Source",
     manual: "Manual",
-    checked: "Checked",
-    review: "Review",
+    review: "Read only",
     pickPath: "Set path",
     reason: "Reason",
     tried: "Locations tried",
     noPath: "Path not recorded",
   },
   review: {
-    eligible: "Eligible",
-    ineligible: "Not eligible",
+    eligible: "Enforced",
+    conventional: "By convention",
+    ineligible: "Not declared",
     unknown: "Unknown",
-    note: "Eligibility comes from the harness's read-only level declaration, not verification of a native call.",
+    note: "Based on the harness's read only declaration; this view makes no native call.",
+  },
+  web: {
+    summaryEnforced: "Web only: Enforced (profiles)",
+    summaryUnenforced: "Web only: Not enforced (no profiles)",
+    enforcedDescription: "The web only level is declared enforced, so this harness can build model profiles.",
+    unenforcedDescription: "The web only level is not declared enforced, so this harness cannot build model profiles.",
   },
   path: {
     title: "Path of {{name}}",
@@ -75,11 +82,11 @@ export default {
     },
   },
   cooling: {
-    name: "Cooldown",
-    status: "Cooling down · try again around {{time}}",
-    clear: "Clear cooldown",
+    status: "Cooling down · ends around {{time}}",
+    clear: "Open retry",
+    retryHint: "Opens one retry opportunity; it does not mean the provider has recovered.",
     done: { cleared: "Cooldown cleared", none: "No active cooldown" },
-    storageUnavailable: "The request number could not be kept; allow session storage for this page and try again.",
+    storageUnavailable: "The request ID could not be kept; allow session storage for this page and try again.",
     unknownResult: "The result of clearing the cooldown is unknown; replay this request.",
   },
 } satisfies typeof zh;

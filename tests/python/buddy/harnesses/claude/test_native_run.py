@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 import tempfile
-from temporary import TemporaryDirectory
 import unittest
 import uuid
 from pathlib import Path
@@ -66,7 +65,7 @@ class NativeRunCase(unittest.TestCase):
 
     def setUp(self):
         super().setUp()
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-claude-seam-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-seam-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -116,6 +115,62 @@ class NativeRunCase(unittest.TestCase):
 
     def fixture_state(self) -> dict:
         return json.loads(self.state_path.read_text(encoding="utf-8"))
+
+
+class ModelRespondedTests(NativeRunCase):
+    """Model-response facts of the shared fake-CLI harness.
+
+    ``NativeRunCase`` is imported as the fixture base by other test modules,
+    so it carries no tests of its own; its tests live in concrete cases here.
+    """
+
+    def test_model_response_reaches_the_observer_before_the_root_turn_ends(self):
+        seen = []
+
+        def observe(facts):
+            seen.append(dict(facts))
+            return FEEDBACK_CONTINUE
+
+        result = self.execute(self.request(), observer=observe)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIs(result.model_responded, True)
+        self.assertIs(seen[0]["modelResponded"], False)
+        self.assertTrue(any(facts["modelResponded"] and not facts["settled"] for facts in seen))
+        self.assertEqual([facts["modelResponded"] for facts in seen],
+                         sorted(facts["modelResponded"] for facts in seen))
+
+    def test_successful_terminal_without_root_model_output_never_responds(self):
+        self.fixture_case("terminal-only")
+        seen = []
+        result = self.execute(self.request(), observer=lambda facts: (seen.append(dict(facts)) or FEEDBACK_CONTINUE))
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIs(result.model_responded, False)
+        self.assertTrue(seen)
+        self.assertTrue(all(facts["modelResponded"] is False for facts in seen))
+
+    def test_only_root_model_frames_count_as_output(self):
+        root = "root-session"
+        assistant = {"type": "assistant", "session_id": root,
+                     "message": {"content": [{"type": "text", "text": "answer"}]}}
+        for frame in ({**assistant, "session_id": "foreign-session"},
+                      {**assistant, "parent_tool_use_id": "child-call"},
+                      {"type": "result", "session_id": "foreign-session",
+                       "usage": {"output_tokens": 5}},
+                      {"type": "assistant", "session_id": root,
+                       "message": {"content": [{"type": "text", "text": ""}]}}):
+            with self.subTest(frame=frame):
+                self.assertFalse(native_run._root_model_output(frame, root))
+        self.assertTrue(native_run._root_model_output(assistant, root))
+        self.assertTrue(native_run._root_model_output(
+            {"type": "stream_event", "session_id": root,
+             "event": {"type": "content_block_start", "content_block": {"type": "tool_use"}}}, root))
+        self.assertTrue(native_run._root_model_output(
+            {"type": "result", "session_id": root, "usage": {"output_tokens": 1}}, root))
+        self.assertTrue(native_run._root_model_output(
+            {"type": "result", "subtype": "success", "session_id": root, "result": "answer"}, root))
+        self.assertFalse(native_run._root_model_output(
+            {"type": "result", "subtype": "error_during_execution", "session_id": root,
+             "is_error": True, "result": "provider error"}, root))
 
 
 class NativeInquiryTests(NativeRunCase):
@@ -282,7 +337,7 @@ class Batch4FactsTests(NativeRunCase):
         self.fixture_case("invalid-catalog")
         result = self.execute(self.request())
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
         facts = self.observations(result)
@@ -297,7 +352,7 @@ class Batch4FactsTests(NativeRunCase):
         result = self.execute(self.request())
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-buddy")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
         self.assertEqual(self.fixture_state()["userTurns"], 0)
@@ -475,7 +530,7 @@ class Batch4FactsTests(NativeRunCase):
                     self.assertNotIn("native-turn-facts", [ref.kind for ref in result.evidence_refs])
                     self.assertTrue(result.tool_evidence.value["streamComplete"])
                     self.assertEqual(result.stop_evidence.native.group_state, "gone")
-                    self.assertTrue(result.model_started)
+                    self.assertTrue(result.model_responded)
                     self.assertFalse(any(facts["settled"] for facts in callbacks))
                     self.assertIsNotNone(result.last_assistant_message)
                     verdict = {"stopReason": None, "elapsedMs": 1}
@@ -544,7 +599,7 @@ class WorkerCarrierTests(NativeRunCase):
                                                      separators=(",", ":"), ensure_ascii=False))
         completion = result.completion_evidence
         self.assertTrue(completion.stream_end)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         # The confirmed root is the session the CLI was actually launched with.
         self.assertEqual(result.native_identity.session_id,
                          flag_value(self.fixture_state()["argv"], "--session-id"))
@@ -571,7 +626,7 @@ class WorkerCarrierTests(NativeRunCase):
         result = self.execute(broken)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-buddy")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         checked = result.buddy.checked
         self.assertIsNone(checked.provider)
         self.assertIsNone(checked.model)
@@ -584,7 +639,7 @@ class WorkerCarrierTests(NativeRunCase):
         result = self.execute(request)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-buddy")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(self.fixture_state()["userTurns"], 0)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
@@ -682,6 +737,20 @@ class WorkerCarrierTests(NativeRunCase):
 
 
 class ReadCarrierTests(NativeRunCase):
+    def test_web_run_sends_only_native_web_tools_and_an_empty_strict_mcp_config(self):
+        self.fixture_case("ok")
+        result = self.execute(self.request(scope="web", schema=READ_SCHEMA))
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        argv = self.fixture_state()["argv"]
+        self.assertEqual(flag_value(argv, "--tools"), "WebSearch,WebFetch")
+        self.assertEqual(flag_value(argv, "--allowedTools"), "WebSearch,WebFetch")
+        self.assertEqual(flag_value(argv, "--disallowedTools"), "mcp__*")
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertEqual(json.loads(flag_value(argv, "--mcp-config")), {"mcpServers": {}})
+        self.assertEqual(flag_value(argv, "--permission-mode"), "default")
+        self.assertEqual(json.loads(native_path(Path(flag_value(argv, "--settings"))).read_bytes()),
+                         native_run.permission_sandbox_settings("web"))
+
     def argv_and_settings(self, result):
         argv = self.fixture_state()["argv"]
         settings = json.loads(native_path(Path(flag_value(argv, "--settings"))).read_bytes())
@@ -810,6 +879,17 @@ class RequestGateTests(NativeRunCase):
 
 
 class SettlementGuardTests(NativeRunCase):
+    def test_initial_native_input_refusal_keeps_structured_admission_facts(self):
+        self.fixture_case("input-too-large")
+        result = self.execute(self.request())
+        self.assertIs(result.native_request_sent, True)
+        self.assertIs(result.model_responded, False)
+        self.assertEqual(result.native_admission_error.value, {
+            "nativeMethod": "stream-json/result", "nativeCode": "invalid_params",
+            "message": "fixture admission refusal", "input_error_code": "input_too_large",
+            "max_chars": 9, "actual_chars": 10})
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def test_model_output_before_the_user_message_is_rejected_with_its_facts_kept(self):
         self.use_fixture(STREAM_FIXTURE)
         # The premature frame is written before the initialize response, so
@@ -833,7 +913,7 @@ class SettlementGuardTests(NativeRunCase):
         self.assertIsNone(broken.native_identity)
         # No native root was ever confirmed, and the package lists none.
         self.assertEqual(broken.tool_evidence.value["nativeIdentity"], [])
-        self.assertTrue(broken.model_started, "the input send itself is still a fact")
+        self.assertIs(broken.native_request_sent, True)
         self.fixture_case("init-wrong-session")
         foreign = self.execute(self.request())
         self.assertEqual(foreign.end.status, "error")
@@ -1311,7 +1391,7 @@ class StructuredDeliveryTests(NativeRunCase):
     """
 
     def delivered(self):
-        return {"buddyId": "legal", "note": "Read-only stream fixture", "evidence": []}
+        return {"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "Read-only stream fixture", "evidence": []}
 
     def review_request(self, **kwargs):
         return self.request(scope="read", schema=READ_SCHEMA, **kwargs)
@@ -1382,34 +1462,31 @@ class StructuredDeliveryTests(NativeRunCase):
         # counted tool fact under its own native call id.
         self.assertEqual([call["callId"] for call in tool_evidence.read_tool_calls(package, state_dir=Path(self.base / "state"))], ["toolu_so_1"])
 
-    def shared_review_observer(self, budget: int):
+    def shared_review_observer(self):
         try:
             from hey_my_buddy.buddy.roles.run_observers import ReviewObserver
         except ImportError:
             self.skipTest("the shared ReviewObserver is not in this baseline; its "
                           "authoritative run is the 3-C validation copy")
-        return ReviewObserver(budget, READ_SCHEMA, "review the frozen packet", can_correct=False)
+        return ReviewObserver(READ_SCHEMA, "review the frozen packet", can_correct=False)
 
-    def test_the_shared_review_observer_stops_an_unqualified_zero_budget_delivery(self):
+    def test_the_shared_review_observer_keeps_an_unqualified_delivery_as_tool_evidence(self):
         self.use_fixture(STREAM_FIXTURE)
         self.fixture_case("structured-unverified")
-        review = self.shared_review_observer(0)
+        review = self.shared_review_observer()
         result = self.execute(self.review_request(), observer=review.observer)
-        self.assertEqual(result.end.status, "cancelled")
-        self.assertEqual(result.end.reason_code, "observer-interrupt")
-        self.assertEqual(review.stop_reason, "readonly-budget-exhausted")
+        self.assertEqual(result.end.status, "ok")
         package = result.tool_evidence.value
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(self.base / "state")),
                          tool_evidence.TOOLS_FORBIDDEN)
 
-    def test_the_shared_review_observer_accepts_a_legal_zero_budget_delivery(self):
+    def test_the_shared_review_observer_accepts_a_legal_delivery(self):
         self.use_fixture(STREAM_FIXTURE)
         self.fixture_case("structured-only")
-        review = self.shared_review_observer(0)
+        review = self.shared_review_observer()
         result = self.execute(self.review_request(), observer=review.observer)
         package = self.package_of(result)
-        self.assertIsNone(review.stop_reason)
         self.assertEqual((package["toolCalls"], list(tool_evidence.read_tool_calls(package, state_dir=Path(self.base / "state")))), (0, []))
         self.assertEqual(result.value.parsed.value, self.delivered())
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(self.base / "state")))

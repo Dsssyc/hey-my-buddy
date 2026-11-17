@@ -4,13 +4,13 @@ import { fileURLToPath } from "node:url";
 import { open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const hint = "滚轮缩放 · Shift+滚轮平移 · 适应宽度：双击 · 键盘 + − 0";
+const hint = "滚轮或 + / − 缩放，Shift+滚轮平移，双击或按 0 适应宽度。";
 const captures = fileURLToPath(new URL("../../../tmp/readability-r12", import.meta.url));
 async function box(node: Locator) { return (await node.boundingBox())!; }
 
 for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (const detail of [false, true]) test.describe(`ruler hint ${theme} ${width} ${detail ? "detail" : "timeline"}`, () => {
   test.use({ locale: "zh-CN", viewport: { width, height: 1000 }, reducedMotion: "reduce" });
-  test("strengthens the ruler, follows the pointer without restarting its delay and stays inside the viewport", async ({ page }) => {
+  test("strengthens the ruler, opens the hint at rest, dismisses it when sliding, and stays inside the viewport", async ({ page }) => {
     await page.addInitScript(theme => localStorage.setItem("hey-my-buddy.console.theme", theme), theme);
     await page.clock.install({ time: new Date("2026-10-19T12:00:00Z") });
     await open(page, `#tasks/${macro}${detail ? "/preview-run-a1/3" : ""}`);
@@ -33,37 +33,65 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
     });
     expect(colors.line).toBe(colors.strongerLine); expect(colors.text).toBe(colors.strongerText);
     const background = await ruler.evaluate(node => getComputedStyle(node).backgroundColor);
+    const sharedTrigger = page.locator('[data-slot=macro-goal-trigger]');
+    await sharedTrigger.hover();
+    await page.clock.runFor(600);
+    const sharedHint = page.locator('[data-slot=tooltip-content]');
+    await expect(sharedHint).toBeVisible();
+    const sharedAnchor = await box(sharedTrigger), sharedBox = await box(sharedHint);
+    const sharedSide = await sharedHint.getAttribute("data-side");
+    expect(["top", "bottom"]).toContain(sharedSide);
+    const sharedGap = sharedSide === "top" ? sharedAnchor.y - sharedBox.y - sharedBox.height : sharedBox.y - sharedAnchor.y - sharedAnchor.height;
+    await page.mouse.move(0, 0);
+    await expect(sharedHint).toHaveCount(0);
     const frame = await box(viewport), rulerBox = await box(ruler);
     const nameHeader = ruler.locator(':scope > div.sticky');
-    const left = frame.x + (await nameHeader.count() ? (await box(nameHeader)).width : 0) + 12;
-    const right = frame.x + frame.width - 12;
+    const left = frame.x + (await nameHeader.count() ? (await box(nameHeader)).width : 0) + 24;
+    const right = frame.x + frame.width - 24;
     const middle = (left + right) / 2;
     const y = rulerBox.y + 12;
     const tooltip = page.locator('[data-slot=tooltip-content]').filter({ hasText: hint });
     const closeTo = async (x: number) => {
       await expect(tooltip).toBeVisible();
-      await expect.poll(async () => { const tip = await box(tooltip); return Math.abs(tip.x + tip.width / 2 - x) - tip.width / 2; }).toBeLessThanOrEqual(1);
+      await expect(tooltip.locator("svg")).toBeVisible();
+      await expect.poll(async () => { const arrow = await box(tooltip.locator("svg")); return Math.abs(arrow.x + arrow.width / 2 - x); }).toBeLessThanOrEqual(1);
       const tip = await box(tooltip);
       expect(tip.x).toBeGreaterThanOrEqual(frame.x);
       expect(tip.x + tip.width).toBeLessThanOrEqual(frame.x + frame.width);
       expect(tip.y).toBeGreaterThanOrEqual(0); expect(tip.y + tip.height).toBeLessThanOrEqual(1000);
+      expect(Math.abs(tip.y - rulerBox.y - rulerBox.height - sharedGap), "the ruler uses the shared tooltip gap").toBeLessThanOrEqual(1);
       return tip;
     };
     for (const x of [left, middle, right]) {
       await page.mouse.move(x, y + 40); await expect(tooltip).toHaveCount(0);
+      await page.mouse.move(x === right ? x - 24 : x + 24, y);
+      await page.clock.runFor(500); await expect(tooltip).toHaveCount(0);
       await page.mouse.move(x, y);
       await page.clock.runFor(500); await expect(tooltip).toHaveCount(0);
       await page.clock.runFor(100); await closeTo(x);
       await expect(ruler).toHaveCSS("background-color", background);
     }
-    const retained = (await tooltip.elementHandle())!;
-    const previous = await box(tooltip);
+    await page.mouse.move(middle, y);
+    await expect(tooltip).toHaveCount(0);
+    await page.clock.runFor(300);
+    await expect(tooltip).toHaveCount(0);
     await page.mouse.move(left, y);
-    const moved = await closeTo(left); // No time has advanced since it opened.
-    expect(await retained.evaluate(node => node.isConnected)).toBe(true);
-    if (previous.width < frame.width - 32) expect(moved.x).toBeLessThan(previous.x - 10);
+    await page.clock.runFor(599);
+    await expect(tooltip).toHaveCount(0);
+    await page.clock.runFor(1);
+    await closeTo(left);
     await mkdir(captures, { recursive: true });
     await page.screenshot({ path: `${captures}/${detail ? "detail" : "timeline"}-${theme}-${width}.png` });
-    await page.mouse.move(left, y + 40); await expect(tooltip).toHaveCount(0);
+    await page.mouse.move(middle, y + 36); await expect(tooltip).toHaveCount(0);
+    if (!detail) await expect(page.locator('[data-slot=timeline-pointer]')).toHaveCount(1);
+    const heading = await box(page.locator('[data-slot=macro-overview-header] h2'));
+    await page.mouse.move(heading.x + heading.width / 2, heading.y + heading.height / 2, { steps: 15 });
+    await expect(page.locator('[data-slot=timeline-pointer]')).toHaveCount(0);
+    await expect(page.locator('[data-slot=pointer-clock]')).toHaveCount(0);
+    await page.clock.runFor(600);
+    await expect(tooltip).toHaveCount(0);
+    await page.keyboard.press("Tab");
+    await ruler.focus();
+    await closeTo(frame.x + frame.width / 2);
   });
 });

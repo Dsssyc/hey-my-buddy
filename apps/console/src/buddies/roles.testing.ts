@@ -1,3 +1,4 @@
+import { modelFacts } from "./model-fixtures";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import type userEvent from "@testing-library/user-event";
 import { createElement } from "react";
@@ -28,7 +29,7 @@ export const PENDING = "claude / anthropic / claude-haiku-4 / low";
 
 function buddy(buddyId: string, capabilities: string[], extra: Partial<Buddy> = {}): Buddy {
   const [harness, provider, model, effort] = buddyId.split(":");
-  return { effortRank: null, buddyId, label: `${model} · ${effort}`, harness, provider, model, effort, available: true, enabled: true,
+  return { effortRank: null, buddyId, alias: null, harness, provider, model, effort, available: true, enabled: true,
     capabilities, contextWindow: null, description: "", source: "catalog:fixture", ...extra };
 }
 
@@ -68,16 +69,16 @@ export type RolesOptions = {
 };
 
 const harnesses: HarnessHealth[] = ["claude", "codex", "dsh", "zcode"].map(harness =>
-  ({ harness, status: "ready", revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] }) as HarnessHealth);
+  ({ harness, status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] }) as HarnessHealth);
 
 export function snapshot({ routers = [], configuration = {}, routingHealth, sessionPresent = true, extra = {} }: RolesOptions = {}): Snapshot & { harnesses: HarnessHealth[] } {
   return {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: sessionPresent ? { id: "fixture-session" } : undefined as unknown as ConsoleSession,
+    csrfToken: "csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0, consoleSession: sessionPresent ? { id: "fixture-session" } : undefined as unknown as ConsoleSession,
 
     configuration: configuration === null ? null
-      : { routerBuddyIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", ...configuration },
+      : { explorationEvery: 5, routerBuddyIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", modelResponseWaitSeconds: 60, profileBuddyId: null, profileUnavailableReason: { code: "profile-not-configured", params: {} }, ...configuration },
     buddies: buddies(),
-    preferences: [], modelServiceNotes: [],
+    ...modelFacts(buddies()), preferences: [],
  decisions: [],
     modelServiceConcurrency: [],
     tasks: { pendingCount: 0 },
@@ -110,36 +111,36 @@ export function fixture(state: Snapshot = snapshot(), replies: Record<string, Re
   const api = {
     snapshot: vi.fn(async () => structuredClone(state)), command, task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
   return { api, command, published, operations };
 }
 
 /** Opens the page at an address and waits until the roles section is drawn. */
-export async function openRoles(f: ReturnType<typeof fixture>, hash = "#buddies/roles") {
+export async function openRoles(f: ReturnType<typeof fixture>, hash = "#buddies/router/routing") {
   window.location.hash = hash;
   render(createElement(App, { suppliedApi: f.api }));
-  await screen.findByRole("region", { name: "角色" });
+  await screen.findByRole("region", { name: "Router" });
 }
 
-export const rolesRegion = () => screen.getByRole("region", { name: "角色" });
-export const section = (name: string) => within(rolesRegion()).getByRole("group", { name });
-export const routerList = () => within(rolesRegion()).getByRole("list", { name: "Router 列表" });
-export const queryRouterList = () => within(rolesRegion()).queryByRole("list", { name: "Router 列表" });
-/** The four-part names of the list's buddies, in the order of the list. */
-export const listed = () => (queryRouterList() ? within(routerList()).getAllByRole("listitem") : []).map(item => item.getAttribute("aria-label"));
-export const line = (quad: string) => within(rolesRegion()).getByRole("listitem", { name: quad });
+export const rolesRegion = () => screen.getByRole("region", { name: "Router" });
+export const section = (name: string) => within(rolesRegion()).getByRole("group", { name: name === "列表" ? "Router 列表" : name });
+export const routerList = () => within(rolesRegion()).getByRole("table", { name: "Router 列表" });
+export const queryRouterList = () => within(rolesRegion()).queryByRole("table", { name: "Router 列表" });
+/** The complete names of the list's buddies, in the order of the list. */
+export const listed = () => (queryRouterList() ? within(routerList()).getAllByRole("row").filter(row => row.hasAttribute("aria-label")) : []).map(item => item.getAttribute("aria-label"));
+export const line = (quad: string) => within(rolesRegion()).getByRole("row", { name: quad });
 export const moveUp = (quad: string) => within(rolesRegion()).getByRole("button", { name: `上移 ${quad}` });
 export const moveDown = (quad: string) => within(rolesRegion()).getByRole("button", { name: `下移 ${quad}` });
 export const remove = (quad: string) => within(rolesRegion()).getByRole("button", { name: `移除 ${quad}` });
 export const addButton = () => within(rolesRegion()).getByRole("button", { name: "添加" });
 export const addDialog = () => screen.getByRole("dialog", { name: "添加 Router" });
 export const queryAddDialog = () => screen.queryByRole("dialog", { name: "添加 Router" });
-/** The dialog's rows: the four-part name of each buddy, with the reason where it cannot be added. */
+/** The dialog's rows: the complete name of each buddy, with the reason where it cannot be added. */
 export const choices = () => within(addDialog()).getAllByRole("button").filter(button => button.textContent !== "取消");
 export const choice = (quad: string) => within(addDialog()).getByRole("button", { name: new RegExp(`^${quad.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}`) });
 export const modeOption = (name: string) => within(section("默认模式")).getByRole("radio", { name });
-export const budgetOption = (name: string) => within(section("审阅预算")).getByRole("radio", { name });
+export const responseWaitInput = () => within(section("开始作答时限")).getByRole("spinbutton", { name: "开始作答时限" });
 export const intervalInput = () => within(section("重试间隔")).getByRole("spinbutton", { name: "重试间隔秒数" });
 export const saveButton = () => within(screen.getByRole("region", { name: "未保存的修改" })).getByRole("button", { name: /^(保存|重试同一保存)$/ });
 export const queryDraftBar = () => screen.queryByRole("region", { name: "未保存的修改" });

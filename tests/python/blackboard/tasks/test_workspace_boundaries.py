@@ -47,7 +47,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         resolved = workspace.resolve(
             self.state, manifest, task_id="micro-task", attempt_id="attempt", action="restore", paths=None,
             observed_fingerprint=evidence["observedFingerprint"], note="restore all paths",
-            actor={"role": "host", "id": "host-1"},
+            actor={"role": "host"},
         )
         self.assertEqual(resolved["state"], "restored")
         self.assertEqual(resolved["resolvedPaths"], paths)
@@ -57,14 +57,39 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(self.git("diff", "--cached", "--name-only", cwd=checkout), b"")
         self.assertNotIn("changedEntries", resolved["artifact"]["snapshot"])
 
-    def test_first_turn_cumulative_patch_uses_sealed_diff_without_git(self):
+    def test_first_turn_cumulative_patch_reuses_verified_diff_without_io(self):
         manifest = self.prepare()
         native_path(Path(manifest["path"]) / "src/file.txt").write_text("output\n", encoding="utf-8", newline="\n")
         sealed = self.seal(manifest)
-        with patch.object(workspace, "_git", side_effect=AssertionError("unexpected Git read")):
+        with (patch.object(workspace, "_git", side_effect=AssertionError("unexpected Git read")),
+              patch.object(workspace, "_read", side_effect=AssertionError("unexpected patch read"))):
             cumulative = workspace.cumulative_patch(manifest, sealed, manifest["inputCommit"])
         self.assertEqual(cumulative["changedPaths"], ["src/file.txt"])
-        self.assertEqual(native_path(Path(cumulative["path"])).read_bytes(), native_path(Path(sealed["diffPath"])).read_bytes())
+        self.assertEqual(cumulative["path"], sealed["diffPath"])
+        self.assertEqual(cumulative["sha256"], sealed["diffSha256"])
+        self.assertEqual(cumulative["baseCommit"], manifest["inputCommit"])
+        self.assertNotIn("outputCommit", cumulative)
+        self.assertEqual(list(native_path(Path(sealed["diffPath"]).parent).glob("*.patch")),
+                         [native_path(Path(sealed["diffPath"]))])
+
+    def test_new_cumulative_patch_keeps_existing_sealed_files_unchanged(self):
+        manifest = self.prepare()
+        native_path(Path(manifest["path"]) / "src/file.txt").write_text("output\n", encoding="utf-8", newline="\n")
+        sealed = self.seal(manifest)
+        legacy_path = Path(sealed["diffPath"]).with_name(f"cumulative-{manifest['inputCommit']}.patch")
+        native_path(legacy_path).write_bytes(native_path(Path(sealed["diffPath"])).read_bytes())
+        sealed["cumulativePatch"] = {
+            "baseCommit": manifest["inputCommit"], "outputCommit": sealed["commit"],
+            "path": str(legacy_path), "sha256": sealed["diffSha256"], "changedPaths": sealed["changedPaths"],
+        }
+        record = workspace._json(sealed)
+        files = {path: path.read_bytes() for path in native_path(legacy_path.parent).iterdir() if path.is_file()}
+        fresh = workspace.seal(self.state, manifest, "micro-task", "new-attempt")
+        cumulative = workspace.cumulative_patch(manifest, fresh, manifest["inputCommit"])
+        self.assertEqual(cumulative["path"], fresh["diffPath"])
+        self.assertEqual(workspace._json(sealed), record)
+        self.assertEqual({path: path.read_bytes() for path in native_path(legacy_path.parent).iterdir()
+                          if path.is_file()}, files)
 
     def test_missing_staged_commit_rejects_turn_start_when_input_still_exists(self):
         source = self.repo / "src/file.txt"
@@ -221,26 +246,80 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertFalse(removed["alreadyRemoved"])
         self.assertFalse(checkout.exists())
 
-    def test_failed_partial_remove_relocks_without_a_gitfile_and_can_resume(self):
+    def test_failed_partial_tree_remove_keeps_its_lock_without_a_gitfile_and_can_resume(self):
         manifest = self.prepare()
         checkout = Path(manifest["path"])
-        real_git = workspace._git
+        real_remove = workspace.private_dirs.remove_tree
 
-        def failed_remove(root, *args, **kwargs):
-            if args[:2] == ("worktree", "remove"):
+        def failed_remove(path, **kwargs):
+            if Path(path) == checkout:
                 (checkout / ".git").unlink()
                 (checkout / "src/file.txt").unlink()
-                raise BoardError("WORKSPACE_GIT_ERROR", "injected partial deletion")
-            return real_git(root, *args, **kwargs)
+                raise PermissionError("injected partial deletion")
+            return real_remove(path, **kwargs)
 
-        with patch.object(workspace, "_git", side_effect=failed_remove):
-            error = self.assert_error("WORKSPACE_GIT_ERROR", workspace.cleanup_remove, self.state, manifest)
+        with patch.object(workspace.private_dirs, "remove_tree", side_effect=failed_remove):
+            error = self.assert_error("WORKSPACE_IO_ERROR", workspace.cleanup_remove, self.state, manifest)
         self.assertNotIn("relockError", error.details)
         self.assertEqual(workspace._worktree_record(self.repo, checkout)["locked"],
                          "hey-my-buddy:" + manifest["workspaceId"])
         proof = workspace.cleanup_inspect(self.state, manifest, resume=True)
         self.assertTrue(proof["eligible"], proof)
         self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True)["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+
+    def test_resumed_cleanup_accepts_deleted_sealed_excluded_file(self):
+        allocation = self.prepare("allocation")
+        checkout = Path(allocation["path"])
+        scratch = checkout / "scratch.txt"
+        scratch.write_text("excluded scratch\n", encoding="utf-8", newline="\n")
+        survivor = checkout / "survivor.txt"
+        survivor.write_text("excluded survivor\n", encoding="utf-8", newline="\n")
+        manifest = self.prepare("later", kind="existing", cwd=str(checkout),
+                                base={"kind": "working-tree", "ref": allocation["inputCommit"]})
+        self.assertIn("scratch.txt", manifest["snapshot"]["excludedEntries"])
+        sealed = self.seal(manifest)
+        self.assertEqual(sealed["snapshot"]["excludedChangedPaths"], [])
+        retained = [allocation, manifest]
+        ordinary = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained)
+        self.assertTrue(ordinary["eligible"], ordinary)
+        sealed_bytes = workspace._json(sealed)
+
+        scratch.unlink()
+        first_proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained)
+        self.assertEqual(first_proof["reasons"], ["unsealed-changes"])
+        self.assertEqual(first_proof["unsealedPaths"], ["scratch.txt"])
+        (checkout / "src/file.txt").unlink()
+        (checkout / ".git").unlink()
+        self.git("worktree", "unlock", str(checkout))
+        resumed = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained, resume=True)
+        self.assertTrue(resumed["eligible"], resumed)
+        self.assertEqual(resumed["unsealedPaths"], [])
+        self.assertEqual(workspace._json(sealed), sealed_bytes)
+        self.assertFalse(scratch.exists())
+        survivor.write_text("changed survivor\n", encoding="utf-8", newline="\n")
+        changed = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained, resume=True)
+        self.assertEqual(changed["reasons"], ["unsealed-changes"])
+        self.assertEqual(changed["unsealedPaths"], ["survivor.txt"])
+        exclude = self.repo / ".git/info/exclude"
+        before_exclude = exclude.read_bytes()
+        exclude.write_bytes(before_exclude + b"\nsurvivor.txt\n")
+        ignored = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained, resume=True)
+        self.assertEqual(ignored["reasons"], ["unsealed-changes"])
+        self.assertEqual(ignored["unsealedPaths"], ["survivor.txt"])
+        self.assertEqual(survivor.read_bytes(), b"changed survivor\n")
+        exclude.write_bytes(before_exclude)
+        survivor.write_text("excluded survivor\n", encoding="utf-8", newline="\n")
+        added = checkout / "new.txt"
+        added.write_text("unsealed new file\n", encoding="utf-8", newline="\n")
+        new_file = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained, resume=True)
+        self.assertEqual(new_file["reasons"], ["unsealed-changes"])
+        self.assertEqual(new_file["unsealedPaths"], ["new.txt"])
+        added.unlink()
+        resumed = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained, resume=True)
+        self.assertTrue(resumed["eligible"], resumed)
+        self.assertTrue(workspace.cleanup_remove(self.state, manifest, retained=retained,
+                                                 resume=True, proof=resumed)["removed"])
         self.assertFalse(checkout.exists())
 
     def test_cleanup_lists_all_fixed_refs_across_retained_workspaces(self):
@@ -288,7 +367,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
                 self.assertEqual(proof["locked"], "hey-my-buddy:" + manifest["workspaceId"])
                 self.assertEqual(target.read_bytes(), b"outside the allocation\x00\xff")
 
-    def test_resumed_cleanup_keeps_unsealed_index_content_without_a_gitfile(self):
+    def test_resumed_cleanup_reclaims_the_sealed_tree_with_a_different_index_without_a_gitfile(self):
         manifest = self.prepare()
         checkout = Path(manifest["path"])
         sealed = self.seal(manifest)
@@ -297,41 +376,45 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         (checkout / "src/file.txt").write_bytes(b"staged only\x00\xff")
         self.git("add", "src/file.txt", cwd=checkout)
         staged_index = workspace._entries(checkout)
+        self.assertNotEqual(staged_index, initial_index)
         (checkout / "src/file.txt").write_text("base\n", encoding="utf-8", newline="\n")
         ordinary = workspace.cleanup_inspect(self.state, manifest, sealed=sealed)
+        self.assertTrue(ordinary['eligible'], ordinary)
         self.git("worktree", "unlock", str(checkout))
         (checkout / ".git").unlink()
         (checkout / "docs/readme.md").unlink()
         self.assertEqual(workspace._entries(git_dir), staged_index)
         proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
-        self.assertFalse(proof["eligible"], proof)
-        self.assertEqual(proof["reasons"], ["unsealed-changes"])
-        self.assertEqual(proof["unsealedPaths"], ordinary["unsealedPaths"])
+        self.assertTrue(proof["eligible"], proof)
+        self.assertEqual(proof["reasons"], [])
+        self.assertEqual(proof["unsealedPaths"], [])
         self.assertEqual(workspace._entries(git_dir), staged_index)
         self.assertEqual((checkout / "src/file.txt").read_text(encoding="utf-8"), "base\n")
-        workspace._git(git_dir, "read-tree", manifest["inputTree"])
-        self.assertEqual(workspace._entries(git_dir), initial_index)
-        self.assertTrue(workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)["eligible"])
-        self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True)["alreadyRemoved"])
+        self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True, proof=proof)["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+        self.assertEqual(self.git('rev-parse', sealed['ref']).decode().strip(), sealed['commit'])
 
-    def test_resumed_cleanup_keeps_an_unsealed_head_without_a_gitfile(self):
+    def test_resumed_cleanup_reclaims_the_sealed_tree_with_a_different_head_without_a_gitfile(self):
         manifest = self.prepare()
         checkout = Path(manifest["path"])
         sealed = self.seal(manifest)
         git_dir = Path(workspace.inspect(str(checkout))["gitDir"])
-        self.git("commit", "--allow-empty", "-qm", "not sealed", cwd=checkout)
-        unsealed_head = self.git("rev-parse", "HEAD", cwd=checkout)
+        self.git("commit", "--allow-empty", "-qm", "same sealed tree", cwd=checkout)
+        different_head = self.git("rev-parse", "HEAD", cwd=checkout)
+        self.assertNotEqual(different_head.decode().strip(), sealed['snapshot']['headCommit'])
+        self.assertEqual(self.git('rev-parse', 'HEAD^{tree}', cwd=checkout).decode().strip(), sealed['tree'])
         ordinary = workspace.cleanup_inspect(self.state, manifest, sealed=sealed)
+        self.assertTrue(ordinary['eligible'], ordinary)
         self.git("worktree", "unlock", str(checkout))
         (checkout / ".git").unlink()
         proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
-        self.assertFalse(proof["eligible"], proof)
-        self.assertEqual(proof["reasons"], ["unsealed-changes"])
-        self.assertEqual(proof["unsealedPaths"], ordinary["unsealedPaths"])
-        self.assertEqual(workspace._git(git_dir, "rev-parse", "HEAD"), unsealed_head)
-        workspace._git(git_dir, "update-ref", "--no-deref", "HEAD", sealed["snapshot"]["headCommit"])
-        self.assertTrue(workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)["eligible"])
-        self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True)["alreadyRemoved"])
+        self.assertTrue(proof["eligible"], proof)
+        self.assertEqual(proof["reasons"], [])
+        self.assertEqual(proof["unsealedPaths"], [])
+        self.assertEqual(workspace._git(git_dir, "rev-parse", "HEAD"), different_head)
+        self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True, proof=proof)["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+        self.assertEqual(self.git('rev-parse', sealed['ref']).decode().strip(), sealed['commit'])
 
     def test_resumed_cleanup_restores_missing_binary_modes_links_and_parents(self):
         payload = self.repo / "src" / "deep" / "payload.bin"
@@ -361,7 +444,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(self.git("ls-files", "-s", "--", "src/deep/link", cwd=checkout).split()[0], b"120000")
         if not workspace._WINDOWS:
             self.assertEqual((checkout / "src/deep/payload.bin").stat().st_mode & 0o777, 0o755)
-        self.assertEqual(workspace.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
+        self.assertEqual(workspace.inspect(str(checkout))["checkoutRoot"], manifest["checkoutRoot"])
         self.assertTrue(workspace.cleanup_remove(self.state, manifest, resume=True)["removed"])
 
     def test_resumed_cleanup_refuses_a_link_placeholder_that_the_real_index_cannot_represent(self):

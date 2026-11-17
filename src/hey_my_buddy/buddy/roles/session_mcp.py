@@ -4,10 +4,10 @@ This module is only the native carrier of the Worker role's session tools: it
 frames the session's stdio JSON-RPC (``initialize``, ``tools/list``,
 ``tools/call``, ``ping``) and hands every tool call to
 :func:`hey_my_buddy.buddy.roles.worker_services.call_session_tool`, which owns
-the six-field finish contract, the attention-outstanding and inquiry-pending
-completion refusals, the journal replay and the signed receipts and refusal
-envelopes. Nothing here decides an outcome, reads the board or mutates state,
-and the journal stays read-only from this process.
+the six-field finish contract, the turn-ended, attention-outstanding and
+inquiry-pending completion refusals, the journal replay and the signed
+receipts and refusal envelopes. Nothing here decides an outcome, reads the
+board or mutates state, and the journal stays read-only from this process.
 
 The native wrapper may surface an ``isError`` tool response as a *successful*
 tool result, so the owning controller imports an outcome only after it
@@ -40,7 +40,8 @@ def respond(message: dict, configuration: dict) -> dict | None:
         result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
                   "serverInfo": {"name": "hey-my-buddy", "version": "1"}}
     elif method == "tools/list":
-        tools = worker_services.session_tools(delegation_authority=configuration.get("delegationAuthority") is True)
+        tools = worker_services.session_tools(delegation_authority=configuration.get("delegationAuthority") is True,
+            checkpoint="toolNames" not in configuration or "hey_my_buddy_checkpoint" in configuration["toolNames"])
         if "toolNames" in configuration:
             tools = [tool for tool in tools if tool["name"] in configuration["toolNames"]]
         result = {"tools": tools}

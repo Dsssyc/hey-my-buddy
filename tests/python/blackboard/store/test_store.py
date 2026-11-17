@@ -11,7 +11,7 @@ from contextlib import closing
 import sqlite3
 import unittest
 
-from support import BoardTestCase
+from support import BoardTestCase, enable_fixture_buddy
 from blackboard.evaluation.test_evaluation import EvaluationTestCase as EvaluationFixtures
 
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION, Corruption
@@ -36,18 +36,18 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
         self.enterContext(patch.object(workflow, "_workspace_module", self.model_workspace))
 
     def submit_micro_task(self, board, request_id: str, model_service=MODEL_SERVICE_A, *, effort: str = "off") -> str:
+        enable_fixture_buddy(board.store, dict(zip(("harness", "provider", "model", "effort"), (*model_service, effort))))
+        cwd = str(self.workdir(request_id))
+        title = request_id
+        task = "concurrency fixture"
         submitted = board.call(
             "workflow_submit",
             {
-                "requestId": request_id,
-                "hostId": "store-host",
-                "task": "concurrency fixture",
-                "cwd": str(self.workdir(request_id)),
-                "harness": model_service[0],
-                "provider": model_service[1],
-                "model": model_service[2],
-                "effort": effort,
-                "executionWorkspace": {"kind": "existing", "access": "write"},
+                "cwd": cwd, "title": title, "task": task,
+                "macroTaskId": "standalone",
+                "buddy": " / ".join((*model_service, effort)),
+                "checkout": "existing", "access": "write", "inputs": [], "writeScope": ["."],
+                "expectedSeconds": 1800,
             },
         )
         return submitted["runId"]
@@ -82,23 +82,25 @@ class CurrentSchemaTests(BoardTestCase):
         self.assertEqual(viewed["runId"], task_id)
         self.assertNotIn("taskId", viewed)
 
-    def test_fresh_board_is_the_current_schema_with_the_model_service_concurrency_table(self):
+    def test_fresh_board_is_the_current_schema_with_normalized_model_services(self):
         board = self.board()
         integrity = board.store.integrity()
         self.assertEqual(integrity["schemaVersion"], SCHEMA_VERSION)
         with board.store.db.read() as connection:
             columns = {
                 row["name"]
-                for row in connection.execute("PRAGMA table_info(model_service_concurrency)")
+                for row in connection.execute("PRAGMA table_info(model_services)")
             }
-            model_services = connection.execute("SELECT COUNT(*) AS count FROM model_service_concurrency").fetchone()["count"]
+            model_services = connection.execute("SELECT COUNT(*) AS count FROM model_services").fetchone()["count"]
             attempt_columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(attempts)")
             }
         self.assertEqual(
             columns,
-            {"harness", "provider", "model", "concurrency_limit"},
+            {"harness", "provider", "model", "description", "context_window", "input_modalities_json",
+             "unavailable_code", "unavailable_params_json", "unavailable_content", "pending_since",
+             "confirmed_absent_at", "concurrency_limit", "source_sequence"},
         )
         self.assertEqual(model_services, 0)
         self.assertTrue({"model_harness", "model_provider", "model_model"} <= attempt_columns)
@@ -174,12 +176,13 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
         # The third task of the same model service waits on the model service limit, not the
         # machine ceiling: a different model service still claims.
         self.register(board, "w-a2")
-        blocked = self.claim_micro_task(board, "w-a2", "fam-a-2")
+        blocked_id = self.submit_micro_task(board, "fam-a-2")
+        blocked = admit_execution(board.client(), "n" * 32)
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "model-capacity")
         with board.store.db.read() as connection:
             reason = connection.execute(
-                "SELECT queue_reason FROM tasks WHERE request_id='fam-a-2'"
+                "SELECT queue_reason FROM tasks WHERE task_id=?", (blocked_id,)
             ).fetchone()["queue_reason"]
         self.assertEqual(reason, "model-capacity")
         self.register(board, "w-b")
@@ -288,9 +291,9 @@ class ExpectedDurationTests(BoardTestCase):
         self.assertEqual(default["expectedSeconds"], 1800)
         self.assertEqual(explicit["expectedSeconds"], 1)
         self.assertNotIn("timeoutSeconds", default)
-        self.assertNotIn("routerBudgetSeconds", explicit)
+        self.assertNotIn("modelResponseWaitSeconds", explicit)
         with board.store.db.read() as connection:
-            rows = connection.execute("SELECT expected_seconds,router_budget_seconds FROM tasks ORDER BY request_id").fetchall()
+            rows = connection.execute("SELECT json_extract(spec_json,'$.expectedSeconds'),json_extract(spec_json,'$.modelResponseWaitSeconds') FROM tasks ORDER BY request_id").fetchall()
             self.assertEqual([tuple(row) for row in rows], [(1800, None), (1, None)])
         self.assertEqual(board.call("task_get", {"runId": explicit["runId"]})["task"]["expectedSeconds"], 1)
 
@@ -308,7 +311,9 @@ class ExpectedDurationTests(BoardTestCase):
     def test_storage_rejects_a_mixed_duration_meaning(self):
         board = self.board()
         task = self.submit(board, "duration-storage")
-        for update in ("expected_seconds=0", "router_budget_seconds=60", "expected_seconds=NULL"):
+        for update in ("spec_json=json_set(spec_json,'$.expectedSeconds',0)",
+                       "spec_json=json_set(spec_json,'$.expectedSeconds','60')",
+                       "spec_json=json_remove(spec_json,'$.expectedSeconds')"):
             with self.subTest(update=update), self.assertRaises(sqlite3.IntegrityError):
                 with board.store.db.write() as connection:
                     connection.execute(f"UPDATE tasks SET {update} WHERE task_id=?", (task["runId"],))
@@ -322,7 +327,7 @@ class ExpectedDurationTests(BoardTestCase):
         response = client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, {"status": "failed", "shutdownConfirmed": True, "terminationReason": "deadline"})
         rejection = response["attempt"]["result"]["result"]["microTaskError"]
         self.assertEqual(rejection["code"], "INVALID_ARGUMENT")
-        self.assertIn("Router budget", rejection["message"])
+        self.assertIn("Router model response wait", rejection["message"])
         self.assertNotIn("receiptRejection", response["attempt"]["result"]["result"])
         self.assertTrue(client.get(runId=task["runId"])["shutdownConfirmed"])
 
@@ -335,13 +340,15 @@ class ServiceAdmissionWindowTests(BoardTestCase):
         board = self.board(max_concurrent=2, clock=clock)
         client = board.client()
         held = self.workdir('held')
-        board.submit_execution(requestId='held', task='hold', cwd=str(held), adapter='command',
-                      argv=['true'], exclusiveResources=['exclusive-fixture'])
+        board.submit_execution(requestId='held', task='hold', cwd=str(held),
+                               adapter='command', argv=['true'])
         admit_execution(client, 'held-nonce-0000000000000000000')
         for index in range(board.store.CLAIM_CANDIDATE_LIMIT + 2):
             clock.advance(1)
-            board.submit_execution(requestId=f'blocked-{index}', task='blocked', cwd=str(self.workdir(f'blocked-{index}')),
-                          adapter='command', argv=['true'], exclusiveResources=['exclusive-fixture'])
+            blocked = held / f'blocked-{index}'
+            blocked.mkdir()
+            board.submit_execution(requestId=f'blocked-{index}', task='blocked', cwd=str(blocked),
+                                   adapter='command', argv=['true'])
         clock.advance(1)
         runnable = board.submit_execution(requestId='runnable', task='free', cwd=str(self.workdir('free')),
                                  adapter='command', argv=['true'])['task']

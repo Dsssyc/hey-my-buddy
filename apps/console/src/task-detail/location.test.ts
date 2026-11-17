@@ -2,14 +2,10 @@ import { describe, expect, it } from "vitest";
 import { TASKS_ROOT, tasksHash, tasksLocation } from "./location";
 
 describe("the address of the tasks page", () => {
-  it("keeps the chosen list order in root, macro task and session addresses", () => {
-    for (const sort of ["activity-asc", "created-desc", "created-asc"] as const) {
-      for (const location of [TASKS_ROOT, { macroTaskId: "macro", runId: "run", step: 2, tab: "session" as const }]) {
-        expect(tasksLocation(tasksHash({ ...location, sort }))).toEqual({ ...location, sort });
-      }
-    }
-    expect(tasksHash({ ...TASKS_ROOT, sort: "activity-desc" })).toBe("#tasks");
+  it("ignores an obsolete list sort parameter in task addresses", () => {
+    expect(tasksHash(TASKS_ROOT)).toBe("#tasks");
     expect(tasksLocation("#tasks?sort=unsupported")).toEqual(TASKS_ROOT);
+    expect(tasksLocation("#tasks/macro/run/2?sort=created-asc&tab=session")).toEqual({ macroTaskId: "macro", runId: "run", step: 2, tab: "session" });
   });
 
   it("names the session tab of the selected detail step", () => {
@@ -35,7 +31,7 @@ describe("the address of the tasks page", () => {
   });
 
   it("names nothing for another page, and ignores a step that is not a positive number", () => {
-    expect(tasksLocation("#buddies/catalog")).toBeNull();
+    expect(tasksLocation("#buddies/models")).toBeNull();
     expect(tasksLocation("")).toBeNull();
     expect(tasksLocation("#tasks")).toEqual(TASKS_ROOT);
     for (const step of ["0", "-1", "x", "1.5", "01", "10000"]) expect(tasksLocation(`#tasks/macro-1/run-9/${step}`)).toEqual({ macroTaskId: "macro-1", runId: "run-9", step: null });

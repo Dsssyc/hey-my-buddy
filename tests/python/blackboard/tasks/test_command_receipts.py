@@ -1,37 +1,25 @@
-"""Workflow receipt identities replay against an advancing private board."""
+"""Workflow response identities and cleanup journals on private boards."""
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest
+from unittest.mock import patch as defer_reclaim
 
 from contextlib import ExitStack
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
+import unittest
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.tasks import test_scope_recovery as scope_fixtures
 from blackboard.tasks.test_workflow_real import RealWorkspaceTestCase
 
-from hey_my_buddy.blackboard.tasks.command_receipts import replay_response, stored_response
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
 from hey_my_buddy.blackboard.tasks import macro_task_deletion
 from hey_my_buddy.errors import BoardError
-
-
-def replay(board, kind, response):
-    stored = stored_response(kind, response)
-    with board.store.db.read() as connection:
-        committed = [json.loads(row[0]) for row in connection.execute(
-            "SELECT response_json FROM commands WHERE kind=?", (kind,)
-        )]
-        if stored not in committed:
-            raise AssertionError(f"The real {kind} producer did not store its submission identity")
-        stored = next(item for item in committed if item == stored)
-        rebuilt = replay_response(board.store.workflow, connection, kind, stored)
-        current = board.store.workflow.compact(
-            connection, board.store.workflow._run_row(connection, stored["runId"])
-        )
-    return stored, rebuilt, current
 
 
 class WorkflowReceiptTests(WorkflowTestCase):
@@ -42,13 +30,16 @@ class WorkflowReceiptTests(WorkflowTestCase):
         submitted = self.submit(board)
         claimed = self.claim(board)
         coordinator = board.store.workflow
-        original = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        original = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         digests = {original["manifestSha256"]}
         with board.store.db.write() as connection:
             for index in range(140):
-                manifest = {**original, "workspaceId": f"ws-retained-{index}"}
+                manifest = {**original, "workspaceId": f"ws-{index:032x}"}
                 manifest.pop("manifestSha256")
                 manifest["manifestSha256"] = sha256_text(canonical_json(manifest))
+                record_dir = self.directory / "workspaces" / manifest["workspaceId"]
+                record_dir.mkdir(parents=True)
+                (record_dir / "manifest.json").write_text(canonical_json(manifest), encoding="utf-8")
                 digests.add(manifest["manifestSha256"])
                 coordinator._pin_artifact(connection, run_id=submitted["runId"], kind="input",
                                           manifest=manifest, attempt_id=None, turn_id=None, now=coordinator.now())
@@ -64,116 +55,104 @@ class WorkflowReceiptTests(WorkflowTestCase):
         self.assertEqual(set(retention["artifactIds"]), artifact_ids)
         self.assertGreater(len(artifact_ids), 128)
 
-    def test_deleted_decision_and_cancel_commands_are_removed_with_the_run(self):
+    def test_deleted_domain_responses_are_removed_with_the_run(self):
         board = self.board()
-        submitted = self.submit(board, request_id="delete-replay", macroTask={"title": "Disposable"})
+        submitted = self.submit(board, request_id="delete-replay",
+                                create_macro={"title": "Disposable", "goal": "Disposable"})
         self.finish_turn(board, self.claim(board), disposition="attention")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        decision_params = {
+        answered = board.call("workflow_continue", {
             "runId": submitted["runId"], "requestId": view["activeRequest"]["requestId"],
-            "commandId": "deleted-decision", "expectedRevision": view["revision"],
-            "decision": "decline", "autoContinue": False, **self.control(view),
-        }
-        board.call("workflow_decide", decision_params)
-        cancel_params = {"runId": submitted["runId"], "commandId": "deleted-cancel",
-                         "note": "Close disposable work", **self.control(view)}
-        cancelled = board.call("workflow_cancel", cancel_params)
+            "decision": "decline",
+        })
+        self.assertEqual(answered["state"], "executing")
+        cancelled = board.call("workflow_cancel", {"runId": submitted["runId"],
+                                                    "note": "Close disposable work"})
+        self.assertEqual(cancelled["state"], "cancelled")
         board.call("workflow_conclude", {"runId": submitted["runId"],
-                                         "note": "Reviewed the failure", **self.control(cancelled)})
+                                         "note": "Reviewed the stopped work"})
         with ExitStack() as stack:
-            for stage in ("_delete_sessions", "_delete_workspaces",
-                          "_delete_private_roots", "_delete_cli_files"):
+            for stage in ("_delete_sessions", "_delete_workspaces", "_delete_private_roots"):
                 stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
             macro_task_deletion.delete(board.store, submitted["macroTaskId"], 1)
         with board.store.db.read() as connection:
-            self.assertEqual(connection.execute(
-                "SELECT COUNT(*) FROM commands WHERE command_id IN ('deleted-decision','deleted-cancel')"
-            ).fetchone()[0], 0)
-        for operation, request in (("workflow_decide", decision_params), ("workflow_cancel", cancel_params)):
+            for table in ("workflow_requests", "workflow_continuations", "workflow_host_conclusions"):
+                self.assertEqual(connection.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE run_id=?", (submitted["runId"],)
+                ).fetchone()[0], 0)
+        for operation, params in (("workflow_continue", {"runId": submitted["runId"],
+                                                         "requestId": view["activeRequest"]["requestId"],
+                                                         "decision": "decline"}),
+                                  ("workflow_cancel", {"runId": submitted["runId"]})):
             with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
-                board.call(operation, request)
+                board.call(operation, params)
             self.assertEqual(caught.exception.code, "NOT_FOUND")
 
-    def test_decision_continuation_takeover_and_cancel_keep_commits_with_current_view(self):
+    def test_decision_replay_uses_the_request_row(self):
         board = self.board()
         submitted = self.submit(board)
         self.finish_turn(board, self.claim(board), disposition="attention")
-        boundary = board.call("workflow_get", {"runId": submitted["runId"]})
-        decided = self.decide(board, boundary, boundary["activeRequest"]["requestId"],
-                              decision="decline", autoContinue=False)
-        continued = self.continue_run(board, decided, command_id="receipt-continue")
-        taken = board.call("workflow_takeover", {
-            "runId": submitted["runId"], "commandId": "receipt-takeover",
-            "expectedOwnerGeneration": continued["ownerGeneration"], "newHostId": "host-2",
-            **self.control(submitted),
-        })
-        self.controls[submitted["runId"]] = taken["control"]
-        cancelled = board.call("workflow_cancel", {
-            "runId": submitted["runId"], "commandId": "receipt-cancel",
-            "note": "Host ended this run", **self.control(submitted),
-        })
-        for kind, original, facts in (
-            ("workflow.decide", decided, ("requestId", "decision")),
-            ("workflow.continue", continued, ("continuationId", "inputSha256", "helperPolicy", "targetRunId")),
-            ("workflow.takeover", taken, ("previousOwnerGeneration",)),
-            ("workflow.cancel", cancelled, ("cancelled",)),
-        ):
-            with self.subTest(kind=kind):
-                stored, rebuilt, current = replay(board, kind, original)
-                self.assertEqual(rebuilt["revision"], current["revision"])
-                self.assertEqual(rebuilt["state"], current["state"])
-                for key in facts:
-                    self.assertEqual(rebuilt[key], original[key])
-                self.assertNotIn("microTask", stored)
-        _, takeover_replay, _ = replay(board, "workflow.takeover", taken)
-        self.assertEqual(takeover_replay["control"], taken["control"])
-        self.assertEqual(takeover_replay["ownerGeneration"], taken["ownerGeneration"])
-        takeover_stored = stored_response("workflow.takeover", taken)
-        self.assertEqual(takeover_stored["control"], {"hostId": taken["control"]["hostId"]})
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        params = {"runId": submitted["runId"], "requestId": view["activeRequest"]["requestId"],
+                  "decision": "approve"}
+        first = board.call("workflow_continue", params)
+        replayed = board.call("workflow_continue", params)
+        self.assertEqual(replayed["state"], first["state"])
+        self.assertTrue(replayed["alreadyResponded"])
+        with board.store.db.read() as connection:
+            response = connection.execute(
+                "SELECT response_kind,response_id FROM workflow_requests WHERE request_id=?",
+                (params["requestId"],),
+            ).fetchone()
+        self.assertEqual((response["response_kind"], response["response_id"]),
+                         ("decision", params["requestId"]))
+        with self.assertRaises(BoardError) as changed:
+            board.call("workflow_continue", {**params, "decision": "decline"})
+        self.assertEqual(changed.exception.code, "CONFLICT")
 
-    def test_review_and_scope_replay_authoritative_records(self):
-        board = self.board()
-        submitted = self.submit(board, request_id="receipt-accepted")
-        self.finish_turn(board, self.claim(board, claim_request_id="accepted-claim"))
-        accepted_id = submitted["runId"]
-        delivered = board.call("workflow_get", {"runId": accepted_id})
-        amended = board.store.workflow.scope_amend({
-            "runId": accepted_id, "commandId": "receipt-scope", "expectedRevision": delivered["revision"],
-            "expectedScopeVersion": 1, "writeScope": ["docs"], "note": "Authorize the next stage",
-            **self.control(delivered),
-        })
-        accepted = self.accept_run(board, amended, keepCheckout=True)
-        for kind, original, facts in (
-            ("workflow.scope_amend", amended, ("scopeVersion", "writeScope", "targetRunId")),
-            ("workflow.accept", accepted, ("verdict", "integrationId", "integration")),
-        ):
-            with self.subTest(kind=kind):
-                stored, rebuilt, current = replay(board, kind, original)
-                self.assertEqual(rebuilt["revision"], current["revision"])
-                self.assertEqual(rebuilt["state"], current["state"])
-                for key in facts:
-                    self.assertEqual(rebuilt[key], original[key])
-                self.assertNotIn("microTask", stored)
-
-    def test_conclusion_keeps_review_identity_after_takeover(self):
+    def test_acceptance_consumes_the_artifact_once(self):
         board = self.board()
         submitted = self.submit(board)
         self.finish_turn(board, self.claim(board))
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
-        concluded = board.call("workflow_conclude", {
-            "runId": delivered["runId"], "note": "Close with the recorded output",
-            **self.control(delivered),
-        })
-        board.call("workflow_takeover", {
-            "runId": delivered["runId"], "commandId": "after-conclusion",
-            "expectedOwnerGeneration": concluded["ownerGeneration"], "newHostId": "host-2",
-            **self.control(delivered),
-        })
-        stored, rebuilt, current = replay(board, "workflow.conclude", concluded)
-        self.assertEqual(rebuilt["revision"], current["revision"])
-        self.assertEqual(rebuilt["conclusion"], concluded["conclusion"])
-        self.assertEqual(rebuilt["partialArtifactId"], concluded["partialArtifactId"])
-        self.assertEqual(set(stored), {"runId", "conclusionId"})
+        artifact_id = delivered["finalArtifactId"]
+        params = {"runId": submitted["runId"], "artifactId": artifact_id,
+                  "note": "Reviewed", "notRequired": "No separate target"}
+        accepted = board.call("workflow_accept", params)
+        replayed = board.call("workflow_accept", params)
+        self.assertTrue(replayed["alreadyResponded"])
+        self.assertEqual(replayed["integrationId"], accepted["integrationId"])
+        with board.store.db.read() as connection:
+            row = connection.execute(
+                "SELECT response_kind,response_id FROM workflow_artifacts WHERE artifact_id=?",
+                (artifact_id,),
+            ).fetchone()
+        self.assertEqual((row["response_kind"], row["response_id"]),
+                         ("accept", accepted["integrationId"]))
+        with self.assertRaises(BoardError) as changed:
+            board.call("workflow_continue", {"runId": submitted["runId"],
+                                             "artifactId": artifact_id, "input": "Try again"})
+        self.assertEqual(changed.exception.code, "CONFLICT")
+
+    def test_conclusion_replay_uses_its_domain_record(self):
+        board = self.board()
+        submitted = self.submit(board)
+        self.finish_turn(board, self.claim(board))
+        delivered = board.call("workflow_get", {"runId": submitted["runId"]})
+        params = {"runId": submitted["runId"], "artifactId": delivered["finalArtifactId"],
+                  "note": "Close with the recorded output"}
+        first = board.call("workflow_conclude", params)
+        replayed = board.call("workflow_conclude", params)
+        self.assertTrue(replayed["alreadyResponded"])
+        self.assertEqual(replayed["conclusionId"], first["conclusionId"])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM workflow_host_conclusions WHERE run_id=?",
+                (submitted["runId"],),
+            ).fetchone()[0], 1)
+        with self.assertRaises(BoardError) as changed:
+            board.call("workflow_conclude", {**params, "note": "Different conclusion"})
+        self.assertEqual(changed.exception.code, "CONFLICT")
 
     def test_small_answers_remain_exact(self):
         board = self.board()
@@ -192,150 +171,157 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
     # Share the established real-Git scenario without inheriting its full suite.
     register = scope_fixtures.ScopeRecoveryTestCase.register
     micro_task_submit = scope_fixtures.ScopeRecoveryTestCase.micro_task_submit
-    control = scope_fixtures.ScopeRecoveryTestCase.control
     claim = scope_fixtures.ScopeRecoveryTestCase.claim
     scope_failure = scope_fixtures.ScopeRecoveryTestCase.scope_failure
     turn_record = scope_fixtures.ScopeRecoveryTestCase.turn_record
     finish_turn = scope_fixtures.ScopeRecoveryTestCase.finish_turn
     view = scope_fixtures.ScopeRecoveryTestCase.view
     resolve = scope_fixtures.ScopeRecoveryTestCase.resolve
+    resolution_facts = scope_fixtures.ScopeRecoveryTestCase.resolution_facts
     scoped_failure = scope_fixtures.ScopeRecoveryTestCase.scoped_failure
     native_scope_failure = scope_fixtures.ScopeRecoveryTestCase.native_scope_failure
     verified_target = scope_fixtures.ScopeRecoveryTestCase.verified_target
 
     def setUp(self):
         super().setUp()
-        self.controls = {}
         self.worker = "w-scope"
         previous_workspace = workflow_module._workspace_module
         workflow_module._workspace_module = workspace_module
         self.addCleanup(setattr, workflow_module, "_workspace_module", previous_workspace)
 
-    def test_partial_resolution_replay_keeps_its_outcome_after_followup(self):
+    def test_partial_resolution_replay_retains_the_first_response(self):
         board, submitted, _claimed, _manifest, _checkout = self.scoped_failure()
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
-        partial = self.resolve(board, view, conflict, "restore", paths=["outside.txt"],
-                               note="Restore one path")
+        first_request = {"runId": submitted["runId"], "requestId": view["activeRequest"]["requestId"],
+                         "resolution": "restore", "observedFingerprint": conflict["observedFingerprint"],
+                         "paths": ["outside.txt"], "note": "Restore one path"}
+        partial = board.call("workflow_continue", first_request)
+        self.assertEqual(partial["resolutionState"], "open")
         current = self.view(board, submitted["runId"])
         completed = self.resolve(board, current, current["workspaceConflicts"][0], "restore",
                                  paths=["tracked.txt"], fingerprint=partial["resolvedFingerprint"],
-                                 command_id="receipt-resolution-2", note="Restore remaining path")
+                                 note="Restore remaining path")
         self.assertEqual(completed["resolutionState"], "restored")
-        stored, rebuilt, latest = replay(board, "workflow.workspace_resolve", partial)
-        self.assertEqual(rebuilt["resolutionState"], "open")
-        self.assertEqual(rebuilt["remainingPaths"], ["tracked.txt"])
-        self.assertEqual(rebuilt["resolvedFingerprint"], partial["resolvedFingerprint"])
-        self.assertEqual(rebuilt["revision"], latest["revision"])
-        self.assertNotIn("workspaceConflicts", stored)
-        _, completed_replay, latest = replay(board, "workflow.workspace_resolve", completed)
-        self.assertEqual(completed_replay["artifactId"], completed["artifactId"])
-        self.assertEqual(completed_replay["changedPaths"], completed["changedPaths"])
-        self.assertEqual(completed_replay["revision"], latest["revision"])
+        replayed = board.call("workflow_continue", first_request)
+        self.assertTrue(replayed["alreadyResponded"])
+        self.assertEqual(replayed["artifactId"], partial["artifactId"])
+        with board.store.db.read() as connection:
+            first_row = connection.execute(
+                "SELECT response_kind,response_id FROM workflow_requests WHERE request_id=?",
+                (first_request["requestId"],),
+            ).fetchone()
+        self.assertEqual(first_row["response_kind"], "resolution")
+        self.assertEqual(first_row["response_id"], conflict["conflictId"])
 
-    def test_acceptance_replay_preserves_host_resolution_delivery(self):
+    def test_acceptance_replay_preserves_resolved_artifact_binding(self):
         board, submitted, _claimed, _manifest, _checkout = self.native_scope_failure(
             request_id="receipt-native-resolution")
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
         resolved = self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
-                                command_id="receipt-native-restore", note="restore refused paths")
+                                note="restore refused paths")
         self.assertTrue(resolved["delivered"])
         target = self.verified_target(resolved["artifact"])
-        request = {
-            "runId": submitted["runId"], "artifactId": resolved["artifactId"],
-            "note": "reviewed the Host-resolved delivery",
-            "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "beforeCommit": target["before"], "keepCheckout": True,
-            **self.control(resolved),
-        }
+        request = {"runId": submitted["runId"], "artifactId": resolved["artifactId"],
+                   "note": "reviewed the Host-resolved delivery",
+                   "target": {"path": str(target["path"]), "ref": "HEAD"},
+                   "beforeCommit": target["before"]}
         first = board.call("workflow_accept", request)
         self.assertEqual(first["state"], "accepted")
-        self.assertEqual(first["resolutionDelivery"]["conflictId"], conflict["conflictId"])
-        self.assertEqual(first["resolutionDelivery"]["artifactId"], resolved["artifactId"])
-        self.assertEqual(set(first["resolutionDelivery"]), {
-            "conflictId", "action", "artifactId", "attemptId", "turnId", "deliveredAt",
-        })
-        stored, rebuilt, _current = replay(board, "workflow.accept", first)
-        self.assertEqual(stored["resolutionConflictId"], conflict["conflictId"])
-        self.assertEqual(rebuilt["resolutionDelivery"], first["resolutionDelivery"])
-
-        # Treat the committed first response as lost and retry the identical request.
+        accepted = self.view(board, submitted["runId"])
+        self.assertEqual(accepted["integrations"][0]["artifactId"], resolved["artifactId"])
+        self.assertEqual(accepted["workspaceConflicts"][0]["artifactId"], resolved["artifactId"])
+        self.assertTrue(accepted["workspaceConflicts"][0]["delivery"]["deliveredAt"])
         replayed = board.call("workflow_accept", request)
-        self.assertTrue(replayed["duplicate"])
+        self.assertTrue(replayed["alreadyResponded"])
         self.assertEqual(replayed["integrationId"], first["integrationId"])
-        self.assertEqual(replayed["resolutionDelivery"], first["resolutionDelivery"])
+        self.assertEqual(len(self.view(board, submitted["runId"])["integrations"]), 1)
 
-    def test_cleanup_plan_replay_reads_the_applied_journal(self):
+    def test_cleanup_idempotency_uses_the_journal_without_command_receipts(self):
         board = self.board()
         submitted = self.micro_task_submit(board, request_id="receipt-cleanup", scope=(".",), kind="worktree")
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id)
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["path"])
         (checkout / "tracked.txt").write_text("accepted output\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal)
         delivered = self.view(board, run_id)
-        accepted = board.call("workflow_accept", {
-            "runId": run_id, "artifactId": delivered["finalArtifactId"],
-            "note": "Reviewed the output", "notRequired": "No separate target in this fixture",
-            "keepCheckout": True, **self.control(delivered),
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = board.call("workflow_accept", {
+                "runId": run_id, "artifactId": delivered["finalArtifactId"],
+                "note": "Reviewed the output", "notRequired": "No separate target in this fixture",
+            })
         planned = board.store.workflow.cleanup_plan({
-            "runId": run_id, "commandId": "receipt-plan", "expectedRevision": accepted["revision"],
-            **self.control(accepted),
+            "runId": run_id,
         })
         applied = board.store.workflow.cleanup_apply({
-            "runId": run_id, "planId": planned["plan"]["planId"], "commandId": "receipt-apply",
-            "expectedRevision": planned["targetRevision"], "confirmPath": planned["plan"]["path"],
-            **self.control(accepted),
+            "runId": run_id,
+            "planId": planned["plan"]["planId"],
+            "confirmPath": planned["plan"]["path"],
         })
         self.assertFalse(checkout.exists())
-        for kind, original in (("workflow.cleanup_plan", planned), ("workflow.cleanup_apply", applied)):
-            with self.subTest(kind=kind):
-                stored, rebuilt, current = replay(board, kind, original)
-                self.assertEqual(rebuilt["revision"], current["revision"])
-                self.assertEqual(rebuilt["plan"], applied["plan"])
-                self.assertEqual(stored["planId"], planned["plan"]["planId"])
-                self.assertNotIn("workspace", stored)
-        _, applied_replay, _ = replay(board, "workflow.cleanup_apply", applied)
-        self.assertTrue(applied_replay["removed"])
-        self.assertEqual(applied_replay["retention"], applied["retention"])
+        repeated = board.store.workflow.cleanup_plan({'runId': run_id})
+        replayed = board.store.workflow.cleanup_apply({'runId': run_id, 'planId': planned['plan']['planId'],
+                                                      'confirmPath': planned['plan']['path']})
+        self.assertEqual(repeated['plan'], applied['plan'])
+        self.assertTrue(replayed['removed'])
+        self.assertTrue(replayed['duplicate'])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE kind IN"
+                                               " ('workflow.cleanup_plan','workflow.cleanup_apply')").fetchone()[0], 0)
 
-    def test_cleanup_apply_accepts_an_already_gone_allocation(self):
+    def missing_allocation_plan(self, request_id):
         board = self.board()
-        submitted = self.micro_task_submit(board, request_id="missing-allocation", scope=(".",), kind="worktree")
+        submitted = self.micro_task_submit(board, request_id=request_id, scope=(".",), kind="worktree")
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id)
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["path"])
+        git_dir = Path(workspace_module.inspect(str(checkout))["gitDir"])
         (checkout / "tracked.txt").write_text("accepted output\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal)
         delivered = self.view(board, run_id)
-        accepted = board.call("workflow_accept", {
-            "runId": run_id, "artifactId": delivered["finalArtifactId"],
-            "note": "Reviewed the output", "notRequired": "No separate target in this fixture",
-            "keepCheckout": True, **self.control(delivered),
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = board.call("workflow_accept", {
+                "runId": run_id, "artifactId": delivered["finalArtifactId"],
+                "note": "Reviewed the output", "notRequired": "No separate target in this fixture",
+            })
         planned = board.store.workflow.cleanup_plan({
-            "runId": run_id, "commandId": "missing-allocation-plan", "expectedRevision": accepted["revision"],
-            **self.control(accepted),
+            "runId": run_id,
         })
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workspace_cleanup_plans SET state='applying' WHERE plan_id=?",
+                               (planned["plan"]["planId"],))
         shutil.rmtree(self.directory / "workspaces" / manifest["workspaceId"])
-        with board.store.db.read() as connection:
-            retained = board.store.workflow._allocation_provenance(
-                connection, board.store.workflow._run_row(connection, run_id)
-            )
-        self.assertIsNone(workspace_module.resolve_allocation(self.directory, manifest, retained))
+        return board, run_id, manifest, checkout, git_dir, planned, accepted
+
+    def test_cleanup_apply_accepts_an_already_gone_allocation(self):
+        board, run_id, manifest, checkout, git_dir, planned, accepted = self.missing_allocation_plan(
+            "missing-allocation")
+        repository = Path(manifest["snapshot"]["repositoryPath"])
+        self.assertIsNotNone(workspace_module._worktree_record(repository, checkout))
+        self.assertFalse((self.directory / "workspaces" / manifest["workspaceId"]).exists())
+        foreign_ref = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/foreign"
+        self.git("update-ref", foreign_ref, "HEAD")
+        foreign_oid = self.git("rev-parse", foreign_ref).strip()
         applied = board.store.workflow.cleanup_apply({
-            "runId": run_id, "planId": planned["plan"]["planId"], "commandId": "missing-allocation-apply",
-            "expectedRevision": planned["targetRevision"], "confirmPath": planned["plan"]["path"],
-            **self.control(accepted),
+            "runId": run_id,
+            "planId": planned["plan"]["planId"],
+            "confirmPath": planned["plan"]["path"],
         })
         self.assertTrue(applied["removed"])
         self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+        self.assertFalse(git_dir.exists())
+        self.assertIsNone(workspace_module._worktree_record(repository, checkout))
+        self.assertEqual(self.git("rev-parse", foreign_ref).strip(), foreign_oid)
+        with self.assertRaises(BoardError) as missing_view:
+            board.call('workflow_get', {'runId': run_id})
+        self.assertEqual(missing_view.exception.code, 'WORKSPACE_MANIFEST_CHANGED')
         # Reusing an applied journal cannot bypass a later deletion marker.
         with board.store.db.write() as connection:
             connection.execute(
@@ -344,16 +330,158 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
                 " VALUES('gone-deletion','micro-task-tree',?)",
                 ('run:' + run_id,),
             )
-        expected = applied['targetRevision']
         operations = (
             lambda: board.store.workflow.cleanup_plan({
-                'runId':run_id,'commandId':'gone-replan','expectedRevision':expected,**self.control(accepted)}),
+                'runId': run_id,
+            }),
             lambda: board.store.workflow.cleanup_apply({
-                'runId':run_id,'planId':planned['plan']['planId'],'commandId':'gone-reapply',
-                'expectedRevision':expected,'confirmPath':planned['plan']['path'],**self.control(accepted)}),
-            lambda: board.call('workflow_reclaim',{'runId':run_id,**self.control(accepted)}),
+                'runId': run_id,
+                'planId': planned['plan']['planId'],
+                'confirmPath': planned['plan']['path'],
+            }),
         )
-        for operation in operations:
+        with defer_reclaim.object(workspace_module, "locate_repository",
+                                  side_effect=AssertionError("Deletion fence must precede repository lookup")):
+            for operation in operations:
+                with self.assertRaises(BoardError) as caught:
+                    operation()
+                self.assertEqual(caught.exception.code,'TASK_DELETING')
+
+    def test_missing_allocation_refuses_a_checkout_recreated_during_registration_proof(self):
+        board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(
+            "missing-allocation-race")
+        original = workspace_module._cleanup_registration
+
+        def recreate_checkout(repository, target, original_manifest=None, **kwargs):
+            registration = original(repository, target, original_manifest, **kwargs)
+            checkout.mkdir(parents=True)
+            (checkout / "foreign.txt").write_text("new occupant\n", encoding="utf-8")
+            return registration
+
+        with patch.object(workspace_module, "_cleanup_registration", side_effect=recreate_checkout):
             with self.assertRaises(BoardError) as caught:
-                operation()
-            self.assertEqual(caught.exception.code,'TASK_DELETING')
+                board.store.workflow.cleanup_apply({
+                    "runId": run_id, "planId": planned["plan"]["planId"],
+                    "confirmPath": planned["plan"]["path"],
+                })
+        self.assertEqual(caught.exception.code, "WORKSPACE_UNSAFE")
+        self.assertEqual((checkout / "foreign.txt").read_text(encoding="utf-8"), "new occupant\n")
+        self.assertTrue(git_dir.exists())
+        self.assertIsNotNone(workspace_module._worktree_record(
+            Path(manifest["snapshot"]["repositoryPath"]), checkout))
+
+    def test_missing_allocation_retries_after_a_partial_gitdir_removal(self):
+        board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(
+            "missing-allocation-partial")
+        original = workspace_module.private_dirs.remove_tree
+
+        def partial_remove(path, **kwargs):
+            if Path(path) == git_dir:
+                (git_dir / "locked").unlink()
+                raise PermissionError("partial Git metadata removal")
+            return original(path, **kwargs)
+
+        with patch.object(workspace_module.private_dirs, "remove_tree", side_effect=partial_remove):
+            with self.assertRaises(BoardError) as caught:
+                board.store.workflow.cleanup_apply({
+                    "runId": run_id, "planId": planned["plan"]["planId"],
+                    "confirmPath": planned["plan"]["path"],
+                })
+        self.assertEqual(caught.exception.code, "WORKSPACE_IO_ERROR")
+        self.assertEqual(workspace_module._worktree_record(
+            Path(manifest["snapshot"]["repositoryPath"]), checkout)["locked"],
+            "hey-my-buddy:" + manifest["workspaceId"])
+        board = self.board()
+        self.assertEqual(board.store.workflow.cleanup_plan({"runId": run_id})["plan"]["state"], "applying")
+        applied = board.store.workflow.cleanup_apply({
+            "runId": run_id, "planId": planned["plan"]["planId"],
+            "confirmPath": planned["plan"]["path"],
+        })
+        self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
+        self.assertFalse(git_dir.exists())
+
+    def test_missing_allocation_refuses_a_foreign_git_lock(self):
+        board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(
+            "missing-allocation-lock")
+        (git_dir / "locked").write_text("foreign-owner\n", encoding="utf-8")
+        with self.assertRaises(BoardError) as caught:
+            board.store.workflow.cleanup_apply({
+                "runId": run_id, "planId": planned["plan"]["planId"],
+                "confirmPath": planned["plan"]["path"],
+            })
+        self.assertEqual(caught.exception.code, "WORKSPACE_UNSAFE")
+        self.assertTrue(git_dir.exists())
+        self.assertFalse(checkout.exists())
+        self.assertEqual(workspace_module._worktree_record(
+            Path(manifest["snapshot"]["repositoryPath"]), checkout)["locked"], "foreign-owner")
+
+    def test_missing_allocation_requires_an_applying_plan(self):
+        board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(
+            "missing-allocation-unstarted")
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workspace_cleanup_plans SET state='planned' WHERE plan_id=?",
+                               (planned["plan"]["planId"],))
+        with self.assertRaises(BoardError) as caught:
+            board.store.workflow.cleanup_apply({
+                "runId": run_id, "planId": planned["plan"]["planId"],
+                "confirmPath": planned["plan"]["path"],
+            })
+        self.assertEqual(caught.exception.code, "WORKSPACE_MANIFEST_CHANGED")
+        self.assertTrue(git_dir.exists())
+
+    def test_missing_allocation_refuses_changed_sql_owner_proof(self):
+        board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(
+            "missing-allocation-owner")
+        with board.store.db.write() as connection:
+            row = connection.execute("SELECT evidence_json FROM workspace_cleanup_plans WHERE plan_id=?",
+                                     (planned["plan"]["planId"],)).fetchone()
+            evidence = json.loads(row["evidence_json"])
+            evidence["workspace"]["allocation"]["manifestSha256"] = "0" * 64
+            connection.execute("UPDATE workspace_cleanup_plans SET evidence_json=? WHERE plan_id=?",
+                               (json.dumps(evidence), planned["plan"]["planId"]))
+        with self.assertRaises(BoardError) as caught:
+            board.store.workflow.cleanup_apply({
+                "runId": run_id, "planId": planned["plan"]["planId"],
+                "confirmPath": planned["plan"]["path"],
+            })
+        self.assertEqual(caught.exception.code, "CONFLICT")
+        self.assertTrue(git_dir.exists())
+
+    def test_missing_allocation_refuses_a_foreign_repository(self):
+        board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(
+            "missing-allocation-repository")
+        foreign = self.directory / "foreign-repo"
+        foreign.mkdir()
+        subprocess.run(["git", "init", "-q", str(foreign)], check=True, capture_output=True)
+        with self.assertRaises(BoardError) as caught:
+            board.store.workflow.cleanup_apply({
+                "runId": run_id, "planId": planned["plan"]["planId"],
+                "confirmPath": planned["plan"]["path"],
+            }, repository=str(foreign / ".git"))
+        self.assertEqual(caught.exception.code, "WORKSPACE_UNSAFE")
+        self.assertTrue(git_dir.exists())
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows dangling junction')
+    def test_missing_allocation_refuses_a_dangling_junction_at_the_allocation_path(self):
+        board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(
+            'missing-allocation-junction')
+        target = self.directory / 'junction-target'
+        target.mkdir()
+        linked = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(checkout.parent), str(target)],
+                                capture_output=True, timeout=10)
+        self.assertEqual(linked.returncode, 0, (linked.stdout, linked.stderr))
+        target.rmdir()
+        self.assertTrue(checkout.parent.is_junction())
+        try:
+            with self.assertRaises(BoardError) as caught:
+                board.store.workflow.cleanup_apply({
+                    'runId': run_id, 'planId': planned['plan']['planId'],
+                    'confirmPath': planned['plan']['path'],
+                })
+            # The manifest boundary rejects the linked private directory before
+            # any workspace-layer check runs; the first boundary owns the code.
+            self.assertEqual(caught.exception.code, 'PRIVATE_PATH_UNSAFE')
+            self.assertTrue(checkout.parent.is_junction())
+            self.assertTrue(git_dir.exists())
+        finally:
+            checkout.parent.rmdir()

@@ -52,9 +52,9 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -m hey_my_buddy.cli.checks --
 
 这 14 个剖析文件全部通过，313 条无失败、无错误、无跳过；批次墙钟 443.0 秒，清理证据为空且私有根已移除。其文件墙钟合计 1,706.793 秒，受剖析开销、不同的并行排队和负载影响，不能与第一轮 1,586.7 秒相加或当成优化回归。附录 A 留下 232 个文件的五轮时间；附录 B 列出全部 313 条的编号和时间。
 
-下表是剖析实测值。Git 列为主测试线程同步 `subprocess.run` 的次数／墙钟（包括启动和等待）；直接 Popen 列只计构造调用的次数／墙钟，不计该子进程整个寿命。建看板为 `InProcessBoard.__init__` 包含时间，sleep 为 cProfile 的主线程睡眠自耗时，均可能与其他列嵌套，不能相加成“节省总数”。子进程内再起的 Git／进程不在主线程计数中，例如 CLI 内的工作归在该 CLI 调用墙钟。
+下表是剖析实测值。Git 列为主测试线程同步 `subprocess.run` 的次数／墙钟（包括启动和等待）；直接 Popen 列只计构造调用的次数／墙钟，不计该子进程整个寿命。建黑板为 `InProcessBoard.__init__` 包含时间，sleep 为 cProfile 的主线程睡眠自耗时，均可能与其他列嵌套，不能相加成“节省总数”。子进程内再起的 Git／进程不在主线程计数中，例如 CLI 内的工作归在该 CLI 调用墙钟。
 
-| 文件（相对 tests/python） | 条数 | 完整 4 进程秒 | 剖析秒 | 同步 Git 次／秒 | 直接 Popen 次／秒 | 建看板秒 | 主线程 sleep 秒 |
+| 文件（相对 tests/python） | 条数 | 完整 4 进程秒 | 剖析秒 | 同步 Git 次／秒 | 直接 Popen 次／秒 | 建黑板秒 | 主线程 sleep 秒 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | `blackboard/tasks/test_workspace_lifecycle.py` | 49 | 389.5 | 410.41 | 12999／384.91 | 13070／60.89 | 2.96 | 3.09 |
 | `blackboard/tasks/test_workflow_preparation.py` | 30 | 171.3 | 168.62 | 6089／158.44 | 6116／22.39 | 1.16 | 1.25 |
@@ -73,7 +73,7 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -m hey_my_buddy.cli.checks --
 
 最重的 Git 路径位于测试体。生命周期文件准备阶段只有 2.371 秒，测试体 406.964 秒；工作区准备为 1.438／166.705 秒；存储 orphan 为 1.932／164.108 秒。生命周期里的 6,100 次 rev-parse 花 180.130 秒，2,091 次 ls-files 花 60.248 秒。七个 Git 重文件合计 rev-parse 16,184 次／463.201 秒、ls-files 7,016 次／201.444 秒；这两类实际命令占 Git 时间的 63.8%。这些数字定位了真实工作区捕获、验证、封存、接续和回收路径的成本，没有证明任何一次检查可以省略。
 
-进程与等待文件的归因也不是统一的“起进程慢”：`test_parallel_dispatch` 准备仅 0.068 秒，16 次建看板共 0.658 秒；主线程 sleep 69.562 秒、875 次 native RPC call 共 17.233 秒，其中等待 slot 恢复的两个条件轮询分别 13.066／12.742 秒，清理 10.771 秒。`test_blackboard` 的 35 次同步子进程调用共 53.188 秒，冷启动 CLI health 一次 26.330 秒，57 条准备共 0.022 秒、建看板 3.529 秒，另有服务／Worker 等待与清理。它们必须继续观察实际进程和锁，不能把产品的轮询上限减小来记收益。
+进程与等待文件的归因也不是统一的“起进程慢”：`test_parallel_dispatch` 准备仅 0.068 秒，16 次建黑板共 0.658 秒；主线程 sleep 69.562 秒、875 次 native RPC call 共 17.233 秒，其中等待 slot 恢复的两个条件轮询分别 13.066／12.742 秒，清理 10.771 秒。`test_blackboard` 的 35 次同步子进程调用共 53.188 秒，冷启动 CLI health 一次 26.330 秒，57 条准备共 0.022 秒、建黑板 3.529 秒，另有服务／Worker 等待与清理。它们必须继续观察实际进程和锁，不能把产品的轮询上限减小来记收益。
 
 `test_worker_runtime` 只有一条重的 staged-runtime 用例：launcher install 96.625 秒、health 14.462 秒、runtime 查询 3.291 秒，准备仅 0.295 秒；没有多个重用例可通过拆文件并行。`test_packaging` 的两个 launcher health 共 45.244 秒；`test_first_install` 的七次 uv sync 共 33.722 秒、launcher install 5.240 秒、每例清理合计 8.836 秒。它们测的是私有安装、启动与路径稳定性，不可改成共用已启动服务或已安装 runtime 来逃过该路径。
 
@@ -85,7 +85,7 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -m hey_my_buddy.cli.checks --
 
 ### 重复准备
 
-已有模板的位置：`test_workspace_lifecycle.py:48`、`test_storage_orphans.py:19`、`test_workflow_preparation.py:23`、`test_workspace.py:18`、`test_workspace_submission_cleanup.py:22`。这些模板的收益已经包含在当前基线，不能再次计入。看板初始化也不是主要成本；没有理由在共用 support.py 新增数据库模板机制。
+已有模板的位置：`test_workspace_lifecycle.py:48`、`test_storage_orphans.py:19`、`test_workflow_preparation.py:23`、`test_workspace.py:18`、`test_workspace_submission_cleanup.py:22`。这些模板的收益已经包含在当前基线，不能再次计入。黑板初始化也不是主要成本；没有理由在共用 support.py 新增数据库模板机制。
 
 三处尚可减少重复建仓库：`RealWorkspaceTestCase.setUp` 对本文件 11 条每条做 5 次 init/config/add/commit；ScopeRecovery 的 18 条同样继承它；RestartPreparation 的 3 条明确不使用现有模板。按每文件创建一次同样的初始仓库、每例独立 copytree 加 update-index --refresh 推算。实测生命周期模板的复制均值 0.01560 秒／次、索引刷新 0.03115 秒／次，估式为旧建库 Git 秒 − 一次建库均值 − 条数 ×（复制均值 + 刷新均值）；模板只复制初始仓库，测试体全保留。该估式跨文件借用复制成本，故仅是预算，不是改后实测。
 
@@ -164,7 +164,7 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -m hey_my_buddy.cli.checks --
 
 执行微任务的基线应是另一个微任务集成后的冻结提交；不能把本文件中 398a275e 的计时与修改过产品源码的提交直接相减。先补齐该隔离检出的 console 开发依赖，查清私有运行时安装失败，并获得负载可比较的测量窗口。本微任务的写入范围不含这些修复；本轮失败不会被归入提速收益。
 
-每条测试的断言、比较值、异常类型与错误码、负面路径、循环次数、参数组合、状态转换、实际 Git／RPC／子进程边界都保持。本方案的模板候选只含正常初始 Git 仓库；工作目录、index、refs、worktree 注册、看板、数据库、凭据、锁、进程、事件和结果每条测试独立。带绝对路径与身份绑定的已提交工作区、已封存产物或活跃 SQLite 看板，尚无简单复制后仍保持原有身份与证据的方案，本轮不采用这类场景模板。模板用普通复制，不用硬链接或 alternates 共享可变对象；模板构建结束后只读，每例结束后核对其内容指纹未变。
+每条测试的断言、比较值、异常类型与错误码、负面路径、循环次数、参数组合、状态转换、实际 Git／RPC／子进程边界都保持。本方案的模板候选只含正常初始 Git 仓库；工作目录、index、refs、worktree 注册、黑板、数据库、凭据、锁、进程、事件和结果每条测试独立。带绝对路径与身份绑定的已提交工作区、已封存产物或活跃 SQLite 黑板，尚无简单复制后仍保持原有身份与证据的方案，本轮不采用这类场景模板。模板用普通复制，不用硬链接或 alternates 共享可变对象；模板构建结束后只读，每例结束后核对其内容指纹未变。
 
 编号核对使用检查器枚举的模块及 unittest 实际发现结果，记录“调度文件、module.Class.method、出现次数”。比较多重集，不能用集合去掉原有重复项；`load_tests`、继承方法和导入别名都以实际发现结果为准。未拆文件的编号逐字相同；拆分仅允许附录所列一对一改名，类名和方法名不变，禁止增加 skip、expectedFailure、条件性早退或把断言移到不被发现的基类。`test_host_workflow.load_tests` 只选择类自身的方法，必须保留这一事实。
 

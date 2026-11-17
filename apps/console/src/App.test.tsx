@@ -4,20 +4,21 @@ import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
-import { listed, note, pane, selectModel } from "./buddies/page.testing";
+import { modelFacts } from "./buddies/model-fixtures";
+import { levelSwitch, listed, pane, selectModel } from "./buddies/page.testing";
 
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 
-const initial = (): Snapshot => ({
-  csrfToken: "fixture-csrf", eventCursor: 0,
+const initial = (): Snapshot => { const snapshot: Snapshot = ({
+  csrfToken: "fixture-csrf", runtimeIdentity: "fixture-runtime", eventCursor: 0,
   consoleSession: { id: "fixture-session" },
 
-  configuration: { routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
+  configuration: { explorationEvery: 5, routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, modelResponseWaitSeconds: 60, profileBuddyId: null,
   },
   buddies: [
     { effortRank: null,
       buddyId: "flash-off",
-      label: "Flash 决策",
+      alias: null,
       harness: "dsh",
       provider: "deepseek-official",
       model: "deepseek-flash",
@@ -32,16 +33,16 @@ const initial = (): Snapshot => ({
   ],
 
   preferences: [],
-      modelServiceNotes: [],
+      models: [], modelCorrespondences: [],
 
   decisions: [],
 
   modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 0 }],
   tasks: { pendingCount: 0 },
   capabilities: { selection: false },
-});
+}); return { ...snapshot, ...modelFacts(snapshot.buddies) }; };
 
-const emptyMacroTasks = () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false });
+const emptyMacroTasks = () => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 }, defaults: { firstLimit: 5, groupLimit: 20 }, cursor: 0, changed: false });
 
 afterEach(() => {
   cleanup();
@@ -51,37 +52,26 @@ afterEach(() => {
 });
 
 describe("console interactions", () => {
-  it("viewing, editing locally and switching pages never sends a write or model request", async () => {
+  it("keeps a local Buddy setting across pages without sending a write", async () => {
     const state = initial();
     const api = {
       runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(state)),
-      command: vi.fn(),
-      task: vi.fn(),
-      macroTasks: vi.fn(async () => emptyMacroTasks()),
+      command: vi.fn(), task: vi.fn(), macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await screen.findByRole("heading", { name: "还没有宏任务" });
+    await screen.findByRole("heading", { name: "暂无宏任务" });
     await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /^Buddy/ }));
     await listed(1, 1);
-    // There is no global edit switch: controls are directly editable, and no
-    // save bar appears until the user actually changes something.
-    expect(screen.queryByRole("switch", { name: "编辑设置" })).toBeNull();
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
     await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "本地草稿");
-    expect(await screen.findByRole("region", { name: "未保存的修改" })).toBeTruthy();
+    await user.click(levelSwitch("off"));
+    expect(screen.getByRole("region", { name: "未保存的修改" })).toBeTruthy();
     await user.click(screen.getByRole("link", { name: "设置" }));
-    // The save bar belongs to Buddy alone; the draft is kept without any
-    // leave confirmation and no save happens by navigating away.
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
     await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /Buddy/ }));
-    expect(note()).toHaveProperty("value", "本地草稿");
-    expect(screen.getByRole("region", { name: "未保存的修改" })).toBeTruthy();
-    expect(within(pane()).getAllByRole("textbox")).toHaveLength(2);
-    expect(within(pane()).getByRole("textbox", { name: "off 的偏好备注" })).toHaveProperty("readOnly", true);
-    await user.click(screen.getByRole("button", { name: "放弃" }));
+    expect(levelSwitch("off").getAttribute("aria-checked")).toBe("false");
     expect(api.command).not.toHaveBeenCalled();
   });
 
@@ -116,7 +106,7 @@ describe("console interactions", () => {
     expect(api.command).not.toHaveBeenCalled();
   });
 
-  it("offers no maintenance or evidence-submission action anywhere", async () => {
+  it("opens evaluation from the buddy's sample count without a write", async () => {
     const state = initial();
     const command = vi.fn(async (operation: string) => {
       throw new Error(`Unexpected command: ${operation}`);
@@ -135,8 +125,14 @@ describe("console interactions", () => {
     await selectModel(user, FLASH, "DSH");
     expect(screen.queryByRole("button", { name: "记录待整理观察" })).toBeNull();
     expect(screen.queryByRole("button", { name: "评价维护" })).toBeNull();
-    // The drawer's only button selects its one native reasoning effort; it sends no request.
-    expect(within(pane()).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual(["off"]);
+    // The effort selector stays local; the sample count carries a stable evaluation address.
+    expect(within(pane()).getAllByRole("button").filter(button => button.getAttribute("aria-label") !== null).map(button => button.getAttribute("aria-label"))).toEqual(["off"]);
+    expect(within(pane()).queryByRole("button", { name: /评价与领域经验/ })).toBeNull();
+    const samples = within(pane()).getByRole("link", { name: "0 次" });
+    expect(samples.getAttribute("href")).toBe("#buddies/evaluation/dsh/deepseek-flash/off");
+    await user.click(samples);
+    expect(window.location.hash).toBe(samples.getAttribute("href"));
+    expect(screen.getByRole("region", { name: "评价" })).toBeTruthy();
     expect(command).not.toHaveBeenCalled();
   });
 

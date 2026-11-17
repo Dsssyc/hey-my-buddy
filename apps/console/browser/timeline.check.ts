@@ -9,7 +9,7 @@ const row = (page: Page, id: string) => page.locator(`[data-slot=timeline-row-na
 for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
   test.describe(`timeline name clipping ${theme} ${width}`, () => {
     test.use({ locale: "zh-CN", viewport: { width, height: 1000 }, reducedMotion: "reduce" });
-    test("fades only clipped names and keeps the full title, correction and buddy on hover", async ({ page }) => {
+    test("fades only clipped names and keeps correction facts inline without row tooltips", async ({ page }) => {
       const short = { runId: "preview-run-a1", title: "schema 26 的冗余清点", clipped: false };
       const long = { runId: "preview-run-a2", title: "剪枝一：删除残留与死表，并核对时间轴微任务名称被截断时的渐隐和完整悬停提示", clipped: true };
       let timeline!: MacroTaskTimeline;
@@ -29,20 +29,15 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
       await open(page, `#tasks/${macro}`);
       for (const { runId, title, clipped } of [short, long]) {
         const name = row(page, runId);
-        const label = name.getByText(title, { exact: true });
+        const label = name.locator('[data-slot="scrolling-title"]');
         await expect(label).toBeVisible();
         expect(await label.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(clipped);
         await expect(label).toHaveCSS("mask-image", clipped ? /linear-gradient/ : "none");
         await label.hover();
         const tooltip = page.getByRole("tooltip");
-        await expect(tooltip).toBeVisible();
-        await expect(tooltip.getByText(title, { exact: true })).toHaveCount(clipped ? 1 : 0);
-        const buddy = timeline.rows.find(item => item.runId === runId)!.buddy!;
-        await expect(tooltip).toContainText([buddy.harness, buddy.provider, buddy.model, buddy.effort].join(" / "));
-        if (clipped) {
-          await expect(name.locator("[data-slot=fix-link]")).toHaveText(`↪ ${short.title}`);
-          await expect(tooltip.getByText(short.title, { exact: true })).toBeVisible();
-        }
+        await page.waitForTimeout(700);
+        await expect(tooltip).toHaveCount(0);
+        if (clipped) await expect(name.locator("[data-slot=fix-link]")).toHaveText(`↪ ${short.title}`);
         await page.mouse.move(width - 8, 8);
         await expect(tooltip).toBeHidden();
       }

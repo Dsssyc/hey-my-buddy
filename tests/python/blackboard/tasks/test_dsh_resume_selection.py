@@ -71,7 +71,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
                          result_mutator=self.micro_task_owned_storage())
 
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="continue-to-native")
+        self.continue_run(board, view)
         resumed = self.claim(board, claim_request_id="native-turn-2")
         turn = resumed["claim"]["turn"]
         self.assertEqual(turn["resumeMode"], "native-session")
@@ -104,7 +104,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
                          result_mutator=self.micro_task_owned_storage())
 
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="continue-unwired")
+        self.continue_run(board, view)
         resumed = self.claim(board, claim_request_id="reconstructed-turn-2")
         turn = resumed["claim"]["turn"]
         self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
@@ -127,7 +127,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
             connection.execute("UPDATE attempts SET result_json=? WHERE attempt_id=?",
                                (canonical_json(receipt), attempt_id))
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="continue-after-cancelled-attempt")
+        self.continue_run(board, view)
         resumed = self.claim(board, claim_request_id="reconstruct-after-cancelled-attempt")
         self.assertEqual(resumed["claim"]["turn"]["resumeMode"], "reconstructed-new-session")
 
@@ -142,7 +142,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         self.assertFalse(rejected["workflow"]["accepted"])
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["state"], "failed")
-        self.continue_run(board, view, command_id="continue-after-rejected")
+        self.continue_run(board, view)
         second = self.claim(board, claim_request_id="claim-after-rejected")
         turn = second["claim"]["turn"]
         self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
@@ -158,7 +158,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         self.finish_turn(board, first, disposition="attention", session_id=CANDIDATE_SESSION,
                          result_mutator=self.micro_task_owned_storage())
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="continue-native")
+        self.continue_run(board, view)
         resumed = self.claim(board, claim_request_id="native-turn-2")
         self.assertEqual(resumed["claim"]["turn"]["resumeMode"], "native-session")
         foreign = self.finish_turn(board, resumed, session_id="foreign-session")
@@ -167,7 +167,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
 
         failed = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(failed["state"], "failed")
-        self.continue_run(board, failed, command_id="continue-after-retention-failure")
+        self.continue_run(board, failed)
         rebuilt = self.claim(board, claim_request_id="claim-after-retention-failure")
         turn = rebuilt["claim"]["turn"]
         self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
@@ -195,7 +195,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
                        " ON CONFLICT(harness) DO UPDATE SET record_json=excluded.record_json",
                        (canonical_json({"version": "0.2.0", "reason": None}),))
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="continue-after-upgrade", access="read")
+        self.continue_run(board, view,  access="read")
         resumed = self.claim(board, claim_request_id="turn-after-upgrade")
         turn = resumed["claim"]["turn"]
         self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
@@ -211,7 +211,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         self.finish_turn(board, first, disposition="attention", session_id=CANDIDATE_SESSION,
                          result_mutator=self.micro_task_owned_storage())
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="continue-new-effort",
+        self.continue_run(board, view,
                           buddy={**BUDDY, "effort": "high"},
                           access="read",
                           note="Host raised effort after the prior turn")
@@ -241,7 +241,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
                          result_mutator=self.attempt_owned_storage())
 
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="continue-old-storage", access="read")
+        self.continue_run(board, view,  access="read")
         resumed = self.claim(board, claim_request_id="turn-after-old-storage")
         turn = resumed["claim"]["turn"]
         self.assertEqual(turn["resumeMode"], "reconstructed-new-session")

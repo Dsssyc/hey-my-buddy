@@ -1,9 +1,10 @@
 """Large stored workspace evidence stays readable through bounded Host views."""
 import json
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from hey_my_buddy.blackboard.tasks import command_receipts
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES
 
@@ -23,16 +24,42 @@ class WorkspaceOutputViewTests(unittest.TestCase):
     def assert_bounded(self, value):
         self.assertLess(len(json.dumps(value).encode()), MAX_MESSAGE_BYTES)
 
+    @staticmethod
+    def coordinator():
+        coordinator = object.__new__(WorkflowCoordinator)
+        coordinator.board = SimpleNamespace(directory=Path("/private"))
+        return coordinator
+
+    @staticmethod
+    def archived_output_row(kind, manifest):
+        return {"artifact_id": "artifact", "kind": kind, "attempt_id": "attempt", "turn_id": "turn",
+                "run_id": "run", "output_snapshot_sha256": "snapshot", "created_at": "now",
+                "content_form": "sealed-inline-v1", "manifest_json": json.dumps(manifest),
+                "input_manifest_sha256": None, "shared_refs_sha256": None, "record_path": None,
+                "record_sha256": None, "workspace_id": None}
+
+    def test_output_artifact_keeps_shared_and_separate_patch_paths(self):
+        for kind in ("output", "partial-output", "resolved-output"):
+            for path in ("/private/output.patch", "/private/cumulative.patch"):
+                with self.subTest(kind=kind, path=path):
+                    manifest = {"commit": "commit", "diffPath": "/private/output.patch", "diffSha256": "digest",
+                                "cumulativePatch": {"path": path, "sha256": "digest", "changedPaths": ["src/file.py"]}}
+                    row = self.archived_output_row(kind, manifest)
+                    view = self.coordinator()._artifact_view(row)
+                    self.assertEqual(view["diffPath"], manifest["diffPath"])
+                    self.assertEqual(view["diffSha256"], manifest["diffSha256"])
+                    self.assertEqual(view["cumulativePatch"]["path"], path)
+                    self.assertEqual(view["cumulativePatch"]["sha256"], "digest")
+                    self.assertEqual(json.loads(row["manifest_json"]), manifest)
+
     def test_output_artifact_preserves_stored_paths_and_exposes_patch(self):
         manifest = {
             "commit": "output-commit", "diffPath": "/private/output.patch", "diffSha256": "diff-digest",
             "changedPaths": self.paths,
             "cumulativePatch": {"path": "/private/cumulative.patch", "changedPaths": self.paths},
         }
-        row = {"artifact_id": "artifact", "kind": "output", "attempt_id": "attempt", "turn_id": "turn",
-               "run_id": "run", "manifest_sha256": "snapshot", "created_at": "now",
-               "manifest_json": json.dumps(manifest)}
-        view = WorkflowCoordinator._artifact_view(row)
+        row = self.archived_output_row("output", manifest)
+        view = self.coordinator()._artifact_view(row)
         self.assertEqual(len(json.loads(row["manifest_json"])["changedPaths"]), 3000)
         self.assertEqual(view["changedPaths"], [path[:500] for path in self.paths[:32]])
         self.assertEqual(view["changedPathsCount"], 3000)
@@ -48,7 +75,7 @@ class WorkspaceOutputViewTests(unittest.TestCase):
                         "missingPaths": [], "hostPaths": [], "note": None}
         row = {"integration_id": "integration", "run_id": "run", "artifact_id": "artifact",
                "strategy": "patch", "target_path": "/private/target", "target_ref": "HEAD",
-               "target_repository_id": "repository", "target_checkout_id": "checkout",
+               "target_project_id": "repository",
                "source_commit": "source", "source_tree": "source-tree", "before_commit": "before",
                "after_commit": "after", "before_tree": "before-tree", "after_tree": "after-tree",
                "verification_json": json.dumps(verification), "note": "accepted", "actor_role": "host",
@@ -78,7 +105,9 @@ class WorkspaceOutputViewTests(unittest.TestCase):
                "delivery_json": None, "state": "open", "action": None, "artifact_id": None,
                "actor_role": None, "actor_id": None,
                "note": None, "created_at": "now", "updated_at": "now"}
-        view = WorkflowCoordinator._conflict_view(object.__new__(WorkflowCoordinator), mock.Mock(), row)
+        connection = mock.Mock()
+        connection.execute.return_value.fetchone.return_value = None
+        view = WorkflowCoordinator._conflict_view(object.__new__(WorkflowCoordinator), connection, row)
         self.assertEqual(view["blockingPathsCount"], 3000)
         self.assertEqual(view["resolvedPathsCount"], 3000)
         self.assertEqual(view["conflictingPathsCount"], 3000)
@@ -93,35 +122,18 @@ class WorkspaceOutputViewTests(unittest.TestCase):
         self.assertTrue(projected["changedPathsSamplesShortened"])
 
     def test_cleanup_plan_keeps_full_unsealed_evidence_and_bounds_reply(self):
-        row = {"plan_id": "plan", "run_id": "run", "workspace_id": "workspace", "checkout_id": "checkout",
-               "repository_id": "repository", "path": "/private/checkout", "kind": "worktree", "state": "blocked",
+        row = {"plan_id": "plan", "run_id": "run", "workspace_id": "workspace",
+               "path": "/private/checkout", "kind": "worktree", "state": "blocked",
                "reasons_json": '["unsealed-changes"]',
                "evidence_json": json.dumps({"workspace": {"unsealedPaths": self.paths}}),
                "retention_json": "{}", "result_json": None, "revision": 2, "created_at": "now",
-               "applied_at": None, "expires_at": "later"}
+               "applied_at": None}
         view = WorkflowCoordinator._plan_view(row)
         self.assertEqual(len(json.loads(row["evidence_json"])["workspace"]["unsealedPaths"]), len(self.paths))
         self.assertEqual(view["evidence"]["workspace"]["unsealedPathsCount"], len(self.paths))
         self.assertEqual(len(view["evidence"]["workspace"]["unsealedPaths"]), 32)
         self.assert_bounded(view)
 
-    def test_resolution_receipt_retains_full_operation_paths_and_bounds_replay(self):
-        response = {"runId": "run", "targetRunId": "run", "conflictId": "conflict", "action": "restore",
-                    "resolutionState": "restored", "resolvedPaths": self.paths, "preservedPaths": [],
-                    "remainingPaths": [], "observedFingerprint": "before", "resolvedFingerprint": "after",
-                    "artifactId": None, "nextBoundaryRequestId": None, "delivered": False}
-        stored = command_receipts.stored_response("workflow.workspace_resolve", response)
-        self.assertEqual(stored["resolvedPaths"], self.paths)
-        coordinator = object.__new__(WorkflowCoordinator)
-        connection = mock.Mock()
-        connection.execute.return_value.fetchone.return_value = None
-        with mock.patch.object(coordinator, "_run_row", return_value={"revision": 2}), \
-             mock.patch.object(coordinator, "compact", return_value={"runId": "run"}):
-            replay = command_receipts.replay_response(coordinator, connection, "workflow.workspace_resolve", stored)
-        self.assertEqual(replay["resolvedPathsCount"], len(self.paths))
-        self.assertEqual(len(replay["resolvedPaths"]), 32)
-        self.assertTrue(replay["resolvedPathsTruncated"])
-        self.assert_bounded(replay)
 
 
 if __name__ == "__main__":

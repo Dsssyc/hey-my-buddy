@@ -4,6 +4,8 @@
 
 Implementation authorized by the developer on 2026-09-25. Experiments and implementation remain unverified until recorded in acceptance evidence. This decision supersedes the separate business and decision capacity lanes.
 
+Note (2026-10-27): the backend and console parts were verified afterwards ([backend](../acceptance/adr011/model-concurrency-backend.md), [console](../acceptance/adr011/model-concurrency-console.md)) and shared model concurrency is current behavior.
+
 ## Model capacity
 
 A model family is identified by the exact adapter, provider and model tuple. Effort variants share one concurrent-task limit, default 2, bounded to integers 1–32. This counts Buddy-owned unresolved attempts, including routing decisions using that model and attempts whose shutdown remains unconfirmed. It cannot count requests made by other applications or a harness's internal parallel calls. Equal provider labels across different harnesses do not prove that they use the same account; cross-harness quota aliasing is outside this change.

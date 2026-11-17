@@ -1,7 +1,6 @@
 """The schema Worker uses one role policy and real native fixture deliveries."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import hashlib
 import json
@@ -22,6 +21,7 @@ from hey_my_buddy.buddy.roles import inline_run, run_controller, run_execution
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.errors import BoardError
 from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase
+from buddy.roles.test_role_prompts import real_turn_input, freeze_turn_input
 
 
 class CodexSchemaTests(unittest.TestCase):
@@ -53,8 +53,9 @@ class CodexSchemaTests(unittest.TestCase):
         for harness in ("codex", "claude"):
             with self.subTest(harness=harness), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
-                        "turnId": "turn", "executionWorkspace": {"access": "full"}}
+                turn = real_turn_input()
+                turn["executionWorkspace"]["access"] = "full"
+                turn = freeze_turn_input(root, turn)
                 (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
                 (root / "task.txt").write_text("Task", encoding="utf-8", newline="\n")
                 control = {"harness": harness, "privateRoot": str(root), "directory": str(root),
@@ -65,7 +66,7 @@ class CodexSchemaTests(unittest.TestCase):
                            "spec": {"provider": "fixture", "model": "fixture", "effort": "low"},
                            "cwd": str(root), "timeoutSeconds": 10,
                            "inquiry": {"resultsPath": str(root / "inquiry.results.jsonl")}}
-                request, services, _observer, error = run_execution.worker_request(control, run_seam(harness))
+                request, services, _observer, error, _parts = run_execution.worker_request(control, run_seam(harness))
                 self.assertIsNone(error)
                 self.assertEqual(services.inquiry.configuration["identity"]["turnId"], "turn")
                 self.assertEqual(services.inquiry.configuration["inquiryJournalPath"], control["inquiry"]["resultsPath"])
@@ -90,10 +91,10 @@ class CodexSchemaTests(unittest.TestCase):
     def test_worker_permission_capabilities_match_role_paths(self):
         expected = {
             "codex": ("codex", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
-                      "permission:none", "permission:read", "permission:write", "permission:full"),
-            "claude": ("claude", "inquiry", "workspace", "cancel", "artifacts", "deadline", "permission:read", "permission:write", "permission:full"),
+                      "permission:none", "permission:web", "permission:read", "permission:write", "permission:full"),
+            "claude": ("claude", "inquiry", "workspace", "cancel", "artifacts", "deadline", "permission:web", "permission:read", "permission:write", "permission:full"),
             "dsh": ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
-                    "permission:none", "permission:read", "permission:write", "permission:full"),
+                    "permission:none", "permission:web", "permission:read", "permission:write", "permission:full"),
             "zcode": ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
                       "permission:none", "permission:read", "permission:write", "permission:full"),
         }
@@ -113,10 +114,10 @@ class CodexSchemaTests(unittest.TestCase):
 
     def test_permission_levels_declare_enforcement(self):
         expected = {
-            "codex": {"none": "convention", "read": "enforced", "write": "enforced", "full": "enforced"},
-            "claude": {"read": "enforced", "write": "enforced", "full": "enforced"},
-            "dsh": {"none": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
-            "zcode": {"none": "enforced", "read": "enforced", "write": "convention", "full": "enforced"},
+            "codex": {"none": "convention", "web": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
+            "claude": {"web": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
+            "dsh": {"none": "enforced", "web": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
+            "zcode": {"none": "enforced", "read": "convention", "write": "convention", "full": "enforced"},
         }
         self.assertEqual(PERMISSION_LEVELS, expected)
 
@@ -125,8 +126,9 @@ class CodexSchemaTests(unittest.TestCase):
             for access in ("read", "write", "full"):
                 with self.subTest(harness=harness, access=access), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
-                    turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
-                            "turnId": "turn", "executionWorkspace": {"access": access}}
+                    turn = real_turn_input()
+                    turn["executionWorkspace"]["access"] = access
+                    turn = freeze_turn_input(root, turn)
                     (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
                     (root / "task.txt").write_text("Task", encoding="utf-8", newline="\n")
                     mount = SimpleNamespace(server_name="test", tool_contracts=[
@@ -143,7 +145,7 @@ class CodexSchemaTests(unittest.TestCase):
                                "invocationId": "invocation",
                                "spec": {"provider": "fixture", "model": "fixture", "effort": "low"},
                                "cwd": str(root), "timeoutSeconds": 10}
-                    request, _services, _observer, error = run_execution.worker_request(control, module)
+                    request, _services, _observer, error, _parts = run_execution.worker_request(control, module)
                     self.assertIsNone(error)
                     self.assertEqual(request.permission, access)
 
@@ -175,13 +177,14 @@ class SchemaWorkerTests(NativeRunCase):
         self.fixture_case(case)
         root = self.base / uuid.uuid4().hex
         root.mkdir(mode=0o700)
-        turn = {"taskId": "task", "attemptId": "attempt", "generation": 1, "turnId": "turn",
-                "resumeMode": "initial", "previousSessionId": previous,
-                "executionWorkspace": {"access": "read"}}
+        turn = real_turn_input()
+        turn["previousSessionId"] = previous
+        turn["executionWorkspace"]["access"] = "read"
+        turn = freeze_turn_input(root, turn)
         (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
         (root / "task.txt").write_text("Do this bounded task", encoding="utf-8", newline="\n")
         control = {"operation": "worker", "harness": "claude", "spec": BUDDY,
-                   "stateDir": os.environ["HMB_STATE_DIR"],
+                   "stateDir": str(root),
                    "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
                    "directory": str(root), "nativeRoot": str(root / "native"),
                    "sessionRecordPath": str(root / "session.jsonl"),
@@ -193,7 +196,7 @@ class SchemaWorkerTests(NativeRunCase):
         identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                invocation_id=control["invocationId"], turn_id="turn",
                                input_sha256=run_execution.input_hash(turn))
-        handle = run_execution.InlineRunHandle(control, identity, grace_seconds=0)
+        handle = run_execution.InlineRunHandle(control, identity)
         with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
                 mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True), \
                 mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)):
@@ -248,7 +251,7 @@ class SchemaWorkerTests(NativeRunCase):
             root, _turn, _control, result, _request, _verdict, code = self.worker(previous="old-session")
         self.assertEqual(code, 1)
         self.assertEqual(result.end.reason_code, "invalid-resume-mode")
-        self.assertIs(result.model_started, False)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertFalse((root / "output.json").exists())
 
@@ -266,7 +269,7 @@ class SchemaWorkerTests(NativeRunCase):
                 payload = json.loads(frame)
                 self.assertEqual(code, 1)
                 self.assertEqual(payload["error"], "tokenSource none")
-                self.assertIs(payload["modelStarted"], False)
+                self.assertIs(payload["modelResponded"], False)
                 self.assertIs(payload["processState"]["shutdownConfirmed"], stopped is True)
 
     def test_native_schemas_stay_fixed_and_full_prompt_hashes_include_the_worker_role(self):
@@ -274,13 +277,13 @@ class SchemaWorkerTests(NativeRunCase):
         # pins the full assembled prompt, including the published Worker text.
         hashes = {
             "codex": ("b46e2bd89c8d171059f35ad52c7c97c8b98fd32bc49382da1c299b4d0d500f1a",
-                      "85cd782728bd56b4132af4636e01d2b198817911edcb93a708256e31bc3c900d"),
+                      "4345d84e8ec926d09e12aff7d55f2a168bdcc4464ab17f4d07b203fe1f3efc99"),
             "claude": ("ff7983882b2a1adefe1cad314fec9c009086ca2ae3fd38d33fe9fddf248f9bca",
-                       "1b0080ffd836a161cb6160d52198f02da074f39e32f511ea57b168b0d9c7effa"),
+                       "0e4621ddeeee1e51181c1c31d9206cc740387142e653948475dc1a060b2231bd"),
         }
         for name, (schema_hash, prompt_hash) in hashes.items():
             with self.subTest(harness=name):
                 format = worker_format(name)
                 self.assertEqual(hashlib.sha256(canonical_json(format.schema).encode()).hexdigest(), schema_hash)
-                self.assertEqual(hashlib.sha256(format.prompt("task", {"turn": 1}).encode()).hexdigest(), prompt_hash)
+                self.assertEqual(hashlib.sha256(format.prompt("task", real_turn_input()).encode()).hexdigest(), prompt_hash)
         self.assertEqual(PERMISSION_LEVELS["codex"]["read"], "enforced")

@@ -19,7 +19,7 @@ export type MacroTaskDeletionClient = {
   snapshot: Snapshot;
   writesAvailable: boolean;
   authority?: AuthorityLatch;
-  onDeleted: (macroTaskId: string, skippedCount: number) => void;
+  onDeleted: (macroTaskId: string) => void;
 };
 
 /** Target identity, count and confirmation stay fixed across an unresolved retry. */
@@ -55,7 +55,7 @@ export function useMacroTaskDeletion(macroTaskId: string, client: MacroTaskDelet
       if (!mounted.current || ticket !== reading.current) return;
       if (error instanceof ApiError && error.code === "NOT_FOUND") {
         completed.current = true;
-        current.current.onDeleted(macroTaskId, 0);
+        current.current.onDeleted(macroTaskId);
         return;
       }
       loseAuthority(error);
@@ -80,7 +80,7 @@ export function useMacroTaskDeletion(macroTaskId: string, client: MacroTaskDelet
     } else if (state.phase !== "unknown" && state.phase !== "incomplete") return;
     const confirmed = confirmation.current!;
     submitting.current = true;
-    setState({ ...state, phase: "submitting", errorCode: null });
+    setState({ ...state, phase: "submitting", errorCode: null, result: null });
     let result: MacroTaskDeletionResult;
     try {
       const { api, snapshot } = current.current;
@@ -91,12 +91,12 @@ export function useMacroTaskDeletion(macroTaskId: string, client: MacroTaskDelet
       loseAuthority(error);
       if (error instanceof ApiError && error.code === "NOT_FOUND") {
         completed.current = true;
-        current.current.onDeleted(macroTaskId, 0);
+        current.current.onDeleted(macroTaskId);
         return;
       }
       const unresolved = state.phase === "unknown" || state.phase === "incomplete";
       setState({ ...state, phase: uncertainResponse(error) ? "unknown" : unresolved ? state.phase : "failed",
-        errorCode: error instanceof ApiError ? error.code : "NETWORK" });
+        errorCode: error instanceof ApiError ? error.code : "NETWORK", result: null });
       return;
     } finally {
       submitting.current = false;
@@ -105,7 +105,7 @@ export function useMacroTaskDeletion(macroTaskId: string, client: MacroTaskDelet
       // The confirmed deletion remains true even if its dialog was closed by
       // navigation. The parent removes only this target, using its live URL.
       completed.current = true;
-      current.current.onDeleted(macroTaskId, result.skipped?.length ?? 0);
+      current.current.onDeleted(macroTaskId);
     } else if (mounted.current) setState({ ...state, phase: "incomplete", errorCode: null, result });
   };
 

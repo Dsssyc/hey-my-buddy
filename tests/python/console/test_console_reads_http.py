@@ -135,6 +135,67 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         for _status, _headers, body in replays:
             self.assertEqual(body, b"")
 
+    def test_maintenance_and_kind_evidence_reads_are_current_and_linkable(self):
+        board = self.board()
+        board.call("model_catalog_refresh", {})
+        run = self.submit(board, request_id="maintenance-evidence", task="Repair parser",
+                          cwd=str(self.workdir("maintenance-evidence")))
+        self.finish_turn(board, self.claim(board, run_id=run["runId"]))
+        self.accept_run(board, board.call("workflow_get", {"runId": run["runId"]}))
+        task_id = board.submit_execution(
+            requestId="maintenance-read-task", task="Synthetic maintenance", adapter="command",
+            argv=["true"], cwd=str(self.workdir("maintenance-read-task")))["task"]["runId"]
+        with board.store.db.write() as db:
+            now = board.store.now()
+            db.execute("INSERT INTO maintenance_runs VALUES('maintenance-read','manual',?,?,'completed',NULL,NULL,?,?)",
+                       ("dsh:deepseek-official:deepseek-flash:off", task_id, now, now))
+            db.execute("INSERT INTO domain_nodes VALUES('software','Software','Software tasks',NULL,NULL,'maintenance-read')")
+            from hey_my_buddy.blackboard.evaluation.models import current_model
+            model_id = current_model(db, 'dsh', 'deepseek-official', 'deepseek-flash')
+            db.execute("INSERT INTO kind_summaries VALUES('dsh',?,'off','Careful parser repairs','maintenance-read')", (model_id,))
+            db.execute("INSERT INTO kind_summary_evidence VALUES('dsh',?,'off',?,1)", (model_id, run["runId"]))
+            db.execute("UPDATE kind_statistics SET samples=2,successes=1,first_passes=1,"
+                       "rework_rounds=0,failures=1 WHERE harness='dsh' AND model_id=? AND effort='off'", (model_id,))
+            db.execute("INSERT INTO kind_cell_statistics(harness,model_id,effort,domain_node_id,task_type,samples,"
+                       "successes,first_passes,rework_rounds,failures)"
+                       " VALUES('dsh',?,'off','software','debug',1,1,1,0,0)", (model_id,))
+        browser = self.open(board)
+        snapshot = browser.bootstrap()
+        self.assertEqual(snapshot["maintenance"]["pendingCount"], 1)
+        maintenance = snapshot["maintenance"]["runs"][0]
+        self.assertEqual((maintenance["triggerType"], maintenance["state"]), ("manual", "completed"))
+        self.assertIsNone(maintenance["reason"])
+        self.assertEqual(maintenance["buddy"], {"harness": "dsh", "provider": "deepseek-official",
+                                               "model": "deepseek-flash", "effort": "off"})
+        self.assertEqual(maintenance["usage"], {"attempts": []})
+        self.assertEqual(snapshot["domainNodes"], [{
+            "nodeId": "software", "name": "Software", "definition": "Software tasks",
+            "parentId": None, "mergedIntoId": None, "directCount": 0,
+        }])
+        evaluation = next(item for item in snapshot["kindEvaluations"]
+                          if (item["harness"], item["modelId"], item["effort"])
+                          == ("dsh", model_id, "off"))
+        self.assertEqual(evaluation["summary"], {"text": "Careful parser repairs"})
+        self.assertEqual(evaluation["statistics"]["overall"]["samples"], 2)
+        self.assertEqual(evaluation["statistics"]["byDomainTaskType"]["software"]["debug"]["samples"], 1)
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO micro_task_classifications VALUES(?,'software','debug','maintenance-read')",
+                       (run["runId"],))
+        self.assertEqual(browser.bootstrap()["domainNodes"][0]["directCount"], 1)
+        self.assertEqual(browser.bootstrap()["maintenance"]["pendingCount"], 0)
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO domain_nodes VALUES('other','Other','Another domain',NULL,NULL,'maintenance-read')")
+            db.execute("UPDATE domain_nodes SET merged_into_id='other' WHERE node_id='software'")
+        domains = {node["nodeId"]: node for node in browser.bootstrap()["domainNodes"]}
+        self.assertEqual((domains["software"]["directCount"], domains["other"]["directCount"]), (1, 0))
+        with board.store.db.write() as db:
+            db.execute("UPDATE maintenance_runs SET state='failed',reason_code='maintenance-answer-invalid',reason_params_json=?"
+                       " WHERE maintenance_run_id='maintenance-read'",
+                       (json.dumps({"errors": ["citation-outside-batch"]}),))
+        failed = browser.bootstrap()["maintenance"]["runs"][0]
+        self.assertEqual(failed["state"], "failed")
+        self.assertEqual(failed["reason"], {"code": "maintenance-answer-invalid", "params": {"errors": ["citation-outside-batch"]}})
+
     def test_pending_count_counts_distinct_roots_awaiting_their_host(self):
         board = self.board()
         self.register(board)
@@ -314,11 +375,12 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
     def test_macro_task_and_timeline_reads_are_conditional(self):
         board = self.board()
         submitted = self.submit(
-            board, request_id="cond-1", cwd=str(self.workdir("cond-1")), macroTask={"title": "Conditional"}
+            board, request_id="cond-1", cwd=str(self.workdir("cond-1")), create_macro={"title": "Conditional", 'goal': "Conditional"}
         )
         browser = self.open(board)
         for path in ("/api/macro-tasks?limit=5",
-                     f"/api/macro-tasks/{submitted['macroTaskId']}/timeline"):
+                     f"/api/macro-tasks/{submitted['macroTaskId']}/timeline",
+                     f"/api/macro-tasks/{submitted['macroTaskId']}/goals"):
             with self.subTest(path=path):
                 status, headers, body = browser.get(path)
                 self.assertEqual(status, 200, body[:300])
@@ -332,6 +394,29 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
             with self.subTest(path=path):
                 status, _headers, _body = browser.get(path, headers={"If-None-Match": "nope"})
                 self.assertEqual(status, 200)
+
+    def test_goal_history_http_route_returns_revisions_and_rejects_query(self):
+        board = self.board()
+        submitted = self.submit(board, request_id="goal-history", create_macro={"title": "Group", "goal": "First"})
+        first_goal = board.call("workflow_get", {"macroTaskId": submitted["macroTaskId"]})["goal"]
+        board.call("workflow_amend", {"macroTaskId": submitted["macroTaskId"], "goal": "Second"})
+        browser = self.open(board)
+        path = f"/api/macro-tasks/{submitted['macroTaskId']}/goals"
+        status, _headers, body = browser.get(path)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body), {
+            "macroTaskId": submitted["macroTaskId"],
+            "goals": [
+                {"body": "Second", "revision": 2, "createdAt": board.call("workflow_get", {"runId": submitted["runId"]})["goal"]["createdAt"]},
+                {"body": "First", "revision": 1, "createdAt": first_goal["createdAt"]},
+            ],
+        })
+        for bad_path, expected in ((path + "?limit=1", 400),
+                                   ("/api/macro-tasks/macro-missing/goals", 404),
+                                   ("/api/macro-tasks/run:standalone/goals", 400)):
+            with self.subTest(path=bad_path):
+                response, _headers, _body = browser.get(bad_path)
+                self.assertEqual(response, expected)
 
 
 

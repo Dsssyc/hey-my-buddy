@@ -32,11 +32,11 @@ Router 的 `_configure_fast`、`_configure_review` 和 `_admit_turn` 的审阅�
 
 删掉了四个 adapter 中各自手写的 permission:read/permission:write、Codex read 的 write/convention 声明、Codex 原生入口的 full 未实现拒绝和测试中 Codex 必须拒绝 full 的旧断言。角色请求夹具按新声明取得 Codex read 的原生只读范围；针对不支持 full 的三个 harness 的能力拒绝与原生拒绝测试保留。路由手工建立的 buddy 夹具补上所属 harness 当前声明的能力字符串，刻意缺能力的负面用例未放松。
 
-既有唯一的 17→18 升级已经通过 catalog.permission_capabilities 读取当前声明，本步不需要修改升级源文件、schema 版本或样板基准。迁移测试确认历史 Codex buddy 获得 permission:full，其他字段、启用与可用状态保持；升级后的 buddy 可进入 full 候选，按各 harness 的当前声明过滤。`Schema17UpgradeTests.test_migration_has_the_complete_fresh_schema` 继续把升级样板与新建看板的完整 schema 比对；库存保存断言继续核对历史数据和计划内的转换。
+既有唯一的 17→18 升级已经通过 catalog.permission_capabilities 读取当前声明，本步不需要修改升级源文件、schema 版本或样板基准。迁移测试确认历史 Codex buddy 获得 permission:full，其他字段、启用与可用状态保持；升级后的 buddy 可进入 full 候选，按各 harness 的当前声明过滤。`Schema17UpgradeTests.test_migration_has_the_complete_fresh_schema` 继续把升级样板与新建黑板的完整 schema 比对；库存保存断言继续核对历史数据和计划内的转换。
 
 ## 逐文件验证
 
-每个测试文件使用 Host 指定的现成只读解释器，分别执行 `python -m unittest <单个模块>`；没有安装依赖或使用 uv。子进程使用检查运行器的 child_environment：本检出的 src 与 tests/python 排在前面，清掉继承的运行身份、Worker 与凭据变量，每个文件使用自己的 HOME、harness 配置、状态、运行与临时目录。测试只启动离线夹具，没有真实模型调用、账户登录、日常看板访问或真实服务与 Worker 的启动、停止、重启。
+每个测试文件使用 Host 指定的现成只读解释器，分别执行 `python -m unittest <单个模块>`；没有安装依赖或使用 uv。子进程使用检查运行器的 child_environment：本检出的 src 与 tests/python 排在前面，清掉继承的运行身份、Worker 与凭据变量，每个文件使用自己的 HOME、harness 配置、状态、运行与临时目录。测试只启动离线夹具，没有真实模型调用、账户登录、日常黑板访问或真实服务与 Worker 的启动、停止、重启。
 
 最终去重结果为 51 个文件、923 项测试，其中 922 项通过，1 项因当前沙盒的 ps 进程枚举限制未通过。33 个 routing 文件由独立内部检查执行，每个文件一个进程；其余 18 个文件的最终逐文件日志保存在本检出的 ignored tmp，迁移、升级样板与目录文件另由主执行者重新运行确认。测试摘要在 `tmp/step2-test-summary.json`；这些本地材料不作为已接受的公共验收记录。
 
@@ -72,6 +72,6 @@ Router 的 `_configure_fast`、`_configure_review` 和 `_admit_turn` 的审阅�
 
 真实回合应核对只读不能写入检出或临时目录而可联网，写检出可以写检出与临时目录并联网及绑定本机端口而不能写检出外，放开可以完成共享内存与列出进程等前两档不能完成的操作；只读的原生搜索与抓取是否可用也在这次真实核对中记录。每项结果以实际原生行为为准；本步的 mock 测试只证明参数、绑定和事实流正确。
 
-Host 整合后还需运行完整检查，补跑上面的 readonly_tools_probe 环境失败项，并将私有看板副本的 17→18 升级、三档真实回合及续接换档结果写入正式验收记录。skill、参考文档与公共能力边界的更新按执行计划由 Host 完成；本次没有改动这些文件。
+Host 整合后还需运行完整检查，补跑上面的 readonly_tools_probe 环境失败项，并将私有黑板副本的 17→18 升级、三档真实回合及续接换档结果写入正式验收记录。skill、参考文档与公共能力边界的更新按执行计划由 Host 完成；本次没有改动这些文件。
 
 打回 1 已把 `install.test_upgrade_migration` 的能力期望改为保留原有非权限能力并按各自 harness 当前声明派生权限能力，install 目录没有其他同类写死 read/write 的断言；本轮检查覆盖全部 16 个测试文件，可运行部分共 181 项按文件独立进程全部通过（其中打回文件 15 项），逐文件日志与完整选择器清单在 ignored `tmp/step2-install-test-summary.json`；延期 14 项交给 Host：`install.test_first_install.SkillInstallTests` 全部 10 项（真实首装或清场需要 ps），`install.test_packaging.CwdIndependentCliTests` 全部 2 项（真实启动器、私有服务和清场），`install.test_upgrade_service.UpgradeServiceTests.test_real_private_service_reads_the_fixed_upgrade_and_uses_public_host_conclusions`（真实服务与 IPC），`install.test_distribution.DistributionTests.test_wheel_and_sdist_are_complete_and_clean`（uv 构建与依赖隔离），其余文件的运行时物化与启动器测试使用离线假程序，没有安装依赖或启动真实服务。

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from temporary import TemporaryDirectory
+import tempfile
 import textwrap
 import time
 import unittest
@@ -68,7 +68,7 @@ for line in sys.stdin:
         if case == 'discovery' or case == 'native-config' and 'mcpServers' not in p:
             assert p['toolAllowlist'] == []
         elif case in ('write-final', 'write-post-close'):
-            assert p.get('mode') in ('yolo', 'plan') and p['mcpServers'] == []
+            assert p.get('mode') == 'yolo' and p['mcpServers'] == []
         else:
             assert p['toolAllowlist'] == [] and p['mcpServers'] == []
             assert p['offPeakToolEnabled'] is False and p['dynamicWorkflowEnabled'] is False
@@ -219,7 +219,7 @@ class ProjectionTests(unittest.TestCase):
     """The fixed projection of real tool.updated frames into shared facts."""
 
     def setUp(self):
-        private = TemporaryDirectory()
+        private = tempfile.TemporaryDirectory()
         self.addCleanup(private.cleanup)
         self.state_dir = Path(private.name) / "state"
 
@@ -227,6 +227,28 @@ class ProjectionTests(unittest.TestCase):
         facts = ZcodeToolFacts(dict(BINDING), state_dir=self.state_dir)
         facts.add_root("s-1", "t-1")
         return facts
+
+    def test_native_result_and_error_kinds_set_outcome(self):
+        cases = (("result", {"result": {"success": True}}, "success"),
+                 ("result", {"result": {"success": False}}, "failure"),
+                 ("result", {"result": {"content": "ok"}}, "unknown"),
+                 ("error", {"error": {"message": "failed"}}, "failure"))
+        for kind, extra, expected in cases:
+            with self.subTest(kind=kind, extra=extra):
+                facts = self.facts()
+                facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read"}))
+                facts.observe(frame({"kind": kind, "toolCallId": "c-1", **extra}, seq=3))
+                call = list(tool_evidence.read_tool_calls(facts.finish(True), state_dir=self.state_dir))[0]
+                self.assertEqual(call["outcome"], expected)
+
+    def test_verified_permission_denial_is_a_failed_end(self):
+        facts = self.facts()
+        facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read"}))
+        facts.observe_denial({**ROOT, "event": "tool.permission.denied", "status": "failed",
+                              "toolCallId": "c-1", "context": {"decision": "deny", "toolName": "Read"}})
+        package = facts.finish(True)
+        call = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))[0]
+        self.assertEqual((call["outcome"], call["phases"]), ("failure", ["end", "start"]))
 
     def test_verified_delivery_exclusion_joins_the_root_and_preserves_unsettled_counts(self):
         facts = self.facts()
@@ -284,7 +306,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir)), [
             {"nativeIdentity": dict(ROOT), "callId": "c-1", "categories": ["read"],
              "phases": ["end", "start"], "facts": [{"toolName": "Read", "category": "read"}],
-             "consistent": True, "endBeforeStart": False,
+             "consistent": True, "endBeforeStart": False, "outcome": "unknown",
              "incomplete": False, "malformed": False, "belongsToRoot": True}])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
         self.assertEqual(package["binding"], BINDING)
@@ -327,7 +349,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir)), [
             {"nativeIdentity": dict(ROOT), "callId": "c-1", "categories": ["other"],
              "phases": ["end"], "facts": [{"toolName": None, "category": "other"}],
-             "consistent": True, "endBeforeStart": True,
+             "consistent": True, "endBeforeStart": True, "outcome": "unknown",
              "incomplete": True, "malformed": True, "belongsToRoot": True}])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (0, 0))
         self.assertFalse(package["streamComplete"])
@@ -341,7 +363,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir)), [
             {"nativeIdentity": dict(ROOT), "callId": None, "categories": ["execute"],
              "phases": ["start"], "facts": [{"toolName": "Bash", "category": "execute"}],
-             "consistent": True, "endBeforeStart": False,
+             "consistent": True, "endBeforeStart": False, "outcome": "unknown",
              "incomplete": True, "malformed": True, "belongsToRoot": True}])
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
@@ -491,7 +513,7 @@ class ProjectionOrderingTests(unittest.TestCase):
     driver's own protocol checks run — the ordering the unified run preserves."""
 
     def setUp(self):
-        private = TemporaryDirectory()
+        private = tempfile.TemporaryDirectory()
         self.addCleanup(private.cleanup)
         self.state_dir = Path(private.name) / "state"
 
@@ -562,7 +584,7 @@ class FakeAppServerTests(unittest.TestCase):
     """The shared fake ZCode app-server harness (migrated from test_no_tool_zcode)."""
 
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-zcode-evidence-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-evidence-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "empty"
@@ -589,10 +611,10 @@ class FakeAppServerTests(unittest.TestCase):
         previous_input = ready.read_text(encoding="utf-8") if ready.exists() else ""
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low", "cwd": str(self.cwd),
-             "routerBudgetSeconds": timeout}, self.root / "attempt", {},
+             "modelResponseWaitSeconds": timeout}, self.root / "attempt", {},
             {**self.environment, "HMB_ZCODE_TEST_CASE": case},
             session_record_path=str(self.root / "session-attempt.jsonl"))
-        request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, timeout_seconds=timeout)
+        request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
         if cancel:
@@ -618,7 +640,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         outcome = self.execute("ok")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         package = outcome.result["toolEvidence"]
-        self.assertEqual(package["version"], 2)
+        self.assertEqual(package["version"], 3)
         self.assertEqual(package["binding"], {"harness": "zcode", "taskId": "task",
                                               "attemptId": "attempt", "generation": 1})
         self.assertEqual(package["nativeIdentity"], [{"sessionId": "s-1", "turnId": "t-1"}])
@@ -642,7 +664,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
     def test_tool_call_receipt_keeps_the_fact_and_fails_the_judge(self):
         outcome = self.execute("tool")
         self.assertEqual(outcome.status, "failed")
-        self.assertEqual(outcome.result["code"], "no-tool-violation")
+        self.assertEqual(outcome.result["code"], "no-tool-violation", outcome.to_report())
         package = outcome.result["toolEvidence"]
         # The fixture's frame carries no toolCallId: the fact is kept unnamed
         # and the observed count stays unknown rather than inventing one call.
@@ -660,7 +682,11 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
 
     def test_foreign_child_call_is_a_kept_foreign_fact(self):
         outcome = self.execute("tool-foreign")
-        self.assertEqual(outcome.result["code"], "no-tool-violation")
+        # The no-tool protocol refuses a foreign session before observer judgment;
+        # the foreign tool fact remains evidence, without root model output.
+        self.assertEqual(outcome.result["code"], "invalid-protocol", outcome.to_report())
+        self.assertEqual(outcome.result["error"], "foreign session event in a no-tool call")
+        self.assertIs(outcome.result["modelResponded"], False)
         package = outcome.result["toolEvidence"]
         call = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))[0]
         self.assertEqual(call["nativeIdentity"], {"sessionId": "s-child", "turnId": "t-child"})
@@ -673,7 +699,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
     def test_a_late_frame_after_the_close_is_recorded_and_incomplete(self):
         outcome = self.execute("post-close-tool")
         self.assertEqual(outcome.status, "failed")
-        self.assertEqual(outcome.result["code"], "no-tool-violation")
+        self.assertEqual(outcome.result["code"], "no-tool-violation", outcome.to_report())
         package = outcome.result["toolEvidence"]
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(len(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))), 1)

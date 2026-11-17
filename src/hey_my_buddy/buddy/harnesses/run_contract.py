@@ -28,6 +28,7 @@ from ...json_codec import canonical_json
 from ...protocol import activity as activity_protocol
 from ...protocol import tool_evidence as tool_evidence_protocol
 from ...protocol import usage as usage_protocol
+from ...protocol.input_failure import normalize_input_failure
 from ...protocol.harness_names import HARNESS_NAMES
 from ...protocol.run_identity import RunIdentity
 from ...protocol.internal_models import (
@@ -61,7 +62,7 @@ FORMAT_VERSION = 1
 from ...protocol.harness_names import HARNESS_NAMES
 
 HarnessName = Literal[*HARNESS_NAMES]
-PermissionLevel = Literal["none", "read", "write", "full"]
+PermissionLevel = Literal["none", "web", "read", "write", "full"]
 EndStatus = Literal["ok", "error", "cancelled", "unknown"]
 SchemaStatus = Literal["valid", "invalid", "unknown"]
 GroupState = Literal["gone", "alive", "unknown"]
@@ -236,6 +237,13 @@ class RunRequest(InternalModel):
     continuation: Optional[RunContinuation] = None
     session_services: JsonTuple(SessionService, max_items=MAX_SESSION_SERVICES) = ()
     capture_evidence: bool = False
+
+    @model_validator(mode="after")
+    def _web_starts_a_new_native_session(self) -> "RunRequest":
+        if self.permission == "web" and self.continuation is not None \
+                and self.continuation.mode == "native-session":
+            raise fail("web permission requires a new native session", field="continuation")
+        return self
 
 class NativeIdentity(InternalModel):
     """One native-provided root identity; no field is ever fabricated.
@@ -412,6 +420,8 @@ def _normalized_package(kind: str, value: Any) -> Optional[FrozenJson]:
         normalized = usage_protocol.normalize_provider_rejection(unpacked)
     elif kind == "lastAssistantMessage":
         normalized = usage_protocol.normalize_last_assistant_message(unpacked)
+    elif kind == "inputFailure":
+        normalized = normalize_input_failure(unpacked)
     else:  # pragma: no cover - the kind set is closed above
         raise fail(f"unknown package kind {kind}")
     if normalized is None:
@@ -462,6 +472,7 @@ LastAssistantMessagePackage = Annotated[Optional[FrozenJson],
                                         BeforeValidator(partial(_normalized_package, "lastAssistantMessage"))]
 ToolEvidencePackage = Annotated[Optional[FrozenJson], BeforeValidator(_validated_tool_evidence)]
 NativeErrorRecord = Annotated[Optional[FrozenJson], BeforeValidator(_native_error_record)]
+InputFailurePackage = Annotated[Optional[FrozenJson], BeforeValidator(partial(_normalized_package, "inputFailure"))]
 
 
 class RunFeedback(InternalModel):
@@ -470,7 +481,7 @@ class RunFeedback(InternalModel):
     The actions are exactly three: ``continue`` lets the run proceed, ``stop``
     asks the driver to interrupt the native run at once, and ``correct``
     carries the complete next input text of one in-run correction. Whether a
-    correction is offered at all — at most once, never for an enum violation —
+    correction is offered at all, including its count and eligible errors,
     and how that text is assembled stay with the role's observation code; the
     driver only executes the feedback, keeps the one native process and the
     total deadline, and reports how many corrections happened. No role verdict
@@ -550,7 +561,9 @@ class RunResult(InternalModel):
     #: provenance's own.
     native_event_count: Optional[Count] = None
     native_evidence: Optional[NativeEvidence] = None
-    model_started: Optional[bool] = None
+    native_request_sent: Optional[bool] = None
+    # First root-session model output: text, reasoning, a tool call or positive output tokens.
+    model_responded: Optional[bool] = None
     buddy: ResultBuddy = Field(default_factory=ResultBuddy)
     native_identity: Optional[NativeIdentity] = None
     value: Optional[RunValue] = None
@@ -561,6 +574,8 @@ class RunResult(InternalModel):
     usage: UsagePackage = None
     provider_rejection: ProviderRejectionPackage = None
     native_error: NativeErrorRecord = None
+    native_admission_error: NativeErrorRecord = None
+    input_failure: InputFailurePackage = None
     last_assistant_message: LastAssistantMessagePackage = None
     session_record_failure: Optional[SessionRecordFailure] = None
     continuation: Optional[ContinuationFacts] = None

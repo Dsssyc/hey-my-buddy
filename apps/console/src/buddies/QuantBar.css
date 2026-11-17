@@ -1,0 +1,30 @@
+.quant-bar-part[data-tone="green"] { fill: var(--buddy-green); }
+.quant-bar-part[data-tone="amber"] { fill: var(--buddy-amber); }
+.quant-bar-part[data-tone="pink"] { fill: var(--buddy-pink); }
+.quant-bar-part[data-tone="sample-pink"] { fill: var(--buddy-sample-pink); }
+.quant-bar-part[data-tone="green-dark"] { fill: var(--buddy-green-dark); }
+.quant-bar-part[data-tone="orange"] { fill: var(--buddy-orange); }
+.quant-bar-part[data-tone="gray"] { fill: var(--buddy-gray); }
+.quant-domain-rate { background-color: var(--buddy-green); }
+.quant-bar-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.quant-bar-trigger:hover,
+.quant-bar-trigger:focus-visible {
+  border-color: var(--focus);
+  outline: none;
+}
+.quant-bar-trigger > svg[data-slot="quant-bar"] { max-width: 100%; }
+.quant-bar-trigger [data-kind="fail"] path { stroke: var(--buddy-pink); }
+.quant-bar-trigger:has([data-tone="sample-pink"]) [data-kind="fail"] path { stroke: var(--buddy-sample-pink); }
+@media (prefers-reduced-motion: no-preference) {
+  .quant-bar-part { transition: x 180ms var(--ease-out-quart), width 180ms var(--ease-out-quart); }
+  .quant-bar-trigger { transition: border-color 150ms var(--ease-out-quart); }
+}

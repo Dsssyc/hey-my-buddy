@@ -14,17 +14,16 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from fake_executable import make_fake_executable
-from support import BoardTestCase, wait_for
+from support import FIXTURE_CATALOG, BoardTestCase, seed_buddy, wait_for
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler, _RecoveredExecution
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.store import BoardStore
-from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.execution import fsync_json
-from hey_my_buddy.protocol.process_identity import inspect_process_identity, kill_verified_process_group
+from hey_my_buddy.protocol.process_identity import inspect_process_identity, kill_verified_process_session
 from hey_my_buddy.protocol.process_start import process_start
 from hey_my_buddy.protocol.run_identity import RunIdentity
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
@@ -141,9 +140,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertEqual(attempt["ownership"], "owned")
                 self.assertEqual(attempt["processIdentity"], identity)
                 self.assert_retained(run_id, before["attemptId"])
-                code, response = self.cli("execution-cancel", json.dumps({
-                    "runId": run_id, "note": "private test"}))
-                self.assertEqual(code, 0, response)
+                self.assertTrue(self.client().cancel(runId=run_id, note="private test")["cancelRequested"])
                 finished = wait_for(lambda: self._finished(run_id), timeout=35)
                 self.assertIsNotNone(finished, self.client().get(runId=run_id))
                 self.assertEqual(finished["state"], "cancelled")
@@ -212,7 +209,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertEqual(process_start(identity["pid"], include_exited=False), identity["startedAt"])
                 psutil.Process(identity["pid"]).kill()
             else:
-                os.killpg(identity["processGroupId"], signal.SIGKILL)
+                os.killpg(identity["pid"], signal.SIGKILL)
             with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
                 finished = wait_for(lambda: self._finished(run_id), timeout=35)
                 self.assertIsNotNone(finished, self.client().get(runId=run_id))
@@ -240,9 +237,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertIsNotNone(unknown, self.client().get(runId=run_id))
                 self.assertEqual(unknown["selectedAttempt"]["attemptId"], before["attemptId"])
                 self.assert_retained(run_id, before["attemptId"])
-                code, response = self.cli("execution-cancel", json.dumps({
-                    "runId": run_id, "note": "frozen private execution"}))
-                self.assertEqual(code, 0, response)
+                self.assertTrue(self.client().cancel(runId=run_id, note="frozen private execution")["cancelRequested"])
                 forced = wait_for(lambda: self.client().get(runId=run_id)["selectedAttempt"].get("forceRequestedAt"),
                                   timeout=35)
                 self.assertIsNotNone(forced)
@@ -260,10 +255,10 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             if identity is not None and inspect_process_identity(identity) == "alive":
                 self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
-                kill_verified_process_group(identity)
+                kill_verified_process_session(identity)
             for journal in native_path(self.directory).glob("harnesses/command/micro-tasks/*/attempts/*/native-process-journal-*.json"):
                 for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
-                    kill_verified_process_group(native)
+                    kill_verified_process_session(native)
 
     def _unknown(self, run_id):
         view = self.client().get(runId=run_id)
@@ -346,7 +341,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             f"        root=Path({str(self.directory)!r})\n"
             "        (root/'router.started').touch()\n"
             "        while not (root/'router.release').exists(): time.sleep(.05)\n"
-            f"        self.final_answers=[json.dumps({{'buddyId':{candidate!r},'note':'offline fixture choice','evidence':[]}})]\n"
+            f"        self.final_answers=[json.dumps({{'domainNodeId':None,'taskType':'change','buddyId':{candidate!r},'note':'offline fixture choice','evidence':[]}})]\n"
             "        return module.fake_agent.FakeAgent.run_final_prompt(self,message)\n"
             "module.WorkflowAgent=GatedAgent\n"
             f"sys.argv[1:1] = ['--fixture-root', {str(self.directory)!r}]\n"
@@ -360,10 +355,8 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             first = "dsh:deepseek-official:deepseek-flash:max"
             with store.db.write() as db:
                 for buddy_id, model in ((first, "deepseek-flash"), (candidate, "deepseek-v4-pro")):
-                    db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
-                               "available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,1,1,?)",
-                               (buddy_id, buddy_id, "dsh", "deepseek-official", model, "max",
-                                canonical_json([])))
+                    seed_buddy(db, buddy_id=buddy_id, harness="dsh", provider="deepseek-official",
+                               model=model, effort="max", now=store.now())
                 settings = {**router.configuration(db), "routerBuddyIds": [first],
                             "defaultRoutingMode": "fast"}
                 router._write_settings(db, settings)
@@ -371,18 +364,139 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             store.db.close()
         return entry, started, gate, candidate
 
+    def select_offline_router(self, request_id, task):
+        """Admit a development-only Router selection through its internal owner."""
+        store = BoardStore(self.directory)
+        try:
+            return store.decisions.request_select({"requestId": request_id, "task": task})
+        finally:
+            store.db.close()
+
+    def codex_router(self, candidate):
+        """A gated offline Codex Router: silent until its gate file appears.
+
+        Codex carries no model-start declaration, so the start wait still
+        judges it. The fake emits nothing at all until the gate exists — the
+        silent first step the wait exists to cancel — and then returns one
+        routing answer naming the candidate. The gated model/list serves a
+        second effort, so one CLI stands behind two Router buddies.
+        """
+        fixture = Path(__file__).resolve().parents[2] / "buddy/harnesses/codex/fixtures/no_tool_codex.py"
+        gate = self.directory / "codex.release"
+        started = self.directory / "codex.started"
+        answer = json.dumps({"domainNodeId": None, "taskType": "change", "buddyId": candidate,
+                             "note": "offline fixture choice", "evidence": []})
+        script = self.directory / "fixture-codex-router.py"
+        script.write_text(
+            "import os, runpy, sys\n"
+            f"sys.path.insert(0, {str(fixture.parent)!r})\n"
+            "os.environ['HMB_CODEX_FIXTURE_CASE'] = 'gated'\n"
+            f"os.environ['HMB_CODEX_FIXTURE_STATE'] = {str(self.directory / 'codex-trace.json')!r}\n"
+            f"os.environ['HMB_CODEX_FIXTURE_GATE'] = {str(gate)!r}\n"
+            f"os.environ['HMB_CODEX_FIXTURE_STARTED'] = {str(started)!r}\n"
+            f"os.environ['HMB_CODEX_FIXTURE_ANSWER'] = {answer!r}\n"
+            f"runpy.run_path({str(fixture)!r}, run_name='__main__')\n", encoding="utf-8", newline="\n")
+        return make_fake_executable(self.directory / "codex-bin", "codex", source=script), started, gate
+
+    def install_codex_router_board(self, *, routers, candidate, wait=None):
+        """Catalog, buddies and settings for Codex Routers over the dsh catalog.
+
+        The candidate stays the offline dsh fixture's model, so a completed
+        selection still names it; only the Router plane runs on Codex.
+        """
+        payload = {**FIXTURE_CATALOG, "providers": [*FIXTURE_CATALOG["providers"], {
+            "provider": "openai", "displayName": "Fixture Codex", "harness": "codex",
+            "efforts": ["low", "high"], "models": [{"id": "fixture-model", "name": "Fixture Model",
+                                                    "description": "offline codex router model",
+                                                    "contextWindow": 1000000,
+                                                    "inputModalities": ["text"]}]}]}
+        self.catalog_fixture(payload)
+        store = BoardStore(self.directory)
+        try:
+            store.initialize()
+            with store.db.write() as db:
+                for buddy_id, harness, provider, model, effort in (*routers, candidate):
+                    seed_buddy(db, buddy_id=buddy_id, harness=harness, provider=provider,
+                               model=model, effort=effort, now=store.now())
+                settings = {**router.configuration(db), "routerBuddyIds": [item[0] for item in routers],
+                            "defaultRoutingMode": "fast"}
+                if wait is not None:
+                    settings["modelResponseWaitSeconds"] = wait
+                router._write_settings(db, settings)
+        finally:
+            store.db.close()
+
+    def test_scheduler_leaves_wait_timeout_to_execution_and_router_fails_over(self):
+        # The Routers are Codex, a harness without a model-start declaration,
+        # so the start wait still judges them: the first Router's silent gated
+        # step is cancelled by the execution process itself (never by the
+        # scheduler) and the service fails over to the next Router in the list.
+        candidate = "dsh:deepseek-official:deepseek-v4-pro:max"
+        first = "codex:openai:fixture-model:low"
+        second = "codex:openai:fixture-model:high"
+        script, started, release = self.codex_router(candidate)
+        self.install_codex_router_board(
+            routers=[(first, "codex", "openai", "fixture-model", "low"),
+                     (second, "codex", "openai", "fixture-model", "high")],
+            candidate=(candidate, "dsh", "deepseek-official", "deepseek-v4-pro", "max"), wait=3)
+        environment = {"HMB_MAX_CONCURRENT": "1", "HMB_CODEX_CLI": str(script)}
+        try:
+            with self.daemon(env=environment):
+                created = self.select_offline_router("router-wait-failover", "Choose after a model start timeout")
+                run_id = created["runId"]
+                def trial_changed():
+                    view = self.client().call("selection_get", {"decisionId": created["decisionId"]})["decision"]
+                    if view["runId"] != run_id or view["status"] in ("failed", "cancelled", "needs-host"):
+                        return view
+                    return None
+                next_dispatch = wait_for(trial_changed, timeout=45)
+                self.assertIsNotNone(next_dispatch, self.client().get(runId=run_id))
+                self.assertNotEqual(next_dispatch["runId"], run_id, next_dispatch)
+                self.assertEqual(next_dispatch["routerBuddyId"], second)
+                self.assertGreater(len(next_dispatch["routerTrials"]), 1, next_dispatch)
+                self.assertEqual(next_dispatch["routerTrials"][0]["code"], "router-not-responding")
+                self.assertEqual(next_dispatch["routerTrials"][1]["buddyId"], second)
+                first_task = self.client().get(runId=run_id)
+                first_attempt = first_task["selectedAttempt"]
+                self.assertEqual(first_task["state"], "failed", first_task)
+                self.assertEqual(first_task["terminationReason"], "deadline")
+                self.assertIsNone(first_attempt["cancelRequestedAt"])
+                self.assertIsNone(first_attempt["forceRequestedAt"])
+                result = first_attempt["result"]["result"]
+                self.assertEqual(result["code"], "router-not-responding")
+                self.assertIs(result["modelResponded"], False)
+                self.assertNotIn("seconds", result)
+                release.touch()
+                decision = wait_for(lambda: self._completed_decision(created["decisionId"]), timeout=30)
+                self.assertIsNotNone(decision, self.client().call("selection_get", {"decisionId": created["decisionId"]}))
+                self.assertEqual(decision["buddyId"], candidate)
+                health = self.client().call("health", {})["routingHealth"]
+                record = next(row for row in health["routers"] if row["buddyId"] == first)
+                self.assertEqual(record["windowNotRespondingCount"], 1)
+                self.assertEqual(record["lastError"]["code"], "router-not-responding")
+        finally:
+            release.touch()
+        self.assertTrue(started.exists(), "the gated Codex Router never received its prompt")
+
     def test_router_result_after_restart_uses_frozen_decision_and_budget(self):
-        script, started, release, candidate = self.offline_router()
-        environment = {"HMB_MAX_CONCURRENT": "1", "HMB_DSH_CLI": str(script)}
+        # Codex carries no model-start declaration, so its Router still owns a
+        # start wait and publishes the budget fallback file the restart must
+        # find frozen, alongside the frozen decision.
+        candidate = "dsh:deepseek-official:deepseek-v4-pro:max"
+        router_id = "codex:openai:fixture-model:low"
+        script, started, release = self.codex_router(candidate)
+        self.install_codex_router_board(
+            routers=[(router_id, "codex", "openai", "fixture-model", "low")],
+            candidate=(candidate, "dsh", "deepseek-official", "deepseek-v4-pro", "max"))
+        environment = {"HMB_MAX_CONCURRENT": "1", "HMB_CODEX_CLI": str(script)}
         with self.daemon(env=environment) as daemon:
-            created = self.client().call("selection_request", {
-                "requestId": "router-reconnect", "task": "Choose an offline fixture buddy"})
+            created = self.select_offline_router("router-reconnect", "Choose an offline fixture buddy")
             self.assertTrue(wait_for(started.exists, timeout=60), created)
             self.assertFalse((self.directory / "sessions").exists(), "ungrouped selections do not record sessions")
             run_id = created["runId"]
             before = self.client().get(runId=run_id)["selectedAttempt"]
             self.assertIsNotNone(before["processIdentity"])
-            budget = attempt_root(self.directory, "dsh", run_id,
+            budget = attempt_root(self.directory, "codex", run_id,
                                   before["attemptId"]) / "execution-budget.json"
             self.assertTrue(wait_for(native_path(budget).exists, timeout=15))
             original_budget = json.loads(native_path(budget).read_text(encoding="utf-8"))
@@ -406,20 +520,27 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             release.touch()
 
     def test_reconnected_router_budget_forces_frozen_execution_after_eight_seconds(self):
-        script, started, release, _candidate = self.offline_router()
-        environment = {"HMB_MAX_CONCURRENT": "1", "HMB_DSH_CLI": str(script)}
+        # The budget file an undeclared harness's Router publishes is the
+        # service's fallback deadline: after a restart it still forces a frozen
+        # execution whose own process went silent.
+        candidate = "dsh:deepseek-official:deepseek-v4-pro:max"
+        router_id = "codex:openai:fixture-model:low"
+        script, started, release = self.codex_router(candidate)
+        self.install_codex_router_board(
+            routers=[(router_id, "codex", "openai", "fixture-model", "low")],
+            candidate=(candidate, "dsh", "deepseek-official", "deepseek-v4-pro", "max"))
+        environment = {"HMB_MAX_CONCURRENT": "1", "HMB_CODEX_CLI": str(script)}
         identity = None
         frozen_process = None
         try:
             with self.daemon(env=environment) as daemon:
-                created = self.client().call("selection_request", {
-                    "requestId": "router-deadline", "task": "Choose behind a frozen gate"})
+                created = self.select_offline_router("router-deadline", "Choose behind a frozen gate")
                 self.assertTrue(wait_for(started.exists, timeout=60), created)
                 self.assertFalse((self.directory / "sessions").exists(), "ungrouped selections do not record sessions")
                 run_id = created["runId"]
                 attempt = self.client().get(runId=run_id)["selectedAttempt"]
                 identity = attempt["processIdentity"]
-                budget = attempt_root(self.directory, "dsh", run_id,
+                budget = attempt_root(self.directory, "codex", run_id,
                                       attempt["attemptId"]) / "execution-budget.json"
                 self.assertTrue(wait_for(native_path(budget).exists, timeout=15))
                 self.restart(daemon)
@@ -458,10 +579,57 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             if identity is not None and inspect_process_identity(identity) == "alive":
                 self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
-                kill_verified_process_group(identity)
-            for journal in native_path(self.directory).glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):
+                kill_verified_process_session(identity)
+            for journal in native_path(self.directory).glob("harnesses/codex/micro-tasks/*/attempts/*/native-process-journal-*.json"):
                 for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
-                    kill_verified_process_group(native)
+                    kill_verified_process_session(native)
+
+    def test_restarted_dsh_router_has_no_budget_and_no_scheduler_deadline(self):
+        # DSH is declared unable to show the model's start, so its Router runs
+        # without the start wait and never publishes the budget fallback file:
+        # a reconnected execution gets no scheduler deadline and is never
+        # cancelled for silence — the harness's own stream idle timeout is the
+        # only bound, and the gate releases this one into a completed answer.
+        script, started, release, candidate = self.offline_router()
+        store = BoardStore(self.directory)
+        try:
+            with store.db.write() as db:
+                router._write_settings(db, {**router.configuration(db),
+                                            "modelResponseWaitSeconds": 3})
+        finally:
+            store.db.close()
+        environment = {"HMB_MAX_CONCURRENT": "1", "HMB_DSH_CLI": str(script)}
+        try:
+            with self.daemon(env=environment) as daemon:
+                created = self.select_offline_router("router-dsh-nowait", "Choose behind the dsh gate")
+                run_id = created["runId"]
+                self.assertTrue(wait_for(started.exists, timeout=60), created)
+                attempt = self.client().get(runId=run_id)["selectedAttempt"]
+                budget = attempt_root(self.directory, "dsh", run_id,
+                                      attempt["attemptId"]) / "execution-budget.json"
+                self.restart(daemon)
+            with self.daemon(env=environment):
+                attached = wait_for(lambda: self._running(run_id), timeout=30)
+                self.assertIsNotNone(attached, self.client().get(runId=run_id))
+
+                def deadline_or_stop():
+                    # The span in which a published budget deadline would have
+                    # forced this execution is the configured wait plus its
+                    # grace; neither may happen and no file may appear.
+                    selected = self.client().get(runId=run_id)["selectedAttempt"]
+                    if selected.get("forceRequestedAt") or selected.get("cancelRequestedAt"):
+                        return "stopped"
+                    return "budget" if native_path(budget).exists() else None
+
+                self.assertIsNone(wait_for(deadline_or_stop, timeout=16),
+                                  self.client().get(runId=run_id))
+                release.touch()
+                decision = wait_for(lambda: self._completed_decision(created["decisionId"]), timeout=45)
+                self.assertIsNotNone(decision, self.client().call("selection_get",
+                                                                   {"decisionId": created["decisionId"]}))
+                self.assertEqual(decision["buddyId"], candidate)
+        finally:
+            release.touch()
 
     def _completed_decision(self, decision_id):
         decision = self.client().call("selection_get", {"decisionId": decision_id})["decision"]
@@ -486,11 +654,10 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         try:
             with self.daemon(env=environment) as daemon:
                 submitted = self.client().call("workflow_submit", {
-                    "requestId": "worker-wrap-up", "hostId": "host-1",
+                     "macroTaskId": "standalone", "title": "worker-wrap-up",
                     "task": "Complete a gated offline fixture turn", "cwd": str(repo),
-                    "submissionToken": "t" * 32, "executionWorkspace": {"kind": "existing", "access": "write"},
-                    "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash",
-                    "effort": "max"})
+                    "buddy": "dsh / deepseek-official / deepseek-flash / max", "checkout": "existing",
+                    "access": "write", "inputs": [], "writeScope": ["."], "expectedSeconds": 120})
                 run_id = submitted["runId"]
                 self.assertTrue(wait_for(worker_started.exists, timeout=60), submitted)
                 before_view = wait_for(lambda: self._running(run_id), timeout=30)
@@ -506,7 +673,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertIsNotNone(bridge)
                 self.assertEqual(inspect_process_identity(identity), "alive")
                 frozen_process = self.freeze_execution(identity)
-                self.client().call("workflow_cancel", {"runId": run_id, **submitted["control"]})
+                self.client().call("workflow_cancel", {"runId": run_id})
                 stopped = self.client().get(runId=run_id)["selectedAttempt"]
                 self.assertEqual(stopped["stopInitiator"], "host")
                 self.assertIsNotNone(stopped["graceDeadline"], stopped)
@@ -534,10 +701,10 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             if identity is not None and inspect_process_identity(identity) == "alive":
                 self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
-                kill_verified_process_group(identity)
+                kill_verified_process_session(identity)
             for journal in native_path(self.directory).glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):
                 for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
-                    kill_verified_process_group(native)
+                    kill_verified_process_session(native)
 
     def _live_bridge(self, run_id):
         observed = self.client().call("inquiry_observe", {"runId": run_id, "timeoutMs": 1000})
@@ -588,7 +755,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
         actor = {"attemptId": claim["attempt"]["attemptId"],
                  "generation": claim["attempt"]["generation"], "nonce": claim["nonce"]}
         identity = {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 123,
-                    "startedAt": 123250000, "processGroupId": 123, "jobName": None}
+                    "startedAt": 123250000, "jobName": None}
         self.board_.call("execution_progress", {**actor, "processIdentity": identity})
         with patch("hey_my_buddy.protocol.process_identity.inspect_process_identity", return_value="alive"):
             self.board_.store.reconcile_startup()
@@ -597,11 +764,11 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
         self.assertEqual(self.client.get(runId=claim["task"]["taskId"])["attemptState"], "uncertain")
         self.board_.store.execution_connection(actor["attemptId"], connected=True)
         output = {**claim_tool_receipt(claim, 0, state_dir=self.directory), "status": "ok", "operation": "select",
-                  "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": None},
+                  "usage": {"elapsedMs": 100, "toolCalls": 0},
                   "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                   "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
                                         "manifestSha256": (claim["decisionInput"].get("executionWorkspace") or {}).get("manifestSha256")},
-                  "decision": {"buddyId": "dsh:fixture:bravo:max", "note": "The frozen legal choice",
+                  "decision": {"domainNodeId": None, "taskType": "change", "buddyId": "dsh:fixture:bravo:max", "note": "The frozen legal choice",
                                "evidence": []}}
         settled = self.board_.call("execution_result", {**actor, "status": "ok",
                                                          "shutdownConfirmed": True, "result": output})
@@ -619,7 +786,7 @@ class ReconnectedWrapUpTests(WorkflowTestCase):
         claimed = self.claim(board)
         claim = claimed["claim"]
         attempt = claim["attempt"]
-        board.call("workflow_cancel", {"runId": run["runId"], **self.controls[run["runId"]]})
+        board.call("workflow_cancel", {"runId": run["runId"]})
         durable = board.client().get(runId=run["runId"])["selectedAttempt"]
         self.assertEqual(durable["stopInitiator"], "host")
         self.assertIsNotNone(durable["graceDeadline"])

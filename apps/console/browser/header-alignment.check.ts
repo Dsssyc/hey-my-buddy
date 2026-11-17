@@ -1,0 +1,157 @@
+import { expect, type Locator } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
+import { open, settle, test } from "./preview";
+
+const macro = "macro-11111111-1111-4111-8111-111111111111";
+const goals = [
+  { body: "目标说明\n\n保持正文舒适的阅读行宽。".repeat(8), revision: 2, createdAt: "2026-11-01T06:02:00Z" },
+  { body: "最初的完整目标。", revision: 1, createdAt: "2026-10-31T19:41:00Z" },
+];
+
+for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test(`header aligns with micro-task label ${theme} ${width}`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await page.addInitScript(theme => {
+    localStorage.setItem("hey-my-buddy.console.theme", theme);
+    localStorage.setItem("hey-my-buddy.language", "zh");
+  }, theme);
+  await open(page, `#tasks/${macro}`);
+  const header = page.locator('[data-slot="macro-overview-header"]');
+  const label = page.locator('[data-slot="timeline-row-filter"]').getByText("微任务", { exact: true });
+  await expect(label).toBeVisible();
+  const left = (await label.boundingBox())!.x;
+  for (const content of [header.locator("h2"), header.locator('[data-slot="macro-overview-facts"] dt').first()]) {
+    await expect(content).toBeVisible();
+    expect(Math.abs((await content.boundingBox())!.x - left)).toBeLessThanOrEqual(1);
+  }
+  const bounds = (await header.boundingBox())!;
+  const controls = (await header.locator(":scope > div").last().boundingBox())!;
+  expect(Math.abs(bounds.x + bounds.width - controls.x - controls.width - (left - bounds.x)), "header controls share the text inset").toBeLessThanOrEqual(1);
+});
+
+// A zero-height inline box sits on the actual text baseline, independent of font metrics.
+async function identifierGeometry(identifier: Locator) {
+  return identifier.evaluate(button => {
+    const baseline = (element: Element) => {
+      // A marker appended to a flex dd becomes a separate flex item. Measure
+      // its identifier's text instead of mistaking the container top for a baseline.
+      const text = element.querySelector('[data-slot="copyable-identifier"] > span') ?? element;
+      const marker = document.createElement("span");
+      marker.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline";
+      text.append(marker); const y = marker.getBoundingClientRect().top; marker.remove(); return y;
+    };
+    const value = button.querySelector("span")!;
+    const valueBaseline = baseline(value);
+    const pair = button.closest("dd")?.previousElementSibling
+      ?? button.closest('[data-slot="section"]')?.querySelector(":scope > span");
+    const facts = button.closest('[data-slot="macro-overview-facts"]');
+    const neighbours = facts ? [...facts.querySelectorAll("dt,dd")].filter(dt => {
+      const rect = dt.getBoundingClientRect(), own = value.getBoundingClientRect();
+      return Math.abs(rect.top - own.top) < 12;
+    }) : [];
+    const svg = button.querySelector("svg")!.getBoundingClientRect(), rect = button.getBoundingClientRect();
+    return { valueBaseline, labelBaseline: pair ? baseline(pair) : null,
+      neighbours: neighbours.map(baseline), height: rect.height,
+      factHeight: facts ? button.closest("dd")!.parentElement!.getBoundingClientRect().height : null,
+      iconOffset: (svg.top + svg.bottom - rect.top - rect.bottom) / 2 };
+  });
+}
+
+// Courier New gives the surrounding text different baseline metrics from the
+// ID's ui-monospace on macOS, reproducing the extra inline line-box pixel locally.
+for (const font of [null, '"Courier New", monospace']) for (const width of [1440, 390]) test(`header baselines and content width ${width}${font ? " alternate font" : ""}`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width, height: 900 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() => {
+    localStorage.setItem("hey-my-buddy.console.theme", "dark");
+    localStorage.setItem("hey-my-buddy.language", "zh");
+  });
+  let history = true;
+  await page.route(`**/api/macro-tasks/${macro}/goals`, route => route.fulfill({ json: { macroTaskId: macro, goals: history ? goals : [goals[0]] } }));
+  await open(page, `#tasks/${macro}`);
+  const header = page.locator('[data-slot="macro-overview-header"]');
+  const identifier = header.locator('[data-slot="copyable-identifier"]');
+  await expect(identifier).toBeVisible();
+  if (font) await header.locator('[data-slot="macro-overview-facts"]').evaluate((element, family) => { (element as HTMLElement).style.fontFamily = family; }, font);
+  const id = await identifierGeometry(identifier);
+  await page.screenshot({ path: testInfo.outputPath("header.png") });
+  expect(id.factHeight).toBe(20);
+  expect(id.height).toBeGreaterThanOrEqual(24);
+  expect(Math.abs(id.labelBaseline! - id.valueBaseline)).toBeLessThanOrEqual(1);
+  expect(id.neighbours.length).toBeGreaterThan(0);
+  for (const y of id.neighbours) expect(Math.abs(y - id.valueBaseline)).toBeLessThanOrEqual(1);
+  expect(Math.abs(id.iconOffset)).toBeLessThanOrEqual(1);
+  const measurements = { id, cards: [] as unknown[] };
+  const bounds = (await header.boundingBox())!;
+  const padding = await header.evaluate(element => ({ left: parseFloat(getComputedStyle(element).paddingLeft), right: parseFloat(getComputedStyle(element).paddingRight) }));
+  for (const withHistory of [true, false]) {
+    history = withHistory;
+    await header.locator('[data-slot="macro-goal-trigger"]').click();
+    const card = page.locator('[data-slot="macro-goal-card"]');
+    await expect(card.locator(".goal-history")).toHaveCount(withHistory ? 1 : 0);
+    await settle(page);
+    const size = await card.evaluate(card => {
+      const main = card.querySelector(".goal-main")!, prose = card.querySelector(".goal-body")!;
+      const history = card.querySelector(".goal-history");
+      const right = history ?? prose;
+      const frame = card.getBoundingClientRect(), edge = right.getBoundingClientRect();
+      const style = getComputedStyle(main);
+      return { rightGap: frame.right - edge.right, expectedGap: 1 + (right === prose ? parseFloat(style.paddingRight) : 0),
+        mainGap: (history?.getBoundingClientRect().left ?? frame.right - 1) - prose.getBoundingClientRect().right,
+        width: frame.width, proseWidth: prose.getBoundingClientRect().width,
+        fontSize: getComputedStyle(prose).fontSize, lineHeight: getComputedStyle(prose).lineHeight,
+        left: frame.left, right: frame.right };
+    });
+    measurements.cards.push({ withHistory, ...size });
+    await page.screenshot({ path: testInfo.outputPath(`${withHistory ? "history" : "single"}.png`) });
+    expect(Math.abs(size.rightGap - size.expectedGap)).toBeLessThanOrEqual(1);
+    expect(Math.abs(size.mainGap - 24)).toBeLessThanOrEqual(1);
+    expect(size.proseWidth).toBeLessThanOrEqual(38 * 14.5);
+    if (width === 1440) expect(size.proseWidth).toBe(38 * 14.5);
+    expect(size.fontSize).toBe("14.5px"); expect(size.lineHeight).toBe("26.825px");
+    expect(size.left).toBeGreaterThanOrEqual(bounds.x + padding.left);
+    expect(size.right).toBeLessThanOrEqual(bounds.x + bounds.width - padding.right);
+    const trigger = (await header.locator('[data-slot="macro-goal-trigger"]').boundingBox())!;
+    expect(Math.abs((await card.boundingBox())!.y - trigger.y - trigger.height - 4)).toBeLessThanOrEqual(1);
+    expect(await header.boundingBox(), "opening a goal does not move the header").toEqual(bounds);
+    await page.keyboard.press("Escape");
+    await expect(card).toBeHidden();
+    expect(await header.boundingBox(), "closing a goal does not move the header").toEqual(bounds);
+  }
+  await writeFile(testInfo.outputPath("measurements.json"), JSON.stringify(measurements, null, 2));
+});
+
+for (const width of [1440, 390]) test(`shared identifiers in header and turn, sealed evidence in acceptance ${width}`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width, height: 1000 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() => {
+    localStorage.setItem("hey-my-buddy.console.theme", "dark");
+    localStorage.setItem("hey-my-buddy.language", "zh");
+  });
+  await page.route("**/api/command", async route => {
+    const response = await route.fetch(); const data = await response.json();
+    if (route.request().postDataJSON().operation === "workflow_get") {
+      for (const turn of data.result.turns) turn.sessionId = "synthetic-session-11111111-1111-4111-8111-111111111111";
+    }
+    await route.fulfill({ response, json: data });
+  });
+  await open(page, `#tasks/${macro}/preview-run-a1/3`);
+  const header = page.locator('[data-slot="detail-header"]');
+  const headerId = header.locator('[data-slot="copyable-identifier"]');
+  await expect(headerId).toBeVisible();
+  expect(Math.abs((await identifierGeometry(headerId)).iconOffset)).toBeLessThanOrEqual(1);
+  const turn = page.locator('[data-slot="detail-band"] [data-slot="copyable-identifier"]');
+  await expect(turn).toBeVisible();
+  const turnId = await identifierGeometry(turn);
+  expect(Math.abs(turnId.iconOffset)).toBeLessThanOrEqual(1);
+  expect(Math.abs(turnId.labelBaseline! - turnId.valueBaseline)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("turn.png") });
+  await page.locator('[data-slot="detail-strip"]').getByRole("button", { name: /^已验收(?: ·|$)/ }).click();
+  const pane = page.locator('[data-slot="detail-pane"]');
+  // Acceptance now exposes the seal's artifact identity rather than a snapshot commit control.
+  const evidence = pane.getByRole("group", { name: "封存证据", exact: true });
+  await expect(evidence).toBeVisible();
+  const artifactId = await evidence.locator("code").first().innerText();
+  await expect(evidence.locator("dl dd").first()).toHaveText(artifactId);
+  await expect(evidence).toContainText("快照摘要");
+  await page.screenshot({ path: testInfo.outputPath("acceptance.png") });
+});

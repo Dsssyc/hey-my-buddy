@@ -165,7 +165,7 @@ def self_process_identity(job_name: str | None) -> dict:
     """Capture this execution process's own complete identity.
 
     A Windows execution reports the interpreter it runs in and the root Job it
-    belongs to; a POSIX execution is itself the recorded group-leader root.
+    belongs to; a POSIX execution is itself the recorded session-leader root.
     """
     pid = os.getpid()
     started_at = _creation_time(pid)
@@ -177,9 +177,8 @@ def self_process_identity(job_name: str | None) -> dict:
         record = {"pid": pid, "startedAt": started_at, "jobName": job_name}
     else:
         if job_name is not None or os.getpgrp() != pid or os.getsid(pid) != pid:
-            raise BoardError("PROCESS_IDENTITY_UNKNOWN", "Execution does not own its process group")
-        record = {"bootId": boot_id(), "pid": pid, "startedAt": started_at,
-                  "processGroupId": pid, "jobName": None}
+            raise BoardError("PROCESS_IDENTITY_UNKNOWN", "Execution does not own its process session")
+        record = {"bootId": boot_id(), "pid": pid, "startedAt": started_at, "jobName": None}
     return validate_process_identity(record)
 
 
@@ -220,7 +219,7 @@ def receipt_reference(directory: Path) -> dict:
 
 
 def read_execution_receipt(directory: Path, *, binding: dict | None = None,
-                           sha256: str | None = None) -> dict | None:
+                           sha256: str | None = None, form: str = "current-report-v2") -> dict | None:
     try:
         descriptor = open_regular_fd(Path(directory) / RECEIPT, os.O_RDONLY)
     except FileNotFoundError:
@@ -232,7 +231,15 @@ def read_execution_receipt(directory: Path, *, binding: dict | None = None,
     value = decode_strict_json(raw)
     if not isinstance(value, dict):
         raise BoardError("INVALID_ARGUMENT", "Execution receipt must be an object")
-    if set(value) != {"attemptId", "generation", "taskId", "report", "createdAt"}:
+    if form == "current-report-v2":
+        expected_fields = {"version", "attemptId", "generation", "taskId", "report", "createdAt"}
+        if type(value.get("version")) is not int or value["version"] != 2:
+            raise BoardError("INVALID_ARGUMENT", "Execution receipt has an invalid version")
+    elif form == "archived-report-v1":
+        expected_fields = {"attemptId", "generation", "taskId", "report", "createdAt"}
+    else:
+        raise BoardError("INVALID_ARGUMENT", "Unknown execution receipt form")
+    if set(value) != expected_fields:
         raise BoardError("INVALID_ARGUMENT", "Execution receipt has an invalid shape")
     if (not isinstance(value["taskId"], str) or not value["taskId"]
             or not isinstance(value["attemptId"], str) or not value["attemptId"]
@@ -371,17 +378,12 @@ def read_execution_endpoint(directory: Path, identity: RunIdentity, *, state_dir
         raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint descriptor is invalid")
     if type(descriptor["hostPid"]) is not int or descriptor["hostPid"] != observed_process_identity["pid"]:
         raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint host PID differs")
-    credential_json = descriptor["endpointCredential"]
-    if credential_json is None:
-        if os.name != "nt":
-            raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint credential is absent")
-    else:
-        credential = cc.EndpointCredential.from_json(credential_json)
-        trusted = cc.local_endpoint_context()
-        if credential.address != descriptor["address"] or (
-                credential.context.platform, credential.context.namespace_id, credential.context.root) != (
-                trusted.platform, trusted.namespace_id, trusted.root):
-            raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint credential differs")
+    credential = cc.EndpointCredential.from_json(descriptor["endpointCredential"])
+    trusted = cc.local_endpoint_context()
+    if credential.address != descriptor["address"] or (
+            credential.context.platform, credential.context.namespace_id, credential.context.root) != (
+            trusted.platform, trusted.namespace_id, trusted.root):
+        raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint credential differs")
     token = value["token"]
     if not isinstance(token, str) or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
         raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint token is invalid")
@@ -415,21 +417,16 @@ def cleanup_execution_endpoint(directory: Path, process_identity: dict, *, state
         return {"status": "unverified", "reason": "endpoint-host-mismatch"}
     rpc_config.configure_server(Path(state_dir))
     rpc_config.configure_client(Path(state_dir))
-    credential_json = descriptor.get("endpointCredential")
-    if credential_json is None:
-        result = {"status": "not-applicable" if os.name == "nt" else "unverified",
-                  "reason": "endpoint-credential-unavailable"}
-    else:
-        try:
-            credential = cc.EndpointCredential.from_json(credential_json)
-        except (ValueError, TypeError):
-            return {"status": "unverified", "reason": "endpoint-credential-invalid"}
-        context = cc.local_endpoint_context()
-        if credential.address != descriptor.get("address") or (
-                credential.context.platform, credential.context.namespace_id, credential.context.root) != (
-                context.platform, context.namespace_id, context.root):
-            return {"status": "unverified", "reason": "endpoint-domain-mismatch"}
-        result = cc.reap_endpoint(descriptor["address"], credential, context=context)
+    try:
+        credential = cc.EndpointCredential.from_json(descriptor.get("endpointCredential"))
+    except (ValueError, TypeError):
+        return {"status": "unverified", "reason": "endpoint-credential-invalid"}
+    context = cc.local_endpoint_context()
+    if credential.address != descriptor.get("address") or (
+            credential.context.platform, credential.context.namespace_id, credential.context.root) != (
+            context.platform, context.namespace_id, context.root):
+        return {"status": "unverified", "reason": "endpoint-domain-mismatch"}
+    result = cc.reap_endpoint(descriptor["address"], credential, context=context)
     if result["status"] in ("reaped", "already-absent", "not-applicable"):
         native_path(path).unlink(missing_ok=True)
     return result

@@ -7,7 +7,7 @@ const worker = "codex:openai:gpt-6-sol:medium";
 
 function buddy(buddyId: string, capabilities: string[], enabled = true): Buddy {
   const [harness, provider, model, effort] = buddyId.split(":");
-  return { effortRank: null, buddyId, label: buddyId, harness, provider, model, effort, available: true, enabled, capabilities,
+  return { effortRank: null, buddyId, alias: null, harness, provider, model, effort, available: true, enabled, capabilities,
     contextWindow: null, description: "", source: "catalog:fixture" };
 }
 
@@ -18,12 +18,12 @@ const failing: RoutingHealth = {
 
 function attention(options: { routers?: string[]; mode?: "fast" | "review"; health?: RoutingHealth; configuration?: null } = {}) {
   const configuration = options.configuration === null ? null
-    : { routerBuddyIds: options.routers ?? [reviewer], routerRetryIntervalSeconds: 600,
-      defaultRoutingMode: options.mode ?? "review", routingBudget: "standard" };
+    : { explorationEvery: 5, routerBuddyIds: options.routers ?? [reviewer], routerRetryIntervalSeconds: 600,
+      defaultRoutingMode: options.mode ?? "review", modelResponseWaitSeconds: 60, profileBuddyId: null };
   const buddies = [buddy(reviewer, ["execution:claude", "routing:fast", "decision"]), buddy(worker, ["execution:codex"])];
   const harnesses = [
-    { harness: "claude", status: "ready", revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] },
-    { harness: "dsh", status: "ready", revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [],
+    { harness: "claude", status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] },
+    { harness: "dsh", status: "ready", revision: 1, manualPath: null, permissionsVerifiedVersion: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [],
       providers: [{ provider: "deepseek-official", coolingUntil: "2099-01-01T00:00:00Z", consecutiveRejections: 1 }] },
   ];
   const snapshot = { configuration, routingHealth: options.health, harnesses } as unknown as Snapshot;

@@ -139,12 +139,6 @@ class NoToolFakeProtocolTests(FakeAppServerTests):
                     calls = list(tool_evidence.read_tool_calls(outcome.result["toolEvidence"], state_dir=self.state_dir))
                     self.assertTrue(calls)
 
-    def test_deadline(self):
-        outcome = self.execute("timeout", timeout=1)
-        self.assertEqual(outcome.status, "failed")
-        self.assertEqual(outcome.result["code"], "timeout")
-        self.assertTrue(outcome.shutdown_confirmed)
-
     def test_cancel(self):
         outcome = self.execute("timeout", timeout=10, cancel=True)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())

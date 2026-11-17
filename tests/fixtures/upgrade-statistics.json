@@ -1,0 +1,99 @@
+{
+  "buddies": {
+    "codex:openai:fixture-alpha:high": {
+      "byDomain": {},
+      "byDomainTaskType": {},
+      "infrastructureFailures": {
+        "count": 2,
+        "lastAt": "2026-01-01T00:02:00.000Z"
+      },
+      "overall": {
+        "failureRate": 0.14285714285714285,
+        "failures": 1,
+        "firstPassRate": 0.7142857142857143,
+        "firstPasses": 5,
+        "medianDeliverySeconds": 0.0,
+        "reworkRounds": 0,
+        "samples": 7,
+        "successes": 6,
+        "usage": {
+          "medianCachedInputTokens": null,
+          "medianInputTokens": null,
+          "medianOutputTokens": null,
+          "samples": 0
+        }
+      }
+    },
+    "codex:openai:fixture-beta:high": {
+      "byDomain": {},
+      "byDomainTaskType": {},
+      "infrastructureFailures": {
+        "count": 0,
+        "lastAt": null
+      },
+      "overall": {
+        "failureRate": null,
+        "failures": 0,
+        "firstPassRate": null,
+        "firstPasses": 0,
+        "medianDeliverySeconds": null,
+        "reworkRounds": 0,
+        "samples": 0,
+        "successes": 0,
+        "usage": {
+          "medianCachedInputTokens": null,
+          "medianInputTokens": null,
+          "medianOutputTokens": null,
+          "samples": 0
+        }
+      }
+    },
+    "codex:openai:fixture-gamma:high": {
+      "byDomain": {},
+      "byDomainTaskType": {},
+      "infrastructureFailures": {
+        "count": 0,
+        "lastAt": null
+      },
+      "overall": {
+        "failureRate": null,
+        "failures": 0,
+        "firstPassRate": null,
+        "firstPasses": 0,
+        "medianDeliverySeconds": null,
+        "reworkRounds": 0,
+        "samples": 0,
+        "successes": 0,
+        "usage": {
+          "medianCachedInputTokens": null,
+          "medianInputTokens": null,
+          "medianOutputTokens": null,
+          "samples": 0
+        }
+      }
+    }
+  },
+  "fixture": {
+    "path": "tests/fixtures/upgrade-floor",
+    "sha256": {
+      "board.sql": "833bc0b2f8e08ed4543f60cc5678c3e4075a7522b9d4184649e4a8c43913cfab",
+      "catalog.json": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
+      "metadata.json": "80a974269e99279d03059e48957fbd9e2462285a0f0e058a28ee7450c613ef2a",
+      "operations.json": "8fb1e41457dce5993046708390286eb1d28b1805d7cd72fccba53fb989fe5c6c",
+      "workspace-resources.json": "5896ae5911e5168a1d065c93196f1512f5dc390780d61cd6cb85ccef01d5e42d"
+    },
+    "sourceCommit": "4de1dd9478980e924a4a86b2c50aaca33e33b79d"
+  },
+  "format": 1,
+  "generationCommand": "env -u HMB_STATE_DIR -u HMB_RUNTIME_ROOT -u HMB_RUNTIME -u HMB_RUNTIME_IDENTITY -u HMB_AGENT_CREDENTIAL_FILE -u HMB_AGENT_CREDENTIAL_FD -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT PYTHONPATH=src:tests/python uv run --frozen python tests/python/blackboard/store/test_upgrade_statistics.py --write-oracle --work-dir tmp/<new-private-dir>",
+  "preparationCommands": [],
+  "source": {
+    "commit": "403c4d3b569fa9fc1084fce1abaaa35b7f26275f",
+    "functions": [
+      "_statistics",
+      "_statistics_fact"
+    ],
+    "path": "src/hey_my_buddy/blackboard/routing/evidence.py",
+    "sha256": "68ff761196d67787fcd2b908b5bb554492e38b7c1bbe96a00b72d8148278db1b"
+  }
+}

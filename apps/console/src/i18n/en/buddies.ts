@@ -1,18 +1,38 @@
+import routerErrors from "./router-errors";
+import routerWork from "./router-work";
+import domainTree from "./domain-tree";
+import routerProfiles from "./router-profiles";
+import modelProfile from "./model-profile";
 import type zh from "../zh/buddies";
 import harness from "./buddies-harness";
 import roles from "./buddies-roles";
+import evaluation from "./evaluation";
+import maintenance from "./maintenance";
 
 export default {
+  routerWork, domainTree, routerProfiles, routerErrors,
+  maintenance,
+  modelProfile,
+  profile: {
+    choose: "Choose buddy",
+    search: "Search buddies",
+    none: "Not set",
+    noCandidates: "No enabled, available buddy has an enforced web only level",
+    dataFlow: "Building a profile sends model names and correspondence candidates to the profile buddy's model provider; the buddy can search public web sources.",
+  },
   sections: {
+    harness: "Harnesses",
+    models: "Models",
+    evaluation: "Evaluation",
     label: "Sections of the Buddies page",
-    catalog: "Catalog",
-    roles: "Roles",
+    router: "Router",
+    summary: "{{n}} harnesses · Enabled {{enabled}} / {{total}}",
   },
   attention: {
     upgrade: "Router settings need an upgrade",
     unset: "No Router set",
     unusable: "Router unavailable",
-    failing: "Routing keeps failing",
+    failing: "Consecutive routing failures",
   },
   preference: {
     unset: "None",
@@ -20,14 +40,10 @@ export default {
     pin: "Pin",
     exclude: "Exclude",
   },
-  preferenceHint: {
-    prefer: "Considered first when routing",
-    pin: "Routing picks only among pinned buddies",
-    exclude: "Left out of routing",
-  },
   unsaved: "Unsaved",
   loginExpired: "Browser authorization has expired and nothing was submitted; authorize this browser again.",
   models: {
+    viewHarness: "View harness",
     search: "Search buddies",
     enabledOnly: "Enabled only",
     showUnavailable: "Show unavailable",
@@ -37,7 +53,6 @@ export default {
     columns: {
       buddy: "Buddy",
       effort: "Reasoning effort",
-      concurrency: "Concurrency",
     },
     fold: "Fold {{name}}",
     unfold: "Unfold {{name}}",
@@ -51,10 +66,12 @@ export default {
     },
     unavailable: "Unavailable",
     pending: "Pending",
-    pendingSince: "Pending since {{time}}",
+    pendingHintNoTime: "Missing from the latest read; it remains usable as before. It is read again one hour after first going missing and marked unavailable only if still absent. No action is needed.",
+    pendingHint: "Missing from the latest read since {{time}}; it remains usable as before. It is read again one hour after first going missing and marked unavailable only if still absent. No action is needed.",
+    noProfile: "Enabled; no model profile yet.",
     fresh: "New",
     occupancyUnknown: "In use: unknown",
-    occupancy: "In use: {{active}}, limit: {{limit}}",
+    occupancy: "In use {{active}} / {{limit}}",
     reading: "Reading unavailable buddies",
     retry: "Retry",
     limit: "Only the first {{n}} unavailable buddies are shown; search for earlier ones.",
@@ -69,21 +86,25 @@ export default {
     },
   },
   pane: {
+    alias: "Alias",
     preference: "Preference",
-    noteNone: "Choose a preference to add a note",
+    noteNone: "Choose a preference to add a reason",
     enable: "Enable {{effort}}",
     buddyPreference: "Preference of {{effort}}",
-    buddyNote: "Note for the preference of {{effort}}",
-    model: "Model",
+    buddyNote: "Reason for the preference of {{effort}}",
+    model: "Model service",
+    status: "Status",
+    firstMissing: "First missing",
+    samples: "Counted in evaluation",
+    sampleCount: "{{n}}",
     available: "Available",
     unavailable: "Unavailable",
     pending: "Pending",
     concurrency: "Concurrency",
     concurrencyLimit: "Concurrency limit",
     occupancy: "In use: {{n}}",
-    occupancyUnknown: "In use: unknown",
     range: "A positive integer is needed",
-    note: "Note",
+    note: "Reason",
     locked: {
       session: "Browser authorization has expired; authorize this browser again to change this",
       saving: "A save is in progress or awaits checking; changes are paused",
@@ -93,4 +114,5 @@ export default {
   },
   harness,
   roles,
+  evaluation,
 } satisfies typeof zh;

@@ -16,6 +16,7 @@ from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.codex import native_run as codex_native_run
 from hey_my_buddy.buddy.harnesses.registry import worker_format
+from hey_my_buddy.buddy.roles.prompts import PromptText
 from hey_my_buddy.buddy.roles import controller, inline_run, run_execution
 from hey_my_buddy.buddy.roles.turn_io import input_hash, private_json
 from hey_my_buddy.private_dirs import ensure_private_dir
@@ -66,12 +67,12 @@ class RoleStopTests(unittest.TestCase):
                         "executionLiveFile": str(self.root / "execution-live.json"),
                         "live": {"instanceId": "a" * 64, "token": "b" * 64},
                         "inputFile": str(self.root / "turn-input.json"),
-                        "outputFile": str(self.root / "turn-output.json"), "timeoutSeconds": None}
+                        "outputFile": str(self.root / "turn-output.json")}
         self.identity = request_for({**self.control, "timeoutSeconds": 60}).identity
 
     def _stop_handle(self):
         return run_execution.InlineRunHandle(
-            {**self.control, "timeoutSeconds": 60}, self.identity, grace_seconds=0)
+            {**self.control, "timeoutSeconds": 60}, self.identity)
 
     def test_host_stop_signals_once_and_keeps_original_deadline(self):
         handle = self._stop_handle()
@@ -96,6 +97,33 @@ class RoleStopTests(unittest.TestCase):
         self.assertTrue(handle.cancelled.is_set())
         self.assertEqual(controller.stop_termination_reason(shutdown_confirmed=True,
                          stop_initiator="lead"), "forced-stop")
+
+    def test_pause_interrupts_capable_harness_without_wrap_up(self):
+        for name in ("codex", "dsh"):
+            with self.subTest(harness=name):
+                handle = self._stop_handle()
+                executor = run_execution.WorkerRunExecutor(SimpleNamespace(
+                    name=name, interrupted_resume=True), SimpleNamespace())
+                deadline = time.monotonic() + 300
+                controller.worker_stop(executor, handle, stop_initiator="pause", grace_deadline=deadline)
+                self.assertTrue(handle.cancelled.is_set())
+                self.assertFalse(handle.force_cancelled.is_set())
+                self.assertFalse(handle.wrap_up_started)
+                self.assertEqual(handle.grace_deadline, deadline)
+                self.assertEqual(controller.stop_termination_reason(shutdown_confirmed=True,
+                                 stop_initiator="pause", grace_expired=True), "pause")
+
+    def test_pause_forces_harness_without_interrupted_resume(self):
+        for name in ("zcode", "claude"):
+            with self.subTest(harness=name):
+                handle = self._stop_handle()
+                executor = run_execution.WorkerRunExecutor(SimpleNamespace(
+                    name=name, interrupted_resume=False), SimpleNamespace())
+                executor.cancel = mock.Mock()
+                controller.worker_stop(executor, handle, stop_initiator="pause",
+                                       grace_deadline=time.monotonic() + 300)
+                executor.cancel.assert_called_once_with(handle)
+                self.assertTrue(handle.force_stop_requested)
 
     def test_console_and_unsupported_harness_force_immediate_cancel(self):
         for initiator, resume in (("console", True), ("host", False)):
@@ -158,7 +186,8 @@ class RoleStopTests(unittest.TestCase):
                  summary_native_gone=True, summary_status="ok", summary_raises=False,
                  first_session_failure=None, summary_session_failure=None,
                  force_before_summary=False, force_during_setup=False, expired=False,
-                 late_summary=False, invalid_summary=False, first_usage=None, summary_usage=None):
+                 late_summary=False, invalid_summary=False, first_usage=None, summary_usage=None,
+                 stop_initiator="host"):
         control = {**self.control, "timeoutSeconds": 60}
         request = request_for(control)
         deadline = time.monotonic() - 1 if expired else time.monotonic() + 300
@@ -168,11 +197,14 @@ class RoleStopTests(unittest.TestCase):
             return deadline + 1 if late_now[0] else native_clock()
         private_json(Path(control["inputFile"]), {"taskId": "task-stop", "attemptId": "attempt-stop",
                      "generation": 1, "turnId": "turn-stop", "resumeMode": "initial"})
-        handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
-        handle.wrap_up_started = True
+        handle = run_execution.InlineRunHandle(control, request.identity)
+        handle.wrap_up_started = stop_initiator == "host"
+        handle.stop_initiator = stop_initiator
         handle.grace_deadline = deadline
         handle.cancel_requested = True
         cancellation = handle.cancelled
+        if stop_initiator == "pause":
+            cancellation.set()
         calls = []
         def run(_module, native_request, *, observer, services, cancelled):
             calls.append((native_request, cancelled()))
@@ -194,7 +226,7 @@ class RoleStopTests(unittest.TestCase):
         def prepare(candidate, _module):
             if force_during_setup and candidate["privateRoot"] != str(self.invocation):
                 handle.force_cancelled.set()
-            return request_for(candidate), None, lambda _fact: rc.FEEDBACK_CONTINUE, None
+            return request_for(candidate), None, lambda _fact: rc.FEEDBACK_CONTINUE, None, PromptText((("task", "worker prompt"),)).parts
         module = SimpleNamespace()
         def publish(selected, _control, _turn_input, _prompt):
             if invalid_summary:
@@ -216,9 +248,19 @@ class RoleStopTests(unittest.TestCase):
         self.last_publication = publication.call_args_list
         return result, code, calls
 
+    def test_pause_runs_only_the_interrupted_native_turn(self):
+        result, code, calls = self._execute(stop_initiator="pause")
+        self.assertEqual(result.end.status, "cancelled")
+        self.assertEqual(code, 1)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0][1])
+        self.assertIsNone(self.last_turn_record)
+        self.assertFalse(self.last_verdict["wrapUpDelivered"])
+        self.assertEqual(self.last_active_control["privateRoot"], str(self.invocation))
+
     def _finished_handle(self, result, code, *, initiator="host", **values):
         handle = run_execution.InlineRunHandle(
-            {**self.control, "timeoutSeconds": 60}, self.identity, grace_seconds=0)
+            {**self.control, "timeoutSeconds": 60}, self.identity)
         handle.result = result
         handle.request = self.last_request
         handle.verdict = self.last_verdict
@@ -327,6 +369,13 @@ class RoleStopTests(unittest.TestCase):
         self.assertFalse(calls[1][1], "the first interrupt must not cancel the summary run")
         self.assertEqual(result.identity, second.identity)
         self.assertTrue((self.invocation / "stop-summary").is_dir())
+
+    def test_wrap_up_does_not_check_a_second_initial_input(self):
+        with mock.patch.object(inline_run, "check_prompt_input", wraps=inline_run.check_prompt_input) as check:
+            _result, code, calls = self._execute()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(check.call_count, 1)
 
     def test_cancelled_first_run_publishes_only_the_selected_summary(self):
         result, code, calls = self._execute()
@@ -495,7 +544,6 @@ class RoleStopTests(unittest.TestCase):
                    "nativeRoot": str(ensure_private_dir(self.root / "native")),
                    "sessionRecordPath": str(self.root / "session.jsonl"),
                    "executionLiveFile": str(self.root / "execution-live.json"),
-                   "timeoutSeconds": None,
                    "outputFile": str(context.turn_output_file())}
         identity = rc.RunIdentity(task_id="task-stop", attempt_id="attempt-stop", generation=1,
                                   invocation_id="first-invocation", turn_id="turn-stop",
@@ -530,7 +578,7 @@ class RoleStopTests(unittest.TestCase):
             with self.subTest(initiator=initiator):
                 native_path(context.turn_output_file()).unlink(missing_ok=True)
                 record = run_execution._worker_result(result, control, turn_input, request.input_text)
-                handle = run_execution.InlineRunHandle(control, identity, grace_seconds=0)
+                handle = run_execution.InlineRunHandle(control, identity)
                 handle.turn_record = record
                 handle.request = request
                 handle.result = result

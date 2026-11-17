@@ -207,6 +207,9 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(view.efforts_for("zcode", "deepseek-official", "deepseek-flash"), ["low", "high"])
         self.assertIsNone(view.lookup("command", "deepseek-official", "deepseek-flash"))
         proposals = view.proposed_buddies()
+        self.assertTrue(all('label' not in item for item in proposals))
+        self.assertTrue(all(item['description'] == '' for item in proposals
+                            if item['harness'] == 'zcode'))
         zcode = [item for item in proposals if item["harness"] == "zcode"]
         self.assertEqual({item["effort"] for item in zcode if item["model"] == "deepseek-flash"}, {"low", "high"})
         self.assertTrue(all(item["buddyId"].startswith("zcode:") for item in zcode))
@@ -218,7 +221,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_unknown_native_settings_never_enter_public_catalog_or_proposals(self):
         view = catalog.CatalogView(catalog.canonical_payload(self.payload()))
-        public = json.dumps([view.metadata(), view.proposed_buddies()])
+        public = json.dumps([view.payload, view.proposed_buddies()])
         for forbidden in ("apiKey", "requestHeaders", "Authorization", "private-provider-secret", "private-model-secret"):
             self.assertNotIn(forbidden, public)
 

@@ -1,8 +1,38 @@
 import type zh from "../zh/shell";
 
 export default {
+  maintenanceValidation: {
+    "invalidJson": "The maintenance answer is not valid JSON.",
+    "citationOutsideBatch": "A summary cites a micro task outside this batch.",
+    "unknown": "The maintenance answer failed validation.",
+    "wrongType": "A field in the answer has the wrong type.",
+    "invalidValue": "The answer contains a disallowed value.",
+    "requiredField": "The answer is missing a required field.",
+    "unexpectedField": "The answer contains an unexpected field.",
+    "textTooShort": "A text field in the answer is empty.",
+    "textTooLong": "A text field in the answer is too long.",
+    "tooManyItems": "The answer contains too many items.",
+    "duplicateNode": "A new domain node ID is duplicated.",
+    "blankNode": "A new domain node has a blank name or definition.",
+    "changedNode": "A previously written domain node cannot be changed in a correction.",
+    "inactiveParent": "A new domain node has an inactive parent.",
+    "parentCycle": "Domain node parents form a cycle.",
+    "duplicateName": "Active domain node names are duplicated.",
+    "duplicateMerge": "A domain node is merged more than once.",
+    "inactiveMergeSource": "The source domain node for a merge is inactive.",
+    "inactiveMergeTarget": "The target domain node for a merge is inactive.",
+    "invalidMerge": "A domain node merge is invalid.",
+    "duplicateClassification": "A micro task is classified more than once.",
+    "inactiveClassificationNode": "A classification points to an inactive domain node.",
+    "missingClassification": "A micro task is missing a classification.",
+    "duplicateCitation": "A summary cites the same micro task more than once.",
+    "deletedCitation": "A summary cites a deleted micro task.",
+  },
+  reasonNoProcesses: "none",
+  reasonProcess: "{{executable}} ({{pid}})",
   reasonFact: "{{name}}: {{value}}",
   reasonParam: {
+    "errors": "Problems",
     "access": "Access",
     "adapter": "Execution adapter",
     "bound": "Bound",
@@ -34,6 +64,12 @@ export default {
     "unfinished": "Unfinished micro tasks"
   },
   reasonValue: {
+    "violation": {
+      "type": "must be text",
+      "empty": "cannot be empty",
+      "length": "can have at most 64 characters",
+      "format": "cannot contain “ / ”, square brackets or control characters"
+    },
     "yes": "Yes",
     "no": "No",
     "operation": {
@@ -73,8 +109,6 @@ export default {
   },
   identifier: { copy: "Copy identifier {{value}}", copied: "Copied", failed: "Copy failed; try again" },
   actor: {
-    delegator: "Delegated by: {{source}}", originalDelegator: "Originally delegated by", unrecordedDelegator: "Delegator not recorded",
-    currentOwner: "Current owner",
     unknownOrigin: "Unrecorded initiator", microTask: "Micro task {{id}}",
     events: {
       dispatch: "{{time}} {{role}} submitted “{{title}}”", approved: "{{time}} {{role}} approved the request for “{{title}}”",
@@ -88,7 +122,7 @@ export default {
     unrecorded: "Not recorded", identity: "{{role}} · {{id}}", recordedBy: "Recorded by",
     markerIdentity: "{{sentence}}, recorded by {{actor}}", origin: "Initiating {{role}}", reason: "Stop reason",
     roles: { host: "Host", lead: "Lead", console: "Console", service: "Service", workflow: "Blackboard", bridge: "Bridge" },
-    stop: { host: "Stopped by Host", lead: "Stopped by Lead", console: "Stopped by Console", service: "Service stopped", workflow: "Stopped by Blackboard", bridge: "Stopped by Bridge", unknown: "Stopped (initiator unknown)" },
+    stop: { host: "Stopped by Host", lead: "Stopped by Lead", console: "Stopped from the console", service: "Stopped by the service", workflow: "Stopped by Blackboard", bridge: "Stopped by Bridge", unknown: "Stopped (initiator unknown)" },
   },
   duration: { hour: "{{n}} h", minute: "{{n}} min", second: "{{n}} s" },
   relative: { second: "{{n}} s ago", minute: "{{n}} min ago", hour: "{{n}} h ago", day: "{{n}} d ago" },
@@ -110,31 +144,23 @@ export default {
     lost: "Connection lost",
     retry: "Retry",
   },
+  runtimeUpdated: {
+    message: "The console has been updated. Refresh to use the new version.",
+    refresh: "Refresh",
+  },
   reminders: {
     overdue: "Overdue",
-    possiblyStuck: "Possibly stuck",
+    possiblyStuck: "Possibly stalled",
   },
-  macroStop: {
-    title: "Stop macro task", cancel: "Cancel", confirm: "Confirm stop",
-    scope: "Stop active work in this macro task. Existing results stay recorded.",
-    scopeRoots: "Micro tasks to stop {{count}}", scopeHelpers: "Helper tasks to stop {{count}}",
-    scopeDelivered: "Delivered micro tasks kept {{count}}", scopeAwaitingHost: "Micro tasks awaiting Host kept {{count}}",
-    scopeAccepted: "Accepted micro tasks kept {{count}}",
-    pending: "Stop request sent; awaiting a reply.", noActive: "No micro tasks or helper tasks are in progress.",
-    actionHint: "Stop micro tasks in progress and helper tasks (confirmation required).",
-    refused: "Stop request was refused", refusedDetail: "The request was refused.", unknown: "Stop unconfirmed",
-    unknownDetail: "The stop outcome is unknown and may have taken effect. Retry the same request or refresh to check.",
-    stopping: "Stopping", stoppingDetail: "Stopping · awaiting evidence",
-    incomplete: "This macro task's record is incomplete", incompleteDetail: "This macro task's record is incomplete · stop unconfirmed",
-    pendingCount: "Stops unconfirmed {{count}}",
-    uncertainCount: "Stops unconfirmed or outside the read {{count}}",
-    stopped: "Stopped", stoppedCount: "Stopped {{roots}}; {{helpers}}",
-    stoppedRoots: "Micro tasks {{count}}",
-    stoppedHelpers: "Helper tasks {{count}}",
-    noOp: "Nothing to stop", noOpDetail: "This request stopped no micro tasks; listed states were preserved.",
-    retry: "Retry stop", retryHint: "Retry the same stop request without expanding its scope.",
-    dismiss: "Dismiss", replayUnknown: "Stop outcome unknown; retry the same request.",
-    invalidResponse: "The macro task stop reply is incomplete; the request outcome is unconfirmed.",
+  macroWork: {
+    pause: "Pause", resume: "Resume", end: "End",
+    pausing: "Pausing", paused: "Paused",
+    title: "End macro task", cancel: "Cancel", confirm: "End",
+    scope: "Unfinished micro tasks stop and are concluded as ended by you from the console, and their checkouts are reclaimed. Delivered ones are left for the Host to accept. Ending cannot be undone.",
+    scopeUnfinished: "End {{count}} micro tasks", scopeDelivered: "Keep {{count}} delivered micro tasks",
+    pauseUnknown: "The pause result is unknown and may have taken effect; retry the same request or refresh to check.",
+    resumeUnknown: "The resume result is unknown and may have taken effect; retry the same request or refresh to check.",
+    endUnknown: "The end result is unknown and may have taken effect; retry the same request or refresh to check.",
   },
   draft: {
     label: "Unsaved changes",
@@ -158,4 +184,4 @@ export default {
     failed: "Cannot reach the blackboard right now",
     reconnect: "Reconnect",
   },
-} satisfies typeof zh & { macroStop: Record<string, string> };
+} satisfies typeof zh & { macroWork: Record<string, string> };

@@ -1,21 +1,19 @@
 import { useEffect, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, CircleX } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-/** An identifier, shortened where it is long, that copies whole. The hint says more of it on hover and focus. */
-export function CopyableIdentifier({ value, hint }: { value: string; hint?: string }) {
-  return <Identifier key={value} value={value} hint={hint} />;
+/** A middle-shortened identifier that copies whole, with feedback in its icon. */
+export function CopyableIdentifier({ value }: { value: string }) {
+  return <Identifier key={value} value={value} />;
 }
 
-function Identifier({ value, hint }: { value: string; hint?: string }) {
+function Identifier({ value }: { value: string }) {
   const { t } = useTranslation("shell");
-  const [open, setOpen] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: "copied" | "failed" } | null>(null);
   useEffect(() => {
     if (!feedback) return;
-    const timer = setTimeout(() => { setFeedback(null); setOpen(false); }, 2000);
+    const timer = setTimeout(() => setFeedback(null), 2000);
     return () => clearTimeout(timer);
   }, [feedback]);
   const prefixLength = value.startsWith("macro-") ? 6 : value.startsWith("run:") ? 4 : 0;
@@ -29,15 +27,13 @@ function Identifier({ value, hint }: { value: string; hint?: string }) {
       setFeedback({ kind: "failed" });
     }
   }
-  return <Tooltip open={!!feedback || open} onOpenChange={setOpen}>
-    <TooltipTrigger asChild>
-      <Button type="button" variant="ghost" size="sm" className="h-8 max-w-full justify-start -ml-2 font-mono text-xs font-normal text-muted-foreground"
+  return <>
+      <Button type="button" variant="ghost" size="sm" data-slot="copyable-identifier" data-feedback={feedback?.kind}
+        className="-my-0.5 h-6 min-h-6 min-w-6 max-w-full shrink-0 justify-start gap-1 px-0 has-[>svg]:px-0 align-baseline font-mono text-xs leading-5 font-normal text-ink"
         aria-label={t("identifier.copy", { value })} onClick={() => void copy()}>
         <span className="truncate">{shortened}</span>
-        {feedback?.kind === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+        {feedback?.kind === "copied" ? <Check key="copied" aria-hidden="true" className="icon-swap size-3.5" /> : feedback?.kind === "failed" ? <CircleX key="failed" aria-hidden="true" className="icon-swap size-3.5 text-fail"/> : <Copy key="idle" aria-hidden="true" className="size-3.5 text-ink3"/>}
       </Button>
-    </TooltipTrigger>
-    <TooltipContent className="break-all">{message || (hint ? `${value} · ${hint}` : value)}</TooltipContent>
     <span className="sr-only" aria-live="polite" role={message ? "status" : undefined}>{message}</span>
-  </Tooltip>;
+  </>;
 }

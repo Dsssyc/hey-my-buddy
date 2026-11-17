@@ -30,9 +30,12 @@ import c_two as cc
 from ...text import configure_utf8_output
 from ...paths import native_path
 from ...errors import BoardError
+from ...protocol.capabilities import model_start_unseen
 from ...protocol.client import BoardClient
 from ...protocol import activity as activity_module
 from ...protocol import execution as execution_protocol
+from ...protocol.workspace_manifest import record_reference
+from ...protocol.turn_input import NONE_TURN_INPUT_VERSION
 from ...protocol.contracts import ExecutionLive
 from ...protocol.run_identity import RunIdentity
 from ...protocol.reasons import reason as make_reason
@@ -40,7 +43,7 @@ from ...json_codec import canonical_json, decode_strict_json
 from ...protocol.stop import WRAP_UP_INITIATORS, TERMINATION_REASONS
 from ..harnesses.registry import ExecutionContext
 from ..harnesses.c_two_live import CTwoLiveEndpoint
-from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, OptionalText, Text, fail
+from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, Text, fail
 from ..harnesses.live import (LIVE_FIELDS, MAX_REQUEST_ID, MAX_OBSERVE_LIMIT,
     MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS, LiveReply, LiveRequest, LiveSnapshot)
 from ..roles import controller as role_seam
@@ -48,12 +51,13 @@ from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_dire
 
 fsync_json = execution_protocol.fsync_json
 BUDGET = execution_protocol.BUDGET
+TIMEOUT_GRACE_SECONDS = 10.0
 PREFLIGHT_RETRY_SECONDS = 15.0
 PREFLIGHT_MAX_RETRY_SECONDS = 180.0
 (
     TERMINATION_COMPLETED, TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED,
     TERMINATION_FORCED_STOP, TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP,
-    TERMINATION_UNKNOWN_STOP, TERMINATION_DEADLINE, TERMINATION_HARNESS_ERROR,
+    TERMINATION_UNKNOWN_STOP, TERMINATION_PAUSE, TERMINATION_DEADLINE, TERMINATION_HARNESS_ERROR,
     TERMINATION_TRANSPORT_ERROR, TERMINATION_INTERRUPTED, TERMINATION_WORKSPACE_ERROR,
 ) = TERMINATION_REASONS
 
@@ -83,19 +87,80 @@ def random_person_name() -> str:
     """One random person name for a run's endpoint; display use only."""
     return secrets.choice(_PERSON_NAMES)
 
+class ModelResponseWait:
+    """Execution-owned start wait; the service's file deadline is a fallback."""
+
+    def __init__(self, path: Path, binding: dict, seconds: int, *, notify=None):
+        self.path = path
+        self.binding = binding
+        self.seconds = seconds
+        self.notify = notify
+        self.deadline = None
+        self.timed_out = False
+        self.failure = None
+        self.lock = threading.RLock()
+
+    def begin(self):
+        with self.lock:
+            self.deadline = time.monotonic() + self.seconds
+            self.timed_out = False
+            deadline = self.deadline
+        fsync_json(self.path, {"binding": self.binding,
+                              "deadline": deadline + TIMEOUT_GRACE_SECONDS})
+        if self.notify is not None:
+            self.notify()
+
+    def raise_failure(self):
+        with self.lock:
+            if self.failure is not None:
+                raise self.failure
+
+    def responded(self, handle):
+        with self.lock:
+            # A driver may normalize this I/O failure; supervision retains it.
+            self.raise_failure()
+            if self.timed_out:
+                return
+            handle.model_responded = True
+            if self.deadline is not None:
+                try:
+                    native_path(self.path).unlink()
+                except Exception as error:
+                    self.failure = error
+                    raise
+                self.deadline = None
+
+    def finished(self):
+        with self.lock:
+            self.raise_failure()
+            if self.deadline is not None:
+                native_path(self.path).unlink()
+                self.deadline = None
+
+    def expired(self, handle):
+        with self.lock:
+            self.raise_failure()
+            if self.timed_out:
+                return True
+            if handle.model_responded:
+                self.responded(handle)
+            self.timed_out = self.deadline is not None and time.monotonic() >= self.deadline
+            return self.timed_out
+
+
 class LiveEndpointDescriptor(InternalModel):
     """Bounded private readiness facts; the credential is native opaque JSON.
 
     The holder consumes ``endpointCredential`` through C-Two's codec. Address,
     instance and the held process PID remain independent binding checks.
-    Windows has no reap credential and uses the native default pipe domain.
+    Windows uses a kernel-managed credential in the native pipe domain.
     """
 
     address: Text(256)
     name: Text(128)
     instance_id: Hex64
     host_pid: NonNegativeInt
-    endpoint_credential: OptionalText(8192) = None
+    endpoint_credential: Text(8192)
 
 def _timeout_ms(value: Any, label: str) -> int:
     """The preserved transport window bound, checked exactly as the live seam does."""
@@ -173,23 +238,43 @@ def validate_claim_turn(claim: dict) -> None:
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid task or attempt")
     if task["spec"]["adapter"] == "decision":
         decision = claim.get("decisionInput")
-        if (not isinstance(decision, dict) or decision.get("routingMode") not in ("fast", "review")
+        if (not isinstance(decision, dict) or decision.get("routingMode") not in ("fast", "review", "profile")
                 or not isinstance(decision.get("buddy"), dict)
                 or not isinstance(decision["buddy"].get("harness"), str)
-                or not decision["buddy"]["harness"] or not isinstance(decision.get("budget"), dict)):
+                or not decision["buddy"]["harness"]):
             raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid decision input")
+        if task["spec"].get("decision", {}).get("kind") == "maintain":
+            if (decision.get("kind") != "maintain" or decision["routingMode"] != "fast"
+                    or decision.get("maintenanceRunId") != task["spec"]["decision"]["decisionId"]
+                    or not isinstance(decision.get("input"), dict)):
+                raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid maintenance input")
+        elif task["spec"].get("decision", {}).get("kind") == "profile":
+            if (decision.get("kind") != "profile" or decision["routingMode"] != "profile"
+                    or decision.get("profileRunId") != task["spec"]["decision"]["decisionId"]
+                    or not isinstance(decision.get("input"), dict)):
+                raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid profile input")
+        wait = task["spec"].get("modelResponseWaitSeconds")
+        if type(wait) is not int or wait < 1:
+            raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid model response wait")
     if "turn" not in claim:
         return
     turn = claim["turn"]
     if not isinstance(turn, dict) or not isinstance(turn.get("turnId"), str) or not turn["turnId"]:
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn identity")
     turn_input = turn.get("input")
-    if not isinstance(turn_input, dict):
+    if (not isinstance(turn_input, dict) or type(turn_input.get("version")) is not int
+            or turn_input["version"] not in (4, NONE_TURN_INPUT_VERSION)):
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn input")
     workspace = turn_input.get("executionWorkspace")
-    if (not isinstance(workspace, dict) or not isinstance(workspace.get("path"), str)
-            or not workspace["path"]):
-        raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid workspace")
+    if turn_input["version"] == 4:
+        if not isinstance(workspace, dict) or set(workspace) != {"workspaceId", "manifestSha256"}:
+            raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid workspace")
+    else:
+        from ...protocol.turn_input import none_execution_workspace
+        try:
+            none_execution_workspace(workspace)
+        except BoardError as error:
+            raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid none workspace") from error
     if not isinstance(claim.get("agentCredential"), str) or not claim["agentCredential"]:
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn credential")
 
@@ -216,13 +301,12 @@ class _ExecutionLive:
                     concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
         self._started = True
         address = cc.server_address()
-        inspected = cc.inspect_endpoint(address)
-        if inspected["status"] not in ("present", "not-applicable"):
-            raise BoardError("LIVE_UNAVAILABLE", "Execution endpoint credential is unavailable")
-        credential = inspected["credential"]
+        credential = cc.server_credential()
+        if credential is None:
+            raise BoardError("LIVE_UNAVAILABLE", "Registered execution endpoint credential is absent")
         descriptor = LiveEndpointDescriptor(address=address, name=self.name,
             instance_id=self.instance_id, host_pid=process_identity["pid"],
-            endpoint_credential=credential.to_json() if credential is not None else None)
+            endpoint_credential=credential.to_json())
         fsync_json(self.execution.directory / execution_protocol.LIVE, {
             "identity": self.identity.to_payload(), "processIdentity": process_identity,
             "descriptor": descriptor.to_payload(), "token": self.token})
@@ -303,7 +387,7 @@ class _ExecutionLive:
 
     def stop(self, request_json: str) -> str:
         value = self._auth(request_json, {"initiator", "graceDeadline", "force"})
-        if value["initiator"] not in {"host", "lead", "console", "service", "deadline", "unknown"}:
+        if value["initiator"] not in {"host", "lead", "console", "pause", "service", "deadline", "unknown"}:
             raise BoardError("INVALID_ARGUMENT", "Unknown stop initiator")
         if type(value["force"]) is not bool:
             raise BoardError("INVALID_ARGUMENT", "Invalid stop force fact")
@@ -427,7 +511,7 @@ class Execution:
         """Run one attempt and always return a durable receipt.
 
         The whole body is guarded: if anything fails after the adapter was started,
-        the owned process group is terminated and a receipt is still written, so a
+        the owned process session is terminated and a receipt is still written, so a
         failure can never leave an orphaned child with no record.
         """
         claim = self.claim
@@ -474,7 +558,7 @@ class Execution:
                     "status": "failed",
                     "result": ({"status": "error", "code": error.code,
                                 "usage": {"elapsedMs": round((time.monotonic() - started_at) * 1000),
-                                          "toolCalls": None, "bytesRead": None}}
+                                          "toolCalls": None}}
                                if isinstance(error, BoardError) and not holder.get("started") else None),
                     "error": f"execution failure: {error!r}",
                     "exitCode": None,
@@ -597,8 +681,7 @@ class Execution:
         return self.receipt(claim, {'status': 'failed', 'result': {
             'status': 'error', 'code': 'router-review-unavailable', 'reasonCode': code,
             'reason': 'The review harness is unavailable',
-            'modelStarted': False, 'harnessAttempts': history,
-            'budget': claim['decisionInput']['budget'],
+            'modelResponded': False, 'harnessAttempts': history,
             **routing_facts(claim['decisionInput'])},
             'error': code, 'exitCode': None, 'signal': None, 'shutdownConfirmed': True,
             'artifacts': [], 'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
@@ -612,7 +695,28 @@ class Execution:
         self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
     ) -> dict:
         from ...install import runtime
+        from ..roles.run_execution import set_maintenance_publisher, set_profile_publisher
+        set_maintenance_publisher(self._maintenance_answer)
+        set_profile_publisher(self._profile_answer)
 
+        def notify_model_wait():
+            # Serialize acknowledgements so an older hint cannot erase this wake.
+            with self._flush_lock:
+                self.hint(waitingReason=None)
+            self.flush_hints()
+
+        # The start wait judges only a protocol that can show the model's start
+        # as it happens. A harness declared unable to see it — DSH's ACP channel
+        # emits each block only after the model's whole step ends — runs without
+        # the wait, bounded by the harness's own stream idle timeout instead, so
+        # a silent first step is never read as a model that did not begin.
+        wait_seconds = None
+        if spec["adapter"] == "decision" and model_start_unseen(
+                claim["decisionInput"]["buddy"]["harness"]) is None:
+            wait_seconds = spec["modelResponseWaitSeconds"]
+        model_wait = (ModelResponseWait(self.directory / BUDGET,
+            {"taskId": task["taskId"], "attemptId": attempt["attemptId"], "generation": attempt["generation"]},
+            wait_seconds, notify=notify_model_wait) if wait_seconds is not None else None)
         context = ExecutionContext(
             task_id=task["taskId"],
             attempt_id=attempt["attemptId"],
@@ -628,6 +732,7 @@ class Execution:
             turn=claim["turn"] if "turn" in claim else None,
             agent_credential=claim["agentCredential"] if "turn" in claim else None,
             session_record_path=self.session_record_path,
+            model_response_wait=model_wait,
         )
         implementation = role_seam.worker_executor(spec["adapter"])
         control = holder['preflightControl']
@@ -676,23 +781,11 @@ class Execution:
                 directory,
             )
         started = time.monotonic()
-        timeout_seconds = context.timeout_seconds
-        deadline = started + timeout_seconds if timeout_seconds is not None else None
-        if deadline is not None:
-            fsync_json(self.directory / BUDGET, {
-                "binding": {"taskId": task["taskId"], "attemptId": attempt["attemptId"],
-                            "generation": attempt["generation"]},
-                "deadline": deadline,
-            })
-        # An older in-flight hint must finish before registering the budget's
-        # notification; its acknowledgement could otherwise erase the same
-        # waitingReason=None value written after the budget was published.
-        with self._flush_lock:
-            self.hint(waitingReason=None)
-        if deadline is not None:
-            # A failed send stays pending for the control/delivery path, and
-            # reconnect reads the file even if this notification was lost.
-            self.flush_hints()
+        if model_wait is not None:
+            model_wait.begin()
+        else:
+            with self._flush_lock:
+                self.hint(waitingReason=None)
         holder["adapter"] = implementation
         # A previous pre-model retry may have proved its own child stopped. That
         # proof cannot cover this start(): it might spawn before raising a handle.
@@ -707,19 +800,22 @@ class Execution:
         timed_out = False
         while True:
             control.raise_fatal()
-            if handle.wait(timeout=0.25) is not None:
+            finished = handle.wait(timeout=0.25) is not None
+            if finished:
+                if model_wait is not None:
+                    model_wait.finished()
+                break
+            if model_wait is not None and model_wait.expired(handle):
+                timed_out = True
+                self.log("Router model did not start responding; cancelling this owned process session")
+                role_seam.worker_cancel(implementation, handle)
+                handle.wait(timeout=None)
                 break
             if (handle.grace_deadline is not None and time.monotonic() >= handle.grace_deadline
                     and not handle.force_stop_requested):
                 handle.grace_expired = True
                 self.log("Host stop grace reached; forcing the owned run to stop")
                 role_seam.worker_cancel(implementation, handle)
-            if deadline is not None and time.monotonic() >= deadline:
-                timed_out = True
-                self.log("Router budget reached; cancelling this owned process group")
-                role_seam.worker_cancel(implementation, handle)
-                handle.wait(timeout=None)
-                break
         unknown_reads = 0
         while True:
             try:
@@ -741,7 +837,7 @@ class Execution:
             outcome.result = {**outcome.result, "evidenceRetention": retention_failure}
         if (holder.get('harnessHistory') and not timed_out
                 and not handle.cancel_requested and outcome.shutdown_confirmed and outcome.status == 'failed'
-                and outcome.result.get('modelStarted') is False
+                and outcome.result.get('nativeRequestSent') is False
                 and outcome.result.get('code') in {'harness-unavailable', 'invalid-native-result', 'invalid-protocol', 'transport-error', 'native-rpc-error', 'protocol-error', 'native-exit', 'connection-closed'}):
             holder['started'] = False
             holder['confirmed_stopped'] = True
@@ -749,8 +845,9 @@ class Execution:
             raise BoardError('HARNESS_PREMODEL_FAILED', 'The native protocol failed before any model input was sent')
         if timed_out:
             outcome.status = "failed"
-            outcome.error = f"the Router budget of {timeout_seconds}s was reached before the adapter finished"
-            outcome.result = {**outcome.result, "status": "error", "code": "router-budget-exhausted"}
+            outcome.error = f"the Router model did not start responding within {wait_seconds}s"
+            outcome.result = {**outcome.result, "status": "error", "code": "router-not-responding",
+                              "modelResponded": False}
         # The genuine reason this attempt stopped. It is recorded with the receipt,
         # so a cancelled task, an expired deadline, a harness failure and a completed
         # turn stay distinguishable even after a transport outage.
@@ -765,10 +862,14 @@ class Execution:
         if enrich(context, outcome) and termination_reason == TERMINATION_COMPLETED:
             termination_reason = TERMINATION_WORKSPACE_ERROR
         if termination_reason in (TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED, TERMINATION_FORCED_STOP,
-                                  TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP):
+                                  TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP,
+                                  TERMINATION_PAUSE):
             outcome.status = "cancelled"
         if "partialOutput" in outcome.result:
             outcome.result["partialOutput"]["reason"] = termination_reason
+        for key in ("workspaceSeal", "partialWorkspaceSeal"):
+            if isinstance(outcome.result.get(key), dict):
+                outcome.result[key] = record_reference(self.state_dir, outcome.result[key])
         report = outcome.to_report()
         if holder.get('harnessHistory'):
             report['result'] = {**(report.get('result') or {}), 'harnessAttempts': holder['harnessHistory']}
@@ -780,6 +881,31 @@ class Execution:
         report["logPaths"] = {name: path for name, path in log_paths.items() if native_path(Path(path)).is_file()}
         report["runtimeIdentity"] = context.runtime.get("identity")
         return self.receipt(claim, report, directory)
+
+    def _maintenance_answer(self, raw, round_index, observations):
+        from ...protocol import maintenance as files
+        run_id = self.claim["decisionInput"]["maintenanceRunId"]
+        reference = files.publish(self.state_dir, run_id, {"answer": raw, "observations": observations})
+        attempt = self.claim["attempt"]
+        try:
+            response = self.client.call("execution_maintenance", {
+                "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": self.nonce,
+                "round": round_index, "answer": reference})
+            return files.read(self.state_dir, run_id, response["feedback"])
+        finally:
+            files.discard_reference(self.state_dir, run_id, reference)
+
+    def _profile_answer(self, raw, round_index, observations):
+        from ...protocol import profile as files
+        run_id = self.claim["decisionInput"]["profileRunId"]
+        reference = files.publish(self.state_dir, run_id, {"answer": raw, "observations": observations})
+        attempt = self.claim["attempt"]
+        # The service owns submitted round files until the final receipt; a
+        # structurally valid answer is still pending its tool-evidence judgment.
+        response = self.client.call("execution_profile", {
+            "attemptId": attempt["attemptId"], "generation": attempt["generation"],
+            "nonce": self.nonce, "round": round_index, "answer": reference})
+        return files.read(self.state_dir, run_id, response["feedback"])
 
     def _wait_control_observation(self, claim, control, retry):
         control.raise_fatal()
@@ -796,6 +922,7 @@ class Execution:
     def receipt(self, claim: dict, report: dict, directory: Path) -> dict:
         attempt = claim["attempt"]
         receipt = {
+            "version": 2,
             "attemptId": attempt["attemptId"],
             "taskId": attempt["taskId"],
             "generation": attempt["generation"],
@@ -831,7 +958,8 @@ class _ExecutionControl(threading.Thread):
         # Signal handlers only update local facts; native cancellation runs on
         # this thread instead of re-entering locks from the main thread.
         if self.cancel_view is not None and not force:
-            if self.deadline is None or initiator in WRAP_UP_INITIATORS:
+            if (self.deadline is None or initiator in WRAP_UP_INITIATORS
+                    or initiator == self.cancel_view["stopInitiator"] == "pause"):
                 return
         self.requests += 2 if force else 1
         self.cancel_view = {"cancelRequested": True, "stopInitiator": initiator}

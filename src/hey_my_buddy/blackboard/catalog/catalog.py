@@ -39,17 +39,6 @@ CONFIRMATION_SECONDS = 3600
 #: is re-read at the next health check. Unknown readings do not extend it.
 CATALOG_SHELF_SECONDS = 6 * 3600
 
-#: ADR-027 rule 2: the unavailable reason of a model whose absence was confirmed.
-CONFIRMED_ABSENCE_REASON = "catalog.model-absent"
-
-#: The unavailable reason of one retired effort whose model remains in the reading.
-RETIRED_EFFORT_REASON = "catalog.effort-retired"
-
-#: Unavailable reasons that are catalog facts, never undone by health recovery.
-#: A 0 left behind by a harness health failure is a health fact, not evidence
-#: that the native model disappeared (ADR-027 rules 1 and 2).
-CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON, "catalog.native-unavailable")
-
 #: ADR-027 rule 3: how an operator refreshes harness catalogs and their readings.
 
 #: The one reason every catalog-caused refusal carries. The user's independent
@@ -139,117 +128,21 @@ def _parse_time(value: Any) -> datetime | None:
         return None
 
 
-def _model_service_key(provider: str, model: str) -> str:
-    return provider + "\x1f" + model
-
-
-def _pending_map(db, harness: str) -> dict:
-    return {_model_service_key(row["provider"], row["model"]):
-            {"since": row["since"], "efforts": json.loads(row["efforts_json"])}
-            for row in db.execute("SELECT provider,model,since,efforts_json FROM catalog_pending WHERE harness=?",
-                                  (harness,))}
-
-
-def _write_pending_map(db, harness: str, pending: dict) -> None:
-    from ...json_codec import canonical_json
-
-    db.execute("DELETE FROM catalog_pending WHERE harness=?", (harness,))
-    db.executemany("INSERT INTO catalog_pending(harness,provider,model,since,efforts_json) VALUES(?,?,?,?,?)",
-                   [(harness, *key.split("\x1f"), value["since"], canonical_json(value["efforts"]))
-                    for key, value in pending.items()])
-
-
-def pending_model_services(db) -> dict[tuple[str, str, str], str]:
-    """Pending model services and their first absence, scoped to the harness."""
-    return {(row["harness"], row["provider"], row["model"]): row["since"]
-            for row in db.execute("SELECT harness,provider,model,since FROM catalog_pending")}
-
-
 def pending_model_efforts(db, harness: str, provider: str, model: str) -> list[str] | None:
-    """The legal efforts frozen at first absence, or None when not pending."""
-    value = _pending_map(db, harness).get(_model_service_key(provider, model))
-    return value["efforts"] if value is not None else None
+    """Efforts retained at first absence; retirement is an independent fact."""
+    row = db.execute("SELECT pending_since FROM model_services WHERE harness=? AND provider=? AND model=?",
+                     (harness, provider, model)).fetchone()
+    if row is None or row['pending_since'] is None:
+        return None
+    return [item['effort'] for item in db.execute(
+        "SELECT effort FROM buddies WHERE harness=? AND provider=? AND model=? AND retired=0 ORDER BY effort_rank,buddy_id",
+        (harness, provider, model))]
 
 
 def catalog_read_at(db, harness: str) -> str | None:
     """When an actual trusted catalog reading was applied."""
     row = db.execute("SELECT read_at FROM catalog_current WHERE harness=?", (harness,)).fetchone()
     return row['read_at'] if row is not None else None
-
-
-def identities_from_payload(payload_json: Any, harness: str) -> set[tuple[str, str, str]]:
-    """Legal harness/provider/model/effort identities a retained catalog lists.
-
-    A model the retained reading itself declared unavailable contributes none
-    of its efforts: that unavailability is a native fact, not a health artifact
-    (ADR-027 rule 1).
-    """
-    identities: set[tuple[str, str, str]] = set()
-    if payload_json is None:
-        return identities
-    view = CatalogView(json.loads(payload_json))
-    for entry in view.payload["providers"]:
-        if entry["harness"] != harness:
-            continue
-        for model in entry["models"]:
-            if model["available"]:
-                identities.update((entry["provider"], model["id"], effort) for effort in model["efforts"])
-    return identities
-
-
-def model_services_from_payload(payload_json: Any, harness: str) -> set[tuple[str, str]]:
-    """Model services a retained confirmed catalog still lists as available."""
-    return {(provider, model) for provider, model, _effort in identities_from_payload(payload_json, harness)}
-
-
-def restore_retained_availability(db, harness: str) -> int:
-    """Restore the model availability of the retained catalog after health noise.
-
-    ADR-027 separates health availability from adopted catalog facts, at the
-    effort level: the 0s a harness health failure left on ``buddies``
-    are never evidence that a native buddy disappeared. A row returns
-    only when the retained confirmed catalog still lists its exact
-    harness/provider/model/effort identity, or when it is one of the last legal
-    efforts recorded for a model service still awaiting disappearance confirmation. A
-    confirmed absence, a retired effort and a native unavailable declaration are
-    catalog facts and are never restored here.
-    """
-    row = db.execute(
-        "SELECT d.payload_json FROM catalog_current c"
-        " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.harness=?",
-        (harness,)).fetchone()
-    identities = identities_from_payload(row[0] if row is not None else None, harness)
-    pending_efforts = {}
-    for key in _pending_map(db, harness):
-        provider, _, model = key.partition("\x1f")
-        pending_efforts[(provider, model)] = pending_model_efforts(db, harness, provider, model) or []
-    restored = 0
-    for buddy in db.execute(
-            "SELECT buddy_id, provider, model, effort, available, unavailable_code"
-            " FROM buddies WHERE harness=?",
-            (harness,)).fetchall():
-        if buddy["available"] or buddy["unavailable_code"] in CATALOG_FACT_REASONS:
-            continue
-        model_service = (buddy["provider"], buddy["model"])
-        identity = (*model_service, buddy["effort"])
-        legal_pending = pending_efforts.get(model_service)
-        if identity in identities or (legal_pending is not None and buddy["effort"] in legal_pending):
-            db.execute("UPDATE buddies SET available=1,unavailable_code=NULL,unavailable_params_json=NULL,unavailable_content=NULL WHERE buddy_id=?",
-                       (buddy["buddy_id"],))
-            restored += 1
-    return restored
-
-
-def catalog_account_status(db, harness: str) -> str:
-    """The account-status fact of the last trusted reading; unknown without one."""
-    row = db.execute("SELECT account_status FROM catalog_current WHERE harness=?", (harness,)).fetchone()
-    return row['account_status'] if row is not None else "unknown"
-
-
-def note_confirmed_read(db, harness: str, *, now: str, account_status: str) -> None:
-    """Persist the fact that a trusted reading was applied for this harness."""
-    db.execute("UPDATE catalog_current SET read_at=?,account_status=? WHERE harness=?",
-               (now, account_status, harness))
 
 
 def _text(value: Any, limit: int = MAX_TEXT) -> str:
@@ -372,8 +265,6 @@ def canonical_payload(value: dict) -> dict:
         providers.append({
             "harness": harness, "provider": provider,
             "displayName": _text(entry.get("displayName"), 200) or provider,
-            "packageName": _text(entry.get("packageName"), 200),
-            "packageVersion": _text(entry.get("packageVersion"), 64),
             **({"accessType": entry["accessType"]} if harness == "zcode" and
                entry.get("accessType") in ("api-key", "zhipu-coding-plan-api-key") else {}),
             "efforts": list(dict.fromkeys(effort for model in models for effort in model["efforts"])),
@@ -406,7 +297,6 @@ def canonical_payload(value: dict) -> dict:
     return {
         "source": source,
         "harnessVersion": _text(value.get("harnessVersion"), 256) or None,
-        "providerVersion": _text(value.get("providerVersion"), 512) or None,
         "discoveredAt": _text(value.get("discoveredAt"), 64) or None,
         "providers": providers,
         "discoveries": discoveries,
@@ -613,12 +503,8 @@ def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: lis
 
 
 class CatalogView:
-    def __init__(self, payload: dict, *, discovery_id: str | None = None):
-        self.payload, self.discovery_id = payload, discovery_id
-
-    @property
-    def source(self) -> str:
-        return self.payload["source"]
+    def __init__(self, payload: dict):
+        self.payload = payload
 
     def lookup(self, harness: str, provider: str, model: str) -> dict | None:
         for entry in self.payload["providers"]:
@@ -640,10 +526,6 @@ class CatalogView:
             for model in entry["models"]
         }
 
-    def metadata(self) -> dict:
-        return {**self.payload, "discoveryId": self.discovery_id,
-                "discoveredAt": self.payload.get("discoveredAt")}
-
     def proposed_buddies(self) -> list[dict]:
         proposals = []
         for entry in self.payload["providers"]:
@@ -655,13 +537,12 @@ class CatalogView:
                     capabilities = ([f"execution:{entry['harness']}", f"effort:{effort}"]
                                     + [f"input:{item}" for item in model["inputModalities"]])
                     proposals.append({
-                        "buddyId": buddy_id, "label": f"{model['name']} · {effort}"[:200],
+                        "buddyId": buddy_id,
                         "harness": entry["harness"], "provider": entry["provider"], "model": model["id"], "effort": effort,
                         "available": model["available"], "unavailableReason": model["unavailableReason"],
                         "unavailableContent": model["unavailableContent"], "enabled": False,
                         "capabilities": capabilities,
                         "contextWindow": model["contextWindow"],
-                        "description": (model["description"] or f"{model['name']} via {entry['displayName']}")[:4000],
-                        "source": f"catalog:{self.discovery_id or self.source}"[:256],
+                        "description": model["description"][:4000],
                     })
         return proposals

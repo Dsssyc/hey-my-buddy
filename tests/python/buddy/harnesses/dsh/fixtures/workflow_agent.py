@@ -166,15 +166,16 @@ class WorkflowAgent(fake_agent.FakeAgent):
 
     def write_quota_record(self, session_id: str, *, code: str | None = None,
                            message_text: str = QUOTA_MESSAGE) -> None:
-        """One synthetic ``session.v3`` rollout: partial usage, retained root
-        assistant text, and the machine error turn end. A fixture written by the
-        fake agent under this run's private session root, never a native record."""
-        directory = self.sessions_dir()
+        """One synthetic ``session.v4`` rollout in the session's two-level
+        directory: partial usage, retained root assistant text, and the
+        machine error turn end. A fixture written by the fake agent under this
+        run's private session root, never a native record."""
+        directory = self.record_directory(session_id)
         native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
         now_ms = int(time.time() * 1000)
         source = {"kind": "model", "provider": "deepseek-official", "model": "deepseek-flash"}
         events = [
-            {"type": "session", "version": 3, "id": session_id, "createdAt": now_ms,
+            {"type": "session", "version": 4, "id": session_id, "createdAt": now_ms,
              "cwd": os.getcwd(), "isSeeded": False, "origin": "acp", "delegationDepth": 0},
             {"type": "user/message", "seq": 4, "data": {
                 "id": f"user-{session_id}", "role": "user",
@@ -196,7 +197,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
                                                 "message": "provider wording never retained"}}}},
         ]
         lines = "".join(json.dumps(event) + "\n" for event in events)
-        path = directory / f"{session_id}.v3.jsonl.zstd"
+        path = directory / "session.v4.jsonl.zstd"
         import zstandard
         native_path(path).write_bytes(zstandard.ZstdCompressor().compress(lines.encode()))
         fake_agent.log(self.log_path, {"event": "quota-record-written", "path": str(path)})

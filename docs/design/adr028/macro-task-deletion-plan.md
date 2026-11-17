@@ -10,7 +10,7 @@
 
 已核对的根因修订：`routing/decision.py` 派下一位 Router 时更新 `decision_requests.task_id`，`router_sequence.reserve_dispatch/dispatches` 才保留所有内部任务。当前 `workflow._routing_tasks` 与 `micro_task.RELATION_SQL` 的 dr 联接只看最新 task_id，`storage.inspect` 的 native_owners 又依赖前者；实施须在这些归属来源统一纳入 router_dispatches，与删除引擎共用完整关联，不能只在 DELETE 时临时补 SQL。`RELATION_SQL` 的 owned_executions 同样要收齐各次 dispatch，停止资格、读取与存储盘点才一致。这是本任务对路由归属根因修复的范围修订。
 
-Host 审后的删减（2026-10-17）：第 1 版审查提出的无宏任务 Lead 分组修订（让 Lead 名下的树归到 Lead 的 `run:` 分组）不随本批做。当日日常看板只读计数，没有宏任务的 Lead 名下微任务为 0 个。`run:<root>` 的 R 照上面的闭包收齐 Lead 名下的树，确认框的数来自同一个闭包；分组显示的修订记入待办，碰到时再做。
+Host 审后的删减（2026-10-17）：第 1 版审查提出的无宏任务 Lead 分组修订（让 Lead 名下的树归到 Lead 的 `run:` 分组）不随本批做。当日日常黑板只读计数，没有宏任务的 Lead 名下微任务为 0 个。`run:<root>` 的 R 照上面的闭包收齐 Lead 名下的树，确认框的数来自同一个闭包；分组显示的修订记入待办，碰到时再做。
 
 | 表 | 命中的行与处理 | 当前依据 |
 | --- | --- | --- |
@@ -142,7 +142,7 @@ C-Two 沿 BoardError 形状返回 `{"error":{"code":"...","message":"...","detai
 
 按 AGENTS 新建 `blackboard/store/upgrade.py`，只做 upgrade base 24 → 25；本批其他存储改动以后扩展同一个待做升级，不另开历史链。`db.SCHEMA_VERSION=25` 与新 DDL 同次修改；`Database._require_current_schema/initialize` 继续只认当前结构，启动不自动迁移。`install/upgrade.py:preflight/idle_snapshot/upgrade` 先按旧结构验证空闲与停止证据、做验证过的 24 备份，在已有独占安装/服务锁与停止旧服务后执行迁移事务，建空删除表、为旧 commands 补 deletion_id=NULL，最后写 schema_version=25；失败恢复完整 24 备份。不能先用新 SCHEMA_VERSION 的当前 preflight 拒掉 24，也不在打开旧库时顺便加表冒充升级。
 
-样板仍是 `tests/fixtures/upgrade-base/metadata.json` 指定的 0.42.0/90bd0148/schema 24；`tests/python/blackboard/store/upgrade_fixture.py:load_fixture` 先在私有根重绑定，再作为迁移输入。这次不把样板改成 25、不重生成基线。修改 `test_upgrade_fixture.py` 中“24 是当前”的断言，明确运行显式升级，再比较新建 25 的 sqlite_master/外键/索引/约束；未改变表逐行/指纹保持，commands 仅多 NULL 列，新删除表为空。安装沿用上一次升级的流程（`627d0f6c^` 的 `install/upgrade.py`）：先升级，再从升级后的看板取 `expected`，`verify_started` 照旧比对新服务启动前后；升级本身的正确性由样板升级测试与 Host 在日常副本上的演练证明，不在每次安装时另算一份转换后的指纹（Host 2026-10-17 审微任务 1 时改）。补迁移失败回滚、重复安装、非 24 输入拒绝、24 启动不写入、样板摘要不变。25 真在实际看板跑过后才按 AGENTS 消费本升级，更新基线提交并重新生成样板，由 Host 留验收证据。
+样板仍是 `tests/fixtures/upgrade-base/metadata.json` 指定的 0.42.0/90bd0148/schema 24；`tests/python/blackboard/store/upgrade_fixture.py:load_fixture` 先在私有根重绑定，再作为迁移输入。这次不把样板改成 25、不重生成基线。修改 `test_upgrade_fixture.py` 中“24 是当前”的断言，明确运行显式升级，再比较新建 25 的 sqlite_master/外键/索引/约束；未改变表逐行/指纹保持，commands 仅多 NULL 列，新删除表为空。安装沿用上一次升级的流程（`627d0f6c^` 的 `install/upgrade.py`）：先升级，再从升级后的黑板取 `expected`，`verify_started` 照旧比对新服务启动前后；升级本身的正确性由样板升级测试与 Host 在日常副本上的演练证明，不在每次安装时另算一份转换后的指纹（Host 2026-10-17 审微任务 1 时改）。补迁移失败回滚、重复安装、非 24 输入拒绝、24 启动不写入、样板摘要不变。25 真在实际黑板跑过后才按 AGENTS 消费本升级，更新基线提交并重新生成样板，由 Host 留验收证据。
 
 ## 8. 控制台入口与契约
 
@@ -158,7 +158,7 @@ C-Two 沿 BoardError 形状返回 `{"error":{"code":"...","message":"...","detai
 
 当前 `_reclaim_checkout` 只是 cleanup_plan/cleanup_apply 的删除编排，并不重新准备检出；会补写文件的是 `workspace.cleanup_inspect(resume=True)` 调用 `_cleanup_restore`，它恢复缺失 gitfile/已保留树的叶子，再走普通回收证明。删除自己的恢复只在持 allocation 锁下复用其身份证明，不为删目录先恢复用户文件；删除中状态禁止另一路回收准入，先已进入 applying 的回收使首次删除拒绝。整合必须先把任务了结，delivered 尚不可删除；普通接纳/最终提交仍受原 revision 与数据库状态约束，不加全局锁或每层重复资格检查。
 
-Host 审后的删减（2026-10-17）：已 finished 而 `shutdown_confirmed=0` 的执行，当前的中断恢复不再判定（`tasks/interruption.py` 的 `recover` 与 `_recover_one`）。当日日常看板只读计数为 0 个，本批不改中断恢复。删除资格照旧拒绝这类执行（reasonCode stop-unconfirmed）；恢复的缺口记入待办，碰到时再修。
+Host 审后的删减（2026-10-17）：已 finished 而 `shutdown_confirmed=0` 的执行，当前的中断恢复不再判定（`tasks/interruption.py` 的 `recover` 与 `_recover_one`）。当日日常黑板只读计数为 0 个，本批不改中断恢复。删除资格照旧拒绝这类执行（reasonCode stop-unconfirmed）；恢复的缺口记入待办，碰到时再修。
 
 ## 10. 确认框数据
 
@@ -196,7 +196,7 @@ Host 的日常规模私有副本演练先做重绑定：借鉴 `load_fixture` �
 | 4：harness 会话 | `buddy/harnesses/codex/`、必要共享 harness 接口、`tasks/worker_sessions.py` 的创建收据判定、对应 harness 测试与 `tests/probes/` 无模型探针 | thread/delete 与仅专门消息算不存在；DSH/ZCode 私有根、Claude 无持久会话；归属沿创建收据，黑板 DB 连接不传入 buddy 层；依赖 1，可与 2、3 并行，公共接缝与写入文件先定归属 |
 | 5：控制台后端与契约 | `console/{server,reads,console_sessions}.py`、`blackboard/service/service.py`、protocol 实际命名映射/contract、签名夹具、版本文件及对应 console/protocol 测试 | 1–4 合并验证后最后接通；仅控制台权限，0.46.0；前端入口/确认/未完成显示在批次三 |
 
-Host 负责跨交付整合、完整检查、另一模型复审、第 11 节日常规模演练与安装决定。前端批次三的 `apps/console/`、 owning reference/skill 与 `docs/acceptance/` 分配在其自身任务中，不扩大本次写入范围。本回合只改本文，不重启服务、不写日常看板、不联网、不调用模型、不操作 stash/分支/tag。
+Host 负责跨交付整合、完整检查、另一模型复审、第 11 节日常规模演练与安装决定。前端批次三的 `apps/console/`、 owning reference/skill 与 `docs/acceptance/` 分配在其自身任务中，不扩大本次写入范围。本回合只改本文，不重启服务、不写日常黑板、不联网、不调用模型、不操作 stash/分支/tag。
 
 ## 13. 已核实事项与待开发者定的事项
 

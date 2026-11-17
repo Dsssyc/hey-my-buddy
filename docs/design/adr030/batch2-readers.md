@@ -1,6 +1,6 @@
 # ADR-030 批次 2：独立账户的读者清单
 
-本清单读取受管检出的 `1140dd13` 源码，日期为 2026-10-12；它是第一回合的调查交付，不是实现或验收记录。本回合只新增本文件，没有修改源码、测试、skill、README 或其他文档，没有运行服务、Worker、账户登录或模型调用，也没有读取日常看板或真实钥匙串。下文“现状”来自源码及仓库夹具，“建议”等待 Host 审阅后才实施。
+本清单读取受管检出的 `1140dd13` 源码，日期为 2026-10-12；它是第一回合的调查交付，不是实现或验收记录。本回合只新增本文件，没有修改源码、测试、skill、README 或其他文档，没有运行服务、Worker、账户登录或模型调用，也没有读取日常黑板或真实钥匙串。下文“现状”来自源码及仓库夹具，“建议”等待 Host 审阅后才实施。
 
 依据是 ADR-030 第 4 条及“影响”、执行计划的现状／贯穿各批／批次 2／清单改判、ADR-019、AGENTS.md 的存储不变量及 ADR-021 L18 升级设计；现源码优先于历史设计。路径以仓库根为基准；表中 `catalog/`、`service/`、`store/`、`routing/`、`evaluation/`、`tasks/` 均指 `src/hey_my_buddy/blackboard/` 下对应目录。
 
@@ -142,7 +142,7 @@ Codex 原生 quota.accountId 经 `codex/protocol.py` 和 `protocol/usage.py:norm
 
 ### 仓库夹具的实际量
 
-本回合用 Python 标准库把 `tests/fixtures/adr021-l18/board.sql` 载入内存 SQLite，未打开任何状态目录的数据库：schema=15；account-selection、account-credential、account-mutation 都是 0 条；attempt-account 是 3 条（attempt 尾号 00b、012、01a，均 codex/native/选择代次0/凭据代次0）；account-operation 是 1 条（`account-operation:00000000000000000000000000000021`，codex/native/credentialRevision=0/purpose=fixture-shutdown-unconfirmed/status=uncertain）。没有 Worker 来源记录或独立凭据事实；这不证明日常看板／文件系统无残余。真实看板的测量只能由 Host 在另行授权的数据副本上做。
+本回合用 Python 标准库把 `tests/fixtures/adr021-l18/board.sql` 载入内存 SQLite，未打开任何状态目录的数据库：schema=15；account-selection、account-credential、account-mutation 都是 0 条；attempt-account 是 3 条（attempt 尾号 00b、012、01a，均 codex/native/选择代次0/凭据代次0）；account-operation 是 1 条（`account-operation:00000000000000000000000000000021`，codex/native/credentialRevision=0/purpose=fixture-shutdown-unconfirmed/status=uncertain）。没有 Worker 来源记录或独立凭据事实；这不证明日常黑板／文件系统无残余。真实黑板的测量只能由 Host 在另行授权的数据副本上做。
 
 原 fixture、metadata/provenance 与固定基点生成器继续证明 schema15 输入来源，不手改 board.sql，也不因为当前模块退休就删生成器对旧基点的 account_operation 调用。新迁移测试在私有还原库另外布置四类及派生记录，验证完整清除和其余逐值保留。
 
@@ -369,7 +369,7 @@ Host command 读取缺陷修在 native_observations.warnings 的原生事实边�
 
 可在本检出内恢复生成：先准备冻结依赖，再运行 `uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/adr030-upgrade-base --output-dir tests/fixtures/upgrade-base`；work-dir须尚未存在，生成器会在此检出的ignored tmp归档固定基点、建立自己的私有工作区与依赖环境，不启动服务或模型。当前请求只需 Host 在本检出准备Python／前端依赖并让本 Worker 继续；若另授权一个 prepared-python，也必须明确它的读取范围，不自行借用日常运行时。
 
-完整检查、浏览器检查、控制台构建、空HOME演练、真实看板副本与故障注入仍由 Host 执行；本回合没有运行或宣称通过它们。
+完整检查、浏览器检查、控制台构建、空HOME演练、真实黑板副本与故障注入仍由 Host 执行；本回合没有运行或宣称通过它们。
 
 
 ## 11. 第三回合的实际产物与验证（后续结论见第12节）
@@ -419,7 +419,7 @@ Host command 读取缺陷修在 native_observations.warnings 的原生事实边�
 | protocol.test_rpc_config | C-Two／Unix IPC 注册或监听被拒绝；`protocol.test_rpc_config.IsolatedTransportTests.test_0755_state_creates_0700_ipc_and_round_trips`、`protocol.test_rpc_config.IsolatedTransportTests.test_concurrent_large_transfers_complete_without_pool`、`protocol.test_rpc_config.IsolatedTransportTests.test_different_private_root_cannot_connect`、`protocol.test_rpc_config.IsolatedTransportTests.test_disabled_pool_releases_outgoing_shm_after_real_rpc`、`protocol.test_rpc_config.IsolatedTransportTests.test_maximum_legal_payload_round_trips_and_over_limit_fails_explicitly`、`protocol.test_rpc_config.IsolatedTransportTests.test_private_root_overrides_inherited_namespace`、`protocol.test_rpc_config.RealDaemonControlTests.test_waits_and_control_operations_share_execution_capacity_without_starvation` |
 
 
-各模块原始日志仅保留在本检出的 ignored tmp；本节记录的是当前源码的聚焦检查，完整检查、浏览器检查、空HOME演练、真实看板副本与故障注入依旧由 Host 执行。本回合未做这些独立检查或控制台构建。
+各模块原始日志仅保留在本检出的 ignored tmp；本节记录的是当前源码的聚焦检查，完整检查、浏览器检查、空HOME演练、真实黑板副本与故障注入依旧由 Host 执行。本回合未做这些独立检查或控制台构建。
 
 
 本回合覆盖上面55个受影响的Python文件，没有尚未启动的指定模块：43个文件整文件通过，共805项；另外12个文件只有部分或没有通过证据，按去重的方法名统计98项受到上述边界限制（其中 cli.test_host_preview 的一项是 Host 已接管的真实前端解析）。合计988项尝试中890项通过；这些数字不包括任何完整check、浏览器或付费／真实harness检查。最终 git diff --check 通过，新夹具与本清单不含机器绝对主目录；未修改分支、标签或stash，未提交。
@@ -431,11 +431,11 @@ Host command 读取缺陷修在 native_observations.warnings 的原生事实边�
 
 Host报告在封存候选 fc516168 上前端类型检查通过，78个前端文件／1119项通过；完整Python检查3579项、216个文件中211个通过，基点已知的 cli.test_host_preview 由整合分支修正，其余四个文件交回本Worker。本节接续第11节的历史状态；Host已补验的其他模块不再列为待办，没有重跑完整检查或前端检查。
 
-四个文件的原因分别为旧测试期望或旧fixture接线，没有据此修改产品代码：test_current_core 的当前schema应为17，前一版本的显式升级提示应为16，并补入schema16启动拒绝的存档检查；test_console_objective_fixture 的新建看板事实跟随SCHEMA_VERSION；test_workspace_identity_migration 测的是当前看板上的身份迁移，版本断言与命名改为当前schema，保留封存历史、固定文件和指纹的全部断言；test_continue_catalog_trust 的五个重读函数和四个lambda仍要求已删除的账户binding，当前契约只传harness名称，故旧fixture触发TypeError并被服务边界报告为INTERNAL_ERROR。修正fixture签名后，原来的九项有界重读、目录拒绝与用户enabled守门断言全部保留且通过。
+四个文件的原因分别为旧测试期望或旧fixture接线，没有据此修改产品代码：test_current_core 的当前schema应为17，前一版本的显式升级提示应为16，并补入schema16启动拒绝的存档检查；test_console_objective_fixture 的新建黑板事实跟随SCHEMA_VERSION；test_workspace_identity_migration 测的是当前黑板上的身份迁移，版本断言与命名改为当前schema，保留封存历史、固定文件和指纹的全部断言；test_continue_catalog_trust 的五个重读函数和四个lambda仍要求已删除的账户binding，当前契约只传harness名称，故旧fixture触发TypeError并被服务边界报告为INTERNAL_ERROR。修正fixture签名后，原来的九项有界重读、目录拒绝与用户enabled守门断言全部保留且通过。
 
 重新搜索 tests/python 中全部schema读写／断言、升级函数名与夹具路径，另修了 test_upgrade_migration 的回滚mock：新目标启动报告当前schema17，旧运行时恢复报告真实基点schema16，并核对报告与当时实际数据库schema相同；test_store 的旧“Schema 11”说明改为当前存储说明；test_upgrade_service 的临时日志名改为中性的 upgrade-base-service.log。搜索后没有 migrate_15_to_16／migrate_15_to_17、adr021-l18 或旧基点提交的引用；旧夹具路径没有其他遗漏。
 
-保留的数字有明确事实身份：test_upgrade_fixture／test_migrations／test_upgrade_migration 中的16是固定0.29.0升级输入、备份或回滚结果，17是目标形式；test_console_version_info 的14由测试主动写入假安装包，专门核对安装版本与源码版本不同；test_store 的10与test_current_core中的旧版本是拒绝存档输入；ZCode的schemaVersion=1是其原生配置格式。这些不是当前看板的旧期望，不把它们改成17。
+保留的数字有明确事实身份：test_upgrade_fixture／test_migrations／test_upgrade_migration 中的16是固定0.29.0升级输入、备份或回滚结果，17是目标形式；test_console_version_info 的14由测试主动写入假安装包，专门核对安装版本与源码版本不同；test_store 的10与test_current_core中的旧版本是拒绝存档输入；ZCode的schemaVersion=1是其原生配置格式。这些不是当前黑板的旧期望，不把它们改成17。
 
 本回合继续使用Host授权的只读解释器、src:tests/python优先与清除十个继承绑定，每个模块独立subprocess执行：blackboard.store.test_current_core 6项通过；blackboard.tasks.test_continue_catalog_trust 9项通过；install.test_workspace_identity_migration 46项通过（102.828秒）。blackboard.tasks.test_console_objective_fixture 的3项结构／隔离检查通过，唯一 test_smoke_response_is_readable_over_real_console_http 在 socket.bind 得到 PermissionError／Operation not permitted，映射为 CONSOLE_PORT_IN_USE，无法进入真实HTTP断言；没有通过mock、跳过或修改监听规则来规避它。
 

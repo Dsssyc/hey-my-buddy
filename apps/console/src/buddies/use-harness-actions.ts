@@ -31,6 +31,7 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
   const [error, setError] = useCopyState(), [note, setNote] = useCopyState();
   const [retry, setRetry] = useState<Action | null>(null);
   const [refused, setRefused] = useState(false);
+  const [scope, setScope] = useState<"harness" | "models" | null>(null);
 
   const rows = recorded.map(row => replies[row.harness] ?? row);
   const refusal = !sessionWritable ? t("loginExpired") : !mutationsAvailable ? t("harness.refused") : "";
@@ -42,8 +43,9 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
   }
   async function run(action: Action) {
     if (busy) return;
+    setScope(action.kind === "retry" ? "models" : "harness");
     // A refusal is said only while the action would still be refused.
-    if (refusal) { setRefused(true); return; }
+    if (refusal) { setError(""); setNote(""); setRetry(null); setRefused(true); return; }
     setBusy(true); setError(""); setNote(""); setRetry(null); setRefused(false);
     try {
       if (action.kind === "check") {
@@ -72,6 +74,6 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
     }
   }
 
-  return { rows, busy, error, note, retry, guard: refused ? refusal : "", refusal, run, reloadSnapshot };
+  return { rows, busy, error, note, retry, guard: refused ? refusal : "", refusal, scope, run, reloadSnapshot };
 
 }

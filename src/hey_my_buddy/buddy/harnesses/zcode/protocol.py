@@ -11,6 +11,9 @@ import time
 from typing import Callable
 
 from ..native_observations import bound_native_text, native_counter
+from ..native_support import (INQUIRY_TOOL_NAME_CHARS, NATIVE_ID_CHARS,
+                              NATIVE_SUMMARY_BYTES, truncate_text, truncate_utf8)
+from ..input_admission import admission_error
 from ..session_receipts import (refusal_shaped, verify_receipt, verify_tool_refusal,
                                 verify_inquiry_receipt)
 from ....json_codec import canonical_json, decode_strict_json
@@ -43,10 +46,10 @@ _WINDOWS_PIPE = os.name == "nt"
 _FACT_RPC_METHODS = frozenset({
     "runtime/capabilities", "session/close", "session/create", "session/messages",
     "session/resume", "session/send", "session/setModel", "session/setThoughtLevel",
-    "session/subscribe",
+    "session/subscribe", "v4/command", "v4/conversation/subscribe", "v4/conversation/unsubscribe",
 })
 NATIVE_EVENT_TYPES = frozenset({
-    "turn.started", "turn.completed", "turn.failed", "tool.updated",
+    "turn.started", "turn.completed", "turn.failed", "turn.steerQueued", "turn.steerDrained", "tool.updated",
     "message.upserted", "message.removed", "part.started", "part.delta",
     "part.upserted", "part.removed", "model.streaming", "permission.requested",
     "userInput.requested", "session.created", "session.resumed", "session.updated",
@@ -54,7 +57,7 @@ NATIVE_EVENT_TYPES = frozenset({
 })
 NATIVE_NOTIFICATION_METHODS = frozenset({
     "startup/storageState", "process/mcpTelemetry", "process/mcpResourceSamples", "process/resourceSample",
-    "session/event", "state.updated", "computer-use/operation-event", "v4/telemetry/event",
+    "session/event", "state.updated", "computer-use/operation-event", "v4/telemetry/event", "v4/conversation/frame",
 })
 
 
@@ -69,11 +72,6 @@ class NativeRpcError(NativeError):
     """A failure raised by the current RPC, rather than by an observer."""
 
 
-#: How this adapter carries Host questions, stated once and reported verbatim.
-#: The native protocol still has no turn-bound in-turn input: ``session/send``
-#: has no delivery/expectedTurn fields and rejects a send during an active
-#: prompt, and the v4 sendText guide can only defer unbound input or start a
-#: new turn. The cooperative channel never injects questions mid-turn.
 
 
 class ActivityProjection:
@@ -597,6 +595,38 @@ def combined_usage(rounds: list[ZcodeAttemptUsage]) -> dict | None:
     return result
 
 
+#: The input members naming one tool operation, in the Claude adapter's caliber:
+#: the first one present is the operation a permission request asks to approve.
+_PERMISSION_OPERATION_KEYS = ("command", "file_path", "path", "notebook_path", "url")
+
+
+def _permission_request_facts(params: object) -> dict:
+    """What one ``interaction/requestPermission`` request asks to approve.
+
+    The reverse request carries the tool's own identities and raw input
+    (verified against the installed app server;
+    docs/acceptance/zcode-request-input-probe.md). Only the bounded tool name,
+    tool call id and one bounded operation value are retained — the full input
+    never reaches evidence.
+    """
+    tool_name = params.get("toolName") if isinstance(params, dict) else None
+    call_id = params.get("toolCallId") if isinstance(params, dict) else None
+    inputs = params.get("input") if isinstance(params, dict) else None
+    operation = "<command or path unread>"
+    if isinstance(inputs, dict):
+        for key in _PERMISSION_OPERATION_KEYS:
+            if isinstance(inputs.get(key), str) and inputs[key]:
+                operation = inputs[key]
+                break
+    return {
+        "toolName": truncate_text(native_tool_name(tool_name), INQUIRY_TOOL_NAME_CHARS)
+                    if isinstance(tool_name, str) and tool_name else "<unknown>",
+        "toolCallId": truncate_text(call_id, NATIVE_ID_CHARS)
+                      if isinstance(call_id, str) and call_id else None,
+        "operation": truncate_utf8(operation, NATIVE_SUMMARY_BYTES, errors="replace"),
+    }
+
+
 class NativeConnection:
     """Responses and reverse requests are pumped together; no request holds a reader."""
 
@@ -614,6 +644,7 @@ class NativeConnection:
         self.observe: Callable[[dict, int], None] = lambda _message, _ordinal: None
         self.on_unknown = on_unknown or (lambda _label: None)
         self.attention: Callable[[dict], None] = lambda _record: None
+        self.on_unsupported: Callable[[dict], None] = lambda _record: None
         self.after_pump: Callable[[], None] = lambda: None
         os.set_blocking(process.stdin.fileno(), False)
         threading.Thread(target=self._read, daemon=True).start()
@@ -712,9 +743,13 @@ class NativeConnection:
                 }})
                 return
             # Anything else (browser, official-MCP auth, future methods): the
-            # documented unsupported-method refusal, recorded as attention.
-            self.attention_request(message, outcome="refused-with-jsonrpc-error")
-            self.send({"id": message["id"], "error": {"code": -32601, "message": "This Buddy execution requires a structured attention outcome"}})
+            # documented unsupported-method refusal, unchanged in its answer.
+            # No Host answer exists for these — credentials are the user's and
+            # the blackboard provides no browser (ADR-030) — so the refusal is
+            # counted as evidence and never becomes attention that would block
+            # the turn's completion.
+            self.unsupported_request(message)
+            self.send({"id": message["id"], "error": {"code": -32601, "message": "This host does not support this request"}})
             return
         if "id" in message:
             self.responses[message["id"]] = message
@@ -748,19 +783,38 @@ class NativeConnection:
             "outcome": outcome,
             "hostAction": "no interactive Host is attached; the turn must report assistance or attention in its own structured outcome",
         }
+        if method == "interaction/requestPermission":
+            record.update(_permission_request_facts(message.get("params")))
         self.attention(record)
 
-    def call(self, method: str, params: dict) -> dict:
+    def unsupported_request(self, message: dict) -> None:
+        """Record one refused native request no Host answer exists for.
+
+        The refusal itself was already sent by the pump's caller; this keeps
+        only the method and time, as evidence rather than attention.
+        """
+        method = message.get("method")
+        self.on_unsupported({
+            "kind": "unsupported-native-request",
+            "method": method[:120] if isinstance(method, str) else "unknown",
+            "at": _now(),
+        })
+
+    def call(self, method: str, params: dict, *, on_sent=None) -> dict:
         request_id = self.next_id
         self.next_id += 1
         self.send({"id": request_id, "method": method, "params": params})
+        if on_sent is not None:
+            on_sent()
         while request_id not in self.responses:
             self.pump()
         response = self.responses.pop(request_id)
         if "error" in response:
             # Native errors can contain provider request details. Keep them in the
             # native private logs; public failures identify only the operation.
-            raise NativeRpcError("native-rpc-error", f"ZCode rejected {method}")
+            failure = NativeRpcError("native-rpc-error", f"ZCode rejected {method}")
+            failure.native_error = admission_error(method, response["error"])
+            raise failure
         result = response.get("result")
         if not isinstance(result, dict):
             self.on_unknown(_unknown_label("rpc-result", method, result))
@@ -774,27 +828,31 @@ class NativeConnection:
 class RootTurnEvidence:
     """Only signed results in the explicitly admitted root turn can count.
 
-    Besides the finish tool this tracker owns the inquiry channel's authority:
-    a question only becomes ``delivered`` when a ``hey_my_buddy_checkpoint`` result in
-    this root session and native turn succeeded untruncated with a signed
-    receipt, and an answer only counts when a ``hey_my_buddy_answer_inquiry`` result
-    in the same turn carried a signed receipt the controller re-verified against
-    the bridge's committed state. Child sessions, relayed sources, agent and
-    background calls are excluded exactly like finish evidence.
+    Answers require successful, untruncated root tool evidence and a signed
+    attempt-bound receipt. The first verified finish result fixes the turn's
+    answer for good: every root tool call after it — and a finish call repeated
+    before any result — is a bounded retained fact in the provenance, never a
+    second result and never a failed turn. Native inquiry delivery is tracked
+    by inquiry.py. Child, relayed and background calls never become root
+    evidence.
     """
 
     def __init__(self, session_id: str, input_id: str, tool_name: str, bridge: dict, *,
-                 checkpoint_name: str | None = None, answer_name: str | None = None,
-                 on_delivery: Callable[[dict, str], None] | None = None,
+                 answer_name: str | None = None,
                  on_answer: Callable[[dict, str], None] | None = None,
                  validate_outcome: Callable[[object], str | None],
                  mounted_tools: tuple[str, ...] | list[str],
-                 on_unknown: Callable[[str], None] | None = None):
+                 on_unknown: Callable[[str], None] | None = None,
+                 on_finish_receipt: Callable[[dict], None] | None = None):
         self.session_id, self.input_id, self.tool_name, self.bridge = session_id, input_id, tool_name, bridge
-        self.checkpoint_name, self.answer_name = checkpoint_name, answer_name
-        self.on_delivery, self.on_answer = on_delivery, on_answer
+        self.answer_name, self.on_answer = answer_name, on_answer
         self.validate_outcome = validate_outcome
         self.on_unknown = on_unknown or (lambda _label: None)
+        #: Called once, the moment a finish receipt verifies and becomes this
+        #: turn's fixed answer. The driver publishes the acceptance the
+        #: session-tools bridge reads, so a repeated finish call is answered
+        #: with the truth instead of a second receipt.
+        self.on_finish_receipt = on_finish_receipt
         #: The bare session tools this run actually mounted — a required,
         #: caller-provided set with no default: a signed refusal envelope
         #: verifies only for a tool this run really bound, and the verifier
@@ -804,6 +862,10 @@ class RootTurnEvidence:
         self.call_id: str | None = None
         self.receipt: dict | None = None
         self.finish_failed = False
+        #: Root tool calls the root made after its finish was fixed: after the
+        #: accepted receipt every later call, and before any result a repeated
+        #: finish call. Each is a bounded fact — never a second result.
+        self.post_finish_calls: list[dict] = []
         #: Root-session calls whose result carried verified delivery evidence
         #: (a verified receipt or a verified signed refusal envelope). Only
         #: these are the completion mechanism's own calls; everything else the
@@ -813,7 +875,6 @@ class RootTurnEvidence:
         self.last_seq = -1
         self.start_seq = self.call_seq = self.result_seq = self.end_seq = -1
         self.completed_ordinal = self.settled_ordinal = self.close_ordinal = 0
-        self.checkpoint_calls: dict[str, dict] = {}
         self.answer_calls: dict[str, dict] = {}
 
     def observe(self, message: dict, ordinal: int) -> None:
@@ -846,8 +907,7 @@ class RootTurnEvidence:
                 if kind == "turn.completed":
                     raise NativeError("invalid-provenance", "the native root completion has no input identity")
                 if kind == "tool.updated" and (self.call_id is not None or any(
-                        call["result"] is None for calls in (self.checkpoint_calls, self.answer_calls)
-                        for call in calls.values())):
+                        call["result"] is None for call in self.answer_calls.values())):
                     raise NativeError("invalid-provenance", "the native root tool update has no call evidence")
             return
         if p.get("type") == "turn.started":
@@ -875,21 +935,27 @@ class RootTurnEvidence:
         kind = data.get("kind")
         tool_call_id = data.get("toolCallId")
         if kind == "scheduled":
-            if self.call_id is not None:
-                raise NativeError("duplicate-finish", "the root scheduled another tool after its finish call")
             name = data.get("toolName")
+            is_answer = self.answer_name is not None and name == self.answer_name
+            if self.call_id is not None and not is_answer:
+                if self.receipt is not None or name == self.tool_name:
+                    # The accepted receipt is this turn's answer, so a later
+                    # root tool call — another finish call included — is a
+                    # retained fact, never a second result; a finish call
+                    # repeated before any result is the same fact, with the
+                    # first call's result the only one that can count.
+                    self._post_finish_fact(name, tool_call_id)
+                    return
+                raise NativeError("duplicate-finish", "the root scheduled another tool after its finish call")
             if name == self.tool_name:
                 if not isinstance(tool_call_id, str) or not tool_call_id:
                     raise NativeError("invalid-provenance", "the root finish call has no identity")
                 self.call_id, self.call_seq = tool_call_id, seq
-            elif name == self.checkpoint_name and self.checkpoint_name is not None:
-                if not isinstance(tool_call_id, str) or not tool_call_id or tool_call_id in self.checkpoint_calls:
-                    raise NativeError("invalid-provenance", "the root checkpoint call has no usable identity")
-                self.checkpoint_calls[tool_call_id] = {"seq": seq, "result": None}
             elif name == self.answer_name and self.answer_name is not None:
                 if not isinstance(tool_call_id, str) or not tool_call_id or tool_call_id in self.answer_calls:
                     raise NativeError("invalid-provenance", "the root answer call has no usable identity")
-                self.answer_calls[tool_call_id] = {"seq": seq, "result": None}
+                self.answer_calls[tool_call_id] = {"seq": seq, "result": None,
+                                                  "late": self.call_id is not None or self.finish_failed}
             return
         if self.call_id is not None and tool_call_id == self.call_id:
             if kind == "error":
@@ -919,14 +985,11 @@ class RootTurnEvidence:
                 self.receipt = verify_receipt(content, self.bridge, self.validate_outcome)
                 self.verified_delivery_calls.add(tool_call_id)
                 self.result_seq = seq
-            return
-        if kind in ("result", "error") and tool_call_id in self.checkpoint_calls:
-            self._inquiry_result(self.checkpoint_calls, data, kind,
-                                 "inquiry-checkpoint", tool_call_id)
+                if self.on_finish_receipt is not None:
+                    self.on_finish_receipt(self.receipt)
             return
         if kind in ("result", "error") and tool_call_id in self.answer_calls:
-            self._inquiry_result(self.answer_calls, data, kind,
-                                 "inquiry-answer", tool_call_id)
+            self._answer_result(data, kind, tool_call_id)
             return
 
     def verified_delivery(self) -> frozenset[tuple[str, str]]:
@@ -939,20 +1002,9 @@ class RootTurnEvidence:
         identity = canonical_json({"sessionId": self.session_id, "turnId": self.turn_id})
         return frozenset((identity, call_id) for call_id in self.verified_delivery_calls)
 
-    def _inquiry_result(self, calls: dict[str, dict], data: dict, kind: str,
-                        receipt_kind: str, tool_call_id: str) -> None:
-        """Import one checkpoint/answer tool result under root-turn authority.
-
-        An ordinary tool error keeps the turn alive for a corrected retry, exactly
-        like a failed finish, and so does a verified signed tool-refusal envelope
-        arriving inside a native wrapper result marked successful. A successful
-        result must otherwise carry a signed receipt the controller re-verifies;
-        the bridge callback then applies the state change or raises for a forged,
-        stale or conflicting binding. A duplicate terminal result for one retained
-        call identity is a protocol violation. The verified receipt itself is
-        handed to its callback and never retained, so an unlimited turn cannot
-        accumulate checkpoint question text.
-        """
+    def _answer_result(self, data: dict, kind: str, tool_call_id: str) -> None:
+        """Verify a root answer, including one scheduled after finish."""
+        calls, receipt_kind = self.answer_calls, "inquiry-answer"
         call = calls[tool_call_id]
         if call["result"] is not None:
             raise NativeError("invalid-provenance", f"the native {receipt_kind} call produced a duplicate terminal result")
@@ -963,7 +1015,7 @@ class RootTurnEvidence:
         if result.get("truncated") is not False:
             raise NativeError("invalid-inquiry-receipt", f"the native {receipt_kind} result was truncated")
         content = result.get("content")
-        native_name = self.checkpoint_name if receipt_kind == "inquiry-checkpoint" else self.answer_name
+        native_name = self.answer_name
         if refusal_shaped(content):
             # Verified for either native success marker before any retryable
             # ordinary-error path, exactly like the finish tool: a forged or
@@ -981,7 +1033,7 @@ class RootTurnEvidence:
         receipt = verify_inquiry_receipt(content, self.bridge, receipt_kind)
         call["result"] = "receipt-verified"
         self.verified_delivery_calls.add(tool_call_id)
-        callback = self.on_delivery if receipt_kind == "inquiry-checkpoint" else self.on_answer
+        callback = self.on_answer
         if callback is not None:
             callback(receipt, tool_call_id)
 
@@ -996,6 +1048,15 @@ class RootTurnEvidence:
         self.finish_failed = True
         self.call_id, self.call_seq = None, -1
 
+    def _post_finish_fact(self, name: object, tool_call_id: object) -> None:
+        # One bounded identifier pair per later root call; arguments, outputs
+        # and raw names never enter evidence.
+        self.post_finish_calls.append({
+            "toolName": native_tool_name(name) if isinstance(name, str) and name.strip() else "<unknown>",
+            "toolCallId": truncate_text(tool_call_id, NATIVE_ID_CHARS)
+                          if isinstance(tool_call_id, str) and tool_call_id else None,
+        })
+
     def provenance(self) -> dict:
         return {
             "harness": "zcode", "tool": "hey_my_buddy_finish_turn", "turnEnd": "completed", "rootSessionMatched": True,
@@ -1005,4 +1066,6 @@ class RootTurnEvidence:
             "turnCompletedOrdinal": self.completed_ordinal, "promptCompletedOrdinal": self.settled_ordinal,
             "sessionCloseOrdinal": self.close_ordinal, "toolResultSuccess": True, "toolResultTruncated": False,
             "turnResultType": "success", "settlement": "session-closed",
+            "postFinishToolCalls": {"count": len(self.post_finish_calls),
+                                    "records": list(self.post_finish_calls)},
         }

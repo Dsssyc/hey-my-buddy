@@ -38,10 +38,12 @@ MAX_INQUIRY_RECEIPT_BYTES = 200 * 1024
 
 #: The closed set of reasons a signed tool-refusal envelope may carry. Every
 #: member is an expected, bounded refusal the role's tools mint for a
-#: correctable caller mistake or an outstanding Host condition; anything else is
-#: not a refusal a native verifier will recover from.
+#: correctable caller mistake, an outstanding Host condition, or a turn that
+#: already ended with an accepted finish receipt; anything else is not a
+#: refusal a native verifier will recover from.
 TOOL_REFUSAL_REASONS = ("invalid-arguments", "attention-outstanding", "inquiry-pending",
-                        "unknown-inquiry", "inquiry-state", "inquiry-channel-absent")
+                        "unknown-inquiry", "inquiry-state", "inquiry-channel-absent",
+                        "turn-ended")
 
 #: A refusal detail is the same bounded correction text a plain tool error
 #: carried (validator output, the pending-inquiry refusal, the attention note),

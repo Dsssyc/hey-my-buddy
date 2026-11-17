@@ -12,13 +12,13 @@ Worker and review carriers, ``no_tool_codex.py`` the fast no-tool carrier.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 import subprocess
 import sys
 import tempfile
-from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -26,6 +26,7 @@ import uuid
 from pathlib import Path
 from buddy.harnesses.session_record_support import notifications
 from buddy.harnesses.fixture_selection import select_command, select_fixture
+from buddy.roles.test_role_prompts import real_turn_input
 from unittest import mock
 
 from hey_my_buddy.blackboard.routing.router import answer_schema
@@ -57,6 +58,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 )
 from hey_my_buddy.buddy.roles.run_observers import CORRECTION_SUFFIX, FastCorrection
 from hey_my_buddy.buddy.roles.structured_call import correction_code
+from hey_my_buddy.buddy.roles.prompts import PromptText
 from hey_my_buddy.buddy.roles.turn_io import input_hash
 from hey_my_buddy.errors import BoardError
 from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
@@ -80,6 +82,74 @@ def observed_activity(endpoint):
 
 
 class RejectionPhaseTests(unittest.TestCase):
+    def test_model_start_requires_root_output_instead_of_turn_start(self):
+        root = {"threadId": "root", "turnId": "current"}
+        empty = [
+            {"method": "turn/started", "params": {"threadId": "root", "turn": {"id": "current"}}},
+            {"method": "item/started", "params": {**root, "item": {"type": "reasoning", "id": "empty"}}},
+            {"method": "item/completed", "params": {**root, "item": {"type": "userMessage", "text": "input"}}},
+            {"method": "item/agentMessage/delta", "params": {"threadId": "child", "turnId": "current", "delta": "foreign"}},
+            {"method": "thread/tokenUsage/updated", "params": {**root, "tokenUsage": {"last": {"inputTokens": 10, "outputTokens": 0}}}},
+        ]
+        for frame in empty:
+            self.assertFalse(native_run._root_model_output(frame, "root", "current"), frame)
+        output = [
+            {"method": "item/agentMessage/delta", "params": {**root, "delta": " "}},
+            {"method": "item/reasoning/textDelta", "params": {**root, "delta": "thinking"}},
+            {"method": "item/started", "params": {**root, "item": {"type": "mcpToolCall", "id": "tool"}}},
+            {"method": "thread/tokenUsage/updated", "params": {**root, "tokenUsage": {"last": {"outputTokens": 1}}}},
+        ]
+        for frame in output:
+            self.assertTrue(native_run._root_model_output(frame, "root", "current"), frame)
+
+    def test_web_overrides_use_nested_objects_with_literal_server_ids(self):
+        connection = mock.Mock()
+        connection.call.return_value = {"config": {
+            "mcp_servers": {'local."files"': {"command": "fixture-mcp", "env": {"TOKEN": "private-value"}},
+                            "disabled": {"enabled": False}},
+            "plugins": {'my."plugin"': {"mcp_servers": {'user."data"': {}}}},
+        }}
+        request = mock.Mock(permission="web", cwd="/private/checkout")
+        overrides = native_run._web_config(connection, request)
+        connection.call.assert_called_once_with("config/read", {"cwd": request.cwd, "includeLayers": False})
+        self.assertEqual(overrides, {
+            "web_search": "live", "features.shell_tool": False, "features.view_image": False,
+            "agents.enabled": False, "features.multi_agent": False, "features.multi_agent_v2": False,
+            "features.apps": False, "features.plugins": False, "features.image_generation": False,
+            "mcp_servers": {'local."files"': {"enabled": False}},
+        })
+        self.assertNotIn("private-value", json.dumps(overrides))
+        self.assertEqual(connection.call.return_value["config"]["mcp_servers"]['local."files"']["env"],
+                         {"TOKEN": "private-value"})
+
+    def test_web_overrides_leave_disabled_transportless_mcp_entries_untouched(self):
+        connection = mock.Mock()
+        connection.call.return_value = {"config": {
+            "mcp_servers": {"computer-use": {"enabled": False}, "active": {"enabled": True}},
+            "plugins": {"my.plugin": {"mcp_servers": {
+                "disabled": {"enabled": False}, "active": {"enabled": True}}}},
+        }}
+        overrides = native_run._web_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
+        self.assertEqual(overrides["mcp_servers"], {"active": {"enabled": False}})
+        self.assertIs(overrides["features.plugins"], False)
+        self.assertNotIn("plugins", overrides)
+
+    def test_web_disables_plugins_even_without_explicit_mcp_policy_entries(self):
+        for plugins in ({}, {"installed": {"enabled": True}}):
+            connection = mock.Mock()
+            connection.call.return_value = {"config": {"mcp_servers": {}, "plugins": plugins}}
+            overrides = native_run._web_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
+            self.assertIs(overrides["features.plugins"], False)
+            self.assertNotIn("plugins", overrides)
+
+    def test_web_unreadable_config_stops_before_thread_admission(self):
+        for configured in (None, [], {"mcp_servers": []}, {"mcp_servers": {"bad": None}}):
+            connection = mock.Mock()
+            connection.call.return_value = {"config": configured}
+            with self.subTest(configured=configured), self.assertRaises(CodexProtocolError):
+                native_run._web_config(connection, mock.Mock(permission="web", cwd="/private/checkout"))
+            self.assertEqual(connection.call.call_count, 1)
+
     def test_input_start_and_foreign_activity_do_not_start_the_root_model(self):
         from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
         evidence = TurnEvidence("root", "current")
@@ -95,13 +165,13 @@ class RejectionPhaseTests(unittest.TestCase):
 
 
 class SeamCase(unittest.TestCase):
-    """The shared private environment for direct seam calls."""
+    """Private seam calls use a readiness budget; deadline checks pass their own."""
 
     def setUp(self):
         developer_source = mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"})
         developer_source.start()
         self.addCleanup(developer_source.stop)
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-codex-seam-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-seam-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -131,16 +201,16 @@ class SeamCase(unittest.TestCase):
         recorded confirmation is replaced — a group whose stop cannot be
         proven after the fact.
         """
-        real = native_run._halt_owned_group
+        real = native_run._halt_owned_session
 
         def halt_then_unconfirmed(handle, deadline):
             shutdown, signalled = real(handle, deadline)
             return False, signalled
 
-        return mock.patch.object(native_run, "_halt_owned_group", halt_then_unconfirmed)
+        return mock.patch.object(native_run, "_halt_owned_session", halt_then_unconfirmed)
 
     def request(self, *, permission: str, output_schema: dict, prompt: str,
-                timeout: int = 8, continuation=None, capture_evidence=False,
+                timeout: int = 180, continuation=None, capture_evidence=False,
                 input_sha256: str | None = None, turn_id: str | None = None,
                 native: str | None = None) -> RunRequest:
         marker = uuid.uuid4().hex[:8]
@@ -179,7 +249,7 @@ class SeamCase(unittest.TestCase):
                 marker = uuid.uuid4().hex
                 catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / ('discovery-' + marker),
                                         native_root=self.base / ('discovery-native-' + marker),
-                                        timeout_seconds=8, cancelled=lambda: False)
+                                        timeout_seconds=180, cancelled=lambda: False)
                 provider = catalog['providers'][0]['provider']
                 self.assertEqual(provider, expected)
                 self.assertEqual(set(catalog['billingByProvider']), {expected})
@@ -206,6 +276,32 @@ class SeamCase(unittest.TestCase):
 
 
 class FastSeamTests(SeamCase):
+    def test_model_start_is_reported_live_after_first_root_output(self):
+        correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
+        seen = []
+
+        def observer(facts):
+            seen.append((facts["settled"], facts["modelResponded"]))
+            return correction.observer(facts)
+
+        result = self.fast_run("ok", correction, observer=observer)
+        self.assertIs(result.model_responded, True)
+        self.assertEqual(seen[0], (False, False))
+        self.assertIn((False, True), seen)
+
+    def test_initial_native_input_refusal_keeps_structured_admission_facts(self):
+        self.set_case("input-too-large")
+        request = self.request(permission="none", output_schema=FAST_SCHEMA, prompt="Pick a buddy")
+        result = run(request, observer=FastCorrection(FAST_SCHEMA, "Pick a buddy").observer,
+                     services=None, cancelled=lambda: False)
+        self.assertIs(result.native_request_sent, True)
+        self.assertIs(result.model_responded, False)
+        self.assertEqual(result.native_admission_error.value, {
+            "nativeMethod": "turn/start", "nativeCode": -32602,
+            "message": "fixture admission refusal", "input_error_code": "input_too_large",
+            "max_chars": 9, "actual_chars": 10})
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def test_default_and_configured_provider_reach_fast_thread_start(self):
         self.assert_discovered_provider_runs('none', FAST_SCHEMA)
 
@@ -221,7 +317,7 @@ class FastSeamTests(SeamCase):
             "multi_agent_version": "v2"}]}
         (self.home / "models_cache.json").write_text(json.dumps(cache), encoding="utf-8", newline="\n")
 
-    def fast_run(self, case: str, correction: FastCorrection, *, timeout: int = 6,
+    def fast_run(self, case: str, correction: FastCorrection, *, timeout: int = 180,
                  observer=None):
         self.set_case(case)
         prompt = "Pick a buddy"
@@ -238,7 +334,7 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.value.schema_status, "unknown")
         self.assertEqual(result.value.correction_count, 0)
         self.assertIsNone(correction.stop_reason)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 0)
@@ -469,7 +565,7 @@ class FastSeamTests(SeamCase):
     def test_unverified_no_tool_policy_continues_with_readback_facts(self):
         result = self.fast_run("config-mismatch", FastCorrection(FAST_SCHEMA, "Pick a buddy"))
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         facts = native_run.native_evidence(result)
         self.assertEqual(facts["policyCheck"]["configReadback"]["status"], "unknown")
         self.assertEqual(facts["nativeConfigPolicy"]["web_search"], "enabled")
@@ -479,7 +575,7 @@ class FastSeamTests(SeamCase):
             with self.subTest(case=case):
                 result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a buddy"))
                 self.assertEqual(result.end.status, "ok", result.end.message)
-                self.assertTrue(result.model_started)
+                self.assertTrue(result.model_responded)
                 self.assertIsNone(result.buddy.checked.model)
                 self.assertEqual(native_run.native_evidence(result)["policyCheck"]["selectedModel"]["status"], "unknown")
 
@@ -487,7 +583,7 @@ class FastSeamTests(SeamCase):
         result = self.fast_run("wrong-model", FastCorrection(FAST_SCHEMA, "Pick a buddy"))
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "buddy-mismatch")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(native_run.native_evidence(result)["nativeThreadReceipt"]["model"], "other")
         trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
         self.assertNotIn("turns", trace)
@@ -499,7 +595,7 @@ class FastSeamTests(SeamCase):
                 trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
                 if case == "provider-wrong":
                     self.assertEqual(result.end.reason_code, "buddy-mismatch")
-                    self.assertIsNone(result.model_started)
+                    self.assertIs(result.model_responded, False)
                     self.assertNotIn("turns", trace)
                 else:
                     self.assertEqual(result.end.status, "ok", result.end.message)
@@ -550,14 +646,14 @@ class FastSeamTests(SeamCase):
         garbage.write_bytes(b"\x00\x01not an executable")
         select_command(os.environ, self.base, "codex", [str(garbage)])
         request = self.request(permission="none", output_schema=FAST_SCHEMA,
-                               prompt="Pick a buddy", timeout=5)
+                               prompt="Pick a buddy")
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = run(request, observer=correction.observer, services=None,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "harness-unavailable")
         self.assertIn("could not start", result.end.message)
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "gone")
         self.assertIsNone(result.end.native_exit_code)
@@ -570,7 +666,7 @@ class FastSeamTests(SeamCase):
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         self.set_case("unlisted-model")
         result = run(self.request(permission="none", output_schema=FAST_SCHEMA,
-                                  prompt="Pick a buddy", timeout=6),
+                                  prompt="Pick a buddy"),
                      observer=correction.observer, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-rpc-error")
@@ -592,7 +688,7 @@ class CodexSeamCase(SeamCase):
         os.environ.update(self.environment)
         os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / "trace.json")
 
-    def worker_run(self, case: str, *, continuation=None, timeout: int = 12,
+    def worker_run(self, case: str, *, continuation=None, timeout: int = 180,
                    observer=None, input_text: str = "fixture micro task task", live=None, level="write"):
         self.set_case(case)
         turn_input = {"taskId": "micro-task-1", "attemptId": "attempt-check", "generation": 7,
@@ -604,7 +700,7 @@ class CodexSeamCase(SeamCase):
                    observer=observer or (lambda _facts: FEEDBACK_CONTINUE),
                    services=self.worker_services(live=live), cancelled=lambda: False)
 
-    def review_run(self, case: str, *, observer=None, capture_evidence=False, timeout: int = 8):
+    def review_run(self, case: str, *, observer=None, capture_evidence=False, timeout: int = 180):
         self.set_case(case)
         return run(self.request(permission="read", output_schema=REVIEW_SCHEMA,
                                 prompt="Select from the frozen packet", timeout=timeout,
@@ -620,7 +716,7 @@ class ProviderReceiptSeamTests(CodexSeamCase):
             with self.subTest(mode=mode):
                 result = getattr(self, mode + "_run")("provider-wrong")
                 self.assertEqual(result.end.reason_code, code)
-                self.assertIsNone(result.model_started)
+                self.assertIs(result.model_responded, False)
                 trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
                 self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
 
@@ -638,7 +734,7 @@ class ProviderReceiptSeamTests(CodexSeamCase):
         continuation = RunContinuation(mode="native-session", previous_session_id=first.native_identity.session_id)
         result = self.worker_run("provider-wrong", continuation=continuation)
         self.assertEqual(result.end.reason_code, "buddy-mismatch")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
         thread = trace["threads"][first.native_identity.session_id]
         self.assertEqual(len(thread["turnRequests"]), 1)
@@ -677,6 +773,18 @@ class ReviewCorrection:
 
 
 class ReviewSeamTests(CodexSeamCase):
+    def test_review_model_start_reaches_observer_before_settlement(self):
+        seen = []
+
+        def observer(facts):
+            seen.append((facts["settled"], facts["modelResponded"]))
+            return FEEDBACK_CONTINUE
+
+        result = self.review_run("readonly-network-disabled", observer=observer)
+        self.assertIs(result.model_responded, True)
+        self.assertEqual(seen[0], (False, False))
+        self.assertIn((False, True), seen)
+
     def test_review_provider_rejection_uses_common_root_activity(self):
         for case, phase in (("quota-before", "before-model"), ("quota-activity-text", "during-model"),
                             ("quota-before-truncated", "unknown")):
@@ -748,7 +856,7 @@ class ReviewSeamTests(CodexSeamCase):
         result = self.review_run("ok")
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.raw,
-                         json.dumps({"buddyId": "legal", "note": "Read-only fixture", "evidence": []}))
+                         json.dumps({"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "Read-only fixture", "evidence": []}))
         self.assertEqual(result.value.correction_count, 0)
         package = result.tool_evidence.value
         self.assertEqual(len(package["nativeIdentity"]), 1)
@@ -800,7 +908,7 @@ class ReviewSeamTests(CodexSeamCase):
     def test_review_network_disabled_receipt_admits_turn(self):
         result = self.review_run("readonly-network-disabled")
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertIs(result.model_started, True)
+        self.assertIs(result.model_responded, True)
         facts = native_run.native_evidence(result)
         self.assertEqual(facts["policyCheck"]["threadReceipt"]["status"], "confirmed")
         self.assertIs(facts["nativePolicy"]["sandbox"]["networkAccess"], False)
@@ -810,7 +918,7 @@ class ReviewSeamTests(CodexSeamCase):
             with self.subTest(case=case):
                 result = self.review_run(case)
                 self.assertEqual(result.end.status, "ok", result.end.message)
-                self.assertTrue(result.model_started)
+                self.assertTrue(result.model_responded)
                 self.assertIsNone(result.buddy.checked.model)
                 self.assertEqual(native_run.native_evidence(result)["policyCheck"]["selectedModel"]["status"], "unknown")
 
@@ -818,7 +926,7 @@ class ReviewSeamTests(CodexSeamCase):
         result = self.review_run("readonly-model-mismatch")
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "readonly-configuration-mismatch")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         self.assertEqual(native_run.native_evidence(result)["nativePolicy"]["model"], "different-model")
         trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
         self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
@@ -829,7 +937,7 @@ class ReviewSeamTests(CodexSeamCase):
                 result = self.review_run(case)
                 self.assertEqual(result.end.status, "error")
                 self.assertEqual(result.end.reason_code, "readonly-policy-unverified")
-                self.assertIsNone(result.model_started)
+                self.assertIs(result.model_responded, False)
                 facts = native_run.native_evidence(result)
                 self.assertIn("nativePolicy", facts)
                 self.assertEqual(facts["policyCheck"]["threadReceipt"]["status"], "unknown")
@@ -858,17 +966,70 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_admitted_worker_turn_without_output_stays_before_model(self):
+        seen = []
+
+        def observer(facts):
+            seen.append(facts["modelResponded"])
+            return FEEDBACK_CONTINUE
+
+        result = self.worker_run("quota-before", observer=observer)
+        self.assertIs(result.native_request_sent, True)
+        self.assertIs(result.model_responded, False)
+        self.assertEqual(seen[0], False)
+        self.assertNotIn(True, seen)
+
+        seen.clear()
+        result = self.worker_run("quota-activity-text", observer=observer)
+        self.assertIs(result.model_responded, True)
+        self.assertEqual(seen[0], False)
+        self.assertIn(True, seen)
+
+    def test_web_native_threads_keep_the_restricted_config(self):
+        self.set_case("ok")
+        for turn_id in (None, "turn-check"):
+            with self.subTest(carrier="worker" if turn_id else "final-message"):
+                request = self.request(permission="web", output_schema=OUTCOME_SCHEMA if turn_id else REVIEW_SCHEMA,
+                                       prompt="Web probe", turn_id=turn_id, input_sha256="a" * 64)
+                result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                             services=self.worker_services() if turn_id else None, cancelled=lambda: False)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
+                thread = trace["threads"][result.native_identity.session_id]
+                self.assertEqual(thread["start"]["sandbox"], "read-only")
+                self.assertEqual(thread["start"]["approvalPolicy"], "never")
+                config = thread["start"]["config"]
+                self.assertEqual(config["web_search"], "live")
+                self.assertFalse(config["features.shell_tool"])
+                self.assertFalse(config["features.view_image"])
+                self.assertFalse(config["agents.enabled"])
+                self.assertFalse(config["features.apps"])
+                self.assertFalse(config["features.plugins"])
+                self.assertFalse(config["features.image_generation"])
+                self.assertEqual(config["mcp_servers"], {"user-tool": {"enabled": False}})
+                self.assertEqual(result.effective_policy.tools.requested.value["config"], config)
+                self.assertEqual(thread["turnRequests"], [{"cwd": str(self.cwd),
+                    "sandboxPolicy": {"type": "readOnly", "networkAccess": True}, "approvalPolicy": "never"}])
+
     def test_complete_worker_prompt_over_two_mib_reaches_the_native_peer(self):
-        task = "Execute this task once: 单份任务正文-2fef3c"
-        turn = {"version": 3, "taskId": "micro-task-1", "attemptId": "attempt-check", "generation": 7,
-                "turnId": "turn-check", "context": {"delegationAuthority": False,
-                    "evidence": "完整上下文😀\n\"quoted\"\\path " * 75000}}
+        # The prompt's two real byte budgets carry it past 2 MiB: the task text
+        # (1,048,550 of the 1 MiB submission bound) and the continuation input
+        # (1,048,560 of its own 1 MiB bound), whose CJK, emoji, quotes,
+        # backslashes and newlines also stress the canonical JSON escaping.
+        task = "Execute this task once: 单份任务正文-2fef3c\n" * 20971
+        turn = real_turn_input()
+        turn.update(taskId="micro-task-1", attemptId="attempt-check", generation=7, turnId="turn-check")
+        turn["context"]["taskId"] = "micro-task-1"
+        turn["context"]["continuation"] = {
+            "kind": "manual", "trigger": None, "note": "continue",
+            "input": "完整上下文😀\n\"quoted\"\\path " * 30840,
+        }
         frozen_input = json.dumps(turn, ensure_ascii=False)
         frozen_hash = input_hash(turn)
         prompt = worker_format("codex").prompt(task, turn)
         expected = prompt.encode("utf-8")
         self.assertGreater(len(expected), 2 * 1024 * 1024)
-        result = self.worker_run("large-prompt", input_text=prompt, timeout=20)
+        result = self.worker_run("large-prompt", input_text=prompt)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         capture = Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).with_suffix(".prompt.txt")
@@ -1017,7 +1178,7 @@ class WorkerSeamTests(CodexSeamCase):
             failed = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=self.worker_services(), cancelled=lambda: False)
         self.assertEqual(failed.end.reason_code, 'harness-unavailable')
-        self.assertFalse(failed.model_started)
+        self.assertFalse(failed.model_responded)
         self.assertFalse(path.exists(), 'a failed startup must not create the session record')
         retried = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                       services=self.worker_services(), cancelled=lambda: False)
@@ -1050,7 +1211,8 @@ class WorkerSeamTests(CodexSeamCase):
                 with mock.patch.object(native_run.Connection, 'pump', observe_pump):
                     result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                                  services=self.worker_services(), cancelled=lambda: False)
-                self.assertTrue(visible, 'the native fixture waits for a flushed running message')
+                self.assertTrue(visible, f'the native fixture waits for a flushed running message: {result.end}\n'
+                                + (Path(request.private_state.invocation_root) / 'native.stderr.log').read_text(encoding='utf-8'))
                 self.assertEqual(result.end.status, 'ok' if case == 'session-stream' else 'error')
                 self.assertEqual(result.stop_evidence.native.group_state, 'gone')
                 lines = notifications(path)
@@ -1131,9 +1293,10 @@ class WorkerSeamTests(CodexSeamCase):
                            "sessionRecordPath": request.session_record_path,
                            "inputFile": str(input_file), "outputFile": str(root / "turn-output.json")}
                 control.update(timeoutSeconds=30)
-                handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
+                handle = run_execution.InlineRunHandle(control, request.identity)
                 with mock.patch.object(run_execution, "worker_request", return_value=(
-                        request, self.worker_services(), lambda _facts: FEEDBACK_CONTINUE, None)):
+                        request, self.worker_services(), lambda _facts: FEEDBACK_CONTINUE, None,
+                        PromptText((("task", request.input_text),)).parts)):
                     result, _request, _verdict, code = inline_run.execute(
                         control, handle)
                 self.assertEqual(code, 0, result.end.message)
@@ -1194,7 +1357,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_null_native_provider_uses_codex_default_in_discovery(self):
         self.set_case('provider-null')
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / 'null-discovery',
-                                native_root=self.base / 'null-native', timeout_seconds=8, cancelled=lambda: False)
+                                native_root=self.base / 'null-native', timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual(catalog['providers'][0]['provider'], 'openai')
         self.assertEqual(set(catalog['billingByProvider']), {'openai'})
         self.assertEqual(catalog['billingByProvider']['openai']['kind'], 'subscription')
@@ -1223,7 +1386,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_unreadable_initial_config_keeps_catalog_unknown_and_continues(self):
         result = self.worker_run("config-unreadable")
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertTrue(result.model_started)
+        self.assertTrue(result.model_responded)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
         self.assertEqual(native_run.native_evidence(result)["catalogRead"]["discovery"]["reason"],
@@ -1266,18 +1429,19 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertFalse((self.base / "activity" / "activity.json").exists())
 
     def test_non_chatgpt_login_and_configured_provider_can_run(self):
-        from hey_my_buddy.blackboard.catalog.catalog import canonical_payload, identities_from_payload
+        from hey_my_buddy.blackboard.catalog.catalog import canonical_payload, CatalogView
         (self.home / "config.toml").write_text('model_provider = "fixture-provider"\n', encoding="utf-8", newline="\n")
         self.set_case("api-key")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "catalog-read",
-                                native_root=self.base / "catalog-native", timeout_seconds=8,
+                                native_root=self.base / "catalog-native", timeout_seconds=180,
                                 cancelled=lambda: False)
         self.assertEqual(catalog["providers"][0]["provider"], "fixture-provider")
         self.assertEqual(catalog["discoveries"][0]["accountStatus"], "confirmed")
         self.assertEqual(catalog["billingByProvider"]["fixture-provider"]["kind"], "unknown")
         normalized = canonical_payload(catalog)
-        self.assertIn(("fixture-provider", "fixture-model", "low"),
-                      identities_from_payload(json.dumps(normalized), "codex"))
+        model = CatalogView(normalized).lookup('codex', 'fixture-provider', 'fixture-model')
+        self.assertTrue(model['available'])
+        self.assertIn('low', model['efforts'])
         request = self.request(permission="write", output_schema=OUTCOME_SCHEMA, prompt="Work",
                                turn_id="turn-1", input_sha256="a" * 64, native="worker-native")
         request = request.model_copy(update={"buddy": RunBuddy(
@@ -1309,7 +1473,7 @@ class WorkerSeamTests(CodexSeamCase):
         continuation = RunContinuation(mode="native-session", previous_session_id=first.native_identity.session_id)
         resumed = self.worker_run("ok", continuation=continuation)
         self.assertEqual(resumed.end.reason_code, "native-resume-unavailable")
-        self.assertIsNone(resumed.model_started)
+        self.assertIs(resumed.model_responded, False)
 
     def test_binding_with_an_unexpected_field_is_refused(self):
         first = self.worker_run("ok")
@@ -1321,7 +1485,7 @@ class WorkerSeamTests(CodexSeamCase):
         result = self.worker_run("ok", continuation=RunContinuation(
             mode="native-session", previous_session_id=previous))
         self.assertEqual(result.end.reason_code, "native-resume-unavailable")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
 
     def test_binding_write_failure_keeps_delivered_turn_and_disables_resume(self):
         original = native_run.private_json
@@ -1475,7 +1639,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_native_events_publish_through_the_shared_endpoint_callback(self):
         self.set_case("worker-tool")
         request = self.request(permission="write", output_schema=OUTCOME_SCHEMA,
-                               prompt="fixture micro task task", timeout=12,
+                               prompt="fixture micro task task",
                                input_sha256=input_hash({"fixture": "live"}), turn_id="turn-live",
                                native="worker-native")
         endpoint = activity_endpoint(request.identity)
@@ -1579,7 +1743,7 @@ class WorkerSeamTests(CodexSeamCase):
         result = self.worker_run(case, timeout=2, continuation=RunContinuation(
             mode='native-session', previous_session_id=previous))
         self.assertEqual(result.end.reason_code, code)
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         self.assertIsNone(result.native_identity)
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         if text is not None:
@@ -1686,7 +1850,7 @@ class WorkerSeamTests(CodexSeamCase):
             return RunFeedback(action="correct", input_text="retry")
 
         request = self.request(permission="write", output_schema=OUTCOME_SCHEMA,
-                               prompt="fixture micro task task", timeout=12,
+                               prompt="fixture micro task task",
                                input_sha256=input_hash({"taskId": "micro-task-1", "attemptId": "x",
                                                         "generation": 1, "turnId": "t"}),
                                turn_id="t", native="worker-native")
@@ -1694,32 +1858,28 @@ class WorkerSeamTests(CodexSeamCase):
             run(request, observer=correcting, services=self.worker_services(),
                 cancelled=lambda: False)
 
-    def test_unconfirmed_native_group_stop_reports_unknown_not_gone(self):
+    def test_unconfirmed_native_session_stop_reports_unknown_not_gone(self):
         observed = []
-        observe = ProcessHandle.shutdown_confirmed
-
-        def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
-            if "--version" in handle.process.args:
-                return observe(handle, settle_seconds=settle_seconds)
-            observed.append(handle)
-            return False
-
-        with mock.patch.object(ProcessHandle, "shutdown_confirmed", unconfirmed):
-            result = self.worker_run("ok")
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-shutdown-failed")
-        stop = result.stop_evidence.native
-        self.assertEqual(stop.group_state, "unknown")
-        # The micro task turn's observed completion is a stream fact of its own;
-        # the unknown group must not overwrite it — and still never saves a
-        # resumable binding. (The halt's real handle below shows the leader
-        # reaped: the reappearance is that handle's fact.)
-        self.assertTrue(result.tool_evidence.value["streamComplete"])
-        self.assertIsNone(result.continuation.resumable)
-        # No orphan: the halt really stopped the group it owned.
-        handle = observed[0]
-        self.assertIsNotNone(handle.process.poll())
-        self.assertTrue(handle.shutdown_confirmed(settle_seconds=0.5))
+        initialize = ProcessHandle.__init__
+        def fail_scan(handle, *args, **kwargs):
+            initialize(handle, *args, **kwargs)
+            if "--version" not in handle.process.args:
+                target, attribute = (handle._members, "snapshot") if handle._members is not None else (handle.job, "active")
+                observed.append((handle, target, attribute, getattr(target, attribute)))
+                setattr(target, attribute, mock.Mock(side_effect=OSError("fixture member scan failed")))
+        try:
+            with mock.patch.object(ProcessHandle, "__init__", fail_scan):
+                result = self.worker_run("ok")
+            self.assertEqual(result.end.status, "error")
+            self.assertEqual(result.end.reason_code, "native-shutdown-failed")
+            self.assertEqual(result.stop_evidence.native.group_state, "unknown")
+            self.assertTrue(result.tool_evidence.value["streamComplete"])
+            self.assertIsNone(result.continuation.resumable)
+            self.assertIsNotNone(observed[0][0].poll())
+        finally:
+            for handle, target, attribute, observation in observed:
+                setattr(target, attribute, observation)
+                self.assertTrue(handle.terminate(grace_seconds=0)[0])
 
     def test_cancelled_run_reports_cancel_and_native_interrupt(self):
         cancel_after_admission = self.cancel_after_native_start()
@@ -1794,7 +1954,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
     """Private commands and the actual public probe/owned-creation boundaries."""
 
     def setUp(self):
-        temporary = TemporaryDirectory(prefix='hey-my-buddy-codex-discovery-boundary-',
+        temporary = tempfile.TemporaryDirectory(prefix='hey-my-buddy-codex-discovery-boundary-',
                                                 dir=os.environ.get('HMB_CHECKS_TMPDIR', tempfile.gettempdir()))
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
@@ -1817,21 +1977,26 @@ class DiscoveryBoundaryTests(unittest.TestCase):
             return run_discovery(cwd=str(self.base), invocation_root=self.base / 'invocation',
                                  native_root=self.base / 'native', timeout_seconds=2, cancelled=lambda: False)
 
+    @contextmanager
     def keep_child_for_teardown(self, before=None):
         create = native_run.owned_popen
 
         def owned(*args, **kwargs):
             if before is not None:
                 before(kwargs)
-            child = create(*args, **kwargs)
-            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
+            return create(*args, **kwargs)
 
+        def capture(*args, **kwargs):
+            handle = ProcessHandle(*args, **kwargs)
             def reap():
-                native_run._halt_owned_group(handle, time.monotonic() + 5)
-                child.stdout.close()
+                native_run._halt_owned_session(handle, time.monotonic() + 5)
+                handle.process.stdout.close()
             self.addCleanup(reap)
-            return child
-        return mock.patch.object(native_run, 'owned_popen', side_effect=owned)
+            return handle
+
+        with mock.patch.object(native_run, 'owned_popen', side_effect=owned), \
+             mock.patch.object(native_run, 'ProcessHandle', side_effect=capture):
+            yield
 
     def test_missing_command_proves_no_native_child(self):
         self.record.update(status='unavailable', command=[],
@@ -1942,7 +2107,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
         self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
 
     def test_connection_failure_with_unknown_halt_keeps_unknown_stop(self):
-        halt = native_run._halt_owned_group
+        halt = native_run._halt_owned_session
 
         def halt_without_evidence(handle, deadline):
             halt(handle, deadline)
@@ -1950,7 +2115,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
 
         with self.keep_child_for_teardown(), \
              mock.patch.object(native_run, 'Connection', side_effect=ValueError('fixture connection refused')), \
-             mock.patch.object(native_run, '_halt_owned_group', side_effect=halt_without_evidence):
+             mock.patch.object(native_run, '_halt_owned_session', side_effect=halt_without_evidence):
             with self.assertRaises(ValueError) as caught:
                 self.discover()
         self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
@@ -1994,15 +2159,17 @@ class DiscoverySeamTests(SeamCase):
         self.set_case("bad-catalog")
         return run_discovery(cwd=str(self.cwd), invocation_root=self.base / f"discovery-{marker}",
                              native_root=self.base / f"discovery-native-{marker}",
-                             timeout_seconds=10, cancelled=lambda: False)
+                             timeout_seconds=180, cancelled=lambda: False)
 
     def test_discovery_reads_the_catalog_without_a_prompt_or_turn(self):
         self.set_case("ok")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
                                 native_root=self.base / "discovery-native",
-                                timeout_seconds=10, cancelled=lambda: False)
+                                timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual(catalog["harness"], "codex")
         self.assertEqual(catalog["harnessVersion"], "codex-cli fixture")
+        self.assertNotIn("providerVersion", catalog)
+        self.assertFalse({"packageName", "packageVersion"} & catalog["providers"][0].keys())
         models = catalog["providers"][0]["models"]
         self.assertEqual([model["id"] for model in models], ["fixture-model"])
         self.assertEqual(models[0]["efforts"], ["low", "high"])
@@ -2018,7 +2185,7 @@ class DiscoverySeamTests(SeamCase):
                 self.set_case(case)
                 catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / case,
                                         native_root=self.base / (case + "-native"),
-                                        timeout_seconds=10, cancelled=lambda: False)
+                                        timeout_seconds=180, cancelled=lambda: False)
                 self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
                 self.assertEqual(catalog["discoveries"][0]["reason"],
                                  {"code": "config-shape-unreadable", "params": {}})
@@ -2031,7 +2198,7 @@ class DiscoverySeamTests(SeamCase):
         self.set_case("unreadable-catalog-result")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "rpc-discovery",
                                 native_root=self.base / "rpc-discovery-native",
-                                timeout_seconds=10, cancelled=lambda: False)
+                                timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
         self.assertEqual(catalog["unknownEvents"]["countsByType"],
                          {"account/updated": 1, "rpc/result-unreadable/model/list": 1})
@@ -2052,13 +2219,13 @@ class DiscoverySeamTests(SeamCase):
         self.assertIs(unknown.exception.discovery_shutdown_confirmed, False)
 
     def test_discovery_stop_observation_failure_keeps_unknown_stop(self):
-        halt = native_run._halt_owned_group
+        halt = native_run._halt_owned_session
 
         def halt_without_evidence(handle, deadline):
             halt(handle, deadline)
             raise ValueError('fixture stop observation failed')
 
-        with mock.patch.object(native_run, '_halt_owned_group', side_effect=halt_without_evidence):
+        with mock.patch.object(native_run, '_halt_owned_session', side_effect=halt_without_evidence):
             with self.assertRaises(ValueError) as caught:
                 self.discover('unknown-stop')
         self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
@@ -2071,7 +2238,7 @@ class CatalogTrustTests(CodexSeamCase):
         self.set_case("ok")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
                                 native_root=self.base / "discovery-native",
-                                timeout_seconds=10, cancelled=lambda: False)
+                                timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual(catalog["discoveries"],
                          [{"harness": "codex", "status": "complete", "accountStatus": "confirmed"}])
         self.assertEqual(catalog["warnings"], [])
@@ -2083,7 +2250,7 @@ class CatalogTrustTests(CodexSeamCase):
         self.set_case("account-unknown")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
                                 native_root=self.base / "discovery-native",
-                                timeout_seconds=10, cancelled=lambda: False)
+                                timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
                          ["fixture-model"])
         self.assertEqual(catalog["discoveries"],
@@ -2100,7 +2267,7 @@ class CatalogTrustTests(CodexSeamCase):
                 catalog = run_discovery(cwd=str(self.cwd),
                                         invocation_root=self.base / f"discovery-{case}",
                                         native_root=self.base / f"discovery-native-{case}",
-                                        timeout_seconds=10, cancelled=lambda: False)
+                                        timeout_seconds=180, cancelled=lambda: False)
                 self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
                                  ["fixture-model"])
                 self.assertEqual(catalog["discoveries"],
@@ -2155,6 +2322,12 @@ class CatalogTrustTests(CodexSeamCase):
         self.assertTrue(raw.startswith("Codex rejected turn/start: 模型不可用".encode()),
                         message)
         self.assertNotIn("\N{REPLACEMENT CHARACTER}", message)
+        self.assertIs(result.native_request_sent, True)
+        self.assertIsNone(result.model_responded)
+        admission = result.native_admission_error.value
+        self.assertEqual(admission["nativeCode"], -32000)
+        self.assertNotIn("input_error_code", admission)
+        self.assertLessEqual(len(admission["message"].encode("utf-8")), 512)
 
     def test_a_listed_model_with_an_unlisted_effort_is_still_refused(self):
         # The fixture catalog lists fixture-model with low/high only: a listed
@@ -2185,7 +2358,7 @@ class CatalogTrustTests(CodexSeamCase):
         state = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8")) \
             if Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}
         self.assertEqual(state["threads"], {})
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         self.assertFalse(any(ref.kind == "model-check" for ref in result.evidence_refs))
 
     def test_a_listed_model_without_a_legal_effort_is_refused_before_any_turn(self):
@@ -2200,7 +2373,7 @@ class CatalogTrustTests(CodexSeamCase):
         state = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8")) \
             if Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}
         self.assertEqual(state["threads"], {})
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_responded, False)
         self.assertFalse(any(ref.kind == "model-check" for ref in result.evidence_refs))
 
     def test_discovery_omits_a_row_without_a_legal_effort(self):
@@ -2209,7 +2382,7 @@ class CatalogTrustTests(CodexSeamCase):
         self.set_case("no-efforts-row")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
                                 native_root=self.base / "discovery-native",
-                                timeout_seconds=10, cancelled=lambda: False)
+                                timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual(catalog["providers"][0]["models"], [])
         self.assertEqual(catalog["warnings"],
                          [{"reason": {"code": "catalog.model-identity-or-effort-omitted", "params": {}}}])

@@ -59,6 +59,16 @@ class HarnessHealthTests(BoardTestCase):
         self.native.assert_called_once()
         self.assertEqual(len(self.refreshed), 1)
 
+    def test_permission_verification_version_is_declared_not_probed(self):
+        self.assertIsNone(self.health.get('codex')['permissionsVerifiedVersion'])
+        self.assertEqual(self.health.get('dsh')['permissionsVerifiedVersion'], '0.2.2-rc.1')
+        self.health.refresh('codex', force=True)
+        self.assertIsNone(self.health.get('codex')['permissionsVerifiedVersion'])
+        self.discovered = {**self.discovered, 'harness': 'dsh', 'version': 'later-version'}
+        refreshed = self.health.refresh('dsh', force=True)
+        self.assertEqual(refreshed['version'], 'later-version')
+        self.assertEqual(refreshed['permissionsVerifiedVersion'], '0.2.2-rc.1')
+
     def test_health_lists_only_persisted_provider_cooling_rows(self):
         self.health.refresh('codex')
         with self.board.db.write() as db:
@@ -146,12 +156,12 @@ class HarnessHealthTests(BoardTestCase):
             directory.mkdir()
             (directory / (('node' if index % 2 else 'codex') + CLI_SUFFIX)).write_text('fixture', encoding="utf-8", newline="\n")
             directories.append(str(directory))
-        empty = [str(self.directory / f'empty-{index}') for index in range(100)]
+        empty = str(self.directory / 'empty')
         unrelated = self.directory / 'unrelated'
         unrelated.mkdir()
         (unrelated / 'other-tool').write_text('fixture', encoding="utf-8", newline="\n")
         (unrelated / ('codex' + CLI_SUFFIX)).mkdir()
-        self.health.add_path_hint(os.pathsep.join([*empty, str(unrelated), *directories]))
+        self.health.add_path_hint(os.pathsep.join([empty, str(unrelated), *directories]))
         self.assertEqual(self.health._path_hints, tuple(directories[:MAX_PATH_HINTS]))
         self.health.add_path_hint(os.pathsep.join(reversed(directories)))
         self.assertEqual(self.health._path_hints, tuple(directories[:MAX_PATH_HINTS]))
@@ -289,11 +299,15 @@ class HarnessHealthTests(BoardTestCase):
         self.health.catalog_refresh = lambda name, record, catalog_scan_claimed=False: readings.append(
             evaluation.record_catalog(catalog.canonical_payload(payload)))
         self.health.refresh('codex', preflight=True)
+        from hey_my_buddy.blackboard.catalog import buddy_state
+        with self.board.db.read() as db:
+            first_facts = buddy_state.rows(db)
         self.snapshot['candidates'][0]['fingerprint'] = {'mtimeNs': 2}
         self.health.refresh('codex', preflight=True)
+        with self.board.db.read() as db:
+            self.assertEqual(buddy_state.rows(db), first_facts)
         self.assertEqual(self.native.call_count, 2)
         self.assertEqual(len(readings), 2)
-        self.assertGreater(readings[1]['observationId'], readings[0]['observationId'])
         self.assertEqual(readings[1]['buddies'], readings[0]['buddies'])
 
     def test_ready_record_expires_without_a_location_change(self):
@@ -401,10 +415,30 @@ class CatalogShelfLifeTests(BoardTestCase):
 
     def catalog_state(self):
         with self.board.db.read() as db:
+            from hey_my_buddy.blackboard.catalog import buddy_state
             row = db.execute("SELECT status, reason FROM catalog_current WHERE harness='codex'").fetchone()
-            buddies = db.execute("SELECT buddy_id, available FROM buddies WHERE harness='codex'").fetchall()
+            buddies = buddy_state.rows(db, harness='codex')
             read_at = db.execute("SELECT read_at FROM catalog_current WHERE harness='codex'").fetchone()
         return row, buddies, (read_at[0] if read_at else None)
+
+    def test_a_failed_first_read_does_not_start_the_catalog_shelf_clock(self):
+        from hey_my_buddy.blackboard.catalog import catalog_store
+        catalog_store.begin(self.board.evaluation)
+        with self.board.db.write() as db:
+            db.execute("UPDATE catalog_current SET updated_at=? WHERE harness='codex'", (_stamp(7 * 3600),))
+        self.assertFalse(self.health._catalog_expired('codex', _stamp(0)))
+        self.assertFalse(self.health._catalog_expired('codex', _stamp(-7 * 3600)))
+
+    def test_a_failed_new_read_does_not_postpone_the_last_successful_read(self):
+        from hey_my_buddy.blackboard.catalog import catalog_store
+        self.record_native('confirmed')
+        self.set_read_at(7 * 3600)
+        catalog_store.begin(self.board.evaluation)
+        self.assertTrue(self.health._catalog_expired('codex', _stamp(0)))
+        self.set_read_at(5 * 3600)
+        catalog_store.begin(self.board.evaluation)
+        self.assertFalse(self.health._catalog_expired('codex', _stamp(0)))
+        self.assertTrue(self.health._catalog_expired('codex', _stamp(-2 * 3600)))
 
     def test_throttled_scan_still_rereads_a_stale_catalog_once(self):
         self.health.refresh('codex')
@@ -666,12 +700,7 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
 
 
 class HealthRecoveryRestoreTests(BoardTestCase):
-    """The direct restore on health recovery, with no catalog publication behind it.
-
-    The publication layer (a trusted reading upserting its rows, or an unknown
-    reading calling the same restore) is the other restorer; this is the one
-    that runs when recovery publishes nothing, inside the health write itself.
-    """
+    """Health recovery changes the composed view without catalog publication."""
 
     def setUp(self):
         super().setUp()
@@ -709,6 +738,9 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         self.evaluation.record_catalog(self.reading(('max',)))  # alpha:high retires
         with self.board.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=1 WHERE harness='dsh'")
+        with self.board.store.db.read() as db:
+            retained = ([tuple(row) for row in db.execute("SELECT * FROM model_services ORDER BY harness,provider,model")],
+                        [tuple(row) for row in db.execute("SELECT * FROM buddies ORDER BY buddy_id")])
         self.health.invalidate('dsh', self.health.get('dsh')['revision'])
         broken = self.buddies()['dsh:fixture:alpha:max']
         self.assertFalse(broken['available'], 'The health failure zeroed the retained route')
@@ -718,15 +750,17 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         self.assertTrue(buddies['dsh:fixture:alpha:max']['available'],
                         'Recovery itself restores the retained reading, before any publication')
         self.assertFalse(buddies['dsh:fixture:alpha:high']['available'], 'A retired effort is a catalog fact')
-        self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason']['code'], catalog.RETIRED_EFFORT_REASON)
+        self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason']['code'], 'catalog.effort-retired')
         self.assertFalse(buddies['dsh:fixture:gamma:max']['available'], 'A native unavailable declaration stays down')
         with self.board.store.db.read() as db:
+            self.assertEqual(([tuple(row) for row in db.execute("SELECT * FROM model_services ORDER BY harness,provider,model")],
+                              [tuple(row) for row in db.execute("SELECT * FROM buddies ORDER BY buddy_id")]), retained)
             self.assertEqual([row['buddy_id'] for row in DecisionCoordinator._scan_candidates(db, [], coding_only=True)[0]],
                              ['dsh:fixture:alpha:max'])
 
 
 class CatalogHealthOwnershipTests(BoardTestCase):
-    """Every health write preserves adopted catalog facts, including NULL rows."""
+    """Every health write preserves adopted model and effort facts."""
 
     def setUp(self):
         super().setUp()
@@ -750,6 +784,9 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         with self.board.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=1 WHERE harness='dsh'")
         self.before = self.buddies()
+        with self.board.store.db.read() as db:
+            self.stored_before = ([tuple(row) for row in db.execute("SELECT * FROM model_services ORDER BY harness,provider,model")],
+                                  [tuple(row) for row in db.execute("SELECT * FROM buddies ORDER BY buddy_id")])
 
     def reading(self, efforts, *, beta):
         models = [{'id': 'alpha', 'efforts': list(efforts), 'available': True},
@@ -775,14 +812,16 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         buddies = self.buddies()
         self.assertTrue(buddies['dsh:fixture:alpha:high']['available'])
         self.assertFalse(buddies['dsh:fixture:alpha:low']['available'])
-        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason']['code'], catalog.RETIRED_EFFORT_REASON)
+        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason']['code'], 'catalog.effort-retired')
         self.assertFalse(buddies['dsh:fixture:beta:high']['available'])
         self.assertEqual(buddies['dsh:fixture:beta:high']['catalogStatus'], 'unavailable')
-        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason']['code'], catalog.CONFIRMED_ABSENCE_REASON)
+        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason']['code'], 'catalog.model-absent')
         self.assertFalse(buddies['dsh:fixture:gamma:high']['available'], 'Native unavailable stays grounded')
         self.assertTrue(all(item['enabled'] for item in buddies.values()))
         self.assertEqual(set(buddies), set(self.before), 'Buddy identities survive')
         with self.board.store.db.read() as db:
+            self.assertEqual(([tuple(row) for row in db.execute("SELECT * FROM model_services ORDER BY harness,provider,model")],
+                              [tuple(row) for row in db.execute("SELECT * FROM buddies ORDER BY buddy_id")]), self.stored_before)
             candidates = [row['buddy_id'] for row in DecisionCoordinator._scan_candidates(db, [], coding_only=True)[0]]
             transitions = [row[0] for row in db.execute("SELECT kind FROM events WHERE kind LIKE 'catalog.model_%' ORDER BY seq")]
         self.assertEqual(candidates, ['dsh:fixture:alpha:high'])
@@ -794,8 +833,8 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         self.assertFalse(buddies['dsh:fixture:alpha:high']['available'])
         self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason'], probe_reason('not-checked'),
                          'A NULL reason must still receive the health write')
-        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason']['code'], catalog.RETIRED_EFFORT_REASON)
-        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason']['code'], catalog.CONFIRMED_ABSENCE_REASON)
+        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason']['code'], 'catalog.effort-retired')
+        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason']['code'], 'catalog.model-absent')
 
     def test_same_harness_path_recheck_preserves_confirmed_absence_and_retired_effort(self):
         # Reproduce the in-process cache stub boundary before a normal health

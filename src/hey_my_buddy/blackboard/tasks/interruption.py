@@ -16,7 +16,7 @@ def read_identity(connection, attempt_id: str) -> dict | None:
     if row['job_name'] is not None:
         return {'pid': row['root_pid'], 'startedAt': row['root_started_at'], 'jobName': row['job_name']}
     return {'bootId': row['boot_id'], 'pid': row['root_pid'], 'startedAt': row['root_started_at'],
-            'processGroupId': row['process_group_id'], 'jobName': None}
+            'jobName': None}
 
 
 def record_identity(connection, attempt_id: str, record: dict) -> None:
@@ -25,9 +25,9 @@ def record_identity(connection, attempt_id: str, record: dict) -> None:
         if previous != record:
             raise BoardError('CONFLICT', 'An execution process identity is immutable', attemptId=attempt_id)
         return
-    connection.execute('INSERT INTO attempt_process_identities VALUES(?,?,?,?,?,?)',
+    connection.execute('INSERT INTO attempt_process_identities VALUES(?,?,?,?,?)',
                        (attempt_id, record.get('bootId'), record['pid'], record['startedAt'],
-                        record.get('processGroupId'), record.get('jobName')))
+                        record.get('jobName')))
 
 
 def attempt_private_adapter(attempt) -> str:
@@ -123,6 +123,10 @@ def _partial_result(board, attempt, identity, kind, *, confirmed):
 def _stop_reason(attempt):
     if attempt['force_reason'] is not None:
         return attempt['force_reason']
+    if attempt['stop_purpose'] == 'pause':
+        return 'pause'
+    if attempt['stop_purpose'] == 'end':
+        return 'console-stop'
     initiator, deadline = attempt['stop_initiator'], attempt['grace_deadline']
     if deadline and initiator in ('host', 'lead'):
         if datetime.now(timezone.utc) >= datetime.fromisoformat(deadline):
@@ -235,7 +239,8 @@ def _recover_one(board, attempt, identity, stopped_evidence):
                     digest = None
             else:
                 digest = received['sha256']
-            receipt = read_execution_receipt(directory, binding=binding, sha256=digest)
+            receipt = read_execution_receipt(directory, binding=binding, sha256=digest,
+                                             form=attempt["result_form"] or "current-report-v2")
             if receipt is None and received is not None:
                 raise BoardError('RECEIPT_MISSING', 'Received execution receipt is missing')
             if receipt is not None:
