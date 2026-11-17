@@ -11,9 +11,24 @@ from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
 from hey_my_buddy.install import upgrade
+from hey_my_buddy.errors import BoardError
 
 
 class UpgradeServiceTests(BoardTestCase):
+    def test_verify_started_rejects_persistence_error_before_other_checks(self):
+        for contract_changed in (False, True):
+            with self.subTest(contract_changed=contract_changed):
+                before = {"schema": SCHEMA_VERSION, "tables": {}, "fingerprints": {}}
+                with self.assertRaises(BoardError) as caught, \
+                        mock.patch.object(upgrade, "idle_snapshot", return_value=before) as snapshot:
+                    upgrade.verify_started(
+                        self.directory, self.directory / "runtime",
+                        {"runtimeContentId": "runtime", "runtimeStable": True, "schemaVersion": SCHEMA_VERSION,
+                         "persistenceError": "Maintenance scheduler: BoardError: admission fenced"},
+                        before, contract_changed=contract_changed)
+                self.assertEqual(caught.exception.code, "UPGRADE_VERIFY_FAILED")
+                snapshot.assert_not_called()
+
     def test_private_service_reads_settings_and_preserved_work(self):
         state = self.directory
         fixture = load_fixture(state)

@@ -328,6 +328,9 @@ def restore(state: Path, current: Path) -> None:
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True) -> dict:
+    if health.get('persistenceError'):
+        raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement service reported a persistence error',
+                         persistenceError=health['persistenceError'])
     expected_schema = before['schema']
     if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != expected_schema:
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match',

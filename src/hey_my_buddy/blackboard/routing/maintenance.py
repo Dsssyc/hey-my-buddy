@@ -79,6 +79,8 @@ class Maintenance:
         return None, None, (dict(settings), buddy)
 
     def _request(self, *, manual):
+        if not manual and self.store.upgrading():
+            return {"status": "upgrading"}, 1.0
         # Only the cheap settings/deadline read runs on event wakeups. The
         # evidence scan and packet construction run once when this check is due,
         # outside the writer lock.
@@ -93,10 +95,15 @@ class Maintenance:
             if not manual:
                 self._check_after = datetime.fromisoformat(self.store.now()).timestamp() + interval
             return {"status": "no-new-evidence"}, interval
-        with self.store.db.write() as connection:
-            response, delay = self._admit(connection, settings=settings, buddy=buddy, packet=packet,
-                                          trigger_type="manual" if manual else "interval")
-            head = self.store._head_of(connection)
+        try:
+            with self.store.db.write() as connection:
+                response, delay = self._admit(connection, settings=settings, buddy=buddy, packet=packet,
+                                              trigger_type="manual" if manual else "interval")
+                head = self.store._head_of(connection)
+        except BoardError as error:
+            if not manual and error.code == "UPGRADE_IN_PROGRESS":
+                return {"status": "upgrading"}, 1.0
+            raise
         self.store._notify(head)
         return response, delay
 

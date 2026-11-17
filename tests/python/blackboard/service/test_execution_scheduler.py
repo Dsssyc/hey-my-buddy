@@ -273,6 +273,7 @@ class ExecutionObservationTests(unittest.TestCase):
             second = {"sessionRecordPath": None, "attempt": {"attemptId": "attempt-2"},
                       "task": {"taskId": "task-2", "spec": {"adapter": "command"}}}
             store = Mock(directory=Path(root))
+            store.upgrading.return_value = False
             service = Mock(store=store, control={})
             service.admit_execution.side_effect = [
                 {"claim": first}, {"claim": second}, {"claim": None}]
@@ -490,6 +491,7 @@ class ExecutionObservationTests(unittest.TestCase):
 
     def test_conflict_is_retried_and_other_admission_errors_are_recorded(self):
         store = Mock()
+        store.upgrading.return_value = False
         store.execution_observations.return_value = []
         service = Mock(store=store, control={})
         scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
@@ -729,6 +731,7 @@ class ExecutionObservationTests(unittest.TestCase):
     def test_stop_barrier_covers_an_execution_still_being_created(self):
         with tempfile.TemporaryDirectory() as root:
             store = Mock(directory=Path(root))
+            store.upgrading.return_value = False
             view = {"cancelRequested": True, "stopInitiator": "service"}
             store.task_get.side_effect = lambda _params: {"task": dict(view)}
             store.record_execution_deadline.return_value = {
@@ -790,6 +793,7 @@ class ExecutionObservationTests(unittest.TestCase):
     def test_failed_observer_start_retains_creator_evidence_and_retries_on_resume(self):
         with tempfile.TemporaryDirectory() as root:
             store = Mock(directory=Path(root))
+            store.upgrading.return_value = False
             service = Mock(store=store, control={})
             scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             claim, _location = self.recovered(root)
@@ -1211,6 +1215,7 @@ class ExecutionObservationTests(unittest.TestCase):
         from hey_my_buddy.protocol.owned_process import ProcessCreationEvidence
         with tempfile.TemporaryDirectory() as root:
             store = Mock(directory=Path(root))
+            store.upgrading.return_value = False
             service = Mock(store=store, control={})
             service.admit_execution.return_value = {"claim": {
                 "sessionRecordPath": None, "task": {"taskId": "task", "spec": {"adapter": "command"}},
@@ -1230,6 +1235,7 @@ class ExecutionObservationTests(unittest.TestCase):
         claim = {"task": {"taskId": "task"}, "attempt": {"attemptId": "attempt"},
                  "sessionRecordPath": "/private/fixture/session.jsonl"}
         store = Mock(directory=Path("/private/fixture"))
+        store.upgrading.return_value = False
         service = Mock(store=store, control={})
         service.admit_execution.side_effect = [{"claim": claim}, {"claim": None}]
         scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
@@ -1238,6 +1244,33 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler._admit_available()
         self.assertEqual(launch.call_args.kwargs["session_record_path"], claim["sessionRecordPath"])
         store.db.read.assert_not_called()
+
+
+class UpgradeAdmissionTests(BoardTestCase):
+    def test_upgrade_defers_queued_execution_without_issues_or_events(self):
+        board = self.board(max_concurrent=1)
+        board.submit_execution(requestId="upgrade-fenced", task="work", adapter="command",
+                               cwd=str(self.workdir()), argv=["echo", "work"])
+        scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
+        journal = board.directory / "upgrade.json"
+        journal.write_text("{}", encoding="utf-8")
+        with board.store.db.read() as db:
+            head = board.store._head_of(db)
+        with patch.object(board.service, "admit_execution", wraps=board.service.admit_execution) as admit, \
+                patch("hey_my_buddy.blackboard.service.execution_scheduler.launch_execution") as launch, \
+                patch.object(scheduler, "_start_observer"):
+            scheduler._admit_available()
+            admit.assert_not_called()
+            launch.assert_not_called()
+            self.assertEqual(board.store.service_issues(), [])
+            with board.store.db.read() as db:
+                self.assertEqual(board.store._head_of(db), head)
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
+            journal.unlink()
+            scheduler._admit_available()
+        launch.assert_called_once()
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
 
 
 class RootCreationTeardownTests(BoardTestCase):
