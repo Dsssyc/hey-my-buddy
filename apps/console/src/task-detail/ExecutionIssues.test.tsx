@@ -19,7 +19,8 @@ for (const [language, name, confirming] of [
     const live = timeline();
     live.spans = live.spans.map(span => span.attemptId === attemptId ? { ...span, endAt: null, state: finalizing ? "finalizing" : "executing", shutdownConfirmed: false } : span);
     open({ origin: attemptId === "att-r1" ? "span:r1" : "span:e2", timeline: live, replies: {
-      task: task({ state: "running", activeAttemptId: attemptId, selectedAttempt: { attemptId, executionState: finalizing ? "finalizing" : "executing", shutdownConfirmed: false,
+      task: task({ state: "running", activeAttemptId: attemptId,
+        activity: { phase: "tool-running", toolName: "Bash", observedAt: at("11:00"), lastToolActivityAt: at("11:00"), counts: { modelTurns: 2, toolCalls: 3 } }, selectedAttempt: { attemptId, executionState: finalizing ? "finalizing" : "executing", shutdownConfirmed: false,
         issues: finalizing ? [{ ...issue, stage: "shutdown", code: "EXECUTION_UNKNOWN", message: "Native session identity is no longer verifiable." }] : [issue] } }),
       workflow: workflow({ state: "executing" }),
     } });
@@ -32,6 +33,7 @@ for (const [language, name, confirming] of [
       expect(document.querySelector("[data-slot=detail-status]")!.textContent).toBe(confirming);
       expect(document.querySelector("[data-slot=detail-status] [data-slot=state-mark]")!.getAttribute("data-kind")).toBe("live");
       expect(pane().querySelector("[data-slot=pane-title]")!.textContent).toContain(confirming);
+      expect(pane().querySelector("[data-slot=detail-live]")).toBeNull();
       const issues = within(pane()).getByRole("group", { name });
       expect(issues.textContent).toContain("Native session identity is no longer verifiable.");
       expect(issues.textContent).not.toContain("EXECUTION_UNKNOWN");
@@ -42,6 +44,7 @@ for (const [language, name, confirming] of [
 
   it("shows a running connection issue without attaching it to earlier attempts", async () => {
     await show("att-2");
+    expect(pane().querySelector("[data-slot=detail-live]")!.textContent).toContain("Bash");
     expect(within(pane()).getByRole("group", { name }).textContent).toContain(issue.message);
     cleanup();
     open({ step: 3, replies: { task: task({ selectedAttempt: { issues: [issue] } }) } });

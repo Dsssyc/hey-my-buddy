@@ -16,6 +16,8 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [390, 1280]) {
           const response = await route.fetch();
           const value = await response.json();
           // The preview has no execution issue stock; supply the current API's recorded facts.
+          value.activity = { phase: "tool-running", toolName: "Bash", observedAt: "2026-09-26T11:00:19.499Z",
+            lastToolActivityAt: "2026-09-26T11:00:19.499Z", counts: { modelTurns: 2, toolCalls: 3 } };
           value.selectedAttempt.executionState = finalizing ? "finalizing" : "executing";
           value.selectedAttempt.shutdownConfirmed = false;
           value.selectedAttempt.issues = [{ stage: finalizing ? "shutdown" : "connection", code: finalizing ? "EXECUTION_UNKNOWN" : "CONNECTION_LOST",
@@ -34,6 +36,8 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [390, 1280]) {
         await expect(page.locator('[data-slot=detail-status]')).toHaveText(state);
         await expect(page.locator('[data-slot=detail-status] [data-slot=state-mark]')).toHaveAttribute("data-kind", "live");
         await expect(pane.locator('[data-slot=pane-title]')).toContainText(state);
+        await expect(pane.locator('[data-slot=detail-live]')).toHaveCount(finalizing ? 0 : 1);
+        if (!finalizing) await expect(pane.locator('[data-slot=detail-live]')).toContainText("Bash");
         await expectTextUncut(issues.locator("p, time"));
         await expectNoSidewaysScroll(page);
         for (const item of await issues.locator("li > p").all()) expect(await contrastOf(item)).toBeGreaterThanOrEqual(4.5);
