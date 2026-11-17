@@ -139,6 +139,8 @@
 
 **仅在 shell 导出的提供方变量无法传给 Worker。** harness 启动环境仍经白名单过滤；只靠 shell 提供 Claude Code CLI 的 API key、没有写入其配置的用户，可能在 Worker 中用不了原有登录方式。需核对[条款调研](../research/2026-10-13-harness-terms-and-orchestration.md)里“不得限制自带的登录方式”与现有边界的关系，再决定是否调整变量传递；经用户 shell 启动的方案不在当前约定内。
 
+**底层取消操作还缺按执行所有权收口的检查。** `blackboard/tasks/workflow.py` 的 `guard_task_control` 只拒绝有 `workflow_runs` 行的微任务，路由调度任务与维护执行分别由 `routing_decisions`、`maintenance_runs` 记录，没有这行，仍可经 C-Two `task_cancel` 绕过微任务的控制边界。应按各方只控制自己发起的执行这一原则，核对调用方权限与执行归属，阻止 Host 直接取消微任务的路由决定或用户发起的维护，同时保留控制台停止其维护执行的合法路径。
+
 **仅供测试的命令执行提交还留有重复边界。** `BoardStore.task_submit` 不带微任务的分支只供检查套件使用，仍重复拒绝编程 harness；`tests/python/protocol/test_rpc_config.py` 也仍直接拼装这一提交，没有共用 `tests/python/support.py` 的 `submit_execution`。下一次改到这一路径时核实调用边界并统一测试写法。
 
 **harness 的声明还没有收成完整的单一来源。** `buddy/harnesses/registry.py` 已提供共用登记表与角色运行声明，仍有其他模块列出 harness 名字，`db.py` 的 CHECK 也写死四个名字，新增 harness 会改存储形式；中断恢复与存储归属的部分规则仍按名字分支。需要清点哪些是事实声明、哪些是两侧的行为边界，补齐能力的明确声明，运行与一致性检查共用；控制台名字与标志的核对也应使用实际前端解析与测试。
