@@ -23,6 +23,7 @@ from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir, make_temporary_dir
 from ...private_files import open_read, publish_bytes, read_bytes, read_text
 from ...protocol import usage
+from ...protocol.owned_process import ProcessCreationEvidence, WorkingDirectoryRejected
 from ...protocol.workspace_manifest import turn_manifest
 from ...protocol.capabilities import PERMISSION_LEVELS
 from ...protocol.stop import WRAP_UP_INITIATORS
@@ -944,6 +945,20 @@ def _native_operation(name: str, operation: str, *, state_dir: Path, **arguments
             payload = collection.payload
             if not isinstance(payload, dict) and not (wait_expired and specification["allowUnknown"]):
                 raise BoardError("HARNESS_UNAVAILABLE", "The native operation receipt must be an object", harness=name)
+            if isinstance(payload, dict) and payload.get("code") == WorkingDirectoryRejected.code:
+                rejection = payload.get("reason")
+                WorkingDirectoryRejected.reason_params(rejection)
+                native = payload["processState"]  # The stop check admitted this object.
+                message = payload.get("error")
+                if (payload.get("status") != "error"
+                        or native.keys() != {"created", "shutdownConfirmed", "nativeExitCode"}
+                        or native["created"] is not False or native["nativeExitCode"] is not None
+                        or not isinstance(message, str) or not message):
+                    raise BoardError("INVALID_PROTOCOL", "The working directory rejection receipt is invalid", harness=name)
+                error = BoardError(WorkingDirectoryRejected.code, message, harness=name,
+                                   reason=rejection, processState=native)
+                error.owned_popen_evidence = ProcessCreationEvidence(False, True, None)
+                raise error
             if specification["allowUnknown"] and (wait_expired or payload.get("status") == "unknown"):
                 return {"source": "native-discovery", "providers": [], "discoveries": [{
                     "harness": name, "status": "unknown", "accountStatus": "unknown",

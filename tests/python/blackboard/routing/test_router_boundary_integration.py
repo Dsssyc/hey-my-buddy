@@ -13,6 +13,7 @@ from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.owned_process import WorkingDirectoryRejected
 from hey_my_buddy.blackboard.routing.router_boundary_data import _candidate_problem, _continuation_context, router_trials, routing_boundary
 from support import FakeClock, seed_buddy
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase, A, B, C, T0, NONCE
@@ -892,6 +893,44 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
             self.assertEqual(db.execute("SELECT decision_id FROM workflow_requests WHERE request_id=?",
                                         (current["activeRequest"]["requestId"],)).fetchone()[0],
                              view["routing"]["decisionId"])
+
+    def test_rejected_working_directory_reaches_the_host_without_router_failover_or_cooling(self):
+        with self.board_.store.db.write() as db:
+            router._write_settings(db, {**router.configuration(db), "routerBuddyIds": [A, B]})
+        view = self.routed()
+        nonce = NONCE + "cwd"
+        task_id = view["routing"]["taskId"]
+        decision_id = view["routing"]["decisionId"]
+        claim = admit_board(self.board_, {"workerId": "w-route", "claimRequestId": "router-cwd",
+                                         "nonce": nonce, "runId": task_id})["claim"]
+        cause = WorkingDirectoryRejected.reason_for(
+            str(self.board_.directory / ("checkout" * 38)), "WinError 267: The directory name is invalid")
+        self.board_.call("execution_result", {
+            "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
+            "nonce": nonce, "status": "failed", "shutdownConfirmed": True,
+            "terminationReason": "workspace-error",
+            "result": {
+                "operation": "select", "status": "error", "code": cause["code"], "reason": cause,
+                "nativeRequestSent": False, "modelResponded": False,
+                "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+            },
+        })
+        decision = self.board_.call("selection_get", {"decisionId": decision_id})["decision"]
+        current = self.board_.call("workflow_get", {"runId": view["runId"]})
+        self.assertEqual(decision["status"], "needs-host")
+        self.assertEqual(decision["reason"], cause)
+        self.assertEqual(current["activeRequest"]["reason"], cause)
+        self.assertEqual(current["routing"]["routingBoundary"]["reason"], cause)
+        with self.board_.store.db.read() as db:
+            self.assertEqual([item["taskId"] for item in router_sequence.dispatches(db, decision_id)], [task_id])
+            self.assertEqual(router_history.buddy_timeline(db, buddy_id=A), [])
+            state = router_history.router_state(db, buddy_id=A, interval_seconds=600, now=T0)
+            self.assertFalse(state["inSkipWindow"])
+            self.assertIsNone(state["skipUntil"])
+        health = self.board_.call("health", {})["routingHealth"]
+        self.assertEqual(health["failureCount"], 0)
+        self.assertEqual(health["consecutiveFailures"], 0)
+        self.assertEqual(health["currentRouterBuddyId"], A)
 
 
 if __name__ == "__main__":

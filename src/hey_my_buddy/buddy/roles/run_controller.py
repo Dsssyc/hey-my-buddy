@@ -12,6 +12,7 @@ from ...errors import BoardError
 from ...json_codec import canonical_json, decode_strict_json
 from ...private_files import read_bytes
 from ...protocol import schemas
+from ...protocol.owned_process import WorkingDirectoryRejected
 from ..harnesses.run_contract import HARNESS_NAMES
 from ..harnesses.registry import native_operation
 
@@ -55,6 +56,14 @@ def execute(control: dict, cancelled: threading.Event) -> tuple[str, int]:
             cwd=control["cwd"], invocation_root=Path(control["privateRoot"]),
             native_root=Path(control["nativeRoot"]), timeout_seconds=control["timeoutSeconds"],
             cancelled=cancelled.is_set, **control["arguments"])
+    except WorkingDirectoryRejected as error:
+        creation = error.owned_popen_evidence
+        return canonical_json({
+            "status": "error", "modelResponded": False, "code": error.code, "error": str(error),
+            "reason": error.reason,
+            "processState": {"created": creation.created, "shutdownConfirmed": creation.shutdown_confirmed,
+                             "nativeExitCode": creation.exit_code},
+        }), 1
     except Exception as error:
         unknown = specification["allowUnknown"] and getattr(error, "code", None) == "deadline"
         native_error = getattr(error, "native_error", None)

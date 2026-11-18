@@ -25,6 +25,7 @@ from ...protocol.task_types import TASK_TYPES
 from ..evaluation import user_policy
 from . import selection_policy, router, router_sequence, router_failover, evidence
 from ...protocol import tool_evidence
+from ...protocol.owned_process import WorkingDirectoryRejected
 from ...protocol.reasons import reason as make_reason, reason_from_json
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
@@ -1137,6 +1138,9 @@ class DecisionCoordinator:
             code = output.get("code")
             code = code if (isinstance(code, str) and code.strip() and len(code) <= 128
                             and not any(ord(c) < 32 or ord(c) == 127 for c in code)) else "router-no-answer"
+            if code == WorkingDirectoryRejected.code:
+                params = WorkingDirectoryRejected.reason_params(output.get("reason"))
+                return refuse(code, changed=True, **params)
             params = ({"seconds": document["modelResponseWaitSeconds"]} if code == "router-not-responding"
                       else {"bound": "not-a-candidate"} if code == "router-out-of-bounds" else {})
             return refuse(code, **params)
@@ -1344,7 +1348,7 @@ class DecisionCoordinator:
                 abstained = code == "router-abstained"
                 if row["status"] in ("failed", "needs-host") and code in special_counts:
                     special_counts[code] += 1
-                is_failure = code not in ("router-out-of-bounds", "router-input-changed") and (
+                is_failure = code not in ("router-out-of-bounds", "router-input-changed", WorkingDirectoryRejected.code) and (
                     row["status"] == "failed" or (row["status"] == "needs-host" and not abstained))
                 if still_failing and is_failure:
                     streak += 1

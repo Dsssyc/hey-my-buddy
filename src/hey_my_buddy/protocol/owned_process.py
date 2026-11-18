@@ -15,6 +15,7 @@ import os
 import subprocess
 import uuid
 
+from ..errors import BoardError
 from ..text import truncate_utf8
 from .reasons import reason
 from .windows_process import WindowsAPI
@@ -122,6 +123,16 @@ class WorkingDirectoryRejected(Exception):
     @staticmethod
     def reason_for(cwd: str, system_reason: str) -> dict:
         return reason("harness.working-directory-rejected", cwd=cwd, systemReason=system_reason)
+
+    @classmethod
+    def reason_params(cls, value: object) -> dict[str, str]:
+        """Read the directory and system reason from a received rejection."""
+        if isinstance(value, dict) and value.keys() == {"code", "params"} and value["code"] == cls.code:
+            params = value.get("params")
+            if (isinstance(params, dict) and params.keys() == {"cwd", "systemReason"}
+                    and all(isinstance(item, str) for item in params.values())):
+                return params
+        raise BoardError("INVALID_PROTOCOL", "The working directory rejection lacks a directory or system reason")
 
     def __init__(self, cwd: str, system_reason: str):
         self.reason = self.reason_for(cwd, system_reason)
