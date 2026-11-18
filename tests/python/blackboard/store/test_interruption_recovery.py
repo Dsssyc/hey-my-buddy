@@ -479,6 +479,58 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual(view['terminationReason'], 'interrupted')
         self.assertTrue(board.store.resource_claims())
 
+    def test_finished_interruption_can_gain_native_stop_proof(self):
+        board, client, task, _, actor = self.claimed()
+        attempt_id = actor['attemptId']
+        journal = self.journal(board, attempt_id)
+        native_path(Path(journal['path'])).unlink()
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
+            self.assertEqual(len(board.store.recover_executions()), 1)
+            original = client.result(runId=task['runId'])['selectedAttempt']['result']
+            self.assertFalse(original['shutdownConfirmed'])
+            with board.store.db.write() as connection:
+                connection.execute("UPDATE attempts SET execution_state='finished',cleanup_pending=0 WHERE attempt_id=?",
+                                   (attempt_id,))
+            self.assertEqual(board.store.recover_executions(), [])
+            self.assertFalse(client.get(runId=task['runId'])['shutdownConfirmed'])
+            processes.NativeProcessJournal(Path(journal['path']), journal['binding'])
+            self.assert_idempotently_confirmed(board, client, task, actor, original, state='failed')
+
+    def test_superseded_attempt_records_stop_without_settling_the_new_generation(self):
+        board, _, task, _, actor = self.claimed()
+        attempt_id, task_id = actor['attemptId'], task['runId']
+        journal = self.journal(board, attempt_id)
+        native_path(Path(journal['path'])).unlink()
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
+            self.assertEqual(len(board.store.recover_executions()), 1)
+        with board.store.db.write() as connection:
+            original = json.loads(board.store._attempt_row(connection, attempt_id)['result_json'])
+            connection.execute("UPDATE attempts SET execution_state='finished' WHERE attempt_id=?", (attempt_id,))
+            connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,"
+                               " created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                               ('new-generation', task_id, 2, 'fixture', 'executing', 'command',
+                                board.store.now(), board.store.now()))
+            connection.execute("UPDATE tasks SET state='running',active_attempt_id=?,selected_attempt_id=? WHERE task_id=?",
+                               ('new-generation', 'new-generation', task_id))
+            original_task = dict(board.store._task_row(connection, {'runId': task_id}))
+        processes.NativeProcessJournal(Path(journal['path']), journal['binding'])
+        with (
+            patch.object(processes, 'inspect_process_identity', return_value='identity-absent'),
+            patch.object(board.store.workflow, 'seal_interrupted_turn') as seal,
+        ):
+            self.assertEqual(len(board.store.recover_executions(attempt_id)), 1)
+            seal.assert_not_called()
+        with board.store.db.read() as connection:
+            self.assertEqual(dict(board.store._task_row(connection, {'runId': task_id})), original_task)
+            attempt = board.store._attempt_row(connection, attempt_id)
+            self.assertEqual(json.loads(attempt['result_json']), {**original, 'shutdownConfirmed': True})
+            self.assertIsNotNone(connection.execute("SELECT 1 FROM attempt_shutdown_evidence WHERE attempt_id=?",
+                                                    (attempt_id,)).fetchone())
+        self.assertEqual(board.store.resource_claims(), [])
+        head = board.store.head()
+        self.assertEqual(board.store.recover_executions(attempt_id), [])
+        self.assertEqual(board.store.head(), head)
+
     def assert_idempotently_confirmed(self, board, client, task, actor, original, *, state):
         self.assertEqual(len(board.store.recover_executions()), 1)
         final = client.get(runId=task['runId'])

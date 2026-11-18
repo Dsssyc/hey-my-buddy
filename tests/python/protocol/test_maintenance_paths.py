@@ -75,6 +75,38 @@ class MaintenancePathTests(unittest.TestCase):
         self.assertTrue(file.is_symlink())
         self.assertEqual(outside.read_text(encoding="utf-8"), "retained")
 
+    def test_discard_orphans_skips_a_missing_or_linked_namespace(self):
+        root = self.run.parent
+        maintenance.discard_orphans(self.state, [])
+        self.assertFalse(root.exists())
+        outside = self.state / "outside"
+        content = outside / self.run.name
+        content.mkdir(parents=True)
+        root.symlink_to(outside, target_is_directory=True)
+        maintenance.discard_orphans(self.state, [])
+        self.assertTrue(root.is_symlink())
+        self.assertTrue(content.is_dir())
+
+    def test_discard_orphans_removes_only_inactive_trees(self):
+        self.run.mkdir(parents=True)
+        orphan = maintenance.publish(self.state, "orphan", "stale")
+        directory = self.run.parent / hashlib.sha256(b"orphan").hexdigest()
+        self.assertTrue((directory / (orphan["sha256"] + ".json")).is_file())
+        maintenance.discard_orphans(self.state, ["run"])
+        self.assertTrue(self.run.is_dir())
+        self.assertFalse(directory.exists())
+
+    def test_discard_orphans_refuses_a_linked_child(self):
+        outside = self.state / "outside"
+        outside.mkdir()
+        self.run.parent.mkdir()
+        self.run.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(BoardError) as raised:
+            maintenance.discard_orphans(self.state, [])
+        self.assertEqual(raised.exception.code, "PRIVATE_PATH_UNSAFE")
+        self.assertTrue(self.run.is_symlink())
+        self.assertTrue(outside.is_dir())
+
 
 if __name__ == "__main__":
     unittest.main()

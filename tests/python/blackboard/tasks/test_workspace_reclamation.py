@@ -430,13 +430,13 @@ class ReclamationTests(LifecycleTestCase):
             with occupied_directory(checkout) as child:
                 processes.return_value = ([psutil.Process(child.pid)], True)
                 maintenance.run()
-                self.assertEqual(scan.call_count, 2)
+                self.assertEqual(scan.call_count, 1)
                 self.assertTrue(checkout.exists())
                 self.assertEqual(board.store.service_issues(), [])
                 entry = maintenance._allocation_entry(checkout.parent)
             self.assertEqual(maintenance._allocation_entry(checkout.parent), entry)
             maintenance.run()
-            self.assertEqual(scan.call_count, 3)
+            self.assertEqual(scan.call_count, 2)
         self.assertFalse(checkout.parent.exists())
         self.assertTrue(static_directory.exists())
         self.assertEqual(board.store.service_issues(), [])
@@ -1036,7 +1036,7 @@ class ReclamationTests(LifecycleTestCase):
         self.assertEqual(observed, ['proof', 'process', 'revoke', 'checkout', 'refs', 'refs', 'refs', 'refs', 'records'])
         self.assertFalse(Path(manifest['checkoutRoot']).parent.exists())
 
-    def test_unproven_allocations_are_scanned_once_each_and_wait_for_entry_or_related_task_changes(self):
+    def test_unproven_allocations_share_a_scan_and_wait_for_entry_or_related_task_changes(self):
         import os
         from unittest.mock import patch
         from hey_my_buddy.blackboard.tasks import reclamation, storage
@@ -1047,17 +1047,22 @@ class ReclamationTests(LifecycleTestCase):
         for index, manifest in enumerate(manifests):
             git(Path(manifest['checkoutRoot']), 'switch', '-q', '-c', 'private-branch-' + str(index))
         maintenance = reclamation.Reclamation(board.store)
+        directories = [Path(manifest['checkoutRoot']).parent for manifest in manifests]
+        with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
+            inventory = reclamation.allocation_inventory(board.store, directories)
+            self.assertEqual(len(inventory), 2)
+            scan.assert_called_once()
         with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
             maintenance.run()
-            self.assertEqual(scan.call_count, 2)
+            scan.assert_called_once()
             maintenance.run()
             maintenance.changed(['unrelated-task'])
             maintenance.run()
-            self.assertEqual(scan.call_count, 2)
+            scan.assert_called_once()
             directory = Path(manifests[0]['checkoutRoot']).parent
             os.utime(directory, None)
             maintenance.run()
-            self.assertEqual(scan.call_count, 3)
+            self.assertEqual(scan.call_count, 2)
         self.assertEqual(board.store.service_issues(), [])
         submitted, _, _, _, _, _, _ = self.run_worktree(board, request_id='reference-source')
         third = workspace.prepare(board.directory, 'reference-retained', intent)
@@ -1071,6 +1076,34 @@ class ReclamationTests(LifecycleTestCase):
         maintenance.changed([submitted['runId']])
         maintenance.run()
         self.assertFalse(Path(third['checkoutRoot']).parent.exists())
+
+    def test_reference_committed_after_the_batch_scan_prevents_revocation(self):
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import reclamation, storage
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host'}}
+        manifest = workspace.prepare(board.directory, 'newly-referenced-orphan', intent)
+        checkout = Path(manifest['checkoutRoot'])
+        plan = workspace.submission_revoke_plan
+
+        def add_reference(*args):
+            result = plan(*args)
+            with board.store.db.write() as connection:
+                connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES ('retainer',?,?)",
+                                   (json.dumps({'path': str(checkout)}), board.store.now()))
+            return result
+
+        with (
+            patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan,
+            patch.object(workspace, 'submission_revoke_plan', side_effect=add_reference),
+            patch.object(workspace, 'revoke_submission') as revoke,
+        ):
+            reclamation.Reclamation(board.store).run()
+            self.assertEqual(scan.call_count, 2)
+            revoke.assert_not_called()
+        self.assertTrue(checkout.is_dir())
+        self.assertEqual(board.store.service_issues(), [])
 
     def test_allocation_internal_git_and_process_errors_are_visible(self):
         from unittest.mock import patch

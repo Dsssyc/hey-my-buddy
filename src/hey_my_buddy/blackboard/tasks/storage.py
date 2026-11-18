@@ -4,7 +4,6 @@ from __future__ import annotations
 from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
 from ...paths import is_absolute_path, native_path
-from ... import locking
 import hashlib
 import json
 import os
@@ -13,17 +12,20 @@ import re
 import stat
 import sys
 import time
+from typing import TYPE_CHECKING
 import uuid
 
 import psutil
 
 from ... import private_dirs, private_files
-from ...private_dirs import directory_mode
 from ...process_observation import observe_open_paths, observe_process_argv
 from ...protocol import schemas
 from ..store.db import utc_now
 from ...errors import BoardError
 from ...install.runtime import DEFAULT_RUNTIME_ROOT, INSTALL_LOCK, is_ready, installation_lock, runtime_root
+
+if TYPE_CHECKING:
+    from ..store.store import BoardStore
 
 GRACE_SECONDS = 3 * 86400
 _RUNTIME_ID = r'[0-9a-f]{32}'
@@ -566,21 +568,23 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
 
 
 @contextmanager
-def locked(store):
-    path = store.directory / 'storage'
-    path.mkdir(mode=directory_mode(), exist_ok=True)
-    if not path.is_dir():
-        raise BoardError('STORAGE_UNSAFE', 'Storage plan root must be a directory', path=str(path))
+def locked(store: BoardStore | Path, *, blocking: bool = False):
+    path = (store if isinstance(store, Path) else store.directory) / 'storage'
+    try:
+        path = private_dirs.ensure_private_dir(path)
+    except BoardError as error:
+        raise BoardError('STORAGE_UNSAFE', 'Storage plan root must be a directory', path=str(path)) from error
     lock_path = path / '.lock'
     try:
-        fd = private_dirs.open_regular_fd(lock_path, os.O_CREAT | os.O_RDWR)
+        fd = private_dirs.open_lock_fd(lock_path, blocking=blocking)
     except BoardError as error:
         raise BoardError('STORAGE_UNSAFE', 'Storage lock is unsafe', path=str(lock_path)) from error
-    try:
-        locking.lock(fd, blocking=False)
-        yield path
     except BlockingIOError as error:
+        if blocking:
+            raise
         raise BoardError('STORAGE_BUSY', 'A storage operation is already running') from error
+    try:
+        yield path
     finally:
         os.close(fd)
 

@@ -252,18 +252,73 @@ def _allocation_owner(store, item):
             item['reasons'] = ['request-task-retained']
 
 
+def _read_allocation_manifest(item):
+    directory = item['directory']
+    try:
+        manifest = workspace._record(directory / 'manifest.json')
+        if manifest is not None and (not isinstance(manifest, dict) or manifest.get('workspaceId') != directory.name):
+            item['reasons'] = ['allocation-unproven']
+        else:
+            item['manifest'] = manifest
+    except BoardError as error:
+        if error.code not in ('WORKSPACE_CONFLICT', 'PRIVATE_PATH_UNSAFE'):
+            raise
+        item['reasons'] = ['allocation-unproven']
+
+
+def _reference_revision(connection):
+    # data_version covers commits through other connections, total_changes
+    # covers writes made through the maintenance thread's cached connection.
+    return connection.execute('PRAGMA data_version').fetchone()[0], connection.total_changes
+
+
+def _scan_allocation_references(connection, items):
+    from .storage import _allocation_reference_sets, _workspace_reference_rows
+
+    def referenced(index, _table, row):
+        items[index]['tasks'].update(value for key in row.keys()
+                                     if (key.endswith('task_id') or key.endswith('run_id'))
+                                     and isinstance(value := row[key], str))
+
+    return _allocation_reference_sets(
+        _workspace_reference_rows(connection), [(item['manifest'], item['requestId']) for item in items],
+        directories=[str(item['directory']) for item in items], on_reference=referenced,
+    )
+
+
 def allocation_records(store, directories, *, stopping=lambda: False, create_revoked_lock=False):
     """Skip owned allocations without a lock; lock unowned candidates one by one.
 
     Admission also holds the allocation lock, so a candidate's owner is re-read
     after acquisition. Removal finishes before the iterator releases its lock.
     """
+    items, previews = [], {}
     for directory in directories:
         if stopping():
-            break
+            return
         item = allocation_record(store, directory)
+        items.append(item)
         if not item['reasons']:
             _allocation_owner(store, item)
+        if not item['reasons'] and not item['missing'] and not item['revoked']:
+            preview = {**item, 'tasks': set()}
+            _read_allocation_manifest(preview)
+            if preview['manifest'] is not None:
+                previews[directory] = preview
+    revision = None
+    if stopping():
+        return
+    if previews:
+        with store.db.read() as connection:
+            revision = _reference_revision(connection)
+            references = _scan_allocation_references(connection, list(previews.values()))
+        for preview, reasons in zip(previews.values(), references, strict=True):
+            preview['references'] = reasons
+
+    for item in items:
+        if stopping():
+            return
+        directory = item['directory']
         if item['reasons'] or item['missing']:
             yield item
             continue
@@ -290,25 +345,23 @@ def allocation_records(store, directories, *, stopping=lambda: False, create_rev
                     raise
             else:
                 item.update(allocation_record(store, directory))
-                _allocation_owner(store, item)
-                if item['owner'] is None:
-                    try:
-                        item['manifest'] = workspace._record(directory / 'manifest.json')
-                        if (item['manifest'] is not None and (not isinstance(item['manifest'], dict)
-                                or item['manifest'].get('workspaceId') != directory.name)):
-                            item['reasons'] = ['allocation-unproven']
-                    except BoardError as error:
-                        if error.code not in ('WORKSPACE_CONFLICT', 'PRIVATE_PATH_UNSAFE'):
-                            raise
-                        item['reasons'] = ['allocation-unproven']
+                if not item['reasons']:
+                    _allocation_owner(store, item)
+                if not item['reasons']:
+                    _read_allocation_manifest(item)
+                    preview = previews.get(directory)
+                    if (preview is not None and (item['manifest'], item['requestId'])
+                            == (preview['manifest'], preview['requestId'])):
+                        item['referenceRevision'] = revision
+                        item['references'] = preview['references']
+                        item['tasks'].update(preview['tasks'])
             if item['reasons']:
                 ownership.close()
             yield item
 
 
-def allocation_plan(store, item):
+def allocation_plan(store, item, *, inventory=False):
     """Use submission revocation's proof, plus retained uses and process facts."""
-    from .storage import _allocation_reference_sets, _workspace_reference_rows
     directory, manifest = item['directory'], item['manifest']
     if item['reasons']:
         return
@@ -325,13 +378,10 @@ def allocation_plan(store, item):
         item['reasons'] = ['allocation-unproven']
         return
     item['reasons'] = list(item['plan']['reasons'])
-    with store.db.read() as connection:
-        def referenced(index, table, row):
-            item['tasks'].update(value for key in row.keys()
-                                 if (key.endswith('task_id') or key.endswith('run_id'))
-                                 and isinstance(value := row[key], str))
-        item['reasons'].extend(_allocation_reference_sets(_workspace_reference_rows(connection),
-            [(manifest, item['requestId'])], directories=[str(directory)], on_reference=referenced)[0])
+    if inventory and 'references' not in item:
+        with store.db.read() as connection:
+            item['references'] = _scan_allocation_references(connection, [item])[0]
+    item['reasons'].extend(item.get('references', ()))
     checkout = directory / 'checkout'
     if not item['reasons'] and workspace._path_present(checkout):
         from .checkout_processes import allocation_created_at, require_idle_checkout
@@ -350,6 +400,15 @@ def allocation_plan(store, item):
             item['reasons'].extend(error.details['reasons'])
 
 
+def _confirm_allocation_references(store, item):
+    """The allocation and storage locks are held, and physical proof allows removal."""
+    if item['manifest'] is None:
+        return
+    with store.db.read() as connection:
+        if _reference_revision(connection) != item.get('referenceRevision'):
+            item['reasons'].extend(_scan_allocation_references(connection, [item])[0])
+
+
 def allocation_inventory(store, directories):
     """List only allocations automatic reclamation cannot presently prove."""
     result = []
@@ -360,7 +419,7 @@ def allocation_inventory(store, directories):
             if item['missing'] or (item['revoked'] and not item['reasons']
                                    and not workspace._path_present(item['directory'] / '.lock')):
                 continue
-            allocation_plan(store, item)
+            allocation_plan(store, item, inventory=True)
             if item['reasons']:
                 checkout = item['directory'] / 'checkout'
                 item['path'] = checkout if workspace._path_present(checkout) else item['directory']
@@ -527,6 +586,8 @@ class Reclamation:
                             else:
                                 with locked(store):
                                     allocation_plan(store, item)
+                                    if not item['reasons']:
+                                        _confirm_allocation_references(store, item)
                                     if not item['reasons']:
                                         allocation_revocations.record(store, directory, item['requestId'])
                                         if item['manifest'] is None:

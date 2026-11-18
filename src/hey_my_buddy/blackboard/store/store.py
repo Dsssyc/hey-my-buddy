@@ -236,6 +236,7 @@ class BoardStore:
         revision: int | None = None,
         payload: dict | None = None,
         wake_owned: bool = True,
+        activity: bool = True,
     ) -> int:
         at = self.now()
         event_payload = dict(payload or {})
@@ -258,8 +259,9 @@ class BoardStore:
                 "DELETE FROM events WHERE task_id IS NULL AND kind=? AND json_extract(payload_json,'$.harness')=? AND seq<?",
                 (kind, event_payload["harness"], seq),
             )
-        from ..tasks.macro_tasks import record_activity
-        record_activity(connection, task_id, seq, at)
+        if activity:
+            from ..tasks.macro_tasks import record_activity
+            record_activity(connection, task_id, seq, at)
         if wake_owned:
             self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=at)
         return seq
@@ -2087,11 +2089,71 @@ class BoardStore:
             request, seal_stash=seal_stash,
             completion_evidence=stop_evidence, output_record=output_record)
 
+    def shutdown_needs_settlement(self, connection: sqlite3.Connection, attempt: sqlite3.Row) -> bool:
+        """Only the effective attempt of an unsettled task may settle the task."""
+        return bool(connection.execute(
+            "SELECT 1 FROM tasks t LEFT JOIN workflow_runs r ON r.run_id=t.task_id"
+            " WHERE t.task_id=? AND t.state NOT IN ('queued','completed','concluded','cancelled')"
+            " AND (r.state IS NULL OR r.state NOT IN ('accepted','concluded'))"
+            " AND COALESCE(t.active_attempt_id,(SELECT attempt_id FROM attempts"
+            " WHERE task_id=t.task_id ORDER BY generation DESC LIMIT 1))=?",
+            (attempt["task_id"], attempt["attempt_id"]),
+        ).fetchone())
+
+    def _record_execution_shutdown(self, connection, attempt, evidence, *, receipt_confirmed, now, historical=False):
+        attempt_id = attempt["attempt_id"]
+        proof = {"receiptShutdownConfirmed": receipt_confirmed, **evidence}
+        if historical:
+            proof["historicalAttempt"] = True
+        connection.execute("INSERT INTO attempt_shutdown_evidence VALUES(?,?,?,?)",
+                           (attempt_id, proof["kind"], canonical_json(proof), now))
+        self._append_event(connection, "execution.shutdown_confirmed", task_id=attempt["task_id"],
+                           attempt_id=attempt_id, payload={"evidence": proof},
+                           activity=not historical, wake_owned=not historical)
+
+    def _clear_execution_receipt_and_issues(self, connection, attempt_id):
+        connection.execute("DELETE FROM attempt_received_receipts WHERE attempt_id=?", (attempt_id,))
+        connection.execute("DELETE FROM execution_issues WHERE attempt_id=? AND stage IN ('connection','shutdown','recovery')",
+                           (attempt_id,))
+
     def confirm_execution_shutdown(self, attempt_id: str, evidence: dict) -> dict:
-        """Supplement only a no-receipt interruption with its later native-stop proof."""
-        with self.db.read() as connection:
+        """Supplement a committed result with its later native-stop proof."""
+        from ..evaluation.native_observations import persist
+
+        with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id)
             payload = json.loads(attempt["result_json"])
+            if not self.shutdown_needs_settlement(connection, attempt):
+                task = self._task_row(connection, {"runId": attempt["task_id"]})
+                duplicate = bool(attempt["shutdown_confirmed"])
+                if not duplicate:
+                    now = self.now()
+                    self._record_execution_shutdown(connection, attempt, evidence,
+                                                    receipt_confirmed=payload["shutdownConfirmed"], now=now,
+                                                    historical=True)
+                    connection.execute(
+                        "UPDATE attempts SET execution_state='finished',shutdown_confirmed=1,result_json=?,"
+                        " finished_at=COALESCE(finished_at,?),cleanup_pending=1,updated_at=?,revision=revision+1"
+                        " WHERE attempt_id=?",
+                        (canonical_json({**payload, "shutdownConfirmed": True}), now, now, attempt_id),
+                    )
+                    self._clear_execution_receipt_and_issues(connection, attempt_id)
+                    self._release_claims(connection, attempt_id)
+                    connection.execute("UPDATE attempt_interruptions SET state='settled',seal_error=NULL WHERE attempt_id=?",
+                                       (attempt_id,))
+                    # The original result already contributed any provider rejection.
+                    # Only a newly confirmed success can change the native observation.
+                    if payload["status"] == "ok":
+                        persist(connection, attempt, None, status="ok", shutdown_confirmed=True, now=now)
+                    attempt = self._attempt_row(connection, attempt_id)
+                response = {"attempt": self._attempt_view(attempt), "task": self._decorate(connection, task),
+                            "duplicate": duplicate, "committed": True}
+                head = self._head_of(connection)
+            else:
+                response = None
+        if response is not None:
+            self._notify(head)
+            return response
         # Interruption settlement built this report inside the service. The new
         # native-stop proof can now bind its safely sealed partial output.
         params = {**payload, "shutdownConfirmed": True, "attemptId": attempt_id}
@@ -2213,17 +2275,13 @@ class BoardStore:
                 payload = {**previous, "shutdownConfirmed": True}
             proof = shutdown_evidence or completion_evidence
             if proof is not None and shutdown_confirmed:
-                proof = {"receiptShutdownConfirmed": (previous["shutdownConfirmed"]
-                         if shutdown_evidence is not None else request["shutdownConfirmed"]), **proof}
-                connection.execute("INSERT INTO attempt_shutdown_evidence VALUES(?,?,?,?)",
-                    (attempt_id_param, proof["kind"], canonical_json(proof), now))
-                self._append_event(connection, "execution.shutdown_confirmed", task_id=attempt["task_id"],
-                    attempt_id=attempt_id_param, payload={"evidence": proof})
+                receipt_confirmed = previous["shutdownConfirmed"] if shutdown_evidence is not None else request["shutdownConfirmed"]
+                self._record_execution_shutdown(connection, attempt, proof, receipt_confirmed=receipt_confirmed, now=now)
             self._transition_attempt(connection, attempt, "finished" if shutdown_confirmed else "uncertain")
             if shutdown_confirmed:
-                connection.execute("DELETE FROM attempt_received_receipts WHERE attempt_id=?", (attempt_id_param,))
-                connection.execute("DELETE FROM execution_issues WHERE attempt_id=? AND stage IN ('connection','shutdown','recovery')",
-                                   (attempt_id_param,))
+                self._clear_execution_receipt_and_issues(connection, attempt_id_param)
+                if shutdown_evidence is not None and attempt["execution_state"] == "finished":
+                    connection.execute("UPDATE attempts SET cleanup_pending=1 WHERE attempt_id=?", (attempt_id_param,))
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             cancel_requested = attempt["cancel_requested_at"] is not None or task["state"] == "cancelling"
             if not shutdown_confirmed and (cancel_requested or attempt["stop_initiator"] is not None or status == "cancelled"):
@@ -2389,14 +2447,24 @@ class BoardStore:
         with self.db.read() as connection:
             return self._attempt_row(connection, attempt_id)["execution_state"] == "finished"
 
+    @staticmethod
+    def _cleanup_updates_activity(connection, attempt_id: str) -> bool:
+        # Confirmation records whether this cleanup belongs to historical work.
+        # The proof survives a restart between confirmation and material removal.
+        return connection.execute(
+            "SELECT 1 FROM attempt_shutdown_evidence WHERE attempt_id=?"
+            " AND json_extract(detail_json,'$.historicalAttempt')=1", (attempt_id,),
+        ).fetchone() is None
+
     def complete_execution_cleanup(self, attempt_id: str) -> None:
         with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id)
             if not attempt["cleanup_pending"]:
                 return
             connection.execute("UPDATE attempts SET cleanup_pending=0 WHERE attempt_id=?", (attempt_id,))
+            activity = self._cleanup_updates_activity(connection, attempt_id)
             self._append_event(connection, "execution.materials_cleaned", task_id=attempt["task_id"],
-                               attempt_id=attempt_id, payload={})
+                               attempt_id=attempt_id, payload={}, activity=activity, wake_owned=activity)
             head = self._head_of(connection)
         self._notify(head)
 
@@ -2428,8 +2496,10 @@ class BoardStore:
             if not removed:
                 return
             task_id = self._attempt_row(connection, attempt_id)["task_id"]
+            activity = (stage not in ('endpoint-cleanup', 'credential-cleanup')
+                        or self._cleanup_updates_activity(connection, attempt_id))
             self._append_event(connection, "execution.issue_resolved", task_id=task_id, attempt_id=attempt_id,
-                               payload={"stage": stage})
+                               payload={"stage": stage}, activity=activity, wake_owned=activity)
             head = self._head_of(connection)
         self._notify(head)
 
@@ -2455,8 +2525,10 @@ class BoardStore:
             return False
         task_id = attempt['task_id'] if attempt is not None else None
         kind = 'execution.issue' if attempt is not None else 'service.issue'
+        activity = (attempt_id is None or stage not in ('endpoint-cleanup', 'credential-cleanup')
+                    or self._cleanup_updates_activity(connection, attempt_id))
         seq = self._append_event(connection, kind if previous is None else kind + '_updated',
-                                 task_id=task_id, attempt_id=attempt_id, wake_owned=False,
+                                 task_id=task_id, attempt_id=attempt_id, wake_owned=False, activity=activity,
                                  payload={'stage': stage, 'code': code, 'message': message})
         occurrence = seq if previous is None else previous['occurrence_seq']
         if attempt is not None:
@@ -2467,7 +2539,7 @@ class BoardStore:
             connection.execute('INSERT INTO service_issues VALUES(?,?,?,?,?) ON CONFLICT(stage)'
                                ' DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at',
                                (stage, code, message, now, occurrence))
-        if previous is None:
+        if previous is None and activity:
             self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=now)
         return True
 

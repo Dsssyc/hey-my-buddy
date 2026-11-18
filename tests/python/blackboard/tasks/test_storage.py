@@ -19,6 +19,14 @@ from process_observation_fakes import native_references, proc_references, proces
 from hey_my_buddy.paths import native_path
 
 class StorageTests(BoardTestCase):
+    def test_storage_lock_releases_after_a_body_error_without_remapping_it(self):
+        board = self.board()
+        with self.assertRaises(BlockingIOError) as caught, storage.locked(board.store):
+            raise BlockingIOError('operation failed')
+        self.assertEqual(str(caught.exception), 'operation failed')
+        with storage.locked(board.directory, blocking=True) as directory:
+            self.assertEqual(directory, board.directory / 'storage')
+
     def test_deep_inventory_and_pending_tomb_keep_ordinary_paths(self):
         root = self.directory / 'long-storage'
         deep = root

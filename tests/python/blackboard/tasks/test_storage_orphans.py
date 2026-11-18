@@ -359,7 +359,7 @@ class StorageOrphanTests(WorkflowTestCase):
             row for row in unproven['candidates'] if row['path'] == str(checkout))['reasons'])
         self.assertTrue(checkout.is_dir())
 
-    def test_planning_streams_rows_and_parses_each_field_once_per_orphan(self):
+    def test_planning_streams_rows_and_parses_each_field_once_for_all_orphans(self):
         first, checkout, _ = self.orphan()
         request = json.loads((checkout.parent / 'request.json').read_text(encoding="utf-8"))
         second = workspace.prepare(self.directory, 'second-orphan', request['intent'])
@@ -385,7 +385,7 @@ class StorageOrphanTests(WorkflowTestCase):
             self.assertEqual(len(read_rows), 1, 'the first row must not preload historical facts')
         with patch.object(storage.json, 'loads', side_effect=counted):
             planned = self.board_instance.call('storage_plan', {})
-        self.assertEqual(len(calls), 2, 'each orphan proof must parse a retained JSON field once')
+        self.assertEqual(len(calls), 1, 'the batch must parse a retained JSON field once')
         for manifest in (first, second):
             self.assertFalse(any(row['path'] == manifest['checkoutRoot'] for row in planned['candidates']))
 

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from support import macro_summaries
-from hey_my_buddy.blackboard.tasks import macro_task_deletion, macro_tasks, worker_sessions
+from hey_my_buddy.blackboard.tasks import interruption, macro_task_deletion, macro_tasks, worker_sessions
 from hey_my_buddy.buddy.harnesses import registry as harness_registry
 from hey_my_buddy.private_dirs import micro_task_root
 from hey_my_buddy.errors import BoardError
@@ -633,6 +633,78 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                          board.store, run["macroTaskId"], 1)
         with board.store.db.write() as db:
             db.execute("UPDATE attempts SET shutdown_confirmed=1 WHERE attempt_id='finished-unconfirmed'")
+        self.assertEqual(macro_task_deletion.preview(board.store, run["macroTaskId"])["blockerTotal"], 0)
+        with self.without_physical_io()[0]:
+            self.assertEqual(macro_task_deletion.delete(board.store, run["macroTaskId"], 1)["state"], "deleted")
+
+    def test_recovered_shutdown_allows_deletion_of_concluded_macro_task(self):
+        board = self.board()
+        run = self.closed(board, "historic-unconfirmed", macro_task="Historic unconfirmed")
+        attempt_id = "historic-finished"
+        now = board.store.now()
+        result = {
+            "status": "failed", "result": None, "artifacts": [], "shutdownConfirmed": False,
+            "exitCode": None, "signal": None, "error": "Execution was interrupted",
+            "logPaths": {}, "runtimeIdentity": None, "terminationReason": "interrupted", "completedAt": now,
+        }
+        identity = {"bootId": "macos:00000000-0000-0000-0000-000000000001",
+                    "pid": 123, "startedAt": 123250000, "jobName": None}
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
+                "adapter,result_json,result_form,shutdown_confirmed,identity_confirmed_at,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (attempt_id, run["runId"], 1, "fixture", "finished", "dsh", json.dumps(result),
+                 "current-report-v2", 0, now, now, now),
+            )
+            connection.execute("INSERT INTO attempt_interruptions VALUES(?,?,'settled',NULL)",
+                               (attempt_id, "identity-absent"))
+            task = dict(connection.execute("SELECT * FROM tasks WHERE task_id=?", (run["runId"],)).fetchone())
+            workflow = dict(connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone())
+            macro_activity = tuple(connection.execute(
+                "SELECT activity_seq,activity_at FROM macro_tasks WHERE macro_task_id=?", (run["macroTaskId"],),
+            ).fetchone())
+        self.assert_code("MACRO_TASK_NOT_SETTLED", macro_task_deletion.delete,
+                         board.store, run["macroTaskId"], 1)
+        with patch.object(interruption.processes, "inspect_process_identity") as inspect_identity:
+            self.assertEqual(board.store.recover_executions(), [])
+            inspect_identity.assert_not_called()
+        self.assert_code("MACRO_TASK_NOT_SETTLED", macro_task_deletion.delete,
+                         board.store, run["macroTaskId"], 1)
+        with board.store.db.write() as connection:
+            interruption.record_identity(connection, attempt_id, identity)
+        with (
+            patch.object(interruption.processes, "inspect_process_identity", return_value="boot-changed"),
+            patch.object(board.store.workflow, "seal_interrupted_turn") as seal,
+            patch.object(board.store.decisions, "complete") as complete,
+        ):
+            with patch("hey_my_buddy.private_dirs.cleanup_attempt_credentials", side_effect=OSError("cleanup blocked")):
+                settled = board.store.recover_executions()
+            with board.store.db.read() as connection:
+                self.assertTrue(board.store._attempt_row(connection, attempt_id)["cleanup_pending"])
+            self.assertEqual(board.store.recover_executions(), [])
+            seal.assert_not_called()
+            complete.assert_not_called()
+        with board.store.db.read() as connection:
+            issue = connection.execute("SELECT code, message FROM execution_issues WHERE attempt_id=? AND stage='recovery'",
+                                       (attempt_id,)).fetchone()
+            self.assertEqual(len(settled), 1, dict(issue) if issue is not None else None)
+            self.assertEqual(dict(connection.execute("SELECT * FROM tasks WHERE task_id=?",
+                                                     (run["runId"],)).fetchone()), task)
+            self.assertEqual(dict(connection.execute("SELECT * FROM workflow_runs WHERE run_id=?",
+                                                     (run["runId"],)).fetchone()), workflow)
+            self.assertEqual(tuple(connection.execute(
+                "SELECT activity_seq,activity_at FROM macro_tasks WHERE macro_task_id=?", (run["macroTaskId"],),
+            ).fetchone()), macro_activity)
+            attempt = board.store._attempt_row(connection, attempt_id)
+            self.assertEqual(json.loads(attempt["result_json"]), {**result, "shutdownConfirmed": True})
+            self.assertFalse(attempt["cleanup_pending"])
+            self.assertEqual(
+                [row["kind"] for row in connection.execute("SELECT kind FROM events WHERE attempt_id=? ORDER BY seq",
+                                                           (attempt_id,))],
+                ["execution.shutdown_confirmed", "execution.issue", "execution.issue_resolved",
+                 "execution.materials_cleaned"],
+            )
         self.assertEqual(macro_task_deletion.preview(board.store, run["macroTaskId"])["blockerTotal"], 0)
         with self.without_physical_io()[0]:
             self.assertEqual(macro_task_deletion.delete(board.store, run["macroTaskId"], 1)["state"], "deleted")
