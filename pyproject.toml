@@ -69,5 +69,8 @@ packages = ["src/hey_my_buddy"]
 include = ["/LICENSE", "/README.md", "/pyproject.toml", "/uv.lock", "/packaging/hatch_build.py", "/packaging/runtime-assets.json", "/src/hey_my_buddy", "/skills/hey-my-buddy/SKILL.md", "/skills/hey-my-buddy/scripts", "/docs/reference"]
 exclude = ["**/__pycache__", "**/*.pyc", "**/node_modules", "**/.venv", "**/_distribution"]
 
+[tool.hey-my-buddy]
+published-version = "0.69.7"
+
 [tool.hatch.build.hooks.custom]
 path = "packaging/hatch_build.py"

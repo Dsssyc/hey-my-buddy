@@ -21,11 +21,15 @@ jobs:
           import tomllib
           from pathlib import Path
 
-          version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = data["project"]["version"]
+          published = data["tool"]["hey-my-buddy"]["published-version"]
           tag = os.environ["GITHUB_REF_NAME"]
           if tag != f"v{version}":
               raise SystemExit(f"Release tag {tag!r} does not match pyproject.toml version {version!r} (expected 'v{version}').")
-          print(f"Verified release tag {tag} matches pyproject.toml version {version}.")
+          if published != version:
+              raise SystemExit(f"Release tag {tag!r} requires tool.hey-my-buddy.published-version {published!r} to equal {version!r}.")
+          print(f"Verified release tag {tag} matches pyproject.toml version and published-version {version}.")
       - uses: astral-sh/setup-uv@v6
         with:
           version: '0.12.19'
