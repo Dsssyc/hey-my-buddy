@@ -12,6 +12,7 @@ from hey_my_buddy.blackboard.routing.maintenance_data import (
 from hey_my_buddy.protocol.structured_schema import schema_errors
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
+from hey_my_buddy.protocol import maintenance as files
 from hey_my_buddy.protocol.task_types import TASK_TYPES
 from hey_my_buddy.blackboard.evaluation.models import append_correspondence, current_model, ensure_model_service
 
@@ -202,9 +203,51 @@ class MaintenanceDataTests(WorkflowTestCase):
                     invalid_kind = {**kind, field: value}
                     with self.assertRaisesRegex(ValueError, "kind identifier components"):
                         answer_schema({**packet, "kinds": [invalid_kind]})
-        kind["kindId"] = json.dumps(packet_key(kind), separators=(",", ":"))
-        with self.assertRaisesRegex(ValueError, "kindId does not match"):
-            answer_schema(packet)
+        for kind_id in (None, 42, "", " \t\n", 'zcode:m:hi"gh\n', "zcode:m:hi'gh", "zcode:m:high\r\n"):
+            with self.subTest(kindId=kind_id):
+                with self.assertRaisesRegex(ValueError, "kindId must be a nonblank printable string"):
+                    answer_schema({**packet, "kinds": [{**kind, "kindId": kind_id}]})
+        other = deepcopy(kind)
+        other["kindId"] = f"{kind['harness']}:{kind['modelId']}:custom+high"
+        with self.assertRaisesRegex(ValueError, "duplicate kindId"):
+            answer_schema({**packet, "kinds": [other, other]})
+
+    def test_packet_sealed_by_the_previous_version_keeps_its_verbatim_kind_id(self):
+        """A packet frozen before percent-encoding still binds its answer rows.
+
+        CONTRACT_VERSION stays at 0.70.0 across the 0.70.1 install, so an
+        execution dispatched before the switch answers against a sealed packet
+        whose kindId holds a native effort verbatim, such as custom+high.
+        Sealed input is validated in the form it was written with: the frozen
+        kindId is the schema key, and apply_answer binds it back to the same
+        kind triple. Newly built packets keep the percent-encoded form.
+        """
+        packet = deepcopy(self.packet())
+        kind = packet["kinds"][0]
+        frozen_id = f"{kind['harness']}:{kind['modelId']}:custom+high"
+        self.assertNotIn("%2B", frozen_id)
+        kind["effort"] = "custom+high"
+        kind["kindId"] = frozen_id
+        packet["classificationRunIds"] = []
+        schema = answer_schema(packet)
+        self.assertEqual(list(schema["properties"]["summaries"]["properties"]), [frozen_id])
+        answer = {"newNodes": [], "merges": [], "classifications": [],
+                  "summaries": {frozen_id: {"text": "Observed custom effort", "citations": []}}}
+        self.assertEqual(schema_errors(answer, schema), [])
+        # The Maintenance.answer path reads the digest-bound sealed packet and
+        # applies the answer against that frozen form.
+        reference = files.publish(self.board_.directory, self.maintenance_id,
+                                  {"packet": packet, "outputSchema": schema})
+        sealed = files.read(self.board_.directory, self.maintenance_id, reference)
+        with self.board_.store.db.write() as db:
+            result = apply_answer(db, packet=sealed["packet"], answer=answer,
+                                  maintenance_run_id=self.maintenance_id)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["written"]["summaries"], 1)
+        with self.board_.store.db.read() as db:
+            row = db.execute("SELECT harness,model_id,effort,text FROM kind_summaries").fetchone()
+        self.assertEqual(tuple(row), (kind["harness"], kind["modelId"], "custom+high",
+                                      "Observed custom effort"))
 
     def test_encoded_kind_ids_bind_distinct_summaries_to_the_original_components(self):
         cases = (

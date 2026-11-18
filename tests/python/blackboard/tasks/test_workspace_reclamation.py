@@ -752,6 +752,49 @@ class ReclamationTests(LifecycleTestCase):
         self.assertFalse(unreadable.exists())
         self.assertEqual(board.store.service_issues(), [])
 
+    def test_unreadable_request_defers_only_its_own_candidate(self):
+        """One unreadable request.json must not abort the other candidates' round.
+
+        The unlocked pre-read runs before any candidate is yielded, so a
+        PermissionError there used to break the whole generator and every
+        allocation after it lost its round. The unreadable candidate is now
+        deferred to its own locked re-read, which reports the failure through
+        its candidate while the healthy ones before and after it are reclaimed.
+        """
+        import errno
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import reclamation
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host'}}
+        manifests = [workspace.prepare(board.directory, request, intent)
+                     for request in ('unreadable-request', 'reclaimable-before', 'reclaimable-after')]
+        for manifest in manifests:
+            workspace.cleanup_remove(board.directory, manifest)
+        unreadable, before, after = (Path(manifest['checkoutRoot']).parent for manifest in manifests)
+        read_record = workspace._record
+
+        def read_with_denial(path):
+            if path == unreadable / 'request.json':
+                raise PermissionError(errno.EACCES, 'fixture unreadable request', str(path))
+            return read_record(path)
+
+        maintenance = reclamation.Reclamation(board.store)
+        with patch.object(workspace, '_record', side_effect=read_with_denial):
+            maintenance.run()
+            self.assertFalse(before.exists())
+            self.assertFalse(after.exists())
+            self.assertTrue(unreadable.is_dir())
+            issue, = board.store.service_issues()
+            self.assertEqual((issue['stage'], issue['code']), ('allocation-reclamation', 'PermissionError'))
+            self.assertIn('fixture unreadable request', issue['message'])
+            with self.assertRaisesRegex(PermissionError, 'fixture unreadable request'):
+                reclamation.allocation_inventory(board.store, [unreadable])
+
+        maintenance.run()
+        self.assertFalse(unreadable.exists())
+        self.assertEqual(board.store.service_issues(), [])
+
     def test_storage_keeps_live_checkout_inventory_and_excludes_terminal_candidates(self):
         from unittest.mock import patch
         board = self.board()

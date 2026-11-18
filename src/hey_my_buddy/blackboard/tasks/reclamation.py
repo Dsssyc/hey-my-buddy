@@ -296,10 +296,16 @@ def allocation_records(store, directories, *, stopping=lambda: False, create_rev
     for directory in directories:
         if stopping():
             return
-        item = allocation_record(store, directory)
+        try:
+            item = allocation_record(store, directory)
+            if not item['reasons']:
+                _allocation_owner(store, item)
+        except (OSError, BoardError):
+            # One unreadable candidate must not block the others' shared scan;
+            # read it again under its allocation lock before reporting a failure.
+            items.append({'directory': directory, 'previewDeferred': True})
+            continue
         items.append(item)
-        if not item['reasons']:
-            _allocation_owner(store, item)
         if not item['reasons'] and not item['missing'] and not item['revoked']:
             preview = {**item, 'tasks': set()}
             try:
@@ -323,6 +329,16 @@ def allocation_records(store, directories, *, stopping=lambda: False, create_rev
         if stopping():
             return
         directory = item['directory']
+        if item.get('previewDeferred'):
+            try:
+                item = allocation_record(store, directory)
+                if not item['reasons']:
+                    _allocation_owner(store, item)
+            except (OSError, BoardError) as error:
+                yield {'directory': directory, 'manifest': None, 'requestId': None,
+                       'owner': None, 'tasks': set(), 'reasons': [], 'revoked': False,
+                       'missing': False, 'readError': error}
+                continue
         if item['reasons'] or item['missing']:
             yield item
             continue
@@ -346,25 +362,26 @@ def allocation_records(store, directories, *, stopping=lambda: False, create_rev
                     # allocation_plan reports, and the scan continues.
                     item['reasons'] = ['checkout-in-use']
                 else:
-                    raise
+                    item['readError'] = error
+            except OSError as error:
+                item['readError'] = error
             else:
-                item.update(allocation_record(store, directory))
-                if not item['reasons']:
-                    _allocation_owner(store, item)
-                if not item['reasons']:
-                    try:
+                try:
+                    item.update(allocation_record(store, directory))
+                    if not item['reasons']:
+                        _allocation_owner(store, item)
+                    if not item['reasons']:
                         _read_allocation_manifest(item)
-                    except (OSError, BoardError) as error:
-                        # Yield the failure with its candidate so the caller can handle it.
-                        item['manifestError'] = error
-                    else:
                         preview = previews.get(directory)
                         if (preview is not None and (item['manifest'], item['requestId'])
                                 == (preview['manifest'], preview['requestId'])):
                             item['referenceRevision'] = revision
                             item['references'] = preview['references']
                             item['tasks'].update(preview['tasks'])
-            if item['reasons'] or 'manifestError' in item:
+                except (OSError, BoardError) as error:
+                    # Yield the failure with its candidate so the caller can handle it.
+                    item['readError'] = error
+            if item['reasons'] or 'readError' in item:
                 ownership.close()
             yield item
 
@@ -423,8 +440,8 @@ def allocation_inventory(store, directories):
     result = []
     with closing(allocation_records(store, directories)) as records:
         for item in records:
-            if 'manifestError' in item:
-                raise item['manifestError']
+            if 'readError' in item:
+                raise item['readError']
             if item['owner'] is not None:
                 continue
             if item['missing'] or (item['revoked'] and not item['reasons']
@@ -590,8 +607,8 @@ class Reclamation:
                     if item['reasons'] == ['WORKSPACE_BUSY']:
                         continue
                     try:
-                        if 'manifestError' in item:
-                            raise item['manifestError']
+                        if 'readError' in item:
+                            raise item['readError']
                         if not item['reasons']:
                             if item['missing']:
                                 if not allocation_revocations.forget_removed(store, directory):

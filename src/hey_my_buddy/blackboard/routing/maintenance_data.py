@@ -241,14 +241,30 @@ def _object(properties):
             "required": list(properties), "additionalProperties": False}
 
 
+def _frozen_kind_id(kind, summary_properties) -> str:
+    """Validate the kindId a sealed packet was written with; forms never rewrite.
+
+    New packets build their kindId from the current percent-encoded form, but a
+    packet already queued by an older installed version is validated in the
+    form it was written with, so its in-flight answer still binds to the same
+    kind triple.
+    """
+    _kind_id(kind)
+    kind_id = kind.get("kindId")
+    if (not isinstance(kind_id, str) or not kind_id.strip() or not kind_id.isprintable()
+            or any(c in kind_id for c in "\"'\r\n")):
+        raise ValueError("Maintenance kindId must be a nonblank printable string without quotes or newlines")
+    if kind_id in summary_properties:
+        raise ValueError("Maintenance packet has a duplicate kindId")
+    return kind_id
+
+
 def answer_schema(packet) -> dict:
     """Use only the JSON Schema keywords supported by structured_call."""
     ids = packet["classificationRunIds"]
     summary_properties = {}
     for kind in packet["kinds"]:
-        kind_id = _kind_id(kind)
-        if kind["kindId"] != kind_id:
-            raise ValueError("Maintenance kindId does not match its kind")
+        kind_id = _frozen_kind_id(kind, summary_properties)
         original = (kind.get("summary") or {}).get("citations") or []
         citation_ids = sorted(set(kind["citationRunIds"]) | set(original))
         citations = {"type": "array", "items": {"type": "string"}}
