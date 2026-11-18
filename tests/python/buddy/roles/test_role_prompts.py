@@ -293,7 +293,7 @@ class RolePromptTests(unittest.TestCase):
                          "441c0ed9ba58ed0c714f9674832e7c98a93160a6d065787f87ed19e5481a1279")
         hashes = {"fast": "470ed4644d0dc5143a555a20ed9e3a9d8b34dd0fd871b5df8fdad86a4dbfb233",
                   "review": "5c21638653f7604d4e50a46ac6e05693ab56e309740cb031ca00c1c41c6499b7",
-                  "maintain": "954b11c665c9b82fdf40fe1755d9d4c37740f61c79a5bc92d39a3bd22942fbc1"}
+                  "maintain": "712e2c63bcba13ecdd7ed71042d8d09fd8028ed3aae27e9ff7852b479d11a5eb"}
         for mode, expected in hashes.items():
             with self.subTest(mode=mode):
                 text = (router.MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(

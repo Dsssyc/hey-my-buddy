@@ -11,12 +11,12 @@ const samples: Record<string, unknown> = {
   buddyId: "buddy-1", bytes: 12345, catalogReadAt: "2026-10-18T01:02:03Z", cause: { code: "harness.not-found", params: { operation: "probe" } },
   conflictingBuddy: { harness: "codex", provider: "openai", model: "other", effort: "max" }, violation: "format",
   category: "OSError", message: "file write unavailable", truncated: false,
-  collection: "buddies", conflictIds: ["conflict-1"], continuationId: "continuation-1", count: 1234, disposition: "completed", enabled: false,
+  collection: "buddies", conflictIds: ["conflict-1"], continuationId: "continuation-1", count: 1234, cwd: "/workspace/sample", disposition: "completed", enabled: false,
   errorCode: "SAMPLE", errors: ["summary-citation-outside-batch"], harness: "codex", kind: "permission", leadRunId: "lead-1", legalEfforts: ["high", "max"], limit: 12000,
   missingCapabilities: ["decision"], operation: "probe", recordId: "record-1",
   processes: [{ pid: 321, startedAt: 456, executable: "python" }],
   unreadableProcesses: [{ pid: 654, startedAt: 789, executable: "python" }],
-  requiredCapability: "decision", runId: "micro-1", retryAt: "2026-10-18T01:02:03Z", seconds: 60, shape: "object", total: 12,
+  requiredCapability: "decision", runId: "micro-1", retryAt: "2026-10-18T01:02:03Z", seconds: 60, shape: "object", systemReason: "WinError 267: The directory name is invalid", total: 12,
   unfinished: [{ runId: "micro-1", state: "executing" }], utf16Units: 32768, version: "0.2.2-rc.1",
 };
 
