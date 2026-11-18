@@ -217,6 +217,74 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 self.assertEqual(native_path(self.execution.directory / RECEIPT).read_bytes(), original)
                 self.assertFalse(native_path(self.execution.directory / "result-delivery.json").exists())
 
+    def test_ipc_tear_down_transients_replay_the_same_result_delivery(self):
+        # The old daemon of a same-contract hot swap closes its IPC listener
+        # while an idempotent call is in flight; each transient C-Two code must
+        # replay the exact same receipt reference until the new daemon answers.
+        receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+                   "report": {"status": "ok"},
+                   "createdAt": "2026-10-16T00:00:00+00:00"}
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt
+        write_receipt(self.execution.directory, receipt)
+        reference = receipt_reference(self.execution.directory)
+        torn = "Ipc transport failure during DispatchUncertain: IPC client closed"
+        for code in ("C_TWO_AT_CLIENT_CALLING_RESOURCE", "C_TWO_TRANSPORT", "C_TWO_RESOURCE_CLOSED",
+                     "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND", "C_TWO_ROUTE_STALE"):
+            with self.subTest(code=code):
+                calls = []
+
+                class Client:
+                    def submit_result(self, *args):
+                        calls.append(args)
+                        if len(calls) == 1:
+                            raise BoardError(code, torn)
+
+                with mock.patch("hey_my_buddy.buddy.runtime.receipts.time.sleep") as pause:
+                    accepted = deliver_receipt(Client(), receipt, self.execution.directory, nonce="n" * 64)
+                self.assertTrue(accepted)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[0], calls[1])
+                self.assertEqual(calls[0], ("attempt-1", 1, "n" * 64, reference))
+                pause.assert_called_once()
+
+    def test_ipc_tear_down_transient_defers_hints_and_replays_them(self):
+        client = self.execution.client
+        client.progress.side_effect = [
+            BoardError("C_TWO_AT_CLIENT_CALLING_RESOURCE",
+                       "Ipc transport failure during DispatchUncertain: IPC client closed"), {}]
+        self.execution.hint(activity={"phase": "running"})
+        with mock.patch.object(entry.time, "monotonic", return_value=10.0):
+            self.assertFalse(self.execution.flush_hints())
+        with mock.patch.object(entry.time, "monotonic", return_value=10.25):
+            self.assertTrue(self.execution.flush_hints())
+        self.assertEqual(client.progress.call_count, 2)
+        self.assertEqual(client.progress.call_args.kwargs["data"], {"activity": {"phase": "running"}})
+        self.assertEqual(self.execution._hints, {})
+
+    def test_ipc_contract_defects_stay_terminal_for_delivery_and_hints(self):
+        receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+                   "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt
+        write_receipt(self.execution.directory, receipt)
+        for code in ("C_TWO_CONTRACT_MISMATCH", "C_TWO_IDENTITY_MISMATCH", "C_TWO_PROTOCOL_VIOLATION"):
+            with self.subTest(code=code):
+                client = mock.Mock()
+                client.submit_result.side_effect = BoardError(code, "peer contract defect")
+                with mock.patch("hey_my_buddy.buddy.runtime.receipts.time.sleep") as pause, \
+                     self.assertRaises(BoardError) as caught:
+                    deliver_receipt(client, receipt, self.execution.directory, nonce="n" * 64)
+                self.assertEqual(caught.exception.code, code)
+                client.submit_result.assert_called_once()
+                pause.assert_not_called()
+                client = self.execution.client
+                client.progress.reset_mock()
+                client.progress.side_effect = BoardError(code, "peer contract defect")
+                self.execution.hint(activity={"phase": "running"})
+                with self.assertRaises(BoardError) as refused:
+                    self.execution.flush_hints(delivering=True)
+                self.assertEqual(refused.exception.code, code)
+                client.progress.assert_called_once()
+
     def test_explicit_refusal_logs_reason_and_retains_receipt_as_evidence(self):
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
         for code in ("ATTEMPT_FINISHED", "STALE_GENERATION", "UNAUTHORIZED", "CONFLICT",

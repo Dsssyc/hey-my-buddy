@@ -9,7 +9,14 @@ from ...protocol.execution import (fsync_json, read_execution_receipt as read_re
 
 from ...errors import BoardError
 
-RETRYABLE = frozenset({"SERVICE_UNAVAILABLE", "UPGRADE_IN_PROGRESS"})
+# SERVICE_UNAVAILABLE and UPGRADE_IN_PROGRESS cover an offline and a fenced
+# service. The C-Two codes are the transient face of one board-side fact: the
+# old daemon of a same-contract hot swap closing its IPC listener while this
+# execution's idempotent call was in flight, so the replay reaches the new
+# daemon. Contract, identity, protocol and internal defects stay terminal.
+RETRYABLE = frozenset({"SERVICE_UNAVAILABLE", "UPGRADE_IN_PROGRESS",
+                       "C_TWO_AT_CLIENT_CALLING_RESOURCE", "C_TWO_TRANSPORT", "C_TWO_RESOURCE_CLOSED",
+                       "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND", "C_TWO_ROUTE_STALE"})
 
 
 def receipt_directory(state: Path, private_adapter: str, task_id: str, attempt_id: str) -> Path:

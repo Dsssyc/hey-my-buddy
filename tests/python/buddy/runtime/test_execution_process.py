@@ -91,6 +91,146 @@ class ExecutionEndpointTests(unittest.TestCase):
                                 "cwd": directory, "systemReason": "WinError 267"}})
                     start.assert_called_once()
 
+    def test_harness_prepare_preflight_replays_the_same_command_across_ipc_tear_down(self):
+        # A same-contract hot swap tears the old daemon down mid-call; the
+        # idempotent preflight must replay its exact commandId, not fail.
+        from hey_my_buddy.blackboard.service import harness_health
+        from hey_my_buddy.buddy.harnesses import runtime_selection
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                    "decision": {"kind": "maintain"}}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                     "decisionInput": {"kind": "maintain", "routingMode": "fast",
+                                       "buddy": {"harness": "dsh"}}}
+            client = mock.Mock()
+            execution = Execution(claim, state, "n" * 32, client=client)
+            calls = []
+
+            def harness_prepare(operation, params):
+                calls.append((operation, dict(params)))
+                if len(calls) == 1:
+                    raise BoardError("C_TWO_AT_CLIENT_CALLING_RESOURCE",
+                                     "Ipc transport failure during DispatchUncertain: IPC client closed")
+                return {"harness": {"status": "ready", "revision": 1}}
+
+            client.call.side_effect = harness_prepare
+            waits = []
+            with mock.patch.object(harness_health, "HARNESSES", {"dsh"}), \
+                 mock.patch.object(runtime_selection, "bound") as bound, \
+                 mock.patch.object(execution.control, "wait",
+                                   side_effect=lambda seconds: waits.append(seconds)), \
+                 mock.patch.object(execution, "_execute_selected",
+                                   return_value={"report": {"status": "ok"}}) as selected:
+                receipt = execution._execute_guarded(claim, claim["task"], spec,
+                                                     claim["attempt"], execution.directory, {})
+            self.assertEqual(receipt["report"]["status"], "ok")
+            selected.assert_called_once()
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0], calls[1])
+            self.assertEqual(calls[0][0], "harness_prepare")
+            self.assertEqual(calls[0][1]["commandId"], "harness-attempt-0")
+            self.assertEqual(waits, [15.0])
+            bound.assert_called_once()
+
+    def test_harness_failed_replays_with_the_same_command_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            claim = {"task": {"taskId": "task", "spec": {"adapter": "dsh"}},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
+            client = mock.Mock()
+            execution = Execution(claim, state, "n" * 32, client=client)
+            execution.control = mock.Mock(cancel_view=None)
+            calls = []
+
+            def harness_prepare(operation, params):
+                calls.append((operation, dict(params)))
+                if len(calls) == 1:
+                    raise BoardError("C_TWO_AT_CLIENT_CALLING_RESOURCE",
+                                     "Ipc transport failure during DispatchUncertain: IPC client closed")
+                return {}
+
+            client.call.side_effect = harness_prepare
+            execution._harness_failed(claim["attempt"], {"revision": 7})
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0], calls[1])
+            self.assertEqual(calls[0][0], "harness_prepare")
+            self.assertEqual(calls[0][1]["commandId"], "harness-failed-attempt")
+            self.assertEqual(calls[0][1]["healthRevision"], 7)
+
+    def test_maintenance_answer_replays_and_retains_its_reference_until_accepted(self):
+        from hey_my_buddy.protocol import maintenance as files
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                    "decision": {"kind": "maintain"}}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                     "decisionInput": {"kind": "maintain", "routingMode": "fast",
+                                       "maintenanceRunId": "maint-1", "buddy": {"harness": "dsh"}}}
+            client = mock.Mock()
+            execution = Execution(claim, state, "n" * 32, client=client)
+            execution.control = mock.Mock(cancel_view=None)
+            calls = []
+            discards = []
+
+            def execution_maintenance(operation, params):
+                calls.append((operation, dict(params)))
+                if len(calls) == 1:
+                    raise BoardError("C_TWO_AT_CLIENT_CALLING_RESOURCE",
+                                     "Ipc transport failure during DispatchUncertain: IPC client closed")
+                return {"feedback": params["answer"]}
+
+            def discard(state_dir, run_id, reference):
+                # The finally may delete the published answer only after the
+                # replay completed; an earlier deletion loses the exact digest
+                # the service needs to recognize the replayed round.
+                discards.append(len(calls))
+                _discard(state_dir, run_id, reference)
+
+            client.call.side_effect = execution_maintenance
+            _discard = files.discard_reference
+            with mock.patch.object(files, "discard_reference", side_effect=discard):
+                answer = execution._maintenance_answer({"decision": "keep"}, 1, [{"domain": "tools"}])
+            self.assertEqual(answer, {"answer": {"decision": "keep"}, "observations": [{"domain": "tools"}]})
+            self.assertEqual(discards, [2])
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0], calls[1])
+            self.assertEqual(calls[0][0], "execution_maintenance")
+            self.assertEqual(calls[0][1]["round"], 1)
+            self.assertEqual(calls[0][1]["attemptId"], "attempt")
+            self.assertFalse(list((state / "maintenance").rglob("*.json")))
+
+    def test_profile_answer_replays_with_the_same_round(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                    "decision": {"kind": "profile"}}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                     "decisionInput": {"kind": "profile", "routingMode": "profile",
+                                       "profileRunId": "prof-1", "buddy": {"harness": "dsh"}}}
+            client = mock.Mock()
+            execution = Execution(claim, state, "n" * 32, client=client)
+            execution.control = mock.Mock(cancel_view=None)
+            calls = []
+
+            def execution_profile(operation, params):
+                calls.append((operation, dict(params)))
+                if len(calls) == 1:
+                    raise BoardError("C_TWO_AT_CLIENT_CALLING_RESOURCE",
+                                     "Ipc transport failure during DispatchUncertain: IPC client closed")
+                return {"feedback": params["answer"]}
+
+            client.call.side_effect = execution_profile
+            answer = execution._profile_answer({"preference": "balanced"}, 2, [])
+            self.assertEqual(answer, {"answer": {"preference": "balanced"}, "observations": []})
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0], calls[1])
+            self.assertEqual(calls[0][0], "execution_profile")
+            self.assertEqual(calls[0][1]["round"], 2)
+
     def test_review_unavailable_result_uses_frozen_request_without_copying_budget(self):
         execution = object.__new__(Execution)
         claim = {'decisionInput': {'routingMode': 'review', 'modelResponseWaitSeconds': 600}}
