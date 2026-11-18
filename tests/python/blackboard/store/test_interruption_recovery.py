@@ -335,6 +335,32 @@ class InterruptionRecoveryTests(BoardTestCase):
                 self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=True))
                 self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
 
+        # A 0.70.1 attempt whose execution.connected cleared queue_reason to NULL
+        # without an attempt.waiting(None) event must stay NULL across a 0.70.2
+        # restart or disconnect and reconnect.
+        for upgrade_from in ('connected', 'disconnected'):
+            with self.subTest(upgrade_from=upgrade_from):
+                board, client, task, _, actor = self.claimed()
+                board.call('execution_progress', {**actor, 'data': {'waitingReason': waiting}})
+                with board.store.db.write() as db:
+                    db.execute("UPDATE tasks SET queue_reason=? WHERE task_id=?",
+                               (None if upgrade_from == 'connected' else 'execution-connection-unknown',
+                                task['runId']))
+                    if upgrade_from == 'disconnected':
+                        db.execute("UPDATE attempts SET execution_state='uncertain', ownership='uncertain'"
+                                   " WHERE attempt_id=?", (actor['attemptId'],))
+                        board.store._append_event(db, 'execution.unknown', task_id=task['runId'],
+                                                  attempt_id=actor['attemptId'], payload={})
+                    else:
+                        board.store._append_event(db, 'execution.connected', task_id=task['runId'],
+                                                  attempt_id=actor['attemptId'], payload={})
+                if upgrade_from == 'connected':
+                    board.call('execution_progress', {**actor, 'data': {'waitingReason': None}})
+                    with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+                        self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
+                self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=True))
+                self.assertIsNone(client.get(runId=task['runId'])['queueReason'])
+
     def test_authenticated_reconnection_restores_ownership_claims_and_waiting_reason_once(self):
         board, client, task, _, actor = self.claimed()
         with patch.object(processes, 'inspect_process_identity', return_value='alive'):

@@ -1884,14 +1884,15 @@ class BoardStore:
                 waiting_code = waiting_reason['code'] if waiting_reason is not None else None
                 current = connection.execute('SELECT queue_reason FROM tasks WHERE task_id=?',
                                              (attempt['task_id'],)).fetchone()['queue_reason']
-                if current in (UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON):
-                    if waiting_code != self._attempt_waiting_code(connection, attempt['task_id'], attempt['attempt_id']):
-                        self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
-                                           attempt_id=attempt['attempt_id'], payload={'reason': waiting_reason})
-                        changed = True
-                elif current != waiting_code and (waiting_code is not None or current == 'router-input-unknown'):
-                    connection.execute('UPDATE tasks SET queue_reason=? WHERE task_id=?',
-                                       (waiting_code, attempt['task_id']))
+                previous_waiting = self._active_waiting_code(
+                    connection, attempt['task_id'], attempt['attempt_id'], current)
+                queue_changed = False
+                if current not in (UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON):
+                    if current != waiting_code and (waiting_code is not None or current == 'router-input-unknown'):
+                        connection.execute('UPDATE tasks SET queue_reason=? WHERE task_id=?',
+                                           (waiting_code, attempt['task_id']))
+                        queue_changed = True
+                if queue_changed or waiting_code != previous_waiting:
                     self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
                                        attempt_id=attempt['attempt_id'], payload={'reason': waiting_reason})
                     changed = True
@@ -2847,15 +2848,41 @@ class BoardStore:
                         " WHERE a.execution_state!='finished' ORDER BY a.created_at,a.attempt_id")]
 
     @staticmethod
-    def _attempt_waiting_code(connection: sqlite3.Connection, task_id: str, attempt_id: str) -> str | None:
+    def _active_waiting_code(
+        connection: sqlite3.Connection, task_id: str, attempt_id: str, current: str | None
+    ) -> str | None:
+        if current == "router-input-unknown":
+            return "router-input-unknown"
+        if current in (UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON):
+            disconnect = connection.execute(
+                "SELECT seq, payload_json FROM events WHERE task_id=? AND attempt_id=?"
+                " AND kind IN ('attempt.uncertain','execution.unknown') ORDER BY seq DESC LIMIT 1",
+                (task_id, attempt_id),
+            ).fetchone()
+            if disconnect is None:
+                return None
+            after = connection.execute(
+                "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=?"
+                " AND kind='attempt.waiting' AND seq>? ORDER BY seq DESC LIMIT 1",
+                (task_id, attempt_id, disconnect["seq"]),
+            ).fetchone()
+            if after is not None:
+                reason = json.loads(after["payload_json"]).get("reason")
+                return reason["code"] if reason is not None else None
+            return json.loads(disconnect["payload_json"]).get("waitingReason")
+        if current != "harness-probe-unknown":
+            return None
         row = connection.execute(
-            "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='attempt.waiting'"
-            " ORDER BY seq DESC LIMIT 1",
+            "SELECT kind, payload_json FROM events WHERE task_id=? AND attempt_id=?"
+            " AND kind IN ('attempt.waiting','execution.connected') ORDER BY seq DESC LIMIT 1",
             (task_id, attempt_id),
         ).fetchone()
         if row is None:
             return None
-        reason = json.loads(row["payload_json"]).get("reason")
+        payload = json.loads(row["payload_json"])
+        if row["kind"] == "execution.connected":
+            return payload.get("waitingReason")
+        reason = payload.get("reason")
         return reason["code"] if reason is not None else None
 
     def execution_connection(self, attempt_id: str, *, connected: bool) -> bool:
@@ -2870,20 +2897,23 @@ class BoardStore:
                     or (attempt["execution_state"], attempt["ownership"]) == (state, ownership)):
                 return True
             now = self.now()
+            current = connection.execute("SELECT queue_reason FROM tasks WHERE task_id=?",
+                                         (attempt["task_id"],)).fetchone()["queue_reason"]
+            shadowed = self._active_waiting_code(connection, attempt["task_id"], attempt_id, current)
             self._transition_attempt(connection, attempt, state)
             connection.execute("UPDATE attempts SET ownership=? WHERE attempt_id=?", (ownership, attempt_id))
             connection.execute("UPDATE resource_claims SET state=? WHERE attempt_id=? AND state IN ('held','retained')",
                                ("held" if connected else "retained", attempt_id))
             if connected:
-                restored = self._attempt_waiting_code(connection, attempt["task_id"], attempt_id)
                 connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?"
                                    " AND queue_reason IN (?,?)",
-                                   (restored, now, attempt["task_id"], UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON))
+                                   (shadowed, now, attempt["task_id"], UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON))
             else:
                 connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?",
                                    (UNKNOWN_QUEUE_REASON, now, attempt["task_id"]))
             self._append_event(connection, "execution.connected" if connected else "execution.unknown",
-                               task_id=attempt["task_id"], attempt_id=attempt_id, payload={})
+                               task_id=attempt["task_id"], attempt_id=attempt_id,
+                               payload={"waitingReason": shadowed} if shadowed is not None else {})
             head = self._head_of(connection)
         self._notify(head)
         return True
@@ -2909,6 +2939,8 @@ class BoardStore:
                 self._retain_claims(connection, attempt["attempt_id"])
                 summary["uncertain"] += 1
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
+                shadowed = self._active_waiting_code(
+                    connection, attempt["task_id"], attempt["attempt_id"], task["queue_reason"])
                 if task["state"] in ("running", "cancelling"):
                     connection.execute(
                         "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
@@ -2920,7 +2952,7 @@ class BoardStore:
                     task_id=attempt["task_id"],
                     attempt_id=attempt["attempt_id"],
                     revision=task["revision"],
-                    payload={},
+                    payload={"waitingReason": shadowed} if shadowed is not None else {},
                 )
             summary["retained"] = int(
                 connection.execute(

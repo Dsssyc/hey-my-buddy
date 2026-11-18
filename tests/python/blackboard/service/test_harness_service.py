@@ -60,6 +60,25 @@ class HarnessServiceTests(BoardTestCase):
             self.assertNotIn('error', self.call('harness_prepare', **params, commandId='ready-read'))
             self.assertIsNone(self.board.task_get({'runId': task['runId']})['task']['queueReason'])
 
+        with patch.object(self.service.harnesses, 'refresh', side_effect=[unknown, ready]):
+            self.assertNotIn('error', self.call('execution_progress', **params,
+                                               data={'waitingReason': {'code': 'router-input-unknown', 'params': {}}}))
+            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='unknown-after-router'))
+            self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
+                             'harness-probe-unknown')
+            before_clear = self.board.head()
+            self.assertNotIn('error', self.call('execution_progress', **params, data={'waitingReason': None}))
+            self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'],
+                             'harness-probe-unknown')
+            self.assertEqual(self.board.head(), before_clear + 1)
+            self.assertNotIn('error', self.call('execution_progress', **params, data={'waitingReason': None}))
+            self.assertEqual(self.board.head(), before_clear + 1)
+            self.assertNotIn('error', self.call('harness_prepare', **params, commandId='ready-after-clear'))
+            self.assertIsNone(self.board.task_get({'runId': task['runId']})['task']['queueReason'])
+            self.assertTrue(self.board.execution_connection(attempt['attemptId'], connected=False))
+            self.assertTrue(self.board.execution_connection(attempt['attemptId'], connected=True))
+            self.assertIsNone(self.board.task_get({'runId': task['runId']})['task']['queueReason'])
+
     def setUp(self):
         super().setUp()
         self.board = BoardStore(self.directory / 'state')
