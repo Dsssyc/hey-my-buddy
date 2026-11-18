@@ -303,6 +303,38 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual([(event['kind'], event['payload']['phase']) for event in events],
                          [('attempt.progress', 'tool-running')])
 
+    def test_replaying_nonempty_waiting_reason_preserves_connection_reasons_until_reconnected(self):
+        waiting = {'code': 'router-input-unknown', 'params': {}}
+        for mode, expected_reason in (('restart', 'attempt-uncertain-after-restart'),
+                                      ('disconnect', 'execution-connection-unknown')):
+            with self.subTest(mode=mode):
+                board, client, task, _, actor = self.claimed()
+                payload = {**actor, 'data': {'waitingReason': waiting}}
+                board.call('execution_progress', payload)
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
+                if mode == 'restart':
+                    with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+                        self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
+                else:
+                    self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=False))
+                head = board.store.head()
+                with board.store.db.read() as db:
+                    before = board.store._attempt_row(db, actor['attemptId'])
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], expected_reason)
+
+                with patch.object(board.store, 'now', return_value='2099-01-03T00:00:00Z'):
+                    replay = board.call('execution_progress', payload)
+                self.assertEqual(replay, {'recorded': True, 'head': head, 'activity': None})
+                self.assertEqual(board.store.head(), head)
+                with board.store.db.read() as db:
+                    after = board.store._attempt_row(db, actor['attemptId'])
+                self.assertEqual(after['revision'], before['revision'])
+                self.assertEqual(after['updated_at'], before['updated_at'])
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], expected_reason)
+
+                self.assertTrue(board.store.execution_connection(actor['attemptId'], connected=True))
+                self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
+
     def test_authenticated_reconnection_restores_ownership_claims_and_waiting_reason_once(self):
         board, client, task, _, actor = self.claimed()
         with patch.object(processes, 'inspect_process_identity', return_value='alive'):

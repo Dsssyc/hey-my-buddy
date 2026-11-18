@@ -1884,7 +1884,12 @@ class BoardStore:
                 waiting_code = waiting_reason['code'] if waiting_reason is not None else None
                 current = connection.execute('SELECT queue_reason FROM tasks WHERE task_id=?',
                                              (attempt['task_id'],)).fetchone()['queue_reason']
-                if current != waiting_code and (waiting_code is not None or current == 'router-input-unknown'):
+                if current in (UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON):
+                    if waiting_code != self._attempt_waiting_code(connection, attempt['task_id'], attempt['attempt_id']):
+                        self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
+                                           attempt_id=attempt['attempt_id'], payload={'reason': waiting_reason})
+                        changed = True
+                elif current != waiting_code and (waiting_code is not None or current == 'router-input-unknown'):
                     connection.execute('UPDATE tasks SET queue_reason=? WHERE task_id=?',
                                        (waiting_code, attempt['task_id']))
                     self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
@@ -2841,6 +2846,18 @@ class BoardStore:
                         "SELECT a.*,t.turn_id FROM attempts a LEFT JOIN workflow_turns t ON t.attempt_id=a.attempt_id"
                         " WHERE a.execution_state!='finished' ORDER BY a.created_at,a.attempt_id")]
 
+    @staticmethod
+    def _attempt_waiting_code(connection: sqlite3.Connection, task_id: str, attempt_id: str) -> str | None:
+        row = connection.execute(
+            "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='attempt.waiting'"
+            " ORDER BY seq DESC LIMIT 1",
+            (task_id, attempt_id),
+        ).fetchone()
+        if row is None:
+            return None
+        reason = json.loads(row["payload_json"]).get("reason")
+        return reason["code"] if reason is not None else None
+
     def execution_connection(self, attempt_id: str, *, connected: bool) -> bool:
         """Project an authenticated long call, or the absence of one, without settling work."""
         with self.db.write() as connection:
@@ -2858,9 +2875,10 @@ class BoardStore:
             connection.execute("UPDATE resource_claims SET state=? WHERE attempt_id=? AND state IN ('held','retained')",
                                ("held" if connected else "retained", attempt_id))
             if connected:
-                connection.execute("UPDATE tasks SET queue_reason=NULL,updated_at=? WHERE task_id=?"
+                restored = self._attempt_waiting_code(connection, attempt["task_id"], attempt_id)
+                connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?"
                                    " AND queue_reason IN (?,?)",
-                                   (now, attempt["task_id"], UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON))
+                                   (restored, now, attempt["task_id"], UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON))
             else:
                 connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?",
                                    (UNKNOWN_QUEUE_REASON, now, attempt["task_id"]))
