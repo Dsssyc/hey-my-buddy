@@ -289,11 +289,12 @@ sys.stdin.buffer.read(1)
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
             attempt = private_dirs.attempt_root(state, "codex", "task", "attempt")
-            attempt.mkdir(parents=True)
+            native_attempt = native_path(attempt)
+            native_attempt.mkdir(parents=True)
             credential = attempt / "agent-credential.json"
             content = state / "content.bin"
             content.write_bytes(NEW)
-            unrelated = attempt / f".execution-report.json.{'a' * 32}.tmp"
+            unrelated = native_attempt / f".execution-report.json.{'a' * 32}.tmp"
             unrelated.write_bytes(OLD)
             process = _spawn(credential, content, "after_writer_fsync", "mutable")
             try:
@@ -301,7 +302,7 @@ sys.stdin.buffer.read(1)
             finally:
                 process.kill()
                 process.communicate(timeout=5)
-            temporary, = attempt.glob(".agent-credential.json.*.tmp")
+            temporary, = native_attempt.glob(".agent-credential.json.*.tmp")
             self.assertEqual(temporary.read_bytes(), NEW)
 
             removed = private_dirs.cleanup_attempt_credentials(state, "codex", "task", "attempt")

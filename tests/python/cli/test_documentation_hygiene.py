@@ -114,13 +114,19 @@ def markdown_links(text: str) -> list[tuple[int, str]]:
         if block.type == "html_block":
             _HTMLLinks(block.map[0] + 1, links).feed(block.content)
         elif block.type == "inline":
+            start_line = block.map[0] + 1
+            html = _HTMLLinks(start_line, links)
+            html_line = 0
             for token in block.children:
                 if token.type == "link_open" and "line_offset" in token.meta:
-                    links.append((block.map[0] + 1 + token.meta["line_offset"], token.attrs["href"]))
+                    links.append((start_line + token.meta["line_offset"], token.attrs["href"]))
                 elif token.type == "image":
-                    links.append((block.map[0] + 1 + token.meta["line_offset"], token.attrs["src"]))
+                    links.append((start_line + token.meta["line_offset"], token.attrs["src"]))
                 elif token.type == "html_inline":
-                    _HTMLLinks(block.map[0] + 1 + token.meta["line_offset"], links).feed(token.content)
+                    line_offset = token.meta["line_offset"]
+                    # Preserve source line breaks from the Markdown between HTML tokens.
+                    html.feed("\n" * (line_offset - html_line) + token.content)
+                    html_line = line_offset + token.content.count("\n")
     return links
 
 
@@ -241,6 +247,22 @@ class ReferenceTests(unittest.TestCase):
     def test_links_inside_html_blocks_keep_their_source_lines(self):
         text = '# Heading\n\n<div>\n<!-- <img src="ignored.png"> -->\n<a\n href="target&amp;amp;.md">a</a>\n</div>'
         self.assertEqual(markdown_links(text), [(5, "target&amp;.md")])
+
+    def test_inline_script_does_not_report_html_in_its_raw_text(self):
+        text = """Example <script>const s = "<img src='missing.png'>";</script>."""
+        self.assertEqual(reference_violations(self.root, {"docs/note.md": text}), [])
+
+    def test_multiline_inline_html_links_keep_their_source_lines(self):
+        text = """# Heading
+
+Example <a
+ href="missing.md">link</a>
+and <script>const s = "<img
+ src='ignored.png'>";</script>
+then <img
+ src="missing.png">.
+"""
+        self.assertEqual(markdown_links(text), [(3, "missing.md"), (7, "missing.png")])
 
     def test_adr_mentions_in_any_text_include_code_and_need_a_decision_file(self):
         missing = "ADR-" + "999"

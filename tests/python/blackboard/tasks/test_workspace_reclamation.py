@@ -717,6 +717,41 @@ class ReclamationTests(LifecycleTestCase):
                 self.assertFalse(directory.exists())
                 self.assertEqual(board.store.service_issues(), [])
 
+    def test_unreadable_manifest_does_not_block_other_orphan_allocations(self):
+        import errno
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import reclamation
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host'}}
+        manifests = [workspace.prepare(board.directory, request, intent)
+                     for request in ('unreadable-manifest', 'reclaimable-manifest')]
+        # The manifest and fixed refs still need reclamation after checkout removal.
+        for manifest in manifests:
+            workspace.cleanup_remove(board.directory, manifest)
+        unreadable, reclaimable = (Path(manifest['checkoutRoot']).parent for manifest in manifests)
+        read_record = workspace._record
+
+        def read_with_denial(path):
+            if path == unreadable / 'manifest.json':
+                raise PermissionError(errno.EACCES, 'fixture unreadable manifest', str(path))
+            return read_record(path)
+
+        maintenance = reclamation.Reclamation(board.store)
+        with patch.object(workspace, '_record', side_effect=read_with_denial):
+            maintenance.run()
+            self.assertTrue(unreadable.is_dir())
+            self.assertFalse(reclaimable.exists())
+            issue, = board.store.service_issues()
+            self.assertEqual((issue['stage'], issue['code']), ('allocation-reclamation', 'PermissionError'))
+            self.assertIn('fixture unreadable manifest', issue['message'])
+            with self.assertRaisesRegex(PermissionError, 'fixture unreadable manifest'):
+                reclamation.allocation_inventory(board.store, [unreadable])
+
+        maintenance.run()
+        self.assertFalse(unreadable.exists())
+        self.assertEqual(board.store.service_issues(), [])
+
     def test_storage_keeps_live_checkout_inventory_and_excludes_terminal_candidates(self):
         from unittest.mock import patch
         board = self.board()
