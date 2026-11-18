@@ -547,11 +547,15 @@ class BoardService(_BaseResource):
                 if retry and db.execute("SELECT 1 FROM events WHERE task_id=? AND kind='harness.start_retry' AND json_extract(payload_json,'$.attemptId')=?", (attempt['task_id'], attempt['attempt_id'])).fetchone():
                     raise BoardError('HARNESS_RETRY_EXHAUSTED', 'Only one pre-model retry is permitted per attempt')
                 response = {'harness': record, 'retry': retry}
-                before_queue = db.execute("SELECT queue_reason FROM tasks WHERE task_id=?",
-                                          (attempt['task_id'],)).fetchone()['queue_reason']
-                self.store._retire_cleared_execution_waiting(db, attempt['task_id'], attempt['attempt_id'], before_queue)
-                self.store._append_event(db, 'harness.start_failed' if failed_only else 'harness.start_retry' if retry else 'harness.execution_selected', task_id=attempt['task_id'],
-                                         payload={'attemptId': attempt['attempt_id'], 'harness': record})
+                _, _, waiting_seq, waiting_code = self.store._attempt_waiting_facts(
+                    db, attempt['task_id'], attempt['attempt_id'])
+                self.store._append_event(
+                    db,
+                    'harness.start_failed' if failed_only else 'harness.start_retry' if retry else 'harness.execution_selected',
+                    task_id=attempt['task_id'],
+                    payload={'attemptId': attempt['attempt_id'], 'harness': record,
+                             'waitingReason': waiting_code, 'waitingSeq': waiting_seq},
+                )
                 self.store._sync_attempt_queue_reason(db, attempt['attempt_id'])
                 self.store._store_receipt(db, command_id, 'harness.prepare', request, response, subject=subject, task_id=attempt['task_id'])
                 head = self.store._head_of(db)
