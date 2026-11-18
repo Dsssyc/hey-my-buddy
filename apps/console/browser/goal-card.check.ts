@@ -70,14 +70,21 @@ for (const scene of [
   await page.keyboard.press("Escape");
   await expect(elapsedCard).toBeHidden();
   const before = await header.boundingBox();
+  // Pause the actual CSS opening transition at its midpoint as soon as it starts,
+  // so a slow initial Playwright round-trip cannot outlive the 200ms reveal.
+  await page.evaluate(() => {
+    const pauseReveal = (event: TransitionEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || target.dataset.slot !== "macro-goal-card" || event.propertyName !== "--reveal-progress") return;
+      document.removeEventListener("transitionrun", pauseReveal, true);
+      for (const animation of target.getAnimations()) { animation.pause(); animation.currentTime = 100; }
+    };
+    document.addEventListener("transitionrun", pauseReveal, true);
+  });
   await trigger.click();
   const card = page.locator('[data-slot="macro-goal-card"]');
   await expect(card).toBeFocused();
   await expect(card.locator("strong, h3").first()).toBeVisible();
-  // Pause the actual CSS opening animation at its midpoint, without changing CSS.
-  await card.evaluate(element => {
-    for (const animation of element.getAnimations()) { animation.pause(); animation.currentTime = 100; }
-  });
   await page.screenshot({ path: `${captures}/${name}-mid.png` });
   const middle = await card.evaluate(element => ({ progress: Number(getComputedStyle(element).getPropertyValue("--reveal-progress")), clip: getComputedStyle(element).clipPath }));
   expect(middle.progress).toBeGreaterThan(0); expect(middle.progress).toBeLessThan(1);
