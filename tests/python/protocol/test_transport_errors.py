@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from c_two.error import ContractMismatch, CoreError
+from c_two.error import ClientCallResource, ContractMismatch, CoreError
 
 from hey_my_buddy import locking
 from hey_my_buddy.protocol import transport
@@ -91,6 +91,33 @@ class StructuredRpcFailureTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, 'cold start reached'):
                         transport._ensure_service(directory)
                     preflight.assert_called_once_with(directory)
+
+    def test_client_call_keeps_its_wrapped_core_failure(self):
+        endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
+        for kind, phase, code in (
+                (None, 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE'),
+                ('not_found', 'pre_dispatch', 'SERVICE_UNAVAILABLE'),
+                ('connection_refused', 'pre_dispatch', 'SERVICE_UNAVAILABLE'),
+                ('permission_denied', 'pre_dispatch', 'LAUNCH_ACCESS_DENIED'),
+                ('other', 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE')):
+            with self.subTest(kind=kind):
+                cause = core_failure(kind)
+                cause.transport_phase = phase
+                cause.details.update({'route': 'control', 'stage': 'inner'})
+                error = ClientCallResource(str(cause), details={'stage': 'outer'})
+                error.__cause__ = cause
+                error.io_operation = 'bind'
+                service = Mock()
+                service.ping.side_effect = error
+                with self.assertRaises(transport.ServiceError) as caught:
+                    transport._invoke(service, endpoint, 'ping', {})
+                self.assertEqual(caught.exception.code, code)
+                expected = {'category': 'transport', 'transport_kind': 'ipc', 'transport_phase': phase,
+                            'raw_os_error': cause.raw_os_error, 'io_operation': 'bind',
+                            'route': 'control', 'stage': 'outer'}
+                if kind is not None:
+                    expected['io_kind'] = kind
+                self.assertEqual(caught.exception.details, expected)
 
     def test_identity_refusal_without_os_error_never_starts_or_reports_stopped(self):
         # C-Two rejects a Windows peer's identity before sending bytes.

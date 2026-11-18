@@ -241,6 +241,30 @@ class InterruptionRecoveryTests(BoardTestCase):
                                        'shutdownConfirmed': True})
         self.assertEqual(client.get(runId=task['runId'])['state'], 'completed')
 
+    def test_replaying_progress_preserves_restart_wait_and_attempt_revision(self):
+        board, client, task, _, actor = self.claimed()
+        activity = {'phase': 'tool-running', 'observedAt': '2026-10-16T00:00:00Z', 'eventSeq': 1}
+        progress = {**actor, 'processIdentity': IDENTITY,
+                    'data': {'activity': activity, 'waitingReason': None}}
+        self.assertEqual(board.call('execution_progress', progress)['activity'], 'recorded')
+        with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+            self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
+        head = board.store.head()
+        with board.store.db.read() as db:
+            before = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'attempt-uncertain-after-restart')
+
+        with patch.object(board.store, 'now', return_value='2099-01-01T00:00:00Z'):
+            replay = board.call('execution_progress', progress)
+
+        self.assertEqual(replay, {'recorded': True, 'head': head, 'activity': 'unchanged'})
+        self.assertEqual(board.store.head(), head)
+        with board.store.db.read() as db:
+            after = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual(after['revision'], before['revision'])
+        self.assertEqual(after['updated_at'], before['updated_at'])
+        self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'attempt-uncertain-after-restart')
+
     def test_authenticated_reconnection_restores_ownership_claims_and_waiting_reason_once(self):
         board, client, task, _, actor = self.claimed()
         with patch.object(processes, 'inspect_process_identity', return_value='alive'):

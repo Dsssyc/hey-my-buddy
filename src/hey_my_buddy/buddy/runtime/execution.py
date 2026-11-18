@@ -48,7 +48,7 @@ from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, Te
 from ..harnesses.live import (LIVE_FIELDS, MAX_REQUEST_ID, MAX_OBSERVE_LIMIT,
     MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS, LiveReply, LiveRequest, LiveSnapshot)
 from ..roles import controller as role_seam
-from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_directory, RETRYABLE, REFUSED
+from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_directory, is_retryable, REFUSED
 
 fsync_json = execution_protocol.fsync_json
 BUDGET = execution_protocol.BUDGET
@@ -455,7 +455,7 @@ class Execution:
                                      phase="executing" if self._identity_pending else None,
                                      data=pending or None)
             except BoardError as error:
-                if error.code in RETRYABLE:
+                if is_retryable(error):
                     return self._defer_hints(error)
                 if delivering or error.code in REFUSED:
                     raise
@@ -619,7 +619,8 @@ class Execution:
                                     raise error
                             if view.get('cancelRequested'):
                                 return cancelled(view)
-                        if error.code not in RETRYABLE:
+                        # A forced probe can commit health before its command receipt.
+                        if not is_retryable(error, pre_dispatch_only=retry and not unknown_reads):
                             raise
                         # The request may already be committed: replay its exact identity.
                         control.wait(min(PREFLIGHT_MAX_RETRY_SECONDS,
@@ -946,6 +947,7 @@ class _ExecutionControl(threading.Thread):
         self.execution = execution
         self._done = threading.Event()
         self._wake = threading.Event()
+        self._interrupted = threading.Event()
         self._lock = threading.RLock()
         self.handle = self.implementation = None
         self.cancel_view = None
@@ -969,6 +971,7 @@ class _ExecutionControl(threading.Thread):
         self.requests += 2 if force else 1
         self.cancel_view = {"cancelRequested": True, "stopInitiator": initiator}
         self.deadline = min(self.deadline, deadline) if self.deadline is not None and deadline is not None else deadline
+        self._interrupted.set()
         self._wake.set()
 
     def attach(self, handle, implementation):
@@ -979,13 +982,16 @@ class _ExecutionControl(threading.Thread):
         self._wake.set()
 
     def wait(self, seconds):
-        self._wake.wait(seconds)
+        if self.fatal is not None or self.cancel_view is not None or self.execution.stop_requested():
+            return
+        self._interrupted.wait(seconds)
 
     def run(self):
         try:
             self._run_control()
         except BaseException as error:
             self.fatal = error
+            self._interrupted.set()
             self._wake.set()
 
     def _run_control(self):
@@ -1018,6 +1024,7 @@ class _ExecutionControl(threading.Thread):
 
     def stop(self):
         self._done.set()
+        self._interrupted.set()
         self._wake.set()
 
 

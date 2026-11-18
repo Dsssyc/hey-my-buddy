@@ -1849,12 +1849,15 @@ class BoardStore:
             attempt = self._verify_attempt_actor(connection, params)
             if attempt["execution_state"] == "finished":
                 raise BoardError("ATTEMPT_FINISHED", "This attempt is already finished; progress is not accepted")
+            has_progress = message is not None or phase is not None
+            changed = has_progress or (data is None and process_identity is None)
             if process_identity is not None:
+                previous_identity = self._process_identity(connection, attempt["attempt_id"])
                 if verify_identity is not None:
                     from ..tasks.interruption import marker_identity
                     # The verified report is recorded as the attempt's root: the
                     # SQLite row never holds the interpreter inside a forwarder.
-                    root = self._process_identity(connection, attempt["attempt_id"])
+                    root = previous_identity
                     if root is None:
                         root = marker_identity(self, attempt)
                     verified = verify_identity(attempt["attempt_id"], process_identity, root)
@@ -1862,38 +1865,42 @@ class BoardStore:
                         raise BoardError("UNAUTHORIZED", "Execution identity differs from the service-owned process")
                 else:
                     verified = process_identity
-                self._record_process_identity(connection, attempt["attempt_id"], verified)
-                connection.execute("UPDATE attempts SET identity_confirmed_at=COALESCE(identity_confirmed_at,?)"
-                                   " WHERE attempt_id=?", (self.now(), attempt["attempt_id"]))
-            if phase in ("starting", "executing") and attempt["execution_state"] not in ("uncertain", "finalizing"):
+                if previous_identity != verified:
+                    self._record_process_identity(connection, attempt["attempt_id"], verified)
+                    changed = True
+                if attempt["identity_confirmed_at"] is None:
+                    connection.execute("UPDATE attempts SET identity_confirmed_at=? WHERE attempt_id=?",
+                                       (self.now(), attempt["attempt_id"]))
+                    changed = True
+            transitioned = (phase in ("starting", "executing")
+                            and attempt["execution_state"] not in (phase, "uncertain", "finalizing"))
+            if transitioned:
                 self._transition_attempt(connection, attempt, phase)
-            now = self.now()
             if data is not None and 'waitingReason' in data:
                 waiting_code = waiting_reason['code'] if waiting_reason is not None else None
                 current = connection.execute('SELECT queue_reason FROM tasks WHERE task_id=?',
                                              (attempt['task_id'],)).fetchone()['queue_reason']
-                if current != waiting_code:
+                if current != waiting_code and (waiting_code is not None or current not in (
+                        UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON)):
                     connection.execute('UPDATE tasks SET queue_reason=? WHERE task_id=?',
                                        (waiting_code, attempt['task_id']))
                     self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
                                        attempt_id=attempt['attempt_id'], payload={'reason': waiting_reason})
-            connection.execute(
-                "UPDATE attempts SET updated_at=?, revision=revision+1 WHERE attempt_id=?",
-                (now, attempt["attempt_id"]),
-            )
+                    changed = True
             activity_state = None
             if activity is not None:
                 # Monotone and idempotent: an identical or older receipt changes
                 # nothing and appends no event.
                 activity_state = "recorded" if self._store_activity(connection, attempt, activity) else "unchanged"
             if activity_state == "recorded":
+                changed = True
                 self._append_event(
                     connection,
                     "attempt.activity",
                     task_id=attempt["task_id"],
                     attempt_id=attempt["attempt_id"],
                 )
-            if message is not None or phase is not None:
+            if has_progress:
                 self._append_event(
                     connection,
                     "attempt.progress",
@@ -1901,6 +1908,9 @@ class BoardStore:
                     attempt_id=attempt["attempt_id"],
                     payload={"message": (message or "")[:2000], "phase": phase},
                 )
+            if changed and not transitioned:
+                connection.execute("UPDATE attempts SET updated_at=?, revision=revision+1 WHERE attempt_id=?",
+                                   (self.now(), attempt["attempt_id"]))
             head = self._head_of(connection)
         self._notify(head)
         return {"recorded": True, "head": head, "activity": activity_state}

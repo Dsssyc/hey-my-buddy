@@ -13,17 +13,27 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from c_two.error import ClientCallResource, CoreError
+
 from hey_my_buddy.buddy.runtime import execution as entry
 from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol.execution import read_execution_receipt, receipt_reference
+from hey_my_buddy.protocol.transport import local_rpc_error
 from private_acl import assert_private_path
 
 
 CLAIM = {"task": {"taskId": "task-1", "spec": {"adapter": "command"}},
          "attempt": {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1}}
+ACTIVITY = {"phase": "tool-running", "observedAt": "2026-10-16T00:00:00Z", "eventSeq": 1}
+
+
+def client_call_failure(cause: CoreError):
+    error = ClientCallResource(str(cause))
+    error.__cause__ = cause
+    return local_rpc_error(error)
 
 
 class WindowsOSProxy:
@@ -209,7 +219,8 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 client = mock.Mock()
                 client.submit_result.side_effect = error
                 with self.assertRaises(type(error)) as caught, \
-                     mock.patch("hey_my_buddy.buddy.runtime.receipts.time.sleep") as pause:
+                     mock.patch("hey_my_buddy.buddy.runtime.receipts.time.sleep",
+                                side_effect=AssertionError('unexpected retry sleep')) as pause:
                     deliver_receipt(client, receipt, self.execution.directory, nonce="n" * 64)
                 self.assertIs(caught.exception, error)
                 client.submit_result.assert_called_once()
@@ -227,62 +238,68 @@ class ExecutionDeliveryTests(unittest.TestCase):
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
         write_receipt(self.execution.directory, receipt)
         reference = receipt_reference(self.execution.directory)
-        torn = "Ipc transport failure during DispatchUncertain: IPC client closed"
-        for code in ("C_TWO_AT_CLIENT_CALLING_RESOURCE", "C_TWO_TRANSPORT", "C_TWO_RESOURCE_CLOSED",
-                     "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND", "C_TWO_ROUTE_STALE"):
-            with self.subTest(code=code):
-                calls = []
-
-                class Client:
-                    def submit_result(self, *args):
-                        calls.append(args)
-                        if len(calls) == 1:
-                            raise BoardError(code, torn)
-
+        cause = CoreError('transport', 'IPC client closed')
+        cause.transport_kind = 'ipc'
+        cause.transport_phase = 'dispatch_uncertain'
+        for error in (client_call_failure(cause), *(
+                BoardError(code, 'route withdrawn') for code in (
+                    'C_TWO_RESOURCE_CLOSED', 'C_TWO_RESOURCE_REMOVED', 'C_TWO_RESOURCE_UNAVAILABLE',
+                    'C_TWO_RESOURCE_NOT_FOUND', 'C_TWO_ROUTE_STALE'))):
+            with self.subTest(code=error.code):
+                client = mock.Mock()
+                client.submit_result.side_effect = [error, {}]
                 with mock.patch("hey_my_buddy.buddy.runtime.receipts.time.sleep") as pause:
-                    accepted = deliver_receipt(Client(), receipt, self.execution.directory, nonce="n" * 64)
+                    accepted = deliver_receipt(client, receipt, self.execution.directory, nonce="n" * 64)
                 self.assertTrue(accepted)
-                self.assertEqual(len(calls), 2)
-                self.assertEqual(calls[0], calls[1])
-                self.assertEqual(calls[0], ("attempt-1", 1, "n" * 64, reference))
+                expected = mock.call("attempt-1", 1, "n" * 64, reference)
+                self.assertEqual(client.submit_result.call_args_list, [expected, expected])
                 pause.assert_called_once()
 
     def test_ipc_tear_down_transient_defers_hints_and_replays_them(self):
         client = self.execution.client
         client.progress.side_effect = [
             BoardError("C_TWO_AT_CLIENT_CALLING_RESOURCE",
-                       "Ipc transport failure during DispatchUncertain: IPC client closed"), {}]
-        self.execution.hint(activity={"phase": "running"})
+                       "IPC client closed", category='transport', transport_kind='ipc',
+                       transport_phase='dispatch_uncertain'), {}]
+        self.execution.hint(activity=ACTIVITY)
         with mock.patch.object(entry.time, "monotonic", return_value=10.0):
             self.assertFalse(self.execution.flush_hints(delivering=True))
         with mock.patch.object(entry.time, "monotonic", return_value=10.25):
             self.assertTrue(self.execution.flush_hints(delivering=True))
         self.assertEqual(client.progress.call_count, 2)
-        self.assertEqual(client.progress.call_args.kwargs["data"], {"activity": {"phase": "running"}})
+        self.assertEqual(client.progress.call_args.kwargs["data"], {"activity": ACTIVITY})
         self.assertEqual(self.execution._hints, {})
 
-    def test_ipc_contract_defects_stay_terminal_for_delivery_and_hints(self):
+    def test_unclassified_ipc_and_contract_defects_stay_terminal_for_delivery_and_hints(self):
         receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
         write_receipt(self.execution.directory, receipt)
-        for code in ("C_TWO_CONTRACT_MISMATCH", "C_TWO_IDENTITY_MISMATCH", "C_TWO_PROTOCOL_VIOLATION"):
-            with self.subTest(code=code):
+        cause = CoreError('transport', 'unclassified local I/O failure')
+        cause.transport_kind = 'ipc'
+        cause.transport_phase = 'pre_dispatch'
+        cause.io_kind = 'other'
+        for error in (local_rpc_error(cause), client_call_failure(cause), local_rpc_error(ClientCallResource()),
+                      BoardError('C_TWO_CONTRACT_MISMATCH', 'peer contract defect'),
+                      BoardError('C_TWO_IDENTITY_MISMATCH', 'peer identity defect'),
+                      BoardError('C_TWO_PROTOCOL_VIOLATION', 'peer protocol defect')):
+            with self.subTest(code=error.code, details=error.details):
                 client = mock.Mock()
-                client.submit_result.side_effect = BoardError(code, "peer contract defect")
-                with mock.patch("hey_my_buddy.buddy.runtime.receipts.time.sleep") as pause, \
+                client.submit_result.side_effect = error
+                with mock.patch("hey_my_buddy.buddy.runtime.receipts.time.sleep",
+                                side_effect=AssertionError('unexpected retry sleep')) as pause, \
                      self.assertRaises(BoardError) as caught:
                     deliver_receipt(client, receipt, self.execution.directory, nonce="n" * 64)
-                self.assertEqual(caught.exception.code, code)
+                self.assertIs(caught.exception, error)
                 client.submit_result.assert_called_once()
                 pause.assert_not_called()
                 client = self.execution.client
                 client.progress.reset_mock()
-                client.progress.side_effect = BoardError(code, "peer contract defect")
-                self.execution.hint(activity={"phase": "running"})
+                client.progress.side_effect = error
+                self.execution.hint(activity=ACTIVITY)
                 with self.assertRaises(BoardError) as refused:
                     self.execution.flush_hints(delivering=True)
-                self.assertEqual(refused.exception.code, code)
+                self.assertIs(refused.exception, error)
                 client.progress.assert_called_once()
 
     def test_explicit_refusal_logs_reason_and_retains_receipt_as_evidence(self):
@@ -606,7 +623,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 client = mock.Mock()
                 client.progress.side_effect = [error, {}]
                 execution = entry.Execution(CLAIM, self.state, 'n' * 64, client=client, log=logs.append)
-                execution.hint(activity={'phase': 'running'})
+                execution.hint(activity=ACTIVITY)
                 control = execution.control
                 control.handle = SimpleNamespace(live_endpoint=None)
                 with mock.patch.object(entry.time, 'monotonic', return_value=10.0), \
@@ -618,7 +635,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 self.assertIsNone(control.cancel_view)
                 cancel.assert_not_called()
                 stop.assert_not_called()
-                self.assertEqual(execution._hints, {'activity': {'phase': 'running'}})
+                self.assertEqual(execution._hints, {'activity': ACTIVITY})
                 self.assertTrue(any('execution progress pending' in line for line in logs))
                 with mock.patch.object(entry.time, 'monotonic', return_value=10.25):
                     self.assertTrue(execution.flush_hints())

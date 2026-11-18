@@ -111,8 +111,8 @@ class ExecutionEndpointTests(unittest.TestCase):
             def harness_prepare(operation, params):
                 calls.append((operation, dict(params)))
                 if len(calls) == 1:
-                    raise BoardError("C_TWO_AT_CLIENT_CALLING_RESOURCE",
-                                     "Ipc transport failure during DispatchUncertain: IPC client closed")
+                    raise BoardError("C_TWO_AT_CLIENT_CALLING_RESOURCE", "IPC client closed",
+                                     category='transport', transport_kind='ipc', transport_phase='dispatch_uncertain')
                 return {"harness": {"status": "ready", "revision": 1}}
 
             client.call.side_effect = harness_prepare
@@ -133,6 +133,81 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertEqual(calls[0][1]["commandId"], "harness-attempt-0")
             self.assertEqual(waits, [15.0])
             bound.assert_called_once()
+
+    def test_forced_preflight_replays_only_before_dispatch(self):
+        from hey_my_buddy.buddy.harnesses import runtime_selection
+
+        spec = {'adapter': 'codex'}
+        claim = {'task': {'taskId': 'task', 'spec': spec},
+                 'attempt': {'taskId': 'task', 'attemptId': 'attempt', 'generation': 1}}
+        for phase, unknown in (('pre_dispatch', False), ('dispatch_uncertain', False),
+                               ('dispatch_uncertain', True)):
+            with self.subTest(phase=phase, unknown=unknown), tempfile.TemporaryDirectory() as directory:
+                client = mock.Mock()
+                execution = Execution(claim, Path(directory), 'n' * 32, client=client)
+                failure = BoardError('C_TWO_AT_CLIENT_CALLING_RESOURCE', 'IPC client closed',
+                                     category='transport', transport_kind='ipc', transport_phase=phase)
+                replies = [{'harness': {'status': 'unhealthy', 'revision': 1}}]
+                if unknown:
+                    replies.append({'harness': {'status': 'unknown', 'revision': 2}})
+                client.call.side_effect = [*replies, failure, {'harness': {'status': 'ready', 'revision': 3}}]
+                with mock.patch.object(runtime_selection, 'bound'), \
+                     mock.patch.object(execution.control, 'wait') as wait, \
+                     mock.patch.object(execution, '_execute_selected', return_value={'status': 'ok'}) as selected:
+                    if phase == 'dispatch_uncertain' and not unknown:
+                        with self.assertRaises(BoardError) as caught:
+                            execution._execute_guarded(claim, claim['task'], spec, claim['attempt'], execution.directory, {})
+                        self.assertIs(caught.exception, failure)
+                        wait.assert_not_called()
+                        selected.assert_not_called()
+                        self.assertEqual(client.call.call_count, 2)
+                    else:
+                        self.assertEqual(execution._execute_guarded(
+                            claim, claim['task'], spec, claim['attempt'], execution.directory, {}), {'status': 'ok'})
+                        selected.assert_called_once()
+                        self.assertEqual(client.call.call_count, len(replies) + 2)
+                        self.assertEqual(client.call.call_args_list[-2], client.call.call_args_list[-1])
+                        self.assertEqual(wait.call_count, 2 if unknown else 1)
+                self.assertTrue(client.call.call_args_list[1].args[1]['retry'])
+                self.assertEqual(client.call.call_args.args[1]['retry'], not unknown)
+
+    def test_preflight_cancels_when_control_consumed_the_wake_before_rpc_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            spec = {'adapter': 'codex'}
+            claim = {'task': {'taskId': 'task', 'spec': spec},
+                     'attempt': {'taskId': 'task', 'attemptId': 'attempt', 'generation': 1}}
+            client = mock.Mock()
+            execution = Execution(claim, Path(directory), 'n' * 32, client=client)
+            native_path(execution.directory).mkdir(parents=True, mode=0o700)
+            wake = execution.control._wake
+            original_clear, original_wait = wake.clear, wake.wait
+            consumed = threading.Event()
+
+            def clear():
+                stopped = execution.stop_requested() and wake.is_set()
+                original_clear()
+                if stopped:
+                    consumed.set()
+
+            def wait(seconds):
+                self.assertLess(seconds, 1, 'preflight waited on the cleared control wake')
+                return original_wait(seconds)
+
+            def prepare(*_args):
+                execution.request_stop('console', force=True)
+                self.assertTrue(consumed.wait(2), 'control did not consume the stop wake')
+                raise BoardError('SERVICE_UNAVAILABLE', 'listener stopped')
+
+            client.call.side_effect = prepare
+            with mock.patch.object(wake, 'clear', side_effect=clear), \
+                 mock.patch.object(wake, 'wait', side_effect=wait), \
+                 mock.patch.object(execution, '_execute_selected') as selected:
+                receipt = execution._execute_guarded(claim, claim['task'], spec, claim['attempt'], execution.directory, {})
+            self.assertEqual(receipt['report']['status'], 'cancelled')
+            self.assertEqual(receipt['report']['terminationReason'], 'console-stop')
+            self.assertTrue(receipt['report']['shutdownConfirmed'])
+            client.call.assert_called_once()
+            selected.assert_not_called()
 
     def test_review_unavailable_result_uses_frozen_request_without_copying_budget(self):
         execution = object.__new__(Execution)

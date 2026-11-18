@@ -9,14 +9,20 @@ from ...protocol.execution import (fsync_json, read_execution_receipt as read_re
 
 from ...errors import BoardError
 
-# SERVICE_UNAVAILABLE and UPGRADE_IN_PROGRESS cover an offline and a fenced
-# service. The C-Two codes are the transient face of one board-side fact: the
-# old daemon of a same-contract hot swap closing its IPC listener while this
-# execution's idempotent call was in flight, so the replay reaches the new
-# daemon. Contract, identity, protocol and internal defects stay terminal.
-RETRYABLE = frozenset({"SERVICE_UNAVAILABLE", "UPGRADE_IN_PROGRESS",
-                       "C_TWO_AT_CLIENT_CALLING_RESOURCE", "C_TWO_TRANSPORT", "C_TWO_RESOURCE_CLOSED",
-                       "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND", "C_TWO_ROUTE_STALE"})
+
+def is_retryable(error: BoardError, *, pre_dispatch_only: bool = False) -> bool:
+    """Recognize an unavailable service, withdrawn route or transient IPC failure."""
+    if error.code in ("SERVICE_UNAVAILABLE", "UPGRADE_IN_PROGRESS",
+                      "C_TWO_RESOURCE_CLOSED", "C_TWO_RESOURCE_REMOVED",
+                      "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND", "C_TWO_ROUTE_STALE"):
+        return True
+    details = error.details
+    phases = ("pre_dispatch",) if pre_dispatch_only else ("pre_dispatch", "dispatch_uncertain")
+    return (error.code == "C_TWO_AT_CLIENT_CALLING_RESOURCE"
+            and details.get("category") == "transport"
+            and details.get("transport_kind") == "ipc"
+            and details.get("io_kind") != "other"
+            and details.get("transport_phase") in phases)
 
 
 def receipt_directory(state: Path, private_adapter: str, task_id: str, attempt_id: str) -> Path:
@@ -46,7 +52,7 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
                     accepted = False
                     refusal = {"code": error.code, "message": error.message}
                     break
-                if error.code not in RETRYABLE:
+                if not is_retryable(error):
                     raise
                 log(f"result delivery pending: {error.code}")
             else:

@@ -107,11 +107,14 @@ class ServiceError(BoardError):
 
 def local_rpc_error(error: CoreError | CCError) -> ServiceError:
     """Keep C-Two's local I/O cause visible at the Host boundary."""
-    details = dict(getattr(error, 'details', None) or {})
-    details.update({key: value for key in ('category', 'transport_kind', 'transport_phase',
-               'io_kind', 'raw_os_error', 'io_operation', 'endpoint_unverified_reason',
-               'local_protocol_version', 'peer_protocol_version')
-               if (value := getattr(error, key, None)) is not None})
+    details = {}
+    cause = error.__cause__
+    for diagnostic in (cause, error) if isinstance(cause, CoreError) else (error,):
+        details.update(diagnostic.details)
+        details.update({key: value for key in ('category', 'transport_kind', 'transport_phase',
+                       'io_kind', 'raw_os_error', 'io_operation', 'endpoint_unverified_reason',
+                       'local_protocol_version', 'peer_protocol_version')
+                       if (value := getattr(diagnostic, key, None)) is not None})
     kind = details.get('io_kind')
     if kind == 'permission_denied':
         code = 'LAUNCH_ACCESS_DENIED'
