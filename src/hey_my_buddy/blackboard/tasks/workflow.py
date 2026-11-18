@@ -50,6 +50,7 @@ from .path_views import MAX_OUTPUT_PATH_VIEW, _bounded_path_fields
 from . import micro_task
 from .micro_task import buddy_view
 from .request_reasons import request_reason
+from .scheduling import DECISION_ADAPTER
 from .macro_task_deletion_guard import reject_deleting_checkout, reject_deleting_run, reject_macro_task
 from ..store.db import canonical_json, sha256_text
 from ..store.work import autonomous_tasks
@@ -5190,7 +5191,6 @@ class WorkflowCoordinator:
                     (target,),
                 ).fetchall()
             else:
-                from .scheduling import DECISION_ADAPTER
                 rows = []
                 for class_predicate in ("t.adapter IS NOT ?", "t.adapter IS ?"):
                     rows.extend(connection.execute(
@@ -7037,9 +7037,13 @@ class WorkflowCoordinator:
                 break
 
     # -- primitive boundary --------------------------------------------------
-    def guard_task_control(self,connection,task_row,params,*,operation):
-        if self._run_optional(connection,task_row["task_id"]) is not None:
-            raise BoardError("MICRO_TASK_REQUIRED","Use cancel (workflow_cancel) for this micro task",runId=task_row["task_id"])
+    def guard_task_control(self, connection, task_row, *, initiator):
+        run_id = task_row["task_id"]
+        if self._run_optional(connection, run_id) is not None:
+            raise BoardError("MICRO_TASK_REQUIRED", "Use cancel (workflow_cancel) for this micro task", runId=run_id)
+        if initiator != "service" and task_row["adapter"] == DECISION_ADAPTER:
+            raise BoardError("FORBIDDEN", "Only the service or an authorized console session can cancel this decision execution",
+                             runId=run_id)
 
 
 # -- module helpers ----------------------------------------------------------

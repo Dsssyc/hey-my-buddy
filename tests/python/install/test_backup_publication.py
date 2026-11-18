@@ -189,6 +189,23 @@ with (mock.patch.object(backup, '_rename', side_effect=hooked_rename),
         backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self._assert_settled(root, 'new')
 
+    def test_recover_and_create_remove_abandoned_verification_directories(self):
+        board, _, root = self._board()
+
+        def create():
+            backup.create(board.directory, runtime_identity=None, plugin_commit=None,
+                          contract_version=CONTRACT_VERSION)
+
+        create()
+        for entry in (lambda: backup.recover(board.directory), create):
+            with self.subTest(entry=entry.__name__):
+                trial = root / '.verify-abandoned'
+                trial.mkdir()
+                shutil.copyfile(board.directory / 'board.sqlite3', trial / 'board.sqlite3')
+                entry()
+                self.assertFalse(trial.exists())
+                self._assert_settled(root, 'old')
+
     def test_incomplete_first_candidate_allows_rebuild(self):
         board, _, root = self._board()
         (root / '.incoming').mkdir(parents=True)
@@ -370,6 +387,7 @@ with (mock.patch.object(backup, '_rename', side_effect=hooked_rename),
         outside = self.workdir('outside')
         for name, expected_code in (('.incoming', 'BACKUP_UNSAFE_PATH'),
                                     ('.previous', 'BACKUP_UNSAFE_PATH'),
+                                    ('.verify-linked', 'BACKUP_UNSAFE_PATH'),
                                     ('.publish.json', 'BACKUP_UNSAFE_PATH')):
             with self.subTest(link=name):
                 linked = root / name

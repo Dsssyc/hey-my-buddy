@@ -328,6 +328,10 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
         run = self.submit(board, request_id='routing-end', buddy='route',
                           create_macro={'title':'End routing','goal':'Route'})
         router_id = run['routing']['taskId']
+        with self.assertRaises(BoardError) as denied:
+            board.call('task_cancel', {'runId': router_id})
+        self.assertEqual(denied.exception.code, 'FORBIDDEN')
+        self.assertEqual(board.call('task_get', {'runId': router_id})['task']['state'], 'queued')
         result = self.control(board, 'end', run['macroTaskId'])
         self.assertEqual(result, {'macroTaskId': run['macroTaskId'], 'duplicate': False})
         self.assertEqual(board.call('workflow_get', {'runId':run['runId']})['state'], 'concluded')

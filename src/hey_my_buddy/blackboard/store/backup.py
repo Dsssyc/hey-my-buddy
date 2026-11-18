@@ -238,6 +238,10 @@ def _publication_journal(root: Path, *, had_current: bool) -> None:
 def _recover_publication(root: Path) -> None:
     """Converge a journaled publication under the backup lock."""
     incoming, current, previous, journal = _backup_paths(root)
+    for trial in root.glob('.verify-*'):
+        _guard(trial)
+        if trial.is_dir():
+            private_dirs.remove_tree(trial)
     if not journal.exists():
         if previous.exists():
             raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Previous backup exists without a publication journal')
@@ -321,7 +325,7 @@ def _recover_publication(root: Path) -> None:
 def recover(state: Path) -> Path:
     """Recover an interrupted publication before reading backups/current.
 
-    Only fixed entries below state/backups are ever renamed/deleted.
+    Recovery also removes interrupted verification directories below state/backups.
     """
     root = Path(state) / 'backups'
     _backup_paths(root)

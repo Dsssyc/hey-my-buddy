@@ -285,6 +285,30 @@ sys.stdin.buffer.read(1)
                             process.kill()
                             process.communicate(timeout=5)
 
+    def test_attempt_cleanup_removes_the_temporary_credential_of_a_killed_writer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            attempt = private_dirs.attempt_root(state, "codex", "task", "attempt")
+            attempt.mkdir(parents=True)
+            credential = attempt / "agent-credential.json"
+            content = state / "content.bin"
+            content.write_bytes(NEW)
+            unrelated = attempt / f".execution-report.json.{'a' * 32}.tmp"
+            unrelated.write_bytes(OLD)
+            process = _spawn(credential, content, "after_writer_fsync", "mutable")
+            try:
+                _wait_for_writer(process, "after_writer_fsync")
+            finally:
+                process.kill()
+                process.communicate(timeout=5)
+            temporary, = attempt.glob(".agent-credential.json.*.tmp")
+            self.assertEqual(temporary.read_bytes(), NEW)
+
+            removed = private_dirs.cleanup_attempt_credentials(state, "codex", "task", "attempt")
+            self.assertEqual(removed["count"], 1)
+            self.assertFalse(temporary.exists())
+            self.assertEqual(unrelated.read_bytes(), OLD)
+
     def test_killed_writer_exposes_only_complete_immutable_facts(self):
         stages = ("before_create", "after_create", "before_write", "partial_write",
                   "after_write", "before_flush", "after_flush", "before_writer_fsync",

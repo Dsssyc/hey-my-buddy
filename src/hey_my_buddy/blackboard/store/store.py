@@ -1008,7 +1008,7 @@ class BoardStore:
         micro-task task can never exist without its governance record.
         """
         spec = micro_task["spec"] if micro_task is not None else schemas.normalize_spec(params)
-        if micro_task is None and spec["adapter"] in schemas.CODING_HARNESSES:
+        if micro_task is None and spec["adapter"] != "command":
             raise BoardError("MICRO_TASK_REQUIRED", "Coding work requires submit (workflow_submit) so routing, ownership and turn evidence remain micro-task")
         request_id = schemas.required_string(params, "requestId", max_length=schemas.MAX_REQUEST_ID)
         fingerprint = schemas.spec_fingerprint(spec)
@@ -1259,15 +1259,16 @@ class BoardStore:
                      "id": schemas.optional_string(params, "requestedBy") or "cli"}
         request = {"selector": {k: params[k] for k in ("runId", "requestId") if k in params}, "note": note}
         with self.db.write() as connection:
+            task = self._task_row(connection, params)
+            if console_authority is None:
+                self.workflow.guard_task_control(connection, task, initiator=initiator)
+            elif (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") not in ("maintain", "profile"):
+                raise BoardError("FORBIDDEN", "A console session may cancel only maintenance or profile executions; use macro task stop for Host work",
+                                 runId=task["task_id"])
             if command_id:
                 receipt = self._receipt(connection, command_id, "task.cancel", request)
                 if receipt is not None:
                     return receipt
-            task = self._task_row(connection, params)
-            if console_authority is not None and (decision_spec(json.loads(task["spec_json"])) or {}).get("kind") not in ("maintain", "profile"):
-                raise BoardError("FORBIDDEN", "A console session may cancel only maintenance or profile executions; use macro task stop for Host work",
-                                 runId=task["task_id"])
-            self.workflow.guard_task_control(connection, task, params, operation="task_cancel")
             now = self.now()
             already = task["state"] in TERMINAL_TASK_STATES
             if not already:

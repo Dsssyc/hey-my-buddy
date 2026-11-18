@@ -906,7 +906,12 @@ class MaintenanceExecutionTests(WorkflowTestCase):
     def test_queued_cancellation_closes_maintenance_and_releases_single_flight(self):
         self.configure()
         started = self.start()
-        self.board_.call("task_cancel", {"runId": started["runId"]})
+        selector = {"runId": started["runId"]}
+        with self.assertRaises(BoardError) as denied:
+            self.board_.call("task_cancel", selector)
+        self.assertEqual(denied.exception.code, "FORBIDDEN")
+        self.assertEqual(self.board_.call("task_get", selector)["task"]["state"], "queued")
+        self.assertEqual(self.board_.console_call("task_cancel", selector)["task"]["state"], "cancelled")
         with self.board_.store.db.read() as db:
             first = db.execute("SELECT state,reason_code FROM maintenance_runs").fetchone()
             self.assertEqual(first["state"], "failed")

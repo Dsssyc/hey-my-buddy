@@ -493,7 +493,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
 
     def test_cancelled_queued_dispatch_needs_only_its_phase_and_outcome(self):
         request = self.request()
-        self.board_.call("task_cancel", {"runId": request["runId"]})
+        self.board_.store.task_cancel({"runId": request["runId"]}, initiator="service")
         trial = self.boundary(request["decisionId"])["routerTrials"][0]
         self.assertEqual(trial["phase"], "preflight")
         self.assertEqual(trial["outcome"], "cancelled")
