@@ -30,12 +30,12 @@ class WindowsCheckoutIdleTests(unittest.TestCase):
     @contextmanager
     def occupied(self, cwd):
         child = owned_popen(
-            [sys.executable, "-c", "import sys; print('ready', flush=True); sys.stdin.read(1)"],
-            cwd=str(cwd), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            [sys.executable, "-c", "import sys; print('ready', flush=True); sys.stdin.buffer.read(1)"],
+            cwd=str(cwd), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         handle = ProcessHandle(child, log_paths={}, stop_channel="stdin")
         try:
             # The directory is a live working directory only once the child runs.
-            self.assertEqual(child.stdout.readline(), "ready\n")
+            self.assertEqual(child.stdout.readline().rstrip(b"\r\n"), b"ready")
             yield
         finally:
             stopped, _ = handle.terminate(grace_seconds=5.0, settle_seconds=5.0)

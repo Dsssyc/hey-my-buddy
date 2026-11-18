@@ -418,11 +418,11 @@ class ReclamationTests(LifecycleTestCase):
             from hey_my_buddy.protocol.owned_process import owned_popen
             from hey_my_buddy.protocol.process_handle import ProcessHandle
             child = owned_popen(
-                [sys.executable, '-c', "import sys; print('ready', flush=True); sys.stdin.read(1)"],
-                cwd=str(checkout), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+                [sys.executable, '-c', "import sys; print('ready', flush=True); sys.stdin.buffer.read(1)"],
+                cwd=str(checkout), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
             handle = ProcessHandle(child, log_paths={}, stop_channel='stdin')
             try:
-                if child.stdout.readline() != 'ready\n':
+                if child.stdout.readline().rstrip(b'\r\n') != b'ready':
                     raise AssertionError('The occupying process did not start')
                 yield
             finally:

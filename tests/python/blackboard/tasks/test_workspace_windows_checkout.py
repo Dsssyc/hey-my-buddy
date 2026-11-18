@@ -180,11 +180,11 @@ class NativeWindowsWorkspaceCheckoutTests(unittest.TestCase):
     @contextmanager
     def _occupied(self, cwd: Path):
         child = owned_popen(
-            [sys.executable, "-c", "import sys; print('ready', flush=True); sys.stdin.read(1)"],
-            cwd=str(cwd), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            [sys.executable, "-c", "import sys; print('ready', flush=True); sys.stdin.buffer.read(1)"],
+            cwd=str(cwd), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         handle = ProcessHandle(child, log_paths={}, stop_channel="stdin")
         try:
-            self.assertEqual(child.stdout.readline(), "ready\n")
+            self.assertEqual(child.stdout.readline().rstrip(b"\r\n"), b"ready")
             yield
         finally:
             stopped, _ = handle.terminate(grace_seconds=5.0, settle_seconds=5.0)
