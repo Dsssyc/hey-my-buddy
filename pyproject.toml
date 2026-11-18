@@ -32,7 +32,7 @@ Documentation = "https://github.com/Dsssyc/hey-my-buddy/blob/main/docs/README.md
 hey-my-buddy = "hey_my_buddy.install.package_install:main"
 
 [dependency-groups]
-dev = ["distlib>=0.4,<0.5"]
+dev = ["distlib>=0.4,<0.5", "markdown-it-py>=4,<5"]
 
 [build-system]
 requires = ["hatchling==1.32.4", "hatch-fancy-pypi-readme==25.1.0"]

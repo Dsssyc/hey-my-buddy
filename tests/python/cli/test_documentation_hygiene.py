@@ -1,8 +1,6 @@
 """Mechanical documentation rules, with the glossary as the terminology source."""
 from __future__ import annotations
 
-from bisect import bisect_right
-from html import unescape
 from html.parser import HTMLParser
 import os
 from pathlib import Path
@@ -10,6 +8,11 @@ import re
 import tempfile
 import unittest
 from urllib.parse import unquote, urlsplit
+
+from markdown_it import MarkdownIt
+from markdown_it.parser_inline import RuleFuncInlineType
+from markdown_it.rules_inline import html_inline, image, link
+from markdown_it.rules_inline.state_inline import StateInline
 
 from cli.test_repository_hygiene import ROOT, _git
 
@@ -68,143 +71,56 @@ def terminology_violations(texts: dict[str, str]) -> list[str]:
     return violations
 
 
-def _blank(text: str) -> str:
-    return re.sub(r"[^\n]+", lambda match: " " * len(match[0]), text)
+class _LinkParser(MarkdownIt):
+    def normalizeLink(self, url: str) -> str:
+        # Keep the decoded destination for diagnostics. This checker emits no HTML.
+        return url
 
 
-def _escaped(text: str, start: int) -> bool:
-    cursor = start
-    while cursor and text[cursor - 1] == "\\":
-        cursor -= 1
-    return (start - cursor) % 2 == 1
+def _record_inline_line(rule: RuleFuncInlineType, token_type: str) -> RuleFuncInlineType:
+    def parse(state: StateInline, silent: bool) -> bool:
+        start, first = state.pos, len(state.tokens)
+        matched = rule(state, silent)
+        if matched and not silent:
+            token = next(token for token in state.tokens[first:] if token.type == token_type)
+            token.meta["line_offset"] = state.src.count("\n", 0, start)
+        return matched
+
+    return parse
 
 
-def prose(text: str) -> str:
-    """Mask Markdown code without moving any source locations."""
-    lines = []
-    fence = None
-    list_indent = 0
-    previous_blank = True
-    indented = False
-    for line in text.splitlines(keepends=True):
-        indent = len(line) - len(line.lstrip(" "))
-        item = re.match(r" *(?:[-+*]|\d+[.)]) +", line)
-        if fence is None and item and indent < list_indent + 4:
-            list_indent = item.end()
-        elif fence is None and line.strip() and indent == 0:
-            list_indent = 0
-        marker = re.match(r"(?: {0,3}>[ \t]?)* {0,3}(`{3,}|~{3,})(.*)", line)
-        if fence is not None:
-            lines.append(_blank(line))
-            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
-                fence = None
-        elif marker:
-            fence = marker[1]
-            lines.append(_blank(line))
-        elif (indent >= list_indent + 4 or line.startswith("\t")) and (previous_blank or indented):
-            lines.append(_blank(line))
-            indented = True
-        else:
-            lines.append(line)
-            if line.strip():
-                indented = False
-        previous_blank = not line.strip() or marker is not None
-    text = "".join(lines)
-    ticks = [match for match in re.finditer(r"`+", text) if not _escaped(text, match.start())]
-    cursor = 0
-    chunks = []
-    i = 0
-    while i < len(ticks):
-        opening = ticks[i]
-        closing = next((j for j in range(i + 1, len(ticks)) if ticks[j][0] == opening[0]), None)
-        if closing is None:
-            i += 1
-            continue
-        end = ticks[closing].end()
-        chunks.extend((text[cursor:opening.start()], _blank(text[opening.start():end])))
-        cursor = end
-        i = closing + 1
-    chunks.append(text[cursor:])
-    return "".join(chunks)
+_MARKDOWN = _LinkParser("commonmark")
+# Block tokens have source maps. Mark inline tokens while their offsets are available.
+_MARKDOWN.inline.ruler.at("link", _record_inline_line(link, "link_open"))
+_MARKDOWN.inline.ruler.at("image", _record_inline_line(image, "image"))
+_MARKDOWN.inline.ruler.at("html_inline", _record_inline_line(html_inline, "html_inline"))
 
 
-def _destination(text: str, start: int) -> tuple[str, int] | None:
-    while start < len(text) and text[start].isspace():
-        start += 1
-    if start >= len(text):
-        return None
-    if text[start] == "<":
-        end = text.find(">", start + 1)
-        if end == -1 or "\n" in text[start:end]:
-            return None
-        return text[start + 1:end], end + 1
-    end = start
-    depth = 0
-    while end < len(text):
-        char = text[end]
-        if char == "\\" and end + 1 < len(text):
-            end += 2
-            continue
-        if char.isspace() or (char == ")" and depth == 0):
-            break
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-        end += 1
-    return text[start:end], end
+class _HTMLLinks(HTMLParser):
+    def __init__(self, start_line: int, links: list[tuple[int, str]]):
+        super().__init__()
+        self.start_line = start_line
+        self.links = links
+
+    def handle_starttag(self, tag, attrs):
+        for key, value in attrs:
+            if value is not None and (tag, key) in (("a", "href"), ("img", "src")):
+                self.links.append((self.start_line + self.getpos()[0] - 1, value))
 
 
 def markdown_links(text: str) -> list[tuple[int, str]]:
-    text = prose(text)
-    newlines = [match.start() for match in re.finditer("\n", text)]
-    definitions = {}
-    for match in re.finditer(r"^ {0,3}\[([^\]\n]+)\]:[ \t]*", text, re.M):
-        destination = _destination(text, match.end())
-        if destination:
-            definitions[" ".join(match[1].split()).casefold()] = destination[0]
     links = []
-    cursor = 0
-    for opening in re.finditer(r"\[", text):
-        start = opening.start()
-        if start < cursor or _escaped(text, start):
-            continue
-        end = start + 1
-        depth = 1
-        while end < len(text) and depth:
-            if text[end] == "\\":
-                end += 2
-                continue
-            if text[end] == "[":
-                depth += 1
-            elif text[end] == "]":
-                depth -= 1
-            end += 1
-        if depth:
-            continue
-        label = text[start + 1:end - 1]
-        target = None
-        if text[end:end + 1] == "(":
-            destination = _destination(text, end + 1)
-            if destination and re.match(r'''\s*(?:(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\))\s*)?\)''', text[destination[1]:]):
-                target = destination[0]
-        elif text[end:end + 1] != ":":
-            reference = re.match(r"[ \t]*\[([^\]\n]*)\]", text[end:])
-            if reference:
-                label = reference[1] or label
-                end += reference.end()
-            target = definitions.get(" ".join(label.split()).casefold())
-        if target is not None:
-            links.append((bisect_right(newlines, start) + 1, target))
-            cursor = end
-
-    class HTMLLinks(HTMLParser):
-        def handle_starttag(self, tag, attrs):
-            for key, value in attrs:
-                if value is not None and (tag, key) in (("a", "href"), ("img", "src")):
-                    links.append((self.getpos()[0], value))
-
-    HTMLLinks().feed(text)
+    for block in _MARKDOWN.parse(text):
+        if block.type == "html_block":
+            _HTMLLinks(block.map[0] + 1, links).feed(block.content)
+        elif block.type == "inline":
+            for token in block.children:
+                if token.type == "link_open" and "line_offset" in token.meta:
+                    links.append((block.map[0] + 1 + token.meta["line_offset"], token.attrs["href"]))
+                elif token.type == "image":
+                    links.append((block.map[0] + 1 + token.meta["line_offset"], token.attrs["src"]))
+                elif token.type == "html_inline":
+                    _HTMLLinks(block.map[0] + 1 + token.meta["line_offset"], links).feed(token.content)
     return links
 
 
@@ -220,7 +136,6 @@ def reference_violations(root: Path, texts: dict[str, str]) -> list[str]:
         if Path(name).suffix.lower() not in (".md", ".markdown"):
             continue
         for number, target in markdown_links(text):
-            target = unescape(re.sub(r"\\([!\"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])", r"\1", target))
             url = urlsplit(target)
             if url.scheme or url.netloc or not url.path or url.path.startswith("/"):
                 continue
@@ -318,10 +233,14 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(markdown_links(r"\[literal](missing.md) \\[real](missing.md)"), [(1, "missing.md")])
 
     def test_reference_links_and_html_links(self):
-        text = '[full][Doc]\n[doc][]\n[doc]\n[unused]\n[doc]: <../target (one).md> "title"\n'
+        text = '[full][Doc]\n[doc][]\n[doc]\n[unused]\n\n[doc]: <../target (one).md> "title"\n'
         text += '<a href="missing.md">bad</a>\n<img src="missing.png">\n'
         self.assertEqual(markdown_links(text), [(1, "../target (one).md"), (2, "../target (one).md"),
-                                               (3, "../target (one).md"), (6, "missing.md"), (7, "missing.png")])
+                                               (3, "../target (one).md"), (7, "missing.md"), (8, "missing.png")])
+
+    def test_links_inside_html_blocks_keep_their_source_lines(self):
+        text = '# Heading\n\n<div>\n<!-- <img src="ignored.png"> -->\n<a\n href="target&amp;amp;.md">a</a>\n</div>'
+        self.assertEqual(markdown_links(text), [(5, "target&amp;.md")])
 
     def test_adr_mentions_in_any_text_include_code_and_need_a_decision_file(self):
         missing = "ADR-" + "999"
