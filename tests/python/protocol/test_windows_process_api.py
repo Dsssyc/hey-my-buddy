@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import ctypes
+import io
+import subprocess
 import sys
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 from hey_my_buddy.protocol import windows_process as windows
+from hey_my_buddy.protocol.owned_process import owned_popen
 from hey_my_buddy.protocol.process_start import _FileTime
 
 
@@ -123,6 +126,21 @@ class WindowsAPITests(unittest.TestCase):
         self.job.AssignProcessToJobObject.side_effect = Win32Error(5)
         with self.assertRaises(OSError):
             self.boundary.assign(self.job_handle, self.child)
+
+    def test_failed_assignment_closes_all_parent_pipes(self):
+        child = mock.Mock(_handle=42, returncode=1,
+                          stdin=io.BytesIO(), stdout=io.BytesIO(), stderr=io.BytesIO())
+        self.job.QueryInformationJobObject.return_value = {"BasicLimitInformation": {}}
+        self.job.AssignProcessToJobObject.side_effect = Win32Error(5)
+        with mock.patch.object(subprocess, "Popen", return_value=child):
+            with self.assertRaises(OSError) as caught:
+                owned_popen(["fixture"], windows_api=self.boundary,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertTrue(caught.exception.owned_popen_evidence.shutdown_confirmed)
+        child.kill.assert_called_once_with()
+        self.api.CloseHandle.assert_called_once_with(self.job_handle)
+        for stream in (child.stdin, child.stdout, child.stderr):
+            self.assertTrue(stream.closed)
 
     def test_member_identities_use_query_handles_exact_filetime_and_held_job_membership(self):
         self.job.QueryInformationJobObject.return_value = [321, 654]

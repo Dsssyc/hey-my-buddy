@@ -537,6 +537,10 @@ class Reclamation:
                                     allocation_revocations.finish(store, directory)
                         self._remember_tasks(directory, item['tasks'])
                         if item['reasons']:
+                            if set(item['reasons']) <= {'checkout-in-use', 'checkout.process-blockers'}:
+                                # Process exit need not change any allocation metadata.
+                                self._blocked_allocations.pop(directory, None)
+                                continue
                             self._allocations.discard(directory)
                             if item['owner'] is None:
                                 self._blocked_allocations[directory] = self._allocation_entry(directory)

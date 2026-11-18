@@ -1,11 +1,14 @@
 """Terminal reclamation through real Git, board receipts and the service loop."""
 import json
-from contextlib import contextmanager
+import os
+import unittest
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 from hey_my_buddy.blackboard.tasks import allocation_revocations, workspace
 from hey_my_buddy.protocol.workspace_manifest import record_reference, turn_manifest
+from support import occupied_directory
 
 
 class ReclamationTests(LifecycleTestCase):
@@ -390,17 +393,52 @@ class ReclamationTests(LifecycleTestCase):
         manifest = workspace.prepare(board.directory, 'windows-occupied-orphan', intent)
         checkout = Path(manifest['checkoutRoot'])
         directory = checkout.parent
-        with self.occupied(checkout), \
-             patch.object(checkout_processes, '_WINDOWS', True), \
+        maintenance = reclamation.Reclamation(board.store)
+        rename_refused = (nullcontext() if os.name == 'nt' else
+                          patch.object(checkout_processes, '_rename_whole_checkout', side_effect=PermissionError))
+        with patch.object(checkout_processes, '_WINDOWS', True), \
              patch.object(storage, 'process_inventory', return_value=([], [], True)):
-            reclamation.Reclamation(board.store).run()
-            self.assertTrue(checkout.exists())
-            row = next(row for row in storage.inspect(board.store)['candidates']
-                       if row['path'] == str(checkout))
-            self.assertEqual(row['reasons'], ['checkout-in-use'])
-            self.assertEqual(board.store.service_issues(), [])
-        reclamation.Reclamation(board.store).run()
+            with occupied_directory(checkout), rename_refused:
+                maintenance.run()
+                self.assertTrue(checkout.exists())
+                row = next(row for row in storage.inspect(board.store)['candidates']
+                           if row['path'] == str(checkout))
+                self.assertEqual(row['reasons'], ['checkout-in-use'])
+                self.assertEqual(board.store.service_issues(), [])
+                entry = maintenance._allocation_entry(directory)
+            self.assertEqual(maintenance._allocation_entry(directory), entry)
+            maintenance.run()
         self.assertFalse(directory.exists())
+        self.assertEqual(board.store.service_issues(), [])
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX working-directory observation')
+    def test_reclamation_retries_after_process_exit_without_rescanning_static_blockers(self):
+        from unittest.mock import patch
+        import psutil
+        from hey_my_buddy.blackboard.tasks import checkout_processes, reclamation, storage
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
+        manifest = workspace.prepare(board.directory, 'posix-occupied-orphan', intent)
+        static = workspace.prepare(board.directory, 'statically-blocked-orphan', intent)
+        checkout = Path(manifest['checkoutRoot'])
+        static_directory = Path(static['checkoutRoot']).parent
+        (static_directory / 'extra-evidence').touch()
+        maintenance = reclamation.Reclamation(board.store)
+        with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan, \
+             patch.object(checkout_processes, '_processes') as processes:
+            with occupied_directory(checkout) as child:
+                processes.return_value = ([psutil.Process(child.pid)], True)
+                maintenance.run()
+                self.assertEqual(scan.call_count, 2)
+                self.assertTrue(checkout.exists())
+                self.assertEqual(board.store.service_issues(), [])
+                entry = maintenance._allocation_entry(checkout.parent)
+            self.assertEqual(maintenance._allocation_entry(checkout.parent), entry)
+            maintenance.run()
+            self.assertEqual(scan.call_count, 3)
+        self.assertFalse(checkout.parent.exists())
+        self.assertTrue(static_directory.exists())
         self.assertEqual(board.store.service_issues(), [])
 
     @contextmanager
@@ -411,28 +449,9 @@ class ReclamationTests(LifecycleTestCase):
         its working directory; POSIX has no such refusal, so its parent is made
         unwritable to the renaming process instead.
         """
-        import os
         if os.name == 'nt':
-            import subprocess
-            import sys
-            from hey_my_buddy.protocol.owned_process import owned_popen
-            from hey_my_buddy.protocol.process_handle import ProcessHandle
-            child = owned_popen(
-                [sys.executable, '-c', "import sys; print('ready', flush=True); sys.stdin.buffer.read(1)"],
-                cwd=str(checkout), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-            handle = ProcessHandle(child, log_paths={}, stop_channel='stdin')
-            try:
-                if child.stdout.readline().rstrip(b'\r\n') != b'ready':
-                    raise AssertionError('The occupying process did not start')
+            with occupied_directory(checkout):
                 yield
-            finally:
-                stopped, _ = handle.terminate(grace_seconds=5.0, settle_seconds=5.0)
-                if child.stdout is not None:
-                    child.stdout.close()
-                if child.stdin is not None:
-                    child.stdin.close()
-                if not stopped:
-                    raise AssertionError('Occupying Windows process tree did not confirm shutdown')
         else:
             checkout.parent.chmod(0o555)
             try:

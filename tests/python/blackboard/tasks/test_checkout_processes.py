@@ -1,9 +1,6 @@
 """Canonical cwd paths, observation failures and privacy before deletion."""
-from contextlib import contextmanager
 import os
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -13,8 +10,7 @@ import psutil
 
 from hey_my_buddy.blackboard.tasks import checkout_processes as guard
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.protocol.owned_process import owned_popen
-from hey_my_buddy.protocol.process_handle import ProcessHandle
+from support import occupied_directory
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows rename occupancy proof")
@@ -27,25 +23,6 @@ class WindowsCheckoutIdleTests(unittest.TestCase):
         (self.checkout / "tracked.txt").write_bytes(b"checkout content")
         (self.checkout / "nested" / "evidence.txt").write_bytes(b"nested content")
 
-    @contextmanager
-    def occupied(self, cwd):
-        child = owned_popen(
-            [sys.executable, "-c", "import sys; print('ready', flush=True); sys.stdin.buffer.read(1)"],
-            cwd=str(cwd), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        handle = ProcessHandle(child, log_paths={}, stop_channel="stdin")
-        try:
-            # The directory is a live working directory only once the child runs.
-            self.assertEqual(child.stdout.readline().rstrip(b"\r\n"), b"ready")
-            yield
-        finally:
-            stopped, _ = handle.terminate(grace_seconds=5.0, settle_seconds=5.0)
-            if child.stdout is not None:
-                child.stdout.close()
-            if child.stdin is not None:
-                child.stdin.close()
-            if not stopped:
-                self.fail("Occupying Windows process tree did not confirm shutdown")
-
     def contents(self):
         return {(str(path.relative_to(self.checkout)), path.read_bytes())
                 for path in self.checkout.rglob("*") if path.is_file()}
@@ -54,7 +31,7 @@ class WindowsCheckoutIdleTests(unittest.TestCase):
         intact = self.contents()
         for cwd in (self.checkout, self.checkout / "nested"):
             with self.subTest(cwd=cwd):
-                with self.occupied(cwd):
+                with occupied_directory(cwd):
                     with self.assertRaises(BoardError) as caught:
                         guard.require_idle_checkout(self.checkout, allocated_at=time.time())
                 self.assertEqual(caught.exception.code, "NOT_READY")

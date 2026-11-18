@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import support
 from hey_my_buddy.protocol.owned_process import owned_popen
 from hey_my_buddy.protocol.process_handle import ProcessHandle
 
@@ -175,6 +176,61 @@ class RealStdioStopTests(unittest.TestCase):
                 self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
             finally:
                 handle.terminate(grace_seconds=0)
+
+
+class OccupiedDirectoryTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+
+    def spawn(self, argv, **kwargs):
+        self.child = owned_popen(argv, **kwargs)
+        return self.child
+
+    def assert_released(self):
+        self.assertIsNotNone(self.child.returncode)
+        self.assertTrue(self.child.stdin.closed)
+        self.assertTrue(self.child.stdout.closed)
+        job = getattr(self.child, "_buddy_job", None)
+        if job is not None:
+            self.assertIsNone(job.handle)
+
+    def test_binary_handshake_and_eof_exit_with_non_ascii_stdio_encodings(self):
+        for encoding in ("cp037", "utf-16-le"):
+            with self.subTest(encoding=encoding), patch.dict(os.environ, PYTHONIOENCODING=encoding):
+                with support.occupied_directory(self.directory) as child:
+                    self.child = child
+                    self.assertIsNone(child.poll())
+                self.assert_released()
+                self.assertEqual(child.returncode, 0)
+
+    def test_readiness_timeout_stops_child_and_closes_pipes(self):
+        with patch.object(support, "owned_popen", side_effect=lambda argv, **kwargs: self.spawn(
+                [*argv[:-1], "import sys; sys.stdin.buffer.read(1)"], **kwargs)):
+            with self.assertRaisesRegex(AssertionError, "Timed out waiting"):
+                with support.occupied_directory(self.directory, timeout=0.1):
+                    self.fail("A child without a handshake entered the context")
+        self.assert_released()
+
+    def test_unconfirmed_or_raised_termination_releases_resources_and_reports_failure(self):
+        for stop_error in (None, OSError("stop failed")):
+            with self.subTest(stop_error=stop_error), patch.object(
+                    ProcessHandle, "terminate", return_value=(False, True), side_effect=stop_error):
+                with self.assertRaisesRegex(AssertionError, "did not confirm shutdown") as caught:
+                    with support.occupied_directory(self.directory) as child:
+                        self.child = child
+                        self.assertIsNone(child.poll())
+                self.assertIs(caught.exception.__cause__, stop_error)
+            self.assert_released()
+
+    def test_handle_construction_failure_releases_resources(self):
+        with patch.object(support, "owned_popen", side_effect=self.spawn), \
+             patch.object(support, "ProcessHandle", side_effect=ValueError("cannot construct handle")):
+            with self.assertRaisesRegex(ValueError, "cannot construct handle"):
+                with support.occupied_directory(self.directory):
+                    self.fail("A child without a process handle entered the context")
+        self.assert_released()
 
 
 if __name__ == "__main__":

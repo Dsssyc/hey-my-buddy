@@ -1,7 +1,6 @@
 """Native Windows checkout failures reported by workspace preparation."""
 from __future__ import annotations
 
-from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 import json
@@ -15,8 +14,7 @@ import tempfile
 
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.protocol.owned_process import owned_popen
-from hey_my_buddy.protocol.process_handle import ProcessHandle
+from support import occupied_directory
 
 
 def _intent(repository: Path, commit: str) -> dict:
@@ -177,31 +175,13 @@ class NativeWindowsWorkspaceCheckoutTests(unittest.TestCase):
         _git(self.repository, "worktree", "lock", "--reason", "hey-my-buddy:" + identifier, str(checkout))
         return checkout, directory, {"version": 4, "projectId": "fixture-project"}
 
-    @contextmanager
-    def _occupied(self, cwd: Path):
-        child = owned_popen(
-            [sys.executable, "-c", "import sys; print('ready', flush=True); sys.stdin.buffer.read(1)"],
-            cwd=str(cwd), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        handle = ProcessHandle(child, log_paths={}, stop_channel="stdin")
-        try:
-            self.assertEqual(child.stdout.readline().rstrip(b"\r\n"), b"ready")
-            yield
-        finally:
-            stopped, _ = handle.terminate(grace_seconds=5.0, settle_seconds=5.0)
-            if child.stdout is not None:
-                child.stdout.close()
-            if child.stdin is not None:
-                child.stdin.close()
-            if not stopped:
-                self.fail("Occupying Windows process tree did not confirm shutdown")
-
     def test_removal_refuses_an_occupied_checkout_and_finishes_once_it_exits(self):
         checkout, directory, manifest = self._locked_checkout("ws-" + "2" * 32)
         removal = {"removed": True, "path": str(checkout)}
         nested = checkout / "nested"
         nested.mkdir()
         intact = (checkout / "tracked.txt").read_bytes()
-        with self._occupied(nested):
+        with occupied_directory(nested):
             with self.assertRaises(BoardError) as caught:
                 workspace._remove_worktree(self.repository, checkout, manifest, removal)
             self.assertEqual(caught.exception.code, "NOT_READY")
@@ -246,7 +226,7 @@ class NativeWindowsWorkspaceCheckoutTests(unittest.TestCase):
         # A process holding the interrupted sibling refuses its recovery before
         # anything is deleted, exactly like an occupied canonical checkout.
         workspace.native_path(checkout).rename(workspace.native_path(sibling))
-        with self._occupied(sibling):
+        with occupied_directory(sibling):
             with self.assertRaises(BoardError) as caught:
                 workspace._remove_worktree(self.repository, checkout, manifest, {"removed": True, "path": str(checkout)})
             self.assertEqual(caught.exception.code, "NOT_READY")

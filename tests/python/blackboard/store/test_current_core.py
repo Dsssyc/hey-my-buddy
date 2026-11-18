@@ -25,25 +25,53 @@ from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
 from hey_my_buddy.blackboard.store.store import BoardStore
 
 
+def frozen_schema_imports(source: Path):
+    frozen_module = re.compile(r"^schema_\d+_\d+$")
+    for path in source.rglob("*.py"):
+        if path == source / "blackboard" / "store" / "upgrade.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            modules = [alias.name for alias in node.names]
+            if isinstance(node, ast.ImportFrom) and node.module:
+                modules.append(node.module)
+            for module in modules:
+                if any(frozen_module.fullmatch(part) for part in module.split(".")):
+                    yield path, node.lineno, module
+
+
 class CurrentCoreTests(BoardTestCase):
     def test_current_modules_do_not_import_frozen_schema_steps(self):
         source = Path(__file__).resolve().parents[4] / "src" / "hey_my_buddy"
-        frozen_module = re.compile(r"^schema_\d+_\d+$")
-        imports = []
-        for path in source.rglob("*.py"):
-            if path.name == "upgrade.py":
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    modules = [alias.name for alias in node.names]
-                elif isinstance(node, ast.ImportFrom):
-                    modules = [node.module] if node.module else []
-                else:
-                    continue
-                imports.extend((path, node.lineno, module) for module in modules
-                               if module and any(frozen_module.fullmatch(part) for part in module.split(".")))
-        self.assertEqual(imports, [])
+        self.assertEqual(list(frozen_schema_imports(source)), [])
+
+    def test_frozen_imports_through_packages_and_relative_paths_are_detected(self):
+        source = self.directory / "source"
+        imports = (
+            "import hey_my_buddy.blackboard.store.schema_37_38 as step\n"
+            "from .schema_37_38 import upgrade\n"
+            "from . import schema_37_38 as step\n"
+            "from hey_my_buddy.blackboard.store import db, schema_37_38\n"
+        )
+        installer = source / "install" / "upgrade.py"
+        store_upgrade = source / "blackboard" / "store" / "upgrade.py"
+        for path in (installer, store_upgrade):
+            path.parent.mkdir(parents=True)
+            path.write_text(imports, encoding="utf-8")
+        (source / "current.py").write_text(
+            "import sqlite3 as schema_37_38\n"
+            "from . import schema\n"
+            "from hey_my_buddy.blackboard.store import db\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(list(frozen_schema_imports(source)), [
+            (installer, 1, "hey_my_buddy.blackboard.store.schema_37_38"),
+            (installer, 2, "schema_37_38"),
+            (installer, 3, "schema_37_38"),
+            (installer, 4, "schema_37_38"),
+        ])
 
     def test_frozen_schema_steps_import_only_the_standard_library(self):
         source = Path(__file__).resolve().parents[4] / "src" / "hey_my_buddy" / "blackboard" / "store"
