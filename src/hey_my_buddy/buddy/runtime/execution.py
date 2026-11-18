@@ -688,31 +688,8 @@ class Execution:
             'error': code, 'exitCode': None, 'signal': None, 'shutdownConfirmed': True,
             'artifacts': [], 'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
 
-    def _call_retryable(self, operation: str, params: dict) -> dict:
-        """Replay one idempotent service call across an old daemon's shutdown.
-
-        The service replays these calls by their fixed commandId or round with
-        the answer digest, so a transient C-Two failure of the daemon being
-        torn down is retried with the exact same parameters until the new
-        daemon answers. A stop received while waiting ends the replay.
-        """
-        delay = 0.25
-        while True:
-            try:
-                return self.client.call(operation, params)
-            except BoardError as error:
-                if error.code not in RETRYABLE:
-                    raise
-                self.log(f"service call pending: {operation}: {error.code}")
-                self.control.raise_fatal()
-                if self.control.cancel_view is not None or self.stop_requested():
-                    raise BoardError('ATTEMPT_FINISHED',
-                                     'Stop requested while replaying a service call') from error
-                self.control.wait(delay)
-                delay = min(10.0, delay * 2)
-
     def _harness_failed(self, attempt, record):
-        self._call_retryable('harness_prepare', {'attemptId': attempt['attemptId'],
+        self.client.call('harness_prepare', {'attemptId': attempt['attemptId'],
             'generation': attempt['generation'], 'nonce': self._nonce(), 'failedOnly': True,
             'healthRevision': record['revision'], 'commandId': f"harness-failed-{attempt['attemptId']}"})
 
@@ -916,7 +893,7 @@ class Execution:
         reference = files.publish(self.state_dir, run_id, {"answer": raw, "observations": observations})
         attempt = self.claim["attempt"]
         try:
-            response = self._call_retryable("execution_maintenance", {
+            response = self.client.call("execution_maintenance", {
                 "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": self.nonce,
                 "round": round_index, "answer": reference})
             return files.read(self.state_dir, run_id, response["feedback"])
@@ -930,7 +907,7 @@ class Execution:
         attempt = self.claim["attempt"]
         # The service owns submitted round files until the final receipt; a
         # structurally valid answer is still pending its tool-evidence judgment.
-        response = self._call_retryable("execution_profile", {
+        response = self.client.call("execution_profile", {
             "attemptId": attempt["attemptId"], "generation": attempt["generation"],
             "nonce": self.nonce, "round": round_index, "answer": reference})
         return files.read(self.state_dir, run_id, response["feedback"])

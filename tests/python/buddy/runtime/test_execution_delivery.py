@@ -254,9 +254,9 @@ class ExecutionDeliveryTests(unittest.TestCase):
                        "Ipc transport failure during DispatchUncertain: IPC client closed"), {}]
         self.execution.hint(activity={"phase": "running"})
         with mock.patch.object(entry.time, "monotonic", return_value=10.0):
-            self.assertFalse(self.execution.flush_hints())
+            self.assertFalse(self.execution.flush_hints(delivering=True))
         with mock.patch.object(entry.time, "monotonic", return_value=10.25):
-            self.assertTrue(self.execution.flush_hints())
+            self.assertTrue(self.execution.flush_hints(delivering=True))
         self.assertEqual(client.progress.call_count, 2)
         self.assertEqual(client.progress.call_args.kwargs["data"], {"activity": {"phase": "running"}})
         self.assertEqual(self.execution._hints, {})
