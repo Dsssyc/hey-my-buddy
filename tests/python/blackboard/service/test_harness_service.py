@@ -29,6 +29,13 @@ class HarnessServiceTests(BoardTestCase):
             view = self.board.task_get({'runId': task['runId']})['task']
             self.assertEqual(view['queueReason'], 'harness-probe-unknown')
             self.assertEqual(view['state'], 'running')
+            probe_head = self.board.head()
+            probe_revision = self.board.task_get({'runId': task['runId']})['task']['selectedAttempt']['revision']
+            self.assertNotIn('error', self.call('execution_progress', **params, data={'waitingReason': None}))
+            after_null = self.board.task_get({'runId': task['runId']})['task']
+            self.assertEqual(after_null['queueReason'], 'harness-probe-unknown')
+            self.assertEqual(after_null['selectedAttempt']['revision'], probe_revision)
+            self.assertEqual(self.board.head(), probe_head)
             self.assertNotIn('error', self.call('execution_progress', **params,
                                                data={'waitingReason': {'code': 'router-input-unknown', 'params': {}}}))
             self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'], 'router-input-unknown')

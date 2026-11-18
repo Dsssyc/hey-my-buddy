@@ -296,6 +296,13 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual(after_uncertain['updated_at'], uncertain['updated_at'])
         self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'attempt-uncertain-after-restart')
 
+        non_startup = board.call('execution_progress',
+                                 {**actor, 'processIdentity': IDENTITY, 'phase': 'tool-running'})
+        self.assertGreater(non_startup['head'], head_uncertain)
+        events = client.read_events(after=head_uncertain)['events']
+        self.assertEqual([(event['kind'], event['payload']['phase']) for event in events],
+                         [('attempt.progress', 'tool-running')])
+
     def test_authenticated_reconnection_restores_ownership_claims_and_waiting_reason_once(self):
         board, client, task, _, actor = self.claimed()
         with patch.object(processes, 'inspect_process_identity', return_value='alive'):

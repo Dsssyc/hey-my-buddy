@@ -1875,15 +1875,16 @@ class BoardStore:
                             and attempt["execution_state"] not in (phase, "uncertain", "finalizing"))
             if transitioned:
                 self._transition_attempt(connection, attempt, phase)
-            has_progress = (message is not None
-                            or (phase is not None and (process_identity is None or identity_changed or transitioned)))
+            startup_replay = (process_identity is not None and message is None
+                              and phase in ("starting", "executing")
+                              and not identity_changed and not transitioned)
+            has_progress = (message is not None or phase is not None) and not startup_replay
             changed = identity_changed or has_progress or (data is None and process_identity is None)
             if data is not None and 'waitingReason' in data:
                 waiting_code = waiting_reason['code'] if waiting_reason is not None else None
                 current = connection.execute('SELECT queue_reason FROM tasks WHERE task_id=?',
                                              (attempt['task_id'],)).fetchone()['queue_reason']
-                if current != waiting_code and (waiting_code is not None or current not in (
-                        UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON)):
+                if current != waiting_code and (waiting_code is not None or current == 'router-input-unknown'):
                     connection.execute('UPDATE tasks SET queue_reason=? WHERE task_id=?',
                                        (waiting_code, attempt['task_id']))
                     self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],

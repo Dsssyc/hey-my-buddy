@@ -118,7 +118,7 @@ def local_rpc_error(error: CoreError | CCError) -> ServiceError:
     kind = details.get('io_kind')
     if kind == 'permission_denied':
         code = 'LAUNCH_ACCESS_DENIED'
-    elif kind in ('not_found', 'connection_refused'):
+    elif kind in ('not_found', 'connection_refused') and details.get('transport_phase') != 'dispatch_uncertain':
         code = 'SERVICE_UNAVAILABLE'
     elif isinstance(error, CCError):
         code = 'C_TWO_' + error.code.name.removeprefix('ERROR_')

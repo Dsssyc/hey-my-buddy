@@ -97,7 +97,9 @@ class StructuredRpcFailureTests(unittest.TestCase):
         for kind, phase, code in (
                 (None, 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE'),
                 ('not_found', 'pre_dispatch', 'SERVICE_UNAVAILABLE'),
+                ('not_found', 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE'),
                 ('connection_refused', 'pre_dispatch', 'SERVICE_UNAVAILABLE'),
+                ('connection_refused', 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE'),
                 ('permission_denied', 'pre_dispatch', 'LAUNCH_ACCESS_DENIED'),
                 ('other', 'dispatch_uncertain', 'C_TWO_AT_CLIENT_CALLING_RESOURCE')):
             with self.subTest(kind=kind):
