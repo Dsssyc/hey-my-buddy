@@ -415,17 +415,24 @@ class ReclamationTests(LifecycleTestCase):
         if os.name == 'nt':
             import subprocess
             import sys
-            child = subprocess.Popen(
-                [sys.executable, '-c', "print('ready', flush=True); import time; time.sleep(180)"],
-                cwd=str(checkout), stdout=subprocess.PIPE, text=True)
-            if child.stdout.readline() != 'ready\n':
-                raise AssertionError('The occupying process did not start')
+            from hey_my_buddy.protocol.owned_process import owned_popen
+            from hey_my_buddy.protocol.process_handle import ProcessHandle
+            child = owned_popen(
+                [sys.executable, '-c', "import sys; print('ready', flush=True); sys.stdin.read(1)"],
+                cwd=str(checkout), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            handle = ProcessHandle(child, log_paths={}, stop_channel='stdin')
             try:
+                if child.stdout.readline() != 'ready\n':
+                    raise AssertionError('The occupying process did not start')
                 yield
             finally:
-                child.terminate()
-                child.wait(timeout=30)
-                child.stdout.close()
+                stopped, _ = handle.terminate(grace_seconds=5.0, settle_seconds=5.0)
+                if child.stdout is not None:
+                    child.stdout.close()
+                if child.stdin is not None:
+                    child.stdin.close()
+                if not stopped:
+                    raise AssertionError('Occupying Windows process tree did not confirm shutdown')
         else:
             checkout.parent.chmod(0o555)
             try:
