@@ -145,6 +145,16 @@ class StructuredRpcFailureTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'SERVICE_UNAVAILABLE')
             self.assertNotIn('transport_phase', caught.exception.details)
 
+            with patch.object(transport, '_read_endpoint', return_value=endpoint), \
+                 patch.object(transport.private_dirs, 'linked', return_value=True), \
+                 patch.object(transport, '_request', side_effect=request), \
+                 patch.object(transport, '_cold_start_preflight',
+                              side_effect=AssertionError('autostart must not enter cold-start preflight')) as preflight, \
+                 self.assertRaises(transport.ServiceError) as autostart_caught:
+                transport._ensure_service(directory)
+            self.assertEqual(autostart_caught.exception.code, 'C_TWO_AT_CLIENT_CALLING_RESOURCE')
+            preflight.assert_not_called()
+
             other = core_failure('other')
             other.transport_phase = 'dispatch_uncertain'
             unclassified = ClientCallResource(str(other))

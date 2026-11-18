@@ -983,9 +983,14 @@ class _ExecutionControl(threading.Thread):
         self._wake.set()
 
     def wait(self, seconds):
-        if self.fatal is not None or self.cancel_view is not None or self.execution.stop_requested():
-            return
-        self._interrupted.wait(seconds)
+        deadline = time.monotonic() + max(0.0, seconds)
+        while True:
+            if self.fatal is not None or self.cancel_view is not None or self.execution.stop_requested():
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            self._interrupted.wait(min(0.25, remaining))
 
     def run(self):
         try:
@@ -997,8 +1002,6 @@ class _ExecutionControl(threading.Thread):
 
     def _run_control(self):
         while not self._done.is_set():
-            if (self.cancel_view is not None or self.execution.stop_requested()) and not self._interrupted.is_set():
-                self._interrupted.set()
             with self._lock:
                 handle, implementation = self.handle, self.implementation
             if handle is not None:
@@ -1022,8 +1025,6 @@ class _ExecutionControl(threading.Thread):
                     # A failed live observation never disables native stop handling.
                     self.execution.log(f"live activity unavailable: {error!r}")
             self.execution.flush_hints()
-            if (self.cancel_view is not None or self.execution.stop_requested()) and not self._interrupted.is_set():
-                self._interrupted.set()
             self._wake.wait(0.25)
             self._wake.clear()
 

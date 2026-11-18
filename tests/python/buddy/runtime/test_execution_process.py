@@ -223,38 +223,54 @@ class ExecutionEndpointTests(unittest.TestCase):
                         wait.assert_not_called()
                         selected.assert_not_called()
 
-    def test_signal_stop_is_lock_free_and_wakes_preflight_via_control_thread(self):
+    def test_signal_stop_is_lock_free_and_wakes_wait_even_while_progress_blocks(self):
         with tempfile.TemporaryDirectory() as directory:
             spec = {'adapter': 'codex'}
             claim = {'task': {'taskId': 'task', 'spec': spec},
                      'attempt': {'taskId': 'task', 'attemptId': 'attempt', 'generation': 1}}
-            execution = Execution(claim, Path(directory), 'n' * 32, client=mock.Mock())
+            client = mock.Mock()
+            execution = Execution(claim, Path(directory), 'n' * 32, client=client)
             control = execution.control
-            # Simulate SIGTERM arriving on the main thread while it already holds
-            # both Event condition locks: a re-entrant set() here would deadlock.
-            with control._interrupted._cond, control._wake._cond:
+            with mock.patch.object(control._interrupted, 'set',
+                                   side_effect=AssertionError('signal handler called _interrupted.set')), \
+                 mock.patch.object(control._wake, 'set',
+                                   side_effect=AssertionError('signal handler called _wake.set')):
                 execution.request_stop('unknown', None, force=True, from_signal=True)
-                self.assertFalse(control._interrupted.is_set())
+            self.assertFalse(control._interrupted.is_set())
             self.assertEqual(control.cancel_view, {'cancelRequested': True, 'stopInitiator': 'unknown'})
             control.cancel_view = None
             control.requests = 0
+
+            progress_entered = threading.Event()
+            release_progress = threading.Event()
+
+            def blocked_progress(*_args, **_kwargs):
+                progress_entered.set()
+                release_progress.wait(5)
+                return {}
+
+            client.progress.side_effect = blocked_progress
+            execution.hint(waitingReason={'code': 'router-input-unknown', 'params': {}})
             control.start()
             try:
+                self.assertTrue(progress_entered.wait(2), 'control thread did not block in progress')
                 entered = threading.Event()
                 finished = threading.Event()
 
                 def waiter():
                     entered.set()
-                    control._interrupted.wait(15.0)
+                    control.wait(180.0)
                     finished.set()
 
                 thread = threading.Thread(target=waiter)
                 thread.start()
                 self.assertTrue(entered.wait(2))
+                time.sleep(0.05)
                 execution.request_stop('unknown', None, force=True, from_signal=True)
-                self.assertTrue(finished.wait(2), 'control thread did not propagate signal stop to _interrupted')
-                thread.join(2)
+                self.assertTrue(finished.wait(1.0), 'wait did not observe signal stop while progress blocked')
+                thread.join(1.0)
             finally:
+                release_progress.set()
                 control.stop()
 
     def test_preflight_cancels_when_control_consumed_the_wake_before_rpc_failed(self):

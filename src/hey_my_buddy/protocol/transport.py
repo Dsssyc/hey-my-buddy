@@ -306,7 +306,12 @@ def _call_board(operation: str, params: dict | None, directory: Path, *, resourc
 
 def _call_board_read_only(operation: str, params: dict | None, directory: Path, *, resource: str = "control") -> dict:
     """Call through an existing service using the already selected state root."""
-    endpoint = _attach_read_only(directory)
+    try:
+        endpoint = _attach_read_only(directory)
+    except ServiceError as error:
+        if not is_transient_ipc_error(error):
+            raise
+        endpoint = None
     if endpoint is None:
         _refuse_without_service(directory)
     return _request(endpoint, operation, params or {}, resource=resource, state_dir=directory)
@@ -318,7 +323,7 @@ def _ping_endpoint(directory: Path, endpoint: dict | None) -> dict | None:
             _request(endpoint, "ping", {}, state_dir=directory)
             return endpoint
         except ServiceError as error:
-            if not is_transient_ipc_error(error):
+            if error.code != "SERVICE_UNAVAILABLE":
                 raise
     return None
 
