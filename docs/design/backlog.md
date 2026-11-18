@@ -6,13 +6,15 @@
 
 **排队的微任务说不出是被哪个微任务挡住。**（2026-11-09 开发者看到另一个会话的微任务“画 Fig. 12 与 F1 表”排在空闲的 gpt-6.1-sol 上，问为什么；Host 只读核对过日常黑板） 排队的原因随 0.67.1 写成了一句短话（例如“该工作目录正被其他微任务使用”），但读取只给 `queueReason`，不给占着资源的是哪个微任务：服务在 `store._admission_blocker` 里知道占着目录的认领属于哪个任务，任务读取（`workflow.py` 的任务视图，Host 的 `get` 也用它）没有带出来。建议在任务读取里加上挡住它的微任务（标识与标题），控制台写出名字并能点过去；这是 Host 一侧读取的变化，属于契约，随下一次动契约的批次做。
 
-**按项目分组的宏任务列表还需在大规模数据下重测。** 当前 `macro_tasks.py` 用限定本页的 `PAGE_HISTORY_SQL` 派生摘要，`use-macro-task-list.ts` 让前台动作中断后台轮询、304 不重提交可见列表，`macro-task-display.ts` 复用日期格式器；列表按项目分组、首屏每组 5 条。旧的 105 个宏任务测量已不能代表当前行为；[0.56.4 的验收](../acceptance/installs/0.56.4.md)也只复测了服务端。剩余工作是在当前分组与分页方式下，以 1000 个宏任务等规模重测首屏、连续翻页与持续变化时的浏览器渲染，再据结果决定是否需要虚拟化或按资源版本增量拉取。
+**按项目分组的宏任务列表在持续写入下轮询与翻页偏慢。** [0.70.0 的验收](../acceptance/installs/0.70.0.md)在 Chromium 156 无头模式下以 1000 个宏任务实测：挂载到 450 条且后台每秒约 9.6 次写入时，浏览器渲染实测为 59.54 FPS、帧间隔 P95 为 16.80 ms、无 Long Task，未触及虚拟化门槛（持续帧间隔 P95 达 33 ms 再议）；瓶颈落在服务端列表重读与翻页查询，挂载 250 条时持续写入下列表请求 P95 达 3.59 秒（超过 3 秒轮询间隔），连续翻页点击 P95 达 644–894 ms。剩余工作是优化持续写入下的服务端分页与列表查询，或评估按资源版本增量拉取变化项。
 
 **叫醒回合已经结束的 Host。** Host 一侧与 Lead 在 `await` 期间的新问题唤醒随 0.63.0 安装（[ADR-022](../decisions/022-expected-duration-and-graceful-stop.md)、[ADR-026](../decisions/026-delegation-authority.md) 2026-10-25 补充、[ADR-032](../decisions/032-host-interface-delegation-loop.md) 第 8 条），控制台微任务详情展示 `selectedAttempt.issues` 与未确认停止的 `finalizing` 状态随 [0.69.9](../acceptance/installs/0.69.9.md) 安装。剩余的是叫醒回合已经结束的 Host（2026-10-14 的 Host 门铃）：Codex 从 0.149.0 起有 `codex queue`（我们 10-14 在 CLI 与 app 上实测过），0.164.0 又让排进的消息能打断回合里的睡眠工具；缺的是我们的接法（谁排消息、Host 怎样知道自己会话的标识、等待进程能否活过回合），见[调研记录](../research/2026-10-26-codex-sleep-and-queue-wake.md)。
 
 **服务冷启动与升级启动的固定等待，在忙机器上可能太短。** `protocol/transport.py` 仍为冷启动设置 20 秒、首次安装时设置 300 秒的等待，`install/upgrade.py` 启动新服务的等待为 45 秒。尚未量清忙机器上的等待分布；先量出在哪一步到时，再决定是否调整时限及失败后的重试提示。
 
-**机器很忙时，Codex 读账户超时会让微任务在开工前失败。** 2026-10-14 一次付费探针在前端测试同时跑的时候，Codex CLI 0.162.1 的 `account/read` 超时，harness 被判失效，重试一次后仍以 `native-rpc-error` 失败，微任务在模型回合开始之前就失败了，没有付费调用；机器空闲后重跑正常。超时是一次性的短时限，负载高时会误判一个好好的 harness。要量一下这个时限该多长，或者读不到账户时不判失效。
+**Codex CLI 微任务开工前多做了一次丢弃结果的账户读取。** [0.70.0 的验收](../acceptance/installs/0.70.0.md)在受控 CPU 与落盘负载下对 Codex CLI 0.169.1 实测 80 次 `account/read` 全部成功（经 npm 启动端到端 P95 为 305.16 ms、最大 347.70 ms），确认后台 `account_probe.py` 的 8 秒时限充裕；2026-10-14 在 Codex CLI 0.162.1 上导致微任务开工前以 `native-rpc-error` 失败的原因，是 `codex/native_run.py` 在建线程前额外调了一次成功结果被丢弃、超时或报错却直接中止尝试的 `account/read`。建议删掉微任务运行路径里这次冗余读取（或把读不到计费信息记为未知而非判运行失败），账户状态统一归后台探测。
+
+**控制台设置页还没有已发布新版本提示。**（2026-11-18 开发者定） 当前设置页版本区（`VersionSection.tsx`）只读取本机 `/session/api/runtime-version`，不查询公开索引。后续在设置页版本区（或顶栏）增加低频只读查询 PyPI 已发布版本：离线或超时静默忽略、不阻塞界面，发现高于当前运行版本的已发布版本时展示版本号与一行升级命令提示（`uvx hey-my-buddy@<version> install`），服务自身仍不自升级；实施时同步修订 [console.md](../reference/console.md) 中“不提供更新检查”的说明。
 
 ## 安装与存储
 
@@ -31,19 +33,11 @@
 
 **黑板的签名密钥没有更换的办法。** 密钥在创建黑板时生成并保存在数据库里，执行凭据由它推导，此后没有维护操作能更换它。建议提供黑板空闲时的密钥轮换，并明确哪些尚未结束的执行凭据会失效；不要依赖用户手工改数据库。
 
-**运行时准备与存储回收各自拼装同一把锁。** `install/upgrade.py` 的 `_prepare_runtime` 仍用 `ensure_private_dir` 与 `open_lock_fd` 直接取得存储围栏，存储模块另有自己的入口。建议收成存储模块的一个入口，支持安装所需的阻塞等待；现有 `test_runtime_preparation_excludes_the_previous_services_reclaimer` 已覆盖准备期间的互斥，还需核对围栏一直持有到旧服务拆下的完整边界。
-
-**私有发布被中途打断后留下的临时件。** 2026-10-21 阶段 C（统一事实发布）的 Opus 独立审查指出，Host 读代码核对过，都不是那一批引入的：写者在临时文件阶段被杀时，`.agent-credential.json.<hex>.tmp` 一类含凭据的临时件不在 `private_dirs.py` 的 `_CREDENTIAL_FILES` 里，凭据清理不会删它；备份校验在 backups 根下建的 `.verify-*` 目录里有一份解压后的完整黑板，进程被杀后会一直留着。另外，`upgrade.restore` 读备份时不持备份锁，靠 `control-daemon.lock`、`board-owner.lock` 与唯一的 `create` 调用点互斥；这一点写进 operations。
-
 **契约变化的安装回退时，IPC 根删不掉就停在 recovery-required。**（2026-10-30，采用 C-Two 0.10.0 那一批的 Opus 审查，Host 核对过代码） 契约变化的安装在起服务之前重建 `state/ipc`。如果 `rmtree` 每次都失败，例如根里有一个属主没有写权限的子目录，向前起新服务之前就失败，回退时的第二次重建也会失败，安装停在 recovery-required，旧服务没有起来；改动之前，新服务起不来时回退照常能起旧服务。这种根只会是人为改坏的，C-Two 自己也拒绝不私有的根，所以记作顺带项：下次动安装的回退时，看能不能在删除之前就判断根能否删除，删不了就在切换之前停下。
 
-**孤立分配核对引用时仍逐个扫描保留事实。** `reclamation.py` 的 `allocation_plan` 每次把一个候选传给 `_allocation_reference_sets`，同一轮有 k 个候选时仍可能做 k 次全部事实的 JSON 解析；受阻项会缓存到目录或相关任务变化，已经不会每轮无条件重扫。建议先对本轮候选共同扫一次，再在各自锁下确认没有引用的候选，保留现有缓存与引用证明边界。
+**`task_wait` 在全局事件唤醒时争抢写锁并扫描 `events` 表。**（2026-11-18 验收 0.70.0 期间 6 路并发 `await` 实测遇到） 全局 `events_wait` 被任一事件唤醒时，每个带 `consumeReminders=True` 的 `task_wait` 都会进入 `blackboard/tasks/messages.py` 的 `consume` 取得 `BEGIN IMMEDIATE` 写锁，并在写锁内执行未按 `task_id` 走索引的 `kind='workflow.pause_delivered'` 扫描；黑板累积数十万条 `events` 且多路 `await` 在高负载下同时唤醒时，串行持锁扫描会超过 10 秒 `busy_timeout`，触发 `OperationalError: database is locked`。建议先在只读连接核对是否有待消费的回执、提醒、问题或暂停事件，确有待写入项再进入写事务，并将暂停交付查询收束到现有 `(task_id, seq)` 索引。
 
 ## 运行环境
-
-**会话为空的证明还缺两条测试。** `test_execution_scheduler.py` 的两条调度器测试替换了句柄观察，不能单独守住真实观察的修复；第二次扫描时根已失去进程号、又出现无法归属的成员，应当得到未知，仍需单独覆盖该扫描顺序。现有 `test_reaped_root_with_newly_seen_session_members_is_unknown` 覆盖的是直接看到根已消失的情形。
-
-**Windows 上工作目录过长时 harness 起不来，却报成不可用。**（2026-10-26 “Windows 残余（四）”在测试机上实测，排在首次发版之后） 进程的工作目录超过约 260 个字符时，Windows 直接拒绝创建进程（WinError 267；测试机上 282 与 286 个字符的工作目录都起不来，没有创建子进程），DSH 把启动处的 `OSError` 投影成 `harness-unavailable`，看起来像 harness 没装好。安全的一边已经守住：没有起进程，就没有要停的。要改的是如实报出系统拒绝启动的原因与工作目录，让 Host 知道换一个浅一些的检出位置；其余 harness 的启动处是否同样投影，一起核对。
 
 **CI 的依赖安装与 Windows ARM64 分片还需量尾部耗时。** 浏览器作业的 Playwright `--with-deps` 仍经 apt 安装依赖；历史上曾有作业在这里花费超过 9 分钟，Windows ARM64 的最慢分片也曾成为关键路径（[记录](../acceptance/check-runner/ci-flakes-and-shards.md)）。当前跨平台套件已全绿；下一次优化 CI 时按现有作业与分片重测耗时，再决定是否缓存依赖或重排分片，不沿用旧测量作为当前用时。
 
@@ -51,7 +45,7 @@
 
 **上限盘点的第 2–7 批仍待处理。** 只读盘点列出的剩余范围是问询的累计上限与分页、控制台的完整历史、原生适配器的增长缓冲、时限与重试、资源预算及零散清理。按通常规模设定的条数、大小与时长应逐项核实依据及达到上限后的行为；跨进程的帧、模型内容的边界校验与有游标的分页分别判断。增长缓冲还包括 Codex、Claude Code、ZCode 发出方向的 8 MiB 检查。各项删改先明确是否涉及契约或存储形式，再安排实现。
 
-**维护面清扫孤立材料时仍拒绝祖先链接。** `protocol/maintenance.py` 的 `discard` 与 `discard_reference` 已只定位要删的项，`discard_orphans` 仍先拒绝 `maintenance` 根是链接的情形。按私有状态之内删除只查被删项的规则，需核对并收束这一处；写入与读取经 `_content_root` 的规则另行核对。`blackboard/store/backup.py` 的 `_backup_paths` 也检查备份根，备份与恢复另有不经链接、不写穿链接的规定（[operations](../reference/operations.md)），先判断是否属于例外再改。
+**维护面读写与备份路径对祖先链接的检查还需核对。** `protocol/maintenance.py` 的 `discard`、`discard_reference` 与 `discard_orphans` 已随 [0.70.0](../acceptance/installs/0.70.0.md) 收束为只查被删项或跳过链接根；经 `_content_root` 写入与读取的祖先链接规则仍待核对。`blackboard/store/backup.py` 的 `_backup_paths` 也检查备份根，备份与恢复另有不经链接、不写穿链接的规定（[operations](../reference/operations.md)），先判断是否属于例外再改。
 
 **运行时版本仍有额外探测进程。** Codex CLI、Claude Code CLI 与 ZCode app 的运行路径仍调用 `probe_version`；DSH CLI 从原生握手取版本，但曾报告协议实现的 `0.0.1`，未必等于发行版本。需核实当前各形态的握手是否提供可用的产品版本，再决定从会话读取还是复用发现时记录的版本，减少额外进程及其停止证明；取不到仍应明确记为未知。
 
@@ -95,6 +89,10 @@
 
 **黑板把不知道的输入模态记成只收文本。** DSH CLI 的模型选项没有输入模态，`catalog.py` 却把空列表补成 `["text"]`；Claude Code CLI 直接声明文本，Codex CLI 缺少模态字段时也默认文本。Router 因此拿到未经原生声明支持的 `input:text` 能力。建议原生没有说明时记为未知，不发布相应的 `input:` 能力，再核对真实模态信息的来源。
 
+**Router 的格式纠偏漏掉了最终会拒绝的答案。**（2026-11-18 开发者提出，经独立审查核对） DSH CLI 的审阅路由中，一次调用读了 5 次工具、耗时 70 秒，因文件引用带行号在收集时被拒，纠偏次数为零；另一次在新原生会话重发完整任务书，却没有带上待修的原答与具体错误位置。建议让角色与黑板在 `protocol/` 共用冻结选择答案的校验规则，区分可修格式错误与硬越界（候选、枚举与探索样本数越界直接结束），指出出错字段路径或 JSON 行列；路由最多纠偏一次，按驱动是否保留原生会话上下文组装修正输入（新开会话的驱动带上上一份原答、冻结 Schema 与具体错误），文件引用的提示、[decision.md](../reference/decision.md) 与校验采用同一纯路径约定，维护面逐项写入与画像面新会话重试的语义各自保留；下一次改动选择答案格式时一并删掉可由 `buddyId` 与 `preferredBuddyId` 推导的冗余字段 `reselected`。
+
+**一次格式错误会让后续请求跳过这个 Router。**（同上） 当前按 [ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 2 条与 [decision.md](../reference/decision.md)，一次未答即开启重试间隔跳过窗口。建议修订该条：当前请求在前一次执行确认停止后照序换人；对同一 buddy，第一次以 `answer-shape` 或 `answer-invalid-json` 结束的独立请求只记一次未答，连续第二个独立请求仍交不出可采纳的答案时才按已有重试间隔暂时跳过，有效选择或有效弃选清零，窗口与单次在途重试准入均从已有终态回执推导。
+
 ## 委派与 Worker
 
 **执行层的内部规格还留着两个默认值。** `protocol/schemas.py` 的 `normalize_spec` 把未写的 `adapter` 当作 `dsh`、`expectedSeconds` 当作 1800 秒；`routing/decision.py` 也两次补上默认时长。当前 `request_select` 的请求不含必填时长，部分测试确实依赖这些默认值，不能直接删掉。需先明确内部提交与路由请求的必填字段、补齐调用者，再删除无用途的默认值。
@@ -103,13 +101,11 @@
 
 **四个 harness 报告与判断事实的口径不一致。** 被拒的原生请求在 Codex、Claude Code 与 DSH 的记录方式不同，`unsupportedNativeRequests` 缺少统一的读取与展示；模型身份的核对与未确认事实的命名也不同。Claude Code CLI 的 `rate_limit_event` 仍在 harness 模块里解释，事实报告与冷却判定的边界需核对。建议把参与判断的事实写成 `RunResult` 的类型字段，由角色与黑板统一判定，用各家的假原生端共跑一致性场景；这会改变跨进程的事实格式，应先明确契约。
 
-**DSH 的检查点说法不够具体。**（2026-10-31） ZCode 改为实时送达之后，只剩 DSH 靠 Worker 自己调用检查点取问题。提示词仍只说在自然的节点与结束之前调用，近 12 次 DSH 执行的 1,048 次工具调用里只调了 19 次。把说法改具体（例如每完成一个步骤、开始一项长检查之前与结束之前），改后用同一个查询再量一次。这是产品里的提示词，由实现方随下一批改到角色文字时做。
+**DSH CLI 检查点提示具体化后的调用频率待复测。** ZCode app 改为实时送达之后，只剩 DSH CLI 靠 Worker 主动调用检查点取问题；此前近 12 次 DSH CLI 执行的 1,048 次工具调用里只调了 19 次。具体到每个实现步骤后、长检查前与交回结果前的提示词已随 [0.70.0](../acceptance/installs/0.70.0.md) 安装；待日常积累新的 DSH CLI 执行样本后，用同一查询复测调用频率。
 
 **普通文件夹还不能作为固定输入，改动也不封存。** 当前项目可以是普通文件夹，`checkout: none` 的 Worker 直接在 `cwd` 工作，固定的只有交回结果。文档、幻灯片等目录的输入固定与改动封存仍缺设计；实施前先明确内容身份、写入边界与交付方式，写成 ADR。
 
 **只读任务在现有检出上的盘点开销没有当前测量。** `existing` 的只读微任务仍盘点未跟踪文件，以核对 Worker 没有改动；大量未被忽略的文件可能拖慢启动。应在当前源码上量提交到开始执行的耗时、文件数与盘点各步骤的成本，再决定是否需要更轻的只读快照。
-
-**文档卫生检查手写了 Markdown 解析。**（2026-10-25 Host 验收文档卫生检查时看到）`tests/python/cli/test_documentation_hygiene.py` 为找相对链接手写了约一百五十行 Markdown 解析（围栏、缩进代码、行内代码、引用链接与 HTML 标签）。任务书当时要求只用标准库，是 Host 的失误，违背了“有成熟的库就用”。建议：改用成熟的 CommonMark 解析库作开发依赖，删掉手写的部分；正反用例照旧。
 
 **提供方对内容的拒绝被记成普通的 harness 故障。**（2026-10-24 开发者转告，Host 只读核对黑板）C-Two 的 Host 经黑板委派一次 Windows 测试，Codex app-server 在执行之前以 `cyberPolicy`（可能的网络安全风险）拒绝了这一回合；黑板把它记成回合失败、`terminationReason: harness-error`，没有让这个提供方进入冷却，这一点是对的，它不是额度。问题是 Host 从记录上看不出这是提供方对内容的拒绝，容易当成技术故障换一个 buddy 重试；同一件事被拒之后换提供方去做，就是绕过拦截。方向：黑板照实记下这是提供方的拒绝，带上原样的代码与文字；Host 指南写明这种结局不改派；不为它加自动处理。先核对 Codex 适配层能否从原生事件里读到这个代码；别的 harness 的拒绝长什么样还没见过，不预先设防。
 
@@ -127,10 +123,6 @@
 
 **仅在 shell 导出的提供方变量无法传给 Worker。** harness 启动环境仍经白名单过滤；只靠 shell 提供 Claude Code CLI 的 API key、没有写入其配置的用户，可能在 Worker 中用不了原有登录方式。需核对[条款调研](../research/2026-10-13-harness-terms-and-orchestration.md)里“不得限制自带的登录方式”与现有边界的关系，再决定是否调整变量传递；经用户 shell 启动的方案不在当前约定内。
 
-**底层取消操作还缺按执行所有权收口的检查。** `blackboard/tasks/workflow.py` 的 `guard_task_control` 只拒绝有 `workflow_runs` 行的微任务，路由调度任务与维护执行分别由 `routing_decisions`、`maintenance_runs` 记录，没有这行，仍可经 C-Two `task_cancel` 绕过微任务的控制边界。应按各方只控制自己发起的执行这一原则，核对调用方权限与执行归属，阻止 Host 直接取消微任务的路由决定或用户发起的维护，同时保留控制台停止其维护执行的合法路径。
-
-**仅供测试的命令执行提交还留有重复边界。** `BoardStore.task_submit` 不带微任务的分支只供检查套件使用，仍重复拒绝编程 harness；`tests/python/protocol/test_rpc_config.py` 也仍直接拼装这一提交，没有共用 `tests/python/support.py` 的 `submit_execution`。下一次改到这一路径时核实调用边界并统一测试写法。
-
 **harness 的声明还没有收成完整的单一来源。** `buddy/harnesses/registry.py` 已提供共用登记表与角色运行声明，仍有其他模块列出 harness 名字，`db.py` 的 CHECK 也写死四个名字，新增 harness 会改存储形式；中断恢复与存储归属的部分规则仍按名字分支。需要清点哪些是事实声明、哪些是两侧的行为边界，补齐能力的明确声明，运行与一致性检查共用；控制台名字与标志的核对也应使用实际前端解析与测试。
 
 **黑板与 buddy 两侧仍有越界引用。** 已登记的边界见 [ADR-025 清点](../acceptance/adr025/step5-cross-imports.tsv)。两侧共用的格式与小函数应归 `protocol/` 或根包，服务调用适配器行为的接口则牵涉进程归属，需要单独决定；现有[搬法方案](adr021/l14-cross-imports-plan.md)的旧计数不能当作当前数量。实施前重列读者与责任，核对跨模块使用的下划线接口及状态目录解析入口，再用检查守住选定的边界。
@@ -146,8 +138,6 @@
 **Worker 临时材料还没有按执行隔离。** 检查运行器已有创建者记录，任务说明也要求只清理本次创建且记下确切位置的材料；这些约束不能阻止模型误删其他会话的临时目录。可评估由黑板为每次执行准备专用临时目录、把 `TMPDIR` 指向它并随检出回收，Worker 交付位置、由 Host 验收后整体清理。实现前明确跨平台临时目录变量与回收归属。
 
 **Codex CLI 与 ZCode app 启动、封存的耗时还缺当前分段测量。** 0.27.0 上曾观察到启动前后各有约一分钟等待，当前执行与工作区路径已经多次改动，不能把旧数字当作现状。应在日常微任务中按准备检出、准备原生目录、启动 harness、读取用量与封存分别计时，确认还有瓶颈再决定优化。
-
-**已结束但停止未确认的执行，中断恢复不再回头判定。** `tasks/interruption.py` 的 `recover` 只挑未结束或清理未完的执行，`_recover_one` 对 `execution_state=finished` 直接返回；若存量里同时有停止未确认的记录，就无法补上确认并删除所属宏任务。需先构造这类存量核实可达性，再依据完整进程身份与现有停止证据补确认，不放宽删除条件。
 
 **重建会话的续接还不能按需读取本微任务之前的会话记录。** 当前 `reconstructed-new-session` 回合拿到任务、摘要、剩余工作与本次输入，缺少查阅此前命令、输出和失败路径的入口。建议提供与控制台共用的按需读取，执行凭据只放行本微任务；不把无上限的过程记录塞进每次提示。实施前明确重新路由后旧内容流向其他提供方的数据边界，并补入 ADR-024 与 Worker 说明。
 
