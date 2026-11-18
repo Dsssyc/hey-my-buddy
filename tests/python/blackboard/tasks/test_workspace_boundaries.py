@@ -250,17 +250,24 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         manifest = self.prepare()
         checkout = Path(manifest["path"])
         real_remove = workspace.private_dirs.remove_tree
+        from hey_my_buddy.blackboard.tasks.checkout_processes import removal_sibling
+        sibling = removal_sibling(checkout)
 
         def failed_remove(path, **kwargs):
-            if Path(path) == checkout:
-                (checkout / ".git").unlink()
-                (checkout / "src/file.txt").unlink()
+            target = Path(path)
+            # A Windows removal deletes under its reserved rename; the failure
+            # must leave the surviving tree at the canonical checkout either way.
+            if target in (checkout, sibling):
+                (target / ".git").unlink()
+                (target / "src/file.txt").unlink()
                 raise PermissionError("injected partial deletion")
             return real_remove(path, **kwargs)
 
         with patch.object(workspace.private_dirs, "remove_tree", side_effect=failed_remove):
             error = self.assert_error("WORKSPACE_IO_ERROR", workspace.cleanup_remove, self.state, manifest)
         self.assertNotIn("relockError", error.details)
+        self.assertTrue(checkout.is_dir())
+        self.assertFalse(sibling.exists())
         self.assertEqual(workspace._worktree_record(self.repo, checkout)["locked"],
                          "hey-my-buddy:" + manifest["workspaceId"])
         proof = workspace.cleanup_inspect(self.state, manifest, resume=True)

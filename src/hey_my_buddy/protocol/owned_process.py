@@ -184,6 +184,14 @@ def owned_popen(*args, windows_api=None, job_name: str | None = None,
                     stopped = job.active() == 0
             except (OSError, subprocess.TimeoutExpired):
                 stopped = False
+            finally:
+                for name in ("stdin", "stdout", "stderr"):
+                    stream = vars(process).get(name)
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except (OSError, ValueError):
+                            pass
         if job is not None:
             try:
                 job.close()

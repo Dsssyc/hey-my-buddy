@@ -45,7 +45,7 @@ export function task(overrides: Record<string, unknown> = {}): Task {
     lineage: { kind: "micro-task", parentRunId: null, rootRunId: "m1", rootLeadRunId: null,
       project: { id: "p1", kind: "git", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" }, buddy: OPUS },
     workflow: { state: "delivered", awaitingHost: false, checkout: "worktree", projectKind: "git", revision: 9, title: "微任务详情", macroTaskId: "macro-1" },
-    selectedAttempt: { attemptId: "att-2", startedAt: at("10:42"), finishedAt: at("11:00"), error: null, shutdownConfirmed: true, tokenUsage: null,
+    selectedAttempt: { attemptId: "att-2", executionState: "finished", issues: [], startedAt: at("10:42"), finishedAt: at("11:00"), error: null, shutdownConfirmed: true, tokenUsage: null,
       reminders: { overdue: false, possiblyStuck: false, lastNativeEventAt: null, toolInProgress: false },
       result: { terminationReason: "completed", result: { finalText: "完成。" } }, ...(selectedAttempt as object | undefined) },
     ...rest,

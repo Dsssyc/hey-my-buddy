@@ -145,7 +145,99 @@ class MacroTaskControlTests(WorkflowTestCase, ConsoleTestCase):
                     records = connection.execute('SELECT * FROM workflow_continuations WHERE run_id=?', (run['runId'],)).fetchall()
                     self.assertEqual(len(records), 1)
                     event = connection.execute("SELECT * FROM events WHERE task_id=? AND kind='workflow.paused'", (run['runId'],)).fetchone()
+                    paused = connection.execute(
+                        "SELECT actor_role,actor_id FROM events WHERE kind='macro_task.paused'"
+                        " AND json_extract(payload_json,'$.macroTaskId')=? ORDER BY seq DESC LIMIT 1",
+                        (target,),
+                    ).fetchone()
+                    self.assertEqual(event['actor_role'], paused['actor_role'])
+                    self.assertEqual(event['actor_id'], paused['actor_id'])
                     self.assertEqual(event['actor_role'], 'console')
+                    self.assertNotEqual(event['actor_id'], 'pause')
+
+    def test_end_propagates_workspace_seal_errors_without_recording_receipt(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        target = 'run:' + run['runId']
+        workflow = board.store.workflow
+        for code in ('WORKSPACE_GIT_ERROR', 'WORKSPACE_MANIFEST_CHANGED'):
+            with self.subTest(code=code):
+                with patch.object(workflow, '_conclude_seal_work', return_value=('manifest', [], 'attempt')):
+                    with patch.object(workflow, '_seal_conclusion', side_effect=BoardError(code, 'Injected seal failure')):
+                        with self.assertRaises(BoardError) as caught:
+                            workflow.end_macro_task({'macroTaskId':target, 'commandId':'seal-error-'+code},
+                                                    console_authority={'sessionId':'browser'})
+                self.assertEqual(caught.exception.code, code)
+                self.assertIsNone(board.call('workflow_get', {'runId':run['runId']})['hostConclusion'])
+                with board.store.db.read() as connection:
+                    receipt = connection.execute("SELECT 1 FROM commands WHERE command_id=?",
+                                                ('seal-error-'+code,)).fetchone()
+                self.assertIsNone(receipt)
+
+    def test_end_skips_unconfirmed_item_and_concludes_other_stopped_items(self):
+        board = self.board()
+        first = self.submit(board, kind='worktree', create_macro={'title':'Mixed stop proof','goal':'Work'})
+        second = self.submit(board, kind='worktree', request_id='stopped-item', macroTaskId=first['macroTaskId'])
+        active = self.claim(board, run_id=first['runId'])
+        with patch.object(board.store.workflow, 'END_WAIT_SECONDS', 0):
+            result = self.control(board, 'end', first['macroTaskId'])
+        self.assertEqual(result, {'macroTaskId': first['macroTaskId'], 'duplicate': False})
+        self.assertIsNone(board.call('workflow_get', {'runId':first['runId']})['hostConclusion'])
+        self.assertIsNotNone(board.call('workflow_get', {'runId':second['runId']})['hostConclusion'])
+        self.finish_turn(board, active, runner_status='cancelled', seal=False)
+        self.control(board, 'end', first['macroTaskId'], 'retry-mixed-stop')
+        self.assertIsNotNone(board.call('workflow_get', {'runId':first['runId']})['hostConclusion'])
+
+    def test_end_skips_parent_blocked_by_unconfirmed_helper_and_concludes_sibling(self):
+        board = self.board(max_concurrent=4)
+        parent = self.submit(board, kind='worktree', create_macro={'title':'Helper stop proof','goal':'Work'})
+        self.finish_turn(board, self.claim(board, run_id=parent['runId']), disposition='assistance')
+        view = board.call('workflow_get', {'runId':parent['runId']})
+        approved = self.decide(board, view, view['activeRequest']['requestId'], autoContinue=False, helpers=[{
+            'title':'active helper','task':'Assist','cwd':str(self.workdir('end-active-helper')),
+            'workspace':{'kind':'worktree','access':'write'}}])
+        helper_id = approved['children'][0]['taskId']
+        active_helper = self.claim(board, run_id=helper_id)
+        sibling = self.submit(board, kind='worktree', request_id='end-sibling', macroTaskId=parent['macroTaskId'])
+        with patch.object(board.store.workflow, 'END_WAIT_SECONDS', 0):
+            result = self.control(board, 'end', parent['macroTaskId'])
+        self.assertEqual(result, {'macroTaskId':parent['macroTaskId'], 'duplicate':False})
+        self.assertIsNone(board.call('workflow_get', {'runId':parent['runId']})['hostConclusion'])
+        self.assertIsNone(board.call('workflow_get', {'runId':helper_id})['hostConclusion'])
+        self.assertIsNotNone(board.call('workflow_get', {'runId':sibling['runId']})['hostConclusion'])
+        self.finish_turn(board, active_helper, runner_status='cancelled', seal=False)
+
+    def test_pause_auto_continuation_for_helper_uses_group_pause_session(self):
+        board = self.board(max_concurrent=4)
+        parent = self.submit(board, kind='worktree')
+        self.finish_turn(board, self.claim(board, run_id=parent['runId']), disposition='assistance')
+        view = board.call('workflow_get', {'runId':parent['runId']})
+        approved = self.decide(board, view, view['activeRequest']['requestId'], autoContinue=False, helpers=[{
+            'title':'pause helper','task':'Assist','cwd':str(self.workdir('pause-active-helper')),
+            'workspace':{'kind':'worktree','access':'write'}}])
+        helper_id = approved['children'][0]['taskId']
+        active_helper = self.claim(board, run_id=helper_id)
+        target = 'run:' + parent['runId']
+        self.control(board, 'pause', target)
+        self.pause_result(board, active_helper)
+        with board.store.db.read() as connection:
+            pause = connection.execute(
+                "SELECT actor_role,actor_id FROM events WHERE kind='macro_task.paused'"
+                " AND json_extract(payload_json,'$.macroTaskId')=? ORDER BY seq DESC LIMIT 1", (target,),
+            ).fetchone()
+            event = connection.execute(
+                "SELECT actor_role,actor_id FROM events WHERE kind='workflow.paused' AND task_id=? ORDER BY seq DESC LIMIT 1",
+                (helper_id,),
+            ).fetchone()
+            continuation = connection.execute(
+                "SELECT state FROM workflow_continuations WHERE run_id=? ORDER BY created_at DESC LIMIT 1",
+                (helper_id,),
+            ).fetchone()
+        self.assertEqual(event['actor_role'], pause['actor_role'])
+        self.assertEqual(event['actor_id'], pause['actor_id'])
+        self.assertEqual(event['actor_role'], 'console')
+        self.assertNotEqual(event['actor_id'], 'pause')
+        self.assertEqual(continuation['state'], 'queued')
 
     def test_host_continue_during_pause_is_recorded_then_starts_after_resume(self):
         board = self.board()

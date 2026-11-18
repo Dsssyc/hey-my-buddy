@@ -155,6 +155,43 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         self.assertFalse(checkout.exists())
         self.assertIsNone(workspace_module._worktree_record(self.repo, checkout))
 
+    def test_a_crashed_windows_removal_converges_before_the_resume_proof(self):
+        from hey_my_buddy.blackboard.tasks.checkout_processes import removal_sibling
+        board, submitted, manifest, checkout, artifact = self.interrupted_reclaim(missing=("tracked.txt",))
+        run_id = submitted["runId"]
+        plan_id = self.view(board, run_id)["cleanup"]["planId"]
+        sibling = checkout.parent / (checkout.name + ".removing")
+        # The process died between the reserved rename and the finished
+        # deletion, with an unsealed new file already inside the tree. The
+        # reserved-name resolver is pointed at this checkout so every platform
+        # runs the Windows convergence; the rest of the removal stays native.
+        real_sibling = workspace_module._windows_removal_sibling
+
+        def reserved(path):
+            return removal_sibling(checkout) if Path(path) == checkout else real_sibling(path)
+
+        (checkout / "new").mkdir()
+        (checkout / "new" / "payload.bin").write_bytes(b"unsealed\x00\xff")
+        native_path(checkout).rename(native_path(sibling))
+        with mock.patch.object(workspace_module, "_windows_removal_sibling", side_effect=reserved):
+            with self.assertRaises(BoardError) as refused:
+                board.store.workflow.cleanup_apply(
+                    {"runId": run_id, "planId": plan_id, "confirmPath": str(checkout)})
+            # The lock boundary recovered the canonical path first, and the
+            # resume proof then refuses the unsealed file exactly as it would
+            # without the interrupted rename.
+            self.assertEqual(refused.exception.details["reasons"], ["unsealed-changes"])
+            self.assertEqual(refused.exception.details["unsealedPaths"], ["new/payload.bin"])
+            self.assertTrue(checkout.is_dir())
+            self.assertFalse(sibling.exists())
+            (checkout / "new" / "payload.bin").unlink()
+            applied = board.store.workflow.cleanup_apply(
+                {"runId": run_id, "planId": plan_id, "confirmPath": str(checkout)})
+        self.assertTrue(applied["removed"])
+        self.assertFalse(applied["plan"]["result"]["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+        self.assertFalse(sibling.exists())
+
     def test_refused_started_reclaim_preserves_every_plan_column_and_the_capture_fence(self):
         (self.repo / "kept.txt").write_text("retained tracked file\n", encoding="utf-8", newline="\n")
         git(self.repo, "add", "kept.txt")

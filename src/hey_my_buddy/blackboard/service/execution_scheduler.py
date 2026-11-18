@@ -281,6 +281,8 @@ class ExecutionScheduler:
         while not self._stopping.is_set():
             if self.service.control.get("stopping") or self.service.control.get("restart_requested"):
                 return
+            if self.store.upgrading():
+                return
             nonce = secrets.token_urlsafe(32)
             try:
                 response = self.service.admit_execution(nonce)

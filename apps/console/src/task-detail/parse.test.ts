@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../api";
 import { parseAudit, parseBasis, parseInquiries, parseRoutingPage, parseTask, parseTokenUsage, parseWorkflow } from "./parse";
-import { HOST, task } from "./task-detail.fixtures";
+import { at, HOST, task } from "./task-detail.fixtures";
 
 const usage = { inputTokens: 20000, cachedInputTokens: 15000, outputTokens: 800, source: "codex-native", scope: "attempt" };
 
@@ -357,5 +357,25 @@ describe("the task view", () => {
   it("keeps the basis a usage states", () => {
     const view = parseTask(task({ selectedAttempt: attempt({ tokenUsage: { ...usage, inputBasis: "excludes-cached", inputTokens: 100 } }) }), "m1");
     expect(view.attempt!.tokenUsage).toMatchObject({ inputBasis: "excludes-cached", inputTokens: 100, cachedInputTokens: 15000 });
+  });
+});
+
+
+describe("selected execution issues", () => {
+  const issue = { stage: "shutdown", code: "EXECUTION_UNKNOWN", message: "Native stop cannot be verified.", observedAt: at("11:00") };
+  it("reads the execution state and all diagnostic fields", () => {
+    expect(parseTask(task({ selectedAttempt: { executionState: "finalizing", shutdownConfirmed: false, issues: [issue] } }), "m1").attempt)
+      .toMatchObject({ executionState: "finalizing", shutdownConfirmed: false, issues: [issue] });
+  });
+  it("rejects malformed execution diagnostics at the read boundary", () => {
+    for (const field of ["stage", "code", "message", "observedAt"]) {
+      for (const value of [undefined, 42]) {
+        expect(() => parseTask(task({ selectedAttempt: { issues: [{ ...issue, [field]: value }] } }), "m1"), field).toThrow(ApiError);
+      }
+    }
+    for (const issues of [undefined, null, {}, [{ ...issue, observedAt: "invalid" }]]) {
+      expect(() => parseTask(task({ selectedAttempt: { issues } }), "m1")).toThrow(ApiError);
+    }
+    expect(() => parseTask(task({ selectedAttempt: { executionState: 42 } }), "m1")).toThrow(ApiError);
   });
 });

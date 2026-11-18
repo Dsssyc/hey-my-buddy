@@ -40,7 +40,8 @@ export default {
   untitled: "Unnamed micro task",
   refresh: { label: "Read again" },
   header: { elapsed: "Elapsed", turns: "Turns" },
-  state: { stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", paused: "Paused", host: "Waiting for Host", lead: "Waiting for Lead", failedHost: "Failed, waiting for Host", cancelledHost: "Cancelled, waiting for Host", failedLead: "Failed, waiting for Lead", cancelledLead: "Cancelled, waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
+  issues: { name: "Execution issues", stages: { "shutdown": "Stop verification", "connection": "Connection", "recovery": "Recovery", "endpoint-cleanup": "Endpoint cleanup", "credential-cleanup": "Credential cleanup" } },
+  state: { confirmingStop: "Confirming stop", stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", paused: "Paused", host: "Waiting for Host", lead: "Waiting for Lead", failedHost: "Failed, waiting for Host", cancelledHost: "Cancelled, waiting for Host", failedLead: "Failed, waiting for Lead", cancelledLead: "Cancelled, waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
   wait: { since: "onward", queue: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
   strip: { label: "Micro task steps", position: "Step {{current}} / {{total}}", previous: "Previous step", next: "Next step", focusItem: "Select {{item}} in the step strip · {{time}}", truncated: "The read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {

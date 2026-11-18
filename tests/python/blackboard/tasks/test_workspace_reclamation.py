@@ -1,10 +1,14 @@
 """Terminal reclamation through real Git, board receipts and the service loop."""
 import json
+import os
+import unittest
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 from hey_my_buddy.blackboard.tasks import allocation_revocations, workspace
 from hey_my_buddy.protocol.workspace_manifest import record_reference, turn_manifest
+from support import occupied_directory
 
 
 class ReclamationTests(LifecycleTestCase):
@@ -27,11 +31,12 @@ class ReclamationTests(LifecycleTestCase):
         original = private_dirs.remove_tree
 
         def occupied(path, **kwargs):
-            if Path(path) == checkout:
-                native_path(checkout / '.git').unlink()
-                native_path(checkout / 'src/feature.py').unlink()
-                native_path(checkout / 'src').rmdir()
-                raise PermissionError(errno.EACCES, 'fixture occupied file', str(checkout / 'tracked.txt'))
+            target = Path(path)
+            if target.parent == checkout.parent and target.name in (checkout.name, checkout.name + '.removing'):
+                native_path(target / '.git').unlink()
+                native_path(target / 'src/feature.py').unlink()
+                native_path(target / 'src').rmdir()
+                raise PermissionError(errno.EACCES, 'fixture occupied file', str(target / 'tracked.txt'))
             return original(path, **kwargs)
 
         maintenance = Reclamation(board.store)
@@ -40,7 +45,10 @@ class ReclamationTests(LifecycleTestCase):
         self.assertEqual(self.view(board, view['runId'])['cleanup']['state'], 'applying')
         self.assertEqual(workspace._worktree_record(self.repo, checkout)['locked'],
                          'hey-my-buddy:' + manifest['workspaceId'])
+        # The failure exit of the removal restores the canonical path, so the
+        # interrupted tree stands at the checkout itself on every platform.
         self.assertEqual({path.name for path in checkout.iterdir()}, {'tracked.txt'})
+        self.assertFalse((checkout.parent / 'checkout.removing').exists())
         self.assertEqual(board.store.service_issues()[0]['stage'], 'workspace-cleanup')
         git(self.repo, 'worktree', 'unlock', str(checkout))
         git(self.repo, 'worktree', 'lock', '--reason', 'foreign-owner', str(checkout))
@@ -56,6 +64,7 @@ class ReclamationTests(LifecycleTestCase):
         git(self.repo, 'worktree', 'lock', '--reason', 'hey-my-buddy:' + manifest['workspaceId'], str(checkout))
         maintenance.run()
         self.assertFalse(checkout.exists())
+        self.assertFalse((checkout.parent / 'checkout.removing').exists())
         self.assertIsNone(workspace._worktree_record(self.repo, checkout))
         self.assertEqual(self.view(board, view['runId'])['cleanup']['state'], 'applied')
         self.assertEqual(board.store.service_issues(), [])
@@ -323,6 +332,198 @@ class ReclamationTests(LifecycleTestCase):
             connection.execute('UPDATE attempts SET shutdown_confirmed=1 WHERE task_id=?', (run_id,))
         reclaim_native(board.store)
         self.assertTrue(all(not root.exists() for root in roots))
+
+    def test_windows_removal_rename_refusal_keeps_every_file_and_converges(self):
+        import os
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import checkout_processes, reclamation
+        board, manifest, checkout, view = self.deferred_checkout()
+        directory = Path(manifest['checkoutRoot']).parent
+        intact = sorted(path.relative_to(checkout) for path in checkout.rglob('*'))
+        # A process still occupies the checkout: the reserved-name rename is
+        # refused before anything is deleted, and the plan reports it blocked.
+        with self.occupied(checkout):
+            with patch.object(checkout_processes, '_WINDOWS', True), \
+                 patch.object(workspace, '_WINDOWS', True):
+                reclamation.Reclamation(board.store).run()
+            self.assertEqual(self.view(board, view['runId'])['cleanup']['state'], 'blocked')
+            self.assertEqual(self.view(board, view['runId'])['cleanup']['reasons'], ['checkout-in-use'])
+            self.assertEqual(board.store.service_issues(), [])
+            self.assertEqual(sorted(path.relative_to(checkout) for path in checkout.rglob('*')), intact)
+            self.assertFalse((directory / 'checkout.removing').exists())
+            # The deletion boundary itself refuses the same rename even when the
+            # idle probe is unavailable: the plan stays applying, files intact.
+            with patch.object(checkout_processes, 'require_idle_checkout', lambda *args, **kwargs: None), \
+                 patch.object(workspace, '_WINDOWS', True):
+                reclamation.Reclamation(board.store).run()
+            self.assertEqual(self.view(board, view['runId'])['cleanup']['state'], 'applying')
+            self.assertEqual(sorted(path.relative_to(checkout) for path in checkout.rglob('*')), intact)
+            self.assertFalse((directory / 'checkout.removing').exists())
+        reclamation.Reclamation(board.store).run()
+        self.assertFalse(checkout.exists())
+        self.assertFalse((directory / 'checkout.removing').exists())
+        self.assertIsNone(workspace._worktree_record(self.repo, checkout))
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_windows_removal_resumes_from_its_reserved_rename_after_an_interruption(self):
+        import os
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import reclamation
+        from hey_my_buddy.paths import native_path
+        board, manifest, checkout, view = self.deferred_checkout()
+        directory = Path(manifest['checkoutRoot']).parent
+        # An interrupted Windows removal renamed the checkout and stopped before
+        # deleting anything; the retry recognizes the reserved name and finishes
+        # both the physical deletion and the Git registration removal.
+        native_path(checkout).rename(native_path(directory / 'checkout.removing'))
+        with patch.object(workspace, '_WINDOWS', True):
+            reclamation.Reclamation(board.store).run()
+        self.assertFalse(checkout.exists())
+        self.assertFalse((directory / 'checkout.removing').exists())
+        self.assertIsNone(workspace._worktree_record(self.repo, checkout))
+        self.assertEqual(self.view(board, view['runId'])['cleanup']['state'], 'applied')
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_windows_idle_probe_reports_an_occupied_orphan_allocation_without_deleting(self):
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import checkout_processes, reclamation, storage
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
+        manifest = workspace.prepare(board.directory, 'windows-occupied-orphan', intent)
+        checkout = Path(manifest['checkoutRoot'])
+        directory = checkout.parent
+        maintenance = reclamation.Reclamation(board.store)
+        rename_refused = (nullcontext() if os.name == 'nt' else
+                          patch.object(checkout_processes, '_rename_whole_checkout', side_effect=PermissionError))
+        with patch.object(checkout_processes, '_WINDOWS', True), \
+             patch.object(storage, 'process_inventory', return_value=([], [], True)):
+            with occupied_directory(checkout), rename_refused:
+                maintenance.run()
+                self.assertTrue(checkout.exists())
+                row = next(row for row in storage.inspect(board.store)['candidates']
+                           if row['path'] == str(checkout))
+                self.assertEqual(row['reasons'], ['checkout-in-use'])
+                self.assertEqual(board.store.service_issues(), [])
+                entry = maintenance._allocation_entry(directory)
+            self.assertEqual(maintenance._allocation_entry(directory), entry)
+            maintenance.run()
+        self.assertFalse(directory.exists())
+        self.assertEqual(board.store.service_issues(), [])
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX working-directory observation')
+    def test_reclamation_retries_after_process_exit_without_rescanning_static_blockers(self):
+        from unittest.mock import patch
+        import psutil
+        from hey_my_buddy.blackboard.tasks import checkout_processes, reclamation, storage
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
+        manifest = workspace.prepare(board.directory, 'posix-occupied-orphan', intent)
+        static = workspace.prepare(board.directory, 'statically-blocked-orphan', intent)
+        checkout = Path(manifest['checkoutRoot'])
+        static_directory = Path(static['checkoutRoot']).parent
+        (static_directory / 'extra-evidence').touch()
+        maintenance = reclamation.Reclamation(board.store)
+        with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan, \
+             patch.object(checkout_processes, '_processes') as processes:
+            with occupied_directory(checkout) as child:
+                processes.return_value = ([psutil.Process(child.pid)], True)
+                maintenance.run()
+                self.assertEqual(scan.call_count, 2)
+                self.assertTrue(checkout.exists())
+                self.assertEqual(board.store.service_issues(), [])
+                entry = maintenance._allocation_entry(checkout.parent)
+            self.assertEqual(maintenance._allocation_entry(checkout.parent), entry)
+            maintenance.run()
+            self.assertEqual(scan.call_count, 3)
+        self.assertFalse(checkout.parent.exists())
+        self.assertTrue(static_directory.exists())
+        self.assertEqual(board.store.service_issues(), [])
+
+    @contextmanager
+    def occupied(self, checkout):
+        """Hold a checkout no whole-tree rename can move, on either platform.
+
+        Windows refuses the rename while a live process keeps the checkout as
+        its working directory; POSIX has no such refusal, so its parent is made
+        unwritable to the renaming process instead.
+        """
+        if os.name == 'nt':
+            with occupied_directory(checkout):
+                yield
+        else:
+            checkout.parent.chmod(0o555)
+            try:
+                yield
+            finally:
+                checkout.parent.chmod(0o755)
+
+    def test_an_interrupted_windows_removal_is_not_new_evidence_for_revocation(self):
+        from unittest.mock import patch
+        from hey_my_buddy.paths import native_path
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, "integrator": {"role": "host"}}
+        manifest = workspace.prepare(board.directory, 'interrupted-removal-revocation', intent)
+        checkout = Path(manifest['checkoutRoot'])
+        directory = checkout.parent
+        native_path(checkout).rename(native_path(directory / 'checkout.removing'))
+        with patch.object(workspace, '_WINDOWS', True):
+            plan = workspace.submission_revoke_plan(board.directory, manifest)
+            self.assertNotIn('additional-evidence', plan['reasons'])
+            workspace.revoke_submission(plan)
+        self.assertEqual({path.name for path in directory.iterdir()}, {'.lock'})
+        self.assertFalse((directory / 'checkout.removing').exists())
+        self.assertIsNone(workspace._worktree_record(self.repo, checkout))
+        self.assertFalse(git(self.repo, 'for-each-ref', '--format=%(refname)',
+                             'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/').strip())
+
+    def test_standalone_native_roots_follow_their_own_terminal_state_and_attempts(self):
+        from support import FakeClock
+        from unittest.mock import patch
+        from hey_my_buddy import private_dirs
+        from hey_my_buddy.blackboard.tasks import storage
+        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_native
+        for index, (attempt_state, attempt_shutdown, reclaimed) in enumerate(
+                ((None, None, True), ('executing', 0, False), ('finished', 0, False), ('finished', 1, True))):
+            with self.subTest(attempt_state=attempt_state, attempt_shutdown=attempt_shutdown):
+                clock = FakeClock()
+                board = self.board(clock=clock)
+                submitted = board.submit_execution(requestId=f'standalone-native-{index}',
+                                                   adapter='command', task='private fixture',
+                                                   argv=['unused-fixture-command'], cwd=str(self.repo),
+                                                   expectedSeconds=60)
+                task_id = submitted['task']['runId']
+                root = private_dirs.ensure_private_dir(
+                    private_dirs.micro_task_root(board.directory, 'zcode', task_id))
+                (root / 'router-working.log').write_text('maintenance evidence', encoding='utf-8')
+
+                def reasons():
+                    with patch.object(storage, 'process_inventory', return_value=([], [], True)):
+                        row = next(row for row in storage.inspect(board.store)['candidates']
+                                   if row['path'] == str(root))
+                    return row['reasons'], row['runId']
+                self.assertEqual(reasons(), (['continuation-supported'], None))
+                with board.store.db.write() as connection:
+                    connection.execute("UPDATE tasks SET state='failed',updated_at=? WHERE task_id=?",
+                                       (clock(), task_id))
+                    if attempt_state is not None:
+                        connection.execute(
+                            "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,"
+                            "execution_state,adapter,shutdown_confirmed,created_at,updated_at)"
+                            " VALUES(?,?,?,?,?,?,?,?,?)",
+                            (f'att-{index}', task_id, 1, 'fixture', attempt_state, 'command',
+                             attempt_shutdown, clock(), clock()))
+                self.assertEqual(reasons(), ((['grace-period'] if reclaimed
+                                              else ['grace-period', 'shutdown-unconfirmed']), None))
+                reclaim_native(board.store)
+                self.assertTrue(root.exists())
+                clock.advance(3 * 86400)
+                reclaim_native(board.store)
+                self.assertEqual(root.exists(), not reclaimed)
+                if not reclaimed:
+                    self.assertEqual(reasons(), (['shutdown-unconfirmed'], None))
 
     def test_abandoned_shell_and_unowned_allocation_are_reclaimed_under_their_locks(self):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConsoleApi } from "./api";
 import type { MacroTaskTimeline } from "./macro-task-types";
 import { macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { timelineScaleInput } from "./timeline/scale";
 import { useMacroTaskTimeline } from "./use-macro-task-timeline";
 
 type TimelineRead = { timeline: MacroTaskTimeline; verifiedAtMs: number | null };
@@ -31,6 +32,31 @@ function setHidden(hidden: boolean) {
 afterEach(() => setHidden(false));
 
 describe("work macro task timeline hook", () => {
+  it("keeps the now line and folding when HTTP Date truncates a same-second open span", async () => {
+    const observedAt = "2026-09-26T08:12:19.499Z";
+    const fixture = macroTaskTimelineFixture();
+    fixture.observedAt = observedAt;
+    fixture.rows = [{ ...fixture.rows[0]!, state: "executing", status: "running" }];
+    fixture.spans = [{ ...fixture.spans.find(span => span.kind === "execution")!,
+      startAt: "2026-09-26T08:12:19.250Z", endAt: null, state: "executing", shutdownConfirmed: false }];
+    fixture.events = [{ ...fixture.events[0]!, at: "2026-09-26T08:12:19.375Z" }];
+    const f = harness(fixture);
+    await act(async () => f.reads[0]!.resolve(readWith(fixture, Date.parse("2026-09-26T08:12:19.000Z"))));
+    expect(f.result.current.displayObservedAt).toBe(observedAt);
+    expect(f.result.current.timeline!.observedAt).toBe(observedAt);
+    expect(timelineScaleInput({ ...f.result.current.timeline!, observedAt: f.result.current.displayObservedAt! }))
+      .toMatchObject({ nowAtEnd: true, canFold: true });
+    f.unmount();
+  });
+
+  it("uses verification time when the body observation is not a finite date", async () => {
+    const fixture = { ...macroTaskTimelineFixture(), observedAt: "invalid" };
+    const f = harness(fixture);
+    await act(async () => f.reads[0]!.resolve(readWith(fixture, 4000)));
+    expect(f.result.current.displayObservedAt).toBe("1970-01-01T00:00:04.000Z");
+    f.unmount();
+  });
+
   it("retries during a background read and retains unchanged rows and spans", async () => {
     vi.useFakeTimers();
     try {
@@ -51,7 +77,7 @@ describe("work macro task timeline hook", () => {
       expect(f.result.current.timeline).toBe(first);
       expect(f.result.current.timeline!.rows).toBe(first!.rows);
       expect(f.result.current.timeline!.spans).toBe(first!.spans);
-      expect(Date.parse(f.result.current.displayObservedAt!)).toBe(4000);
+      expect(Date.parse(f.result.current.displayObservedAt!)).toBe(Date.parse(fixture.observedAt));
       expect(f.result.current.loading).toBe(false);
     } finally { vi.useRealTimers(); }
   });

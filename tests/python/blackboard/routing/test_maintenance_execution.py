@@ -10,7 +10,8 @@ from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from support import BoardTestCase, FakeClock, seed_buddy
 
-from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.blackboard.routing import maintenance_data, router
+from hey_my_buddy.blackboard.routing.maintenance import Scheduler
 from hey_my_buddy.blackboard.evaluation.models import ensure_model_service
 from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.blackboard.store.db import canonical_json
@@ -609,6 +610,71 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                 head = self.board_.store._head_of(db)
             self.board_.store._notify(head)
             self.assertEqual(self.board_.store.maintenance.collect(), 120)
+
+    def test_collect_defers_upgrade_without_scanning_or_publishing_and_resumes(self):
+        self.configure()
+        store = self.board_.store
+        journal = store.directory / "upgrade.json"
+        journal.write_text("{}", encoding="utf-8")
+        with patch.object(maintenance_data, "build_packet", side_effect=AssertionError("unexpected scan")), \
+                patch.object(files, "publish", side_effect=AssertionError("unexpected publication")):
+            self.assertEqual(store.maintenance._request(manual=False), ({"status": "upgrading"}, 1.0))
+            self.assertEqual(store.maintenance.collect(), 1.0)
+        self.assertIsNone(store.persistence_error)
+        self.assertEqual(list(store.directory.glob("maintenance/**/*.json")), [])
+        with self.assertRaises(BoardError) as caught:
+            store.maintenance.trigger(manual=True)
+        self.assertEqual(caught.exception.code, "UPGRADE_IN_PROGRESS")
+        self.assertEqual(list(store.directory.glob("maintenance/**/*.json")), [])
+        journal.unlink()
+        self.assertIsNone(store.maintenance.collect())
+        with store.db.read() as db:
+            run = db.execute("SELECT * FROM maintenance_runs").fetchone()
+        self.assertEqual((run["trigger_type"], run["state"]), ("interval", "running"))
+        self.assertTrue(self.run_files(run["maintenance_run_id"]))
+
+    def test_collect_rolls_back_if_upgrade_starts_after_read_check(self):
+        self.configure()
+        store = self.board_.store
+        journal = store.directory / "upgrade.json"
+        create_task = store.decisions._create_task
+        def fence_admission(*args, **kwargs):
+            journal.write_text("{}", encoding="utf-8")
+            return create_task(*args, **kwargs)
+        with patch.object(store.decisions, "_create_task", side_effect=fence_admission), \
+                patch.object(files, "publish", wraps=files.publish) as publish:
+            self.assertEqual(store.maintenance.collect(), 1.0)
+        publish.assert_called_once()
+        self.assertIsNone(store.persistence_error)
+        self.assertEqual(list(store.directory.glob("maintenance/**/*.json")), [])
+        with store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM maintenance_runs").fetchone()[0], 0)
+        journal.unlink()
+        self.assertIsNone(store.maintenance.collect())
+
+    def test_scheduler_rechecks_upgrade_and_admits_on_the_next_cycle(self):
+        self.configure()
+        store = self.board_.store
+        journal = store.directory / "upgrade.json"
+        journal.write_text("{}", encoding="utf-8")
+        delays = []
+        def advance_cycle(predicate, timeout):
+            delays.append(timeout)
+            if len(delays) == 1:
+                self.assertEqual(timeout, 1.0)
+                self.assertEqual(list(store.directory.glob("maintenance/**/*.json")), [])
+                journal.unlink()
+            else:
+                store._wait_stopped = True
+        try:
+            with patch.object(store._condition, "wait_for", side_effect=advance_cycle):
+                Scheduler(store).run()
+        finally:
+            store._wait_stopped = False
+        self.assertIsNone(store.persistence_error)
+        self.assertEqual(delays, [1.0, None])
+        with store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM maintenance_runs WHERE state='running'").fetchone()[0], 1)
 
     def test_queued_claim_cancels_after_buddy_clear_or_reassignment(self):
         for replacement in (None, "dsh:fixture:other:off"):

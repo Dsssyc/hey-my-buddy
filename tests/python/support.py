@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import ExitStack, closing, contextmanager
@@ -35,9 +36,70 @@ from hey_my_buddy.console.server import Console  # noqa: E402
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator  # noqa: E402
 from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore  # noqa: E402
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION  # noqa: E402
+from hey_my_buddy.protocol.owned_process import owned_popen  # noqa: E402
+from hey_my_buddy.protocol.process_handle import ProcessHandle  # noqa: E402
 from hey_my_buddy.blackboard.service.service import BoardService, WaitAdmission, WaitService, call_operation  # noqa: E402
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry  # noqa: E402
 from hey_my_buddy.blackboard.store.store import BoardStore  # noqa: E402
+
+
+@contextmanager
+def occupied_directory(cwd: Path, *, timeout: float = 30.0):
+    """Hold a directory as the working directory of an owned fixture child."""
+    command = "import sys; sys.stdout.buffer.write(b'ready\\n'); sys.stdout.buffer.flush(); sys.stdin.buffer.read(1)"
+    # Unbuffered parent pipes can be closed even if the reader is still blocked.
+    child = owned_popen([sys.executable, "-c", command], cwd=str(cwd),
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0,
+                        start_new_session=True)
+    with ExitStack() as pipes:
+        pipes.enter_context(closing(child.stdin))
+        pipes.enter_context(closing(child.stdout))
+        ready = threading.Event()
+        line = b""
+
+        def read_ready():
+            nonlocal line
+            try:
+                line = child.stdout.readline()
+            except (OSError, ValueError):
+                pass
+            finally:
+                ready.set()
+
+        handle = None
+        body_failed = True
+        try:
+            handle = ProcessHandle(child, log_paths={}, stop_channel="stdin")
+            threading.Thread(target=read_ready, daemon=True).start()
+            if not ready.wait(timeout):
+                raise AssertionError("Timed out waiting for the occupying process")
+            if line.rstrip(b"\r\n") != b"ready":
+                raise AssertionError(f"The occupying process sent an unexpected handshake: {line!r}")
+            yield child
+            body_failed = False
+        finally:
+            stopped = False
+            stop_error = None
+            if handle is not None:
+                try:
+                    stopped, _ = handle.terminate(grace_seconds=5.0, settle_seconds=5.0)
+                except BaseException as error:
+                    stop_error = error
+            if not stopped:
+                job = handle.job if handle is not None else getattr(child, "_buddy_job", None)
+                try:
+                    try:
+                        if job is not None and job.handle is not None:
+                            job.close()
+                    finally:
+                        if child.poll() is None:
+                            if job is None:
+                                child.kill()
+                            child.wait(timeout=2.0)
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    raise AssertionError("Could not stop the occupying process during cleanup") from error
+                if not body_failed:
+                    raise AssertionError("Occupying process tree did not confirm shutdown") from stop_error
 
 
 def native_read_bytes(path: Path) -> bytes:

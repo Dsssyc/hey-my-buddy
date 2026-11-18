@@ -56,6 +56,8 @@ An ADR's considered alternatives each state their strongest case before the reas
 
 Record actual verification in `docs/acceptance/`; never present a draft or a worker's success message as acceptance. State the verification boundary in public docs: a capability that is unverified, partially wired or waiting on installation is named as such rather than described as working.
 
+`docs/design/backlog.md` holds only open problems not yet in implementation; remove an entry in the change that moves it into an ADR or reference or records its acceptance in `docs/acceptance/`, never leaving completed notes in place.
+
 Record an investigation of other projects, papers or products in `docs/research/`, one dated note per question in the form its README gives: the question, what was read and how far, the facts in our own words with their basis, what was taken and what was not, and what would make the note stale. A note carries no code from another project and no address of its repository or of files inside it. An implementation is written from the note and the decision, never from that project's source; reuse happens only through a library or framework whose licence allows it, added as a dependency. Decisions cite the note instead of repeating the survey.
 
 Records, fixtures and saved evidence name locations with `~` or a placeholder, never a machine's absolute home directory or the layout of its project directories; the check suite fails when a tracked file carries those of the machine running it.

@@ -18,7 +18,15 @@ from pathlib import Path
 from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
-from .schema_37_38 import ROUTER_SETTINGS_DDL
+
+ROUTER_SETTINGS_DDL = """CREATE TABLE router_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
+    model_response_wait_seconds INTEGER NOT NULL DEFAULT 60 CHECK (typeof(model_response_wait_seconds)='integer' AND model_response_wait_seconds BETWEEN 1 AND 86400),
+    retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
+, maintenance_buddy_id TEXT, maintenance_interval_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (maintenance_interval_seconds >= 1)
+, exploration_every INTEGER DEFAULT 5 CHECK (exploration_every IS NULL OR exploration_every >= 2)
+, profile_buddy_id TEXT REFERENCES buddies(buddy_id) ON DELETE RESTRICT);"""
 
 SCHEMA_VERSION = 41
 DB_FILE = "board.sqlite3"

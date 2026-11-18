@@ -361,10 +361,10 @@ def inspect(store) -> dict:
     with store.db.read() as connection:
         for path in native:
             task_id = native_tasks.get(path.name)
-            run = reclamation.native_owner(connection, task_id) if task_id is not None else None
-            reasons = reclamation.native_reasons(store, connection, run, datetime.fromisoformat(store.now()))
+            owner = reclamation.native_owner(connection, task_id) if task_id is not None else None
+            reasons = reclamation.native_reasons(store, connection, owner, datetime.fromisoformat(store.now()))
             if reasons or private_dirs.linked(path):
-                add('harnesses', path, reasons, runId=run['run_id'] if run is not None else None,
+                add('harnesses', path, reasons, runId=reclamation.native_owner_run_id(owner),
                     adapter=path.parent.parent.name)
     harnesses = state / 'harnesses'
     sessions = state / 'sessions'

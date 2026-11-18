@@ -259,13 +259,19 @@ class DocumentationTests(unittest.TestCase):
         self.assertNotIn("codex plugin add", text)
 
     def test_readmes_keep_first_install_parity(self):
-        version = re.search(r'^version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"), re.MULTILINE).group(1)
+        import tomllib
+        metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        version = metadata["project"]["version"]
+        published = metadata["tool"]["hey-my-buddy"]["published-version"]
         for name in ("README.md", "README.zh-CN.md"):
             text = (ROOT / name).read_text(encoding="utf-8")
-            self.assertIn(f"uvx hey-my-buddy@{version} install", text, name)
+            self.assertIn(f"uvx hey-my-buddy@{published} install", text, name)
+            self.assertIn(f"hey_my_buddy-{version}-py3-none-any.whl", text, name)
             self.assertIn("~/.agents/skills/hey-my-buddy", text, name)
             self.assertIn("docs/reference/operations.md#installation", text, name)
             self.assertNotIn("codex plugin add", text, name)
+        usage = (ROOT / "docs/reference/usage.md").read_text(encoding="utf-8")
+        self.assertIn(f"uvx hey-my-buddy@{published} install", usage)
 
 
 if __name__ == "__main__":

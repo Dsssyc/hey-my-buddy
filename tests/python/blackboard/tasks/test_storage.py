@@ -43,6 +43,102 @@ class StorageTests(BoardTestCase):
         self.assertEqual(result['removed'][0]['path'], str(root))
         self.assertNotIn('\\\\?\\', read_bytes(receipt).decode())
 
+    def test_a_tree_stable_at_plan_changes_at_apply_reinspection(self):
+        board = self.board()
+        candidate, planned, row = self._runtime_plan(board)
+        self.assertEqual(row['reasons'], [])
+        real_tree_info = storage.tree_info
+        apply_phase = []
+
+        def changing_only_under_apply(path):
+            size, fingerprint, safe, stable = real_tree_info(path)
+            if apply_phase and private_dirs._absolute(Path(path)) == candidate:
+                return size, '', safe, False
+            return size, fingerprint, safe, stable
+
+        with mock.patch.object(storage, 'tree_info', side_effect=changing_only_under_apply):
+            apply_phase.append(None)
+            result = board.call('storage_apply', {'planId': planned['planId'],
+                                                  'commandId': 'apply-reinspect-changing', 'confirm': True})
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['removed'], [])
+        skipped = next(item for item in result['skipped'] if item['path'] == str(candidate))
+        self.assertEqual(skipped['reasons'], ['changing'])
+        self.assertTrue(candidate.is_dir())
+        self.assertTrue((candidate / 'payload').exists())
+
+    def test_a_tree_changing_at_the_final_pre_removal_recheck_is_skipped(self):
+        board = self.board()
+        real_tree_info = storage.tree_info
+        measurements = []
+
+        def changing_on_final_recheck(path):
+            if private_dirs._absolute(Path(path)).name == 'expired-runtime':
+                measurements.append(None)
+                # Plan scan, apply reinspection, then the pre-removal recheck.
+                if len(measurements) > 2:
+                    return 0, '', True, False
+            return real_tree_info(path)
+
+        with mock.patch.object(storage, 'tree_info', side_effect=changing_on_final_recheck):
+            candidate, planned, row = self._runtime_plan(board)
+            self.assertEqual(row['reasons'], [])
+            result = board.call('storage_apply', {'planId': planned['planId'],
+                                                  'commandId': 'final-recheck-changing', 'confirm': True})
+        self.assertEqual(len(measurements), 3)
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['removed'], [])
+        skipped = next(item for item in result['skipped'] if item['path'] == str(candidate))
+        self.assertEqual(skipped['reasons'], ['STORAGE_CHANGED'])
+        self.assertTrue(candidate.is_dir())
+        self.assertTrue((candidate / 'payload').exists())
+
+    def test_a_pending_resume_refuses_an_original_tree_that_changed(self):
+        board = self.board()
+        candidate, planned, row = self._runtime_plan(board)
+        identity = candidate.lstat()
+        receipt = board.directory / 'storage' / ('receipt-' + hashlib.sha256(b'pending-changed-tree').hexdigest() + '.json')
+        receipt.write_text(json.dumps({
+            'planId': planned['planId'], 'removedBytes': 0, 'removed': [], 'skipped': [], 'complete': False,
+            'pending': {'id': row['id'], 'path': row['path'], 'tomb': str(candidate.with_name(
+                '.reclaim-' + planned['planId'] + '-' + candidate.name)),
+                'bytes': row['bytes'], 'fingerprint': row['fingerprint'],
+                'device': identity.st_dev, 'inode': identity.st_ino}}), encoding='utf-8', newline='\n')
+        real_tree_info = storage.tree_info
+        with mock.patch.object(storage, 'tree_info',
+                               side_effect=lambda path: ((0, '', True, False)
+                                                         if private_dirs._absolute(Path(path)) == candidate
+                                                         else real_tree_info(path))):
+            with self.assertRaises(BoardError) as caught:
+                board.call('storage_apply', {'planId': planned['planId'],
+                                             'commandId': 'pending-changed-tree', 'confirm': True})
+        self.assertEqual(caught.exception.code, 'STORAGE_CHANGED')
+        self.assertTrue(candidate.is_dir())
+        self.assertTrue((candidate / 'payload').exists())
+        self.assertFalse(candidate.with_name('.reclaim-' + planned['planId'] + '-' + candidate.name).exists())
+
+    def test_a_directory_vanishing_under_scandir_alone_marks_the_scan_changing(self):
+        root = self.directory / 'scandir-vanishing'
+        vanishing = root / 'vanishing-directory'
+        vanishing.mkdir(parents=True)
+        (vanishing / 'payload').write_bytes(b'deleted by its owning process')
+        real_scandir = os.scandir
+        def replaced_under_scan(path):
+            if native_path(path) == native_path(vanishing):
+                native_path(vanishing / 'payload').unlink()
+                native_path(vanishing).rmdir()
+                try:
+                    return real_scandir(path)
+                finally:
+                    # The owning process recreates the site before the scan's
+                    # measuring pass, so no listed entry is missing at lstat.
+                    native_path(vanishing).mkdir()
+            return real_scandir(path)
+        with mock.patch.object(storage.os, 'scandir', replaced_under_scan):
+            self.assertEqual(storage.tree_info(root), (0, '', True, False))
+        self.assertTrue(vanishing.is_dir())
+        self.assertEqual(list(vanishing.iterdir()), [])
+
     def test_a_tree_changing_under_the_scan_is_listed_and_never_reclaimed(self):
         board = self.board()
         root = Path(os.environ['HMB_RUNTIME_ROOT'])

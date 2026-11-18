@@ -14,6 +14,7 @@ import tempfile
 
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.errors import BoardError
+from support import occupied_directory
 
 
 def _intent(repository: Path, commit: str) -> dict:
@@ -164,6 +165,78 @@ class NativeWindowsWorkspaceCheckoutTests(unittest.TestCase):
         self.assertIn("src/link", error["details"]["paths"])
         self.assertTrue(error["details"]["reason"])
         self.assertEqual(result["cause"], {"code": "WORKSPACE_GIT_ERROR", "operation": "reset"})
+
+    def _locked_checkout(self, identifier: str) -> tuple[Path, Path, dict]:
+        commit = self.commit_index("100644", "tracked.txt", b"windows checkout content\n")
+        directory = self.state / "workspaces" / identifier
+        checkout = directory / "checkout"
+        directory.mkdir(parents=True)
+        _git(self.repository, "worktree", "add", "--detach", str(checkout), commit)
+        _git(self.repository, "worktree", "lock", "--reason", "hey-my-buddy:" + identifier, str(checkout))
+        return checkout, directory, {"version": 4, "projectId": "fixture-project"}
+
+    def test_removal_refuses_an_occupied_checkout_and_finishes_once_it_exits(self):
+        checkout, directory, manifest = self._locked_checkout("ws-" + "2" * 32)
+        removal = {"removed": True, "path": str(checkout)}
+        nested = checkout / "nested"
+        nested.mkdir()
+        intact = (checkout / "tracked.txt").read_bytes()
+        with occupied_directory(nested):
+            with self.assertRaises(BoardError) as caught:
+                workspace._remove_worktree(self.repository, checkout, manifest, removal)
+            self.assertEqual(caught.exception.code, "NOT_READY")
+            self.assertEqual(caught.exception.details["reasons"], ["checkout-in-use"])
+            self.assertEqual((checkout / "tracked.txt").read_bytes(), intact)
+            self.assertFalse((directory / "checkout.removing").exists())
+            self.assertIsNotNone(workspace._worktree_record(self.repository, checkout))
+        workspace._remove_worktree(self.repository, checkout, manifest, removal)
+        self.assertFalse(checkout.exists())
+        self.assertFalse((directory / "checkout.removing").exists())
+        self.assertIsNone(workspace._worktree_record(self.repository, checkout))
+
+    def test_removal_finishes_from_its_reserved_rename_after_an_interruption(self):
+        checkout, directory, manifest = self._locked_checkout("ws-" + "3" * 32)
+        # The removal renamed the whole checkout and was interrupted before any
+        # deletion: the retry recovers the canonical path first, then deletes
+        # the checkout standing there and clears the Git registration.
+        workspace.native_path(checkout).rename(workspace.native_path(directory / "checkout.removing"))
+        removal = {"removed": True, "path": str(checkout)}
+        workspace._remove_worktree(self.repository, checkout, manifest, removal)
+        # The recovered checkout existed and this call deleted it, so the
+        # removal reports a real deletion, not an already-absent target.
+        self.assertFalse(removal["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+        self.assertFalse((directory / "checkout.removing").exists())
+        self.assertIsNone(workspace._worktree_record(self.repository, checkout))
+
+    def test_an_interrupted_removal_sibling_is_recovered_only_as_the_single_path(self):
+        checkout, directory, manifest = self._locked_checkout("ws-" + "4" * 32)
+        sibling = directory / "checkout.removing"
+        intact = (checkout / "tracked.txt").read_bytes()
+        # Both names standing together is unsafe and deletes neither side.
+        sibling.mkdir()
+        with self.assertRaises(BoardError) as unsafe:
+            workspace._remove_worktree(self.repository, checkout, manifest, {"removed": True, "path": str(checkout)})
+        self.assertEqual(unsafe.exception.code, "WORKSPACE_UNSAFE")
+        self.assertEqual(unsafe.exception.details["reasons"], ["unsafe-path"])
+        self.assertEqual(unsafe.exception.details["path"], str(sibling))
+        self.assertEqual((checkout / "tracked.txt").read_bytes(), intact)
+        self.assertTrue(sibling.is_dir())
+        sibling.rmdir()
+        # A process holding the interrupted sibling refuses its recovery before
+        # anything is deleted, exactly like an occupied canonical checkout.
+        workspace.native_path(checkout).rename(workspace.native_path(sibling))
+        with occupied_directory(sibling):
+            with self.assertRaises(BoardError) as caught:
+                workspace._remove_worktree(self.repository, checkout, manifest, {"removed": True, "path": str(checkout)})
+            self.assertEqual(caught.exception.code, "NOT_READY")
+            self.assertEqual(caught.exception.details["reasons"], ["checkout-in-use"])
+            self.assertTrue(sibling.is_dir())
+            self.assertFalse(checkout.exists())
+        workspace._remove_worktree(self.repository, checkout, manifest, {"removed": True, "path": str(checkout)})
+        self.assertFalse(checkout.exists())
+        self.assertFalse(sibling.exists())
+        self.assertIsNone(workspace._worktree_record(self.repository, checkout))
 
 
 if __name__ == "__main__":
