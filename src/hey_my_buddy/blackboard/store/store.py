@@ -1884,17 +1884,12 @@ class BoardStore:
                 waiting_code = waiting_reason['code'] if waiting_reason is not None else None
                 current = connection.execute('SELECT queue_reason FROM tasks WHERE task_id=?',
                                              (attempt['task_id'],)).fetchone()['queue_reason']
-                previous_waiting = self._active_waiting_code(
+                _, previous_waiting = self._attempt_execution_waiting(
                     connection, attempt['task_id'], attempt['attempt_id'], current)
-                queue_changed = False
-                if current not in (UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON):
-                    if current != waiting_code and (waiting_code is not None or current == 'router-input-unknown'):
-                        connection.execute('UPDATE tasks SET queue_reason=? WHERE task_id=?',
-                                           (waiting_code, attempt['task_id']))
-                        queue_changed = True
-                if queue_changed or waiting_code != previous_waiting:
+                if waiting_code != previous_waiting:
                     self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
                                        attempt_id=attempt['attempt_id'], payload={'reason': waiting_reason})
+                    self._sync_attempt_queue_reason(connection, attempt['attempt_id'])
                     changed = True
             activity_state = None
             if activity is not None:
@@ -2848,42 +2843,103 @@ class BoardStore:
                         " WHERE a.execution_state!='finished' ORDER BY a.created_at,a.attempt_id")]
 
     @staticmethod
-    def _active_waiting_code(
-        connection: sqlite3.Connection, task_id: str, attempt_id: str, current: str | None
-    ) -> str | None:
-        if current == "router-input-unknown":
-            return "router-input-unknown"
-        if current in (UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON):
-            disconnect = connection.execute(
-                "SELECT seq, payload_json FROM events WHERE task_id=? AND attempt_id=?"
-                " AND kind IN ('attempt.uncertain','execution.unknown') ORDER BY seq DESC LIMIT 1",
-                (task_id, attempt_id),
-            ).fetchone()
-            if disconnect is None:
-                return None
-            after = connection.execute(
-                "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=?"
-                " AND kind='attempt.waiting' AND seq>? ORDER BY seq DESC LIMIT 1",
-                (task_id, attempt_id, disconnect["seq"]),
-            ).fetchone()
-            if after is not None:
-                reason = json.loads(after["payload_json"]).get("reason")
-                return reason["code"] if reason is not None else None
-            return json.loads(disconnect["payload_json"]).get("waitingReason")
-        if current != "harness-probe-unknown":
-            return None
+    def _attempt_probe_waiting(
+        connection: sqlite3.Connection, task_id: str, attempt_id: str
+    ) -> tuple[int, str | None]:
+        rows = connection.execute(
+            "SELECT seq, payload_json FROM events WHERE task_id=?"
+            " AND kind IN ('harness.execution_selected','harness.start_retry','harness.start_failed')"
+            " ORDER BY seq DESC",
+            (task_id,),
+        ).fetchall()
+        for entry in rows:
+            payload = json.loads(entry["payload_json"])
+            if payload.get("attemptId") != attempt_id:
+                continue
+            record = payload.get("harness") or {}
+            unknown = (record.get("status") == "unknown"
+                       or (record.get("lastProbe") or {}).get("status") == "unknown")
+            return (int(entry["seq"]), "harness-probe-unknown") if unknown else (0, None)
+        return (0, None)
+
+    @staticmethod
+    def _raw_execution_waiting(
+        connection: sqlite3.Connection, task_id: str, attempt_id: str
+    ) -> tuple[int, str | None]:
         row = connection.execute(
-            "SELECT kind, payload_json FROM events WHERE task_id=? AND attempt_id=?"
-            " AND kind IN ('attempt.waiting','execution.connected') ORDER BY seq DESC LIMIT 1",
+            "SELECT seq, kind, payload_json FROM events WHERE task_id=? AND attempt_id=?"
+            " AND kind IN ('attempt.waiting','execution.connected','execution.unknown','attempt.uncertain')"
+            " ORDER BY seq DESC LIMIT 1",
             (task_id, attempt_id),
         ).fetchone()
         if row is None:
-            return None
+            return (0, None)
         payload = json.loads(row["payload_json"])
-        if row["kind"] == "execution.connected":
-            return payload.get("waitingReason")
-        reason = payload.get("reason")
-        return reason["code"] if reason is not None else None
+        if row["kind"] == "attempt.waiting":
+            reason = payload.get("reason")
+            code = reason["code"] if reason is not None else None
+            return (int(row["seq"]), code) if code is not None else (0, None)
+        code = payload.get("waitingReason")
+        if code is None:
+            return (0, None)
+        return (int(payload.get("waitingSeq", row["seq"])), code)
+
+    @classmethod
+    def _attempt_execution_waiting(
+        cls, connection: sqlite3.Connection, task_id: str, attempt_id: str, current: str | None
+    ) -> tuple[int, str | None]:
+        if current not in ("router-input-unknown", "harness-probe-unknown",
+                           UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON):
+            return (0, None)
+        return cls._raw_execution_waiting(connection, task_id, attempt_id)
+
+    def _retire_cleared_execution_waiting(
+        self, connection: sqlite3.Connection, task_id: str, attempt_id: str, current: str | None
+    ) -> None:
+        if current in ("router-input-unknown", "harness-probe-unknown",
+                       UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON):
+            return
+        if self._raw_execution_waiting(connection, task_id, attempt_id)[1] is not None:
+            self._append_event(connection, "attempt.waiting", task_id=task_id,
+                               attempt_id=attempt_id, payload={"reason": None})
+
+    def _projected_attempt_queue_reason(
+        self, connection: sqlite3.Connection, task_id: str, attempt_id: str, execution_state: str
+    ) -> str | None:
+        if execution_state == "uncertain":
+            disconnect = connection.execute(
+                "SELECT kind FROM events WHERE task_id=? AND attempt_id=?"
+                " AND kind IN ('attempt.uncertain','execution.unknown') ORDER BY seq DESC LIMIT 1",
+                (task_id, attempt_id),
+            ).fetchone()
+            if disconnect is not None and disconnect["kind"] == "execution.unknown":
+                return UNKNOWN_QUEUE_REASON
+            return UNCERTAIN_QUEUE_REASON
+        probe_seq, probe_code = self._attempt_probe_waiting(connection, task_id, attempt_id)
+        waiting_seq, waiting_code = self._raw_execution_waiting(connection, task_id, attempt_id)
+        if probe_code is not None and waiting_code is not None:
+            return waiting_code if waiting_seq >= probe_seq else probe_code
+        return waiting_code or probe_code
+
+    def _sync_attempt_queue_reason(
+        self, connection: sqlite3.Connection, attempt_id: str, *, updated_at: str | None = None
+    ) -> bool:
+        attempt = self._attempt_row(connection, attempt_id)
+        task = connection.execute("SELECT state, queue_reason FROM tasks WHERE task_id=?",
+                                  (attempt["task_id"],)).fetchone()
+        if task is None or task["state"] not in ("running", "cancelling"):
+            return False
+        projected = self._projected_attempt_queue_reason(
+            connection, attempt["task_id"], attempt_id, attempt["execution_state"])
+        if task["queue_reason"] == projected:
+            return False
+        if updated_at is not None:
+            connection.execute("UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
+                               (projected, updated_at, attempt["task_id"]))
+        else:
+            connection.execute("UPDATE tasks SET queue_reason=? WHERE task_id=?",
+                               (projected, attempt["task_id"]))
+        return True
 
     def execution_connection(self, attempt_id: str, *, connected: bool) -> bool:
         """Project an authenticated long call, or the absence of one, without settling work."""
@@ -2899,21 +2955,16 @@ class BoardStore:
             now = self.now()
             current = connection.execute("SELECT queue_reason FROM tasks WHERE task_id=?",
                                          (attempt["task_id"],)).fetchone()["queue_reason"]
-            shadowed = self._active_waiting_code(connection, attempt["task_id"], attempt_id, current)
+            waiting_seq, shadowed = self._attempt_execution_waiting(
+                connection, attempt["task_id"], attempt_id, current)
             self._transition_attempt(connection, attempt, state)
             connection.execute("UPDATE attempts SET ownership=? WHERE attempt_id=?", (ownership, attempt_id))
             connection.execute("UPDATE resource_claims SET state=? WHERE attempt_id=? AND state IN ('held','retained')",
                                ("held" if connected else "retained", attempt_id))
-            if connected:
-                connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?"
-                                   " AND queue_reason IN (?,?)",
-                                   (shadowed, now, attempt["task_id"], UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON))
-            else:
-                connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?",
-                                   (UNKNOWN_QUEUE_REASON, now, attempt["task_id"]))
+            payload = {"waitingReason": shadowed, "waitingSeq": waiting_seq} if shadowed is not None else {}
             self._append_event(connection, "execution.connected" if connected else "execution.unknown",
-                               task_id=attempt["task_id"], attempt_id=attempt_id,
-                               payload={"waitingReason": shadowed} if shadowed is not None else {})
+                               task_id=attempt["task_id"], attempt_id=attempt_id, payload=payload)
+            self._sync_attempt_queue_reason(connection, attempt_id, updated_at=now)
             head = self._head_of(connection)
         self._notify(head)
         return True
@@ -2939,21 +2990,18 @@ class BoardStore:
                 self._retain_claims(connection, attempt["attempt_id"])
                 summary["uncertain"] += 1
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
-                shadowed = self._active_waiting_code(
+                waiting_seq, shadowed = self._attempt_execution_waiting(
                     connection, attempt["task_id"], attempt["attempt_id"], task["queue_reason"])
-                if task["state"] in ("running", "cancelling"):
-                    connection.execute(
-                        "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
-                        (UNCERTAIN_QUEUE_REASON, now, attempt["task_id"]),
-                    )
+                payload = {"waitingReason": shadowed, "waitingSeq": waiting_seq} if shadowed is not None else {}
                 self._append_event(
                     connection,
                     "attempt.uncertain",
                     task_id=attempt["task_id"],
                     attempt_id=attempt["attempt_id"],
                     revision=task["revision"],
-                    payload={"waitingReason": shadowed} if shadowed is not None else {},
+                    payload=payload,
                 )
+                self._sync_attempt_queue_reason(connection, attempt["attempt_id"], updated_at=now)
             summary["retained"] = int(
                 connection.execute(
                     "SELECT COUNT(*) AS count FROM resource_claims WHERE state='retained'"
