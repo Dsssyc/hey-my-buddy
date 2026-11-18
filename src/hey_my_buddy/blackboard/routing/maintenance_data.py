@@ -51,7 +51,11 @@ def _kind(value):
 
 
 def _kind_id(value):
-    return json.dumps(_kind(value), ensure_ascii=False, separators=(",", ":"))
+    harness, model_id, effort = _kind(value)
+    if any(not isinstance(part, str) or not part or not part.isprintable()
+           or any(char in part for char in ":\"'") for part in (harness, model_id, effort)):
+        raise ValueError("Maintenance kind identifier components must be nonempty printable strings without colons or quotes")
+    return f"{harness}:{model_id}:{effort}"
 
 
 def _kind_payload(connection, harness, model_id, effort):
@@ -241,11 +245,19 @@ def answer_schema(packet) -> dict:
     ids = packet["classificationRunIds"]
     summary_properties = {}
     for kind in packet["kinds"]:
+        kind_id = _kind_id(kind)
+        if kind["kindId"] != kind_id:
+            raise ValueError("Maintenance kindId does not match its kind")
         original = (kind.get("summary") or {}).get("citations") or []
         citation_ids = sorted(set(kind["citationRunIds"]) | set(original))
-        summary_properties[kind["kindId"]] = _object({
+        citations = {"type": "array", "items": {"type": "string"}}
+        if citation_ids:
+            citations["items"]["enum"] = citation_ids
+        else:
+            citations["maxItems"] = 0
+        summary_properties[kind_id] = _object({
             "text": _string(4000),
-            "citations": {"type": "array", "items": {"type": "string", "enum": citation_ids}},
+            "citations": citations,
         })
     schema = _object({
         "newNodes": {"type": "array", "items": _object({
@@ -257,8 +269,7 @@ def answer_schema(packet) -> dict:
             "runId": {"type": "string", "enum": ids},
             "domainNodeId": _string(128),
             "taskType": {"type": "string", "enum": list(TASK_TYPES)}})},
-        "summaries": {"type": "object", "properties": summary_properties,
-                      "required": list(summary_properties), "additionalProperties": False},
+        "summaries": _object(summary_properties),
     })
     if not ids:
         schema["properties"]["classifications"]["maxItems"] = 0
@@ -522,14 +533,14 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
             continue
         cited = item["citations"]
         if len(cited) != len(set(cited)):
-            errors.append(f"summaries[{key}]: duplicate citation")
+            errors.append(f"summaries[{kind_id}]: duplicate citation")
             continue
         if cited:
             cited_placeholders = ",".join("?" for _ in cited)
             existing_citations = {row["run_id"] for row in connection.execute(
                 f"SELECT run_id FROM workflow_runs WHERE run_id IN ({cited_placeholders})", cited)}
             if len(existing_citations) != len(cited):
-                errors.append(f"summaries[{key}]: cited micro task was deleted; rewrite summary")
+                errors.append(f"summaries[{kind_id}]: cited micro task was deleted; rewrite summary")
                 continue
         connection.execute(
             "INSERT INTO kind_summaries(harness,model_id,effort,text,maintenance_run_id) VALUES(?,?,?,?,?)"

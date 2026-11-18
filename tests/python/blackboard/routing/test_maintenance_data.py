@@ -140,8 +140,7 @@ class MaintenanceDataTests(WorkflowTestCase):
         original = packet["kinds"][0]
         other = deepcopy(original)
         other["modelId"] = "other-model-id"
-        other["kindId"] = json.dumps(packet_key(other),
-                                      separators=(",", ":"))
+        other["kindId"] = ":".join(packet_key(other))
         original["citationRunIds"] = [first]
         original["unreadRunIds"] = [first]
         other["citationRunIds"] = [second]
@@ -155,13 +154,57 @@ class MaintenanceDataTests(WorkflowTestCase):
         answer["summaries"][original["kindId"]]["citations"] = [second]
         self.assertIn("enum", schema_errors(answer, schema))
         answer["summaries"][original["kindId"]]["citations"] = [first]
-        answer["summaries"][json.dumps([original["harness"], other["modelId"], "invalid-effort"])] = {
+        answer["summaries"][f"{original['harness']}:{other['modelId']}:invalid-effort"] = {
             "text": "Invalid combination", "citations": []}
         self.assertIn("additionalProperties", schema_errors(answer, schema))
         packet["kinds"] = []
         packet["classificationRunIds"] = []
         answer = {"newNodes": [], "merges": [], "classifications": [], "summaries": {}}
         self.assertEqual(schema_errors(answer, answer_schema(packet)), [])
+
+    def test_answer_schema_uses_strict_objects_and_literals(self):
+        def check(schema, path):
+            if schema["type"] == "object":
+                properties = schema["properties"]
+                self.assertCountEqual(schema["required"], properties, path)
+                self.assertIs(schema["additionalProperties"], False, path)
+                for key, child in properties.items():
+                    self.assertNotRegex(key, r'["\r\n]', path)
+                    check(child, f"{path}.{key}")
+            if "enum" in schema:
+                self.assertTrue(schema["enum"], path)
+                for value in schema["enum"]:
+                    self.assertNotRegex(value, r'["\r\n]', path)
+            if "items" in schema:
+                check(schema["items"], f"{path}[]")
+
+        packet = self.packet()
+        kind = packet["kinds"][0]
+        empty_kind_id = f"{kind['harness']}:{kind['modelId']}:high"
+        packet["kinds"].append({**kind, "effort": "high", "citationRunIds": [], "summary": None,
+                                "kindId": empty_kind_id})
+        for run_ids in (packet["classificationRunIds"], []):
+            with self.subTest(classifications=bool(run_ids)):
+                schema = answer_schema({**packet, "classificationRunIds": run_ids})
+                check(schema, "answer")
+                summaries = schema["properties"]["summaries"]["properties"]
+                self.assertEqual(set(summaries), {kind["kindId"], empty_kind_id})
+                citations = summaries[empty_kind_id]["properties"]["citations"]
+                self.assertEqual(schema_errors([], citations), [])
+                self.assertIn("maxItems", schema_errors([kind["citationRunIds"][0]], citations))
+
+    def test_answer_schema_rejects_invalid_kind_identifiers(self):
+        packet = self.packet()
+        kind = packet["kinds"][0]
+        for field in ("harness", "modelId", "effort"):
+            for value in ("", "two:parts", 'double"quote', "single'quote", "line\rbreak", "line\nbreak"):
+                with self.subTest(field=field, value=value):
+                    invalid_kind = {**kind, field: value}
+                    with self.assertRaisesRegex(ValueError, "kind identifier components"):
+                        answer_schema({**packet, "kinds": [invalid_kind]})
+        kind["kindId"] = json.dumps(packet_key(kind), separators=(",", ":"))
+        with self.assertRaisesRegex(ValueError, "kindId does not match"):
+            answer_schema(packet)
 
     def test_schema_permitted_values_pass_the_write_boundary(self):
         kind = self.packet()["kinds"][0]

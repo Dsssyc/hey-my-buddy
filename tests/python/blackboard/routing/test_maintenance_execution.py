@@ -281,9 +281,17 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(claim["task"]["spec"]["modelResponseWaitSeconds"], 90)
         self.assertNotIn("modelResponseWaitSeconds", claim["task"]["spec"]["decision"])
         self.assertEqual(self.board_.call("task_get", {"runId": started["runId"]})["task"]["modelResponseWaitSeconds"], 90)
-        self.assertEqual(self.packet(claim)["classificationRunIds"], [self.evidence_id])
-        self.assertEqual(self.packet(claim)["microTasks"][0]["classification"], None)
-        self.assertEqual(self.packet(claim)["kinds"][0]["unreadRunIds"], [self.evidence_id])
+        frozen = files.read(self.board_.directory, document["maintenanceRunId"], document["input"])
+        packet = frozen["packet"]
+        self.assertEqual(packet["classificationRunIds"], [self.evidence_id])
+        self.assertIsNone(packet["microTasks"][0]["classification"])
+        kind = packet["kinds"][0]
+        self.assertEqual(kind["unreadRunIds"], [self.evidence_id])
+        kind_id = f"{kind['harness']}:{kind['modelId']}:{kind['effort']}"
+        self.assertEqual(kind["kindId"], kind_id)
+        summaries = frozen["outputSchema"]["properties"]["summaries"]
+        self.assertEqual(list(summaries["properties"]), [kind_id])
+        self.assertEqual(summaries["required"], [kind_id])
         self.assertEqual(claim["task"]["spec"]["decision"]["kind"], "maintain")
         with self.board_.store.db.read() as db:
             run = db.execute("SELECT task_id,state FROM maintenance_runs").fetchone()
