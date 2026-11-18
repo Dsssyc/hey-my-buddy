@@ -675,6 +675,12 @@ def _lock(directory, *, create=True):
             raise BoardError("WORKSPACE_BUSY", "The workspace lock was removed while acquiring it") from error
         if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
             raise BoardError("WORKSPACE_BUSY", "The workspace lock changed while acquiring it")
+        if _workspace_identifier(directory.name):
+            # A crashed Windows removal, or a crash between the idle probe's two
+            # renames, can have left the checkout under its reserved removal
+            # name; every proof under this lock addresses the canonical path,
+            # so the boundary restores it first.
+            _recover_windows_removal_sibling(directory / "checkout")
         yield
     finally:
         os.close(descriptor)
@@ -1194,15 +1200,15 @@ def submission_revoke_plan(state_dir, manifest):
             raise BoardError("WORKSPACE_UNSAFE", "The submission records no longer prove this allocation")
         plan = {"manifest": manifest, "directory": directory, "allocation": None, "reasons": [],
                 "repository": pinned["source"]["repositoryPath"]}
+        # An interrupted Windows removal renamed this checkout already; the
+        # boundary returns it to the canonical name, so the sibling is that
+        # removal's own target, never additional evidence and never a second
+        # standing path this plan has to accept.
+        _recover_windows_removal_sibling(directory / "checkout")
         expected = {".lock", "request.json", "input.json", "manifest.json"}
         checkout_present = manifest["kind"] == "worktree" and _path_present(directory / "checkout")
         if checkout_present:
             expected.add("checkout")
-        removing = _windows_removal_sibling(directory / "checkout")
-        if removing is not None and _path_present(removing):
-            # An interrupted Windows removal renamed this checkout already; the
-            # reserved sibling is that removal's own target, not new evidence.
-            expected.add(removing.name)
         if {path.name for path in directory.iterdir()} != expected:
             plan["reasons"].append("additional-evidence")
             return plan
@@ -2742,6 +2748,17 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
                     result["reasons"].append("unsafe-path")
             return result
         checkout_root = Path(allocation["path"])
+        # An interrupted Windows removal can have left this checkout under its
+        # reserved removal name; the proof below reads the canonical path only.
+        # A sibling another process still holds, or both names standing together,
+        # is a retention fact of the same plan, not a failure of the plan itself.
+        try:
+            _recover_windows_removal_sibling(checkout_root)
+        except BoardError as error:
+            if error.code not in ("WORKSPACE_UNSAFE", "NOT_READY"):
+                raise
+            result["reasons"].extend(error.details["reasons"])
+            return result
         if not _inside(manifest["path"], checkout_root):
             result["reasons"].append("unsafe-path")
         # The plan's terminal binding identifies the allocation. A later Host
@@ -2918,10 +2935,16 @@ def deletion_inspect(state_dir, manifest: dict, *, repository=None) -> dict:
         checkout = Path(allocation["path"])
         repository = Path(repository) if repository is not None else _repository(manifest)
         try:
+            # An interrupted Windows removal can have left this checkout under
+            # its reserved removal name; the proofs below read the canonical
+            # path, and an occupied or doubled sibling is a reported blocker.
+            _recover_windows_removal_sibling(checkout)
             record, _git_dir = _cleanup_registration(repository, checkout, manifest)
         except BoardError as error:
             if error.code == "WORKSPACE_UNSAFE":
                 return {"reasons": error.details["reasons"], "resume": True}
+            if error.code == "NOT_READY" and error.details.get("reasons") == ["checkout-in-use"]:
+                return {"reasons": ["checkout-in-use"], "resume": True}
             raise
         if record is None:
             return {"reasons": [], "resume": True, "eligible": True,
@@ -2947,8 +2970,14 @@ def deletion_remove_checkout(repository: Path, checkout_root: Path, *, workspace
     checkout_root = Path(checkout_root)
     identity = {"version": 4, "projectId": project_id}
     try:
+        # An interrupted Windows removal can have left this checkout under its
+        # reserved removal name; the removal below addresses the canonical
+        # path, and an occupied or doubled sibling is a returned blocker.
+        _recover_windows_removal_sibling(checkout_root)
         record, _git_dir = _cleanup_registration(repository, checkout_root, identity)
     except BoardError as error:
+        if error.code == 'NOT_READY' and error.details.get('reasons') == ['checkout-in-use']:
+            return ['checkout-in-use']
         if error.code != 'WORKSPACE_UNSAFE':
             raise
         retained = _project_refs(repository, workspace_id)[1].get(
@@ -3003,6 +3032,7 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False, pr
         else:
             allocation = proof["allocation"]
         checkout_root = Path(allocation["path"])
+        _recover_windows_removal_sibling(checkout_root)
         removal = {"removed": True, "path": str(checkout_root),
                    "repositoryPath": str(Path(repository) if repository is not None else _repository(manifest)),
                    "workspaceId": allocation["workspaceId"], "manifestWorkspaceId": manifest["workspaceId"],
@@ -3055,21 +3085,47 @@ def _windows_removal_sibling(checkout_root: Path) -> Path | None:
     return removal_sibling(checkout_root)
 
 
+def _recover_windows_removal_sibling(checkout_root: Path) -> bool:
+    """Return an interrupted Windows removal to the single canonical path.
+
+    A crash between the reserved rename and the finished deletion leaves the
+    checkout under its removal sibling, while every proof, fence and recovery
+    names the canonical path. Each boundary restores the sibling first, so one
+    path stands at a time; both names standing together, or a linked sibling,
+    is an unsafe state nothing may resolve by deleting either side.
+    """
+    sibling = _windows_removal_sibling(checkout_root)
+    if sibling is None or not _path_present(sibling):
+        return False
+    if private_dirs.linked(sibling) or _path_present(checkout_root):
+        raise BoardError("WORKSPACE_UNSAFE", "The reserved checkout removal name is occupied",
+                         reasons=["unsafe-path"], path=str(sibling))
+    try:
+        native_path(sibling).rename(native_path(checkout_root))
+    except PermissionError as error:
+        raise BoardError("NOT_READY", "The checkout is in use by another process",
+                         reasons=["checkout-in-use"], path=str(checkout_root)) from error
+    private_files.sync_directory(checkout_root.parent)
+    return True
+
+
 def _remove_worktree(repository, checkout_root, manifest, removal):
     """Keep the original locked registration until physical deletion completes.
 
     Git can remove its registration even when Windows refuses a checkout file.
     The private-tree boundary leaves that registration intact on a partial
-    deletion, so the existing applying journal can prove and resume it.
+    deletion, so the existing applying journal can prove and resume it. A
+    Windows removal converges on one path: an interrupted earlier attempt is
+    recovered to the canonical checkout before anything is deleted, and an
+    in-process deletion failure puts the tree back at that same path before
+    the error leaves this function.
     """
+    _recover_windows_removal_sibling(checkout_root)
     present = _path_present(checkout_root)
     target = checkout_root
     sibling = _windows_removal_sibling(checkout_root)
     if sibling is not None:
         if present:
-            if _path_present(sibling):
-                raise BoardError("WORKSPACE_UNSAFE", "The reserved checkout removal name is occupied",
-                                 path=str(sibling))
             try:
                 native_path(checkout_root).rename(native_path(sibling))
             except PermissionError as error:
@@ -3078,11 +3134,25 @@ def _remove_worktree(repository, checkout_root, manifest, removal):
                 raise BoardError("NOT_READY", "The checkout is in use by another process",
                                  reasons=["checkout-in-use"], path=str(checkout_root)) from error
             private_files.sync_directory(checkout_root.parent)
-        # Either this rename or an interrupted earlier one left the checkout
-        # under its reserved removal name; deletion always finishes there.
+        # The whole-tree rename proves no process holds the checkout and keeps
+        # its original path free during deletion; deletion always finishes at
+        # the reserved sibling.
         target = sibling
-    if _path_present(target):
-        private_dirs.remove_tree(target)
+    try:
+        if _path_present(target):
+            private_dirs.remove_tree(target)
+    except BaseException:
+        # A failure inside this process leaves the tree at the canonical path,
+        # exactly like the state before the removal started; the raised error
+        # itself stays the reported one, and a restore that cannot run is left
+        # to the next boundary's recovery.
+        if sibling is not None and not _path_present(checkout_root) and _path_present(sibling):
+            try:
+                native_path(sibling).rename(native_path(checkout_root))
+                private_files.sync_directory(checkout_root.parent)
+            except OSError:
+                pass
+        raise
     if _path_present(checkout_root) or (sibling is not None and _path_present(sibling)):
         raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout still exists after removal", path=str(checkout_root))
     removal["alreadyRemoved"] = not present

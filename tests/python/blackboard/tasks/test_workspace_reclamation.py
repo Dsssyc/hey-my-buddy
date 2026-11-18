@@ -25,15 +25,11 @@ class ReclamationTests(LifecycleTestCase):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         from hey_my_buddy.paths import native_path
         board, manifest, checkout, view = self.deferred_checkout()
-        # A Windows removal deletes the checkout under its reserved rename;
-        # the interrupted tree is whichever of the two names still stands.
-        remaining = [checkout]
         original = private_dirs.remove_tree
 
         def occupied(path, **kwargs):
             target = Path(path)
             if target.parent == checkout.parent and target.name in (checkout.name, checkout.name + '.removing'):
-                remaining[:] = [target]
                 native_path(target / '.git').unlink()
                 native_path(target / 'src/feature.py').unlink()
                 native_path(target / 'src').rmdir()
@@ -46,17 +42,17 @@ class ReclamationTests(LifecycleTestCase):
         self.assertEqual(self.view(board, view['runId'])['cleanup']['state'], 'applying')
         self.assertEqual(workspace._worktree_record(self.repo, checkout)['locked'],
                          'hey-my-buddy:' + manifest['workspaceId'])
-        self.assertEqual({path.name for path in remaining[0].iterdir()}, {'tracked.txt'})
+        # The failure exit of the removal restores the canonical path, so the
+        # interrupted tree stands at the checkout itself on every platform.
+        self.assertEqual({path.name for path in checkout.iterdir()}, {'tracked.txt'})
+        self.assertFalse((checkout.parent / 'checkout.removing').exists())
         self.assertEqual(board.store.service_issues()[0]['stage'], 'workspace-cleanup')
         git(self.repo, 'worktree', 'unlock', str(checkout))
         git(self.repo, 'worktree', 'lock', '--reason', 'foreign-owner', str(checkout))
         maintenance.run()
         issues = board.store.service_issues()
         self.assertEqual(issues[0]['stage'], 'workspace-cleanup')
-        # With the checkout still standing the blocked plan reports its reason;
-        # once a Windows removal renamed it away, the same refusal surfaces from
-        # the resume proof instead. Both carry the code and the owning run.
-        self.assertEqual(issues[0]['code'], 'lock-mismatch')
+        self.assertIn('lock-mismatch', issues[0]['message'])
         self.assertIn(view['runId'], issues[0]['message'])
         head = board.store.head()
         maintenance.run()

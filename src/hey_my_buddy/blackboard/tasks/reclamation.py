@@ -276,9 +276,18 @@ def allocation_records(store, directories, *, stopping=lambda: False, create_rev
             try:
                 ownership.enter_context(workspace._lock(directory, create=create_revoked_lock and item['revoked']))
             except BoardError as error:
-                if error.code not in ('WORKSPACE_BUSY', 'WORKSPACE_UNSAFE', 'PRIVATE_PATH_UNSAFE'):
+                if error.code == 'WORKSPACE_BUSY':
+                    item['reasons'] = ['WORKSPACE_BUSY']
+                elif error.code in ('WORKSPACE_UNSAFE', 'PRIVATE_PATH_UNSAFE'):
+                    item['reasons'] = ['allocation-unproven']
+                elif error.code == 'NOT_READY' and error.details.get('reasons') == ['checkout-in-use']:
+                    # A crashed Windows removal left the checkout under its reserved
+                    # name while another process still holds it; the lock boundary's
+                    # recovery reports the same occupied-checkout blocker
+                    # allocation_plan reports, and the scan continues.
+                    item['reasons'] = ['checkout-in-use']
+                else:
                     raise
-                item['reasons'] = ['WORKSPACE_BUSY' if error.code == 'WORKSPACE_BUSY' else 'allocation-unproven']
             else:
                 item.update(allocation_record(store, directory))
                 _allocation_owner(store, item)

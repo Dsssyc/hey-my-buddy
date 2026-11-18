@@ -514,23 +514,32 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         return board, submitted, manifest, checkout, artifact
 
     def interrupt_reclaim(self, board, view, checkout, *, missing=(), remove_git=False):
+        from hey_my_buddy.blackboard.tasks.checkout_processes import removal_sibling
         real_remove = private_dirs.remove_tree
+        sibling = removal_sibling(checkout)
 
         def interrupted_remove(path, **kwargs):
-            if Path(path) == checkout:
+            target = Path(path)
+            if target in (checkout, sibling):
+                # A Windows removal deletes under its reserved rename, so the
+                # interruption addresses whichever of the two names it received.
                 # Exercise the retained applying form with its original Git
                 # identity and a missing lock as well as partial file removal.
                 git(self.repo, "worktree", "unlock", str(checkout))
                 for path in missing:
-                    (checkout / path).unlink()
+                    (target / path).unlink()
                 if remove_git:
-                    (checkout / ".git").unlink()
+                    (target / ".git").unlink()
                 raise RuntimeError("lost during physical removal")
             return real_remove(path, **kwargs)
 
         with mock.patch.object(private_dirs, "remove_tree", side_effect=interrupted_remove):
             with self.assertRaises(RuntimeError):
                 self.reclaim(board, view)
+        # The failure exit of the removal itself restores the canonical path,
+        # so the interrupted tree always stands at the checkout it registered.
+        self.assertTrue(checkout.is_dir())
+        self.assertFalse(sibling.exists())
         self.assertEqual(self.view(board, view["runId"])["cleanup"]["state"], "applying")
         self.assertNotIn("locked", workspace_module._worktree_record(self.repo, checkout))
 
