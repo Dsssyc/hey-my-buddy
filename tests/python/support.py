@@ -97,7 +97,11 @@ def occupied_directory(cwd: Path, *, timeout: float = 30.0):
                                 child.kill()
                             child.wait(timeout=2.0)
                 except (OSError, subprocess.TimeoutExpired) as error:
-                    raise AssertionError("Could not stop the occupying process during cleanup") from error
+                    if stop_error is None or isinstance(stop_error, Exception):
+                        raise AssertionError("Could not stop the occupying process during cleanup") from error
+                    stop_error.add_note(f"Could not stop the occupying process during cleanup: {error}")
+                if stop_error is not None and not isinstance(stop_error, Exception):
+                    raise stop_error
                 if not body_failed:
                     raise AssertionError("Occupying process tree did not confirm shutdown") from stop_error
 

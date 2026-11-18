@@ -51,7 +51,7 @@ from ..version import VersionShutdownError, probe_version
 from ..base import BoundSessionServices, ProcessHandle
 from ..input_admission import admission_error
 from ....protocol.input_failure import is_input_too_large
-from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
+from ....protocol.owned_process import WindowsCommandLineTooLong, WorkingDirectoryRejected, owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ..native_support import (
     CancelFlag,
@@ -84,6 +84,7 @@ from ..run_contract import (
     ResultBuddy,
     RunBuddy,
     RunEnd,
+    WorkingDirectoryRejection,
     RunFeedback,
     RunRequest,
     RunResult,
@@ -647,6 +648,7 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
+    working_directory_rejection: WorkingDirectoryRejection | None = None
     native_error: dict | None = None
     provider_rejection: dict | None = None
     root_model_activity: bool = False
@@ -1151,10 +1153,12 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             state.reason = "observer-interrupt"
             state.observer_stopped = True
             outcome.record = None
-        except (NativeError, ReceiptError, VersionShutdownError) as error:
+        except (NativeError, ReceiptError, VersionShutdownError, WorkingDirectoryRejected) as error:
             state.status = "cancelled" if error.code == "cancelled" else "error"
             launch_reason = getattr(error, "reason", None)
             state.reason = launch_reason["code"] if launch_reason is not None else error.code
+            if isinstance(error, WorkingDirectoryRejected):
+                state.working_directory_rejection = WorkingDirectoryRejection(**error.reason["params"])
             if state.reason == "harness.shutdown-unverified":
                 # Entry resolution may own a Node probe before the main spawn.
                 owned_spawn[:] = [{"created": True, "shutdown": False, "exit_code": None}]
@@ -1737,6 +1741,7 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
     return RunResult(
         identity=request.identity, harness="zcode",
         end=RunEnd(status=state.status, reason_code=state.reason,
+                   working_directory_rejection=state.working_directory_rejection,
                    native_exit_code=state.exit_code,
                    message=state.error_text),
         harness_version=spawn.version if spawn is not None else None,

@@ -116,8 +116,9 @@ CHECKPOINT_DESCRIPTION = (
     "Pick up queued Host inquiries for this micro task turn. Returns a signed receipt listing the questions "
     "still awaiting an answer (nothing pending returns an empty list); when the serialized receipt budget "
     "cannot carry every pending question, morePending names how many stayed queued — answer the listed ones "
-    "and checkpoint again to pick up the rest. Call it at natural work milestones and again just before "
-    "hey_my_buddy_finish_turn; it is never required on a timer. Answer each listed question with "
+    "and checkpoint again to pick up the rest. Call it proactively after completing each step, before starting "
+    "a time-consuming check or long-running command, and before calling hey_my_buddy_finish_turn. "
+    "No timer-based polling is needed. Answer each listed question with "
     "hey_my_buddy_answer_inquiry using its exact inquiryId."
 )
 ANSWER_DESCRIPTION = (
@@ -143,11 +144,12 @@ def micro_task_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
                     credential_file: str | None = None) -> str:
     """Micro task root prompt: scope, inquiry channel, finish contract."""
     inquiry = (
-        f"Host inquiries arrive cooperatively: call {checkpoint_tool} at natural work milestones and again just "
-        f"before finishing to pick up any queued Host questions (an empty list means none). Answer each listed "
+        f"Host inquiries arrive cooperatively: call {checkpoint_tool} proactively after completing each step, "
+        f"before starting a time-consuming check or long-running command, and before calling {finish_tool} "
+        f"to pick up any queued Host questions (an empty list means none). Answer each listed "
         f"question with {answer_tool} using its exact inquiryId. A completed finish is refused while a question "
         f"is still unanswered; a question the journal shows answered, discarded or otherwise no longer answerable "
-        f"does not block it. Checkpointing is voluntary and never on a timer, and no input is ever injected into "
+        f"does not block it. No timer-based polling is needed, and no input is ever injected into "
         "your turn."
     ) if checkpoint_tool and answer_tool else ""
     if answer_tool and checkpoint_tool is None:

@@ -82,7 +82,7 @@ from ..native_support import (
     INQUIRY_FAILURE_BYTES,
 )
 from ..native_observations import native_counter
-from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
+from ....protocol.owned_process import WindowsCommandLineTooLong, WorkingDirectoryRejected, owned_popen
 from ..run_contract import (
     CheckedBuddy,
     CheckedValue,
@@ -96,6 +96,7 @@ from ..run_contract import (
     ResultBuddy,
     RunBuddy,
     RunEnd,
+    WorkingDirectoryRejection,
     RunFeedback,
     RunRequest,
     RunResult,
@@ -252,6 +253,7 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
+    working_directory_rejection: WorkingDirectoryRejection | None = None
     native_admission_error: dict | None = None
     provider_rejection: dict | None = None
     catalog_checked: bool = False
@@ -1101,6 +1103,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
         return RunResult(
             identity=request.identity, harness="claude",
             end=RunEnd(status=state.status, reason_code=state.reason,
+                       working_directory_rejection=state.working_directory_rejection,
                        native_exit_code=state.exit_code,
                        message=state.error_text),
             harness_version=spawn.version if spawn is not None else None,
@@ -1257,10 +1260,12 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                                    "rejectionPhase": collector.evidence.rejection_phase() if collector is not None
                                    and collector.evidence is not None else "unknown"}
             request_interrupt()
-        except (ClaudeProtocolError, VersionShutdownError) as error:
+        except (ClaudeProtocolError, VersionShutdownError, WorkingDirectoryRejected) as error:
             state.status = "cancelled" if error.code == "user-cancel" else "error"
             state.reason = error.code
             state.error_text = str(error)
+            if isinstance(error, WorkingDirectoryRejected):
+                state.working_directory_rejection = WorkingDirectoryRejection(**error.reason["params"])
             if (isinstance(error, ClaudeProtocolError) and collector is not None
                     and collector.user_sent and collector.evidence is not None
                     and not collector.evidence.root_model_activity):

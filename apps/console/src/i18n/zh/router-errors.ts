@@ -94,6 +94,7 @@ export default {
   "wrong-native-thread": "原生线程与请求不符",
   "readonly-configuration-mismatch": "只读设置与请求不符",
   "harness.command-line-too-long": "启动命令超过长度上限",
+  "harness.working-directory-rejected": "操作系统拒绝使用该工作目录",
   "dsh-tool-inventory-unreadable": "未读到 DSH 工具目录",
   "dsh-tool-inventory-format-unrecognized": "无法识别 DSH 工具目录格式",
   "catalog-unavailable": "模型目录不可用",

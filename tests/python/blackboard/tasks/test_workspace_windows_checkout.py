@@ -154,7 +154,8 @@ class NativeWindowsWorkspaceCheckoutTests(unittest.TestCase):
         commit = self.commit_index("120000", "src/link", b"target.txt")
         child = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--restricted-child",
                                 str(self.state), str(self.repository), commit],
-                               capture_output=True, text=True, timeout=180)
+                               capture_output=True, text=True, encoding="utf-8", timeout=180,
+                               env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         self.assertEqual(child.returncode, 0, child.stderr)
         result = json.loads(child.stdout)
         if result["kind"] == "unprivileged-symlink-allowed":

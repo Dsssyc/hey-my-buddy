@@ -15,6 +15,8 @@ import os
 import subprocess
 import uuid
 
+from ..text import truncate_utf8
+from .reasons import reason
 from .windows_process import WindowsAPI
 from .service_process import CREATE_NEW_PROCESS_GROUP, service_creation_flags
 
@@ -112,6 +114,45 @@ class WindowsCommandLineTooLong(ValueError):
         super().__init__(f"Windows command line has {utf16_units} UTF-16 units; limit is {self.limit}")
 
 
+class WorkingDirectoryRejected(Exception):
+    """The OS refused the requested working directory before creating a child."""
+
+    code = "harness.working-directory-rejected"
+
+    @staticmethod
+    def reason_for(cwd: str, system_reason: str) -> dict:
+        return reason("harness.working-directory-rejected", cwd=cwd, systemReason=system_reason)
+
+    def __init__(self, cwd: str, system_reason: str):
+        self.reason = self.reason_for(cwd, system_reason)
+        self.owned_popen_evidence = ProcessCreationEvidence(False, True, None)
+        message = f"The OS rejected the working directory ({system_reason}). Use a valid or shorter checkout path."
+        super().__init__(truncate_utf8(f"{message} Directory: {cwd!r}", 512, errors="replace"))
+
+
+def _rejected_cwd(error: OSError, cwd, executable) -> WorkingDirectoryRejected | None:
+    if cwd is None:
+        return None
+    directory = os.fsdecode(cwd)
+    winerror = getattr(error, "winerror", None)
+    if winerror != 267:  # CreateProcessW's ERROR_DIRECTORY has no filename.
+        if not isinstance(error, (NotADirectoryError, FileNotFoundError)):
+            return None
+        if error.filename is not None:
+            # POSIX Popen reports the precise path that failed chdir or exec.
+            if os.fsdecode(error.filename) != directory:
+                return None
+            if os.fsdecode(executable) == directory and os.path.isdir(directory):
+                return None
+        elif (not os.path.isabs(executable) or not os.path.isfile(executable)
+              or os.path.isdir(directory)):
+            # An unnamed ENOENT can be the executable or its interpreter.
+            # Require separate evidence of an invalid cwd and an existing executable.
+            return None
+    number = f"WinError {winerror}" if winerror is not None else f"errno {error.errno}"
+    return WorkingDirectoryRejected(directory, f"{number}: {error.strerror}")
+
+
 def check_windows_command_line(argv, *, windows: bool | None = None) -> None:
     """Check exactly the command line that Python's Windows Popen will encode.
 
@@ -128,47 +169,54 @@ def check_windows_command_line(argv, *, windows: bool | None = None) -> None:
         raise WindowsCommandLineTooLong(units)
 
 
-def owned_popen(*args, windows_api=None, job_name: str | None = None,
+def owned_popen(argv, *, windows_api=None, job_name: str | None = None,
                 defer_resume: bool = False, **kwargs):
     """Create a process with tree ownership before any user code can run.
 
     Every failure carries ``owned_popen_evidence`` (ProcessCreationEvidence).
     ``created`` records whether Popen returned an actual process handle;
     ``shutdown_confirmed`` records no child or observed cleanup, independently
-    of whether the caller has registered ownership. Confirmed failures retain
-    the original exception; unknown cleanup raises RuntimeError with the same
-    evidence and the original failure as its cause. Consumers use the evidence,
-    never exception text or type, to judge shutdown.
+    of whether the caller has registered ownership. A rejected working directory
+    raises WorkingDirectoryRejected. Unknown cleanup raises RuntimeError with
+    the same evidence and the original failure as its cause. Other confirmed
+    failures retain the original exception. Consumers use the evidence to judge
+    shutdown.
 
     ``defer_resume`` leaves the assigned child suspended for the execution-root
     launch, which must publish its spawn marker before the child runs.
     """
     from .process_identity import begin_native_process_spawn, discard_confirmed_native_spawn
 
-    check_windows_command_line(args[0], windows=os.name == "nt" or windows_api is not None)
+    windows = os.name == "nt" or windows_api is not None
+    check_windows_command_line(argv, windows=windows)
     intent = begin_native_process_spawn()
     process = None
     job = None
     assigned = False
     try:
-        if os.name != "nt" and windows_api is None:
-            if job_name is not None:
-                raise ValueError("a Job name requires Windows process ownership")
-            process = subprocess.Popen(*args, **kwargs)
-            process._buddy_native_intent = intent
-            return process
-        api = windows_api if windows_api is not None else WindowsAPI()
-        name = job_name if job_name is not None else f"Local\\HeyMyBuddy-{uuid.uuid4()}"
-        job = OwnedJob(api, api.create_job(name), name)
-        kwargs = {**kwargs, "creationflags": kwargs.get("creationflags", 0) |
-                  CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | service_creation_flags(windows=True),
-                  "start_new_session": False}
-        process = subprocess.Popen(*args, **kwargs)
-        api.assign(job.handle, process)
-        assigned = True
-        if not defer_resume:
-            api.resume(process)
-        process._buddy_job = job
+        if windows:
+            api = windows_api if windows_api is not None else WindowsAPI()
+            name = job_name if job_name is not None else f"Local\\HeyMyBuddy-{uuid.uuid4()}"
+            job = OwnedJob(api, api.create_job(name), name)
+            kwargs["creationflags"] = (kwargs.get("creationflags", 0) | CREATE_SUSPENDED |
+                                       CREATE_NEW_PROCESS_GROUP | service_creation_flags(windows=True))
+            kwargs["start_new_session"] = False
+        elif job_name is not None:
+            raise ValueError("a Job name requires Windows process ownership")
+        try:
+            process = subprocess.Popen(argv, **kwargs)
+        except OSError as error:
+            executable = kwargs.get("executable") or argv[0]
+            rejection = _rejected_cwd(error, kwargs.get("cwd"), executable)
+            if rejection is not None:
+                raise rejection from error
+            raise
+        if job is not None:
+            job.api.assign(job.handle, process)
+            assigned = True
+            if not defer_resume:
+                job.api.resume(process)
+            process._buddy_job = job
         process._buddy_native_intent = intent
         return process
     except BaseException as error:
@@ -198,6 +246,13 @@ def owned_popen(*args, windows_api=None, job_name: str | None = None,
             except OSError:
                 if process is not None:
                     stopped = False
+            if assigned and process.returncode is None:
+                # Kill-on-close may reap the leader even when TerminateJobObject failed.
+                # This wait does not establish that the entire Job stopped.
+                try:
+                    process.wait(timeout=2)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
         evidence = ProcessCreationEvidence(
             created=process is not None, shutdown_confirmed=stopped,
             exit_code=process.returncode if process is not None else None)

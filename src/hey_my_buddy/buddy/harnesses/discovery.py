@@ -577,7 +577,7 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *
     retain the directory if the owned group cannot be confirmed stopped.
     """
     from .dsh.acp.launch import LaunchOwnershipError, LaunchRejected, launch
-    from ...protocol.owned_process import WindowsCommandLineTooLong
+    from ...protocol.owned_process import WindowsCommandLineTooLong, WorkingDirectoryRejected
 
     start = time.monotonic()
     if start >= deadline:
@@ -596,6 +596,8 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *
             process, handle = error.process, error.handle
         except WindowsCommandLineTooLong as error:
             return make_reason("harness.command-line-too-long", operation="probe", utf16Units=error.utf16_units, limit=error.limit), b""
+        except WorkingDirectoryRejected as error:
+            return error.reason, b""
         except (LaunchRejected, OSError, ValueError):
             return code, output
         else:

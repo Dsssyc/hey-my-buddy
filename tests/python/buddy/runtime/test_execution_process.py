@@ -39,11 +39,17 @@ def self_identity_for_endpoint() -> dict:
 
 class ExecutionEndpointTests(unittest.TestCase):
     def test_harness_retry_requires_proof_the_native_request_was_not_sent(self):
+        from hey_my_buddy.blackboard.routing.statistics import round_classification
+        from hey_my_buddy.buddy.harnesses.run_contract import RunEnd, WorkingDirectoryRejection
         from hey_my_buddy.buddy.roles import controller
         from hey_my_buddy.install import runtime
+        from hey_my_buddy.protocol.owned_process import WorkingDirectoryRejected
 
-        for sent, started in ((True, False), (None, False), (False, False), (False, None)):
-            with self.subTest(nativeRequestSent=sent, modelResponded=started), \
+        cases = [("transport-error", sent, started)
+                 for sent, started in ((True, False), (None, False), (False, False), (False, None))]
+        cases.append((WorkingDirectoryRejected.code, False, False))
+        for code, sent, started in cases:
+            with self.subTest(code=code, nativeRequestSent=sent, modelResponded=started), \
                  tempfile.TemporaryDirectory(prefix="premodel-retry-") as directory:
                 state = Path(directory)
                 spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60, "decision": {"kind": "maintain"}}
@@ -58,13 +64,18 @@ class ExecutionEndpointTests(unittest.TestCase):
                                          stop_initiator=None, grace_expired=False)
                 holder = {"preflightControl": mock.Mock(), "harnessHistory": [{"harness": "dsh"}]}
                 outcome = AdapterOutcome(status="failed", shutdown_confirmed=True,
-                    result={"code": "transport-error", "nativeRequestSent": sent, "modelResponded": started})
+                    result={"code": code, "nativeRequestSent": sent, "modelResponded": started})
+                directory_rejected = code == WorkingDirectoryRejected.code
+                if directory_rejected:
+                    rejection = WorkingDirectoryRejection(cwd=directory, system_reason="WinError 267")
+                    handle.result = SimpleNamespace(activity=None, end=RunEnd(
+                        status="error", reason_code=code, working_directory_rejection=rejection))
                 with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
                      mock.patch.object(controller, "worker_executor", return_value=object()), \
                      mock.patch.object(controller, "prepare_worker_run", return_value=controller.WorkerPreparation(True)), \
                      mock.patch.object(controller, "worker_start", return_value=handle) as start, \
                      mock.patch.object(controller, "worker_collect", return_value=outcome):
-                    if sent is False:
+                    if sent is False and not directory_rejected:
                         with self.assertRaises(BoardError) as refused:
                             execution._execute_selected(claim, claim["task"], spec, claim["attempt"], state, holder)
                         self.assertEqual(refused.exception.code, "HARNESS_PREMODEL_FAILED")
@@ -73,6 +84,11 @@ class ExecutionEndpointTests(unittest.TestCase):
                         report = execution._execute_selected(claim, claim["task"], spec, claim["attempt"], state, holder)
                         self.assertEqual(report["result"]["nativeRequestSent"], sent)
                         self.assertIs(holder["handle"], handle)
+                        if directory_rejected:
+                            self.assertEqual(report["terminationReason"], "workspace-error")
+                            self.assertEqual(round_classification(report), "neither")
+                            self.assertEqual(report["result"]["reason"], {"code": code, "params": {
+                                "cwd": directory, "systemReason": "WinError 267"}})
                     start.assert_called_once()
 
     def test_review_unavailable_result_uses_frozen_request_without_copying_budget(self):

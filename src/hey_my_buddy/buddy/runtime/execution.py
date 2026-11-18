@@ -38,6 +38,7 @@ from ...protocol.workspace_manifest import record_reference
 from ...protocol.turn_input import NONE_TURN_INPUT_VERSION
 from ...protocol.contracts import ExecutionLive
 from ...protocol.run_identity import RunIdentity
+from ...protocol.owned_process import WorkingDirectoryRejected
 from ...protocol.reasons import reason as make_reason
 from ...json_codec import canonical_json, decode_strict_json
 from ...protocol.stop import WRAP_UP_INITIATORS, TERMINATION_REASONS
@@ -217,7 +218,8 @@ def classify_termination(outcome, *, timed_out, cancel_requested,
             wrap_up_delivered=result.get("wrapUpDelivered", False))
     # The turn seal runs only after a completed native turn. Partial sealing and
     # cumulative patch capture can also fail while preserving an earlier failure.
-    if outcome.result.get("workspaceSealError") is not None:
+    if (outcome.result.get("workspaceSealError") is not None
+            or outcome.result.get("code") == WorkingDirectoryRejected.code):
         return TERMINATION_WORKSPACE_ERROR
     if outcome.result.get("code") == "transport-error":
         return TERMINATION_TRANSPORT_ERROR
@@ -831,6 +833,9 @@ class Execution:
         result = getattr(handle, "result", None)
         if result is not None and result.activity is not None:
             self.hint(activity=result.activity.value)
+        if outcome.result.get("code") == WorkingDirectoryRejected.code:
+            rejection = result.end.working_directory_rejection
+            outcome.result["reason"] = WorkingDirectoryRejected.reason_for(rejection.cwd, rejection.system_reason)
         # A Router projection must retain a failure to preserve its native evidence.
         retention_failure = getattr(handle, "evidence_retention_failure", None)
         if isinstance(retention_failure, dict):

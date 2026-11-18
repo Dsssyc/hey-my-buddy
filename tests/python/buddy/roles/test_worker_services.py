@@ -172,9 +172,14 @@ class MicroTaskPromptTests(unittest.TestCase):
         self.assertNotIn("Host inquiries arrive cooperatively", half)
         both = worker_services.micro_task_prompt("t", turn, finish, checkpoint_tool=checkpoint,
                                                answer_tool=answer)
-        self.assertIn(f"call {checkpoint} at natural work milestones", both)
+        self.assertIn(f"call {checkpoint} proactively after completing each step", both)
+        self.assertIn(f"before calling {finish}", both)
         self.assertIn(f"Answer each listed question with {answer}", both)
-        self.assertIn("never on a timer", both)
+        for instructions in (both, worker_services.CHECKPOINT_DESCRIPTION):
+            self.assertIn("after completing each step", instructions)
+            self.assertIn("before starting a time-consuming check or long-running command", instructions)
+            self.assertIn("No timer-based polling is needed", instructions)
+        self.assertIn("before calling hey_my_buddy_finish_turn", worker_services.CHECKPOINT_DESCRIPTION)
         # The names are plain arguments: arbitrary identifiers flow through
         # verbatim, and no harness name appears anywhere in the role's own text
         # ("review"/"reviewer" are ordinary words of the frozen hints). The

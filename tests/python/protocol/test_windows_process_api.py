@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.protocol import windows_process as windows
-from hey_my_buddy.protocol.owned_process import owned_popen
+from hey_my_buddy.protocol.owned_process import ProcessCreationEvidence, owned_popen
 from hey_my_buddy.protocol.process_start import _FileTime
 
 
@@ -139,6 +139,28 @@ class WindowsAPITests(unittest.TestCase):
         self.assertTrue(caught.exception.owned_popen_evidence.shutdown_confirmed)
         child.kill.assert_called_once_with()
         self.api.CloseHandle.assert_called_once_with(self.job_handle)
+        for stream in (child.stdin, child.stdout, child.stderr):
+            self.assertTrue(stream.closed)
+
+    def test_failed_termination_reaps_the_leader_after_kill_on_close(self):
+        child = mock.Mock(pid=321, _handle=42, returncode=None,
+                          stdin=io.BytesIO(), stdout=io.BytesIO(), stderr=io.BytesIO())
+        self.job.QueryInformationJobObject.return_value = {"BasicLimitInformation": {}}
+        self.job.TerminateJobObject.side_effect = Win32Error(5)
+
+        def reap(*, timeout):
+            self.assertEqual(timeout, 2)
+            self.assertIn(mock.call(self.job_handle), self.api.CloseHandle.call_args_list)
+            child.returncode = 1
+            return child.returncode
+
+        child.wait.side_effect = reap
+        with mock.patch.object(subprocess, "Popen", return_value=child), \
+             mock.patch.object(self.boundary, "resume", side_effect=OSError("resume failed")):
+            with self.assertRaisesRegex(RuntimeError, "shutdown is unconfirmed") as caught:
+                owned_popen(["fixture"], windows_api=self.boundary)
+        child.wait.assert_called_once_with(timeout=2)
+        self.assertEqual(caught.exception.owned_popen_evidence, ProcessCreationEvidence(True, False, 1))
         for stream in (child.stdin, child.stdout, child.stderr):
             self.assertTrue(stream.closed)
 

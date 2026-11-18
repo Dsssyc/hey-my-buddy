@@ -33,7 +33,7 @@ from typing import Any, Callable, Iterator, Mapping
 from ....errors import BoardError
 from ....json_codec import decode_strict_json
 from ....protocol.reasons import reason as make_reason
-from ....protocol.owned_process import WindowsCommandLineTooLong
+from ....protocol.owned_process import WindowsCommandLineTooLong, WorkingDirectoryRejected
 from ....private_dirs import ensure_private_dir
 from ....paths import native_path
 from ....private_files import read_bytes, open_read
@@ -73,6 +73,7 @@ from ..run_contract import (
     ResultBuddy,
     RunBuddy,
     RunEnd,
+    WorkingDirectoryRejection,
     RunFeedback,
     RunRequest,
     RunResult,
@@ -499,6 +500,7 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
+    working_directory_rejection: WorkingDirectoryRejection | None = None
     model_responded: bool = False
     native_request_sent: bool | None = False
     native_admission_error: dict | None = None
@@ -991,11 +993,13 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.reason = "observer-interrupt"
             state.observer_stopped = True
             send_cancel(sessions[-1] if sessions else None)
-        except (NativeError, ReceiptError) as error:
+        except (NativeError, ReceiptError, WorkingDirectoryRejected) as error:
             state.spawn_failure = getattr(error, "spawn_evidence", None)
             state.status = "cancelled" if error.code in ("cancelled", "native-cancelled") else "error"
             state.reason = error.code
             state.error_text = str(error)[:512]
+            if isinstance(error, WorkingDirectoryRejected):
+                state.working_directory_rejection = WorkingDirectoryRejection(**error.reason["params"])
             send_cancel(sessions[-1] if sessions else None)
         except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
             state.status = "error"
@@ -1569,6 +1573,7 @@ def _build_result(request: RunRequest, *, state: _RunState,
     return RunResult(
         identity=request.identity, harness="dsh",
         end=RunEnd(status=state.status, reason_code=state.reason,
+                   working_directory_rejection=state.working_directory_rejection,
                    native_exit_code=stop.get("exit_code"),
                    message=state.error_text),
         harness_version=state.harness_version,

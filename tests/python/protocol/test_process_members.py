@@ -47,6 +47,17 @@ class AdmissionTests(unittest.TestCase):
         rows.clear()
         self.assertEqual(observer.observe(), "identity-absent")
 
+    def test_second_observation_cannot_prove_absence_with_a_new_session_member(self):
+        rows = {101: ProcessMember(101, 10, 1, 101, True)}
+        starts = {101: 10}
+        observer, _ = self.observer(rows, starts)
+        self.assertEqual(observer.observe(), "alive")
+        del rows[101], starts[101]
+        rows[102] = ProcessMember(102, 11, 1, 101, True)
+        starts[102] = 11
+        self.assertEqual(observer.observe(), "unknown")
+        self.assertEqual(observer.known, {101: 10})
+
     def test_new_session_member_after_root_reaping_is_unknown_and_unsignalled(self):
         rows = {101: ProcessMember(101, 10, 1, 101, True),
                 102: ProcessMember(102, 11, 101, 202, True)}
