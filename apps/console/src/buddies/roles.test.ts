@@ -24,15 +24,14 @@ describe("the warning of the recorded window", () => {
     expect(healthSummary(health()).warning).toBeNull();
   });
 
-  it("names the unavailable Router with the recorded code, and a window that keeps failing", () => {
+  it("names the unavailable Router with the recorded code", () => {
     expect(healthSummary(health({ available: false, reason: { code: "router-skip-window", params: {} } })).warning).toEqual({ kind: "unavailable", reason: { code: "router-skip-window", params: {} } });
     expect(healthSummary(health({ available: false })).warning).toEqual({ kind: "unavailable", reason: null });
-    expect(healthSummary(health({ failureCount: 4, consecutiveFailures: 4 })).warning).toEqual({ kind: "failing", count: 4 });
   });
 
-  it("takes the service's availability as it is and derives no failure threshold", () => {
+  it("takes the service's availability as it is: failures alone raise no warning", () => {
     const summary = healthSummary(health({ available: true, consecutiveFailures: 4, failureCount: 4 }));
-    expect(summary.warning).toEqual({ kind: "failing", count: 4 });
+    expect(summary.warning).toBeNull();
   });
 
   it("does not count abstentions or cancellations as failures", () => {
@@ -205,9 +204,9 @@ describe("the note under the list", () => {
       .toEqual({ kind: "head", buddyId: "gone:p:m:e", refusal: null });
   });
 
-  it("comes after nobody-can-serve and the head's refusal, and before nothing", () => {
+  it("is none while only the window records failures, and the head's refusal still comes first", () => {
     const failing = health({ currentRouterBuddyId: MEDIUM_ID, failureCount: 3, consecutiveFailures: 3 });
-    expect(routerNote(source([MEDIUM_ID]), failing)).toEqual({ kind: "failing", count: 3 });
+    expect(routerNote(source([MEDIUM_ID]), failing)).toBeNull();
     expect(routerNote(source([SOL_ID]), { ...failing, currentRouterBuddyId: SOL_ID })).toMatchObject({ kind: "head" });
   });
 });

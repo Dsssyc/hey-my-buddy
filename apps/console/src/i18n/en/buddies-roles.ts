@@ -25,7 +25,6 @@ export default {
       head: "The first in the list, {{name}}: {{reason}}.",
       gone: "no longer in the catalog",
       unavailable: "The Router is unavailable.",
-      failing: "Routing has failed {{n}} times in a row.",
     },
   },
   add: {

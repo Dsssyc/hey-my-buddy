@@ -49,8 +49,8 @@ describe("what waits on the Buddy page", () => {
     expect(attention({ health: { ...failing, available: false, currentRouterBuddyId: null } }).roles).toBe("unusable");
   });
 
-  it("names routing that keeps failing while the Router itself can work", () => {
-    expect(attention({ health: failing }).roles).toBe("failing");
+  it("is nothing while the window records failures and the Router itself can work", () => {
+    expect(attention({ health: failing }).roles).toBeNull();
   });
 
 });

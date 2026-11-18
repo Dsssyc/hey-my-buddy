@@ -33,7 +33,6 @@ function noteText(note: RouterNote | null, buddies: Buddy[], t: TFunction<"buddi
       }} />;
     }
     case "unavailable": return note.reason ? <ReasonMessage reason={note.reason} /> : t("roles.list.attention.unavailable");
-    case "failing": return t("roles.list.attention.failing", { n: note.count });
   }
 }
 
