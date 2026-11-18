@@ -8,6 +8,7 @@ import uuid
 
 from ...errors import BoardError
 from ...protocol import maintenance as files, schemas
+from ...protocol.owned_process import WorkingDirectoryRejected
 from ..store.db import canonical_json
 from . import maintenance_data, router
 
@@ -272,6 +273,8 @@ class Maintenance:
                 code = problem["code"]
         params = ({"seconds": json.loads(task["spec_json"])["modelResponseWaitSeconds"]}
                   if code == "router-not-responding" else None)
+        if code == WorkingDirectoryRejected.code:
+            params = WorkingDirectoryRejected.reason_params(output.get("reason"))
         return self.finish(connection, task_id=task["task_id"], now=now, code=code, params=params)
 
 

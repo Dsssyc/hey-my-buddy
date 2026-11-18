@@ -147,15 +147,15 @@ def _rejected_cwd(error: OSError, cwd, executable) -> WorkingDirectoryRejected |
     directory = os.fsdecode(cwd)
     winerror = getattr(error, "winerror", None)
     if winerror != 267:  # CreateProcessW's ERROR_DIRECTORY has no filename.
-        if not isinstance(error, (NotADirectoryError, FileNotFoundError)):
-            return None
         if error.filename is not None:
             # POSIX Popen reports the precise path that failed chdir or exec.
             if os.fsdecode(error.filename) != directory:
                 return None
-            if os.fsdecode(executable) == directory and os.path.isdir(directory):
+            if (os.fsdecode(executable) == directory and os.path.isdir(directory)
+                    and os.access(directory, os.X_OK)):
                 return None
-        elif (not os.path.isabs(executable) or not os.path.isfile(executable)
+        elif (not isinstance(error, (NotADirectoryError, FileNotFoundError))
+              or not os.path.isabs(executable) or not os.path.isfile(executable)
               or os.path.isdir(directory)):
             # An unnamed ENOENT can be the executable or its interpreter.
             # Require separate evidence of an invalid cwd and an existing executable.

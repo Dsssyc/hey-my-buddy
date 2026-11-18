@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 import json
+from urllib.parse import quote
 
 from ...protocol.structured_schema import schema_errors
 from ...protocol.task_types import TASK_TYPES
@@ -51,11 +52,11 @@ def _kind(value):
 
 
 def _kind_id(value):
-    harness, model_id, effort = _kind(value)
-    if any(not isinstance(part, str) or not part or not part.isprintable()
-           or any(char in part for char in ":\"'") for part in (harness, model_id, effort)):
-        raise ValueError("Maintenance kind identifier components must be nonempty printable strings without colons or quotes")
-    return f"{harness}:{model_id}:{effort}"
+    parts = _kind(value)
+    if any(not isinstance(part, str) or not part.strip() for part in parts):
+        raise ValueError("Maintenance kind identifier components must be nonblank strings")
+    # quote always leaves tilde unescaped. Encode it to keep the key alphabet fixed.
+    return ":".join(quote(part, safe="-_.").replace("~", "%7E") for part in parts)
 
 
 def _kind_payload(connection, harness, model_id, effort):

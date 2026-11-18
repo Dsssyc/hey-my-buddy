@@ -1,5 +1,6 @@
 """The four native drivers retain a working directory rejection and stop."""
 from contextlib import ExitStack
+import errno
 import os
 from pathlib import Path
 import subprocess
@@ -15,7 +16,74 @@ from hey_my_buddy.buddy.harnesses.zcode import native_run as zcode
 from hey_my_buddy.buddy.harnesses.run_contract import (
     FEEDBACK_CONTINUE, PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
 )
-from hey_my_buddy.protocol.owned_process import WorkingDirectoryRejected
+from hey_my_buddy.protocol.owned_process import WorkingDirectoryRejected, _rejected_cwd, owned_popen
+
+
+class WorkingDirectoryClassificationTests(unittest.TestCase):
+    def test_named_os_errors_distinguish_the_directory_from_the_executable(self):
+        with tempfile.TemporaryDirectory() as root:
+            cwd = os.path.join(root, "cwd")
+            executable = os.path.join(root, "harness")
+            for number in (errno.ENOENT, errno.ENOTDIR, errno.ENAMETOOLONG,
+                           errno.EACCES, errno.EPERM, errno.ELOOP):
+                with self.subTest(errno=number):
+                    error = OSError(number, os.strerror(number), os.fsencode(cwd))
+                    rejection = _rejected_cwd(error, Path(cwd), executable)
+                    self.assertEqual(rejection.reason, WorkingDirectoryRejected.reason_for(
+                        cwd, f"errno {number}: {error.strerror}"))
+                    error = OSError(number, os.strerror(number), executable)
+                    self.assertIsNone(_rejected_cwd(error, cwd, executable))
+            self.assertIsNone(_rejected_cwd(PermissionError(errno.EACCES, "permission denied"),
+                                            cwd, sys.executable))
+
+
+@unittest.skipUnless(os.name == "posix", "requires POSIX chdir and exec")
+class PosixWorkingDirectoryTests(unittest.TestCase):
+    def assert_rejected_cwd(self, cwd, number, *, executable=sys.executable):
+        with self.assertRaises(WorkingDirectoryRejected) as caught:
+            owned_popen([executable], cwd=cwd)
+        error = caught.exception
+        self.assertEqual(error.__cause__.errno, number)
+        self.assertEqual(error.reason, WorkingDirectoryRejected.reason_for(
+            str(cwd), f"errno {number}: {error.__cause__.strerror}"))
+        self.assertFalse(error.owned_popen_evidence.created)
+        self.assertTrue(error.owned_popen_evidence.shutdown_confirmed)
+
+    def assert_executable_error(self, cwd, executable, number):
+        with self.assertRaises(OSError) as caught:
+            owned_popen([str(executable)], cwd=cwd)
+        self.assertEqual(caught.exception.errno, number)
+        self.assertEqual(caught.exception.filename, str(executable))
+
+    def test_long_component_and_symlink_loop_are_attributed_to_the_failing_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            long_path = root / ("x" * (os.pathconf(root, "PC_NAME_MAX") + 1))
+            loop = root / "loop"
+            loop.symlink_to(loop.name)
+            for path, number in ((long_path, errno.ENAMETOOLONG), (loop, errno.ELOOP)):
+                with self.subTest(errno=number):
+                    self.assert_rejected_cwd(path, number)
+                    self.assert_executable_error(root, path, number)
+
+    @unittest.skipIf(getattr(os, "geteuid", lambda: -1)() == 0, "root can traverse a mode-0600 directory")
+    def test_directory_without_search_permission_is_rejected_even_if_named_as_executable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            blocked = Path(directory) / "blocked"
+            blocked.mkdir(mode=0o600)
+            try:
+                self.assert_rejected_cwd(blocked, errno.EACCES)
+                self.assert_rejected_cwd(blocked, errno.EACCES, executable=str(blocked))
+            finally:
+                blocked.chmod(0o700)
+
+    def test_nonexecutable_file_and_searchable_directory_remain_exec_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "nonexecutable"
+            executable.touch(mode=0o600)
+            self.assert_executable_error(root, executable, errno.EACCES)
+            self.assert_executable_error(root, root, errno.EACCES)
 
 
 class WorkingDirectoryTests(unittest.TestCase):

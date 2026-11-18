@@ -14,6 +14,7 @@ from hey_my_buddy.console.reads import console_snapshot_projection
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import profile as files
 from hey_my_buddy.protocol import tool_evidence
+from hey_my_buddy.protocol.owned_process import WorkingDirectoryRejected
 
 
 NONCE = "p" * 32
@@ -140,6 +141,23 @@ class ProfileExecutionTests(BoardTestCase):
         self.assertEqual([item["claim"] for item in replaced["profile"]["claims"]],
                          ["Different sourced claim"])
         self.assertEqual(replaced["profile"]["profileRunId"], replacement["profileRunId"])
+
+    def test_working_directory_rejection_keeps_its_reason_parameters(self):
+        self.configure()
+        attempt = self.claim(self.start())["attempt"]
+        cause = WorkingDirectoryRejected.reason_for(
+            str(self.board_.directory / "missing"), "WinError 267: The directory name is invalid")
+        self.board_.call("execution_result", {
+            "attemptId": attempt["attemptId"], "generation": attempt["generation"],
+            "nonce": NONCE, "status": "failed", "shutdownConfirmed": True,
+            "terminationReason": "workspace-error",
+            "result": {"operation": "profile", "status": "error", "code": cause["code"],
+                       "reason": cause, "nativeRequestSent": False, "modelResponded": False,
+                       "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}}},
+        })
+        run = self.model_view()["latestProfileRun"]
+        self.assertEqual(run["state"], "failed")
+        self.assertEqual(run["reason"], cause)
 
     def test_latest_run_reads_outcome_summary_from_result_even_when_publication_fails(self):
         self.configure()

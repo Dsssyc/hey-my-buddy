@@ -11,6 +11,7 @@ from copy import deepcopy
 
 from . import router_history, router_sequence
 from ...protocol import schemas
+from ...protocol.owned_process import WorkingDirectoryRejected
 from ...protocol.reasons import reason_from_json
 from .router_boundary import build_boundary
 from .candidate import candidate_bound
@@ -19,6 +20,7 @@ from ..tasks.workspace_bindings import effective_manifest
 _CHANGED_CODES = frozenset({
     "router-input-changed",
     "router-out-of-bounds", "workflow-routing-fenced", "router-input-too-large",
+    WorkingDirectoryRejected.code,
 })
 
 

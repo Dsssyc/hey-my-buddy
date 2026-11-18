@@ -27,6 +27,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 )
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import maintenance as files
+from hey_my_buddy.protocol.owned_process import WorkingDirectoryRejected
 from hey_my_buddy.protocol.reasons import REGISTERED_REASON_PARAMETERS
 
 from buddy.harnesses.dsh.acp.support import FAKE_AGENT
@@ -503,6 +504,23 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                     self.assertIsNone(actual)
                 else:
                     self.assertEqual({key: actual[key] for key in reported}, reported)
+
+    def test_working_directory_rejection_keeps_its_reason_parameters(self):
+        self.configure()
+        attempt = self.claim_maintenance(self.start()["runId"])["attempt"]
+        cause = WorkingDirectoryRejected.reason_for(
+            str(self.board_.directory / "missing"), "WinError 267: The directory name is invalid")
+        self.board_.call("execution_result", {
+            "attemptId": attempt["attemptId"], "generation": attempt["generation"],
+            "nonce": NONCE, "status": "failed", "shutdownConfirmed": True,
+            "terminationReason": "workspace-error",
+            "result": {"operation": "maintenance", "status": "error", "code": cause["code"],
+                       "reason": cause, "nativeRequestSent": False, "modelResponded": False,
+                       "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}}},
+        })
+        run = console_snapshot_projection(self.board_.service)[0]["maintenance"]["runs"][0]
+        self.assertEqual(run["state"], "failed")
+        self.assertEqual(run["reason"], cause)
 
     def test_stop_unconfirmed_keeps_its_reason_over_a_rejected_answer(self):
         self.configure()

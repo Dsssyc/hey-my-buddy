@@ -4,7 +4,7 @@ import json
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
-from support import FakeClock
+from support import FakeClock, seed_buddy
 from hey_my_buddy.blackboard.routing.maintenance_data import (
     answer_schema, apply_answer, build_packet, merge_domain, pending, rename_domain,
     pending_count,
@@ -13,7 +13,7 @@ from hey_my_buddy.protocol.structured_schema import schema_errors
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol.task_types import TASK_TYPES
-from hey_my_buddy.blackboard.evaluation.models import current_model, ensure_model_service
+from hey_my_buddy.blackboard.evaluation.models import append_correspondence, current_model, ensure_model_service
 
 
 def packet_key(kind):
@@ -197,7 +197,7 @@ class MaintenanceDataTests(WorkflowTestCase):
         packet = self.packet()
         kind = packet["kinds"][0]
         for field in ("harness", "modelId", "effort"):
-            for value in ("", "two:parts", 'double"quote', "single'quote", "line\rbreak", "line\nbreak"):
+            for value in ("", " \t\n", None, 42):
                 with self.subTest(field=field, value=value):
                     invalid_kind = {**kind, field: value}
                     with self.assertRaisesRegex(ValueError, "kind identifier components"):
@@ -205,6 +205,58 @@ class MaintenanceDataTests(WorkflowTestCase):
         kind["kindId"] = json.dumps(packet_key(kind), separators=(",", ":"))
         with self.assertRaisesRegex(ValueError, "kindId does not match"):
             answer_schema(packet)
+
+    def test_encoded_kind_ids_bind_distinct_summaries_to_the_original_components(self):
+        cases = (
+            ("a:b", "c", "zcode:a%3Ab:c"),
+            ("a", "b:c", "zcode:a:b%3Ac"),
+            ("a", "custom:high", "zcode:a:custom%3Ahigh"),
+            ("a", "custom%3Ahigh\"'\n高~", "zcode:a:custom%253Ahigh%22%27%0A%E9%AB%98%7E"),
+        )
+        with self.board_.store.db.write() as db:
+            now = self.board_.store.now()
+            for model_id in ("a:b", "a"):
+                db.execute("INSERT INTO models(model_id,display_name) VALUES(?,?)", (model_id, model_id))
+                append_correspondence(db, ("zcode", "fixture", f"model-{model_id}"), model_id, now, "same-name")
+            for index, (model_id, effort, _) in enumerate(cases):
+                alias = f"encoded-kind-{index}"
+                seed_buddy(db, buddy_id=alias, harness="zcode", provider="fixture", model=f"model-{model_id}",
+                           effort=effort, now=now)
+                db.execute("UPDATE buddies SET alias=? WHERE buddy_id=?", (alias, alias))
+        run_ids = {}
+        for index, (_, _, kind_id) in enumerate(cases):
+            alias = f"encoded-kind-{index}"
+            run = self.submit(self.board_, request_id=alias, buddy=alias)
+            run_id = run["runId"]
+            self.finish_turn(self.board_, self.claim(self.board_, run_id=run_id))
+            self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": run_id}))
+            run_ids[kind_id] = run_id
+
+        packet = self.packet()
+        ordinary = next(kind for kind in packet["kinds"] if kind["harness"] == BUDDY["harness"])
+        self.assertEqual(ordinary["kindId"], ":".join(packet_key(ordinary)))
+        self.assertEqual({packet_key(kind): kind["kindId"] for kind in packet["kinds"] if kind["harness"] == "zcode"},
+                         {("zcode", model_id, effort): kind_id for model_id, effort, kind_id in cases})
+        schema = answer_schema(packet)
+        self.assertCountEqual(schema["properties"]["summaries"]["required"], [ordinary["kindId"], *run_ids])
+        answer = {
+            "newNodes": [{"id": "parser", "name": "Parsing", "definition": "Parsing work", "parentId": None}],
+            "merges": [],
+            "classifications": [{"runId": run_id, "domainNodeId": "parser", "taskType": "debug"}
+                                for run_id in packet["classificationRunIds"]],
+            "summaries": {ordinary["kindId"]: {"text": "Ordinary kind", "citations": []},
+                          **{kind_id: {"text": kind_id, "citations": [run_id]} for kind_id, run_id in run_ids.items()}},
+        }
+        self.assertEqual(schema_errors(answer, schema), [])
+        with self.board_.store.db.write() as db:
+            result = apply_answer(db, packet=packet, answer=answer, maintenance_run_id=self.maintenance_id)
+            self.assertEqual(result["errors"], [])
+            self.assertEqual(result["written"]["summaries"], len(cases) + 1)
+            rows = db.execute("SELECT s.model_id,s.effort,s.text,e.run_id FROM kind_summaries s"
+                              " JOIN kind_summary_evidence e USING(harness,model_id,effort)"
+                              " WHERE s.harness='zcode' AND e.cited=1")
+            self.assertCountEqual([tuple(row) for row in rows],
+                                  [(model_id, effort, kind_id, run_ids[kind_id]) for model_id, effort, kind_id in cases])
 
     def test_schema_permitted_values_pass_the_write_boundary(self):
         kind = self.packet()["kinds"][0]

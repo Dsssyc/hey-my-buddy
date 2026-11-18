@@ -8,6 +8,7 @@ import uuid
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ...protocol import profile as files, schemas
+from ...protocol.owned_process import WorkingDirectoryRejected
 from ..store.db import canonical_json
 from . import profile_data, router
 
@@ -199,4 +200,6 @@ class Profile:
             if isinstance(answer, str):
                 answer = decode_strict_json(answer)
             profile_data.apply_answer(connection, model_id=run['model_id'], run_id=run['profile_run_id'], answer=answer, now=now)
+        if code == WorkingDirectoryRejected.code:
+            params = WorkingDirectoryRejected.reason_params(output.get('reason'))
         return self.finish(connection, task_id=task['task_id'], now=now, code=code, params=params)

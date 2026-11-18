@@ -920,7 +920,13 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertEqual(decision["status"], "needs-host")
         self.assertEqual(decision["reason"], cause)
         self.assertEqual(current["activeRequest"]["reason"], cause)
-        self.assertEqual(current["routing"]["routingBoundary"]["reason"], cause)
+        boundary = current["routing"]["routingBoundary"]
+        self.assertEqual(boundary["reason"], cause)
+        self.assertEqual(boundary["kind"], "routing-changed")
+        self.assertIs(boundary["routerTrials"][0]["shutdownConfirmed"], True)
+        self.assertEqual(boundary["routerTrials"][0]["outcome"], "changed")
+        self.assertIn("continue", boundary["actions"])
+        self.assertIn("continue", current["actions"])
         with self.board_.store.db.read() as db:
             self.assertEqual([item["taskId"] for item in router_sequence.dispatches(db, decision_id)], [task_id])
             self.assertEqual(router_history.buddy_timeline(db, buddy_id=A), [])
@@ -931,6 +937,15 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertEqual(health["failureCount"], 0)
         self.assertEqual(health["consecutiveFailures"], 0)
         self.assertEqual(health["currentRouterBuddyId"], A)
+
+        params = self.choice_params(current, "dsh / fixture / bravo / max")
+        continued = self.board_.call("workflow_continue", params)
+        self.assertEqual(continued["runId"], view["runId"])
+        self.assertEqual(continued["requestId"], params["requestId"])
+        resumed = self.claim(self.board_, run_id=view["runId"])
+        self.assertIsNotNone(resumed["claim"], resumed)
+        self.finish_turn(self.board_, resumed)
+        self.assertEqual(self.board_.call("workflow_get", {"runId": view["runId"]})["buddy"]["model"], "bravo")
 
 
 if __name__ == "__main__":
