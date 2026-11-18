@@ -1849,8 +1849,7 @@ class BoardStore:
             attempt = self._verify_attempt_actor(connection, params)
             if attempt["execution_state"] == "finished":
                 raise BoardError("ATTEMPT_FINISHED", "This attempt is already finished; progress is not accepted")
-            has_progress = message is not None or phase is not None
-            changed = has_progress or (data is None and process_identity is None)
+            identity_changed = False
             if process_identity is not None:
                 previous_identity = self._process_identity(connection, attempt["attempt_id"])
                 if verify_identity is not None:
@@ -1867,15 +1866,18 @@ class BoardStore:
                     verified = process_identity
                 if previous_identity != verified:
                     self._record_process_identity(connection, attempt["attempt_id"], verified)
-                    changed = True
+                    identity_changed = True
                 if attempt["identity_confirmed_at"] is None:
                     connection.execute("UPDATE attempts SET identity_confirmed_at=? WHERE attempt_id=?",
                                        (self.now(), attempt["attempt_id"]))
-                    changed = True
+                    identity_changed = True
             transitioned = (phase in ("starting", "executing")
                             and attempt["execution_state"] not in (phase, "uncertain", "finalizing"))
             if transitioned:
                 self._transition_attempt(connection, attempt, phase)
+            has_progress = (message is not None
+                            or (phase is not None and (process_identity is None or identity_changed or transitioned)))
+            changed = identity_changed or has_progress or (data is None and process_identity is None)
             if data is not None and 'waitingReason' in data:
                 waiting_code = waiting_reason['code'] if waiting_reason is not None else None
                 current = connection.execute('SELECT queue_reason FROM tasks WHERE task_id=?',

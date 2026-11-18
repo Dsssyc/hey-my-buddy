@@ -301,6 +301,19 @@ class ExecutionDeliveryTests(unittest.TestCase):
                     self.execution.flush_hints(delivering=True)
                 self.assertIs(refused.exception, error)
                 client.progress.assert_called_once()
+                startup_client = mock.Mock()
+                startup_client.progress.side_effect = error
+                startup = entry.Execution(CLAIM, self.state, "n" * 64, client=startup_client)
+                startup._identity_pending = {"pid": 301}
+                with mock.patch.object(startup, "execute") as native, \
+                     mock.patch("hey_my_buddy.protocol.process_identity.install_native_process_journal"), \
+                     mock.patch.object(entry.time, "sleep",
+                                       side_effect=AssertionError("unexpected startup retry sleep")), \
+                     self.assertRaises(BoardError) as startup_refused:
+                    startup.run()
+                self.assertIs(startup_refused.exception, error)
+                startup_client.progress.assert_called_once()
+                native.assert_not_called()
 
     def test_explicit_refusal_logs_reason_and_retains_receipt_as_evidence(self):
         from hey_my_buddy.buddy.runtime.receipts import write_receipt

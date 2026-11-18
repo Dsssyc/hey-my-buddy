@@ -119,6 +119,44 @@ class StructuredRpcFailureTests(unittest.TestCase):
                     expected['io_kind'] = kind
                 self.assertEqual(caught.exception.details, expected)
 
+    def test_read_only_ping_disconnect_becomes_unavailable_without_uncertain_phase(self):
+        endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / 'state'
+            directory.mkdir(mode=0o700)
+            cause = core_failure(None)
+            cause.transport_phase = 'dispatch_uncertain'
+            cause.raw_os_error = None
+            cause.io_operation = None
+            torn = ClientCallResource(str(cause))
+            torn.__cause__ = cause
+            calls = []
+
+            def request(_endpoint, operation, _params, resource='control', *, state_dir):
+                calls.append((operation, resource, state_dir))
+                raise transport.local_rpc_error(torn)
+
+            with patch.object(transport, '_read_endpoint', return_value=endpoint), \
+                 patch.object(transport.private_dirs, 'linked', return_value=True), \
+                 patch.object(transport, '_request', side_effect=request), \
+                 self.assertRaises(transport.ServiceError) as caught:
+                transport._call_board_read_only('harness_prepare', {'retry': True}, directory)
+            self.assertEqual(calls, [('ping', 'control', directory)])
+            self.assertEqual(caught.exception.code, 'SERVICE_UNAVAILABLE')
+            self.assertNotIn('transport_phase', caught.exception.details)
+
+            other = core_failure('other')
+            other.transport_phase = 'dispatch_uncertain'
+            unclassified = ClientCallResource(str(other))
+            unclassified.__cause__ = other
+            with patch.object(transport, '_read_endpoint', return_value=endpoint), \
+                 patch.object(transport.private_dirs, 'linked', return_value=True), \
+                 patch.object(transport, '_request', side_effect=transport.local_rpc_error(unclassified)), \
+                 self.assertRaises(transport.ServiceError) as caught:
+                transport._call_board_read_only('harness_prepare', {'retry': True}, directory)
+            self.assertEqual(caught.exception.code, 'C_TWO_AT_CLIENT_CALLING_RESOURCE')
+            self.assertEqual(caught.exception.details['io_kind'], 'other')
+
     def test_identity_refusal_without_os_error_never_starts_or_reports_stopped(self):
         # C-Two rejects a Windows peer's identity before sending bytes.
         # That permission denial has no OS errno and is not an absent listener.

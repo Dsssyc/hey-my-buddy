@@ -171,6 +171,92 @@ class ExecutionEndpointTests(unittest.TestCase):
                 self.assertTrue(client.call.call_args_list[1].args[1]['retry'])
                 self.assertEqual(client.call.call_args.args[1]['retry'], not unknown)
 
+        from hey_my_buddy.buddy.runtime.receipts import is_retryable
+        from hey_my_buddy.protocol import transport
+        from hey_my_buddy.protocol.client import BoardClient
+
+        self.assertFalse(is_retryable(
+            BoardError('SERVICE_UNAVAILABLE', 'uncertain', transport_phase='dispatch_uncertain'),
+            pre_dispatch_only=True))
+        endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
+        torn = transport.ServiceError('C_TWO_AT_CLIENT_CALLING_RESOURCE', 'IPC client closed',
+                                      category='transport', transport_kind='ipc', transport_phase='dispatch_uncertain')
+        for fail_on in ('ping', 'prepare'):
+            with self.subTest(fail_on=fail_on), tempfile.TemporaryDirectory() as directory:
+                state = Path(directory)
+                board_client = BoardClient(state, autostart=False)
+                execution = Execution(claim, state, 'n' * 32, client=board_client)
+                forced_calls = []
+                pings = 0
+
+                def request(_endpoint, operation, params, resource='control', *, state_dir):
+                    nonlocal pings
+                    if operation == 'ping':
+                        pings += 1
+                        if fail_on == 'ping' and pings == 2:
+                            raise torn
+                        return {'ok': True}
+                    if not params['retry']:
+                        return {'harness': {'status': 'unhealthy', 'revision': 1}}
+                    forced_calls.append(dict(params))
+                    if fail_on == 'prepare' and len(forced_calls) == 1:
+                        raise torn
+                    return {'harness': {'status': 'ready', 'revision': 2}}
+
+                with mock.patch.object(transport, '_read_endpoint', return_value=endpoint), \
+                     mock.patch.object(transport.private_dirs, 'linked', return_value=True), \
+                     mock.patch.object(transport, '_request', side_effect=request), \
+                     mock.patch.object(runtime_selection, 'bound'), \
+                     mock.patch.object(execution.control, 'wait') as wait, \
+                     mock.patch.object(execution, '_execute_selected', return_value={'status': 'ok'}) as selected:
+                    if fail_on == 'ping':
+                        self.assertEqual(execution._execute_guarded(
+                            claim, claim['task'], spec, claim['attempt'], execution.directory, {}), {'status': 'ok'})
+                        self.assertEqual(len(forced_calls), 1)
+                        wait.assert_called_once()
+                        selected.assert_called_once()
+                    else:
+                        with self.assertRaises(BoardError) as caught:
+                            execution._execute_guarded(claim, claim['task'], spec, claim['attempt'], execution.directory, {})
+                        self.assertIs(caught.exception, torn)
+                        self.assertEqual(len(forced_calls), 1)
+                        wait.assert_not_called()
+                        selected.assert_not_called()
+
+    def test_signal_stop_is_lock_free_and_wakes_preflight_via_control_thread(self):
+        with tempfile.TemporaryDirectory() as directory:
+            spec = {'adapter': 'codex'}
+            claim = {'task': {'taskId': 'task', 'spec': spec},
+                     'attempt': {'taskId': 'task', 'attemptId': 'attempt', 'generation': 1}}
+            execution = Execution(claim, Path(directory), 'n' * 32, client=mock.Mock())
+            control = execution.control
+            # Simulate SIGTERM arriving on the main thread while it already holds
+            # both Event condition locks: a re-entrant set() here would deadlock.
+            with control._interrupted._cond, control._wake._cond:
+                execution.request_stop('unknown', None, force=True, from_signal=True)
+                self.assertFalse(control._interrupted.is_set())
+            self.assertEqual(control.cancel_view, {'cancelRequested': True, 'stopInitiator': 'unknown'})
+            control.cancel_view = None
+            control.requests = 0
+            control.start()
+            try:
+                entered = threading.Event()
+                finished = threading.Event()
+
+                def waiter():
+                    entered.set()
+                    control._interrupted.wait(15.0)
+                    finished.set()
+
+                thread = threading.Thread(target=waiter)
+                thread.start()
+                self.assertTrue(entered.wait(2))
+                execution.request_stop('unknown', None, force=True, from_signal=True)
+                self.assertTrue(finished.wait(2), 'control thread did not propagate signal stop to _interrupted')
+                thread.join(2)
+            finally:
+                control.stop()
+
     def test_preflight_cancels_when_control_consumed_the_wake_before_rpc_failed(self):
         with tempfile.TemporaryDirectory() as directory:
             spec = {'adapter': 'codex'}

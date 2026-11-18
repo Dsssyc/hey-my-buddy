@@ -127,6 +127,22 @@ def local_rpc_error(error: CoreError | CCError) -> ServiceError:
     return ServiceError(code, str(error), **details)
 
 
+def is_transient_ipc_error(error: BoardError, *, pre_dispatch_only: bool = False) -> bool:
+    """Recognize an unavailable service, withdrawn route or transient IPC failure."""
+    details = error.details
+    if pre_dispatch_only and details.get("transport_phase") == "dispatch_uncertain":
+        return False
+    if error.code in ("SERVICE_UNAVAILABLE", "C_TWO_RESOURCE_CLOSED", "C_TWO_RESOURCE_REMOVED",
+                      "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND", "C_TWO_ROUTE_STALE"):
+        return True
+    phases = ("pre_dispatch",) if pre_dispatch_only else ("pre_dispatch", "dispatch_uncertain")
+    return (error.code == "C_TWO_AT_CLIENT_CALLING_RESOURCE"
+            and details.get("category") == "transport"
+            and details.get("transport_kind") == "ipc"
+            and details.get("io_kind") != "other"
+            and details.get("transport_phase") in phases)
+
+
 def encode_message(value: Any) -> str:
     try:
         text = json.dumps(value, ensure_ascii=False, allow_nan=False)
@@ -302,7 +318,7 @@ def _ping_endpoint(directory: Path, endpoint: dict | None) -> dict | None:
             _request(endpoint, "ping", {}, state_dir=directory)
             return endpoint
         except ServiceError as error:
-            if error.code != "SERVICE_UNAVAILABLE":
+            if not is_transient_ipc_error(error):
                 raise
     return None
 

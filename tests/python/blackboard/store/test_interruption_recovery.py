@@ -265,6 +265,37 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual(after['updated_at'], before['updated_at'])
         self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'attempt-uncertain-after-restart')
 
+    def test_replaying_startup_acknowledgement_is_idempotent_before_and_after_restart(self):
+        board, client, task, _, actor = self.claimed(identity=False)
+        startup = {**actor, 'processIdentity': IDENTITY, 'phase': 'executing'}
+        self.assertTrue(board.call('execution_progress', startup)['recorded'])
+        head_executing = board.store.head()
+        with board.store.db.read() as db:
+            confirmed = board.store._attempt_row(db, actor['attemptId'])
+        with patch.object(board.store, 'now', return_value='2099-01-01T00:00:00Z'):
+            replay_executing = board.call('execution_progress', startup)
+        self.assertEqual(replay_executing['head'], head_executing)
+        self.assertEqual(board.store.head(), head_executing)
+        with board.store.db.read() as db:
+            after_executing = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual(after_executing['revision'], confirmed['revision'])
+        self.assertEqual(after_executing['updated_at'], confirmed['updated_at'])
+
+        with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+            self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
+        head_uncertain = board.store.head()
+        with board.store.db.read() as db:
+            uncertain = board.store._attempt_row(db, actor['attemptId'])
+        with patch.object(board.store, 'now', return_value='2099-01-02T00:00:00Z'):
+            replay_uncertain = board.call('execution_progress', startup)
+        self.assertEqual(replay_uncertain['head'], head_uncertain)
+        self.assertEqual(board.store.head(), head_uncertain)
+        with board.store.db.read() as db:
+            after_uncertain = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual(after_uncertain['revision'], uncertain['revision'])
+        self.assertEqual(after_uncertain['updated_at'], uncertain['updated_at'])
+        self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'attempt-uncertain-after-restart')
+
     def test_authenticated_reconnection_restores_ownership_claims_and_waiting_reason_once(self):
         board, client, task, _, actor = self.claimed()
         with patch.object(processes, 'inspect_process_identity', return_value='alive'):

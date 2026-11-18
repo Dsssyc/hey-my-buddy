@@ -426,8 +426,8 @@ class Execution:
     def log(self, message):
         self._log(f"[execution {self.claim['attempt']['attemptId']}] {message}")
 
-    def request_stop(self, initiator="unknown", grace_deadline=None, *, force=False):
-        self.control.request_stop(initiator, grace_deadline, force=force)
+    def request_stop(self, initiator="unknown", grace_deadline=None, *, force=False, from_signal=False):
+        self.control.request_stop(initiator, grace_deadline, force=force, from_signal=from_signal)
 
     def stop_requested(self):
         return self.control.cancel_view is not None
@@ -493,7 +493,7 @@ class Execution:
             install_native_process_journal(native_process_journal_path(self.directory), binding)
         delay = 0.25
         while self._identity_pending is not None:
-            delivered = self.flush_hints()
+            delivered = self.flush_hints(delivering=True)
             if self._identity_pending is not None:
                 time.sleep(delay)
                 if not delivered:
@@ -961,9 +961,9 @@ class _ExecutionControl(threading.Thread):
         if self.fatal is not None:
             raise self.fatal
 
-    def request_stop(self, initiator, deadline, *, force=False):
-        # Signal handlers only update local facts; native cancellation runs on
-        # this thread instead of re-entering locks from the main thread.
+    def request_stop(self, initiator, deadline, *, force=False, from_signal=False):
+        # Signal handlers only update lock-free local facts; the control thread
+        # sets the condition-backed events and runs native cancellation.
         if self.cancel_view is not None and not force:
             if (self.deadline is None or initiator in WRAP_UP_INITIATORS
                     or initiator == self.cancel_view["stopInitiator"] == "pause"):
@@ -971,8 +971,9 @@ class _ExecutionControl(threading.Thread):
         self.requests += 2 if force else 1
         self.cancel_view = {"cancelRequested": True, "stopInitiator": initiator}
         self.deadline = min(self.deadline, deadline) if self.deadline is not None and deadline is not None else deadline
-        self._interrupted.set()
-        self._wake.set()
+        if not from_signal:
+            self._interrupted.set()
+            self._wake.set()
 
     def attach(self, handle, implementation):
         with self._lock:
@@ -996,6 +997,8 @@ class _ExecutionControl(threading.Thread):
 
     def _run_control(self):
         while not self._done.is_set():
+            if (self.cancel_view is not None or self.execution.stop_requested()) and not self._interrupted.is_set():
+                self._interrupted.set()
             with self._lock:
                 handle, implementation = self.handle, self.implementation
             if handle is not None:
@@ -1019,6 +1022,8 @@ class _ExecutionControl(threading.Thread):
                     # A failed live observation never disables native stop handling.
                     self.execution.log(f"live activity unavailable: {error!r}")
             self.execution.flush_hints()
+            if (self.cancel_view is not None or self.execution.stop_requested()) and not self._interrupted.is_set():
+                self._interrupted.set()
             self._wake.wait(0.25)
             self._wake.clear()
 
@@ -1044,11 +1049,11 @@ def main():
                           session_record_path=material["sessionRecordPath"],
                           log=lambda message: print(message, flush=True))
     def interrupted(_signal, _frame):
-        execution.request_stop("unknown", None, force=True)
+        execution.request_stop("unknown", None, force=True, from_signal=True)
     if os.name != "nt":
         signal.signal(signal.SIGTERM, interrupted)
     for pending in _early_signals:
-        interrupted(pending, None)
+        execution.request_stop("unknown", None, force=True)
     _early_signals.clear()
     from ...private_dirs import ensure_private_dir
     ensure_private_dir(execution.directory)

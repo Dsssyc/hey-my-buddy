@@ -6,23 +6,16 @@ from pathlib import Path
 
 from ...protocol.execution import (fsync_json, read_execution_receipt as read_receipt,
                                   receipt_reference, RECEIPT, REFUSED)
+from ...protocol.transport import is_transient_ipc_error
 
 from ...errors import BoardError
 
 
 def is_retryable(error: BoardError, *, pre_dispatch_only: bool = False) -> bool:
-    """Recognize an unavailable service, withdrawn route or transient IPC failure."""
-    if error.code in ("SERVICE_UNAVAILABLE", "UPGRADE_IN_PROGRESS",
-                      "C_TWO_RESOURCE_CLOSED", "C_TWO_RESOURCE_REMOVED",
-                      "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND", "C_TWO_ROUTE_STALE"):
-        return True
-    details = error.details
-    phases = ("pre_dispatch",) if pre_dispatch_only else ("pre_dispatch", "dispatch_uncertain")
-    return (error.code == "C_TWO_AT_CLIENT_CALLING_RESOURCE"
-            and details.get("category") == "transport"
-            and details.get("transport_kind") == "ipc"
-            and details.get("io_kind") != "other"
-            and details.get("transport_phase") in phases)
+    """Recognize an unavailable or fenced service, withdrawn route or transient IPC failure."""
+    if pre_dispatch_only and error.details.get("transport_phase") == "dispatch_uncertain":
+        return False
+    return error.code == "UPGRADE_IN_PROGRESS" or is_transient_ipc_error(error, pre_dispatch_only=pre_dispatch_only)
 
 
 def receipt_directory(state: Path, private_adapter: str, task_id: str, attempt_id: str) -> Path:
