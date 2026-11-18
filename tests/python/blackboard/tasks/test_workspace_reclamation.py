@@ -795,6 +795,44 @@ class ReclamationTests(LifecycleTestCase):
         self.assertFalse(unreadable.exists())
         self.assertEqual(board.store.service_issues(), [])
 
+    def test_deeply_nested_record_retains_corrupt_candidate_in_fixed_order(self):
+        from contextlib import closing
+        from hey_my_buddy.blackboard.tasks import reclamation
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host'}}
+        manifests = [workspace.prepare(board.directory, request, intent)
+                     for request in ('healthy-before', 'deep-manifest', 'deep-request', 'healthy-after')]
+        for manifest in manifests:
+            workspace.cleanup_remove(board.directory, manifest)
+        before, deep_manifest, deep_request, after = (Path(manifest['checkoutRoot']).parent for manifest in manifests)
+        nested = '[' * 2000 + ']' * 2000
+        (deep_manifest / 'manifest.json').write_text(nested, encoding='utf-8')
+        (deep_request / 'request.json').write_text(nested, encoding='utf-8')
+
+        ordered = (before, deep_manifest, deep_request, after)
+        with closing(reclamation.allocation_records(board.store, ordered)) as records:
+            observed = [(item['directory'], list(item['reasons'])) for item in records]
+        self.assertEqual(observed, [
+            (before, []),
+            (deep_manifest, ['allocation-unproven']),
+            (deep_request, ['allocation-unproven']),
+            (after, []),
+        ])
+        inventory = reclamation.allocation_inventory(board.store, ordered)
+        self.assertEqual([(item['directory'], item['reasons']) for item in inventory], [
+            (deep_manifest, ['allocation-unproven', 'checkout-missing']),
+            (deep_request, ['allocation-unproven', 'checkout-missing']),
+        ])
+
+        maintenance = reclamation.Reclamation(board.store)
+        maintenance.run()
+        self.assertFalse(before.exists())
+        self.assertFalse(after.exists())
+        self.assertTrue(deep_manifest.is_dir())
+        self.assertTrue(deep_request.is_dir())
+        self.assertEqual(board.store.service_issues(), [])
+
     def test_storage_keeps_live_checkout_inventory_and_excludes_terminal_candidates(self):
         from unittest.mock import patch
         board = self.board()

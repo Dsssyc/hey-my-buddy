@@ -643,7 +643,7 @@ def _record(path):
         return None
     try:
         return json.loads(data)
-    except (ValueError, UnicodeError) as error:
+    except (ValueError, UnicodeError, RecursionError) as error:
         raise BoardError("WORKSPACE_CONFLICT", "A workspace recovery record is malformed", path=str(path)) from error
 
 
