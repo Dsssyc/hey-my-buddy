@@ -241,7 +241,12 @@ class ExecutionDeliveryTests(unittest.TestCase):
         cause = CoreError('transport', 'IPC client closed')
         cause.transport_kind = 'ipc'
         cause.transport_phase = 'dispatch_uncertain'
-        for error in (client_call_failure(cause), *(
+        refused_uncertain = CoreError('transport', 'peer closed mid-call')
+        refused_uncertain.transport_kind = 'ipc'
+        refused_uncertain.transport_phase = 'dispatch_uncertain'
+        refused_uncertain.io_kind = 'connection_refused'
+        for error in (local_rpc_error(cause), client_call_failure(cause),
+                      local_rpc_error(refused_uncertain), client_call_failure(refused_uncertain), *(
                 BoardError(code, 'route withdrawn') for code in (
                     'C_TWO_RESOURCE_CLOSED', 'C_TWO_RESOURCE_REMOVED', 'C_TWO_RESOURCE_UNAVAILABLE',
                     'C_TWO_RESOURCE_NOT_FOUND', 'C_TWO_ROUTE_STALE'))):

@@ -171,6 +171,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                 self.assertTrue(client.call.call_args_list[1].args[1]['retry'])
                 self.assertEqual(client.call.call_args.args[1]['retry'], not unknown)
 
+        from c_two.error import CoreError
         from hey_my_buddy.buddy.runtime.receipts import is_retryable
         from hey_my_buddy.protocol import transport
         from hey_my_buddy.protocol.client import BoardClient
@@ -178,6 +179,12 @@ class ExecutionEndpointTests(unittest.TestCase):
         self.assertFalse(is_retryable(
             BoardError('SERVICE_UNAVAILABLE', 'uncertain', transport_phase='dispatch_uncertain'),
             pre_dispatch_only=True))
+        direct_uncertain = CoreError('transport', 'peer closed mid-call')
+        direct_uncertain.transport_kind = 'ipc'
+        direct_uncertain.transport_phase = 'dispatch_uncertain'
+        direct_uncertain.io_kind = 'connection_refused'
+        self.assertTrue(is_retryable(transport.local_rpc_error(direct_uncertain), pre_dispatch_only=False))
+        self.assertFalse(is_retryable(transport.local_rpc_error(direct_uncertain), pre_dispatch_only=True))
         endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
         torn = transport.ServiceError('C_TWO_AT_CLIENT_CALLING_RESOURCE', 'IPC client closed',
                                       category='transport', transport_kind='ipc', transport_phase='dispatch_uncertain')

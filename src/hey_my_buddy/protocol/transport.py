@@ -136,10 +136,10 @@ def is_transient_ipc_error(error: BoardError, *, pre_dispatch_only: bool = False
                       "C_TWO_RESOURCE_UNAVAILABLE", "C_TWO_RESOURCE_NOT_FOUND", "C_TWO_ROUTE_STALE"):
         return True
     phases = ("pre_dispatch",) if pre_dispatch_only else ("pre_dispatch", "dispatch_uncertain")
-    return (error.code == "C_TWO_AT_CLIENT_CALLING_RESOURCE"
+    return (error.code in ("C_TWO_AT_CLIENT_CALLING_RESOURCE", "C_TWO_TRANSPORT")
             and details.get("category") == "transport"
             and details.get("transport_kind") == "ipc"
-            and details.get("io_kind") != "other"
+            and details.get("io_kind") not in ("other", "address_in_use", "permission_denied")
             and details.get("transport_phase") in phases)
 
 
