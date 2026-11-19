@@ -203,10 +203,11 @@ class RoleStopTests(unittest.TestCase):
         handle.grace_deadline = deadline
         handle.cancel_requested = True
         cancellation = handle.cancelled
-        if stop_initiator == "pause":
-            cancellation.set()
         calls = []
         def run(_module, native_request, *, observer, services, cancelled):
+            if not calls and stop_initiator == "pause":
+                # Pause arrives while the first native turn is running.
+                cancellation.set()
             calls.append((native_request, cancelled()))
             if len(calls) == 1:
                 cancellation.set()

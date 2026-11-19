@@ -102,8 +102,10 @@ class ModelResponseWait:
         self.failure = None
         self.lock = threading.RLock()
 
-    def begin(self):
+    def begin(self, handle=None):
         with self.lock:
+            if handle is not None:
+                handle.model_responded = False
             self.deadline = time.monotonic() + self.seconds
             self.timed_out = False
             deadline = self.deadline
@@ -1119,13 +1121,36 @@ class _ExecutionControl(threading.Thread):
             self._activity = None
         self._wake.set()
 
+    def _apply_pending_locked(self):
+        handle, implementation = self.handle, self.implementation
+        if handle is None or self.requests <= self.applied:
+            return
+        requested = self.requests
+        # Skip a late stop only when the handle already proves its whole owned
+        # tree is gone (not merely that a root exited while children or a
+        # Windows Job still live): stopping an already-settled run would rewrite
+        # a native failure into a cancellation, whereas any unproven handle
+        # still receives the stop.
+        if not _handle_shutdown_confirmed(handle):
+            if self.applied or requested > 1:
+                handle.stop_initiator = self.cancel_view["stopInitiator"]
+                role_seam.worker_cancel(implementation, handle)
+            else:
+                role_seam.worker_stop(implementation, handle,
+                    stop_initiator=self.cancel_view["stopInitiator"], grace_deadline=self.deadline)
+        self.applied = requested
+
     def detach(self):
         """Retire the live handle once its native work has settled.
 
-        A stop request arriving after the collected result is complete must not
-        reach ``worker_stop``/``worker_cancel`` and distort that result.
+        If a stop was already accepted while the handle's owned process tree is
+        not yet confirmed gone (for example a root exited while Job or session
+        descendants remain alive), apply it before clearing the handle so a
+        fast detach never drops the stop; an already-confirmed stop is skipped
+        so a late stop cannot distort the settled result.
         """
         with self._lock:
+            self._apply_pending_locked()
             self.handle = self.implementation = None
 
     def wait(self, seconds):
@@ -1150,24 +1175,9 @@ class _ExecutionControl(threading.Thread):
         # never delay a stop or the light activity collection here.
         while not self._done.is_set():
             with self._lock:
-                handle, implementation = self.handle, self.implementation
+                handle = self.handle
                 # Retiring a handle waits for any stop already being applied.
-                if handle is not None and self.requests > self.applied:
-                    requested = self.requests
-                    # Skip a late stop only when the handle already proves its
-                    # whole owned tree is gone (not merely that a root exited
-                    # while children or a Windows Job still live): stopping an
-                    # already-settled run would rewrite a native failure into a
-                    # cancellation, whereas any unproven handle still receives
-                    # the stop.
-                    if not _handle_shutdown_confirmed(handle):
-                        if self.applied or requested > 1:
-                            handle.stop_initiator = self.cancel_view["stopInitiator"]
-                            role_seam.worker_cancel(implementation, handle)
-                        else:
-                            role_seam.worker_stop(implementation, handle,
-                                stop_initiator=self.cancel_view["stopInitiator"], grace_deadline=self.deadline)
-                    self.applied = requested
+                self._apply_pending_locked()
             if handle is not None:
                 try:
                     endpoint = getattr(handle, "live_endpoint", None)

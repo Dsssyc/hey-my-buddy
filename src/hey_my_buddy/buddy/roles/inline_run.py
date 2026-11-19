@@ -31,8 +31,13 @@ from .controller import run_harness
 from .prompts import wrap_up_prompt
 
 
-def _stop_requested(handle) -> bool:
-    """True when this inline handle or its owning execution already accepted a stop."""
+def _prelaunch_stopped(handle) -> bool:
+    """True when this handle or its owning execution already accepted a stop.
+
+    Only called before entering ``run_harness`` (never as the in-flight
+    cancellation callback): an in-flight stop must travel through
+    ``worker_stop`` so wrap-up grace and stop policy are never bypassed.
+    """
     if handle.cancelled.is_set():
         return True
     reader = getattr(handle, "accepted_stop", None)
@@ -41,10 +46,11 @@ def _stop_requested(handle) -> bool:
         return False
     # A stop accepted before control.attach still binds the handle's own stop
     # facts so termination keeps the real initiator instead of falling back.
-    handle.cancel_requested = True
-    if handle.stop_initiator is None:
-        handle.stop_initiator = view.get("stopInitiator")
-    handle.cancelled.set()
+    with handle.stop_lock:
+        handle.cancel_requested = True
+        if handle.stop_initiator is None:
+            handle.stop_initiator = view.get("stopInitiator")
+        handle.cancelled.set()
     return True
 
 
@@ -95,13 +101,15 @@ def _profile_execute(control, handle, module, started):
     while round_index <= 2:
         if round_index:
             # Check an already-accepted stop or latched timeout before re-arming
-            # the correction round's wait, then start the timer before preparing
-            # the next prompt so preparation stays inside the response budget.
-            if _stop_requested(handle) or (model_wait is not None and model_wait.expired_now()):
+            # the correction round's wait, then clear model_responded and start
+            # the timer atomically under model_wait.lock so the supervision loop
+            # can never write the previous round's True back onto the new budget.
+            if _prelaunch_stopped(handle) or (model_wait is not None and model_wait.expired_now()):
                 break
-            handle.model_responded = False
             if model_wait is not None:
-                model_wait.begin()
+                model_wait.begin(handle)
+            else:
+                handle.model_responded = False
         invocation_root = ensure_private_dir(Path(control["privateRoot"]) / f"call-{round_index + 1}")
         next_control = {**control, "invocationId": uuid.uuid4().hex,
                         "privateRoot": str(invocation_root)}
@@ -115,7 +123,7 @@ def _profile_execute(control, handle, module, started):
         # must not enter the native harness. The first round is rechecked here
         # exactly like a correction round, so a profile stopped or timed out
         # while its round was being prepared never starts a native session.
-        if _stop_requested(handle) or (model_wait is not None and model_wait.expired_now()):
+        if _prelaunch_stopped(handle) or (model_wait is not None and model_wait.expired_now()):
             if result is None:
                 # No native call was ever sent: the stopped attempt itself is
                 # the result — cancelled, with no native session behind it.
@@ -140,7 +148,7 @@ def _profile_execute(control, handle, module, started):
         live_activity = None
         with _inline_live(request, services, handle, event_seq_offset=event_seq_offset) as live_services:
             result = run_harness(module, request, observer=partial(handle.observe, observing), services=live_services,
-                                 cancelled=partial(_stop_requested, handle))
+                                 cancelled=handle.cancelled.is_set)
             if live_services is not None and getattr(live_services, "live", None) is not None:
                 live_activity = live_services.live.current_activity()
         launched_rounds += 1
@@ -353,23 +361,31 @@ def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
     if input_error is None and check.blocked:
         input_error = BoardError(INPUT_REJECTED, "The initial prompt exceeds the harness's declared input limit")
     if input_error is None:
-        with _inline_live(request, services, handle) as live_services:
-            result = run_harness(module, request, observer=partial(handle.observe, observer), services=live_services,
-                                 cancelled=partial(_stop_requested, handle))
-        if result.native_admission_error is not None:
-            native_error = result.native_admission_error.value
-            native_version = result.harness_version if result.harness_version is not None else version
-            native_check = (check_prompt_input(select_input_limit(request.harness, native_version), parts)
-                            if native_version != version else check)
-            failure = input_failure(native_check, stage="native-admission", harness=request.harness,
-                version=native_version,
-                native_request_sent=result.native_request_sent, model_responded=result.model_responded,
-                native_error=native_error)
-            update = {"input_failure": FrozenJson(failure)}
-            if is_input_too_large(native_error):
-                update["end"] = result.end.model_copy(update={"reason_code": INPUT_REJECTED})
-                update["provider_rejection"] = None
-            result = result.model_copy(update=update)
+        model_wait = handle.model_response_wait
+        if _prelaunch_stopped(handle) or (model_wait is not None and model_wait.expired_now()):
+            result = RunResult(identity=request.identity, harness=request.harness,
+                end=RunEnd(status="cancelled"), harness_version=version,
+                buddy=ResultBuddy(requested=request.buddy), native_request_sent=False,
+                model_responded=False,
+                stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
+        else:
+            with _inline_live(request, services, handle) as live_services:
+                result = run_harness(module, request, observer=partial(handle.observe, observer), services=live_services,
+                                     cancelled=handle.cancelled.is_set)
+            if result.native_admission_error is not None:
+                native_error = result.native_admission_error.value
+                native_version = result.harness_version if result.harness_version is not None else version
+                native_check = (check_prompt_input(select_input_limit(request.harness, native_version), parts)
+                                if native_version != version else check)
+                failure = input_failure(native_check, stage="native-admission", harness=request.harness,
+                    version=native_version,
+                    native_request_sent=result.native_request_sent, model_responded=result.model_responded,
+                    native_error=native_error)
+                update = {"input_failure": FrozenJson(failure)}
+                if is_input_too_large(native_error):
+                    update["end"] = result.end.model_copy(update={"reason_code": INPUT_REJECTED})
+                    update["provider_rejection"] = None
+                result = result.model_copy(update=update)
     else:
         result = RunResult(identity=request.identity, harness=request.harness,
             end=RunEnd(status="error", reason_code=input_error.code, message=input_error.message),
