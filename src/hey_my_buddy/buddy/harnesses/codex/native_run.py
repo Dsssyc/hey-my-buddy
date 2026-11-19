@@ -419,6 +419,20 @@ class _Spawn:
     connection: Connection
 
 
+def _reported_event_seq(live: CTwoLiveEndpoint | None) -> int:
+    """The highest activity sequence this attempt already reported, if any.
+
+    A fresh correction round's live endpoint carries the previous rounds' last
+    reported receipt; this round's own events start above it, never back at
+    zero.
+    """
+    if live is None:
+        return 0
+    reported = live.current_activity()
+    sequence = reported.get("eventSeq") if isinstance(reported, dict) else None
+    return sequence if type(sequence) is int else 0
+
+
 class _ActivityWriter:
     """Preserve Codex's own counting and throttle before the shared live publisher."""
 
@@ -428,6 +442,7 @@ class _ActivityWriter:
         # per-turn sequence restarted; keep shared validation and ordering only.
         self.publisher = ActivityPublisher(live.publish_activity if live else None,
                                            min_interval_seconds=0)
+        self.seq_base = _reported_event_seq(live)
         self.state: dict = {}
         self.last_payload: dict | None = None
 
@@ -444,10 +459,13 @@ class _ActivityWriter:
         if state.get("phase") == phase and tick - state.get("lastWrite", 0) < 2:
             return
         # A correction round's own TurnEvidence restarts its per-turn count, so
-        # the attempt's accumulated events offset it: the published sequence
-        # stays strictly monotone across every round of the same attempt and an
-        # earlier round's later events can never look newer than this round's.
-        payload = {"phase": phase, "observedAt": now, "eventSeq": event_seq_base + evidence.event_seq,
+        # the run's accumulated events offset it, and the whole run itself sits
+        # above the sequence this attempt already reported through its endpoint:
+        # the published sequence stays strictly monotone across every round of
+        # the same attempt and an earlier round's later events can never look
+        # newer than this round's.
+        payload = {"phase": phase, "observedAt": now,
+                   "eventSeq": self.seq_base + event_seq_base + evidence.event_seq,
                    "nativeSessionId": evidence.thread_id, "lastNativeActivityAt": now,
                    "counts": {"modelTurns": evidence.model_turns + model_turns_base,
                               "toolCalls": evidence.tool_calls if tool_calls is None else tool_calls}}

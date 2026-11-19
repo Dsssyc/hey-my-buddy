@@ -160,8 +160,11 @@ class ModelResponseWait:
     def mark_timeout(self, outcome: AdapterOutcome) -> None:
         outcome.status = "failed"
         outcome.error = f"the Router model did not start responding within {self.seconds}s"
+        # The timeout judges the wait that just expired, never the attempt's
+        # whole history: an answer an earlier round of this attempt already
+        # delivered stays recorded beside the expired wait's own failure.
         outcome.result = {**outcome.result, "status": "error", "code": "router-not-responding",
-                          "modelResponded": False}
+                          "modelResponded": outcome.result.get("modelResponded") is True}
 
 
 class LiveEndpointDescriptor(InternalModel):
@@ -1141,12 +1144,18 @@ class _ExecutionControl(threading.Thread):
                 # Retiring a handle waits for any stop already being applied.
                 if handle is not None and self.requests > self.applied:
                     requested = self.requests
-                    if self.applied or requested > 1:
-                        handle.stop_initiator = self.cancel_view["stopInitiator"]
-                        role_seam.worker_cancel(implementation, handle)
-                    else:
-                        role_seam.worker_stop(implementation, handle,
-                            stop_initiator=self.cancel_view["stopInitiator"], grace_deadline=self.deadline)
+                    # A handle whose native work already ended keeps its settled
+                    # result: a stop arriving now cannot stop anything, and
+                    # applying it would rewrite a native failure into a
+                    # cancellation, so the late request is consumed unanswered.
+                    # A handle that exposes no ended fact is still running.
+                    if not getattr(handle, "finished", False):
+                        if self.applied or requested > 1:
+                            handle.stop_initiator = self.cancel_view["stopInitiator"]
+                            role_seam.worker_cancel(implementation, handle)
+                        else:
+                            role_seam.worker_stop(implementation, handle,
+                                stop_initiator=self.cancel_view["stopInitiator"], grace_deadline=self.deadline)
                     self.applied = requested
             if handle is not None:
                 try:

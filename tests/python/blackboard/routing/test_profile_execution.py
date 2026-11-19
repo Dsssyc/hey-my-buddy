@@ -398,6 +398,145 @@ class ProfileExecutionTests(BoardTestCase):
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM attempts WHERE task_id=?', (started['runId'],)).fetchone()[0], 1)
 
+    def test_a_correction_round_that_never_launches_stores_no_correction_rounds(self):
+        from hey_my_buddy.buddy.harnesses.registry import run_seam
+        from hey_my_buddy.buddy.harnesses.run_contract import (
+            NativeIdentity, RunEnd, RunResult, RunValue, StopEvidence, StopLayer,
+        )
+        from hey_my_buddy.buddy.roles.router import DecisionAdapter
+        from hey_my_buddy.buddy.runtime.execution import Execution
+        from hey_my_buddy.paths import native_path
+        from hey_my_buddy.protocol import process_identity
+
+        self.configure()
+        started = self.start()
+        claim = self.claim(started)
+        requests = []
+        answers = [self.valid_answer(), self.valid_answer()]
+        answers[0]['claims'][0].pop('sourceUrl')
+
+        def fake_run(request, *, observer, services, cancelled):
+            index = len(requests)
+            requests.append(request)
+            native_identity = {'sessionId': f'profile-native-{index}'}
+            receipt = claim_tool_receipt(claim, state_dir=self.board_.directory,
+                                         native_identity=native_identity)
+            if index == 0:
+                # The stop lands once the first answer is on its way to the
+                # service: the rejected correction round is then prepared but
+                # must never launch another native session.
+                execution.request_stop('console', force=True)
+            return RunResult(identity=request.identity, harness=request.harness,
+                end=RunEnd(status='ok', native_exit_code=0), model_responded=True,
+                native_identity=NativeIdentity(session_id=native_identity['sessionId']),
+                value=RunValue(schema_status='valid', raw=json.dumps(answers[index])),
+                tool_evidence=receipt['toolEvidence'],
+                stop_evidence=StopEvidence(native=StopLayer(group_state='gone')))
+
+        module = run_seam('dsh')
+        logs = []
+        with patch.object(process_identity, '_active_native_journal', None):
+            execution = Execution(claim, self.board_.directory, NONCE, client=self.board_.client(),
+                                  session_record_path=claim['sessionRecordPath'], log=logs.append)
+            native_path(execution.directory).mkdir(parents=True, mode=0o700, exist_ok=True)
+            native_path(execution.evidence_directory).mkdir(parents=True, mode=0o700, exist_ok=True)
+            with patch.object(module, 'run', side_effect=fake_run), \
+                    patch.object(DecisionAdapter, 'available', return_value=(True, None)), \
+                    patch.object(module, 'check_preparation', return_value=None), \
+                    patch.object(module, 'native_evidence', return_value={}):
+                execution.run()
+        self.assertEqual(len(requests), 1, logs)
+        # The one native round's answer was rejected, so the run fails on the
+        # answer itself — but the correction round that never entered a native
+        # session counts no correction.
+        view = self.model_view()
+        self.assertEqual(view['latestProfileRun']['state'], 'failed')
+        self.assertEqual(view['latestProfileRun']['reason']['code'], 'profile-answer-invalid')
+        self.assertEqual(view['latestProfileRun']['correctionRounds'], 0)
+        self.assertIsNone(view['profile'])
+
+    def test_a_correction_round_timing_out_before_launch_keeps_the_first_rounds_model_response(self):
+        import time as time_module
+        from pathlib import Path
+        from hey_my_buddy.buddy.harnesses.registry import run_seam
+        from hey_my_buddy.buddy.harnesses.run_contract import (
+            NativeIdentity, RunEnd, RunResult, RunValue, StopEvidence, StopLayer,
+        )
+        from hey_my_buddy.buddy.roles.router import DecisionAdapter
+        from hey_my_buddy.buddy.runtime import execution as execution_module
+        from hey_my_buddy.buddy.runtime.execution import Execution
+        from hey_my_buddy.paths import native_path
+        from hey_my_buddy.protocol import process_identity
+
+        self.board_.console_call("user_policy_publish", {"commandId": "profile-settings-timeout", "configuration": {
+            "profileBuddyId": PROFILE_BUDDY, "modelResponseWaitSeconds": 1}})
+        started = self.start()
+        claim = self.claim(started)
+        requests = []
+        answers = [self.valid_answer(), self.valid_answer()]
+        answers[0]['claims'][0].pop('sourceUrl')
+        budgets = []
+        original_fsync = execution_module.fsync_json
+
+        def fsync(path, *args, **kwargs):
+            original_fsync(path, *args, **kwargs)
+            if Path(path).name == execution_module.BUDGET and len(budgets) < 2:
+                budgets.append(path)
+                if len(budgets) == 2:
+                    # The correction round's re-armed start wait expires while
+                    # its budget file is being published, before the round can
+                    # enter its native session.
+                    time_module.sleep(1.1)
+
+        def fake_run(request, *, observer, services, cancelled):
+            index = len(requests)
+            requests.append(request)
+            self.assertFalse(cancelled())
+            # The first round's model answers, which clears its start wait.
+            self.assertEqual(observer({"modelResponded": True, "toolCalls": 0}).action, "continue")
+            native_identity = {'sessionId': f'profile-native-{index}'}
+            receipt = claim_tool_receipt(claim, state_dir=self.board_.directory,
+                                         native_identity=native_identity)
+            return RunResult(identity=request.identity, harness=request.harness,
+                end=RunEnd(status='ok', native_exit_code=0), model_responded=True,
+                native_identity=NativeIdentity(session_id=native_identity['sessionId']),
+                value=RunValue(schema_status='valid', raw=json.dumps(answers[index])),
+                tool_evidence=receipt['toolEvidence'],
+                stop_evidence=StopEvidence(native=StopLayer(group_state='gone')))
+
+        module = run_seam('dsh')
+        logs = []
+        with patch.object(process_identity, '_active_native_journal', None), \
+                patch.object(execution_module, 'model_start_unseen', return_value=None):
+            execution = Execution(claim, self.board_.directory, NONCE, client=self.board_.client(),
+                                  session_record_path=claim['sessionRecordPath'], log=logs.append)
+            native_path(execution.directory).mkdir(parents=True, mode=0o700, exist_ok=True)
+            native_path(execution.evidence_directory).mkdir(parents=True, mode=0o700, exist_ok=True)
+            with patch.object(module, 'run', side_effect=fake_run), \
+                    patch.object(DecisionAdapter, 'available', return_value=(True, None)), \
+                    patch.object(module, 'check_preparation', return_value=None), \
+                    patch.object(module, 'native_evidence', return_value={}), \
+                    patch.object(execution_module, 'fsync_json', side_effect=fsync):
+                execution.run()
+        self.assertEqual(len(requests), 1, logs)
+        self.assertEqual(len(budgets), 2, logs)
+        # The expired wait fails the attempt as not responding — without
+        # erasing the answer the one native round already delivered or
+        # counting the correction round that never entered a session.
+        attempt_id = claim['attempt']['attemptId']
+        with self.board_.store.db.read() as db:
+            recorded = json.loads(db.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
+                                             (attempt_id,)).fetchone()[0])
+            run_row = db.execute('SELECT state, reason_code, correction_rounds FROM profile_runs WHERE task_id=?',
+                                 (started['runId'],)).fetchone()
+        self.assertEqual(recorded['status'], 'failed')
+        self.assertEqual(recorded['terminationReason'], 'deadline')
+        self.assertEqual(recorded['result']['code'], 'router-not-responding')
+        self.assertIs(recorded['result']['modelResponded'], True)
+        self.assertEqual(recorded['result']['correctionCount'], 0)
+        self.assertEqual(tuple(run_row)[:2], ('failed', 'router-not-responding'))
+        self.assertEqual(run_row['correction_rounds'], 0)
+
     def test_late_receipt_records_usage_after_run_was_fenced(self):
         self.configure()
         started = self.start()

@@ -287,6 +287,86 @@ class ExecutionEndpointTests(unittest.TestCase):
                 if thread is not None:
                     thread.join(2)
 
+    def test_a_late_stop_never_rewrites_an_already_ended_native_failure(self):
+        from hey_my_buddy.buddy.harnesses import run_contract as rc
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.buddy.roles.run_execution import InlineRunHandle
+        from hey_my_buddy.install import runtime
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "decision", "cwd": directory, "modelResponseWaitSeconds": 60,
+                    "decision": {"kind": "profile"}}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                     "decisionInput": {"kind": "profile", "buddy": {"harness": "codex"}}}
+            execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            execution.receipt = lambda claim, report, directory: report
+            control = execution.control
+            identity = rc.RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="call")
+            handle = InlineRunHandle({"timeoutSeconds": None}, identity)
+            # The native run already failed and its evidence is settled: the
+            # handle reports ended and only the main thread's detach has not
+            # run yet — exactly the window a late stop request lands in.
+            handle.result = rc.RunResult(identity=identity, harness="codex",
+                end=rc.RunEnd(status="error", reason_code="native-turn-failed",
+                              message="Codex turn did not complete successfully"),
+                stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+            handle.exit_code = 1
+            handle.done.set()
+            consumed = threading.Event()
+
+            class Executor:
+                """The executor's flag effects on an inline handle, as the registry applies them."""
+
+                def stop(self, owned, *, stop_initiator, grace_deadline):
+                    owned.force_stop_requested = True
+                    self.cancel(owned)
+
+                def cancel(self, owned, **_kwargs):
+                    owned.terminate()
+
+            def wait(timeout):
+                # The stop is requested while the handle is attached and
+                # finished, and the control thread consumes it before the
+                # main thread leaves this wait and detaches the handle.
+                execution.request_stop("console", None, force=True)
+                deadline = time.monotonic() + 2
+                while control.applied != control.requests and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                consumed.set()
+                return handle.exit_code
+
+            handle.wait = wait
+            outcome = AdapterOutcome(status="failed", shutdown_confirmed=True,
+                result={"code": "native-error", "nativeRequestSent": True})
+            control.start()
+            try:
+                with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
+                     mock.patch.object(controller, "worker_executor", return_value=Executor()), \
+                     mock.patch.object(controller, "prepare_worker_run",
+                                       return_value=controller.WorkerPreparation(True)), \
+                     mock.patch.object(controller, "worker_start", return_value=handle), \
+                     mock.patch.object(controller, "worker_collect", return_value=outcome):
+                    report = execution._execute_selected(
+                        claim, claim["task"], spec, claim["attempt"], execution.directory,
+                        {"preflightControl": control})
+            finally:
+                control.stop()
+            control.join(2)
+            self.assertFalse(control.is_alive())
+            self.assertTrue(consumed.is_set())
+            self.assertEqual(control.applied, control.requests)
+            # The settled native failure keeps its own reason: the late stop
+            # neither cancelled the attempt nor named its initiator.
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["terminationReason"], "harness-error")
+            self.assertFalse(handle.cancel_requested)
+            self.assertFalse(handle.force_stop_requested)
+            self.assertIsNone(handle.stop_initiator)
+
     def test_preflight_cancels_when_control_consumed_the_wake_before_rpc_failed(self):
         with tempfile.TemporaryDirectory() as directory:
             spec = {'adapter': 'codex'}
@@ -439,7 +519,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                                              cancel_requested=False, stop_initiator=None, grace_expired=False,
                                              result=None, model_responded=False)
                     outcome = AdapterOutcome(status='failed' if finished else 'ok', shutdown_confirmed=True,
-                        result={'code': 'native-error'} if finished else {'modelResponded': True})
+                        result={'code': 'native-error'} if finished else {'modelResponded': responded})
                     with mock.patch.object(runtime, 'resolve_runtime', return_value={}), \
                          mock.patch.object(controller, 'worker_executor', return_value=object()), \
                          mock.patch.object(controller, 'prepare_worker_run', return_value=controller.WorkerPreparation(True)), \
@@ -578,6 +658,22 @@ class ExecutionEndpointTests(unittest.TestCase):
                     wait.responded(SimpleNamespace(model_responded=True))
             self.assertTrue(path.exists())
             self.assertIsNotNone(wait.deadline)
+
+    def test_a_timeout_keeps_an_earlier_rounds_model_response(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        binding = {"taskId": "task", "attemptId": "attempt", "generation": 1}
+        wait = ModelResponseWait(Path("~/fixture/unused-budget") / module.BUDGET, binding, 60)
+        answered = AdapterOutcome(status="ok", shutdown_confirmed=True,
+                                  result={"modelResponded": True, "correctionCount": 0})
+        wait.mark_timeout(answered)
+        # A later round's expired start wait fails that round without erasing
+        # the answer an earlier round of the same attempt already delivered.
+        self.assertEqual(answered.status, "failed")
+        self.assertEqual(answered.result["code"], "router-not-responding")
+        self.assertIs(answered.result["modelResponded"], True)
+        silent = AdapterOutcome(status="ok", shutdown_confirmed=True, result={"nativeRequestSent": False})
+        wait.mark_timeout(silent)
+        self.assertIs(silent.result["modelResponded"], False)
 
     def test_normalized_native_observer_error_stays_an_execution_failure(self):
         from hey_my_buddy.buddy.runtime import execution as module
