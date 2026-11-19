@@ -40,6 +40,7 @@ class ExecutionContext:
     session_record_path: str | None = None
     #: Execution-local supervision, never serialized or passed to a harness.
     model_response_wait: Any = None
+    accepted_stop: Any = None
     effective_workspace: dict | None = field(default=None, init=False)
 
     @property

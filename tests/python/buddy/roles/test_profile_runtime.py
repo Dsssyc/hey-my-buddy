@@ -233,10 +233,111 @@ class ProfileRuntimeTests(unittest.TestCase):
         self.assertIs(handle.model_responded, True)
         self.assertFalse(wait_path.exists(), "the stopped round re-armed its start wait")
 
+    def test_correction_preparation_time_counts_against_its_response_budget(self):
+        from hey_my_buddy.buddy.runtime import execution as execution_module
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = self._control(root)
+            clock = [0.0]
+            seen = []
+            preparations = 0
+            handle = run_execution.InlineRunHandle(control, rc.RunIdentity(
+                task_id=control["taskId"], attempt_id=control["attemptId"],
+                generation=control["generation"], invocation_id="profile-fixture"))
+            handle.model_response_wait = execution_module.ModelResponseWait(
+                root / "execution-budget.json",
+                {"taskId": "task", "attemptId": "attempt", "generation": 1}, 1)
+
+            def slow_selected(_harness, _environment):
+                nonlocal preparations
+                preparations += 1
+                if preparations == 2:
+                    # 2 seconds spent preparing a correction round exceeds its
+                    # 1-second response budget and must prevent launching it.
+                    clock[0] += 2.0
+                return None
+
+            def run(_module, request, *, observer, services, cancelled):
+                seen.append(request)
+                self.assertEqual(observer({"modelResponded": True, "toolCalls": 0}).action, "continue")
+                return rc.RunResult(identity=request.identity, harness=request.harness,
+                    end=rc.RunEnd(status="ok", native_exit_code=0), model_responded=True,
+                    native_request_sent=True, buddy=rc.ResultBuddy(requested=request.buddy),
+                    value=rc.RunValue(schema_status="invalid", raw="bad one"),
+                    stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+
+            def publish(_raw, _round_index, _observations):
+                return {"accepted": False, "errors": ["claim 1 needs a sourceDate"]}
+
+            @contextmanager
+            def live(_request, _services, _handle, **_kwargs):
+                yield None
+
+            token = run_execution._profile_publisher.set(publish)
+            try:
+                with mock.patch.object(execution_module, "time", SimpleNamespace(monotonic=lambda: clock[0])), \
+                     mock.patch.object(inline_run, "_inline_live", live), \
+                     mock.patch.object(inline_run, "run_harness", side_effect=run), \
+                     mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", side_effect=slow_selected), \
+                     mock.patch("hey_my_buddy.protocol.input_limit.check_prompt_input",
+                                return_value=SimpleNamespace(blocked=False)), \
+                     mock.patch("hey_my_buddy.protocol.capabilities.select_input_limit", return_value=None):
+                    handle.model_response_wait.begin()
+                    _result, _request, verdict, code = inline_run._profile_execute(
+                        control, handle, SimpleNamespace(prepare_run_services=None), 0.0)
+            finally:
+                run_execution._profile_publisher.reset(token)
+        self.assertEqual(len(seen), 1, "correction round launched despite exhausting its budget during preparation")
+        self.assertEqual(code, 1)
+        self.assertTrue(handle.model_response_wait.timed_out)
+        self.assertEqual(verdict["correctionCount"], 0)
+        self.assertIs(verdict["modelResponded"], True)
+
+    def test_an_accepted_stop_before_control_attach_prevents_the_first_native_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = self._control(root)
+            stop_view = [None]
+            handle = run_execution.InlineRunHandle(control, rc.RunIdentity(
+                task_id=control["taskId"], attempt_id=control["attemptId"],
+                generation=control["generation"], invocation_id="profile-fixture"))
+            handle.accepted_stop = lambda: stop_view[0]
+            seen = []
+
+            def selected(_harness, _environment):
+                # Emulate a console stop arriving on Execution before
+                # control.attach(handle) has bound handle.cancelled.
+                stop_view[0] = {"stopInitiator": "console"}
+                return None
+
+            def run(_module, request, **_kwargs):
+                seen.append(request)
+                raise AssertionError("native harness must not be entered after an accepted stop")
+
+            @contextmanager
+            def live(_request, _services, _handle, **_kwargs):
+                yield None
+
+            with mock.patch.object(inline_run, "_inline_live", live), \
+                 mock.patch.object(inline_run, "run_harness", side_effect=run), \
+                 mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", side_effect=selected), \
+                 mock.patch("hey_my_buddy.protocol.input_limit.check_prompt_input",
+                            return_value=SimpleNamespace(blocked=False)), \
+                 mock.patch("hey_my_buddy.protocol.capabilities.select_input_limit", return_value=None):
+                result, _request, verdict, code = inline_run._profile_execute(
+                    control, handle, SimpleNamespace(prepare_run_services=None), 0.0)
+        self.assertEqual(seen, [])
+        self.assertEqual(code, 1)
+        self.assertEqual(result.end.status, "cancelled")
+        self.assertIs(handle.cancel_requested, True)
+        self.assertEqual(handle.stop_initiator, "console")
+        self.assertEqual(verdict["correctionCount"], 0)
+        self.assertIs(verdict["nativeRequestSent"], False)
+
     def test_correction_rounds_continue_the_attempt_activity_sequence(self):
         from dataclasses import dataclass
         from datetime import datetime, timezone
-        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+        from hey_my_buddy.protocol.activity import is_newer
 
         @dataclass(frozen=True)
         class _Services:
@@ -246,62 +347,68 @@ class ProfileRuntimeTests(unittest.TestCase):
         def now():
             return datetime.now(timezone.utc).isoformat()
 
-        with tempfile.TemporaryDirectory() as directory:
-            control = self._control(Path(directory))
-            responses = [("bad one", 1), ("good", 0)]
-            seen, seeded, sequences = [], [], []
-            handle = run_execution.InlineRunHandle(control, rc.RunIdentity(
-                task_id=control["taskId"], attempt_id=control["attemptId"],
-                generation=control["generation"], invocation_id="profile-fixture"))
+        for mode in ("live-and-result", "result-only"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                control = self._control(Path(directory))
+                responses = [("bad one", 1, 30, "session-1"), ("good", 0, 3, "session-2")]
+                seen, initial_live, observed_live, round_results = [], [], [], []
+                handle = run_execution.InlineRunHandle(control, rc.RunIdentity(
+                    task_id=control["taskId"], attempt_id=control["attemptId"],
+                    generation=control["generation"], invocation_id="profile-fixture"))
 
-            def run(_module, request, *, observer, services, cancelled):
-                seen.append(request)
-                # The native driver continues this round's own event sequence
-                # above whatever its endpoint already reported.
-                reported = services.live.current_activity()
-                seeded.append(reported)
-                base = (reported or {}).get("eventSeq") or 0
-                raw, calls = responses[len(seen) - 1]
-                self.assertEqual(observer({"modelResponded": True, "toolCalls": calls}).action, "continue")
-                published = []
-                for step in (3, 9):
-                    payload = {"phase": "streaming-model", "observedAt": now(),
-                               "eventSeq": base + step, "counts": {"modelTurns": 1, "toolCalls": calls}}
-                    self.assertTrue(services.live.publish_activity(payload))
-                    published.append(payload["eventSeq"])
-                sequences.append(published)
-                return rc.RunResult(identity=request.identity, harness=request.harness,
-                    end=rc.RunEnd(status="ok", native_exit_code=0), model_responded=True,
-                    native_request_sent=True, buddy=rc.ResultBuddy(requested=request.buddy),
-                    value=rc.RunValue(schema_status="invalid", raw=raw),
-                    activity=rc.FrozenJson({"phase": "streaming-model", "observedAt": now(),
-                                            "eventSeq": published[-1],
-                                            "counts": {"modelTurns": 1, "toolCalls": calls}}),
-                    stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+                def run(_module, request, *, observer, services, cancelled):
+                    seen.append(request)
+                    # A fresh round's endpoint is never pre-seeded with the
+                    # previous round's session receipt; the harness emits its
+                    # own local sequence (e.g. Claude/DSH starting back at 3)
+                    # and the endpoint/role offsets it strictly above round 1.
+                    initial_live.append(services.live.current_activity())
+                    raw, calls, local_seq, session_id = responses[len(seen) - 1]
+                    self.assertEqual(observer({"modelResponded": True, "toolCalls": calls}).action, "continue")
+                    if mode == "live-and-result":
+                        payload = {"phase": "streaming-model", "observedAt": now(),
+                                   "eventSeq": local_seq, "nativeSessionId": session_id,
+                                   "counts": {"modelTurns": 1, "toolCalls": calls}}
+                        self.assertTrue(services.live.publish_activity(payload))
+                        observed_live.append(services.live.current_activity())
+                    result_obj = rc.RunResult(identity=request.identity, harness=request.harness,
+                        end=rc.RunEnd(status="ok", native_exit_code=0), model_responded=True,
+                        native_request_sent=True, buddy=rc.ResultBuddy(requested=request.buddy),
+                        value=rc.RunValue(schema_status="invalid", raw=raw),
+                        activity=rc.FrozenJson({"phase": "streaming-model", "observedAt": now(),
+                                                "eventSeq": local_seq, "nativeSessionId": session_id,
+                                                "counts": {"modelTurns": 1, "toolCalls": calls}}),
+                        stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+                    round_results.append(result_obj)
+                    return result_obj
 
-            def publish(raw, round_index, observations):
-                return {"accepted": round_index == len(responses) - 1,
-                        "errors": [] if round_index == len(responses) - 1 else ["claim 1 needs a sourceDate"]}
+                def publish(raw, round_index, observations):
+                    return {"accepted": round_index == len(responses) - 1,
+                            "errors": [] if round_index == len(responses) - 1 else ["claim 1 needs a sourceDate"]}
 
-            token = run_execution._profile_publisher.set(publish)
-            try:
-                with mock.patch.object(inline_run, "run_harness", side_effect=run), \
-                     mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value=None), \
-                     mock.patch("hey_my_buddy.protocol.input_limit.check_prompt_input",
-                                return_value=SimpleNamespace(blocked=False)), \
-                     mock.patch("hey_my_buddy.protocol.capabilities.select_input_limit", return_value=None):
-                    result, request, verdict, code = inline_run._profile_execute(
-                        control, handle, SimpleNamespace(prepare_run_services=lambda *, inquiry=None: _Services()),
-                        inline_run.time.monotonic())
-            finally:
-                run_execution._profile_publisher.reset(token)
-        self.assertEqual(len(seen), 2)
-        self.assertEqual(code, 0)
-        # The fresh round's endpoint is seeded with the previous round's last
-        # reported receipt, and its own publications continue strictly above it,
-        # so an earlier round's later events can never shadow the next round.
-        self.assertIsNone(seeded[0])
-        self.assertEqual(seeded[1]["eventSeq"], sequences[0][-1])
-        self.assertGreater(sequences[1][0], sequences[0][-1])
-        self.assertEqual(sequences[0], sorted(sequences[0]))
-        self.assertEqual(sequences[1], sorted(sequences[1]))
+                token = run_execution._profile_publisher.set(publish)
+                try:
+                    with mock.patch.object(inline_run, "run_harness", side_effect=run), \
+                         mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value=None), \
+                         mock.patch("hey_my_buddy.protocol.input_limit.check_prompt_input",
+                                    return_value=SimpleNamespace(blocked=False)), \
+                         mock.patch("hey_my_buddy.protocol.capabilities.select_input_limit", return_value=None):
+                        result, request, verdict, code = inline_run._profile_execute(
+                            control, handle, SimpleNamespace(prepare_run_services=lambda *, inquiry=None: _Services()),
+                            inline_run.time.monotonic())
+                finally:
+                    run_execution._profile_publisher.reset(token)
+                self.assertEqual(len(seen), 2)
+                self.assertEqual(code, 0)
+                self.assertEqual(initial_live, [None, None])
+                first_activity = round_results[0].activity.value
+                # Round 2 had local eventSeq 3 after round 1's 30: offset by
+                # 31 gives 34, strictly above 30 for both live and final facts.
+                self.assertEqual(result.activity.value["eventSeq"], 34)
+                self.assertEqual(result.activity.value["nativeSessionId"], "session-2")
+                self.assertTrue(is_newer(result.activity.value, first_activity))
+                if mode == "live-and-result":
+                    self.assertEqual(observed_live[0]["eventSeq"], 30)
+                    self.assertEqual(observed_live[1]["eventSeq"], 34)
+                    self.assertEqual(observed_live[1]["nativeSessionId"], "session-2")
+                    self.assertTrue(is_newer(observed_live[1], observed_live[0]))

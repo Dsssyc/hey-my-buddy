@@ -31,6 +31,46 @@ from .controller import run_harness
 from .prompts import wrap_up_prompt
 
 
+def _stop_requested(handle) -> bool:
+    """True when this inline handle or its owning execution already accepted a stop."""
+    if handle.cancelled.is_set():
+        return True
+    reader = getattr(handle, "accepted_stop", None)
+    view = reader() if callable(reader) else None
+    if not isinstance(view, dict):
+        return False
+    # A stop accepted before control.attach still binds the handle's own stop
+    # facts so termination keeps the real initiator instead of falling back.
+    handle.cancel_requested = True
+    if handle.stop_initiator is None:
+        handle.stop_initiator = view.get("stopInitiator")
+    handle.cancelled.set()
+    return True
+
+
+def _offset_result_activity(result, offset: int):
+    if not offset:
+        return result
+    activity = getattr(result, "activity", None)
+    value = activity.value if activity is not None else None
+    if not isinstance(value, dict):
+        return result
+    seq = value.get("eventSeq")
+    if type(seq) is not int or seq < 0:
+        return result
+    return result.model_copy(update={"activity": FrozenJson({**value, "eventSeq": seq + offset})})
+
+
+def _next_event_seq_offset(current: int, live_activity: dict | None, result) -> int:
+    highest = None
+    for candidate in (live_activity, getattr(getattr(result, "activity", None), "value", None)):
+        if isinstance(candidate, dict):
+            seq = candidate.get("eventSeq")
+            if type(seq) is int and seq >= 0 and (highest is None or seq > highest):
+                highest = seq
+    return max(current, highest + 1) if highest is not None else current
+
+
 def _profile_execute(control, handle, module, started):
     """Correct a profile in fresh native sessions, each with its own start wait."""
     from ...protocol.capabilities import select_input_limit
@@ -48,18 +88,20 @@ def _profile_execute(control, handle, module, started):
     feedback = None
     previous_raw = None
     errors = None
-    reported_activity = None
+    event_seq_offset = 0
     result = request = observer = None
     round_index = 0
     model_wait = handle.model_response_wait
     while round_index <= 2:
-        if round_index and (handle.cancelled.is_set() or (model_wait is not None and model_wait.expired_now())):
-            # A stop, or a wait that already expired or timed out, ends the
-            # attempt before the next round is even prepared: re-arming the
-            # wait below would clear the latched expiry and rewrite the wait
-            # file for a round that will never run, so the previous round's
-            # collected result stands unchanged.
-            break
+        if round_index:
+            # Check an already-accepted stop or latched timeout before re-arming
+            # the correction round's wait, then start the timer before preparing
+            # the next prompt so preparation stays inside the response budget.
+            if _stop_requested(handle) or (model_wait is not None and model_wait.expired_now()):
+                break
+            handle.model_responded = False
+            if model_wait is not None:
+                model_wait.begin()
         invocation_root = ensure_private_dir(Path(control["privateRoot"]) / f"call-{round_index + 1}")
         next_control = {**control, "invocationId": uuid.uuid4().hex,
                         "privateRoot": str(invocation_root)}
@@ -69,19 +111,11 @@ def _profile_execute(control, handle, module, started):
         record = selected(next_request.harness, environment_for())
         version = record.get("version") if record is not None else None
         blocked = check_prompt_input(select_input_limit(next_request.harness, version), parts).blocked
-        if round_index:
-            # The correction round re-arms its own start wait and resets the
-            # per-round model fact before the last pre-launch check, so a stop
-            # or expiry that lands while the wait is being armed still
-            # prevents the native session.
-            handle.model_responded = False
-            if model_wait is not None:
-                model_wait.begin()
         # A stop, or a model-response wait that already expired or timed out,
         # must not enter the native harness. The first round is rechecked here
         # exactly like a correction round, so a profile stopped or timed out
         # while its round was being prepared never starts a native session.
-        if handle.cancelled.is_set() or (model_wait is not None and model_wait.expired_now()):
+        if _stop_requested(handle) or (model_wait is not None and model_wait.expired_now()):
             if result is None:
                 # No native call was ever sent: the stopped attempt itself is
                 # the result — cancelled, with no native session behind it.
@@ -103,15 +137,15 @@ def _profile_execute(control, handle, module, started):
                 harness_version=version, buddy=ResultBuddy(requested=request.buddy),
                 stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
             break
-        with _inline_live(request, services, handle, continued_activity=reported_activity) as live_services:
+        live_activity = None
+        with _inline_live(request, services, handle, event_seq_offset=event_seq_offset) as live_services:
             result = run_harness(module, request, observer=partial(handle.observe, observing), services=live_services,
-                                 cancelled=handle.cancelled.is_set)
+                                 cancelled=partial(_stop_requested, handle))
+            if live_services is not None and getattr(live_services, "live", None) is not None:
+                live_activity = live_services.live.current_activity()
         launched_rounds += 1
-        reported = getattr(result, "activity", None)
-        if reported is not None:
-            # The next round's fresh native session continues this attempt's
-            # activity sequence above everything this round already reported.
-            reported_activity = reported.value
+        result = _offset_result_activity(result, event_seq_offset)
+        event_seq_offset = _next_event_seq_offset(event_seq_offset, live_activity, result)
         model_responded.append(result.model_responded)
         request_sent.append(result.native_request_sent)
         tools = result.tool_evidence.value if result.tool_evidence is not None else {}
@@ -188,15 +222,10 @@ def _profile_execute(control, handle, module, started):
 
 
 @contextmanager
-def _inline_live(request, services, handle, *, continued_activity=None):
+def _inline_live(request, services, handle, *, event_seq_offset: int = 0):
     capabilities = (EXISTING_CAPABILITIES[request.harness] if services is not None and services.inquiry is not None
                     else LiveCapabilities(inquiry_delivery="unsupported"))
-    endpoint = CTwoLiveEndpoint(request.identity, capabilities)
-    if continued_activity is not None:
-        # A fresh correction round of the same attempt continues its activity
-        # timeline: restating the last reported receipt lets the native driver
-        # continue its event sequence above everything already reported.
-        endpoint.publish_activity(continued_activity)
+    endpoint = CTwoLiveEndpoint(request.identity, capabilities, event_seq_offset=event_seq_offset)
     server = run_execution.execution_live_server()
     try:
         if server is not None:
@@ -326,7 +355,7 @@ def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
     if input_error is None:
         with _inline_live(request, services, handle) as live_services:
             result = run_harness(module, request, observer=partial(handle.observe, observer), services=live_services,
-                                 cancelled=handle.cancelled.is_set)
+                                 cancelled=partial(_stop_requested, handle))
         if result.native_admission_error is not None:
             native_error = result.native_admission_error.value
             native_version = result.harness_version if result.harness_version is not None else version

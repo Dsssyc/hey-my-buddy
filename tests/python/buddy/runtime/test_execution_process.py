@@ -367,6 +367,81 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertFalse(handle.force_stop_requested)
             self.assertIsNone(handle.stop_initiator)
 
+    def test_a_late_stop_still_stops_a_process_handle_with_living_descendants(self):
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.install import runtime
+        from hey_my_buddy.protocol.process_handle import ProcessHandle
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            spec = {"adapter": "command", "cwd": directory, "command": ["true"]}
+            claim = {"task": {"taskId": "task", "spec": spec},
+                     "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
+            execution = Execution(claim, state, "n" * 32, client=mock.Mock())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            execution.receipt = lambda claim, report, directory: report
+            control = execution.control
+
+            class LivingJob:
+                def __init__(self):
+                    self.active_count = 1
+                    self.closed = False
+
+                def active(self):
+                    return self.active_count
+
+                def close(self, *, confirmed=False):
+                    self.closed = confirmed
+
+            job = LivingJob()
+            process = SimpleNamespace(pid=4242, returncode=7, poll=lambda: 7, _buddy_job=job)
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
+            # Root process already exited with code 7, so handle.finished is
+            # True, while a child in the Job is still alive.
+            self.assertTrue(handle.finished)
+            self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
+
+            calls = []
+
+            class Executor:
+                def stop(self, owned, *, stop_initiator, grace_deadline):
+                    calls.append(("stop", stop_initiator))
+                    owned.cancel_requested = True
+                    owned.stop_initiator = stop_initiator
+
+                def cancel(self, owned, **_kwargs):
+                    calls.append(("cancel", owned.stop_initiator))
+                    owned.cancel_requested = True
+
+            def wait(timeout):
+                execution.request_stop("console", None, force=True)
+                deadline = time.monotonic() + 2
+                while control.applied != control.requests and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                return 7
+
+            handle.wait = wait
+            outcome = AdapterOutcome(status="cancelled", shutdown_confirmed=True, exit_code=7)
+            control.start()
+            try:
+                with mock.patch.object(runtime, "resolve_runtime", return_value={}), \
+                     mock.patch.object(controller, "worker_executor", return_value=Executor()), \
+                     mock.patch.object(controller, "prepare_worker_run",
+                                       return_value=controller.WorkerPreparation(True)), \
+                     mock.patch.object(controller, "worker_start", return_value=handle), \
+                     mock.patch.object(controller, "worker_collect", return_value=outcome):
+                    report = execution._execute_selected(
+                        claim, claim["task"], spec, claim["attempt"], execution.directory,
+                        {"preflightControl": control})
+            finally:
+                control.stop()
+            control.join(2)
+            self.assertFalse(control.is_alive())
+            self.assertEqual(len(calls), 1, "living Job descendants must still receive the stop")
+            self.assertEqual(report["status"], "cancelled")
+            self.assertEqual(report["terminationReason"], "console-stop")
+
     def test_preflight_cancels_when_control_consumed_the_wake_before_rpc_failed(self):
         with tempfile.TemporaryDirectory() as directory:
             spec = {'adapter': 'codex'}

@@ -855,61 +855,72 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(sequences, sorted(sequences))
         self.assertEqual(observed_activity(endpoint), result.activity.value)
 
-    def test_the_activity_writer_continues_above_the_reported_sequence(self):
+    def test_an_offset_endpoint_shifts_codex_live_publications_without_seeding(self):
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
+        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
         request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt="Select from the frozen packet")
-        endpoint = activity_endpoint(request.identity)
-        self.assertEqual(native_run._reported_event_seq(endpoint), 0)
-        self.assertEqual(native_run._reported_event_seq(None), 0)
+        endpoint = CTwoLiveEndpoint(request.identity, LiveCapabilities(inquiry_delivery="unsupported"),
+                                    event_seq_offset=31)
+        self.assertIsNone(endpoint.current_activity())
         now = native_run.utc_now()
-        endpoint.publish_activity({"phase": "finishing", "observedAt": now, "eventSeq": 30,
-                                   "nativeSessionId": "previous-session", "lastNativeActivityAt": now,
-                                   "counts": {"modelTurns": 1, "toolCalls": 0}})
-        self.assertEqual(native_run._reported_event_seq(endpoint), 30)
         writer = native_run._ActivityWriter(endpoint)
-        self.assertEqual(writer.seq_base, 30)
         evidence = TurnEvidence("thread", "turn")
         evidence.observe({"method": "item/started", "params": {
             "threadId": "thread", "turnId": "turn", "item": {"type": "agentMessage", "id": "item", "text": "answer"}}})
         writer.write(evidence, "streaming-model")
-        # The fresh session's first event continues strictly above everything
-        # the attempt already reported through this endpoint.
-        self.assertEqual(endpoint.current_activity()["eventSeq"], 31)
+        # The fresh round's endpoint starts clean and shifts this round's local
+        # eventSeq strictly above the previous round's last reported sequence.
+        self.assertEqual(endpoint.current_activity()["eventSeq"], 32)
+        self.assertEqual(writer.last_payload["eventSeq"], 1)
         self.assertTrue(is_newer(endpoint.current_activity(),
                                  {"phase": "finishing", "observedAt": now, "eventSeq": 30,
                                   "nativeSessionId": "previous-session", "lastNativeActivityAt": now,
                                   "counts": {"modelTurns": 1, "toolCalls": 0}}))
 
-    def test_a_seeded_fresh_session_continues_the_attempt_activity_sequence(self):
+    def test_an_offset_fresh_session_continues_the_attempt_activity_sequence(self):
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
         self.set_case("ok")
         prompt = "Select from the frozen packet"
         first_request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt=prompt)
         first_endpoint = activity_endpoint(first_request.identity)
-        with mock.patch.object(first_endpoint, "publish_activity",
-                               wraps=first_endpoint.publish_activity) as first_publish:
+        first_published = []
+        original_first = first_endpoint.publish_activity
+
+        def record_first(payload):
+            changed = original_first(payload)
+            if changed:
+                first_published.append(first_endpoint.current_activity()["eventSeq"])
+            return changed
+
+        with mock.patch.object(first_endpoint, "publish_activity", side_effect=record_first):
             first = run(first_request, observer=lambda _facts: FEEDBACK_CONTINUE,
                         services=RunServices(live=first_endpoint), cancelled=lambda: False)
         self.assertEqual(first.end.status, "ok", first.end.message)
-        # The profile role hands every correction round a fresh native session
-        # whose endpoint carries the attempt's last reported receipt.
+        offset = first.activity.value["eventSeq"] + 1
         second_request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt=prompt)
-        second_endpoint = activity_endpoint(second_request.identity)
-        second_endpoint.publish_activity(first.activity.value)
-        with mock.patch.object(second_endpoint, "publish_activity",
-                               wraps=second_endpoint.publish_activity) as second_publish:
+        second_endpoint = CTwoLiveEndpoint(second_request.identity,
+                                           LiveCapabilities(inquiry_delivery="unsupported"),
+                                           event_seq_offset=offset)
+        second_published = []
+        original_second = second_endpoint.publish_activity
+
+        def record_second(payload):
+            changed = original_second(payload)
+            if changed:
+                second_published.append(second_endpoint.current_activity()["eventSeq"])
+            return changed
+
+        with mock.patch.object(second_endpoint, "publish_activity", side_effect=record_second):
             second = run(second_request, observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=RunServices(live=second_endpoint), cancelled=lambda: False)
         self.assertEqual(second.end.status, "ok", second.end.message)
-        first_sequences = [call.args[0]["eventSeq"] for call in first_publish.call_args_list]
-        second_sequences = [call.args[0]["eventSeq"] for call in second_publish.call_args_list]
-        self.assertTrue(first_sequences and second_sequences)
-        self.assertEqual(max(first_sequences), first.activity.value["eventSeq"])
-        # Every publication of the second round continues strictly above the
-        # first round's last reported sequence, so the stored activity of the
-        # attempt can never fall back to the first round's events.
-        self.assertGreater(min(second_sequences), max(first_sequences))
-        self.assertEqual(second_sequences, sorted(second_sequences))
-        self.assertTrue(is_newer(second.activity.value, first.activity.value))
+        self.assertTrue(first_published and second_published)
+        self.assertEqual(max(first_published), first.activity.value["eventSeq"])
+        self.assertGreater(min(second_published), max(first_published))
+        self.assertEqual(second_published, sorted(second_published))
+        self.assertTrue(is_newer(second_endpoint.current_activity(), first.activity.value))
 
     def test_a_completed_review_stream_stays_complete_without_a_confirmed_stop(self):
         # The Host probe's shape: the real halt executed, its recorded

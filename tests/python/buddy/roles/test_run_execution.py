@@ -41,7 +41,7 @@ class InlineRunErrorTests(unittest.TestCase):
             control = {"privateRoot": directory}
             with mock.patch("hey_my_buddy.buddy.roles.inline_run.execute", side_effect=error):
                 handle = run_execution._launch(
-                    control, SimpleNamespace(model_response_wait=None),
+                    control, SimpleNamespace(model_response_wait=None, accepted_stop=None),
                     environment={"HMB_STATE_DIR": os.environ["HMB_STATE_DIR"]},
                     identity=identity)
                 self.assertEqual(handle.wait(10), 1)

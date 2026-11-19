@@ -453,6 +453,9 @@ class Execution:
     def stop_requested(self):
         return self.control.cancel_view is not None
 
+    def accepted_stop(self):
+        return self.control.cancel_view
+
     def hint(self, **data):
         """Record one hint under the short memory lock and wake the flusher.
 
@@ -796,6 +799,7 @@ class Execution:
             agent_credential=claim["agentCredential"] if "turn" in claim else None,
             session_record_path=self.session_record_path,
             model_response_wait=model_wait,
+            accepted_stop=self.accepted_stop,
         )
         implementation = role_seam.worker_executor(spec["adapter"])
         control = holder['preflightControl']
@@ -1060,6 +1064,12 @@ class _HintFlusher(threading.Thread):
             self.execution.control.fail(error)
 
 
+def _handle_shutdown_confirmed(handle) -> bool:
+    """True only when the handle itself proves its entire owned process tree ended."""
+    check = getattr(handle, "shutdown_confirmed", None)
+    return callable(check) and check(settle_seconds=0) is True
+
+
 class _ExecutionControl(threading.Thread):
     """Observe only local native activity and received signals; no lease or stop polling."""
     def __init__(self, execution):
@@ -1144,12 +1154,13 @@ class _ExecutionControl(threading.Thread):
                 # Retiring a handle waits for any stop already being applied.
                 if handle is not None and self.requests > self.applied:
                     requested = self.requests
-                    # A handle whose native work already ended keeps its settled
-                    # result: a stop arriving now cannot stop anything, and
-                    # applying it would rewrite a native failure into a
-                    # cancellation, so the late request is consumed unanswered.
-                    # A handle that exposes no ended fact is still running.
-                    if not getattr(handle, "finished", False):
+                    # Skip a late stop only when the handle already proves its
+                    # whole owned tree is gone (not merely that a root exited
+                    # while children or a Windows Job still live): stopping an
+                    # already-settled run would rewrite a native failure into a
+                    # cancellation, whereas any unproven handle still receives
+                    # the stop.
+                    if not _handle_shutdown_confirmed(handle):
                         if self.applied or requested > 1:
                             handle.stop_initiator = self.cancel_view["stopInitiator"]
                             role_seam.worker_cancel(implementation, handle)

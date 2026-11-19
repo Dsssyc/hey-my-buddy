@@ -101,6 +101,7 @@ class InlineRunHandle:
         self.live_endpoint = None
         self.model_responded = False
         self.model_response_wait = None
+        self.accepted_stop = None
 
     def observe(self, observer, facts):
         """Retain native model output before the role judges the same facts."""
@@ -554,6 +555,7 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
                    generation=identity.generation)
     handle = InlineRunHandle(control, identity)
     handle.model_response_wait = context.model_response_wait
+    handle.accepted_stop = context.accepted_stop
     def run() -> None:
         from .inline_run import execute
         try:
