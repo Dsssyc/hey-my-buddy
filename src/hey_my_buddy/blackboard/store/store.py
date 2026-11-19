@@ -75,10 +75,12 @@ def attempt_queue_reason(attempt) -> str | None:
 
     Terminal states and committed results hold none; otherwise the connection
     reason of an uncertain attempt wins over the recorded Router wait, which
-    wins over an unknown harness probe.
+    wins over an unknown harness probe. ``result_form`` is bound to
+    ``result_json`` by the table's own constraint, so it names a committed
+    result as reliably without carrying the report body.
     """
     if (attempt is None or attempt["execution_state"] in ("finalizing", "finished")
-            or attempt["result_json"] is not None):
+            or attempt["result_form"] is not None):
         return None
     return attempt["connection_reason"] or attempt["waiting_reason"] or (
         "harness-probe-unknown" if attempt["probe_unknown"] else None)
@@ -93,10 +95,8 @@ def task_queue_reason(connection: sqlite3.Connection, task) -> str | None:
     """
     if task["active_attempt_id"] is None:
         return task["queue_reason"]
-    # The aliased presence flag spares the view the whole committed result body.
     return attempt_queue_reason(connection.execute(
-        "SELECT execution_state, connection_reason, probe_unknown, waiting_reason,"
-        " result_json IS NOT NULL AS result_json"
+        "SELECT execution_state, connection_reason, probe_unknown, waiting_reason, result_form"
         " FROM attempts WHERE attempt_id=?",
         (task["active_attempt_id"],),
     ).fetchone())

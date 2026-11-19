@@ -1063,3 +1063,69 @@ class ReleaseReasonContinuationTests(WorkflowTestCase):
                 (submitted['runId'], second['attemptId']),
             ).fetchall()
         self.assertTrue(any('events_task_idx' in row['detail'] for row in plan), plan)
+
+
+class QueueReasonProjectionTests(WorkflowTestCase):
+    """Every task queueReason entry point reads one identical attempt projection."""
+
+    def views(self, board, run_id):
+        from hey_my_buddy.blackboard.store.store import task_queue_reason
+        from hey_my_buddy.blackboard.tasks import macro_tasks
+        with board.store.db.read() as connection:
+            task_row = board.store._task_row(connection, {"runId": run_id})
+            direct = task_queue_reason(connection, task_row)
+            timeline = macro_tasks.macro_task_timeline(board.store, {"macroTaskId": f"run:{run_id}"})["rows"]
+        return {
+            "task_get": board.call("task_get", {"runId": run_id})["task"]["queueReason"],
+            "direct": direct,
+            "workflow_get": board.call("workflow_get", {"runId": run_id})["queueReason"],
+            "timeline": timeline[0]["queueReason"] if timeline else None,
+        }
+
+    def assert_views(self, board, run_id, expected):
+        views = self.views(board, run_id)
+        self.assertEqual(views, {entry: expected for entry in views})
+
+    def test_every_entry_point_projects_the_active_attempt_identically(self):
+        from support import publish_result_receipt
+
+        waiting = {"code": "router-input-unknown", "params": {}}
+        board = self.board()
+        run_id = self.submit(board)["runId"]
+        claim = self.claim(board, run_id=run_id)["claim"]
+        actor = {"attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
+                 "nonce": "n" * 16}
+        # An unknown probe shows until a recorded wait outranks it.
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE attempts SET probe_unknown=1 WHERE attempt_id=?", (actor["attemptId"],))
+        self.assert_views(board, run_id, "harness-probe-unknown")
+        board.call("execution_progress", {**actor, "data": {"waitingReason": waiting}})
+        self.assert_views(board, run_id, "router-input-unknown")
+        # A disconnect outranks both while it lasts and returns to the wait.
+        self.assertTrue(board.store.execution_connection(actor["attemptId"], connected=False))
+        self.assert_views(board, run_id, "execution-connection-unknown")
+        self.assertTrue(board.store.execution_connection(actor["attemptId"], connected=True))
+        self.assert_views(board, run_id, "router-input-unknown")
+        # Receipt reception settles every wait at every entry point.
+        reference = publish_result_receipt(board.directory, {
+            **actor, "status": "ok", "shutdownConfirmed": True, "result": {"text": "done"}})
+        self.assertEqual(board.call("execution_result", reference), {"received": True})
+        self.assert_views(board, run_id, None)
+
+        # A committed result reads as no reason even while the attempt is still
+        # uncertain with no confirmed stop.
+        board = self.board()
+        run_id = self.submit(board, request_id="req-result", cwd=str(self.workdir("result")))["runId"]
+        claim = self.claim(board, claim_request_id="c-result", run_id=run_id)["claim"]
+        actor = {"attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
+                 "nonce": "n" * 16}
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE attempts SET probe_unknown=1, waiting_reason='router-input-unknown'"
+                               " WHERE attempt_id=?", (actor["attemptId"],))
+        board.store.execution_result({**actor, "status": "ok", "result": {"finalText": "unconfirmed"},
+                                      "shutdownConfirmed": False},
+                                     stop_evidence={"kind": "identity-absent", "native": "journal"})
+        with board.store.db.read() as connection:
+            row = board.store._attempt_row(connection, actor["attemptId"])
+        self.assertEqual((row["execution_state"], row["result_form"] is not None), ("uncertain", True))
+        self.assert_views(board, run_id, None)
