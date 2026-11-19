@@ -73,11 +73,12 @@ UNKNOWN_QUEUE_REASON = "execution-connection-unknown"
 def attempt_queue_reason(attempt) -> str | None:
     """One attempt row's own waiting projection.
 
-    Terminal states hold none; otherwise the connection reason of an uncertain
-    attempt wins over the recorded Router wait, which wins over an unknown
-    harness probe.
+    Terminal states and committed results hold none; otherwise the connection
+    reason of an uncertain attempt wins over the recorded Router wait, which
+    wins over an unknown harness probe.
     """
-    if attempt is None or attempt["execution_state"] in ("finalizing", "finished"):
+    if (attempt is None or attempt["execution_state"] in ("finalizing", "finished")
+            or attempt["result_json"] is not None):
         return None
     return attempt["connection_reason"] or attempt["waiting_reason"] or (
         "harness-probe-unknown" if attempt["probe_unknown"] else None)
@@ -92,8 +93,10 @@ def task_queue_reason(connection: sqlite3.Connection, task) -> str | None:
     """
     if task["active_attempt_id"] is None:
         return task["queue_reason"]
+    # The aliased presence flag spares the view the whole committed result body.
     return attempt_queue_reason(connection.execute(
-        "SELECT execution_state, connection_reason, probe_unknown, waiting_reason"
+        "SELECT execution_state, connection_reason, probe_unknown, waiting_reason,"
+        " result_json IS NOT NULL AS result_json"
         " FROM attempts WHERE attempt_id=?",
         (task["active_attempt_id"],),
     ).fetchone())
@@ -1376,9 +1379,7 @@ class BoardStore:
                 expectedRevision=task["revision"],
             )
 
-    def _transition_attempt(
-        self, connection: sqlite3.Connection, attempt: sqlite3.Row, state: str, *, connection_reason: str | None = None
-    ) -> None:
+    def _validate_attempt_transition(self, connection: sqlite3.Connection, attempt: sqlite3.Row, state: str) -> None:
         if state not in ATTEMPT_STATES:
             raise BoardError("INVALID_ARGUMENT", f"Unknown attempt state {state!r}")
         if state not in ATTEMPT_TRANSITIONS.get(attempt["execution_state"], frozenset()):
@@ -1390,17 +1391,23 @@ class BoardStore:
             )
         if state == "finished" and attempt["execution_state"] != "finished":
             self._settle_attempt_inquiries(connection, attempt)
+
+    def _transition_attempt(
+        self, connection: sqlite3.Connection, attempt: sqlite3.Row, state: str, *, connection_reason: str | None = None
+    ) -> None:
+        self._validate_attempt_transition(connection, attempt, state)
         now = self.now()
         # One statement keeps the row inside its constraints: only an uncertain
-        # attempt carries a connection reason, and a receipt-bound state settles
-        # every wait.
+        # attempt without a result carries a connection reason, and a receipt-
+        # bound state or a committed result settles every wait.
+        result_committed = attempt["result_json"] is not None
         cursor = connection.execute(
             "UPDATE attempts SET execution_state=?, connection_reason=?, probe_unknown=?, waiting_reason=?,"
             " updated_at=?, revision=revision+1 WHERE attempt_id=? AND revision=?",
             (state,
-             connection_reason if state == "uncertain" else None,
-             0 if state in ("finalizing", "finished") else attempt["probe_unknown"],
-             None if state in ("finalizing", "finished") else attempt["waiting_reason"],
+             connection_reason if state == "uncertain" and not result_committed else None,
+             0 if state in ("finalizing", "finished") or result_committed else attempt["probe_unknown"],
+             None if state in ("finalizing", "finished") or result_committed else attempt["waiting_reason"],
              now, attempt["attempt_id"], attempt["revision"]),
         )
         if cursor.rowcount != 1:
@@ -1924,7 +1931,9 @@ class BoardStore:
                               and not identity_changed and not transitioned)
             has_progress = (message is not None or phase is not None) and not startup_replay
             changed = identity_changed or has_progress or (data is None and process_identity is None)
-            if data is not None and 'waitingReason' in data and attempt['execution_state'] not in ('finalizing', 'finished'):
+            if (data is not None and 'waitingReason' in data
+                    and attempt['execution_state'] not in ('finalizing', 'finished')
+                    and attempt['result_json'] is None):
                 waiting_code = waiting_reason['code'] if waiting_reason is not None else None
                 if attempt['waiting_reason'] != waiting_code:
                     # The wait is recorded on the attempt row even while its
@@ -2336,8 +2345,8 @@ class BoardStore:
             if proof is not None and shutdown_confirmed:
                 receipt_confirmed = previous["shutdownConfirmed"] if shutdown_evidence is not None else request["shutdownConfirmed"]
                 self._record_execution_shutdown(connection, attempt, proof, receipt_confirmed=receipt_confirmed, now=now)
-            self._transition_attempt(connection, attempt, "finished" if shutdown_confirmed else "uncertain",
-                                     connection_reason=None if shutdown_confirmed else UNCERTAIN_QUEUE_REASON)
+            self._validate_attempt_transition(
+                connection, attempt, "finished" if shutdown_confirmed else "uncertain")
             if shutdown_confirmed:
                 self._clear_execution_receipt_and_issues(connection, attempt_id_param)
                 if shutdown_evidence is not None and attempt["execution_state"] == "finished":
@@ -2364,11 +2373,18 @@ class BoardStore:
                 task_state = "reconciliation-needed"
             else:
                 task_state = "failed"
-            connection.execute(
-                "UPDATE attempts SET result_json=?, result_form=COALESCE(result_form,'current-report-v2'),"
+            # The state and the committed result land in one constrained
+            # statement: an unconfirmed result leaves the attempt uncertain
+            # naming no connection reason and holding no probe flag or wait,
+            # exactly like a finished one.
+            cursor = connection.execute(
+                "UPDATE attempts SET execution_state=?, result_json=?, result_form=COALESCE(result_form,'current-report-v2'),"
                 " shutdown_confirmed=?, runtime_identity=COALESCE(?, runtime_identity),"
-                " stop_initiator=COALESCE(stop_initiator,?),finished_at=?, updated_at=?, revision=revision+1 WHERE attempt_id=?",
+                " stop_initiator=COALESCE(stop_initiator,?), finished_at=?, connection_reason=NULL,"
+                " probe_unknown=0, waiting_reason=NULL, updated_at=?, revision=revision+1"
+                " WHERE attempt_id=? AND revision=?",
                 (
+                    "finished" if shutdown_confirmed else "uncertain",
                     canonical_json(payload),
                     1 if shutdown_confirmed else 0,
                     request["runtimeIdentity"],
@@ -2377,8 +2393,11 @@ class BoardStore:
                     now,
                     now,
                     attempt["attempt_id"],
+                    attempt["revision"],
                 ),
             )
+            if cursor.rowcount != 1:
+                raise BoardError("REVISION_CONFLICT", "The attempt changed concurrently; re-read it and retry")
             from ..evaluation.native_observations import persist
             persist_result = ({**result, "providerRejection": None}
                               if isinstance(result, dict) and result.get("code") == INPUT_REJECTED

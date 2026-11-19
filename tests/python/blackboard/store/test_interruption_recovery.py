@@ -356,6 +356,26 @@ class InterruptionRecoveryTests(BoardTestCase):
                 self.assertEqual(view['attemptState'], 'finalizing')
                 self.assertIsNone(view['queueReason'])
 
+    def test_unconfirmed_result_commit_clears_waiting_facts_without_a_connection_reason(self):
+        board, client, task, _, actor = self.claimed()
+        # A live wait and an unknown probe are legal while the attempt holds no
+        # result; committing one must settle both without inventing a restart.
+        with board.store.db.write() as db:
+            db.execute("UPDATE attempts SET probe_unknown=1, waiting_reason='router-input-unknown'"
+                       " WHERE attempt_id=?", (actor['attemptId'],))
+        self.assertEqual(client.get(runId=task['runId'])['queueReason'], 'router-input-unknown')
+        board.store.execution_result({**actor, 'status': 'ok', 'result': {'finalText': 'unconfirmed'},
+                                      'shutdownConfirmed': False},
+                                     stop_evidence={'kind': 'identity-absent', 'native': 'journal'})
+        with board.store.db.read() as db:
+            row = board.store._attempt_row(db, actor['attemptId'])
+        self.assertEqual((row['execution_state'], row['connection_reason'], row['probe_unknown'],
+                          row['waiting_reason'], row['result_json'] is not None),
+                         ('uncertain', None, 0, None, True))
+        view = client.get(runId=task['runId'])
+        self.assertEqual(view['state'], 'reconciliation-needed')
+        self.assertIsNone(view['queueReason'])
+
     def test_probe_unknown_survives_disconnect_and_reconnect_until_a_ready_probe(self):
         unknown_probe = {'harness': 'codex', 'status': 'unknown',
                          'lastProbe': {'status': 'unknown'}}

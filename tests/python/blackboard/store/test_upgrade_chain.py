@@ -213,6 +213,11 @@ class UpgradeChainTests(unittest.TestCase):
                           for row in attempts])
         self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM "tasks" ORDER BY rowid')], tasks)
         attempt_id = self.db.execute('SELECT attempt_id FROM attempts ORDER BY rowid LIMIT 1').fetchone()[0]
+        # The reason-bearing probes need a still-running shape: the idle stock's
+        # finished attempts hold committed results, so model the released form
+        # that proves its stop without ever receiving one.
+        with self.db:
+            self.db.execute("UPDATE attempts SET result_json=NULL,result_form=NULL WHERE attempt_id=?", (attempt_id,))
         task_id = self.db.execute('SELECT task_id FROM "tasks" WHERE queue_reason IS NOT NULL ORDER BY rowid LIMIT 1').fetchone()
         self.assertIsNotNone(task_id)
         # A finished attempt may keep its historical uncertain ownership while
@@ -255,6 +260,27 @@ class UpgradeChainTests(unittest.TestCase):
         with self.db:
             self.db.execute("UPDATE tasks SET active_attempt_id=?,queue_reason=NULL WHERE task_id=?",
                             (attempt_id, task_id[0]))
+        # A committed result ends every live connection question: the row may be
+        # uncertain with no reason at all, and no reason, probe flag or Router
+        # wait may accompany the stored result.
+        with self.db:
+            self.db.execute("UPDATE attempts SET execution_state='finished',connection_reason=NULL,"
+                            " probe_unknown=0,waiting_reason=NULL WHERE attempt_id=?", (attempt_id,))
+        result_row = self.db.execute('SELECT attempt_id FROM attempts WHERE result_json IS NOT NULL'
+                                     ' ORDER BY rowid LIMIT 1').fetchone()
+        self.assertIsNotNone(result_row)
+        result_id = result_row[0]
+        with self.db:
+            self.db.execute("UPDATE attempts SET execution_state='uncertain' WHERE attempt_id=?", (result_id,))
+        for assignment in (
+                "connection_reason='attempt-uncertain-after-restart'",
+                "connection_reason='execution-connection-unknown'",
+                "probe_unknown=1",
+                "waiting_reason='router-input-unknown'"):
+            with self.subTest(result=assignment), self.assertRaises(sqlite3.IntegrityError), self.db:
+                self.db.execute(f"UPDATE attempts SET {assignment} WHERE attempt_id=?", (result_id,))
+        with self.db:
+            self.db.execute("UPDATE attempts SET execution_state='finished' WHERE attempt_id=?", (result_id,))
         self.assert_current_structure()
 
     def test_all_dropped_facts_have_floor_stock_and_equal_the_frozen_spec(self):

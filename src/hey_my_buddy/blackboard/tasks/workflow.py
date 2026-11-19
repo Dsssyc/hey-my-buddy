@@ -5987,10 +5987,12 @@ class WorkflowCoordinator:
         total = connection.execute("SELECT COUNT(*) FROM workflow_lead_tasks WHERE lead_run_id=?", (run_id,)).fetchone()[0]
         rows = connection.execute(
             # The active attempt carries a running task's waiting projection:
-            # its connection reason, else its Router wait, else an unknown probe.
+            # its connection reason, else its Router wait, else an unknown probe;
+            # a terminal or result-bearing attempt holds none.
             "SELECT r.*,t.request_id,t.state AS execution_state,"
             " CASE WHEN t.active_attempt_id IS NULL THEN t.queue_reason ELSE ("
-            "  SELECT CASE WHEN a.execution_state IN ('finalizing','finished') THEN NULL"
+            "  SELECT CASE WHEN a.execution_state IN ('finalizing','finished')"
+            "   OR a.result_json IS NOT NULL THEN NULL"
             "   ELSE COALESCE(a.connection_reason,a.waiting_reason,"
             "    CASE WHEN a.probe_unknown=1 THEN 'harness-probe-unknown' ELSE NULL END) END"
             "  FROM attempts a WHERE a.attempt_id=t.active_attempt_id) END AS queue_reason"

@@ -485,8 +485,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         self.assert_only_upgrade_project_marker_changed(before, files(source), fixture, project_id)
 
     def test_invalid_selected_execution_is_not_published(self):
-        for assignment in ("execution_state='uncertain',connection_reason='attempt-uncertain-after-restart'",
-                           'shutdown_confirmed=0', 'cleanup_pending=1'):
+        for assignment in ("execution_state='uncertain'", 'shutdown_confirmed=0', 'cleanup_pending=1'):
             with self.subTest(assignment=assignment):
                 board = InProcessBoard(self.directory / ('source-' + str(len(self._stack))))
                 self._stack.append(board)

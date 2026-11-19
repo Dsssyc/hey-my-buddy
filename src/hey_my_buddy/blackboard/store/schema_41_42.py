@@ -84,14 +84,16 @@ CREATE TABLE IF NOT EXISTS attempts (
     revision            INTEGER NOT NULL DEFAULT 1,
     CHECK ((result_json IS NULL AND result_form IS NULL)
         OR (result_json IS NOT NULL AND result_form IS NOT NULL)),
-    -- The connection reason names why the attempt is uncertain: it is bound to
-    -- execution_state, not ownership, because a finished attempt may keep its
-    -- historical uncertain ownership while holding no live reason.
-    CHECK ((execution_state='uncertain' AND connection_reason IS NOT NULL)
-        OR (execution_state!='uncertain' AND connection_reason IS NULL)),
+    -- The connection reason names why a still-running attempt is uncertain: it
+    -- is bound to execution_state, not ownership, because a finished attempt may
+    -- keep its historical uncertain ownership, and a committed result ends every
+    -- live connection question without proving a stop.
+    CHECK ((execution_state='uncertain' AND result_json IS NULL AND connection_reason IS NOT NULL)
+        OR ((execution_state!='uncertain' OR result_json IS NOT NULL) AND connection_reason IS NULL)),
     -- Receiving a receipt settles every wait: no probe flag or Router wait may
-    -- survive into finalizing or finished.
-    CHECK (execution_state NOT IN ('finalizing','finished') OR (probe_unknown = 0 AND waiting_reason IS NULL)),
+    -- survive into finalizing, finished or a committed result.
+    CHECK ((execution_state NOT IN ('finalizing','finished') AND result_json IS NULL)
+        OR (probe_unknown = 0 AND waiting_reason IS NULL)),
     UNIQUE(task_id, generation)
 );
 """

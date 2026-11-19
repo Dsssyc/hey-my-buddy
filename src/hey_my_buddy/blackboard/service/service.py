@@ -553,6 +553,7 @@ class BoardService(_BaseResource):
                 probe_unknown = 1 if (record.get('status') == 'unknown'
                                       or (record.get('lastProbe') or {}).get('status') == 'unknown') else 0
                 if (attempt['execution_state'] not in ('finalizing', 'finished')
+                        and attempt['result_json'] is None
                         and int(attempt['probe_unknown']) != probe_unknown):
                     cursor = db.execute(
                         "UPDATE attempts SET probe_unknown=?, updated_at=?, revision=revision+1"
